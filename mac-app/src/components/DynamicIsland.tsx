@@ -611,6 +611,28 @@ const drawerStyles: Record<string, React.CSSProperties> = {
 };
 
 // =============================================================================
+/** Renders the 5-bar real-time waveform driven by audio level data. */
+function WaveformBars({ levels, color }: { levels: number[]; color: string }) {
+  return (
+    <>
+      {levels.map((level, i) => (
+        <div
+          key={i}
+          style={{
+            width: '2px',
+            borderRadius: '1px',
+            backgroundColor: color,
+            height: `${Math.max(2, Math.round(level * 14))}px`,
+            opacity: 0.5 + 0.5 * level,
+            transition: 'height 0.08s ease-out, opacity 0.08s ease-out',
+          }}
+        />
+      ))}
+    </>
+  );
+}
+
+// =============================================================================
 // Left pill — mode toggle + history controls
 // =============================================================================
 
@@ -668,9 +690,10 @@ function LeftPill() {
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const deletedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Waveform: ring buffer of recent audio levels for hot-mic visualization.
+  // Waveform: ring buffer of recent audio levels for visualization (hot-mic and standard).
   const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
   const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
+  const [standardAudioLevel, setStandardAudioLevel] = useState(0);
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
@@ -684,7 +707,15 @@ function LeftPill() {
         setIsFinal(false);
         setPipeCount(0);
         setAnimatedPipes(new Set());
+        // Reset waveform buffer so standard recording starts with clean bars.
+        waveformBufferRef.current.reset();
+        setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
       }
+    });
+
+    // Standard recording audio level updates (for real-time waveform).
+    api.onStandardAudioLevel?.((level: number) => {
+      setStandardAudioLevel(level);
     });
 
     // Stack count updates (screenshots captured during standard recording).
@@ -769,6 +800,7 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-hotmic-runtime');
       api.removeAllListeners('dynamic-island-stack-changed');
+      api.removeAllListeners('dynamic-island-standard-audio-level');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
@@ -780,13 +812,15 @@ function LeftPill() {
     };
   }, []);
 
-  // Update waveform ring buffer when audio levels arrive in hot-mic mode.
+  // Update waveform ring buffer when audio levels arrive (hot-mic or standard recording).
+  // During standard recording, always use standardAudioLevel regardless of input mode.
   useEffect(() => {
-    if (inputMode !== 'hot-mic') return;
+    const level = state === 'recording' ? standardAudioLevel : filterMeter.rawLevel;
+    if (state !== 'recording' && inputMode !== 'hot-mic') return;
     const buf = waveformBufferRef.current;
-    buf.push(filterMeter.rawLevel);
+    buf.push(level);
     setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
-  }, [filterMeter.rawLevel, inputMode]);
+  }, [filterMeter.rawLevel, standardAudioLevel, inputMode, state]);
 
   useEffect(() => {
     if (transcriptRef.current) {
@@ -986,8 +1020,8 @@ function LeftPill() {
       ? styles.hudPillWarn
       : styles.hudPillGood;
 
-  // Whether we're in a standard-mode active state (recording or transcribing).
-  const isStandardActive = inputMode === 'standard' && (state === 'recording' || state === 'transcribing' || state === 'improving');
+  // Standard recording: show waveform in place of mode dot (regardless of input mode).
+  const showStandardWaveform = state === 'recording';
 
   return (
     <div style={styles.outerContainer}>
@@ -1001,100 +1035,63 @@ function LeftPill() {
           height: `${compactPillHeight}px`,
         }}
       >
-        {isStandardActive ? (
-          // Standard recording/transcribing: animated waveform + pipes.
-          <div style={styles.standardStatusContainer}>
+        {/* Left side: mode toggle (dot or waveform). Same position for all modes. */}
+        <button
+          className="di-mode-toggle"
+          onClick={toggleInputMode}
+          style={styles.modeToggle}
+          title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
+        >
+          {inputMode === 'hot-mic' || showStandardWaveform ? (
             <div aria-hidden="true" style={styles.waveformContainer}>
-              {Array.from({ length: WAVEFORM_BAR_COUNT }, (_, i) => (
-                <div
-                  key={i}
-                  style={{
-                    width: '2px',
-                    borderRadius: '1px',
-                    backgroundColor: modeDot.color,
-                    height: '14px',
-                    transformOrigin: 'center',
-                    animation: state === 'recording'
-                      ? `waveformPulse 0.7s ease-in-out ${i * 0.09}s infinite`
-                      : `waveformPulse 1.2s ease-in-out ${i * 0.15}s infinite`,
-                    opacity: state === 'recording' ? 1 : 0.6,
-                    transition: 'opacity 0.2s ease',
-                  }}
-                />
-              ))}
+              <WaveformBars levels={waveformLevels} color={modeDot.color} />
             </div>
-            {pipeCount > 0 && (
-              <div style={styles.pipeContainer}>
-                {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
-                  <div
-                    key={i}
-                    style={{
-                      width: '2px',
-                      height: '10px',
-                      backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                      opacity: animatedPipes.has(i) ? 1 : 0,
-                      transition: 'opacity 0.2s ease-in',
-                    }}
-                  />
-                ))}
-                {pipeCount > 3 && (
-                  <span style={styles.pipeOverflow}>+{pipeCount - 3}</span>
-                )}
-              </div>
+          ) : (
+            <span
+              aria-hidden="true"
+              style={{
+                ...styles.modeStateDot,
+                backgroundColor: modeDot.color,
+                boxShadow: modeDot.shadow,
+              }}
+            />
+          )}
+        </button>
+        {/* Right side: hamburger (or pipe count during standard recording). */}
+        {showStandardWaveform && pipeCount > 0 ? (
+          <div style={styles.pipeContainer}>
+            {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
+              <div
+                key={i}
+                style={{
+                  width: '2px',
+                  height: '10px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                  opacity: animatedPipes.has(i) ? 1 : 0,
+                  transition: 'opacity 0.2s ease-in',
+                }}
+              />
+            ))}
+            {pipeCount > 3 && (
+              <span style={styles.pipeOverflow}>+{pipeCount - 3}</span>
             )}
           </div>
         ) : (
-          // Idle / hot-mic: mode toggle dot (or waveform) + hamburger.
-          <>
-            <button
-              className="di-mode-toggle"
-              onClick={toggleInputMode}
-              style={styles.modeToggle}
-              title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
-            >
-              {inputMode === 'hot-mic' ? (
-                <div aria-hidden="true" style={styles.waveformContainer}>
-                  {waveformLevels.map((level, i) => (
-                    <div
-                      key={i}
-                      style={{
-                        width: '2px',
-                        borderRadius: '1px',
-                        backgroundColor: modeDot.color,
-                        height: `${Math.max(2, Math.round(level * 14))}px`,
-                        opacity: 0.5 + 0.5 * level,
-                        transition: 'height 0.08s ease-out, opacity 0.08s ease-out',
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <span
-                  aria-hidden="true"
-                  style={{
-                    ...styles.modeStateDot,
-                    backgroundColor: modeDot.color,
-                    boxShadow: modeDot.shadow,
-                  }}
-                />
-              )}
-            </button>
-            <button
-              className="di-hamburger"
-              onClick={toggleHistory}
-              style={{
-                ...styles.hamburger,
-                backgroundColor: 'transparent',
-              }}
-              title="transcript history"
-            >
-              <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
-                <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
-                <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
-                <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
-              </svg>
-            </button>
-          </>
+          <button
+            className="di-hamburger"
+            onClick={toggleHistory}
+            style={{
+              ...styles.hamburger,
+              backgroundColor: 'transparent',
+            }}
+            title="transcript history"
+          >
+            <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
+              <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
+              <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
+              <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
+            </svg>
+          </button>
         )}
       </div>
 
@@ -1334,16 +1331,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '50%',
     transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
     flexShrink: 0,
-  },
-
-  // Standard recording/transcribing status shown centered in the left pill.
-  standardStatusContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: '6px',
-    width: '100%',
-    height: '100%',
   },
 
   // Vertical pipes showing screenshot stacks during recording.

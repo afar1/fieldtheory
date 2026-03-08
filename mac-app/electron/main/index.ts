@@ -2506,28 +2506,16 @@ function setupTranscribeIPCHandlers(): void {
     if (!preferencesManager) {
       return 'whisper';
     }
-    const configured = preferencesManager.getPreference('transcriptionEngine');
-    if (configured && configured !== 'whisper') {
-      void preferencesManager.save({
-        transcriptionEngine: 'whisper',
-        hotMicTranscriptionEngine: 'default',
-      });
-    }
-    return 'whisper';
+    return preferencesManager.getPreference('transcriptionEngine') || 'whisper';
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen' | 'mlx-whisper') => {
+  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
-    if (engine !== 'whisper') {
-      log.info('Ignoring unsupported engine request "%s"; using whisper only', engine);
-    } else {
-      log.info('Transcription engine set: whisper');
-    }
+    log.info('Transcription engine set: %s', engine);
     await preferencesManager.save({
-      transcriptionEngine: 'whisper',
-      // Hot Mic now follows the global engine selection.
+      transcriptionEngine: engine,
       hotMicTranscriptionEngine: 'default',
     });
     await transcriberManager?.restartTranscriptionRuntime();
@@ -5359,7 +5347,12 @@ function broadcastTranscribeEvents(): void {
     // Forward stack count to the Dynamic Island for pipe display.
     dynamicIslandManager?.updateStackCount(count);
   });
-  
+
+  // Forward standard recording audio levels to the Dynamic Island for waveform.
+  transcriberManager.on('audioLevel', (level: number) => {
+    dynamicIslandManager?.updateStandardAudioLevel(level);
+  });
+
   // Track if quota just exhausted - skip paste-success to preserve upgrade message.
   let quotaJustExhausted = false;
   

@@ -12,14 +12,82 @@ Usage:
 
 import argparse
 import json
+import struct
 import sys
+
+import numpy as np
 
 MODEL_NAME = "nemo-parakeet-tdt-0.6b-v2"
 
 
+def read_wav_float32(path):
+    """Read a WAV file, handling both integer PCM and IEEE float formats.
+
+    Python's wave module only supports integer PCM (format 1).
+    Swift's AVAudioFile writes IEEE float (format 3) WAVs, so we
+    parse the header ourselves when needed.
+    """
+    with open(path, "rb") as f:
+        riff = f.read(4)
+        if riff != b"RIFF":
+            raise ValueError(f"Not a WAV file: {path}")
+        f.read(4)  # file size
+        wave_id = f.read(4)
+        if wave_id != b"WAVE":
+            raise ValueError(f"Not a WAV file: {path}")
+
+        fmt_chunk = None
+        data_chunk = None
+
+        while True:
+            chunk_id = f.read(4)
+            if len(chunk_id) < 4:
+                break
+            chunk_size = struct.unpack("<I", f.read(4))[0]
+            if chunk_id == b"fmt ":
+                fmt_chunk = f.read(chunk_size)
+            elif chunk_id == b"data":
+                data_chunk = f.read(chunk_size)
+            else:
+                f.seek(chunk_size, 1)
+
+    if fmt_chunk is None or data_chunk is None:
+        raise ValueError(f"Missing fmt or data chunk: {path}")
+
+    audio_format = struct.unpack("<H", fmt_chunk[0:2])[0]
+    num_channels = struct.unpack("<H", fmt_chunk[2:4])[0]
+    sample_rate = struct.unpack("<I", fmt_chunk[4:8])[0]
+    bits_per_sample = struct.unpack("<H", fmt_chunk[14:16])[0]
+
+    if audio_format == 3:  # IEEE float
+        if bits_per_sample == 32:
+            samples = np.frombuffer(data_chunk, dtype=np.float32)
+        elif bits_per_sample == 64:
+            samples = np.frombuffer(data_chunk, dtype=np.float64).astype(np.float32)
+        else:
+            raise ValueError(f"Unsupported float bit depth: {bits_per_sample}")
+    elif audio_format == 1:  # Integer PCM
+        if bits_per_sample == 16:
+            samples = np.frombuffer(data_chunk, dtype=np.int16).astype(np.float32) / 32768.0
+        elif bits_per_sample == 32:
+            samples = np.frombuffer(data_chunk, dtype=np.int32).astype(np.float32) / 2147483648.0
+        elif bits_per_sample == 8:
+            samples = np.frombuffer(data_chunk, dtype=np.uint8).astype(np.float32) / 128.0 - 1.0
+        else:
+            raise ValueError(f"Unsupported PCM bit depth: {bits_per_sample}")
+    else:
+        raise ValueError(f"Unsupported WAV format: {audio_format}")
+
+    if num_channels > 1:
+        samples = samples.reshape(-1, num_channels)[:, 0]
+
+    return samples, sample_rate
+
+
 def transcribe(model, audio_path, timestamps=False):
     """Run transcription and return the result string."""
-    result = model.recognize(audio_path)
+    waveform, sr = read_wav_float32(audio_path)
+    result = model.recognize(waveform, sample_rate=sr)
 
     if timestamps and hasattr(result, "segments") and result.segments:
         lines = []

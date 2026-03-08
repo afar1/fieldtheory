@@ -216,6 +216,46 @@ describe('HotMicManager app hide by name', () => {
   });
 });
 
+describe('HotMicManager matchTailCommand early-exit guards', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('skips running app queries when text has no trigger prefixes', async () => {
+    const { manager } = createManager();
+    const getRunningApps = vi.fn(async () => [
+      { bundleId: 'com.tinyspeck.slackmacgap', name: 'Slack' },
+    ]);
+    manager.setAppSwitcher({
+      getRunningApps,
+      activateApp: vi.fn(async () => true),
+    } as any);
+
+    const result = await (manager as any).matchTailCommand('alright can you hear me okay');
+    expect(result).toBeNull();
+    expect(getRunningApps).not.toHaveBeenCalled();
+
+    manager.destroy();
+  });
+
+  it('queries running apps when text contains an app switch prefix', async () => {
+    const { manager } = createManager();
+    const getRunningApps = vi.fn(async () => [
+      { bundleId: 'com.tinyspeck.slackmacgap', name: 'Slack' },
+    ]);
+    manager.setAppSwitcher({
+      getRunningApps,
+      activateApp: vi.fn(async () => true),
+    } as any);
+
+    const result = await (manager as any).matchTailCommand('open slack');
+    expect(result?.commandName).toBe('app-switch:Slack');
+    expect(getRunningApps).toHaveBeenCalled();
+
+    manager.destroy();
+  });
+});
+
 describe('HotMicManager transcript history persistence', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -578,7 +618,7 @@ describe('HotMicManager transcript dismissal', () => {
     expect((manager as any).transcriptBuffer).toEqual([]);
     expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
     expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(true, 0, '');
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation');
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
 
     manager.destroy();
   });
@@ -1273,7 +1313,7 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command');
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('command', undefined);
     manager.destroy();
   });
 
@@ -1284,7 +1324,7 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).setRealtimeHarvestMode();
 
     expect(nativeHelper.setHarvestMode).toHaveBeenCalledTimes(1);
-    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation');
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', undefined);
     manager.destroy();
   });
 
@@ -1299,8 +1339,17 @@ describe('HotMicManager chunk queue backpressure', () => {
     (manager as any).chunkProcessingInFlight = false;
     (manager as any).setRealtimeHarvestMode();
 
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command');
-    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation');
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', undefined);
+    expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', undefined);
+    manager.destroy();
+  });
+
+  it('passes silenceMs 0 for parakeet engine', () => {
+    const { manager, nativeHelper } = createManager({ transcriptionEngine: 'parakeet' });
+
+    (manager as any).setRealtimeHarvestMode();
+
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
     manager.destroy();
   });
 
