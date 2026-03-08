@@ -2908,7 +2908,7 @@ function setupClipboardIPCHandlers(): void {
                 const imagePath = await clipboardManager.exportImageToCache(stackItem);
                 if (imagePath) {
                   // Use real path for terminal compatibility
-                  figurePaths.push(`Figure ${stackItem.figureLabel}: \`${imagePath}\``);
+                  figurePaths.push(`Figure ${stackItem.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
                 }
               }
             }
@@ -2928,9 +2928,10 @@ function setupClipboardIPCHandlers(): void {
           const imagePath = await clipboardManager.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
+            const shortPath = imagePath.replace(os.homedir(), '~');
             const figureRef = item.figureLabel
-              ? `Figure ${item.figureLabel}: \`${imagePath}\``
-              : `\`${imagePath}\``;
+              ? `Figure ${item.figureLabel}: \`${shortPath}\``
+              : `\`${shortPath}\``;
             const figureRefWithSpace = `${figureRef} `;
             clipboard.writeText(figureRefWithSpace);
             // Set hash from exact clipboard payload to avoid self-capture churn.
@@ -3096,7 +3097,7 @@ function setupClipboardIPCHandlers(): void {
           const imagePath = await clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
-            paths.push(`Figure ${item.figureLabel}: \`${imagePath}\``);
+            paths.push(`Figure ${item.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
           }
         }
         return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
