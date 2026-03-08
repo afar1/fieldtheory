@@ -176,6 +176,7 @@ export class TranscriberManager extends EventEmitter {
   private standardChunkReadyListener: ((filePath: string) => void) | null = null;
   private standardPendingChunkQueue: Array<{ filePath: string; readyAtMs: number }> = [];
   private standardChunkProcessingInFlight: boolean = false;
+  private currentStandardHarvestMode: 'command' | 'dictation' | 'off' = 'off';
   private standardChunkCommandTriggered: boolean = false;
   private pendingImmediateSquaresAction: string | null = null;
   private pendingImmediateSquaresText: string = '';
@@ -212,6 +213,7 @@ export class TranscriberManager extends EventEmitter {
     this.nativeHelper.on('audioLevel', (level: number, isSpeech: boolean) => {
       if (this.status === 'recording') {
         this.overlay.updateAudioLevel(level);
+        this.emit('audioLevel', level);
         // Check if this level indicates actual audio content.
         if (isSpeech) {
           this.hasAudioContent = true;
@@ -889,6 +891,7 @@ export class TranscriberManager extends EventEmitter {
     this.standardChunkReadyListener = null;
     this.standardPendingChunkQueue = [];
     this.standardChunkProcessingInFlight = false;
+    this.currentStandardHarvestMode = 'off';
     this.nativeHelper.setHarvestMode('off');
   }
 
@@ -917,10 +920,18 @@ export class TranscriberManager extends EventEmitter {
     return 'dictation';
   }
 
+  private getEngineSilenceMs(): number | undefined {
+    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    if (engine === 'parakeet') return 0;
+    return undefined;
+  }
+
   private setStandardRealtimeHarvestMode(): void {
     if (this.status !== 'recording') return;
     const mode = this.getStandardRealtimeHarvestMode();
-    this.nativeHelper.setHarvestMode(mode);
+    if (mode === this.currentStandardHarvestMode) return;
+    this.currentStandardHarvestMode = mode;
+    this.nativeHelper.setHarvestMode(mode, this.getEngineSilenceMs());
   }
 
   private async processStandardChunkQueue(): Promise<void> {
@@ -949,12 +960,15 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private async onStandardChunkReady(wavPath: string, chunkReadyAtMs?: number): Promise<void> {
+    const pipelineStart = performance.now();
     try {
       if (this.status !== 'recording') return;
       if (this.pendingImmediateSquaresAction) return;
 
       const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+      const asrStart = performance.now();
       const rawChunkText = await this.transcribeWithEngineFallback(wavPath, engine);
+      const asrMs = Math.round(performance.now() - asrStart);
       const chunkText = this.sanitizeTranscriptText(rawChunkText);
       const liveChunkText = this.stripFigureReferences(chunkText);
       if (!liveChunkText) return;
@@ -966,11 +980,17 @@ export class TranscriberManager extends EventEmitter {
         .trim();
 
       this.emit('standardLiveTranscript', this.standardLiveTranscript);
-      this.setStandardRealtimeHarvestMode();
 
       if (this.squaresManager) {
+        const cmdStart = performance.now();
         const tailMatch = this.squaresManager.parseVoiceCommandFromTail(this.standardLiveTranscript.toLowerCase());
+        const cmdMs = Math.round(performance.now() - cmdStart);
         if (tailMatch) {
+          const totalMs = Math.round(performance.now() - pipelineStart);
+          log.info(
+            '[timing] standard chunk: asr=%dms cmd=%dms total=%dms engine=%s command=%s',
+            asrMs, cmdMs, totalMs, engine, tailMatch.action
+          );
           this.pendingImmediateSquaresAction = tailMatch.action;
           this.pendingImmediateSquaresText = tailMatch.remainingText.trim();
           this.standardLiveTranscript = this.pendingImmediateSquaresText;
@@ -980,8 +1000,15 @@ export class TranscriberManager extends EventEmitter {
             this.standardChunkCommandTriggered = true;
             void this.stopRecordingAndTranscribe();
           }
+          return;
         }
       }
+
+      const totalMs = Math.round(performance.now() - pipelineStart);
+      log.debug(
+        '[timing] standard chunk: asr=%dms total=%dms engine=%s',
+        asrMs, totalMs, engine
+      );
     } catch (error) {
       log.error('Standard chunk transcription failed:', error);
     } finally {
@@ -1182,49 +1209,64 @@ export class TranscriberManager extends EventEmitter {
       this.setStatus('transcribing');
       this.overlay.showTranscribing();
 
+      const finalPassStart = performance.now();
       let cleanedText = '';
       const liveTranscriptFallback = this.standardLiveTranscript.trim();
+      let finalAsrMs = 0;
 
       if (immediateSquaresAction) {
         // Immediate Squares actions are finalized from the detected tail text so we can
         // execute the command deterministically even if recording is stopped mid-phrase.
         cleanedText = this.sanitizeTranscriptText(immediateSquaresText);
       } else {
-        // Standard recording is accuracy-first: always run a full-file pass at stop.
-        // Live chunks are used only for in-session preview/UX.
-        const engineForModelCheck = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-        if (engineForModelCheck === 'whisper') {
-          const selectedModel = this.modelManager.getSelectedModel();
-          const modelAvailable = await this.modelManager.isModelAvailable();
-          if (!modelAvailable) {
-            this.clearStandardLiveTranscript();
-            this.setStatus('idle');
-            this.handleOverlayAfterTranscription();
-            this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
-            return;
+        const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+
+        // With realtime chunking, the tail file from stopRecording() only contains audio
+        // after the last snapshot — often just silence. If live chunks already produced a
+        // transcript, skip the final-pass ASR on the tiny tail and use it directly.
+        const tailFileSize = await fs.promises.stat(wavPath).then(s => s.size).catch(() => Infinity);
+        const hasLiveTranscript = liveTranscriptFallback.length > 0;
+        // 32000 bytes ≈ 0.5s of 16kHz float32 mono — minimum for a recognizable word.
+        const tailTooSmall = tailFileSize < 32000;
+
+        if (hasLiveTranscript && tailTooSmall) {
+          // Tail is just silence/header — use the live transcript directly.
+          cleanedText = this.sanitizeTranscriptText(liveTranscriptFallback);
+          void fs.promises.unlink(wavPath).catch(() => {});
+          log.debug('Final-pass: using live transcript (%d chars, tail=%d bytes)', cleanedText.length, tailFileSize);
+        } else {
+          // Full-file pass: Whisper benefits from full context; also used when there
+          // are no live chunks (short recording with no harvest).
+          if (engine === 'whisper') {
+            const selectedModel = this.modelManager.getSelectedModel();
+            const modelAvailable = await this.modelManager.isModelAvailable();
+            if (!modelAvailable) {
+              this.clearStandardLiveTranscript();
+              this.setStatus('idle');
+              this.handleOverlayAfterTranscription();
+              this.emit('error', new Error(`Model "${selectedModel}" not available. Please download the model first.`));
+              return;
+            }
+          }
+
+          const asrStart = performance.now();
+          const text = await this.transcribeWithEngineFallback(wavPath, engine);
+          finalAsrMs = Math.round(performance.now() - asrStart);
+          cleanedText = this.sanitizeTranscriptText(text);
+
+          // If full-file ASR returned empty but live chunks had content, use them.
+          if (cleanedText.length === 0 && hasLiveTranscript) {
+            cleanedText = this.sanitizeTranscriptText(liveTranscriptFallback);
+            log.debug('Final-pass ASR empty; using live transcript (%d chars)', cleanedText.length);
           }
         }
-
-        const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-        const text = await this.transcribeWithEngineFallback(wavPath, engine);
-        cleanedText = this.sanitizeTranscriptText(text);
       }
 
       this.clearStandardLiveTranscript();
-      
+
       // Check for Squares voice commands (e.g., "grid", "focus", "horizontal").
       // If the transcription is a window management command, execute it and skip pasting.
       let deferredSquaresAction = immediateSquaresAction;
-      if (cleanedText.length === 0 && !deferredSquaresAction && liveTranscriptFallback.length > 0) {
-        const fallbackText = this.sanitizeTranscriptText(liveTranscriptFallback);
-        if (fallbackText.length > 0) {
-          cleanedText = fallbackText;
-          log.warn(
-            'Full-file transcription empty; falling back to live transcript (%d chars)',
-            fallbackText.length
-          );
-        }
-      }
       if (cleanedText.length === 0) {
         if (deferredSquaresAction && this.squaresManager) {
           await this.squaresManager.executeAction(deferredSquaresAction);
@@ -1251,6 +1293,7 @@ export class TranscriberManager extends EventEmitter {
 
       // Detect portable commands in the transcription.
       // If user says "use the debug command", insert [cmd:debug.md] reference.
+      const cmdDetectStart = performance.now();
       this.detectedCommands = [];
       if (this.commandsManager) {
         const commandDetection = this.commandsManager.detectCommands(cleanedText);
@@ -1272,6 +1315,7 @@ export class TranscriberManager extends EventEmitter {
           this.emit('commandsDetected', this.detectedCommands.map((cmd: { name: string }) => cmd.name));
         }
       }
+      const cmdDetectMs = Math.round(performance.now() - cmdDetectStart);
 
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
@@ -1337,12 +1381,23 @@ export class TranscriberManager extends EventEmitter {
       // Paste, check accessibility in parallel for UI feedback.
       // Don't clear stack after auto-paste so Super Paste (Cmd+Shift+V) can re-paste if needed.
       // Stack is cleared when next recording starts.
+      const pasteStart = performance.now();
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
       await this.pasteStack(false);
       if (deferredSquaresAction && this.squaresManager) {
         await this.squaresManager.executeAction(deferredSquaresAction);
       }
+      const pasteMs = Math.round(performance.now() - pasteStart);
+      const finalTotalMs = Math.round(performance.now() - finalPassStart);
       this.emit('result', finalText);
+
+      log.info(
+        '[timing] final pass: asr=%dms cmd=%dms paste=%dms total=%dms%s',
+        finalAsrMs, cmdDetectMs, pasteMs, finalTotalMs,
+        this.detectedCommands.length > 0
+          ? ` commands=${this.detectedCommands.map(c => c.name).join(',')}`
+          : ''
+      );
 
       // Set status to idle BEFORE emitting paste events.
       // This prevents the idle transition from overriding paste-failed UI.

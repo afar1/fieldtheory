@@ -1223,13 +1223,20 @@ export class HotMicManager extends EventEmitter {
     };
   }
 
+  private getEngineSilenceMs(): number | undefined {
+    const engine = this.getConfiguredTranscriptionEngineForLogs();
+    if (engine === 'parakeet') return 0;
+    return undefined;
+  }
+
   private setRealtimeHarvestMode(): void {
     const nextMode = this.getPreferredHarvestMode();
+    const silenceMs = this.getEngineSilenceMs();
     if (this.currentHarvestMode === nextMode) {
       return;
     }
     this.currentHarvestMode = nextMode;
-    this.nativeHelper.setHarvestMode(nextMode);
+    this.nativeHelper.setHarvestMode(nextMode, silenceMs);
     log.debug(
       'Hot Mic: harvest mode -> %s (engine=%s, queue=%d)',
       nextMode,
@@ -2010,7 +2017,9 @@ export class HotMicManager extends EventEmitter {
     }
 
     // Unified tail-match: navigation, system, squares, app switch, start claude/codex, restart server
+    const cmdStart = performance.now();
     const tailMatch = await this.matchTailCommand(lower);
+    const cmdMs = Math.round(performance.now() - cmdStart);
     if (tailMatch) {
       if (tailMatch.remainingText.trim()) {
         const normalizedRemaining = this.pushNormalizedTextToBuffer(tailMatch.remainingText);
@@ -2049,18 +2058,19 @@ export class HotMicManager extends EventEmitter {
         }
       }
 
-      if (LOG_TRANSCRIPT_PAYLOADS) {
-        log.info('Hot Mic: tail-match command "%s" → %s', lower, tailMatch.commandName);
-      } else {
-        log.info('Hot Mic: tail-match command → %s', tailMatch.commandName);
-      }
+      const execStart = performance.now();
       if (tailMatch.script) {
         exec(tailMatch.script);
       }
       if (tailMatch.action) {
         await tailMatch.action();
       }
+      const execMs = Math.round(performance.now() - execStart);
       this.playSound('paste');
+      log.info(
+        'Hot Mic: [timing] command: detect=%dms exec=%dms name=%s',
+        cmdMs, execMs, tailMatch.commandName
+      );
       this.resetBufferDiscardTimer();
       return;
     }
@@ -2541,9 +2551,10 @@ export class HotMicManager extends EventEmitter {
       }
     }
 
-    // Dynamic: App switching
-    if (this.appSwitcher) {
-      const appTailMatch = await this.parseAppSwitchFromTail(text);
+    // Dynamic: App switching — only query running apps if text contains a trigger prefix.
+    const openPrefixes = this.getAppOpenPrefixes();
+    if (this.appSwitcher && this.textContainsAnyPrefix(stripped, openPrefixes)) {
+      const appTailMatch = await this.parseAppCommandFromTail(text, openPrefixes);
       if (appTailMatch) {
         return {
           commandName: 'app-switch:' + appTailMatch.appName,
@@ -2554,23 +2565,29 @@ export class HotMicManager extends EventEmitter {
     }
 
     // Dynamic: Hide specific app by name ("hide slack", "hide the browser")
-    const hideMatch = await this.parseHideAppFromTail(text);
-    if (hideMatch) {
-      return {
-        commandName: 'hide-app:' + hideMatch.appName,
-        action: async () => { await this.hideAppByName(hideMatch); },
-        remainingText: hideMatch.remainingText,
-      };
+    const hidePrefixes = this.getAppHidePrefixes();
+    if (this.textContainsAnyPrefix(stripped, hidePrefixes)) {
+      const hideMatch = await this.parseAppCommandFromTail(text, hidePrefixes);
+      if (hideMatch) {
+        return {
+          commandName: 'hide-app:' + hideMatch.appName,
+          action: async () => { await this.hideAppByName(hideMatch); },
+          remainingText: hideMatch.remainingText,
+        };
+      }
     }
 
     // Dynamic: Quit specific app by name ("quit slack", "quit the browser")
-    const quitMatch = await this.parseQuitAppFromTail(text);
-    if (quitMatch) {
-      return {
-        commandName: 'quit-app:' + quitMatch.appName,
-        action: async () => { await this.quitAppByName(quitMatch); },
-        remainingText: quitMatch.remainingText,
-      };
+    const quitPrefixes = this.getAppQuitPrefixes();
+    if (this.textContainsAnyPrefix(stripped, quitPrefixes)) {
+      const quitMatch = await this.parseAppCommandFromTail(text, quitPrefixes);
+      if (quitMatch) {
+        return {
+          commandName: 'quit-app:' + quitMatch.appName,
+          action: async () => { await this.quitAppByName(quitMatch); },
+          remainingText: quitMatch.remainingText,
+        };
+      }
     }
 
     return null;
@@ -2583,6 +2600,12 @@ export class HotMicManager extends EventEmitter {
     const pref = this.preferences.getPreference(prefKey as any);
     const raw = typeof pref === 'string' && pref.trim() ? pref : defaultValue;
     return raw.split(',').map(w => w.trim().toLowerCase()).filter(w => w.length > 0);
+  }
+
+  /** Fast check: does the text contain any of the given prefix words (assumes prefixes are lowercase)? */
+  private textContainsAnyPrefix(text: string, prefixes: string[]): boolean {
+    const lower = text.toLowerCase();
+    return prefixes.some(p => lower.includes(p));
   }
 
   private getAppOpenPrefixes(): string[] {
@@ -2680,11 +2703,11 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Check if text ends with "open X" / "switch to X" / "go to X".
-   * Returns matched app info + remaining text, or null.
+   * Match text ending with "<prefix> [the/a/an] <app name>" for any set of prefixes.
+   * Builds app phrases from user aliases, built-in aliases, and running apps.
+   * Used by open/switch, hide, and quit commands.
    */
-  private async parseAppSwitchFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
-    const prefixes = this.getAppOpenPrefixes();
+  private async parseAppCommandFromTail(text: string, prefixes: string[]): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
     const runningApps = await this.getRunningApps();
 
     // Build all possible app phrases (user aliases + built-in aliases + running app names)
@@ -2761,116 +2784,6 @@ export class HotMicManager extends EventEmitter {
     }
   }
 
-  /**
-   * Check if text ends with "quit X" / "close X" / "kill X" (app-level quit).
-   * Reuses the same app name matching as parseAppSwitchFromTail.
-   */
-  private async parseQuitAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
-    const prefixes = this.getAppQuitPrefixes();
-    const runningApps = await this.getRunningApps();
-
-    // Build all possible app phrases (same logic as parseAppSwitchFromTail)
-    const phrases: Array<{ phrase: string; canonical: string }> = [];
-
-    const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
-    for (const { appName, aliases } of userAliases) {
-      const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
-      for (const alias of aliasList) {
-        phrases.push({ phrase: alias, canonical: appName });
-      }
-    }
-
-    for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
-      for (const alias of aliases) {
-        phrases.push({ phrase: alias, canonical });
-      }
-    }
-
-    for (const app of runningApps) {
-      phrases.push({ phrase: app.name.toLowerCase(), canonical: app.name });
-    }
-
-    phrases.sort((a, b) => b.phrase.length - a.phrase.length);
-
-    const articles = ['the ', 'a ', 'an '];
-    for (const prefix of prefixes) {
-      const prefixWithSpace = `${prefix} `;
-      for (const { phrase, canonical } of phrases) {
-        const triggers = [prefixWithSpace + phrase];
-        for (const article of articles) {
-          triggers.push(prefixWithSpace + article + phrase);
-        }
-        for (const trigger of triggers) {
-          if (text === trigger) {
-            const bundleId = this.findBundleId(canonical, runningApps);
-            return { appName: canonical, bundleId, remainingText: '' };
-          }
-          if (text.endsWith(' ' + trigger)) {
-            const remaining = text.slice(0, -(trigger.length + 1)).trim();
-            const bundleId = this.findBundleId(canonical, runningApps);
-            return { appName: canonical, bundleId, remainingText: remaining };
-          }
-        }
-      }
-    }
-
-    return null;
-  }
-
-  /**
-   * Check if text ends with hide-prefix + app name (e.g. "hide slack").
-   * Reuses the same app matching logic as app-switch / app-quit.
-   */
-  private async parseHideAppFromTail(text: string): Promise<{ appName: string; bundleId: string | null; remainingText: string } | null> {
-    const prefixes = this.getAppHidePrefixes();
-    const runningApps = await this.getRunningApps();
-
-    const phrases: Array<{ phrase: string; canonical: string }> = [];
-
-    const userAliases = this.preferences.getPreference('hotMicAppAliases') ?? [];
-    for (const { appName, aliases } of userAliases) {
-      const aliasList = aliases.split(',').map(a => a.trim().toLowerCase()).filter(a => a.length > 0);
-      for (const alias of aliasList) {
-        phrases.push({ phrase: alias, canonical: appName });
-      }
-    }
-
-    for (const [canonical, aliases] of Object.entries(APP_VOICE_ALIASES)) {
-      for (const alias of aliases) {
-        phrases.push({ phrase: alias, canonical });
-      }
-    }
-
-    for (const app of runningApps) {
-      phrases.push({ phrase: app.name.toLowerCase(), canonical: app.name });
-    }
-
-    phrases.sort((a, b) => b.phrase.length - a.phrase.length);
-
-    const articles = ['the ', 'a ', 'an '];
-    for (const prefix of prefixes) {
-      const prefixWithSpace = `${prefix} `;
-      for (const { phrase, canonical } of phrases) {
-        const triggers = [prefixWithSpace + phrase];
-        for (const article of articles) {
-          triggers.push(prefixWithSpace + article + phrase);
-        }
-        for (const trigger of triggers) {
-          if (text === trigger) {
-            const bundleId = this.findBundleId(canonical, runningApps);
-            return { appName: canonical, bundleId, remainingText: '' };
-          }
-          if (text.endsWith(' ' + trigger)) {
-            const remaining = text.slice(0, -(trigger.length + 1)).trim();
-            const bundleId = this.findBundleId(canonical, runningApps);
-            return { appName: canonical, bundleId, remainingText: remaining };
-          }
-        }
-      }
-    }
-
-    return null;
-  }
 
   /**
    * Quit an app by name. Uses AppleScript to gracefully quit.

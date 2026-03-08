@@ -424,6 +424,13 @@ export class DynamicIslandManager extends EventEmitter {
     return this.inputMode;
   }
 
+  updateStandardAudioLevel(level: number): void {
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-standard-audio-level', level);
+    }
+  }
+
   updateHotMicBackgroundFilterMeter(data: HotMicBackgroundFilterMeter): void {
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {

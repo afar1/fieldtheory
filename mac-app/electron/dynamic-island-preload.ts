@@ -65,6 +65,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-show-history', () => callback());
   },
 
+  // Standard recording audio level updates (for real-time waveform).
+  onStandardAudioLevel: (callback: (level: number) => void) => {
+    ipcRenderer.on('dynamic-island-standard-audio-level', (_event, level) => callback(level));
+  },
+
   // Stack count updates (screenshots captured during standard recording).
   onStackChanged: (callback: (count: number) => void) => {
     ipcRenderer.on('dynamic-island-stack-changed', (_event, count) => callback(count));
