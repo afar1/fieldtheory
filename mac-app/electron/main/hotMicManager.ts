@@ -688,6 +688,7 @@ export class HotMicManager extends EventEmitter {
     // Screenshots join the same draft lifecycle as transcript text:
     // they should expire on the same inactivity timeout if not submitted.
     this.resetBufferDiscardTimer();
+    this.emit('screenshotStackChanged', this.hotMicScreenshotMetadata.length);
   }
 
   getState(): HotMicState {
@@ -2840,6 +2841,8 @@ export class HotMicManager extends EventEmitter {
     let cleanedText = trimmedText
       .replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ')
       .replace(/\([^)]*\)/g, ' ')
+      .replace(/[<>]{2,}/g, ' ')
+      .replace(/\b(mm[-\s]?hmm|mm+|hmm+)\b/gi, ' ')
       .replace(/\s+/g, ' ')
       .trim();
 
@@ -2919,9 +2922,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   private resetHotMicFigureSession(): void {
-    this.hotMicSessionStartMs = Date.now();
-    this.hotMicSessionItemIds = [];
-    this.hotMicScreenshotMetadata = [];
+    this.clearScreenshotState();
     this.hotMicBufferSegments = [];
   }
 
@@ -3034,9 +3035,17 @@ export class HotMicManager extends EventEmitter {
     this.transcriptBuffer = [];
     this.hotMicBufferSegments = [];
     if (clearScreenshots) {
-      this.hotMicSessionItemIds = [];
-      this.hotMicScreenshotMetadata = [];
-      this.hotMicSessionStartMs = Date.now();
+      this.clearScreenshotState();
+    }
+  }
+
+  private clearScreenshotState(): void {
+    const hadScreenshots = this.hotMicScreenshotMetadata.length > 0;
+    this.hotMicSessionItemIds = [];
+    this.hotMicScreenshotMetadata = [];
+    this.hotMicSessionStartMs = Date.now();
+    if (hadScreenshots) {
+      this.emit('screenshotStackChanged', 0);
     }
   }
 
@@ -3111,7 +3120,7 @@ export class HotMicManager extends EventEmitter {
       if (!item || !item.imageData) continue;
       const imagePath = await this.exportClipboardItemToCache(item);
       if (imagePath) {
-        lines.push(`Figure ${screenshot.figureLabel}: ${imagePath}`);
+        lines.push(`Figure ${screenshot.figureLabel}: \`${imagePath}\``);
       }
     }
 

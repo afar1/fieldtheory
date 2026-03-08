@@ -1025,6 +1025,8 @@ export class TranscriberManager extends EventEmitter {
     // then normalize casing/chunk-ending periods.
     let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ').trim();
     cleanedText = cleanedText.replace(/\([^)]*\)/g, ' ').trim();
+    cleanedText = cleanedText.replace(/[<>]{2,}/g, ' ').trim();
+    cleanedText = cleanedText.replace(/\b(mm[-\s]?hmm|mm+|hmm+)\b/gi, ' ').trim();
     cleanedText = this.applyWordSubstitutions(cleanedText);
     cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
     return cleanedText.toLowerCase().replace(/\.+$/, '').trim();
@@ -1129,7 +1131,7 @@ export class TranscriberManager extends EventEmitter {
           const figureLabel = item.figureLabel || String(i + 1);
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            clipboard.writeText(this.addFollowupTypingSpace(`Figure ${figureLabel}\n${imagePath}`));
+            clipboard.writeText(this.addFollowupTypingSpace(`Figure ${figureLabel}\n\`${imagePath}\``));
             this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }
@@ -3601,7 +3603,7 @@ export class TranscriberManager extends EventEmitter {
         const imagePath = await this.clipboardManager!.exportImageToCache(item);
         if (imagePath) {
           // Use real path for terminal compatibility
-          figurePaths.push(`Figure ${item.figureLabel}: ${imagePath}`);
+          figurePaths.push(`Figure ${item.figureLabel}: \`${imagePath}\``);
         }
       }
     }
