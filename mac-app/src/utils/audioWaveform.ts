@@ -1,9 +1,9 @@
 /**
- * Audio waveform utilities for the Dynamic Island hot-mic visualization.
+ * Audio waveform utilities for the Dynamic Island visualization.
  *
  * Maintains a ring buffer of recent audio levels and applies perceptual
  * scaling so that typical speech RMS values (0.01–0.2) produce visible
- * bar heights.
+ * bar heights. Used by both hot-mic and standard recording modes.
  */
 
 /** Default number of bars in the waveform display. */

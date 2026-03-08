@@ -65,6 +65,7 @@ struct IncomingMessage: Codable {
     let pressEnter: Bool?       // For typeIntoApp
     let titleSubstring: String? // For focusWindowByTitle
     let mode: String?           // For setHarvestMode ("command" or "dictation")
+    let silenceMs: Int?         // For setHarvestMode — optional silence override (nil = use default)
     // Window management (Squares)
     let pid: Int32?             // For setWindowFrame
     let title: String?          // For setWindowFrame
@@ -1406,6 +1407,7 @@ final class RecordingHelper {
     private var hasSpeechSinceLastHarvest = false
     private var silenceTimer: DispatchWorkItem?
     private var harvestMode: String = "command"  // "command" = snappier chunks, "dictation" = slightly longer chunks
+    private var silenceMsOverride: Int? = nil    // Engine-specific override (nil = use default for mode)
     private var consecutiveSpeechMs: Double = 0
     private var voicedMsSinceLastHarvest: Double = 0
     private var observedMsSinceLastHarvest: Double = 0
@@ -1510,19 +1512,23 @@ final class RecordingHelper {
                 if deltaMs > 0 {
                     observedMsSinceLastHarvest += deltaMs
                 }
-                let silenceMs = harvestMode == "dictation"
+                let silenceMs = silenceMsOverride ?? (harvestMode == "dictation"
                     ? RecordingHelper.SILENCE_DICTATION_MS
-                    : RecordingHelper.SILENCE_COMMAND_MS
-                let work = DispatchWorkItem { [weak self] in
-                    guard let self = self, self.isRecording else { return }
-                    self.silenceTimer = nil
-                    self.emitHarvestChunk(trigger: "silence")
+                    : RecordingHelper.SILENCE_COMMAND_MS)
+                if silenceMs <= 0 {
+                    emitHarvestChunk(trigger: "silence")
+                } else {
+                    let work = DispatchWorkItem { [weak self] in
+                        guard let self = self, self.isRecording else { return }
+                        self.silenceTimer = nil
+                        self.emitHarvestChunk(trigger: "silence")
+                    }
+                    silenceTimer = work
+                    DispatchQueue.main.asyncAfter(
+                        deadline: .now() + .milliseconds(silenceMs),
+                        execute: work
+                    )
                 }
-                silenceTimer = work
-                DispatchQueue.main.asyncAfter(
-                    deadline: .now() + .milliseconds(silenceMs),
-                    execute: work
-                )
             }
         }
     }
@@ -1578,8 +1584,9 @@ final class RecordingHelper {
 
     /// Set the harvest mode and cancel any pending silence timer.
     /// Called from MessageHandler when Node sends setHarvestMode.
-    func setHarvestMode(_ mode: String) {
+    func setHarvestMode(_ mode: String, silenceMs: Int? = nil) {
         harvestMode = mode
+        silenceMsOverride = silenceMs
         silenceTimer?.cancel()
         silenceTimer = nil
         resetHarvestSpeechState()
@@ -2149,8 +2156,8 @@ final class MessageHandler {
 
         case .setHarvestMode:
             if let mode = message.mode {
-                RecordingHelper.shared.setHarvestMode(mode)
-                sendLog(level: "info", message: "Harvest mode set to: \(mode)")
+                RecordingHelper.shared.setHarvestMode(mode, silenceMs: message.silenceMs)
+                sendLog(level: "info", message: "Harvest mode set to: \(mode), silenceMs: \(message.silenceMs.map(String.init) ?? "default")")
             } else {
                 sendError("setHarvestMode requires mode")
             }
