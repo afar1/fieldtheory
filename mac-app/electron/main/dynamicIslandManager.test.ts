@@ -590,7 +590,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       offsetY: 6,
     });
     expect(left?.getSize()).toEqual([84, 42]);
-    expect(right?.getSize()).toEqual([84, 42]);
+    expect(right?.getSize()).toEqual([48, 42]);
     expect(left?.getPosition()).toEqual([1156, 6]);
     expect(right?.getPosition()).toEqual([1340, 6]);
   });
@@ -616,7 +616,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(left?.getPosition()).toEqual([722, 0]);
     expect(right?.getPosition()).toEqual([934, 0]);
     expect(left?.getSize()).toEqual([72, 38]);
-    expect(right?.getSize()).toEqual([72, 38]);
+    expect(right?.getSize()).toEqual([48, 38]);
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {

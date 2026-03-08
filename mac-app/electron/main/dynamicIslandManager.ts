@@ -120,7 +120,7 @@ export class DynamicIslandManager extends EventEmitter {
     { modeWidth: 2056, notchWidth: 167, pillY: 0 },
   ];
   private readonly CENTER_JOIN_OVERLAP_PX = 1;
-  private readonly RIGHT_PILL_WIDTH = 72;
+  private readonly RIGHT_PILL_WIDTH = 48;
   private readonly RIGHT_PILL_HEIGHT = 38;
   private readonly DRAWER_WIDTH = 360;
   private readonly DRAWER_HEIGHT = 82;   // 38px backdrop + 44px text
@@ -1240,7 +1240,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getRightPillWidth(): number {
-    return this.geometryTuning.pillWidth;
+    return this.RIGHT_PILL_WIDTH;
   }
 
   private getRightPillHeight(): number {
