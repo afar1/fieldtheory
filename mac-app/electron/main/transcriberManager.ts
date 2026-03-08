@@ -4,6 +4,7 @@ import { getHotkeyManager } from './hotkeyManager';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import http from 'http';
 import net from 'net';
 import { exec } from 'child_process';
@@ -1131,7 +1132,7 @@ export class TranscriberManager extends EventEmitter {
           const figureLabel = item.figureLabel || String(i + 1);
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            clipboard.writeText(this.addFollowupTypingSpace(`Figure ${figureLabel}\n\`${imagePath}\``));
+            clipboard.writeText(this.addFollowupTypingSpace(`Figure ${figureLabel}\n\`${imagePath.replace(os.homedir(), '~')}\``));
             this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }
@@ -1368,7 +1369,7 @@ export class TranscriberManager extends EventEmitter {
             }
           }
           
-          this.emit('stackChanged', this.currentStack.length);
+          this.emit('stackChanged', this.screenshotMetadata.length);
         }
       }
       
@@ -1386,6 +1387,7 @@ export class TranscriberManager extends EventEmitter {
       const pasteStart = performance.now();
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
       await this.pasteStack(false);
+      this.emit('stackChanged', 0);
       if (deferredSquaresAction && this.squaresManager) {
         await this.squaresManager.executeAction(deferredSquaresAction);
       }
@@ -3241,7 +3243,7 @@ export class TranscriberManager extends EventEmitter {
       }
     }
     
-    this.emit('stackChanged', this.currentStack.length);
+    this.emit('stackChanged', this.screenshotMetadata.length);
   }
 
   /**
@@ -3319,7 +3321,7 @@ export class TranscriberManager extends EventEmitter {
       }
     }
 
-    this.emit('stackChanged', this.currentStack.length);
+    this.emit('stackChanged', this.screenshotMetadata.length);
   }
   
   /**
@@ -3603,7 +3605,7 @@ export class TranscriberManager extends EventEmitter {
         const imagePath = await this.clipboardManager!.exportImageToCache(item);
         if (imagePath) {
           // Use real path for terminal compatibility
-          figurePaths.push(`Figure ${item.figureLabel}: \`${imagePath}\``);
+          figurePaths.push(`Figure ${item.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
         }
       }
     }

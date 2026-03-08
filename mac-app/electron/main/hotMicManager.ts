@@ -3120,7 +3120,7 @@ export class HotMicManager extends EventEmitter {
       if (!item || !item.imageData) continue;
       const imagePath = await this.exportClipboardItemToCache(item);
       if (imagePath) {
-        lines.push(`Figure ${screenshot.figureLabel}: \`${imagePath}\``);
+        lines.push(`Figure ${screenshot.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
       }
     }
 
