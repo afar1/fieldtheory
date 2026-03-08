@@ -433,8 +433,8 @@ describe('HotMicManager screenshot figure integration', () => {
     );
 
     expect(payload).toContain('alpha segment [Figure 1] beta segment [Figure 2]');
-    expect(payload).toContain('Figure 1: /tmp/figure-201.png');
-    expect(payload).toContain('Figure 2: /tmp/figure-202.png');
+    expect(payload).toContain('Figure 1: `/tmp/figure-201.png`');
+    expect(payload).toContain('Figure 2: `/tmp/figure-202.png`');
 
     manager.destroy();
   });
@@ -495,7 +495,57 @@ describe('HotMicManager screenshot figure integration', () => {
     );
 
     expect(payload).toContain('[Figure 1]');
-    expect(payload).toContain('Figure 1: /tmp/ctx-401.png');
+    expect(payload).toContain('Figure 1: `/tmp/ctx-401.png`');
+
+    manager.destroy();
+  });
+
+  it('emits screenshotStackChanged when screenshots are added', () => {
+    const { manager, clipboardItems } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).hotMicSessionStartMs = Date.now() - 1000;
+
+    const listener = vi.fn();
+    manager.on('screenshotStackChanged', listener);
+
+    clipboardItems.set(601, { id: 601, type: 'screenshot', imageData: Buffer.from([1]), createdAt: Date.now() - 800 });
+    clipboardItems.set(602, { id: 602, type: 'screenshot', imageData: Buffer.from([2]), createdAt: Date.now() - 500 });
+
+    manager.addScreenshotToSession(601);
+    expect(listener).toHaveBeenCalledWith(1);
+
+    manager.addScreenshotToSession(602);
+    expect(listener).toHaveBeenCalledWith(2);
+
+    manager.destroy();
+  });
+
+  it('emits screenshotStackChanged(0) when draft context is cleared', () => {
+    const { manager, clipboardItems } = createManager();
+    (manager as any).state = 'listening';
+    (manager as any).hotMicSessionStartMs = Date.now() - 1000;
+
+    clipboardItems.set(701, { id: 701, type: 'screenshot', imageData: Buffer.from([1]), createdAt: Date.now() - 800 });
+    manager.addScreenshotToSession(701);
+
+    const listener = vi.fn();
+    manager.on('screenshotStackChanged', listener);
+
+    (manager as any).clearHotMicDraftContext(true);
+    expect(listener).toHaveBeenCalledWith(0);
+
+    manager.destroy();
+  });
+
+  it('does not emit screenshotStackChanged(0) when no screenshots were present', () => {
+    const { manager } = createManager();
+    (manager as any).state = 'listening';
+
+    const listener = vi.fn();
+    manager.on('screenshotStackChanged', listener);
+
+    (manager as any).clearHotMicDraftContext(true);
+    expect(listener).not.toHaveBeenCalled();
 
     manager.destroy();
   });
@@ -571,6 +621,76 @@ describe('HotMicManager drawer preview threshold', () => {
     // Buffer should have sanitized text.
     expect((manager as any).transcriptBuffer.length).toBe(1);
     expect((manager as any).transcriptBuffer[0]).toContain('should render cleanly');
+
+    manager.destroy();
+  });
+
+  it('strips angle-bracket hallucinations like << and >> from chunks', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('<< hello world >>');
+
+    expect((manager as any).transcriptBuffer.length).toBe(1);
+    expect((manager as any).transcriptBuffer[0]).toBe('hello world');
+
+    manager.destroy();
+  });
+
+  it('drops chunks that are only angle-bracket noise', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('<<');
+
+    expect((manager as any).transcriptBuffer).toEqual([]);
+
+    manager.destroy();
+  });
+
+  it('strips mm-hmm filler sounds from chunks', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('mm-hmm hello there mm-hmm');
+
+    expect((manager as any).transcriptBuffer.length).toBe(1);
+    expect((manager as any).transcriptBuffer[0]).toBe('hello there');
+
+    manager.destroy();
+  });
+
+  it('drops chunks that are only mm-hmm filler', async () => {
+    const { manager } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMicBackgroundFilterMeter: vi.fn(),
+    };
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+
+    await (manager as any).processListeningChunk('mm-hmm');
+
+    expect((manager as any).transcriptBuffer).toEqual([]);
 
     manager.destroy();
   });

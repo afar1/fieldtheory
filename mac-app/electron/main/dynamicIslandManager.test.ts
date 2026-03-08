@@ -686,6 +686,69 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(drawer?.backgroundColorCalls).toEqual([]);
   });
 
+  it('forwards stack count updates to the right pill', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.updateStackCount(2);
+
+    const right = testState.getWindowBySide('right');
+    expect(right).toBeDefined();
+
+    const stackEvents = right?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-stack-changed'
+    ) ?? [];
+    expect(stackEvents.length).toBeGreaterThan(0);
+    expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(2);
+  });
+
+  it('does not send stack count to the left pill', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.updateStackCount(3);
+
+    const left = testState.getWindowBySide('left');
+    expect(left).toBeDefined();
+
+    const stackEvents = left?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-stack-changed'
+    ) ?? [];
+    expect(stackEvents.length).toBe(0);
+  });
+
+  it('restores stack count when right pill reconnects', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.updateStackCount(5);
+
+    // Simulate right window teardown and recreation.
+    const originalRight = testState.getWindowBySide('right');
+    originalRight?.close();
+
+    // Re-enable triggers window recreation.
+    manager.setEnabled(false);
+    manager.setEnabled(true);
+
+    const newRight = testState.MockBrowserWindow.instances
+      .filter(w => !w.isDestroyed())
+      .find(w => w.loadTarget.search === '?side=right' || w.loadTarget.url?.includes('side=right'));
+    expect(newRight).toBeDefined();
+
+    const stackEvents = newRight?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-stack-changed'
+    ) ?? [];
+    expect(stackEvents.length).toBeGreaterThan(0);
+    expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(5);
+  });
+
   it('keeps transparent side backing untouched across repeated refreshes', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
