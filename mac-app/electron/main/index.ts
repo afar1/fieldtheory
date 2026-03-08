@@ -2908,7 +2908,7 @@ function setupClipboardIPCHandlers(): void {
                 const imagePath = await clipboardManager.exportImageToCache(stackItem);
                 if (imagePath) {
                   // Use real path for terminal compatibility
-                  figurePaths.push(`Figure ${stackItem.figureLabel}: ${imagePath}`);
+                  figurePaths.push(`Figure ${stackItem.figureLabel}: \`${imagePath}\``);
                 }
               }
             }
@@ -2929,8 +2929,8 @@ function setupClipboardIPCHandlers(): void {
           if (imagePath) {
             // Use real path for terminal compatibility
             const figureRef = item.figureLabel
-              ? `Figure ${item.figureLabel}: ${imagePath}`
-              : imagePath;
+              ? `Figure ${item.figureLabel}: \`${imagePath}\``
+              : `\`${imagePath}\``;
             const figureRefWithSpace = `${figureRef} `;
             clipboard.writeText(figureRefWithSpace);
             // Set hash from exact clipboard payload to avoid self-capture churn.
@@ -3096,7 +3096,7 @@ function setupClipboardIPCHandlers(): void {
           const imagePath = await clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
-            paths.push(`Figure ${item.figureLabel}: ${imagePath}`);
+            paths.push(`Figure ${item.figureLabel}: \`${imagePath}\``);
           }
         }
         return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
@@ -6005,6 +6005,10 @@ async function initTranscriberSystem(): Promise<void> {
     hotMicManager.on('toggleInputModeRequested', () => {
       const nextMode: InputMode = getCurrentInputMode() === 'hot-mic' ? 'standard' : 'hot-mic';
       void applyInputMode(nextMode);
+    });
+
+    hotMicManager.on('screenshotStackChanged', (count: number) => {
+      dynamicIslandManager?.updateStackCount(count);
     });
 
     broadcastInputMode(getCurrentInputMode());

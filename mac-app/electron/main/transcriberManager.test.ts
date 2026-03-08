@@ -804,6 +804,30 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(normalized).toBe('hello there');
   });
 
+  it('strips << >> hallucination noise from transcript chunks', () => {
+    const manager: any = {
+      applyWordSubstitutions: vi.fn((text: string) => text),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.sanitizeTranscriptText('hello << goodbye')).toBe('hello goodbye');
+    expect(manager.sanitizeTranscriptText('<<>>')).toBe('');
+    expect(manager.sanitizeTranscriptText('hello >> world')).toBe('hello world');
+  });
+
+  it('strips mm-hmm and filler sounds from transcript chunks', () => {
+    const manager: any = {
+      applyWordSubstitutions: vi.fn((text: string) => text),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.sanitizeTranscriptText('mm-hmm')).toBe('');
+    expect(manager.sanitizeTranscriptText('mm hmm')).toBe('');
+    expect(manager.sanitizeTranscriptText('hello mm-hmm world')).toBe('hello world');
+    expect(manager.sanitizeTranscriptText('hmm that is interesting')).toBe('that is interesting');
+    expect(manager.sanitizeTranscriptText('mm mm-hmm mm')).toBe('');
+  });
+
   it('strips figure references from live chunk accumulation to avoid dynamic island spam', async () => {
     const manager: any = {
       status: 'recording',

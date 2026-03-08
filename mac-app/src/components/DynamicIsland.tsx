@@ -155,8 +155,12 @@ function timeAgo(timestamp: number): string {
 function RightPill() {
   const [drawerTranscript, setDrawerTranscript] = useState('');
   const [copied, setCopied] = useState(false);
+  const [pipeCount, setPipeCount] = useState(0);
+  const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
+  const [hovered, setHovered] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hasTranscript = drawerTranscript.trim().length > 0;
+  const hasPipes = pipeCount > 0;
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
@@ -169,8 +173,30 @@ function RightPill() {
       }
     });
 
+    api.onStackChanged?.((count: number) => {
+      setPipeCount((prev) => {
+        if (count < prev) {
+          setAnimatedPipes(new Set());
+          return count;
+        }
+        if (count > prev) {
+          setTimeout(() => {
+            setAnimatedPipes((animPrev) => {
+              const next = new Set(animPrev);
+              for (let i = prev; i < count; i++) {
+                next.add(i);
+              }
+              return next;
+            });
+          }, 50);
+        }
+        return count;
+      });
+    });
+
     return () => {
       api.removeAllListeners('dynamic-island-drawer-transcript');
+      api.removeAllListeners('dynamic-island-stack-changed');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
@@ -205,45 +231,79 @@ function RightPill() {
     }
   }, [drawerTranscript]);
 
-  const showDrawerControls = hasTranscript;
+  const hasControls = hasTranscript || hasPipes;
 
   return (
-    <div style={rightStyles.outerContainer}>
+    <div
+      style={rightStyles.outerContainer}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+    >
       <div
         className="di-right-pill"
         style={rightStyles.pill}
       >
-        {showDrawerControls && (
-          <button
-            className="di-right-dismiss-btn"
-            onClick={handleDismissClick}
-            style={rightStyles.dismissButton}
-            title="dismiss transcript"
-          >
-            <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
-              <circle cx="5.5" cy="5.5" r="5" stroke="rgba(255,255,255,0.55)" strokeWidth="1" />
-              <path d="M3.8 3.8L7.2 7.2M7.2 3.8L3.8 7.2" stroke="rgba(255,255,255,0.65)" strokeWidth="1" strokeLinecap="round" />
-            </svg>
-          </button>
-        )}
-        {showDrawerControls && (
-          <button
-            className="di-right-copy-btn"
-            onClick={handleCopyClick}
-            style={rightStyles.copyButton}
-            title={copied ? 'copied' : 'copy transcript'}
-          >
-            {copied ? (
-              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                <path d="M2.2 6.2L4.8 8.8L9.8 3.8" stroke="#34c759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            ) : (
-              <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                <rect x="4" y="1.2" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" />
-                <rect x="1.8" y="3.6" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" fill="rgba(0,0,0,0.35)" />
-              </svg>
+        {/* Pipes — fade out on hover */}
+        {hasPipes && (
+          <div style={{
+            ...rightStyles.pipeLayer,
+            opacity: (hasControls && hovered) ? 0 : 1,
+          }}>
+            {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
+              <div
+                key={i}
+                style={{
+                  width: '2px',
+                  height: '10px',
+                  backgroundColor: 'rgba(255, 255, 255, 0.9)',
+                  opacity: animatedPipes.has(i) ? 1 : 0,
+                  transition: 'opacity 0.2s ease-in',
+                }}
+              />
+            ))}
+            {pipeCount > 3 && (
+              <span style={rightStyles.pipeOverflow}>+{pipeCount - 3}</span>
             )}
-          </button>
+          </div>
+        )}
+        {/* Controls — fade in on hover */}
+        {hasControls && (
+          <div style={{
+            ...rightStyles.controlsLayer,
+            opacity: hovered ? 1 : (hasPipes ? 0 : 1),
+            pointerEvents: hovered || !hasPipes ? 'auto' : 'none',
+          }}>
+            <button
+              className="di-right-dismiss-btn"
+              onClick={handleDismissClick}
+              style={rightStyles.dismissButton}
+              title="dismiss transcript"
+            >
+              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
+                <circle cx="5.5" cy="5.5" r="5" stroke="rgba(255,255,255,0.55)" strokeWidth="1" />
+                <path d="M3.8 3.8L7.2 7.2M7.2 3.8L3.8 7.2" stroke="rgba(255,255,255,0.65)" strokeWidth="1" strokeLinecap="round" />
+              </svg>
+            </button>
+            {hasTranscript && (
+              <button
+                className="di-right-copy-btn"
+                onClick={handleCopyClick}
+                style={rightStyles.copyButton}
+                title={copied ? 'copied' : 'copy transcript'}
+              >
+                {copied ? (
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                    <path d="M2.2 6.2L4.8 8.8L9.8 3.8" stroke="#34c759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                ) : (
+                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                    <rect x="4" y="1.2" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" />
+                    <rect x="1.8" y="3.6" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" fill="rgba(0,0,0,0.35)" />
+                  </svg>
+                )}
+              </button>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -259,10 +319,10 @@ const rightStyles: Record<string, React.CSSProperties> = {
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
   },
   pill: {
+    position: 'relative',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: '10px',
     width: '100%',
     height: '100%',
     padding: '0 8px',
@@ -270,6 +330,27 @@ const rightStyles: Record<string, React.CSSProperties> = {
     backgroundColor: '#000000',
     borderRadius: '0 0 16px 0',
     overflow: 'hidden',
+  },
+  pipeLayer: {
+    position: 'absolute',
+    left: '12px',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '2px',
+    transition: 'opacity 150ms ease',
+  },
+  pipeOverflow: {
+    fontSize: '8px',
+    fontWeight: 600,
+    color: 'rgba(255, 255, 255, 0.9)',
+    marginLeft: '2px',
+  },
+  controlsLayer: {
+    position: 'absolute',
+    display: 'flex',
+    alignItems: 'center',
+    gap: '10px',
+    transition: 'opacity 150ms ease',
   },
   dismissButton: {
     display: 'flex',
@@ -652,9 +733,6 @@ function LeftPill() {
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(50);
   const [compactPillWidth, setCompactPillWidth] = useState<number>(() => window.innerWidth);
   const [compactPillHeight, setCompactPillHeight] = useState<number>(() => window.innerHeight);
-  // Stack/pipe count for screenshots captured during standard recording.
-  const [pipeCount, setPipeCount] = useState(0);
-  const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
   const [filterMeter, setFilterMeter] = useState<HotMicFilterMeter>({
     enabled: false,
     strength: 50,
@@ -705,8 +783,6 @@ function LeftPill() {
         setTranscript('');
         setCommands([]);
         setIsFinal(false);
-        setPipeCount(0);
-        setAnimatedPipes(new Set());
         // Reset waveform buffer so standard recording starts with clean bars.
         waveformBufferRef.current.reset();
         setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
@@ -716,28 +792,6 @@ function LeftPill() {
     // Standard recording audio level updates (for real-time waveform).
     api.onStandardAudioLevel?.((level: number) => {
       setStandardAudioLevel(level);
-    });
-
-    // Stack count updates (screenshots captured during standard recording).
-    api.onStackChanged?.((count: number) => {
-      setPipeCount((prev) => {
-        if (count < prev) {
-          setAnimatedPipes(new Set());
-          return count;
-        }
-        if (count > prev) {
-          setTimeout(() => {
-            setAnimatedPipes((animPrev) => {
-              const next = new Set(animPrev);
-              for (let i = prev; i < count; i++) {
-                next.add(i);
-              }
-              return next;
-            });
-          }, 50);
-        }
-        return count;
-      });
     });
 
     api.onTranscriptUpdate((data: { text: string; isFinal: boolean }) => {
@@ -799,7 +853,6 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-input-mode');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-hotmic-runtime');
-      api.removeAllListeners('dynamic-island-stack-changed');
       api.removeAllListeners('dynamic-island-standard-audio-level');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
@@ -1057,42 +1110,22 @@ function LeftPill() {
             />
           )}
         </button>
-        {/* Right side: hamburger (or pipe count during standard recording). */}
-        {showStandardWaveform && pipeCount > 0 ? (
-          <div style={styles.pipeContainer}>
-            {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
-              <div
-                key={i}
-                style={{
-                  width: '2px',
-                  height: '10px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                  opacity: animatedPipes.has(i) ? 1 : 0,
-                  transition: 'opacity 0.2s ease-in',
-                }}
-              />
-            ))}
-            {pipeCount > 3 && (
-              <span style={styles.pipeOverflow}>+{pipeCount - 3}</span>
-            )}
-          </div>
-        ) : (
-          <button
-            className="di-hamburger"
-            onClick={toggleHistory}
-            style={{
-              ...styles.hamburger,
-              backgroundColor: 'transparent',
-            }}
-            title="transcript history"
-          >
-            <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
-              <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
-              <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
-              <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
-            </svg>
-          </button>
-        )}
+        {/* Right side: hamburger menu. */}
+        <button
+          className="di-hamburger"
+          onClick={toggleHistory}
+          style={{
+            ...styles.hamburger,
+            backgroundColor: 'transparent',
+          }}
+          title="transcript history"
+        >
+          <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
+            <path d="M0 1H14V2H0V1Z" fill="rgba(255,255,255,0.78)" />
+            <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
+            <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
+          </svg>
+        </button>
       </div>
 
       {historyVisible && (
@@ -1331,21 +1364,6 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: '50%',
     transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
     flexShrink: 0,
-  },
-
-  // Vertical pipes showing screenshot stacks during recording.
-  pipeContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '2px',
-    marginLeft: '2px',
-  },
-
-  pipeOverflow: {
-    fontSize: '8px',
-    fontWeight: 600,
-    color: 'rgba(255, 255, 255, 0.9)',
-    marginLeft: '2px',
   },
 
   contentArea: {

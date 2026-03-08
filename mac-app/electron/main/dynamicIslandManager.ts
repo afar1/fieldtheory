@@ -365,14 +365,14 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   // -------------------------------------------------------------------------
-  // Stack count (screenshots during standard recording, forwarded to left pill)
+  // Stack count (screenshots during recording, forwarded to right pill)
   // -------------------------------------------------------------------------
 
   updateStackCount(count: number): void {
     this.stackCount = count;
     if (!this.enabled) return;
-    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
-      this.window.webContents.send('dynamic-island-stack-changed', count);
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-stack-changed', count);
     }
   }
 
@@ -620,10 +620,6 @@ export class DynamicIslandManager extends EventEmitter {
         this.sendInputModeToRenderers();
         this.sendHistory();
         this.sendHotMicRuntimeStatusToLeft();
-        // Restore stack count on reconnect.
-        if (this.stackCount > 0) {
-          this.window!.webContents.send('dynamic-island-stack-changed', this.stackCount);
-        }
 
         if (this.pendingShow) {
           this.pendingShow = false;
@@ -700,10 +696,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.reinforceWindowBacking('right', 'right-ready-show');
         this.rightWindow.setOpacity(1);
         this.rightWindow.showInactive();
-        this.rightWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
-        this.sendHotMicToRight();
-        this.rightWindow.webContents.send('dynamic-island-state', this.state);
-        this.sendInputModeToRenderers();
+        this.syncRightWindowState();
       }
     });
   }
@@ -721,10 +714,19 @@ export class DynamicIslandManager extends EventEmitter {
     this.rightWindow.showInactive();
 
     if (this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
-      this.sendHotMicToRight();
-      this.rightWindow.webContents.send('dynamic-island-state', this.state);
-      this.sendInputModeToRenderers();
+      this.syncRightWindowState();
+    }
+  }
+
+  private syncRightWindowState(): void {
+    const w = this.rightWindow;
+    if (!w || w.isDestroyed()) return;
+    w.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
+    this.sendHotMicToRight();
+    w.webContents.send('dynamic-island-state', this.state);
+    this.sendInputModeToRenderers();
+    if (this.stackCount > 0) {
+      w.webContents.send('dynamic-island-stack-changed', this.stackCount);
     }
   }
 
