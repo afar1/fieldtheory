@@ -15,7 +15,6 @@ import {
   summarizeTranscriptForIsland
 } from '../utils/textUtils';
 import {
-  getLeftModeDotPresentation,
   type DynamicIslandInputMode,
 } from '../utils/dynamicIslandIndicator';
 import {
@@ -148,30 +147,56 @@ function timeAgo(timestamp: number): string {
   return `${days}d ago`;
 }
 
+// Shared animated tray slot style — used by both pills for collapsible elements.
+function traySlotStyle(expanded: boolean): React.CSSProperties {
+  return {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: expanded ? '22px' : '0px',
+    minWidth: expanded ? '22px' : '0px',
+    height: '22px',
+    overflow: 'hidden',
+    transition: 'width 200ms ease, min-width 200ms ease, margin-right 200ms ease',
+    marginRight: expanded ? '8px' : '0px',
+  };
+}
+
 // =============================================================================
-// Right pill — drawer controls
+// Right pill — waveform + pipe bars
 // =============================================================================
 
 function RightPill() {
-  const [drawerTranscript, setDrawerTranscript] = useState('');
-  const [copied, setCopied] = useState(false);
   const [pipeCount, setPipeCount] = useState(0);
   const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
-  const [hovered, setHovered] = useState(false);
-  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hasTranscript = drawerTranscript.trim().length > 0;
-  const hasPipes = pipeCount > 0;
+  const [state, setState] = useState<IslandState>('idle');
+  const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
+  const [standardAudioLevel, setStandardAudioLevel] = useState(0);
+  const [filterMeterRawLevel, setFilterMeterRawLevel] = useState(0);
+  const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
+  const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
+  const waveformActive = inputMode === 'hot-mic' || state === 'recording';
+
+  // Hot-mic waveform = orange, standard recording waveform = white.
+  const waveformColor = inputMode === 'hot-mic'
+    ? 'rgba(249, 115, 22, 0.95)'
+    : 'rgba(255, 255, 255, 0.92)';
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
     if (!api) return;
 
-    api.onDrawerTranscript?.((text: string) => {
-      setDrawerTranscript(text);
-      if (!text.trim()) {
-        setCopied(false);
+    api.onStateChange?.((s: string) => {
+      setState(s as IslandState);
+      if (s === 'recording') {
+        waveformBufferRef.current.reset();
+        setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
       }
     });
+    api.onInputMode?.((m: 'hot-mic' | 'standard') => setInputMode(m));
+
+    api.onStandardAudioLevel?.((level: number) => setStandardAudioLevel(level));
+    api.onHotMicFilterMeter?.((data: { rawLevel: number }) => setFilterMeterRawLevel(data.rawLevel));
 
     api.onStackChanged?.((count: number) => {
       setPipeCount((prev) => {
@@ -195,116 +220,59 @@ function RightPill() {
     });
 
     return () => {
-      api.removeAllListeners('dynamic-island-drawer-transcript');
+      api.removeAllListeners('dynamic-island-state');
+      api.removeAllListeners('dynamic-island-input-mode');
+      api.removeAllListeners('dynamic-island-standard-audio-level');
+      api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-stack-changed');
-      if (copiedTimerRef.current) {
-        clearTimeout(copiedTimerRef.current);
-        copiedTimerRef.current = null;
-      }
     };
   }, []);
 
-  const handleDismissClick = useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    (window as any).dynamicIslandAPI?.dismissTranscript?.();
-  }, []);
+  // Update waveform ring buffer when audio levels arrive.
+  useEffect(() => {
+    const level = state === 'recording' ? standardAudioLevel : filterMeterRawLevel;
+    if (state !== 'recording' && inputMode !== 'hot-mic') return;
+    const buf = waveformBufferRef.current;
+    buf.push(level);
+    setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
+  }, [filterMeterRawLevel, standardAudioLevel, inputMode, state]);
 
-  const handleCopyClick = useCallback(async (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.stopPropagation();
-    const text = drawerTranscript.trim();
-    if (!text) return;
-
-    try {
-      const api = (window as any).dynamicIslandAPI;
-      if (api?.copyToClipboard) {
-        api.copyToClipboard(text);
-      } else if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(text);
-      } else {
-        return;
-      }
-      setCopied(true);
-      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
-      copiedTimerRef.current = setTimeout(() => setCopied(false), 900);
-    } catch (error) {
-      console.error('Failed to copy drawer transcript:', error);
-    }
-  }, [drawerTranscript]);
-
-  const hasControls = hasTranscript || hasPipes;
+  const pipeSlotWidth = pipeCount > 3 ? (pipeCount >= 10 ? '38px' : '32px') : '22px';
 
   return (
-    <div
-      style={rightStyles.outerContainer}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-    >
+    <div style={rightStyles.outerContainer}>
       <div
         className="di-right-pill"
-        style={rightStyles.pill}
+        style={{
+          ...rightStyles.pill,
+          width: waveformActive ? '100%' : '48px',
+          transition: 'width 200ms ease',
+        }}
       >
-        {/* Pipes — fade out on hover */}
-        {hasPipes && (
-          <div style={{
-            ...rightStyles.pipeLayer,
-            opacity: (hasControls && hovered) ? 0 : 1,
-          }}>
-            {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
-              <div
-                key={i}
-                style={{
-                  width: '2px',
-                  height: '10px',
-                  backgroundColor: 'rgba(255, 255, 255, 0.9)',
-                  opacity: animatedPipes.has(i) ? 1 : 0,
-                  transition: 'opacity 0.2s ease-in',
-                }}
-              />
-            ))}
-            {pipeCount > 3 && (
-              <span style={rightStyles.pipeOverflow}>+{pipeCount - 3}</span>
-            )}
+        {/* Slot 3: Waveform — collapses to 0 when no session active */}
+        <div style={traySlotStyle(waveformActive)}>
+          <div aria-hidden="true" style={rightStyles.waveformContainer}>
+            <WaveformBars levels={waveformLevels} color={waveformColor} />
           </div>
-        )}
-        {/* Controls — fade in on hover */}
-        {hasControls && (
-          <div style={{
-            ...rightStyles.controlsLayer,
-            opacity: hovered ? 1 : (hasPipes ? 0 : 1),
-            pointerEvents: hovered || !hasPipes ? 'auto' : 'none',
-          }}>
-            <button
-              className="di-right-dismiss-btn"
-              onClick={handleDismissClick}
-              style={rightStyles.dismissButton}
-              title="dismiss transcript"
-            >
-              <svg width="11" height="11" viewBox="0 0 11 11" fill="none" aria-hidden="true">
-                <circle cx="5.5" cy="5.5" r="5" stroke="rgba(255,255,255,0.55)" strokeWidth="1" />
-                <path d="M3.8 3.8L7.2 7.2M7.2 3.8L3.8 7.2" stroke="rgba(255,255,255,0.65)" strokeWidth="1" strokeLinecap="round" />
-              </svg>
-            </button>
-            {hasTranscript && (
-              <button
-                className="di-right-copy-btn"
-                onClick={handleCopyClick}
-                style={rightStyles.copyButton}
-                title={copied ? 'copied' : 'copy transcript'}
-              >
-                {copied ? (
-                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                    <path d="M2.2 6.2L4.8 8.8L9.8 3.8" stroke="#34c759" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-                  </svg>
-                ) : (
-                  <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
-                    <rect x="4" y="1.2" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" />
-                    <rect x="1.8" y="3.6" width="6.2" height="6.2" rx="1" stroke="rgba(255,255,255,0.6)" strokeWidth="1" fill="rgba(0,0,0,0.35)" />
-                  </svg>
-                )}
-              </button>
-            )}
-          </div>
-        )}
+        </div>
+        {/* Slot 4: Pipe bars — widens when overflow count appears */}
+        <div style={{
+          ...rightStyles.pipeSlot,
+          width: pipeSlotWidth,
+          minWidth: pipeSlotWidth,
+          transition: 'width 200ms ease, min-width 200ms ease',
+        }}>
+          {pipeCount > 0 && (
+            <div style={rightStyles.pipeGroup}>
+              {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
+                <span key={i} style={{ ...rightStyles.pipeChar, opacity: animatedPipes.has(i) ? 1 : 0 }}>|</span>
+              ))}
+              {pipeCount > 3 && (
+                <span style={rightStyles.pipeOverflow}>+{pipeCount - 3}</span>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -319,64 +287,47 @@ const rightStyles: Record<string, React.CSSProperties> = {
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
   },
   pill: {
-    position: 'relative',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center',
     width: '100%',
     height: '100%',
-    padding: '0 8px',
+    padding: '0 10px',
     boxSizing: 'border-box',
     backgroundColor: '#000000',
     borderRadius: '0 0 16px 0',
     overflow: 'hidden',
   },
-  pipeLayer: {
-    position: 'absolute',
-    left: '12px',
+  waveformContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: '1.5px',
+    height: '14px',
+  },
+  pipeSlot: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '22px',
+    minWidth: '22px',
+    height: '22px',
+  },
+  pipeGroup: {
     display: 'flex',
     alignItems: 'center',
     gap: '2px',
-    transition: 'opacity 150ms ease',
+  },
+  pipeChar: {
+    fontSize: '11px',
+    fontWeight: 300,
+    color: 'rgba(255, 255, 255, 0.78)',
+    lineHeight: 1,
+    transition: 'opacity 0.2s ease-in',
   },
   pipeOverflow: {
     fontSize: '8px',
     fontWeight: 600,
-    color: 'rgba(255, 255, 255, 0.9)',
+    color: 'rgba(255, 255, 255, 0.78)',
     marginLeft: '2px',
-  },
-  controlsLayer: {
-    position: 'absolute',
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    transition: 'opacity 150ms ease',
-  },
-  dismissButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '16px',
-    height: '16px',
-    flexShrink: 0,
-    padding: 0,
-    border: 'none',
-    borderRadius: '999px',
-    backgroundColor: 'transparent',
-    cursor: 'pointer',
-  },
-  copyButton: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '16px',
-    height: '16px',
-    flexShrink: 0,
-    padding: 0,
-    border: 'none',
-    borderRadius: '999px',
-    backgroundColor: 'transparent',
-    cursor: 'pointer',
   },
 };
 
@@ -769,10 +720,6 @@ function LeftPill() {
   const deletedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Waveform: ring buffer of recent audio levels for visualization (hot-mic and standard).
-  const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
-  const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
-  const [standardAudioLevel, setStandardAudioLevel] = useState(0);
-
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
     if (!api) return;
@@ -783,15 +730,7 @@ function LeftPill() {
         setTranscript('');
         setCommands([]);
         setIsFinal(false);
-        // Reset waveform buffer so standard recording starts with clean bars.
-        waveformBufferRef.current.reset();
-        setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
       }
-    });
-
-    // Standard recording audio level updates (for real-time waveform).
-    api.onStandardAudioLevel?.((level: number) => {
-      setStandardAudioLevel(level);
     });
 
     api.onTranscriptUpdate((data: { text: string; isFinal: boolean }) => {
@@ -853,7 +792,6 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-input-mode');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-hotmic-runtime');
-      api.removeAllListeners('dynamic-island-standard-audio-level');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
@@ -864,16 +802,6 @@ function LeftPill() {
       }
     };
   }, []);
-
-  // Update waveform ring buffer when audio levels arrive (hot-mic or standard recording).
-  // During standard recording, always use standardAudioLevel regardless of input mode.
-  useEffect(() => {
-    const level = state === 'recording' ? standardAudioLevel : filterMeter.rawLevel;
-    if (state !== 'recording' && inputMode !== 'hot-mic') return;
-    const buf = waveformBufferRef.current;
-    buf.push(level);
-    setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
-  }, [filterMeter.rawLevel, standardAudioLevel, inputMode, state]);
 
   useEffect(() => {
     if (transcriptRef.current) {
@@ -1051,7 +979,6 @@ function LeftPill() {
   const acceptedPct = Math.round(Math.max(0, Math.min(1, filterMeter.acceptedLevel)) * 100);
   const thresholdPct = Math.round(Math.max(0, Math.min(1, filterMeter.threshold)) * 100);
   const speechRatioPct = Math.round(Math.max(0, Math.min(1, filterMeter.speechRatio)) * 100);
-  const modeDot = getLeftModeDotPresentation(inputMode, state);
   const formatMs = (value: number | null): string => (
     value === null ? '--' : `${Math.max(0, Math.round(value))}ms`
   );
@@ -1073,44 +1000,43 @@ function LeftPill() {
       ? styles.hudPillWarn
       : styles.hudPillGood;
 
-  // Standard recording: show waveform in place of mode dot (regardless of input mode).
-  const showStandardWaveform = state === 'recording';
+  // Waveform active when hot-mic is on OR standard recording is in progress.
+  // Both pills animate between compact (48px) and expanded (full window width).
+  const waveformActive = inputMode === 'hot-mic' || state === 'recording';
+
+  const handleCancelSession = useCallback(() => {
+    (window as any).dynamicIslandAPI?.cancelSession?.();
+  }, []);
 
   return (
-    <div style={styles.outerContainer}>
+    <div style={{
+      ...styles.outerContainer,
+      alignItems: 'flex-end',
+    }}>
       <div
         className="di-left-pill"
         style={{
           ...styles.island,
           ...styles.islandIdle,
           justifyContent: 'center',
-          width: `${compactPillWidth}px`,
+          width: waveformActive ? `${compactPillWidth}px` : '48px',
           height: `${compactPillHeight}px`,
+          gap: '0px',
+          transition: 'width 200ms ease',
         }}
       >
-        {/* Left side: mode toggle (dot or waveform). Same position for all modes. */}
-        <button
-          className="di-mode-toggle"
-          onClick={toggleInputMode}
-          style={styles.modeToggle}
-          title={inputMode === 'hot-mic' ? 'switch to standard mode' : 'switch to hot mic mode'}
+        {/* X cancel button — collapses to 0 width when no session active */}
+        <div
+          className="di-cancel-btn"
+          onClick={handleCancelSession}
+          style={{ ...traySlotStyle(waveformActive), cursor: 'pointer', opacity: 0.5, transition: 'width 200ms ease, min-width 200ms ease, margin-right 200ms ease, opacity 150ms ease' }}
+          title="cancel session"
         >
-          {inputMode === 'hot-mic' || showStandardWaveform ? (
-            <div aria-hidden="true" style={styles.waveformContainer}>
-              <WaveformBars levels={waveformLevels} color={modeDot.color} />
-            </div>
-          ) : (
-            <span
-              aria-hidden="true"
-              style={{
-                ...styles.modeStateDot,
-                backgroundColor: modeDot.color,
-                boxShadow: modeDot.shadow,
-              }}
-            />
-          )}
-        </button>
-        {/* Right side: hamburger menu. */}
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+            <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
+          </svg>
+        </div>
+        {/* Hamburger menu — always visible */}
         <button
           className="di-hamburger"
           onClick={toggleHistory}
@@ -1298,6 +1224,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexDirection: 'column',
     alignItems: 'flex-start',
     width: '100%',
+    height: '100%',
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
   },
 
@@ -1334,35 +1261,6 @@ const styles: Record<string, React.CSSProperties> = {
     border: 'none',
     cursor: 'pointer',
     transition: 'background-color 0.15s ease',
-    flexShrink: 0,
-  },
-
-  waveformContainer: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '1.5px',
-    height: '14px',
-  },
-
-  modeToggle: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '22px',
-    height: '22px',
-    minWidth: '22px',
-    borderRadius: '8px',
-    border: 'none',
-    backgroundColor: 'transparent',
-    cursor: 'pointer',
-    flexShrink: 0,
-  },
-
-  modeStateDot: {
-    width: '7px',
-    height: '7px',
-    borderRadius: '50%',
-    transition: 'background-color 0.15s ease, box-shadow 0.15s ease',
     flexShrink: 0,
   },
 
@@ -1791,9 +1689,8 @@ styleSheet.textContent = `
   .di-mode-toggle:hover {
     background-color: transparent !important;
   }
-  .di-right-dismiss-btn:hover,
-  .di-right-copy-btn:hover {
-    background-color: rgba(255, 255, 255, 0.12) !important;
+  .di-cancel-btn:hover {
+    opacity: 1 !important;
   }
   .di-drawer-word {
     display: inline-block;
