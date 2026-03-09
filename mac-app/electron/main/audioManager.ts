@@ -429,6 +429,7 @@ export class AudioManager extends EventEmitter {
     try {
       this.helper.setDefaultInput(this.priorityDeviceId);
       this.defaultInputId = this.priorityDeviceId;
+      this.emit('deviceEnforced');
     } finally {
       // Reset flag after a short delay to account for async CoreAudio callback.
       setTimeout(() => {
