@@ -577,6 +577,7 @@ export class DynamicIslandManager extends EventEmitter {
     const initialHeight = this.historyVisible ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
 
     this.window = new BrowserWindow({
+      type: 'panel',
       width: initialWidth,
       height: initialHeight,
       x,
