@@ -5935,6 +5935,17 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager.on('dismiss-transcript', () => {
         hotMicManager?.dismissCurrentTranscript();
       });
+      dynamicIslandManager.on('cancel-session', () => {
+        // Cancel whichever recording mode is active and collapse the tray.
+        const transcriberStatus = transcriberManager?.getStatus();
+        if (transcriberStatus === 'recording' || transcriberStatus === 'silentStacking') {
+          transcriberManager?.toggleRecording();
+        }
+        if (hotMicManager?.isActive || getCurrentInputMode() === 'hot-mic') {
+          applyHotMicMode('deactivate');
+          void applyInputMode('standard');
+        }
+      });
       dynamicIslandManager.on('open-field-theory', () => {
         if (!clipboardHistoryWindow) {
           clipboardHistoryWindow = initClipboardHistoryWindow();

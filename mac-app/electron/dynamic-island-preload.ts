@@ -159,6 +159,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.send('dynamic-island-dismiss-transcript');
   },
 
+  // Cancel the active recording session (standard or hot-mic).
+  cancelSession: () => {
+    ipcRenderer.send('dynamic-island-cancel-session');
+  },
+
   // Open the main Field Theory clipboard/history window.
   openFieldTheory: () => {
     ipcRenderer.send('dynamic-island-open-field-theory');

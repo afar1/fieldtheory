@@ -543,24 +543,33 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(rightModeEvents[rightModeEvents.length - 1]?.args[0]).toBe('hot-mic');
   });
 
-  it('keeps the top-left pill compact during recording and transcribing', () => {
+  it('keeps both pill windows at expanded width (animation is renderer-side CSS)', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
 
     const left = testState.getWindowBySide('left');
+    const right = testState.getWindowBySide('right');
     expect(left).toBeDefined();
+    expect(right).toBeDefined();
+
+    // BrowserWindow is always at expanded width (72px) regardless of state.
+    // The renderer handles compact/expanded animation via CSS transitions.
     expect(left?.getSize()).toEqual([72, 38]);
+    expect(right?.getSize()).toEqual([72, 38]);
 
     manager.setInputMode('hot-mic');
     expect(left?.getSize()).toEqual([72, 38]);
+    expect(right?.getSize()).toEqual([72, 38]);
 
     manager.setState('recording');
     expect(left?.getSize()).toEqual([72, 38]);
 
-    manager.setState('transcribing');
+    manager.setState('idle');
+    manager.setInputMode('standard');
     expect(left?.getSize()).toEqual([72, 38]);
+    expect(right?.getSize()).toEqual([72, 38]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {
@@ -589,8 +598,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       offsetX: 10,
       offsetY: 6,
     });
+    // With tuning pillWidth=84, both pills use max(84, 72) = 84
     expect(left?.getSize()).toEqual([84, 42]);
-    expect(right?.getSize()).toEqual([48, 42]);
+    expect(right?.getSize()).toEqual([84, 42]);
+    // Left: floor((2560 - 100) / 2 - 84) + 10 = 1156
     expect(left?.getPosition()).toEqual([1156, 6]);
     expect(right?.getPosition()).toEqual([1340, 6]);
   });
@@ -613,10 +624,11 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(right).toBeDefined();
 
     // 1728 width maps to the profile notch width 140.
+    // Left: floor((1728 - 140) / 2 - 72) = 722
     expect(left?.getPosition()).toEqual([722, 0]);
     expect(right?.getPosition()).toEqual([934, 0]);
     expect(left?.getSize()).toEqual([72, 38]);
-    expect(right?.getSize()).toEqual([48, 38]);
+    expect(right?.getSize()).toEqual([72, 38]);
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {
