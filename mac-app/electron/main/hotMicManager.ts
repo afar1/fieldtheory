@@ -610,7 +610,19 @@ export class HotMicManager extends EventEmitter {
 
   setAudioManager(manager: AudioManager): void {
     this.audioManager = manager;
+    manager.on('deviceEnforced', () => this.handleDeviceEnforced());
     log.info('Hot Mic: AudioManager wired for priority mic enforcement');
+  }
+
+  private async handleDeviceEnforced(): Promise<void> {
+    if (this.state === 'idle' || !this.nativeHelper.isRecordingActive()) return;
+    log.info('Hot Mic: restarting recording after device enforcement');
+    try {
+      await this.nativeHelper.stopRecording();
+      await this.nativeHelper.startRecording();
+    } catch (error) {
+      log.error('Hot Mic: failed to restart recording after device enforcement:', error);
+    }
   }
 
   setTranscriberStatusGetter(getter: () => string): void {

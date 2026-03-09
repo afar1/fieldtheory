@@ -191,6 +191,7 @@ export class TranscriberManager extends EventEmitter {
     this.clipboardManager = clipboardManager || null;
     this.quotaManager = quotaManager || null;
     this.audioManager = audioManager || null;
+    this.audioManager?.on('deviceEnforced', () => this.handleDeviceEnforced());
     this.cursorStatusManager = cursorStatusManager || null;
     this.commandsManager = commandsManager || null;
     // ModelManager will be initialized with selected model in init()
@@ -622,6 +623,18 @@ export class TranscriberManager extends EventEmitter {
       await this.stopRecordingAndTranscribe();
     }
     // Ignore if transcribing
+  }
+
+  private async handleDeviceEnforced(): Promise<void> {
+    if (this.status !== 'recording' && this.status !== 'silentStacking') return;
+    if (!this.nativeHelper.isRecordingActive()) return;
+    log.info('Standard recording: restarting after device enforcement');
+    try {
+      await this.nativeHelper.stopRecording();
+      await this.nativeHelper.startRecording();
+    } catch (error) {
+      log.error('Standard recording: failed to restart after device enforcement:', error);
+    }
   }
 
   /**
