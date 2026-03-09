@@ -283,7 +283,13 @@ export class ClipboardHistoryWindow {
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
-    const shouldShowApp = showInDock || app.isHidden();
+
+    // Always reactivate so the panel can receive focus after a paste flow
+    // (app.isHidden() is false but inactive — panel couldn't handle clicks).
+    app.show();
+    if (!showInDock && process.platform === 'darwin') {
+      app.dock.hide();
+    }
 
     // If window exists, reposition and show it.
     // For existing windows, we can use renderer-based sound (instant via Web Audio API).
@@ -296,12 +302,6 @@ export class ClipboardHistoryWindow {
           width: savedBounds.width,
           height: savedBounds.height,
         });
-      }
-
-      // Keep panel mode from force-activating the app in Cmd+Tab/Dock.
-      // Only unhide when using Dock mode or when the app is actually hidden.
-      if (shouldShowApp) {
-        app.show();
       }
 
       // Play sound via renderer (instant - Web Audio API) BEFORE showing window.
@@ -335,12 +335,6 @@ export class ClipboardHistoryWindow {
     // The delay is acceptable since content is loading anyway.
     if (!skipSound) {
       this.soundManager.play('windowOpen');
-    }
-
-    // Keep panel mode from force-activating the app in Cmd+Tab/Dock.
-    // Only unhide when using Dock mode or when the app is actually hidden.
-    if (shouldShowApp) {
-      app.show();
     }
 
     // Create new window.

@@ -149,6 +149,14 @@ export class CommandsManager extends EventEmitter {
    * Reinitialize for the current user. Call after setUserDataManager.
    */
   async reinitializeForUser(): Promise<void> {
+    // Skip if settings path hasn't changed (avoids redundant re-scans when
+    // auth confirms the same user already restored from disk).
+    const oldPath = this.settingsPath;
+    this.updateSettingsPath();
+    if (this.settingsPath === oldPath && this.commands.size > 0) {
+      return;
+    }
+
     // Stop existing watchers
     for (const abort of this.watchers.values()) {
       abort.abort();
@@ -156,8 +164,6 @@ export class CommandsManager extends EventEmitter {
     this.watchers.clear();
     this.commands.clear();
 
-    // Update path and reload
-    this.updateSettingsPath();
     this.loadSettings();
 
     // Rescan all directories

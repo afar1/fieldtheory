@@ -156,14 +156,18 @@ export class CommandLauncherWindow {
   
   /**
    * Hide the command launcher window.
-   * Explicitly activates the previous app to restore focus.
-   * app.hide() doesn't work reliably when other Electron windows are visible (e.g., immersive mode).
+   * @param skipActivation Skip previous-app activation (caller handles it).
    */
-  hide(): void {
-    this._isShowing = false; // Clear showing flag on hide
-    if (this.window && !this.window.isDestroyed()) {
-      this.window.hide();
-    }
+  hide(skipActivation = false): void {
+    this._isShowing = false;
+
+    // Already hidden — prevents blur re-entry after hide(true).
+    const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
+    if (!isVisible) return;
+
+    this.window!.hide();
+
+    if (skipActivation) return;
 
     // Explicitly activate the previous app instead of hiding entire Electron app.
     // This works even when clipboard history is visible in immersive mode.

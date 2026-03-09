@@ -84,7 +84,10 @@ const log = createLogger('Main');
 const VISION_BUILD_ENABLED = false;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
-const { exec } = require('child_process');
+const { exec, execFile: execFileCp } = require('child_process');
+const { promisify } = require('util');
+const execFileAsync = promisify(execFileCp);
+
 function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     exec(command, { timeout: timeoutMs }, (error: Error | null, stdout: string, stderr: string) => {
@@ -95,6 +98,21 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
       }
     });
   });
+}
+
+// Activate target app and paste in a single osascript (avoids focus race conditions).
+async function activateAndPaste(targetApp: { bundleId: string; name: string } | null): Promise<void> {
+  if (targetApp) {
+    const bundleId = targetApp.bundleId;
+    if (bundleId.includes('"') || bundleId.includes("'")) {
+      log.error('activateAndPaste: invalid bundleId contains quotes:', bundleId);
+      return;
+    }
+    const script = `tell application id "${bundleId}"\n  activate\nend tell\ndelay 0.1\ntell application "System Events"\n  keystroke "v" using command down\nend tell`;
+    await execFileAsync('osascript', ['-e', script], { timeout: 3000 });
+  } else {
+    await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+  }
 }
 
 // Load environment variables from .env.local for Supabase credentials.
@@ -4703,9 +4721,6 @@ function setupClipboardIPCHandlers(): void {
 
   // Handle handoff invocation from command launcher (same behavior as commands).
   ipcMain.handle('commands:invokeHandoff', async (_event, filePath: string) => {
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
     const plist = require('plist');
 
     if (!commandsManager || !fs.existsSync(filePath)) {
@@ -4713,34 +4728,23 @@ function setupClipboardIPCHandlers(): void {
     }
 
     try {
-      // Get the app that was active before the launcher opened.
       const targetApp = commandLauncherWindow?.getPreviousApp();
       const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
       const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
-
       const fileName = path.basename(filePath);
 
-      // Use text-based file path for terminals and IDEs with integrated terminals.
+      commandLauncherWindow?.hide(true);
+
       if (isTerminal || isIDE) {
-        const referenceText = `[resume from handoff: ${fileName}]\n${filePath}`;
-        clipboard.writeText(`${referenceText} `);
+        clipboard.writeText(`[resume from handoff: ${fileName}]\n${filePath} `);
         clipboardManager?.syncClipboardHash();
       } else {
-        // For other apps: paste the .md file as an attachment.
-        const filePaths = [filePath];
-        const plistData = plist.build(filePaths);
+        const plistData = plist.build([filePath]);
         clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
         clipboardManager?.syncClipboardHash();
       }
 
-      // Refocus the previous app and paste.
-      if (targetApp) {
-        await execAsync(`osascript -e 'tell application "${targetApp.name}" to activate'`);
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
-
-      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-
+      await activateAndPaste(targetApp ?? null);
       return { success: true };
     } catch (error) {
       log.error('Error invoking handoff:', error);
@@ -4751,56 +4755,42 @@ function setupClipboardIPCHandlers(): void {
   // Handle direct command invocation from command launcher (Cmd+Shift+K).
   // Gets the command, determines if target is terminal, and pastes appropriately.
   ipcMain.handle('commands:invoke', async (_event, commandName: string) => {
-    const { exec } = require('child_process');
-    const { promisify } = require('util');
-    const execAsync = promisify(exec);
     const plist = require('plist');
 
     if (!commandsManager) {
       return { success: false, error: 'Not initialized' };
     }
 
-    // Check portable commands quota
     if (quotaManager && !quotaManager.isAllowed('portable_commands')) {
       return { success: false, error: 'Portable command limit reached. Upgrade to continue.' };
     }
 
     const command = commandsManager.getCommand(commandName);
     if (!command) {
+      log.error(`Command not found: "${commandName}". Available: ${commandsManager.getCommands().map(c => c.name).join(', ')}`);
       return { success: false, error: 'Command not found' };
     }
 
     try {
-      // Get the app that was active before the launcher opened.
       const targetApp = commandLauncherWindow?.getPreviousApp();
       const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
       const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
 
+      log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
-      // Use text-based file path for terminals and IDEs with integrated terminals.
-      // IDEs like Cursor/VS Code work better with file paths that can be used in their terminals.
+      commandLauncherWindow?.hide(true);
+
       if (isTerminal || isIDE) {
-        // For terminals and IDEs: paste a text reference with the file path below.
-        const referenceText = `[run this command: ${command.name}.md]\n${command.filePath}`;
-        clipboard.writeText(`${referenceText} `);
+        clipboard.writeText(`[run this command: ${command.name}.md]\n${command.filePath} `);
         clipboardManager?.syncClipboardHash();
       } else {
-        // For other apps: paste the .md file as an attachment.
-        const filePaths = [command.filePath];
-        const plistData = plist.build(filePaths);
+        const plistData = plist.build([command.filePath]);
         clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
         clipboardManager?.syncClipboardHash();
       }
 
-      // Refocus the previous app and paste.
-      if (targetApp) {
-        await execAsync(`osascript -e 'tell application "${targetApp.name}" to activate'`);
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
+      await activateAndPaste(targetApp ?? null);
 
-      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
-
-      // Track portable command usage
       await quotaManager?.updateUsage('portable_commands', 1);
       metricsManager?.recordCommandExecuted();
       return { success: true };
@@ -6195,12 +6185,9 @@ async function initTranscriberSystem(): Promise<void> {
   const envVars = loadEnvVars();
 
   // Create UserDataManager for per-user data isolation.
-  // This must be created before AuthManager so it can coordinate user changes.
-  userDataManager = createUserDataManager();
-  await userDataManager.restoreCurrentUser();
-
   // Restore last known user from current-user.json so per-user paths work
   // immediately — no need to wait for auth to resolve.
+  userDataManager = createUserDataManager();
   await userDataManager.restoreCurrentUser();
 
   // Set UserDataManager on managers BEFORE authManager.init().
@@ -6218,6 +6205,10 @@ async function initTranscriberSystem(): Promise<void> {
   }
   if (commandsManager) {
     commandsManager.setUserDataManager(userDataManager);
+    // Reload per-user commands immediately if user was restored from disk.
+    if (userDataManager.isLoggedIn()) {
+      await commandsManager.reinitializeForUser();
+    }
   }
 
   authManager = new AuthManager();
