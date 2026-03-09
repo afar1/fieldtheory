@@ -237,6 +237,11 @@ export class DynamicIslandManager extends EventEmitter {
       this.emit('dismiss-transcript');
     });
 
+    // Cancel the active recording session (standard or hot-mic).
+    ipcMain.on('dynamic-island-cancel-session', () => {
+      this.emit('cancel-session');
+    });
+
     ipcMain.on('dynamic-island-open-field-theory', () => {
       // Collapse history immediately before opening the main window to avoid
       // transient expanded transparent surfaces during focus transfer.
@@ -426,8 +431,9 @@ export class DynamicIslandManager extends EventEmitter {
 
   updateStandardAudioLevel(level: number): void {
     if (!this.enabled) return;
-    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
-      this.window.webContents.send('dynamic-island-standard-audio-level', level);
+    // Only the right pill renders the waveform; left pill no longer uses audio levels.
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-standard-audio-level', level);
     }
   }
 
@@ -435,6 +441,9 @@ export class DynamicIslandManager extends EventEmitter {
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-hotmic-filter-meter', data);
+    }
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.webContents.send('dynamic-island-hotmic-filter-meter', data);
     }
   }
 
@@ -1230,9 +1239,13 @@ export class DynamicIslandManager extends EventEmitter {
     return y + (profile?.pillY ?? 0) + this.geometryTuning.offsetY;
   }
 
+  private getActivePillWidth(): number {
+    // Always return expanded width — compact/expanded animation is CSS in the renderer.
+    return Math.max(this.geometryTuning.pillWidth, this.ISLAND_WIDTH_IDLE);
+  }
+
   private getIdlePillWidth(): number {
-    const baseWidth = this.geometryTuning.pillWidth;
-    return Math.max(baseWidth, this.ISLAND_WIDTH_IDLE);
+    return this.getActivePillWidth();
   }
 
   private getIdlePillHeight(): number {
@@ -1240,7 +1253,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getRightPillWidth(): number {
-    return this.RIGHT_PILL_WIDTH;
+    return this.getActivePillWidth();
   }
 
   private getRightPillHeight(): number {
@@ -1471,6 +1484,7 @@ export class DynamicIslandManager extends EventEmitter {
     ipcMain.removeAllListeners('dynamic-island-history-visible');
     ipcMain.removeAllListeners('dynamic-island-toggle-mute');
     ipcMain.removeAllListeners('dynamic-island-dismiss-transcript');
+    ipcMain.removeAllListeners('dynamic-island-cancel-session');
     ipcMain.removeAllListeners('dynamic-island-open-field-theory');
     this.stackCount = 0;
   }
