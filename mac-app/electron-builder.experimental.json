@@ -54,6 +54,14 @@
       {
         "from": "scripts/setup-mlx-whisper.sh",
         "to": "scripts/setup-mlx-whisper.sh"
+      },
+      {
+        "from": "scripts/parakeet-transcribe.py",
+        "to": "scripts/parakeet-transcribe.py"
+      },
+      {
+        "from": "scripts/setup-parakeet.sh",
+        "to": "scripts/setup-parakeet.sh"
       }
     ]
   },
