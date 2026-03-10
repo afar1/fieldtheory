@@ -349,7 +349,7 @@ export class TranscriberManager extends EventEmitter {
     this.overlay.setOverlayStyle('rectangle');
 
     // Register global hotkey for normal transcription with a safe fallback
-    await this.registerPrimaryHotkeyWithFallback(this.hotkey, true);
+    await this.registerPrimaryHotkeyWithFallback(this.hotkey);
 
     // Register secondary hotkey if configured
     if (this.secondaryHotkey) {
@@ -375,13 +375,13 @@ export class TranscriberManager extends EventEmitter {
     this.hotkey = this.preferences.getPreference('transcriptionHotkey');
     this.secondaryHotkey = this.preferences.getPreference('transcriptionSecondaryHotkey') || null;
 
-    void this.registerPrimaryHotkeyWithFallback(this.hotkey, false);
+    void this.registerPrimaryHotkeyWithFallback(this.hotkey);
     if (this.secondaryHotkey) {
       void this.registerSecondaryHotkey(this.secondaryHotkey);
     }
   }
 
-  private async registerPrimaryHotkeyWithFallback(hotkey: string, persistFallback: boolean): Promise<void> {
+  private async registerPrimaryHotkeyWithFallback(hotkey: string): Promise<void> {
     const success = await this.registerHotkey(hotkey);
     if (success || !hotkey) {
       return;
@@ -391,8 +391,10 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    // Use the fallback for this session only — never overwrite the user's saved preference.
+    // The user's hotkey may be temporarily unavailable (another app holds it, permissions timing).
     log.warn(
-      'Primary hotkey "%s" is unavailable; falling back to %s',
+      'Primary hotkey "%s" is unavailable; using %s for this session (user pref preserved)',
       hotkey,
       SAFE_FALLBACK_TRANSCRIPTION_HOTKEY
     );
@@ -402,9 +404,6 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    if (persistFallback) {
-      await this.preferences.save({ transcriptionHotkey: SAFE_FALLBACK_TRANSCRIPTION_HOTKEY });
-    }
     this.emit('hotkeyChanged', SAFE_FALLBACK_TRANSCRIPTION_HOTKEY);
   }
 
@@ -3231,6 +3230,13 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
+   * Get the number of items currently in the stack.
+   */
+  getStackLength(): number {
+    return this.currentStack.length;
+  }
+
+  /**
    * Clear the current stack.
    */
   clearStack(): void {
@@ -3351,9 +3357,14 @@ export class TranscriberManager extends EventEmitter {
       }
     }
 
-    this.emit('stackChanged', this.screenshotMetadata.length);
+    // Emit the screenshot count: use screenshotMetadata during recording (precise),
+    // or currentStack length when idle (only screenshots are added when idle).
+    const count = (this.status === 'recording' || this.status === 'silentStacking')
+      ? this.screenshotMetadata.length
+      : this.currentStack.length;
+    this.emit('stackChanged', count);
   }
-  
+
   /**
    * Generate a figure label from an index (0 = 1, 1 = 2, 2 = 3, etc.)
    */

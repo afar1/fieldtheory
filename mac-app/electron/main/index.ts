@@ -253,6 +253,12 @@ function routeCapturedItemToActiveSession(itemId: number): void {
 
   if (hotMicManager?.isActive) {
     hotMicManager.addScreenshotToSession(itemId);
+    return;
+  }
+
+  // Idle: stack screenshots so they accumulate until pasted.
+  if (transcriberManager) {
+    transcriberManager.addToStack(itemId);
   }
 }
 let squaresManager: SquaresManager | null = null;
@@ -707,6 +713,12 @@ function registerHotkeysAfterOnboarding(): void {
       lastSuperPasteTime = now;
 
       if (!clipboardManager) {
+        return;
+      }
+
+      // If there's an active screenshot stack (from idle captures), paste it then reset.
+      if (transcriberManager && transcriberManager.getStackLength() > 0 && transcriberManager.getStatus() === 'idle') {
+        await transcriberManager.pasteStack(true);
         return;
       }
 
@@ -5894,6 +5906,11 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
   broadcastTranscribeEvents();
+
+  // Pre-warm transcription engine so first use is fast (Parakeet model load, etc.).
+  transcriberManager.warmup().catch((err) => {
+    log.warn('Transcription warmup failed (non-fatal): %s', err?.message || err);
+  });
 
   // Wire up native helper for fast sound playback and preload all sounds.
   // This gives ~1-5ms latency instead of ~50-100ms with afplay.

@@ -589,6 +589,7 @@ export class DynamicIslandManager extends EventEmitter {
       roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
       alwaysOnTop: true,
       skipTaskbar: true,
+      hiddenInMissionControl: true,
       resizable: false,
       movable: false,
       focusable: true,
@@ -678,6 +679,7 @@ export class DynamicIslandManager extends EventEmitter {
       roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
       alwaysOnTop: true,
       skipTaskbar: true,
+      hiddenInMissionControl: true,
       resizable: false,
       movable: false,
       focusable: false,
@@ -772,6 +774,7 @@ export class DynamicIslandManager extends EventEmitter {
       roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
       alwaysOnTop: true,
       skipTaskbar: true,
+      hiddenInMissionControl: true,
       resizable: false,
       movable: false,
       focusable: false,
@@ -838,6 +841,7 @@ export class DynamicIslandManager extends EventEmitter {
       roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
       alwaysOnTop: true,
       skipTaskbar: true,
+      hiddenInMissionControl: true,
       resizable: false,
       movable: false,
       focusable: false,
@@ -1050,11 +1054,15 @@ export class DynamicIslandManager extends EventEmitter {
   ): void {
     if (useTransparentWindow) {
       // Transparent side windows should keep the constructor-level transparent
-      // backing. Repeated runtime setBackgroundColor calls on transparent
-      // windows are a known source of compositor instability on macOS.
+      // backing. Avoid frequent setBackgroundColor calls which can cause
+      // compositor instability on macOS — but DO re-apply on forced reinforce
+      // (e.g. after focus/show events) to recover from white backing corruption.
       const transparentColor = '#00000000';
       const previousColor = this.windowBackingColor.get(win);
       this.windowBackingColor.set(win, transparentColor);
+      if (options?.force) {
+        win.setBackgroundColor(transparentColor);
+      }
       if (this.DEBUG_WINDOW_EVENT_LOGGING && options?.force && previousColor !== transparentColor) {
         log.info(
           'Dynamic Island transparent backing tracked (%s): %s -> %s (reason=%s)',
