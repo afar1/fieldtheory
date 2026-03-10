@@ -548,6 +548,7 @@ describe('TranscriberManager standard paste target fallback', () => {
       },
       currentStack: [1],
       detectedCommands: [],
+      screenshotMetadata: [],
       getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
       nativeHelper: {
         getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty' })),
@@ -580,6 +581,7 @@ describe('TranscriberManager standard paste target fallback', () => {
       },
       currentStack: [1],
       detectedCommands: [],
+      screenshotMetadata: [],
       getFrontmostAppBundleId: vi.fn(async () => 'com.github.Electron'),
       nativeHelper: {
         getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty' })),
@@ -605,6 +607,7 @@ describe('TranscriberManager standard paste target fallback', () => {
       },
       currentStack: [1],
       detectedCommands: [],
+      screenshotMetadata: [],
       getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
       nativeHelper: {
         getFrontmostApp: vi.fn(() => null),
@@ -638,6 +641,7 @@ describe('TranscriberManager standard paste target fallback', () => {
       },
       currentStack: [1],
       detectedCommands: [],
+      screenshotMetadata: [],
       getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
       nativeHelper: {
         getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty' })),
@@ -696,6 +700,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       commandsManager: null,
       clipboardManager: null,
       detectedCommands: [],
+      screenshotMetadata: [],
       accessTokenGetter: null,
       lastTranscription: '',
       pasteStack: vi.fn(async () => {}),
@@ -747,6 +752,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       commandsManager: null,
       clipboardManager: null,
       detectedCommands: [],
+      screenshotMetadata: [],
       accessTokenGetter: null,
       lastTranscription: '',
       pasteStack: vi.fn(async () => {}),
@@ -885,6 +891,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       commandsManager: null,
       clipboardManager: null,
       detectedCommands: [],
+      screenshotMetadata: [{ capturedAtMs: 1000, figureLabel: '1', figureId: 'fig01' }],
       lastTranscription: '',
       pasteStack: vi.fn(async () => {}),
       emit: vi.fn(),
@@ -892,7 +899,6 @@ describe('TranscriberManager standard real-time chunking', () => {
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
       preferences: { getPreference: vi.fn(() => 'whisper') },
-      screenshotMetadata: [{ capturedAtMs: 1000, figureLabel: '1', figureId: 'fig01' }],
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -938,6 +944,11 @@ describe('TranscriberManager standard real-time chunking', () => {
       commandsManager: null,
       clipboardManager: null,
       detectedCommands: [],
+      screenshotMetadata: [
+        { capturedAtMs: 500, figureLabel: '1', figureId: 'fig01' },
+        { capturedAtMs: 1600, figureLabel: '2', figureId: 'fig02' },
+        { capturedAtMs: 2500, figureLabel: '3', figureId: 'fig03' },
+      ],
       lastTranscription: '',
       pasteStack: vi.fn(async () => {}),
       emit: vi.fn(),
@@ -945,18 +956,13 @@ describe('TranscriberManager standard real-time chunking', () => {
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
       preferences: { getPreference: vi.fn(() => 'whisper') },
-      screenshotMetadata: [
-        { capturedAtMs: 500, figureLabel: '1', figureId: 'fig01' },
-        { capturedAtMs: 1600, figureLabel: '2', figureId: 'fig02' },
-        { capturedAtMs: 2500, figureLabel: '3', figureId: 'fig03' },
-      ],
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
     await manager.stopRecordingAndTranscribe();
 
     expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
-    expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript [Figure 1] [Figure 2] [Figure 3]');
   });
 
   it('uses immediate tail command text and skips full-file transcription', async () => {
@@ -992,6 +998,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       commandsManager: null,
       clipboardManager: null,
       detectedCommands: [],
+      screenshotMetadata: [],
       lastTranscription: '',
       pasteStack: vi.fn(async () => {}),
       emit: vi.fn(),
@@ -999,7 +1006,6 @@ describe('TranscriberManager standard real-time chunking', () => {
       handleOverlayAfterTranscription: vi.fn(),
       transcribeWithEngineFallback,
       preferences: { getPreference: vi.fn(() => 'whisper') },
-      screenshotMetadata: [],
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
