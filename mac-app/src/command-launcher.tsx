@@ -215,7 +215,7 @@ const getStyles = (isDark: boolean) => ({
   container: {
     display: 'flex',
     flexDirection: 'column' as const,
-    backgroundColor: 'transparent',
+    backgroundColor: isDark ? '#1e1e1e' : '#f5f5f5',
     borderRadius: '8px',
     overflow: 'hidden',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',

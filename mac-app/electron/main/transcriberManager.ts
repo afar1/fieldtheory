@@ -591,6 +591,12 @@ export class TranscriberManager extends EventEmitter {
    * @param isSecondary - True if triggered by secondary hotkey, false for primary
    */
   private async handleHotkeyPress(_isSecondary: boolean): Promise<void> {
+    // Hot mic active — flush and paste its buffer instead of starting a new recording.
+    if (this.status === 'idle' && this.hotMicDelegate?.isActive) {
+      await this.hotMicDelegate.handleShortPress();
+      return;
+    }
+
     if (this.status === 'idle') {
       if (this.pendingHotkeyTimer) {
         // Second tap within threshold → double-tap confirmed → silentStacking
@@ -1332,6 +1338,9 @@ export class TranscriberManager extends EventEmitter {
         }
       }
       const cmdDetectMs = Math.round(performance.now() - cmdDetectStart);
+
+      // Insert inline [Figure N] references for screenshots taken during recording.
+      cleanedText = this.insertFigureReferences(cleanedText);
 
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
@@ -3487,15 +3496,18 @@ export class TranscriberManager extends EventEmitter {
     if (this.screenshotMetadata.length === 0) {
       return text;
     }
-    
-    // Sort by capture time.
+
     const sortedMetadata = [...this.screenshotMetadata].sort(
       (a, b) => a.capturedAtMs - b.capturedAtMs
     );
-    
-    // Append figure references at the end as a fallback.
-    const figureRefs = sortedMetadata.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
 
+    // Only append references not already present in the text.
+    const missing = sortedMetadata.filter(
+      meta => !text.includes(`[Figure ${meta.figureLabel}]`)
+    );
+    if (missing.length === 0) return text;
+
+    const figureRefs = missing.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
     return `${text} ${figureRefs}`;
   }
 

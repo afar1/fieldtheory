@@ -14,10 +14,11 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
-  '0.1.90': [
-    'Refactored Dynamic Island: 4-slot layout with CSS animations and cancel button',
+  '0.1.91': [
+    'Refactored Dynamic Island: 4-slot layout with cancel button and waveform',
     'Command launcher now supports access to all window management shortcuts',
     'NVIDIA Parakeet now the primary voice-to-text model for Hot Mic and Standard',
+    'Transcription button now submits Hot Mic content instead of discarding it',
     'Fixed a half dozen user-reported bugs',
   ],
   '0.1.87': [
@@ -245,7 +246,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
-  '0.1.90': 'Mar 9 2026',
+  '0.1.91': 'Mar 9 2026',
   '0.1.87': 'Feb 26 2026',
   '0.1.86': 'Feb 25 2026',
   '0.1.85': 'Feb 25 2026',

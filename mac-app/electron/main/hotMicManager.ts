@@ -1157,10 +1157,24 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   async handleShortPress(): Promise<void> {
-    if (this.isActive) {
-      log.info('Hot Mic force-submit via short press');
-      this.deactivate();
+    if (!this.isActive) return;
+
+    if (this.transcriptBuffer.length > 0) {
+      log.info('Hot Mic: flushing buffer via short press (%d chunks)', this.transcriptBuffer.length);
+      const target = this.getTypeTarget();
+      const mappedText = await this.consumeBufferedHotMicPayload(target);
+      if (mappedText) {
+        void this.storeHotMicTranscript(mappedText);
+        if (target) {
+          const result = await this.typeIntoAppWithClipboardSync(target, mappedText, true);
+          if (result.success) {
+            this.playSound('paste');
+          }
+        }
+      }
     }
+
+    this.deactivate();
   }
 
   handleLongPress(): void {
