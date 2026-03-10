@@ -686,16 +686,17 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(filler?.backgroundColorCalls).not.toContain('#ff0000');
     expect(drawer?.backgroundColorCalls).not.toContain('#ff0000');
 
-    // Side windows stay constructor-transparent and avoid runtime rewrites.
+    // Side windows stay constructor-transparent; forced refreshes re-apply
+    // transparent backing to recover from macOS compositor corruption.
     expect(left?.constructorOptions.transparent).toBe(true);
     expect(right?.constructorOptions.transparent).toBe(true);
-    expect(left?.backgroundColorCalls).toEqual([]);
-    expect(right?.backgroundColorCalls).toEqual([]);
+    expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
+    expect(right?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
     // Center fill remains opaque to avoid fake-notch white slabs.
     expect(filler?.backgroundColorCalls).toContain('#000000');
     // Drawer stays transparent so transcript panel corner rounding is visible.
     expect(drawer?.constructorOptions.transparent).toBe(true);
-    expect(drawer?.backgroundColorCalls).toEqual([]);
+    expect(drawer?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
 
   it('forwards stack count updates to the right pill', () => {
@@ -761,7 +762,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(5);
   });
 
-  it('keeps transparent side backing untouched across repeated refreshes', () => {
+  it('re-applies transparent backing on forced refreshes to recover from compositor corruption', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -777,7 +778,8 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.refreshWindowProperties('refresh-2');
 
     const afterCalls = left?.backgroundColorCalls.length ?? 0;
-    expect(afterCalls).toEqual(initialCalls);
-    expect(left?.backgroundColorCalls).toEqual([]);
+    // Each forced refresh re-applies transparent color to recover from white flashes.
+    expect(afterCalls).toBeGreaterThan(initialCalls);
+    expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
 });

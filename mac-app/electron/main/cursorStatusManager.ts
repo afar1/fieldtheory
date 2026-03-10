@@ -741,6 +741,7 @@ export class CursorStatusManager extends EventEmitter {
       roundedCorners: false,
       alwaysOnTop: true,
       skipTaskbar: true,
+      hiddenInMissionControl: true,
       resizable: false,
       movable: false,
       focusable: false,

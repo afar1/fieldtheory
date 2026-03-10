@@ -228,6 +228,9 @@ export default function SettingsPanel({
   // Hide status labels - show only colored dots.
   const [hideStatusLabels, setHideStatusLabels] = useState(false);
 
+  // Window management (Squares) enabled state.
+  const [squaresEnabled, setSquaresEnabled] = useState(true);
+
   // Cursor status debug mode - shows blue background to prove we control the overlay.
   const [cursorStatusDebugMode, setCursorStatusDebugMode] = useState(false);
 
@@ -323,6 +326,11 @@ export default function SettingsPanel({
       // Load hide status labels setting
       window.clipboardAPI.getHideStatusLabels?.().then(hide => {
         setHideStatusLabels(hide);
+      });
+
+      // Load window management (Squares) enabled state
+      window.squaresAPI?.getConfig?.().then(config => {
+        setSquaresEnabled(config?.enabled ?? true);
       });
 
       // Load cursor status debug mode setting
@@ -1767,9 +1775,29 @@ export default function SettingsPanel({
 
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Window Voice Commands</span>
+            <span style={styles.rowLabel}>Window management</span>
+            <span style={styles.rowHint}>Snap, tile, and arrange windows via voice or command launcher</span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => {
+                const newEnabled = !squaresEnabled;
+                setSquaresEnabled(newEnabled);
+                window.squaresAPI?.setConfig({ enabled: newEnabled });
+              }}
+              style={{ ...styles.toggle, backgroundColor: squaresEnabled ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: squaresEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+
+        {squaresEnabled && (
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Window voice commands</span>
             <span style={styles.rowHint}>
-              Configure spoken window actions (tile, focus, snap). Keyboard shortcuts for window management are not configured here.
+              Configure spoken window actions (tile, focus, snap)
             </span>
           </div>
           <div style={styles.rowControls}>
@@ -1781,6 +1809,7 @@ export default function SettingsPanel({
             </button>
           </div>
         </div>
+        )}
 
         {/* Show in Dock - WIP feature, hidden until ready */}
         {/* Permission Reminders - removed, always show until permissions granted */}

@@ -1,0 +1,7 @@
+# The Compositor's Lie
+
+In 1984, when Bill Atkinson built QuickDraw for the original Macintosh, he invented a trick: instead of tracking which pixels a window *owned*, he tracked rectangular *regions* that were obscured. When a window moved, QuickDraw didn't redraw from scratch — it copied the visible pixels via `CopyBits` and only repainted the slivers that had been revealed. The system lied about what was underneath, and it was fast enough that nobody noticed.
+
+macOS's WindowServer compositor inherited this lineage but evolved it into something far more complex. Every window now carries a **backing store** — an off-screen bitmap that the compositor blends together 60 times a second. When you set `transparent: true` on an Electron BrowserWindow, you're asking the compositor to treat that backing store's alpha channel literally. But the compositor has its own opinions. Focus events, workspace transitions, and Mission Control all trigger re-composition passes. During these passes, a transparent window's backing store can momentarily fall out of sync with its content — the compositor renders the raw backing (white) before Chromium's renderer has had time to paint the transparent content back into it.
+
+The fix — re-asserting `setBackgroundColor('#00000000')` on forced refreshes — essentially taps the compositor on the shoulder and says "yes, I really did mean transparent." It's the modern equivalent of Atkinson's CopyBits trick: a small, timely lie that preserves the illusion of seamlessness.
