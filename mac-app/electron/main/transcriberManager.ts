@@ -174,6 +174,7 @@ export class TranscriberManager extends EventEmitter {
 
   // Standard (push-to-talk) real-time chunk transcription state.
   private standardLiveTranscript: string = '';
+  private standardLiveSegments: Array<{ text: string; endMs: number }> = [];
   private standardChunkReadyListener: ((filePath: string) => void) | null = null;
   private standardPendingChunkQueue: Array<{ filePath: string; readyAtMs: number }> = [];
   private standardChunkProcessingInFlight: boolean = false;
@@ -867,6 +868,7 @@ export class TranscriberManager extends EventEmitter {
 
   private resetStandardRealtimeSession(): void {
     this.standardLiveTranscript = '';
+    this.standardLiveSegments = [];
     this.standardPendingChunkQueue = [];
     this.standardChunkProcessingInFlight = false;
     this.standardChunkCommandTriggered = false;
@@ -877,6 +879,7 @@ export class TranscriberManager extends EventEmitter {
 
   private clearStandardLiveTranscript(): void {
     this.standardLiveTranscript = '';
+    this.standardLiveSegments = [];
     this.emit('standardLiveTranscript', '');
   }
 
@@ -998,6 +1001,11 @@ export class TranscriberManager extends EventEmitter {
         .filter(Boolean)
         .join(' ')
         .trim();
+
+      this.standardLiveSegments.push({
+        text: liveChunkText,
+        endMs: chunkReadyAtMs ?? (this.recordingStartTime > 0 ? Date.now() - this.recordingStartTime : 0),
+      });
 
       this.emit('standardLiveTranscript', this.standardLiveTranscript);
 
@@ -3497,18 +3505,41 @@ export class TranscriberManager extends EventEmitter {
       return text;
     }
 
-    const sortedMetadata = [...this.screenshotMetadata].sort(
+    const normalizedText = this.stripFigureReferences(text);
+    const sortedScreenshots = [...this.screenshotMetadata].sort(
       (a, b) => a.capturedAtMs - b.capturedAtMs
     );
 
-    // Only append references not already present in the text.
-    const missing = sortedMetadata.filter(
-      meta => !text.includes(`[Figure ${meta.figureLabel}]`)
-    );
-    if (missing.length === 0) return text;
+    const segments = this.standardLiveSegments
+      .map((seg) => ({ text: this.stripFigureReferences(seg.text), endMs: Math.max(0, seg.endMs) }))
+      .filter((seg) => seg.text.length > 0);
 
-    const figureRefs = missing.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
-    return `${text} ${figureRefs}`;
+    // No segment timing — fall back to appending at the end.
+    if (segments.length === 0) {
+      const refs = sortedScreenshots.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
+      return [normalizedText, refs].filter(Boolean).join(' ').trim();
+    }
+
+    // Map each screenshot to the segment whose endMs is >= the screenshot's capturedAtMs.
+    const segmentFigures: Map<number, string[]> = new Map();
+    for (const screenshot of sortedScreenshots) {
+      let segmentIndex = segments.findIndex((seg) => screenshot.capturedAtMs <= seg.endMs);
+      if (segmentIndex < 0) {
+        segmentIndex = segments.length - 1;
+      }
+      const figures = segmentFigures.get(segmentIndex) ?? [];
+      figures.push(screenshot.figureLabel);
+      segmentFigures.set(segmentIndex, figures);
+    }
+
+    const result = segments.map((segment, index) => {
+      const figures = segmentFigures.get(index);
+      if (!figures || figures.length === 0) return segment.text;
+      const refs = figures.map((label) => `[Figure ${label}]`).join(' ');
+      return `${segment.text} ${refs}`;
+    });
+
+    return result.join(' ').trim();
   }
 
   /**
@@ -3644,18 +3675,11 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Keep a trailing space after command/path payloads so users can continue typing immediately.
+   * Keep a trailing space so users can continue typing immediately after paste.
    */
   private addFollowupTypingSpace(text: string): string {
     const trimmed = text.replace(/\s+$/g, '');
     if (!trimmed) return text;
-    const lines = trimmed.split('\n');
-    const lastLine = lines[lines.length - 1] || '';
-    const looksLikePath = /^(\/|~\/)/.test(lastLine);
-    const looksLikeCommandRef = /(?:^|\n)\[(run this command|resume from handoff): [^\]]+\]\n[^\n]+$/i.test(trimmed);
-    if (!looksLikePath && !looksLikeCommandRef) {
-      return text;
-    }
     return `${trimmed} `;
   }
 

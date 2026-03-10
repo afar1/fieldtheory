@@ -609,6 +609,16 @@ export class DynamicIslandManager extends EventEmitter {
 
     this.loadWindowUrl(this.window, 'dynamic-island.html?side=left');
 
+    // Intercept Cmd+W at the keyboard level so it never reaches the window
+    // close handler. Using preventDefault on 'close' causes macOS to
+    // re-composite the window, flashing white corners on transparent windows
+    // and making the app appear in Cmd+Tab.
+    this.window.webContents.on('before-input-event', (_event, input) => {
+      if (input.type === 'keyDown' && input.key === 'w' && input.meta) {
+        _event.preventDefault();
+      }
+    });
+
     this.window.on('closed', () => {
       this.window = null;
     });

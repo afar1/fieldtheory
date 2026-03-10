@@ -6009,6 +6009,10 @@ async function initTranscriberSystem(): Promise<void> {
       void applyInputMode(nextMode);
     });
 
+    hotMicManager.on('inputModeResetRequested', () => {
+      void applyInputMode('standard');
+    });
+
     hotMicManager.on('screenshotStackChanged', (count: number) => {
       dynamicIslandManager?.updateStackCount(count);
     });
