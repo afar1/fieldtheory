@@ -1016,3 +1016,118 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.emit).toHaveBeenCalledWith('result', 'draft layout');
   });
 });
+
+describe('TranscriberManager idle screenshot stacking', () => {
+  it('addToStack emits currentStack.length when idle', () => {
+    const emit = vi.fn();
+    const manager: any = {
+      status: 'idle',
+      currentStack: [],
+      screenshotMetadata: [],
+      clipboardManager: null,
+      quotaManager: null,
+      emit,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.addToStack(100);
+    expect(emit).toHaveBeenCalledWith('stackChanged', 1);
+
+    manager.addToStack(101);
+    expect(emit).toHaveBeenCalledWith('stackChanged', 2);
+  });
+
+  it('addToStack emits screenshotMetadata.length when recording', () => {
+    const emit = vi.fn();
+    const clipboardManager = {
+      getItem: vi.fn((id: number) => ({ id, type: 'screenshot', imageData: Buffer.from([1]) })),
+      updateFigureLabel: vi.fn(),
+      generateFigureId: vi.fn(() => 'fig01'),
+    };
+    const manager: any = {
+      status: 'recording',
+      currentStack: [],
+      screenshotMetadata: [],
+      clipboardManager,
+      quotaManager: null,
+      recordingStartTime: Date.now(),
+      cursorStatusManager: null,
+      autoStackLimitShownThisSession: false,
+      emit,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.addToStack(200);
+    // screenshotMetadata gets one entry; currentStack also has one entry
+    expect(emit).toHaveBeenCalledWith('stackChanged', 1);
+    expect(manager.screenshotMetadata).toHaveLength(1);
+  });
+
+  it('skips duplicate item IDs', () => {
+    const emit = vi.fn();
+    const manager: any = {
+      status: 'idle',
+      currentStack: [50],
+      screenshotMetadata: [],
+      clipboardManager: null,
+      quotaManager: null,
+      emit,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.addToStack(50);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('getStackLength returns currentStack length', () => {
+    const manager: any = {
+      currentStack: [1, 2, 3],
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.getStackLength()).toBe(3);
+  });
+});
+
+describe('TranscriberManager hotkey fallback', () => {
+  it('does not persist fallback hotkey to preferences when primary fails', async () => {
+    const save = vi.fn();
+    const emit = vi.fn();
+    const manager: any = {
+      hotkey: 'Alt+K',
+      registeredHotkey: null,
+      preferences: { save },
+      emit,
+      // Mock registerHotkey: first call (user's hotkey) fails, second (fallback) succeeds
+      registerHotkey: vi.fn()
+        .mockResolvedValueOnce(false)   // user's hotkey fails
+        .mockResolvedValueOnce(true),   // fallback succeeds
+      normalizeHotkey: vi.fn((h: string) => h),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await (manager as any).registerPrimaryHotkeyWithFallback('Alt+K');
+
+    expect(save).not.toHaveBeenCalled();
+    expect(emit).toHaveBeenCalledWith('hotkeyChanged', 'Option+Shift+Space');
+  });
+
+  it('does not fall back when user hotkey registers successfully', async () => {
+    const save = vi.fn();
+    const emit = vi.fn();
+    const manager: any = {
+      hotkey: 'Alt+K',
+      registeredHotkey: null,
+      preferences: { save },
+      emit,
+      registerHotkey: vi.fn().mockResolvedValueOnce(true),
+      normalizeHotkey: vi.fn((h: string) => h),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await (manager as any).registerPrimaryHotkeyWithFallback('Alt+K');
+
+    expect(save).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith('hotkeyChanged', expect.anything());
+  });
+});

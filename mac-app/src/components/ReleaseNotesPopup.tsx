@@ -14,6 +14,12 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.93': [
+    'Dynamic Island pills now hidden from Mission Control and hot corners',
+    'Fixed white background flash when clicking pills or using Super Paste',
+    'Screenshots now stack idle — take multiple, then Cmd+Shift+V to paste all at once',
+    'Focus voice command expands window to 80% height and centers it',
+  ],
   '0.1.92': [
     'Refactored Dynamic Island: 4-slot layout with cancel button and waveform',
     'Command launcher now supports access to all window management shortcuts',
@@ -253,6 +259,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.93': 'Mar 10 2026',
   '0.1.92': 'Mar 9 2026',
   '0.1.91': 'Mar 9 2026',
   '0.1.87': 'Feb 26 2026',

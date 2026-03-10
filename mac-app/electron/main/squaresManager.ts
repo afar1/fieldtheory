@@ -977,11 +977,18 @@ export class SquaresManager extends EventEmitter {
       log.info('Focus: moved %d same-app windows off-screen', otherWindows.length);
     }
 
-    // Center the focused window on its screen.
+    // Expand to 80% screen height, center both axes, keep current width.
     const targetScreen = this.getScreenForWindow(frontWindow.frame);
-    const centerFrame = this.calculateSingleWindowFrame('center', frontWindow.frame, targetScreen);
+    const s = targetScreen.visibleFrame;
+    const focusHeight = Math.floor(s.height * 0.8);
+    const focusFrame: WindowFrame = {
+      x: s.x + Math.floor((s.width - frontWindow.frame.width) / 2),
+      y: s.y + Math.floor((s.height - focusHeight) / 2),
+      width: frontWindow.frame.width,
+      height: focusHeight,
+    };
 
-    await this.moveWindow(frontWindow.ownerPID, frontWindow.title, frontWindow.frame, centerFrame);
+    await this.moveWindow(frontWindow.ownerPID, frontWindow.title, frontWindow.frame, focusFrame);
     return true;
   }
 
