@@ -292,6 +292,8 @@ export class HotMicManager extends EventEmitter {
   private audioLevelListener: ((level: number, isSpeech: boolean) => void) | null = null;
   private chunkReadyListener: ((filePath: string) => void) | null = null;
   private chunkProcessingInFlight: boolean = false;
+  private shortPressInFlight: boolean = false;
+  private shortPressPending: boolean = false;
   private pendingChunkQueue: PendingChunk[] = [];
   private forcedSnapshotTimer: NodeJS.Timeout | null = null;
   private forcedSnapshotInFlight: boolean = false;
@@ -1158,27 +1160,68 @@ export class HotMicManager extends EventEmitter {
 
   async handleShortPress(): Promise<void> {
     if (!this.isActive) return;
+    if (this.shortPressInFlight) {
+      // A flush is already running — queue one more so it fires after.
+      this.shortPressPending = true;
+      return;
+    }
+    this.shortPressInFlight = true;
 
-    if (this.transcriptBuffer.length > 0) {
-      log.info('Hot Mic: flushing buffer via short press (%d chunks)', this.transcriptBuffer.length);
-      const target = this.getTypeTarget();
-      const mappedText = await this.consumeBufferedHotMicPayload(target);
-      if (mappedText) {
-        void this.storeHotMicTranscript(mappedText);
-        if (target) {
-          const result = await this.typeIntoAppWithClipboardSync(target, mappedText, true);
-          if (result.success) {
-            this.playSound('paste');
+    try {
+      // Stop new chunks from arriving while we drain.
+      this.stopForcedSnapshotLoop();
+      if (this.chunkReadyListener) {
+        this.nativeHelper.removeListener('recordingChunkReady', this.chunkReadyListener);
+        this.chunkReadyListener = null;
+      }
+
+      // Snapshot the current recording — captures any buffered audio in Swift
+      // without stopping the audio engine.
+      try {
+        const finalWav = await this.nativeHelper.snapshotRecording();
+        if (finalWav) {
+          this.enqueueChunkForTranscription(finalWav, this.captureChunkAudioStats(), Date.now());
+        }
+      } catch {
+        // No active recording or very short audio — proceed with existing buffer.
+      }
+
+      // Wait for all pending transcriptions (including the snapshot) to complete
+      // so their results land in transcriptBuffer before we flush.
+      await this.waitForQueueDrain();
+
+      if (this.transcriptBuffer.length > 0) {
+        log.info('Hot Mic: flushing buffer via short press (%d chunks)', this.transcriptBuffer.length);
+        const target = this.getTypeTarget();
+        let mappedText = await this.consumeBufferedHotMicPayload(target);
+        if (mappedText) {
+          void this.storeHotMicTranscript(mappedText);
+          if (target) {
+            // Trailing space so the next dictation flows naturally.
+            mappedText = mappedText + ' ';
+            const result = await this.typeIntoAppWithClipboardSync(target, mappedText, false);
+            if (result.success) {
+              this.playSound('paste');
+            }
           }
         }
       }
-    }
 
-    this.deactivate();
+      // Re-attach audio monitoring — engine is still recording, just
+      // need to restore the chunk listener and forced snapshot loop.
+      this.startAudioMonitoring();
+    } finally {
+      this.shortPressInFlight = false;
+      if (this.shortPressPending && this.isActive) {
+        this.shortPressPending = false;
+        void this.handleShortPress();
+      }
+    }
   }
 
   handleLongPress(): void {
     this.deactivate();
+    this.emit('inputModeResetRequested');
   }
 
   // ---------------------------------------------------------------------------
@@ -1725,6 +1768,28 @@ export class HotMicManager extends EventEmitter {
       this.chunkProcessingInFlight = false;
       this.setRealtimeHarvestMode();
     }
+  }
+
+  private waitForQueueDrain(timeoutMs: number = 10000): Promise<void> {
+    if (!this.chunkProcessingInFlight && this.pendingChunkQueue.length === 0) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      const start = Date.now();
+      const check = () => {
+        if (!this.chunkProcessingInFlight && this.pendingChunkQueue.length === 0) {
+          resolve();
+          return;
+        }
+        if (Date.now() - start > timeoutMs) {
+          log.warn('Hot Mic: queue drain timed out after %dms', timeoutMs);
+          resolve();
+          return;
+        }
+        setTimeout(check, 50);
+      };
+      setTimeout(check, 50);
+    });
   }
 
   private startForcedSnapshotLoop(): void {
