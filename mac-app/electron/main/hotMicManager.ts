@@ -19,6 +19,7 @@ import { getHotkeyManager } from './hotkeyManager';
 import type { TranscriptionEngine } from './types/transcribe';
 import type { HotMicEngineStatus } from './types/hotMic';
 import { createLogger } from './logger';
+import { stripFigureReferences, insertFigureReferencesInline } from './figureUtils';
 
 const log = createLogger('HotMic');
 const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
@@ -3150,51 +3151,11 @@ export class HotMicManager extends EventEmitter {
   }
 
   private stripFigureReferences(text: string): string {
-    if (!text) return '';
-    return text
-      .replace(/\s*\[Figure\s+[A-Za-z0-9]+\]\s*/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return stripFigureReferences(text);
   }
 
   private insertFigureReferencesIntoHotMicText(text: string): string {
-    const normalizedText = this.stripFigureReferences(text);
-    if (this.hotMicScreenshotMetadata.length === 0) {
-      return normalizedText;
-    }
-
-    const segments = this.hotMicBufferSegments
-      .map((segment) => ({ text: this.stripFigureReferences(segment.text), endMs: Math.max(0, segment.endMs) }))
-      .filter((segment) => segment.text.length > 0);
-
-    const sortedScreenshots = [...this.hotMicScreenshotMetadata].sort(
-      (a, b) => a.capturedAtMs - b.capturedAtMs
-    );
-
-    if (segments.length === 0) {
-      const refs = sortedScreenshots.map((meta) => `[Figure ${meta.figureLabel}]`).join(' ');
-      return [normalizedText, refs].filter(Boolean).join(' ').trim();
-    }
-
-    const segmentFigures: Map<number, string[]> = new Map();
-    for (const screenshot of sortedScreenshots) {
-      let segmentIndex = segments.findIndex((segment) => screenshot.capturedAtMs <= segment.endMs);
-      if (segmentIndex < 0) {
-        segmentIndex = segments.length - 1;
-      }
-      const figures = segmentFigures.get(segmentIndex) ?? [];
-      figures.push(screenshot.figureLabel);
-      segmentFigures.set(segmentIndex, figures);
-    }
-
-    const result = segments.map((segment, index) => {
-      const figures = segmentFigures.get(index);
-      if (!figures || figures.length === 0) return segment.text;
-      const refs = figures.map((label) => `[Figure ${label}]`).join(' ');
-      return `${segment.text} ${refs}`;
-    });
-
-    return result.join(' ').trim();
+    return insertFigureReferencesInline(text, this.hotMicBufferSegments, this.hotMicScreenshotMetadata);
   }
 
   private async appendFigurePathsForTerminal(text: string, targetBundleId: string | null): Promise<string> {

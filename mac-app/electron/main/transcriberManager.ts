@@ -31,6 +31,7 @@ import type { TranscriptionEngine, HotMicEngine } from './types/transcribe';
 import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
 import * as plist from 'plist';
 import { createLogger } from './logger';
+import { stripFigureReferences, insertFigureReferencesInline } from './figureUtils';
 
 const log = createLogger('Transcriber');
 const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
@@ -1061,11 +1062,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private stripFigureReferences(text: string): string {
-    if (!text) return '';
-    return text
-      .replace(/\s*\[Figure\s+[A-Za-z0-9]+\]\s*/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    return stripFigureReferences(text);
   }
 
   /**
@@ -1292,12 +1289,11 @@ export class TranscriberManager extends EventEmitter {
         }
       }
 
-      this.clearStandardLiveTranscript();
-
       // Check for Squares voice commands (e.g., "grid", "focus", "horizontal").
       // If the transcription is a window management command, execute it and skip pasting.
       let deferredSquaresAction = immediateSquaresAction;
       if (cleanedText.length === 0) {
+        this.clearStandardLiveTranscript();
         if (deferredSquaresAction && this.squaresManager) {
           await this.squaresManager.executeAction(deferredSquaresAction);
           this.setStatus('idle');
@@ -1315,6 +1311,7 @@ export class TranscriberManager extends EventEmitter {
         const handled = await this.squaresManager.handleVoiceCommand(cleanedText);
         if (handled) {
           log.info(`Squares voice command executed: "${cleanedText}"`);
+          this.clearStandardLiveTranscript();
           this.setStatus('idle');
           this.handleOverlayAfterTranscription();
           return;
@@ -1348,7 +1345,10 @@ export class TranscriberManager extends EventEmitter {
       const cmdDetectMs = Math.round(performance.now() - cmdDetectStart);
 
       // Insert inline [Figure N] references for screenshots taken during recording.
+      // IMPORTANT: must happen before clearStandardLiveTranscript() which clears
+      // standardLiveSegments needed for inline placement based on timing.
       cleanedText = this.insertFigureReferences(cleanedText);
+      this.clearStandardLiveTranscript();
 
       // Store transcription in clipboard history.
       if (this.clipboardManager) {
@@ -3496,50 +3496,8 @@ export class TranscriberManager extends EventEmitter {
     return (h * 3600 + m * 60 + s) * 1000 + milliseconds;
   }
   
-  /**
-   * Insert figure references into the transcript text (fallback for non-timestamped output).
-   * Appends all figure references at the end.
-   */
   private insertFigureReferences(text: string): string {
-    if (this.screenshotMetadata.length === 0) {
-      return text;
-    }
-
-    const normalizedText = this.stripFigureReferences(text);
-    const sortedScreenshots = [...this.screenshotMetadata].sort(
-      (a, b) => a.capturedAtMs - b.capturedAtMs
-    );
-
-    const segments = this.standardLiveSegments
-      .map((seg) => ({ text: this.stripFigureReferences(seg.text), endMs: Math.max(0, seg.endMs) }))
-      .filter((seg) => seg.text.length > 0);
-
-    // No segment timing — fall back to appending at the end.
-    if (segments.length === 0) {
-      const refs = sortedScreenshots.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
-      return [normalizedText, refs].filter(Boolean).join(' ').trim();
-    }
-
-    // Map each screenshot to the segment whose endMs is >= the screenshot's capturedAtMs.
-    const segmentFigures: Map<number, string[]> = new Map();
-    for (const screenshot of sortedScreenshots) {
-      let segmentIndex = segments.findIndex((seg) => screenshot.capturedAtMs <= seg.endMs);
-      if (segmentIndex < 0) {
-        segmentIndex = segments.length - 1;
-      }
-      const figures = segmentFigures.get(segmentIndex) ?? [];
-      figures.push(screenshot.figureLabel);
-      segmentFigures.set(segmentIndex, figures);
-    }
-
-    const result = segments.map((segment, index) => {
-      const figures = segmentFigures.get(index);
-      if (!figures || figures.length === 0) return segment.text;
-      const refs = figures.map((label) => `[Figure ${label}]`).join(' ');
-      return `${segment.text} ${refs}`;
-    });
-
-    return result.join(' ').trim();
+    return insertFigureReferencesInline(text, this.standardLiveSegments, this.screenshotMetadata);
   }
 
   /**
