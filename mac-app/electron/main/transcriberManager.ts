@@ -317,7 +317,7 @@ export class TranscriberManager extends EventEmitter {
     // Load preferences
     await this.preferences.load();
     const configuredEngine = this.preferences.getPreference('transcriptionEngine');
-    if (configuredEngine && configuredEngine !== 'whisper') {
+    if (configuredEngine && configuredEngine !== 'whisper' && configuredEngine !== 'parakeet') {
       log.info(
         'Transcription engine "%s" is no longer exposed in settings; reverting to whisper',
         configuredEngine
