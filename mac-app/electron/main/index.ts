@@ -222,6 +222,21 @@ let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 
 /**
+ * Check if the configured transcription engine is ready.
+ * For parakeet: checks parakeet installation.
+ * For whisper (default): checks whisper model availability.
+ */
+async function isTranscriptionEngineReady(): Promise<boolean> {
+  if (!transcriberManager) return false;
+  const engine = preferencesManager?.get()?.transcriptionEngine;
+  if (engine === 'parakeet') {
+    return transcriberManager.isParakeetInstalled();
+  }
+  const modelManager = transcriberManager.getModelManager();
+  return modelManager ? modelManager.isModelAvailable() : false;
+}
+
+/**
  * Shared entry point for direct hot mic start/stop actions.
  * This controls runtime activation only; preference persistence and
  * input-mode broadcasting happen through applyInputMode().
@@ -5070,11 +5085,9 @@ function setupOnboardingIPCHandlers(): void {
       ? await onboardingWindow.getPermissionStatus()
       : { microphone: 'not-determined' as const, accessibility: false };
     
-    // Check if default model is downloaded.
-    const modelDownloaded = transcriberManager?.getModelManager()
-      ? await transcriberManager.getModelManager().isModelAvailable()
-      : false;
-    
+    // Check if the configured transcription engine is ready.
+    const modelDownloaded = await isTranscriptionEngineReady();
+
     return {
       isComplete: prefs?.onboardingComplete ?? false,
       currentStep: prefs?.onboardingStep ?? 0,
@@ -5131,12 +5144,9 @@ function setupOnboardingIPCHandlers(): void {
     return true;
   });
 
-  // Check if model is downloaded (for model download step).
+  // Check if transcription engine is ready (for model download step).
   ipcMain.handle(OnboardingIPCChannels.CHECK_MODEL_STATUS, async () => {
-    if (!transcriberManager?.getModelManager()) {
-      return { downloaded: false, size: 0 };
-    }
-    const isAvailable = await transcriberManager.getModelManager().isModelAvailable();
+    const isAvailable = await isTranscriptionEngineReady();
     return { downloaded: isAvailable };
   });
 
@@ -7380,10 +7390,8 @@ if (!gotTheLock) {
     const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
     const screenStatus = systemPreferences.getMediaAccessStatus('screen');
 
-    // Check if voice model is downloaded
-    const modelDownloaded = transcriberManager?.getModelManager()
-      ? await transcriberManager.getModelManager().isModelAvailable()
-      : false;
+    // Check if the configured transcription engine is ready
+    const modelDownloaded = await isTranscriptionEngineReady();
 
     // Check if user is authenticated
     const isAuthenticated = authManager?.isAuthenticated() ?? false;
