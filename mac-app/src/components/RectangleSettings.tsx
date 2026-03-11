@@ -5,6 +5,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 
+interface HeightConfig {
+  focusHeightPercent: number;
+  focusKeepHeight: boolean;
+  horizontalHeightPercent: number;
+  horizontalKeepHeight: boolean;
+}
+
 type ActionMeta = { label: string; description: string };
 
 /** Voice command metadata for display. */
@@ -53,6 +60,12 @@ export default function RectangleSettings() {
   const { theme } = useTheme();
   const [commands, setCommands] = useState<Record<string, string>>({});
   const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [heightConfig, setHeightConfig] = useState<HeightConfig>({
+    focusHeightPercent: 80,
+    focusKeepHeight: false,
+    horizontalHeightPercent: 80,
+    horizontalKeepHeight: true,
+  });
   const styles = getStyles(theme);
 
   useEffect(() => {
@@ -60,6 +73,28 @@ export default function RectangleSettings() {
     window.hotMicAPI.getRectangleCommands().then((cmds) => {
       setCommands(cmds);
       setEditValues(cmds);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!window.squaresAPI) return;
+    window.squaresAPI.getConfig().then((config) => {
+      if (!config) return;
+      setHeightConfig({
+        focusHeightPercent: config.focusHeightPercent ?? 80,
+        focusKeepHeight: config.focusKeepHeight ?? false,
+        horizontalHeightPercent: config.horizontalHeightPercent ?? 80,
+        horizontalKeepHeight: config.horizontalKeepHeight ?? true,
+      });
+    });
+  }, []);
+
+  const saveHeightConfig = useCallback(async (updates: Partial<HeightConfig>) => {
+    if (!window.squaresAPI) return;
+    setHeightConfig((prev) => {
+      const next = { ...prev, ...updates };
+      window.squaresAPI!.setConfig(next);
+      return next;
     });
   }, []);
 
@@ -84,6 +119,89 @@ export default function RectangleSettings() {
 
   return (
     <div style={styles.container}>
+      {/* Window Height Settings */}
+      <div style={styles.group}>
+        <h3 style={styles.groupTitle}>Window Height</h3>
+        <p style={styles.headerDescription}>
+          Control the height of windows when using Focus and Horizontal actions.
+        </p>
+
+        {/* Focus height */}
+        <div style={{ padding: '4px 0' }}>
+          <div style={styles.actionHeader}>
+            <span style={styles.actionLabel}>Focus</span>
+          </div>
+          <p style={styles.description}>Height of the focused window</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={heightConfig.focusKeepHeight}
+                onChange={(e) => saveHeightConfig({ focusKeepHeight: e.target.checked })}
+                style={{ accentColor: theme.accent }}
+              />
+              <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
+            </label>
+            {!heightConfig.focusKeepHeight && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input
+                  type="range"
+                  min={30}
+                  max={100}
+                  step={5}
+                  value={heightConfig.focusHeightPercent}
+                  onChange={(e) => saveHeightConfig({ focusHeightPercent: Number(e.target.value) })}
+                  style={{ width: '100px', accentColor: theme.accent }}
+                />
+                <span style={{ fontSize: '12px', color: theme.textSecondary, minWidth: '32px' }}>
+                  {heightConfig.focusHeightPercent}%
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div style={styles.divider} />
+
+        {/* Horizontal height */}
+        <div style={{ padding: '4px 0' }}>
+          <div style={styles.actionHeader}>
+            <span style={styles.actionLabel}>Horizontal</span>
+          </div>
+          <p style={styles.description}>Height of windows when spread horizontally</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={heightConfig.horizontalKeepHeight}
+                onChange={(e) => saveHeightConfig({ horizontalKeepHeight: e.target.checked })}
+                style={{ accentColor: theme.accent }}
+              />
+              <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
+            </label>
+            {!heightConfig.horizontalKeepHeight && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <input
+                  type="range"
+                  min={30}
+                  max={100}
+                  step={5}
+                  value={heightConfig.horizontalHeightPercent}
+                  onChange={(e) => saveHeightConfig({ horizontalHeightPercent: Number(e.target.value) })}
+                  style={{ width: '100px', accentColor: theme.accent }}
+                />
+                <span style={{ fontSize: '12px', color: theme.textSecondary, minWidth: '32px' }}>
+                  {heightConfig.horizontalHeightPercent}%
+                </span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div style={styles.sectionDivider} />
+
+      {/* Voice Commands */}
       <div style={styles.group}>
         <h3 style={styles.groupTitle}>Voice Commands (Hot Mic)</h3>
         <p style={styles.headerDescription}>

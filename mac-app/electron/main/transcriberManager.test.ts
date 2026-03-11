@@ -1087,6 +1087,142 @@ describe('TranscriberManager idle screenshot stacking', () => {
 
     expect(manager.getStackLength()).toBe(3);
   });
+
+  it('clearStack while idle clears items and emits stackChanged(0)', () => {
+    const emit = vi.fn();
+    const manager: any = {
+      status: 'idle',
+      currentStack: [10, 20],
+      screenshotMetadata: [{ itemId: 10 }, { itemId: 20 }],
+      detectedCommands: ['cmd1'],
+      emit,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.clearStack();
+
+    expect(manager.currentStack).toEqual([]);
+    expect(manager.screenshotMetadata).toEqual([]);
+    expect(manager.detectedCommands).toEqual([]);
+    expect(emit).toHaveBeenCalledWith('stackChanged', 0);
+    // Status stays idle — clearStack doesn't change status
+    expect(manager.status).toBe('idle');
+  });
+});
+
+describe('TranscriberManager silent stacking', () => {
+  function createSilentStackHarness() {
+    const emit = vi.fn();
+    const play = vi.fn();
+    const pasteSilentStack = vi.fn(async () => {});
+    const startRecording = vi.fn(async () => {});
+    const updateStackId = vi.fn();
+    const generateFigureId = vi.fn(() => 'fig01');
+    const manager: any = {
+      status: 'silentStacking',
+      currentStack: [10, 20, 30],
+      screenshotMetadata: [
+        { itemId: 10, figureLabel: 'A', figureId: 'aaa', capturedAtMs: 0 },
+        { itemId: 20, figureLabel: 'B', figureId: 'bbb', capturedAtMs: 100 },
+        { itemId: 30, figureLabel: 'C', figureId: 'ccc', capturedAtMs: 200 },
+      ],
+      detectedCommands: [],
+      clipboardManager: { updateStackId, generateFigureId },
+      soundManager: { play },
+      emit,
+      pasteSilentStack,
+      startRecording,
+      setStatus(s: string) { this.status = s; this.emit('statusChanged', s); },
+      clearStack() {
+        this.currentStack = [];
+        this.screenshotMetadata = [];
+        this.detectedCommands = [];
+        this.emit('stackChanged', 0);
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    return { manager, emit, play, pasteSilentStack, startRecording, updateStackId };
+  }
+
+  it('cancelSilentStacking resets to idle, clears stack, plays stop sound', () => {
+    const { manager, emit, play } = createSilentStackHarness();
+
+    (manager as any).cancelSilentStacking();
+
+    expect(manager.status).toBe('idle');
+    expect(manager.currentStack).toEqual([]);
+    expect(manager.screenshotMetadata).toEqual([]);
+    expect(manager.detectedCommands).toEqual([]);
+    expect(play).toHaveBeenCalledWith('recordingStop');
+    expect(emit).toHaveBeenCalledWith('statusChanged', 'idle');
+    expect(emit).toHaveBeenCalledWith('stackChanged', 0);
+  });
+
+  it('cancelSilentStacking is a no-op when not in silentStacking', () => {
+    const { manager, play } = createSilentStackHarness();
+    manager.status = 'recording';
+
+    (manager as any).cancelSilentStacking();
+
+    expect(manager.status).toBe('recording');
+    expect(play).not.toHaveBeenCalled();
+  });
+
+  it('finishSilentStacking pastes stack and returns to idle', async () => {
+    const { manager, pasteSilentStack, updateStackId, emit } = createSilentStackHarness();
+
+    await manager.finishSilentStacking();
+
+    expect(manager.status).toBe('idle');
+    expect(updateStackId).toHaveBeenCalledWith([10, 20, 30], expect.any(String));
+    expect(emit).toHaveBeenCalledWith('autostackCreated');
+    expect(pasteSilentStack).toHaveBeenCalledWith([10, 20, 30]);
+    expect(manager.currentStack).toEqual([]);
+  });
+
+  it('finishSilentStacking with empty stack just returns to idle', async () => {
+    const { manager, pasteSilentStack } = createSilentStackHarness();
+    manager.currentStack = [];
+
+    await manager.finishSilentStacking();
+
+    expect(manager.status).toBe('idle');
+    expect(pasteSilentStack).not.toHaveBeenCalled();
+  });
+
+  it('finishSilentStacking is a no-op when not in silentStacking', async () => {
+    const { manager, pasteSilentStack } = createSilentStackHarness();
+    manager.status = 'idle';
+
+    await manager.finishSilentStacking();
+
+    expect(pasteSilentStack).not.toHaveBeenCalled();
+  });
+
+  it('startRecordingFromSilentStack sets idle before paste, then starts recording', async () => {
+    const { manager, pasteSilentStack, startRecording, updateStackId, emit } = createSilentStackHarness();
+
+    await (manager as any).startRecordingFromSilentStack();
+
+    // Should transition to idle before pasting (prevents re-stacking during paste)
+    const statusCalls = emit.mock.calls.filter((args) => args[0] === 'statusChanged');
+    expect(statusCalls[0]).toEqual(['statusChanged', 'idle']);
+    // Should have pasted the stack
+    expect(updateStackId).toHaveBeenCalled();
+    expect(pasteSilentStack).toHaveBeenCalledWith([10, 20, 30]);
+    // Should have started fresh recording
+    expect(startRecording).toHaveBeenCalled();
+  });
+
+  it('startRecordingFromSilentStack with empty stack still starts recording', async () => {
+    const { manager, pasteSilentStack, startRecording } = createSilentStackHarness();
+    manager.currentStack = [];
+
+    await (manager as any).startRecordingFromSilentStack();
+
+    expect(pasteSilentStack).not.toHaveBeenCalled();
+    expect(startRecording).toHaveBeenCalled();
+  });
 });
 
 describe('TranscriberManager hotkey fallback', () => {
