@@ -23,7 +23,7 @@ import {
   WAVEFORM_BAR_COUNT,
 } from '../utils/audioWaveform';
 
-type IslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
+type IslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
 interface HistoryItem {
   id: number;
@@ -176,6 +176,7 @@ function RightPill() {
   const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
   const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
   const waveformActive = inputMode === 'hot-mic' || state === 'recording';
+  const expanded = waveformActive || state === 'silentStacking' || (state === 'idle' && pipeCount > 0);
 
   // Hot-mic waveform = orange, standard recording waveform = white.
   const waveformColor = inputMode === 'hot-mic'
@@ -245,11 +246,11 @@ function RightPill() {
         className="di-right-pill"
         style={{
           ...rightStyles.pill,
-          width: waveformActive ? '100%' : '48px',
+          width: expanded ? '100%' : '48px',
           transition: 'width 200ms ease',
         }}
       >
-        {/* Slot 3: Waveform — collapses to 0 when no session active */}
+        {/* Slot 3: Waveform — collapses to 0 when no session active (not during silentStacking) */}
         <div style={traySlotStyle(waveformActive)}>
           <div aria-hidden="true" style={rightStyles.waveformContainer}>
             <WaveformBars levels={waveformLevels} color={waveformColor} />
@@ -678,6 +679,7 @@ function LeftPill() {
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [deletedId, setDeletedId] = useState<number | null>(null);
   const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
+  const [stackCount, setStackCount] = useState(0);
   const [historyWordsPerLine, setHistoryWordsPerLine] = useState(10);
   const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
@@ -731,6 +733,13 @@ function LeftPill() {
         setCommands([]);
         setIsFinal(false);
       }
+      if (newState === 'idle') {
+        setStackCount(0);
+      }
+    });
+
+    api.onStackChanged?.((count: number) => {
+      setStackCount(count);
     });
 
     api.onTranscriptUpdate((data: { text: string; isFinal: boolean }) => {
@@ -792,6 +801,7 @@ function LeftPill() {
       api.removeAllListeners('dynamic-island-input-mode');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-hotmic-runtime');
+      api.removeAllListeners('dynamic-island-stack-changed');
       if (copiedTimerRef.current) {
         clearTimeout(copiedTimerRef.current);
         copiedTimerRef.current = null;
@@ -1001,8 +1011,9 @@ function LeftPill() {
       : styles.hudPillGood;
 
   // Waveform active when hot-mic is on OR standard recording is in progress.
-  // Both pills animate between compact (48px) and expanded (full window width).
   const waveformActive = inputMode === 'hot-mic' || state === 'recording';
+  // Pills expand for waveform, silentStacking, or idle with stacked screenshots (so X is visible).
+  const expanded = waveformActive || state === 'silentStacking' || (state === 'idle' && stackCount > 0);
 
   const handleCancelSession = useCallback(() => {
     (window as any).dynamicIslandAPI?.cancelSession?.();
@@ -1019,7 +1030,7 @@ function LeftPill() {
           ...styles.island,
           ...styles.islandIdle,
           justifyContent: 'center',
-          width: waveformActive ? `${compactPillWidth}px` : '48px',
+          width: expanded ? `${compactPillWidth}px` : '48px',
           height: `${compactPillHeight}px`,
           gap: '0px',
           transition: 'width 200ms ease',
@@ -1029,7 +1040,7 @@ function LeftPill() {
         <div
           className="di-cancel-btn"
           onClick={handleCancelSession}
-          style={{ ...traySlotStyle(waveformActive), cursor: 'pointer', opacity: 0.5, transition: 'width 200ms ease, min-width 200ms ease, margin-right 200ms ease, opacity 150ms ease' }}
+          style={{ ...traySlotStyle(expanded), cursor: 'pointer', opacity: 0.5, transition: 'width 200ms ease, min-width 200ms ease, margin-right 200ms ease, opacity 150ms ease' }}
           title="cancel session"
         >
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">

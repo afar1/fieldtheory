@@ -10,7 +10,7 @@ const log = createLogger('DynamicIsland');
 // Two symmetric pills: left (hamburger + expanded states) and right (hot-mic dot).
 // =============================================================================
 
-export type DynamicIslandState = 'idle' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
+export type DynamicIslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 export type DynamicIslandInputMode = 'hot-mic' | 'standard';
 
 interface TranscriptHistoryItem {
@@ -378,6 +378,9 @@ export class DynamicIslandManager extends EventEmitter {
     if (!this.enabled) return;
     if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
       this.rightWindow.webContents.send('dynamic-island-stack-changed', count);
+    }
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-stack-changed', count);
     }
   }
 

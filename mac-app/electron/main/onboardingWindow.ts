@@ -256,6 +256,13 @@ export class OnboardingWindow {
 
     this.window.on('closed', () => {
       this.window = null;
+      // Restore dock to user's preference (onboarding show() called app.dock.show())
+      if (process.platform === 'darwin' && this.preferencesManager) {
+        const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+        if (!showInDock) {
+          app.dock.hide();
+        }
+      }
     });
   }
 

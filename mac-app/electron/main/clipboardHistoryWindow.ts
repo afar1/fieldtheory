@@ -310,6 +310,12 @@ export class ClipboardHistoryWindow {
         this.window.webContents.send('clipboard:playSound', 'windowOpen');
       }
 
+      // Restore alwaysOnTop for panel mode — immersive mode disables it,
+      // and it must be re-applied each time the window is shown.
+      if (!showInDock) {
+        this.window.setAlwaysOnTop(true, 'screen-saver', 1);
+      }
+
       this.window.show();
       // Bring window to front of window stack (important when not alwaysOnTop)
       this.window.moveTop();
@@ -672,6 +678,14 @@ export class ClipboardHistoryWindow {
       }
       app.hide();
       this.logLifecycle('hide:app-hidden');
+    } else {
+      // Even when not hiding the whole app, ensure dock stays hidden.
+      // Immersive mode (alwaysOnTop:false) or dock.bounce() can cause the
+      // dock icon to reappear; re-hide it on every window dismiss.
+      const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+      if (!showInDock && process.platform === 'darwin') {
+        app.dock.hide();
+      }
     }
     this.previouslyFocusedWindow = null;
     if (this.onHidden) {
@@ -856,8 +870,13 @@ export class ClipboardHistoryWindow {
         // In immersive mode, disable alwaysOnTop so window behaves normally
         this.window.setAlwaysOnTop(false);
         this.window.setVisibleOnAllWorkspaces(false);
+      } else {
+        // Restore panel behavior when exiting immersive mode.
+        // This ensures the window hides from Cmd+Tab immediately rather than
+        // lingering until the next hide/show cycle.
+        this.window.setAlwaysOnTop(true, 'screen-saver', 1);
+        this.window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
       }
-      // Don't restore alwaysOnTop when exiting - let window stay normal until hidden
     }
   }
 
