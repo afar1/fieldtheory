@@ -584,33 +584,6 @@ export default function TranscriptionSettings() {
         </div>
 
         <div style={styles.modelsList}>
-          {/* Whisper engine option */}
-          <div
-            style={{
-              ...styles.modelCard,
-              borderLeft: selectedEngine === 'whisper'
-                ? `3px solid ${theme.info}`
-                : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
-              backgroundColor: selectedEngine === 'whisper'
-                ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
-                : 'transparent',
-              cursor: 'pointer',
-            }}
-            onClick={() => handleEngineChange('whisper')}
-          >
-            <div style={styles.modelCardContent}>
-              <div style={styles.modelCardHeader}>
-                <span style={{ ...styles.rowValue, fontWeight: selectedEngine === 'whisper' ? 600 : 500 }}>
-                  Whisper
-                </span>
-              </div>
-              <span style={styles.modelHint}>whisper.cpp — fast local transcription</span>
-            </div>
-            {selectedEngine === 'whisper' && (
-              <span style={styles.downloadedBadge}>Active</span>
-            )}
-          </div>
-
           {/* Parakeet engine option */}
           <div
             style={{
@@ -631,8 +604,9 @@ export default function TranscriptionSettings() {
                   Parakeet
                 </span>
                 <span style={styles.modelSize}>~600MB</span>
+                <span style={styles.recommendedBadge}>Recommended</span>
               </div>
-              <span style={styles.modelHint}>NVIDIA Parakeet TDT 0.6B — high-accuracy English ASR</span>
+              <span style={styles.modelHint}>NVIDIA Parakeet TDT 0.6B — fast, high-accuracy English ASR</span>
             </div>
             <div style={styles.rowControls}>
               {parakeetInstalled ? (
@@ -658,9 +632,37 @@ export default function TranscriptionSettings() {
               {parakeetSetupError}
             </div>
           )}
+
+          {/* Whisper engine option */}
+          <div
+            style={{
+              ...styles.modelCard,
+              borderLeft: selectedEngine === 'whisper'
+                ? `3px solid ${theme.info}`
+                : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+              backgroundColor: selectedEngine === 'whisper'
+                ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
+                : 'transparent',
+              cursor: 'pointer',
+            }}
+            onClick={() => handleEngineChange('whisper')}
+          >
+            <div style={styles.modelCardContent}>
+              <div style={styles.modelCardHeader}>
+                <span style={{ ...styles.rowValue, fontWeight: selectedEngine === 'whisper' ? 600 : 500 }}>
+                  Whisper
+                </span>
+              </div>
+              <span style={styles.modelHint}>whisper.cpp — backup English model</span>
+            </div>
+            {selectedEngine === 'whisper' && (
+              <span style={styles.downloadedBadge}>Active</span>
+            )}
+          </div>
         </div>
       </div>
 
+      {selectedEngine === 'whisper' && (
       <div style={styles.modelsSection}>
         <div style={styles.sectionHeader}>
           <span style={styles.sectionTitle}>WHISPER MODELS</span>
@@ -763,6 +765,7 @@ export default function TranscriptionSettings() {
             })}
         </div>
       </div>
+      )}
 
       {error && (
         <div style={styles.copyableErrorBlock}>
@@ -988,6 +991,16 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     fontSize: '11px',
     fontWeight: 500,
     color: theme.success,
+  },
+  recommendedBadge: {
+    fontSize: '9px',
+    fontWeight: 600,
+    color: theme.isDark ? theme.success : '#14372A',
+    backgroundColor: theme.successBg,
+    padding: '1px 5px',
+    borderRadius: '3px',
+    textTransform: 'uppercase' as const,
+    letterSpacing: '0.02em',
   },
 
   // Progress bar for downloads.

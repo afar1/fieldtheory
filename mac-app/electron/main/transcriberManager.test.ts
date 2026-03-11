@@ -4,6 +4,7 @@ vi.mock('electron', () => ({
   app: {
     isPackaged: false,
     getAppPath: vi.fn(() => '/tmp'),
+    on: vi.fn(),
   },
   globalShortcut: {
     register: vi.fn(() => true),
@@ -1222,6 +1223,82 @@ describe('TranscriberManager silent stacking', () => {
 
     expect(pasteSilentStack).not.toHaveBeenCalled();
     expect(startRecording).toHaveBeenCalled();
+  });
+});
+
+describe('TranscriberManager engine revert on init', () => {
+  function createInitHarness(prefValues: Record<string, unknown>) {
+    const save = vi.fn(async () => {});
+    const manager: any = {
+      preferences: {
+        load: vi.fn(async () => {}),
+        getPreference: (key: string) => prefValues[key],
+        save,
+      },
+      modelManager: { setSelectedModel: vi.fn() },
+      overlay: { setOverlayStyle: vi.fn() },
+      registerPrimaryHotkeyWithFallback: vi.fn(async () => {}),
+      registerSecondaryHotkey: vi.fn(async () => {}),
+      hotkey: null,
+      secondaryHotkey: null,
+      registeredHotkey: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    return { manager, save };
+  }
+
+  it('reverts qwen engine to whisper on init', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'qwen',
+      selectedModel: 'small',
+    });
+    await manager.init();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'whisper' })
+    );
+  });
+
+  it('reverts mlx-whisper engine to whisper on init', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'mlx-whisper',
+      selectedModel: 'small',
+    });
+    await manager.init();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'whisper' })
+    );
+  });
+
+  it('does not revert parakeet engine on init', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'parakeet',
+      selectedModel: 'small',
+    });
+    await manager.init();
+    expect(save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: expect.anything() })
+    );
+  });
+
+  it('does not revert whisper engine on init', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'whisper',
+      selectedModel: 'small',
+    });
+    await manager.init();
+    expect(save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: expect.anything() })
+    );
+  });
+
+  it('does not revert when no engine is configured', async () => {
+    const { manager, save } = createInitHarness({
+      selectedModel: 'small',
+    });
+    await manager.init();
+    expect(save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: expect.anything() })
+    );
   });
 });
 

@@ -20,18 +20,7 @@ type PermissionStatus = {
 
 type ModelSize = 'small';
 
-interface ModelInfo {
-  name: string;
-  size: string;
-  description: string;
-  recommended?: boolean;
-}
-
-const MODELS: Record<ModelSize, ModelInfo> = {
-  small: { name: 'English Model', size: '466 MB', description: 'Fast and reliable accuracy', recommended: true },
-};
-
-// Model selection order.
+// Model selection order (used for auto-selecting a downloaded model).
 const MODEL_ORDER: ModelSize[] = ['small'];
 
 // Phase to step number mapping for persistence.
@@ -218,37 +207,45 @@ interface AIIntegrationStatus {
 
 interface ModelPhaseProps {
   selectedModel: ModelSize;
-  onSelectModel: (model: ModelSize) => void;
   modelDownloadStatus: Record<string, boolean>;
   downloadingModel: string | null;
   downloadProgress: number;
   onDownloadModel: (model: ModelSize) => void;
   onCancelDownload: () => void;
-  onDeleteModel: (model: ModelSize) => void;
   onFinish: () => void;
+  selectedEngine: 'parakeet' | 'whisper';
+  onSelectEngine: (engine: 'parakeet' | 'whisper') => void;
+  parakeetInstalled: boolean;
+  settingUpParakeet: boolean;
+  parakeetSetupError: string | null;
+  onSetupParakeet: () => void;
   theme: Theme;
   styles: Record<string, React.CSSProperties>;
 }
 
 function ModelPhase({
   selectedModel,
-  onSelectModel,
   modelDownloadStatus,
   downloadingModel,
   downloadProgress,
   onDownloadModel,
   onCancelDownload,
-  onDeleteModel,
   onFinish,
+  selectedEngine,
+  onSelectEngine,
+  parakeetInstalled,
+  settingUpParakeet,
+  parakeetSetupError,
+  onSetupParakeet,
   theme,
   styles,
 }: ModelPhaseProps) {
-  const isSelectedModelDownloaded = modelDownloadStatus[selectedModel] || false;
+  const isWhisperReady = modelDownloadStatus[selectedModel] || false;
 
-  // Can finish if the selected model is downloaded.
-  const canFinish = isSelectedModelDownloaded;
+  // Can finish if the chosen engine is ready.
+  const canFinish = selectedEngine === 'parakeet' ? parakeetInstalled : isWhisperReady;
 
-  // AI integration state - shown while downloading to give user something to do
+  // AI integration state - shown when either engine is ready
   const [aiStatus, setAiStatus] = useState<AIIntegrationStatus | null>(null);
   const [claudeConnecting, setClaudeConnecting] = useState(false);
   const [cursorConnecting, setCursorConnecting] = useState(false);
@@ -292,123 +289,145 @@ function ModelPhase({
     }
   };
 
-  // Show AI integration section when downloading or after download
-  const showAIIntegration = downloadingModel !== null || isSelectedModelDownloaded;
+  // Show AI integration section when either engine is ready
+  const showAIIntegration = canFinish || downloadingModel !== null;
   const hasAnyAITool = aiStatus && (aiStatus.claudeCode.available || aiStatus.cursor.available);
 
   return (
     <div style={styles.phase}>
-      <h1 style={styles.title}>Download Local Voice Transcription Model</h1>
+      <h1 style={styles.title}>Choose Your Transcription Engine</h1>
       <p style={styles.subtitle}>
-        This model runs locally on your Mac for private, offline transcription.
+        Runs locally on your Mac for private, offline transcription.
       </p>
 
       <div style={styles.modelList}>
-        {MODEL_ORDER.map((modelKey) => {
-          const info = MODELS[modelKey];
-          if (!info) return null;
-          const isDownloaded = modelDownloadStatus[modelKey] || false;
-          const isDownloading = downloadingModel === modelKey;
-          const isSelected = selectedModel === modelKey;
-
-          // Determine border and shadow styles
-          const isRecommended = info.recommended;
-          let borderColor = theme.border;
-          let boxShadow = 'none';
-
-          if (isSelected && isDownloaded) {
-            borderColor = theme.accent;
-          } else if (isRecommended) {
-            borderColor = theme.info; // Blue border for recommended
-            boxShadow = theme.isDark ? '0 2px 8px rgba(59, 130, 246, 0.1)' : '0 2px 8px rgba(59, 130, 246, 0.15)';
-          }
-
-          return (
-            <div
-              key={modelKey}
-              onClick={() => isDownloaded && onSelectModel(modelKey)}
-              style={{
-                ...styles.modelCard,
-                borderColor,
-                boxShadow,
-                backgroundColor: isSelected && isDownloaded ? theme.successBg : (theme.isDark ? theme.surface1 : '#fff'),
-                cursor: isDownloaded ? 'pointer' : 'default',
-              }}
-            >
-              {/* Checkmark only for the active/selected model */}
-              <div style={styles.modelCardCheck}>
-                {isSelected && isDownloaded ? (
-                  <span style={styles.checkmark}>✓</span>
-                ) : (
-                  <span style={styles.unchecked}>○</span>
-                )}
-              </div>
-              <div style={styles.modelCardLeft}>
-                <div style={styles.modelCardHeader}>
-                  <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
-                    {info.name}
-                  </span>
-                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                    {info.size}
-                  </span>
-                  {info.recommended && (
-                    <span style={styles.recommendedBadge}>Recommended</span>
-                  )}
-                </div>
-                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-                  {info.description}
-                </div>
-                {isDownloading && (
-                  <div style={styles.progressContainer}>
-                    <div style={styles.progressBar}>
-                      <div style={{ ...styles.progressFill, width: `${downloadProgress}%` }} />
-                    </div>
-                    <span style={styles.progressText}>{Math.round(downloadProgress)}%</span>
-                  </div>
-                )}
-              </div>
-              <div style={styles.modelCardRight}>
-                {isDownloaded ? (
-                  <div style={styles.modelCardActions}>
-                    {isSelected ? (
-                      <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Active</span>
-                    ) : (
-                      <span style={{ fontSize: '11px', color: theme.textSecondary }}>Ready</span>
-                    )}
-                    <button
-                      onClick={(e) => { e.stopPropagation(); onDeleteModel(modelKey); }}
-                      style={styles.deleteButton}
-                      title="Delete model"
-                    >
-                      ✕
-                    </button>
-                  </div>
-                ) : isDownloading ? (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onCancelDownload(); }}
-                    style={styles.cancelButton}
-                  >
-                    Cancel
-                  </button>
-                ) : (
-                  <button
-                    onClick={(e) => { e.stopPropagation(); onDownloadModel(modelKey); }}
-                    disabled={downloadingModel !== null}
-                    style={{
-                      ...styles.downloadButton,
-                      opacity: downloadingModel !== null ? 0.5 : 1,
-                    }}
-                  >
-                    Download
-                  </button>
-                )}
-              </div>
+        {/* Parakeet engine card */}
+        <div
+          onClick={() => onSelectEngine('parakeet')}
+          style={{
+            ...styles.modelCard,
+            borderColor: selectedEngine === 'parakeet' ? theme.accent : theme.border,
+            boxShadow: selectedEngine === 'parakeet'
+              ? (theme.isDark ? '0 2px 8px rgba(59, 130, 246, 0.1)' : '0 2px 8px rgba(59, 130, 246, 0.15)')
+              : 'none',
+            backgroundColor: selectedEngine === 'parakeet'
+              ? (theme.isDark ? theme.surface1 : '#fff')
+              : 'transparent',
+            cursor: 'pointer',
+          }}
+        >
+          <div style={styles.modelCardCheck}>
+            {selectedEngine === 'parakeet' ? (
+              <span style={styles.checkmark}>✓</span>
+            ) : (
+              <span style={styles.unchecked}>○</span>
+            )}
+          </div>
+          <div style={styles.modelCardLeft}>
+            <div style={styles.modelCardHeader}>
+              <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
+                Parakeet
+              </span>
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                ~600 MB
+              </span>
+              <span style={styles.recommendedBadge}>Recommended</span>
             </div>
-          );
-        })}
+            <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+              NVIDIA Parakeet TDT 0.6B — fast, high-accuracy English ASR
+            </div>
+          </div>
+          <div style={styles.modelCardRight}>
+            {parakeetInstalled ? (
+              <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Installed</span>
+            ) : settingUpParakeet ? (
+              <span style={{ fontSize: '11px', color: theme.warning, fontWeight: 500 }}>Installing...</span>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); onSetupParakeet(); }}
+                style={styles.downloadButton}
+              >
+                Install
+              </button>
+            )}
+          </div>
+        </div>
+        {parakeetSetupError && (
+          <div style={{ fontSize: '11px', color: theme.error, marginTop: '2px', padding: '0 12px' }}>
+            {parakeetSetupError}
+          </div>
+        )}
+
+        {/* Whisper engine card */}
+        <div
+          onClick={() => onSelectEngine('whisper')}
+          style={{
+            ...styles.modelCard,
+            borderColor: selectedEngine === 'whisper' ? theme.accent : theme.border,
+            boxShadow: selectedEngine === 'whisper'
+              ? (theme.isDark ? '0 2px 8px rgba(59, 130, 246, 0.1)' : '0 2px 8px rgba(59, 130, 246, 0.15)')
+              : 'none',
+            backgroundColor: selectedEngine === 'whisper'
+              ? (theme.isDark ? theme.surface1 : '#fff')
+              : 'transparent',
+            cursor: 'pointer',
+          }}
+        >
+          <div style={styles.modelCardCheck}>
+            {selectedEngine === 'whisper' ? (
+              <span style={styles.checkmark}>✓</span>
+            ) : (
+              <span style={styles.unchecked}>○</span>
+            )}
+          </div>
+          <div style={styles.modelCardLeft}>
+            <div style={styles.modelCardHeader}>
+              <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
+                Whisper
+              </span>
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                466 MB
+              </span>
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+              whisper.cpp — backup English model
+            </div>
+            {downloadingModel && (
+              <div style={styles.progressContainer}>
+                <div style={styles.progressBar}>
+                  <div style={{ ...styles.progressFill, width: `${downloadProgress}%` }} />
+                </div>
+                <span style={styles.progressText}>{Math.round(downloadProgress)}%</span>
+              </div>
+            )}
+          </div>
+          <div style={styles.modelCardRight}>
+            {isWhisperReady ? (
+              <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Downloaded</span>
+            ) : downloadingModel ? (
+              <button
+                onClick={(e) => { e.stopPropagation(); onCancelDownload(); }}
+                style={styles.cancelButton}
+              >
+                Cancel
+              </button>
+            ) : (
+              <button
+                onClick={(e) => { e.stopPropagation(); onDownloadModel(selectedModel); }}
+                disabled={downloadingModel !== null}
+                style={{
+                  ...styles.downloadButton,
+                  opacity: downloadingModel !== null ? 0.5 : 1,
+                }}
+              >
+                Download
+              </button>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* AI Integration Section - shown while downloading or after download */}
+      {/* AI Integration Section - shown when either engine is ready */}
       {showAIIntegration && aiStatus && hasAnyAITool && (
         <div style={{
           marginTop: '16px',
@@ -1545,6 +1564,12 @@ export default function Onboarding() {
   const [downloadingModel, setDownloadingModel] = useState<string | null>(null);
   const [downloadProgress, setDownloadProgress] = useState(0);
 
+  // Engine selection state.
+  const [selectedEngine, setSelectedEngine] = useState<'parakeet' | 'whisper'>('parakeet');
+  const [parakeetInstalled, setParakeetInstalled] = useState(false);
+  const [settingUpParakeet, setSettingUpParakeet] = useState(false);
+  const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
+
   // Load initial state from Electron.
   useEffect(() => {
     const loadState = async () => {
@@ -1602,6 +1627,13 @@ export default function Onboarding() {
           if (downloadingModels.length > 0) {
             setDownloadingModel(downloadingModels[0]);
           }
+
+          // Load engine selection and parakeet status.
+          const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? 'whisper';
+          setSelectedEngine(currentEngine === 'parakeet' ? 'parakeet' : 'whisper');
+
+          const isPkInstalled = await window.transcribeAPI.isParakeetInstalled?.() ?? false;
+          setParakeetInstalled(isPkInstalled);
         }
       } catch (err) {
         console.error('[Onboarding] Failed to load state:', err);
@@ -1686,37 +1718,28 @@ export default function Onboarding() {
     setDownloadProgress(0);
   }, []);
   
-  // Delete a downloaded model.
-  const deleteModel = useCallback(async (model: ModelSize) => {
-    if (!window.transcribeAPI) return;
-    
-    try {
-      const success = await window.transcribeAPI.deleteModel(model);
-      if (success) {
-        // Refresh the download status.
-        const downloadStatus = await window.transcribeAPI.getModelDownloadStatus();
-        setModelDownloadStatus(downloadStatus);
-        
-        // If we deleted the selected model, select another downloaded model if available.
-        if (model === selectedModel) {
-          const stillDownloaded = MODEL_ORDER.find(m => downloadStatus[m]);
-          if (stillDownloaded) {
-            setSelectedModel(stillDownloaded);
-            await window.transcribeAPI.setSelectedModel(stillDownloaded);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('Failed to delete model:', error);
-    }
-  }, [selectedModel]);
-  
-  // Handle model selection (for already-downloaded models).
-  const handleSelectModel = useCallback(async (model: ModelSize) => {
-    if (!window.transcribeAPI) return;
-    setSelectedModel(model);
-    await window.transcribeAPI.setSelectedModel(model);
+  // Engine selection handlers.
+  const handleEngineChange = useCallback((engine: 'parakeet' | 'whisper') => {
+    setSelectedEngine(engine);
   }, []);
+
+  const handleSetupParakeet = useCallback(async () => {
+    if (!window.transcribeAPI || settingUpParakeet) return;
+    setSettingUpParakeet(true);
+    setParakeetSetupError(null);
+    try {
+      const result = await window.transcribeAPI.setupParakeet?.();
+      if (result?.success) {
+        setParakeetInstalled(true);
+      } else {
+        setParakeetSetupError(result?.error ?? 'Setup failed');
+      }
+    } catch (err) {
+      setParakeetSetupError(err instanceof Error ? err.message : 'Setup failed');
+    } finally {
+      setSettingUpParakeet(false);
+    }
+  }, [settingUpParakeet]);
 
   // Phase navigation - saves step to preferences for resume on restart.
   const goToModel = useCallback(async () => {
@@ -1724,9 +1747,11 @@ export default function Onboarding() {
     await window.onboardingAPI?.setStep?.(PHASE_TO_STEP.model);
   }, []);
   const goToAccount = useCallback(async () => {
+    // Persist engine choice before navigating.
+    await window.transcribeAPI?.setTranscriptionEngine?.(selectedEngine);
     setPhase('account');
     await window.onboardingAPI?.setStep?.(PHASE_TO_STEP.account);
-  }, []);
+  }, [selectedEngine]);
   const goToShortcuts = useCallback(async () => {
     setPhase('shortcuts');
     await window.onboardingAPI?.setStep?.(PHASE_TO_STEP.shortcuts);
@@ -1774,14 +1799,18 @@ export default function Onboarding() {
         return (
           <ModelPhase
             selectedModel={selectedModel}
-            onSelectModel={handleSelectModel}
             modelDownloadStatus={modelDownloadStatus}
             downloadingModel={downloadingModel}
             downloadProgress={downloadProgress}
             onDownloadModel={downloadModel}
             onCancelDownload={cancelDownload}
-            onDeleteModel={deleteModel}
             onFinish={goToAccount}
+            selectedEngine={selectedEngine}
+            onSelectEngine={handleEngineChange}
+            parakeetInstalled={parakeetInstalled}
+            settingUpParakeet={settingUpParakeet}
+            parakeetSetupError={parakeetSetupError}
+            onSetupParakeet={handleSetupParakeet}
             theme={theme}
             styles={styles}
           />
