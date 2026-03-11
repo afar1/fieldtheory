@@ -116,6 +116,10 @@ export interface SquaresConfig {
   enabled: boolean;
   gapSize: number;                  // Gap between windows in grid/spread layouts (px)
   maxHistorySize: number;           // How many undo states to keep (default: 50)
+  focusHeightPercent: number;       // % of screen height for focus action (default: 80)
+  focusKeepHeight: boolean;         // If true, focus preserves current window height
+  horizontalHeightPercent: number;  // % of screen height for horizontal spread (default: 80)
+  horizontalKeepHeight: boolean;    // If true, horizontal preserves current window height
 }
 
 /**
@@ -125,6 +129,10 @@ export const DEFAULT_SQUARES_CONFIG: SquaresConfig = {
   enabled: true,
   gapSize: 8,
   maxHistorySize: 50,
+  focusHeightPercent: 80,
+  focusKeepHeight: false,
+  horizontalHeightPercent: 80,
+  horizontalKeepHeight: true,
 };
 
 /**

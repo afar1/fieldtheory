@@ -253,12 +253,6 @@ function routeCapturedItemToActiveSession(itemId: number): void {
 
   if (hotMicManager?.isActive) {
     hotMicManager.addScreenshotToSession(itemId);
-    return;
-  }
-
-  // Idle: stack screenshots so they accumulate until pasted.
-  if (transcriberManager) {
-    transcriberManager.addToStack(itemId);
   }
 }
 let squaresManager: SquaresManager | null = null;
@@ -716,9 +710,9 @@ function registerHotkeysAfterOnboarding(): void {
         return;
       }
 
-      // If there's an active screenshot stack (from idle captures), paste it then reset.
-      if (transcriberManager && transcriberManager.getStackLength() > 0 && transcriberManager.getStatus() === 'idle') {
-        await transcriberManager.pasteStack(true);
+      // If in silentStacking mode, paste the collected stack and return to idle.
+      if (transcriberManager && transcriberManager.getStatus() === 'silentStacking') {
+        await transcriberManager.finishSilentStacking();
         return;
       }
 
@@ -5267,7 +5261,9 @@ function broadcastTranscribeEvents(): void {
 
     // Update dynamic island with recording state transitions.
     if (dynamicIslandManager) {
-      if (status === 'recording') {
+      if (status === 'silentStacking') {
+        dynamicIslandManager.setState('silentStacking');
+      } else if (status === 'recording') {
         dynamicIslandManager.setState('recording');
       } else if (status === 'transcribing') {
         dynamicIslandManager.setState('transcribing');
@@ -5803,7 +5799,10 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardHistoryWindow.show(boundsToUse, false, true);
       }
 
-      if (app.dock) {
+      // Only bounce dock if the icon is visible (showInDock mode).
+      // Bouncing when hidden can cause the dock icon to reappear.
+      const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+      if (app.dock && showInDock) {
         app.dock.bounce('informational');
       }
       clipboardHistoryWindow?.playArtifactDiscoverySound();
@@ -5945,8 +5944,17 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager.on('cancel-session', () => {
         // Cancel whichever recording mode is active and collapse the tray.
         const transcriberStatus = transcriberManager?.getStatus();
-        if (transcriberStatus === 'recording' || transcriberStatus === 'silentStacking') {
+        if (transcriberStatus === 'silentStacking') {
+          transcriberManager?.cancelSilentStacking();
+        } else if (transcriberStatus === 'recording') {
           transcriberManager?.toggleRecording();
+        } else if (transcriberStatus === 'idle' && transcriberManager && transcriberManager.getStackLength() > 0) {
+          transcriberManager.clearStack();
+          // Explicitly reset DI state and stack count so both pills collapse.
+          // clearStack emits stackChanged(0) but it travels through multiple hops;
+          // sending directly ensures the right pill's pipeCount resets immediately.
+          dynamicIslandManager?.updateStackCount(0);
+          dynamicIslandManager?.setState('idle');
         }
         if (hotMicManager?.isActive || getCurrentInputMode() === 'hot-mic') {
           applyHotMicMode('deactivate');

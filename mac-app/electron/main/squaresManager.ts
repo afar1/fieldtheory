@@ -97,6 +97,25 @@ async function runAppleScript(script: string): Promise<string> {
 }
 
 // ============================================================================
+// Layout helpers
+// ============================================================================
+
+/** Minimum height percentage to prevent degenerate zero-height windows. */
+const MIN_HEIGHT_PERCENT = 10;
+
+/** Resolve target height for a window based on keep-height flag and percentage. */
+export function resolveHeight(
+  currentHeight: number,
+  screenHeight: number,
+  keepHeight: boolean,
+  heightPercent: number,
+): number {
+  if (keepHeight) return currentHeight;
+  const clamped = Math.max(MIN_HEIGHT_PERCENT, heightPercent);
+  return Math.floor(screenHeight * (clamped / 100));
+}
+
+// ============================================================================
 // SquaresManager class
 // ============================================================================
 
@@ -749,19 +768,29 @@ export class SquaresManager extends EventEmitter {
     const count = windows.length;
 
     if (count === 0) return [];
+
+    const resolveH = (w: WindowInfo) => resolveHeight(
+      w.frame.height, s.height,
+      this.config.horizontalKeepHeight, this.config.horizontalHeightPercent,
+    );
+
     if (count === 1) {
       const w = windows[0];
-      return [{ x: s.x, y: s.y + Math.round((s.height - w.frame.height) / 2), width: s.width, height: w.frame.height }];
+      const h = resolveH(w);
+      return [{ x: s.x, y: s.y + Math.round((s.height - h) / 2), width: s.width, height: h }];
     }
 
     const windowWidth = Math.floor((s.width - gap * (count + 1)) / count);
 
-    return windows.map((w, i) => ({
-      x: s.x + gap + i * (windowWidth + gap),
-      y: s.y + Math.round((s.height - w.frame.height) / 2),
-      width: windowWidth,
-      height: w.frame.height,
-    }));
+    return windows.map((w, i) => {
+      const h = resolveH(w);
+      return {
+        x: s.x + gap + i * (windowWidth + gap),
+        y: s.y + Math.round((s.height - h) / 2),
+        width: windowWidth,
+        height: h,
+      };
+    });
   }
 
   /**
@@ -977,10 +1006,13 @@ export class SquaresManager extends EventEmitter {
       log.info('Focus: moved %d same-app windows off-screen', otherWindows.length);
     }
 
-    // Expand to 80% screen height, center both axes, keep current width.
+    // Expand to configured % screen height (or keep current), center both axes, keep current width.
     const targetScreen = this.getScreenForWindow(frontWindow.frame);
     const s = targetScreen.visibleFrame;
-    const focusHeight = Math.floor(s.height * 0.8);
+    const focusHeight = resolveHeight(
+      frontWindow.frame.height, s.height,
+      this.config.focusKeepHeight, this.config.focusHeightPercent,
+    );
     const focusFrame: WindowFrame = {
       x: s.x + Math.floor((s.width - frontWindow.frame.width) / 2),
       y: s.y + Math.floor((s.height - focusHeight) / 2),

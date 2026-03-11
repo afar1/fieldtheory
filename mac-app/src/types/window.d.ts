@@ -1668,6 +1668,10 @@ declare global {
     enabled: boolean;
     gapSize: number;
     maxHistorySize: number;
+    focusHeightPercent: number;
+    focusKeepHeight: boolean;
+    horizontalHeightPercent: number;
+    horizontalKeepHeight: boolean;
   }
 
   /**
