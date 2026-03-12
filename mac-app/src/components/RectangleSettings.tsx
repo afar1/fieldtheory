@@ -8,6 +8,7 @@ import { useTheme, Theme } from '../contexts/ThemeContext';
 interface HeightConfig {
   focusHeightPercent: number;
   focusKeepHeight: boolean;
+  focusWidthPercent: number;
   horizontalHeightPercent: number;
   horizontalKeepHeight: boolean;
 }
@@ -63,6 +64,7 @@ export default function RectangleSettings() {
   const [heightConfig, setHeightConfig] = useState<HeightConfig>({
     focusHeightPercent: 80,
     focusKeepHeight: false,
+    focusWidthPercent: 60,
     horizontalHeightPercent: 80,
     horizontalKeepHeight: true,
   });
@@ -83,6 +85,7 @@ export default function RectangleSettings() {
       setHeightConfig({
         focusHeightPercent: config.focusHeightPercent ?? 80,
         focusKeepHeight: config.focusKeepHeight ?? false,
+        focusWidthPercent: config.focusWidthPercent ?? 60,
         horizontalHeightPercent: config.horizontalHeightPercent ?? 80,
         horizontalKeepHeight: config.horizontalKeepHeight ?? true,
       });
@@ -123,16 +126,16 @@ export default function RectangleSettings() {
       <div style={styles.group}>
         <h3 style={styles.groupTitle}>Window Height</h3>
         <p style={styles.headerDescription}>
-          Control the height of windows when using Focus and Horizontal actions.
+          Control the size of windows when using Focus and Horizontal actions.
         </p>
 
-        {/* Focus height */}
+        {/* Focus */}
         <div style={{ padding: '4px 0' }}>
           <div style={styles.actionHeader}>
             <span style={styles.actionLabel}>Focus</span>
           </div>
-          <p style={styles.description}>Height of the focused window</p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+          <p style={styles.description}>Size of the focused window</p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -143,21 +146,33 @@ export default function RectangleSettings() {
               <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
             </label>
             {!heightConfig.focusKeepHeight && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>Height</span>
                 <input
-                  type="range"
+                  type="number"
                   min={30}
                   max={100}
                   step={5}
                   value={heightConfig.focusHeightPercent}
-                  onChange={(e) => saveHeightConfig({ focusHeightPercent: Number(e.target.value) })}
-                  style={{ width: '100px', accentColor: theme.accent }}
+                  onChange={(e) => saveHeightConfig({ focusHeightPercent: Math.max(30, Math.min(100, Number(e.target.value))) })}
+                  style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
                 />
-                <span style={{ fontSize: '12px', color: theme.textSecondary, minWidth: '32px' }}>
-                  {heightConfig.focusHeightPercent}%
-                </span>
-              </div>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+              </label>
             )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Width</span>
+              <input
+                type="number"
+                min={30}
+                max={100}
+                step={5}
+                value={heightConfig.focusWidthPercent}
+                onChange={(e) => saveHeightConfig({ focusWidthPercent: Math.max(30, Math.min(100, Number(e.target.value))) })}
+                style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
+              />
+              <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+            </label>
           </div>
         </div>
 
@@ -180,20 +195,19 @@ export default function RectangleSettings() {
               <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
             </label>
             {!heightConfig.horizontalKeepHeight && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>Height</span>
                 <input
-                  type="range"
+                  type="number"
                   min={30}
                   max={100}
                   step={5}
                   value={heightConfig.horizontalHeightPercent}
-                  onChange={(e) => saveHeightConfig({ horizontalHeightPercent: Number(e.target.value) })}
-                  style={{ width: '100px', accentColor: theme.accent }}
+                  onChange={(e) => saveHeightConfig({ horizontalHeightPercent: Math.max(30, Math.min(100, Number(e.target.value))) })}
+                  style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
                 />
-                <span style={{ fontSize: '12px', color: theme.textSecondary, minWidth: '32px' }}>
-                  {heightConfig.horizontalHeightPercent}%
-                </span>
-              </div>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+              </label>
             )}
           </div>
         </div>

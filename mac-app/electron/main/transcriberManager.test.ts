@@ -1280,6 +1280,17 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
+  it('does not revert parakeet multilingual engine on init', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'parakeet-multilingual',
+      selectedModel: 'small',
+    });
+    await manager.init();
+    expect(save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: expect.anything() })
+    );
+  });
+
   it('does not revert whisper engine on init', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'whisper',

@@ -1,5 +1,11 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import {
+  DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
+  PARAKEET_VISIBLE_ENGINE_OPTIONS,
+  normalizeVisibleTranscriptionEngine,
+  type VisibleTranscriptionEngine,
+} from '../utils/transcriptionEngines';
 
 type TranscriptionStatus = 'idle' | 'recording' | 'transcribing';
 type ModelStatus = 'downloaded' | 'downloading' | 'missing';
@@ -46,7 +52,7 @@ export default function TranscriptionSettings() {
   const [copiedError, setCopiedError] = useState<'general' | null>(null);
 
   // Engine selection state.
-  const [selectedEngine, setSelectedEngine] = useState<'whisper' | 'parakeet'>('whisper');
+  const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
   const [parakeetInstalled, setParakeetInstalled] = useState(false);
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
   const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
@@ -100,9 +106,9 @@ export default function TranscriptionSettings() {
         setAbandonHotkey(currentAbandonHotkey);
         setHotMicHotkey(currentHotMicHotkey);
 
-        // Fetch current engine selection. Only Whisper and Parakeet are user-facing.
-        const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? 'whisper';
-        setSelectedEngine(currentEngine === 'parakeet' ? 'parakeet' : 'whisper');
+        // Fetch current engine selection. Only Whisper and Parakeet variants are user-facing.
+        const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
+        setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
 
         // Check Parakeet installation status.
         const parakeetInstalled = await window.transcribeAPI!.isParakeetInstalled?.() ?? false;
@@ -201,7 +207,7 @@ export default function TranscriptionSettings() {
     }
   }, [downloadingModel]);
 
-  const handleEngineChange = useCallback(async (engine: 'whisper' | 'parakeet') => {
+  const handleEngineChange = useCallback(async (engine: VisibleTranscriptionEngine) => {
     if (!window.transcribeAPI) return;
     setSelectedEngine(engine);
     try {
@@ -584,49 +590,58 @@ export default function TranscriptionSettings() {
         </div>
 
         <div style={styles.modelsList}>
-          {/* Parakeet engine option */}
-          <div
-            style={{
-              ...styles.modelCard,
-              borderLeft: selectedEngine === 'parakeet'
-                ? `3px solid ${theme.info}`
-                : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
-              backgroundColor: selectedEngine === 'parakeet'
-                ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
-                : 'transparent',
-              cursor: parakeetInstalled ? 'pointer' : 'default',
-            }}
-            onClick={() => parakeetInstalled && handleEngineChange('parakeet')}
-          >
-            <div style={styles.modelCardContent}>
-              <div style={styles.modelCardHeader}>
-                <span style={{ ...styles.rowValue, fontWeight: selectedEngine === 'parakeet' ? 600 : 500 }}>
-                  Parakeet
-                </span>
-                <span style={styles.modelSize}>~600MB</span>
-                <span style={styles.recommendedBadge}>Recommended</span>
+          {PARAKEET_VISIBLE_ENGINE_OPTIONS.map((engineOption) => {
+            const isActive = selectedEngine === engineOption.id;
+            return (
+              <div
+                key={engineOption.id}
+                style={{
+                  ...styles.modelCard,
+                  borderLeft: isActive
+                    ? `3px solid ${theme.info}`
+                    : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+                  backgroundColor: isActive
+                    ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
+                    : 'transparent',
+                  cursor: parakeetInstalled ? 'pointer' : 'default',
+                }}
+                onClick={() => parakeetInstalled && handleEngineChange(engineOption.id)}
+              >
+                <div style={styles.modelCardContent}>
+                  <div style={styles.modelCardHeader}>
+                    <span style={{ ...styles.rowValue, fontWeight: isActive ? 600 : 500 }}>
+                      {engineOption.label}
+                    </span>
+                    {engineOption.sizeLabel && (
+                      <span style={styles.modelSize}>{engineOption.sizeLabel}</span>
+                    )}
+                    {engineOption.recommended && (
+                      <span style={styles.recommendedBadge}>Recommended</span>
+                    )}
+                  </div>
+                  <span style={styles.modelHint}>{engineOption.description}</span>
+                </div>
+                <div style={styles.rowControls}>
+                  {parakeetInstalled ? (
+                    isActive ? (
+                      <span style={styles.downloadedBadge}>Active</span>
+                    ) : (
+                      <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Installed</span>
+                    )
+                  ) : settingUpParakeet ? (
+                    <span style={{ fontSize: '11px', color: theme.warning }}>Installing...</span>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleSetupParakeet(); }}
+                      style={styles.btn}
+                    >
+                      Install
+                    </button>
+                  )}
+                </div>
               </div>
-              <span style={styles.modelHint}>NVIDIA Parakeet TDT 0.6B — fast, high-accuracy English ASR</span>
-            </div>
-            <div style={styles.rowControls}>
-              {parakeetInstalled ? (
-                selectedEngine === 'parakeet' ? (
-                  <span style={styles.downloadedBadge}>Active</span>
-                ) : (
-                  <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Installed</span>
-                )
-              ) : settingUpParakeet ? (
-                <span style={{ fontSize: '11px', color: theme.warning }}>Installing...</span>
-              ) : (
-                <button
-                  onClick={(e) => { e.stopPropagation(); handleSetupParakeet(); }}
-                  style={styles.btn}
-                >
-                  Install
-                </button>
-              )}
-            </div>
-          </div>
+            );
+          })}
           {parakeetSetupError && (
             <div style={{ fontSize: '11px', color: theme.error, marginTop: '4px', padding: '0 4px' }}>
               {parakeetSetupError}

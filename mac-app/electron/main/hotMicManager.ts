@@ -16,7 +16,10 @@ import { DynamicIslandManager, type HotMicBackgroundFilterMeter } from './dynami
 import { ClipboardItem, isTerminalApp } from './clipboardManager';
 import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS } from './hotMicDefaults';
 import { getHotkeyManager } from './hotkeyManager';
-import type { TranscriptionEngine } from './types/transcribe';
+import {
+  isParakeetEngine,
+  type TranscriptionEngine,
+} from './types/transcribe';
 import type { HotMicEngineStatus } from './types/hotMic';
 import { createLogger } from './logger';
 import { stripFigureReferences, insertFigureReferencesInline } from './figureUtils';
@@ -1296,7 +1299,7 @@ export class HotMicManager extends EventEmitter {
 
   private getEngineSilenceMs(): number | undefined {
     const engine = this.getConfiguredTranscriptionEngineForLogs();
-    if (engine === 'parakeet') return 0;
+    if (isParakeetEngine(engine)) return 0;
     return undefined;
   }
 
