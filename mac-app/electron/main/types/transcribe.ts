@@ -3,10 +3,33 @@
  * 'whisper': whisper.cpp (local binary, CPU/Metal)
  * 'qwen': Qwen3-ASR-0.6B via mlx-audio (Apple Silicon)
  * 'mlx-whisper': Whisper large-v3-turbo via mlx-whisper (Apple Silicon)
- * 'parakeet': NVIDIA Parakeet TDT 0.6B v2 via onnx-asr (CPU/ONNX Runtime)
+ * 'parakeet': NVIDIA Parakeet TDT 0.6B v2 (English) via onnx-asr (CPU/ONNX Runtime)
+ * 'parakeet-multilingual': NVIDIA Parakeet TDT 0.6B v3 (multilingual) via onnx-asr (CPU/ONNX Runtime)
  */
-export type TranscriptionEngine = 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet';
+export type TranscriptionEngine =
+  | 'whisper'
+  | 'qwen'
+  | 'mlx-whisper'
+  | 'parakeet'
+  | 'parakeet-multilingual';
 export type HotMicEngine = 'default' | TranscriptionEngine;
+export type ParakeetEngine = Extract<TranscriptionEngine, 'parakeet' | 'parakeet-multilingual'>;
+
+export const PARAKEET_ENGINE_MODEL_IDS: Record<ParakeetEngine, string> = {
+  parakeet: 'nemo-parakeet-tdt-0.6b-v2',
+  'parakeet-multilingual': 'nemo-parakeet-tdt-0.6b-v3',
+};
+
+export const PARAKEET_ENGINE_LABELS: Record<ParakeetEngine, string> = {
+  parakeet: 'Parakeet English',
+  'parakeet-multilingual': 'Parakeet Multilingual',
+};
+
+export function isParakeetEngine(
+  engine: string | null | undefined
+): engine is ParakeetEngine {
+  return engine === 'parakeet' || engine === 'parakeet-multilingual';
+}
 
 /**
  * IPC channels for transcription functionality.
@@ -150,8 +173,8 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<void>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
   isQwenInstalled: () => Promise<boolean>;
   isMlxWhisperInstalled: () => Promise<boolean>;
   isParakeetInstalled: () => Promise<boolean>;
@@ -169,4 +192,3 @@ export interface TranscribeAPI {
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
 }
-

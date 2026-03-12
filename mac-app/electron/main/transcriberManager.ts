@@ -27,7 +27,14 @@ import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import { StdioJsonServer } from './stdioJsonServer';
-import type { TranscriptionEngine, HotMicEngine } from './types/transcribe';
+import {
+  PARAKEET_ENGINE_LABELS,
+  PARAKEET_ENGINE_MODEL_IDS,
+  isParakeetEngine,
+  type TranscriptionEngine,
+  type HotMicEngine,
+  type ParakeetEngine,
+} from './types/transcribe';
 import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
 import * as plist from 'plist';
 import { createLogger } from './logger';
@@ -86,6 +93,7 @@ export class TranscriberManager extends EventEmitter {
   private qwenServer: StdioJsonServer | null = null;
   private mlxWhisperServer: StdioJsonServer | null = null;
   private parakeetServer: StdioJsonServer | null = null;
+  private parakeetServerEngine: ParakeetEngine | null = null;
   private qwenFallbackLoggedForDisabledReason: boolean = false;
 
   // Persistent whisper-server (HTTP) state for whisper.cpp.
@@ -317,7 +325,11 @@ export class TranscriberManager extends EventEmitter {
     // Load preferences
     await this.preferences.load();
     const configuredEngine = this.preferences.getPreference('transcriptionEngine');
-    if (configuredEngine && configuredEngine !== 'whisper' && configuredEngine !== 'parakeet') {
+    if (
+      configuredEngine
+      && configuredEngine !== 'whisper'
+      && !isParakeetEngine(configuredEngine)
+    ) {
       log.info(
         'Transcription engine "%s" is no longer exposed in settings; reverting to whisper',
         configuredEngine
@@ -890,7 +902,7 @@ export class TranscriberManager extends EventEmitter {
 
   private getEngineSilenceMs(): number | undefined {
     const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
-    if (engine === 'parakeet') return 0;
+    if (isParakeetEngine(engine)) return 0;
     return undefined;
   }
 
@@ -1866,9 +1878,10 @@ export class TranscriberManager extends EventEmitter {
 
     // Parakeet (NVIDIA Parakeet TDT 0.6B v2 via onnx-asr).
     // Falls back to whisper.cpp if server fails and a model is available.
-    if (engine === 'parakeet') {
+    if (isParakeetEngine(engine)) {
+      const engineLabel = PARAKEET_ENGINE_LABELS[engine];
       try {
-        return await this.transcribeWithParakeet(wavPath);
+        return await this.transcribeWithParakeet(wavPath, engine);
       } catch (parakeetError) {
         if (!allowWhisperFallback) throw parakeetError;
 
@@ -1877,14 +1890,14 @@ export class TranscriberManager extends EventEmitter {
           : await this.modelManager.isModelAvailable();
         if (!whisperAvailable) throw parakeetError;
 
-        log.warn('Parakeet failed, falling back to whisper.cpp: %s', (parakeetError as Error).message);
+        log.warn('%s failed, falling back to whisper.cpp: %s', engineLabel, (parakeetError as Error).message);
         this.lastHotMicUsedWhisperFallback = true;
 
         try {
           return await this.transcribe(wavPath, whisperModelOverride);
         } catch (whisperError) {
           throw new Error(
-            `Parakeet failed: ${(parakeetError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
+            `${engineLabel} failed: ${(parakeetError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
           );
         }
       }
@@ -2457,47 +2470,52 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
-  private getOrCreateParakeetServer(): StdioJsonServer {
-    if (!this.parakeetServer) {
+  private getOrCreateParakeetServer(engine: ParakeetEngine): StdioJsonServer {
+    if (!this.parakeetServer || this.parakeetServerEngine !== engine) {
+      this.parakeetServer?.stop();
       this.parakeetServer = new StdioJsonServer({
-        name: 'Parakeet',
+        name: PARAKEET_ENGINE_LABELS[engine],
         command: this.getParakeetPythonPath(),
-        args: [this.getParakeetScriptPath(), '--server'],
+        args: [this.getParakeetScriptPath(), '--server', '--model', PARAKEET_ENGINE_MODEL_IDS[engine]],
       });
+      this.parakeetServerEngine = engine;
     }
     return this.parakeetServer;
   }
 
-  private startParakeetServer(): Promise<void> {
-    return this.getOrCreateParakeetServer().start();
+  private startParakeetServer(engine: ParakeetEngine): Promise<void> {
+    return this.getOrCreateParakeetServer(engine).start();
   }
 
   stopParakeetServer(): void {
     this.parakeetServer?.stop();
+    this.parakeetServer = null;
+    this.parakeetServerEngine = null;
   }
 
-  private sendParakeetCommand(cmd: Record<string, unknown>) {
-    return this.getOrCreateParakeetServer().send(cmd);
+  private sendParakeetCommand(engine: ParakeetEngine, cmd: Record<string, unknown>) {
+    return this.getOrCreateParakeetServer(engine).send(cmd);
   }
 
   /**
    * Transcribe audio using NVIDIA Parakeet TDT 0.6B v2.
    * Starts the server on first use, auto-restarts on crash (one retry).
    */
-  private async transcribeWithParakeet(wavPath: string): Promise<string> {
+  private async transcribeWithParakeet(wavPath: string, engine: ParakeetEngine): Promise<string> {
     const needTimestamps = this.screenshotMetadata.length > 0;
+    const engineLabel = PARAKEET_ENGINE_LABELS[engine];
 
     const doTranscribe = async (): Promise<string> => {
-      await this.startParakeetServer();
+      await this.startParakeetServer(engine);
 
-      const response = await this.sendParakeetCommand({
+      const response = await this.sendParakeetCommand(engine, {
         cmd: 'transcribe',
         audio: wavPath,
         timestamps: needTimestamps,
       });
 
       if (!response.ok) {
-        throw new Error(`Parakeet transcription failed: ${response.error}`);
+        throw new Error(`${engineLabel} transcription failed: ${response.error}`);
       }
 
       return (response.text || '').trim();
@@ -2510,7 +2528,7 @@ export class TranscriberManager extends EventEmitter {
       if (message.includes('not running') || message.includes('timed out') || message.includes('startup cancelled')) {
         throw firstError;
       }
-      log.warn('Parakeet transcription failed, restarting server: %s', message);
+      log.warn('%s transcription failed, restarting server: %s', engineLabel, message);
       this.stopParakeetServer();
       return await doTranscribe();
     }
@@ -2739,8 +2757,9 @@ export class TranscriberManager extends EventEmitter {
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
       await this.startMlxWhisperServer();
     }
-    if (engines.includes('parakeet') && this.isParakeetInstalled()) {
-      await this.startParakeetServer();
+    const parakeetEngine = engines.find(isParakeetEngine);
+    if (parakeetEngine && this.isParakeetInstalled()) {
+      await this.startParakeetServer(parakeetEngine);
     }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       await this.startWhisperServer();
@@ -2766,8 +2785,9 @@ export class TranscriberManager extends EventEmitter {
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
       await this.startMlxWhisperServer();
     }
-    if (engines.includes('parakeet') && this.isParakeetInstalled()) {
-      await this.startParakeetServer();
+    const parakeetEngine = engines.find(isParakeetEngine);
+    if (parakeetEngine && this.isParakeetInstalled()) {
+      await this.startParakeetServer(parakeetEngine);
     }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       await this.startWhisperServer();
@@ -2776,7 +2796,7 @@ export class TranscriberManager extends EventEmitter {
 
   private getConfiguredTranscriptionEngine(): TranscriptionEngine {
     const configured = this.preferences.getPreference('transcriptionEngine');
-    if (configured === 'qwen' || configured === 'mlx-whisper' || configured === 'parakeet') {
+    if (configured === 'qwen' || configured === 'mlx-whisper' || isParakeetEngine(configured)) {
       return configured;
     }
     return 'whisper';
@@ -2880,14 +2900,15 @@ export class TranscriberManager extends EventEmitter {
     }
 
     // Parakeet runs on any architecture (ONNX Runtime CPU), no Apple Silicon needed.
-    if (selectedEngine === 'parakeet') {
+    if (isParakeetEngine(selectedEngine)) {
+      const engineLabel = PARAKEET_ENGINE_LABELS[selectedEngine];
       if (!this.isParakeetInstalled()) {
         return this.buildHotMicEngineStatus(
           selectedEngine,
           whisperModel,
           fallbackAvailable,
           'not-installed',
-          'Parakeet runtime is not installed'
+          `${engineLabel} runtime is not installed`
         );
       }
       if (this.parakeetServer?.disabledReason) {
@@ -2905,7 +2926,7 @@ export class TranscriberManager extends EventEmitter {
           whisperModel,
           fallbackAvailable,
           'ready',
-          'Parakeet server is ready'
+          `${engineLabel} server is ready`
         );
       }
       if (this.parakeetServer?.isStarting) {
@@ -2914,7 +2935,7 @@ export class TranscriberManager extends EventEmitter {
           whisperModel,
           fallbackAvailable,
           'warming',
-          'Parakeet server is warming up'
+          `${engineLabel} server is warming up`
         );
       }
       return this.buildHotMicEngineStatus(
@@ -2922,7 +2943,7 @@ export class TranscriberManager extends EventEmitter {
         whisperModel,
         fallbackAvailable,
         'cold',
-        'Parakeet server is idle (starts on first chunk)'
+        `${engineLabel} server is idle (starts on first chunk)`
       );
     }
 
@@ -3045,11 +3066,11 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    if (engine === 'parakeet') {
+    if (isParakeetEngine(engine)) {
       if (!this.isParakeetInstalled()) {
         return;
       }
-      await this.startParakeetServer();
+      await this.startParakeetServer(engine);
       return;
     }
 
