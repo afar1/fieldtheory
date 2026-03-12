@@ -1473,6 +1473,15 @@ describe('HotMicManager chunk queue backpressure', () => {
     manager.destroy();
   });
 
+  it('passes silenceMs 0 for parakeet multilingual engine', () => {
+    const { manager, nativeHelper } = createManager({ transcriptionEngine: 'parakeet-multilingual' });
+
+    (manager as any).setRealtimeHarvestMode();
+
+    expect(nativeHelper.setHarvestMode).toHaveBeenCalledWith('dictation', 0);
+    manager.destroy();
+  });
+
   it('uses longer forced snapshot interval for mlx and under queue pressure', () => {
     const { manager } = createManager({ transcriptionEngine: 'mlx-whisper' });
     const queue = (manager as any).pendingChunkQueue;

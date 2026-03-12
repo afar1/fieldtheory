@@ -27,7 +27,9 @@ import {
   SetPriorityDevicePayload,
 } from './types/audio';
 import {
+  isParakeetEngine,
   TranscribeIPCChannels,
+  type TranscriptionEngine,
 } from './types/transcribe';
 import {
   ClipboardIPCChannels,
@@ -229,7 +231,7 @@ let hotMicManager: HotMicManager | null = null;
 async function isTranscriptionEngineReady(): Promise<boolean> {
   if (!transcriberManager) return false;
   const engine = preferencesManager?.get()?.transcriptionEngine;
-  if (engine === 'parakeet') {
+  if (isParakeetEngine(engine)) {
     return transcriberManager.isParakeetInstalled();
   }
   const modelManager = transcriberManager.getModelManager();
@@ -2572,7 +2574,7 @@ function setupTranscribeIPCHandlers(): void {
     return preferencesManager.getPreference('transcriptionEngine') || 'whisper';
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => {
+  ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: TranscriptionEngine) => {
     if (!preferencesManager) {
       throw new Error('PreferencesManager not initialized');
     }
@@ -6697,7 +6699,7 @@ if (!gotTheLock) {
       return 'default';
     });
 
-    ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper') => {
+    ipcMain.handle('hotmic:setTranscriptionEngineMode', async (_event, mode: 'default' | TranscriptionEngine) => {
       if (mode !== 'default') {
         log.info('Hot Mic engine override is deprecated; using global transcription engine');
       }
