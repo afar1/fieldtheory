@@ -37,6 +37,13 @@ describe('tomlSetNotify', () => {
     const result = tomlSetNotify(content, 'python3 /path/to/codex-notify.py');
     expect(result).toBe(content);
   });
+
+  it('moves notify to top level when appended after a table header', () => {
+    const content = '[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\nnotify = "old-command"\n';
+    const result = tomlSetNotify(content, 'python3 /path/to/codex-notify.py');
+    expect(result).toContain('notify = "python3 /path/to/codex-notify.py"\n\n[notice.model_migrations]');
+    expect(result).not.toContain('old-command');
+  });
 });
 
 describe('tomlRemoveNotify', () => {
@@ -89,6 +96,12 @@ describe('tomlAddWritableRoot', () => {
     const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
     expect(result).toBe(content);
   });
+
+  it('moves writable_roots to top level when appended after a table header', () => {
+    const content = '[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\nwritable_roots = [\n  "/tmp/old"\n]\n';
+    const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
+    expect(result).toContain('writable_roots = [\n  "/tmp/old",\n  "/home/user/.fieldtheory/librarian"\n]\n\n[notice.model_migrations]');
+  });
 });
 
 describe('tomlRemoveWritableRoot', () => {
@@ -112,6 +125,13 @@ describe('tomlRemoveWritableRoot', () => {
     const content = 'model = "o3"\n';
     const result = tomlRemoveWritableRoot(content, '/home/user/.fieldtheory/librarian');
     expect(result).toBe(content);
+  });
+
+  it('removes our path from a nested writable_roots block and keeps the rest top level', () => {
+    const content = '[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\nwritable_roots = [\n  "/home/user/projects",\n  "/home/user/.fieldtheory/librarian"\n]\n';
+    const result = tomlRemoveWritableRoot(content, '/home/user/.fieldtheory/librarian');
+    expect(result).toContain('writable_roots = [\n  "/home/user/projects"\n]\n\n[notice.model_migrations]');
+    expect(result).not.toContain('/home/user/.fieldtheory/librarian');
   });
 });
 

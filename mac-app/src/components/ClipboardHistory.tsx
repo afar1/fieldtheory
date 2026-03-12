@@ -233,10 +233,9 @@ export default function ClipboardHistory() {
   });
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
-  // DEBUG: Librarian count overlay
+  // Shared Librarian counter from ~/.fieldtheory/librarian/state.json
   const [librarianStatus, setLibrarianStatus] = useState<{ edits: number; threshold: number; frequency: string } | null>(null);
   useEffect(() => {
-    if (!isWindowVisible) return;
     const fetchStatus = async () => {
       const status = await window.librarianAPI?.getEditStatus();
       setLibrarianStatus(status ?? null);
@@ -244,7 +243,7 @@ export default function ClipboardHistory() {
     fetchStatus();
     const interval = setInterval(fetchStatus, 2000); // Poll every 2 seconds
     return () => clearInterval(interval);
-  }, [isWindowVisible]);
+  }, []);
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     // If user started a transcription, always show Fields on next open.
