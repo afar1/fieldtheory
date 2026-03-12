@@ -124,7 +124,7 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     chunksReceived: number;
     micHealthy: boolean;
     engine: {
-      selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet';
+      selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual';
       readiness:
         | 'ready'
         | 'warming'

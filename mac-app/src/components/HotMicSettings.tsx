@@ -619,11 +619,11 @@ export default function HotMicSettings() {
       </div>
       {whisperModelReady ? (
         <p style={styles.description}>
-          Hot Mic follows Voice & Transcription and uses Whisper only.
+          Hot Mic follows Voice & Transcription. This Whisper model is used when fallback is needed.
         </p>
       ) : (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Whisper model is missing or incomplete. Download it in Voice & Transcription settings.
+          Whisper fallback model is missing or incomplete. Download it in Voice & Transcription settings.
         </p>
       )}
 
@@ -1308,7 +1308,9 @@ function getConditionColor(condition: string): string {
   }
 }
 
-function formatEngineLabel(engine: 'whisper' | 'qwen' | 'mlx-whisper'): string {
+function formatEngineLabel(engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): string {
+  if (engine === 'parakeet-multilingual') return 'Parakeet Multilingual';
+  if (engine === 'parakeet') return 'Parakeet English';
   if (engine === 'mlx-whisper') return 'MLX Whisper (large-v3-turbo)';
   if (engine === 'qwen') return 'Qwen3-ASR';
   return 'Whisper';
