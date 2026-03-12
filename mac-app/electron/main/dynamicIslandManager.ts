@@ -64,17 +64,17 @@ export interface DynamicIslandHotMicRuntimeStatus {
 }
 
 export interface DynamicIslandGeometryTuning {
-  notchWidthOverride: number; // 0 means "use profile/auto notch width"
-  pillWidth: number;
-  pillHeight: number;
+  notchWidthOverride: number; // 0 = auto (use profile/detected notch width)
+  pillWidth: number;          // 0 = auto (use ISLAND_WIDTH_IDLE default)
+  pillHeight: number;         // 0 = auto (use menu bar height)
   offsetX: number;
   offsetY: number;
 }
 
 export const DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING: DynamicIslandGeometryTuning = {
   notchWidthOverride: 0,
-  pillWidth: 72,
-  pillHeight: 38,
+  pillWidth: 0,
+  pillHeight: 0,
   offsetX: 0,
   offsetY: 0,
 };
@@ -107,17 +107,17 @@ export class DynamicIslandManager extends EventEmitter {
   private readonly ISLAND_HEIGHT_WITH_HISTORY = 380;
   private readonly HISTORY_LIMIT = 25;
   private readonly NOTCH_WIDTH = 200;
-  // Standard macOS notch-display "looks like" widths.
-  // We snap to the nearest profile so pills stay parked against notch edges.
+  // Notch display profiles: "looks like" mode widths → notch widths in logical pt.
+  // Calibrated from 170pt at 1728pt (16" MBP), others scaled proportionally.
   private readonly NOTCH_DISPLAY_PROFILES: NotchDisplayProfile[] = [
-    { modeWidth: 1147, notchWidth: 93, pillY: 0 },
-    { modeWidth: 1168, notchWidth: 95, pillY: 0 },
-    { modeWidth: 1312, notchWidth: 106, pillY: 0 },
-    { modeWidth: 1496, notchWidth: 121, pillY: 0 },
-    { modeWidth: 1512, notchWidth: 122, pillY: 0 },
-    { modeWidth: 1728, notchWidth: 140, pillY: 0 },
-    { modeWidth: 1800, notchWidth: 146, pillY: 0 },
-    { modeWidth: 2056, notchWidth: 167, pillY: 0 },
+    { modeWidth: 1147, notchWidth: 113, pillY: 0 },
+    { modeWidth: 1168, notchWidth: 115, pillY: 0 },
+    { modeWidth: 1312, notchWidth: 129, pillY: 0 },
+    { modeWidth: 1496, notchWidth: 147, pillY: 0 },
+    { modeWidth: 1512, notchWidth: 149, pillY: 0 },
+    { modeWidth: 1728, notchWidth: 170, pillY: 0 },
+    { modeWidth: 1800, notchWidth: 177, pillY: 0 },
+    { modeWidth: 2056, notchWidth: 202, pillY: 0 },
   ];
   private readonly CENTER_JOIN_OVERLAP_PX = 1;
   private readonly RIGHT_PILL_WIDTH = 48;
@@ -308,8 +308,8 @@ export class DynamicIslandManager extends EventEmitter {
         320,
         this.geometryTuning.notchWidthOverride
       ),
-      pillWidth: this.clampInt(tuning.pillWidth, 72, 120, this.geometryTuning.pillWidth),
-      pillHeight: this.clampInt(tuning.pillHeight, 24, 120, this.geometryTuning.pillHeight),
+      pillWidth: this.clampInt(tuning.pillWidth, 0, 120, this.geometryTuning.pillWidth),
+      pillHeight: this.clampInt(tuning.pillHeight, 0, 120, this.geometryTuning.pillHeight),
       offsetX: this.clampInt(tuning.offsetX, -240, 240, this.geometryTuning.offsetX),
       offsetY: this.clampInt(tuning.offsetY, -160, 160, this.geometryTuning.offsetY),
     };
@@ -330,6 +330,26 @@ export class DynamicIslandManager extends EventEmitter {
 
   getGeometryTuning(): DynamicIslandGeometryTuning {
     return { ...this.geometryTuning };
+  }
+
+  getResolvedGeometry(): DynamicIslandGeometryTuning & {
+    _detected?: { modeWidth: number; scaleFactor: number; menuBarHeight: number; isInternal: boolean };
+  } {
+    const profile = this.getActiveNotchProfile();
+    const primaryDisplay = screen.getPrimaryDisplay();
+    return {
+      notchWidthOverride: profile?.notchWidth ?? this.NOTCH_WIDTH,
+      pillWidth: this.ISLAND_WIDTH_IDLE,
+      pillHeight: this.getMenuBarHeight(),
+      offsetX: 0,
+      offsetY: 0,
+      _detected: {
+        modeWidth: this.getPrimaryDisplayModeWidth(),
+        scaleFactor: primaryDisplay.scaleFactor,
+        menuBarHeight: primaryDisplay.workArea.y - primaryDisplay.bounds.y,
+        isInternal: this.isPrimaryInternalDisplay(),
+      },
+    };
   }
 
   // -------------------------------------------------------------------------
@@ -1214,6 +1234,13 @@ export class DynamicIslandManager extends EventEmitter {
     };
   }
 
+  private getMenuBarHeight(): number {
+    const primaryDisplay = screen.getPrimaryDisplay();
+    const menuBarHeight = primaryDisplay.workArea.y - primaryDisplay.bounds.y;
+    if (menuBarHeight <= 0 || menuBarHeight >= 80) return this.ISLAND_HEIGHT_IDLE;
+    return Math.max(menuBarHeight, 32);
+  }
+
   private isPrimaryInternalDisplay(): boolean {
     const primaryDisplay = screen.getPrimaryDisplay();
     return primaryDisplay.internal !== false;
@@ -1262,7 +1289,8 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getActivePillWidth(): number {
-    // Always return expanded width — compact/expanded animation is CSS in the renderer.
+    // 0 = auto: use the default idle width
+    if (this.geometryTuning.pillWidth === 0) return this.ISLAND_WIDTH_IDLE;
     return Math.max(this.geometryTuning.pillWidth, this.ISLAND_WIDTH_IDLE);
   }
 
@@ -1271,6 +1299,10 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getIdlePillHeight(): number {
+    // 0 = auto: use menu bar height so the pill fits across 13"/14"/16" MacBook Pros.
+    if (this.geometryTuning.pillHeight === 0) {
+      return this.getMenuBarHeight();
+    }
     return this.geometryTuning.pillHeight;
   }
 
@@ -1279,6 +1311,9 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getRightPillHeight(): number {
+    if (this.geometryTuning.pillHeight === 0) {
+      return this.getMenuBarHeight();
+    }
     return this.geometryTuning.pillHeight;
   }
 
@@ -1318,8 +1353,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private shouldShowGapFill(): boolean {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    return primaryDisplay.internal === false;
+    return true;
   }
 
   private updateRightWindowPosition(): void {
