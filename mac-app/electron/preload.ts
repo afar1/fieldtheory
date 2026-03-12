@@ -3563,6 +3563,15 @@ const hotMicAPI = {
   }> => {
     return ipcRenderer.invoke('hotmic:resetIslandGeometry');
   },
+  getResolvedIslandGeometry: async (): Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  } | null> => {
+    return ipcRenderer.invoke('hotmic:getResolvedIslandGeometry');
+  },
   getSubmitWord: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getSubmitWord');
   },

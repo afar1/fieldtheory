@@ -284,8 +284,8 @@ const DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS = 450;
 
 const HOT_MIC_ISLAND_GEOMETRY_LIMITS = {
   notchWidthOverride: { min: 0, max: 320 },
-  pillWidth: { min: 72, max: 120 },
-  pillHeight: { min: 24, max: 120 },
+  pillWidth: { min: 0, max: 120 },
+  pillHeight: { min: 0, max: 120 },
   offsetX: { min: -240, max: 240 },
   offsetY: { min: -160, max: 160 },
 } as const;
@@ -6763,6 +6763,10 @@ if (!gotTheLock) {
 
     ipcMain.handle('hotmic:resetIslandGeometry', async () => {
       return await saveAndApplyHotMicIslandGeometry(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
+    });
+
+    ipcMain.handle('hotmic:getResolvedIslandGeometry', () => {
+      return dynamicIslandManager?.getResolvedGeometry() ?? null;
     });
 
     ipcMain.handle('hotmic:getSubmitWord', () => {
