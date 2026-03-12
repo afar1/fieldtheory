@@ -1542,6 +1542,30 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // ===========================================================================
+  // Codex Hook API
+  // ===========================================================================
+
+  // Get Codex CLI installation status
+  ipcMain.handle('librarian:getCodexStatus', (): string => {
+    return librarianManager?.getCodexStatus() ?? 'not-installed';
+  });
+
+  // Check if Codex hook is installed
+  ipcMain.handle('librarian:isCodexHookInstalled', (): boolean => {
+    return librarianManager?.isCodexHookInstalled() ?? false;
+  });
+
+  // Install Codex hook
+  ipcMain.handle('librarian:installCodexHook', (): boolean => {
+    return librarianManager?.installCodexHook() ?? false;
+  });
+
+  // Uninstall Codex hook
+  ipcMain.handle('librarian:uninstallCodexHook', (): boolean => {
+    return librarianManager?.uninstallCodexHook() ?? false;
+  });
+
+  // ===========================================================================
   // Discovery Frequency API
   // ===========================================================================
 
@@ -5215,6 +5239,7 @@ function setupOnboardingIPCHandlers(): void {
   ipcMain.handle(OnboardingIPCChannels.GET_AI_INTEGRATION_STATUS, () => {
     const claudeCodeAvailable = librarianManager?.getClaudeCodeStatus() !== 'not-installed';
     const cursorAvailable = fs.existsSync(path.join(os.homedir(), '.cursor'));
+    const codexAvailable = librarianManager?.getCodexStatus() !== 'not-installed';
 
     const claudeHookInstalled = librarianManager?.isReadPermissionHookInstalled() ?? false;
     const cursorHookInstalled = librarianManager?.isCursorReadPermissionHookInstalled() ?? false;
@@ -5222,6 +5247,7 @@ function setupOnboardingIPCHandlers(): void {
     return {
       claudeCode: { available: claudeCodeAvailable, connected: claudeHookInstalled },
       cursor: { available: cursorAvailable, connected: cursorHookInstalled },
+      codex: { available: codexAvailable, connected: librarianManager?.isCodexHookInstalled() ?? false },
     };
   });
 

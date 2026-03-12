@@ -3101,6 +3101,12 @@ const librarianAPI = {
   installCursorHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installCursorHook'),
   uninstallCursorHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallCursorHook'),
 
+  // Codex hook management
+  getCodexStatus: (): Promise<string> => ipcRenderer.invoke('librarian:getCodexStatus'),
+  isCodexHookInstalled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isCodexHookInstalled'),
+  installCodexHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installCodexHook'),
+  uninstallCodexHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallCodexHook'),
+
   // ===========================================================================
   // Discovery Frequency API
   // ===========================================================================
