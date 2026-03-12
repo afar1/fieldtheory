@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transcribe audio using NVIDIA Parakeet TDT 0.6B v2 via onnx-asr.
+"""Transcribe audio using NVIDIA Parakeet TDT 0.6B models via onnx-asr.
 
 Runs Parakeet locally on CPU using ONNX Runtime. The model is downloaded
 automatically on first use and cached for subsequent calls.
@@ -17,7 +17,7 @@ import sys
 
 import numpy as np
 
-MODEL_NAME = "nemo-parakeet-tdt-0.6b-v2"
+DEFAULT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v2"
 
 
 def read_wav_float32(path):
@@ -162,6 +162,11 @@ def main():
     parser.add_argument("--audio", help="Path to WAV file")
     parser.add_argument("--timestamps", action="store_true", help="Include timestamps")
     parser.add_argument("--server", action="store_true", help="Persistent server mode")
+    parser.add_argument(
+        "--model",
+        default=DEFAULT_MODEL_NAME,
+        help="onnx-asr model id to load (default: English Parakeet v2)",
+    )
     args = parser.parse_args()
 
     if not args.server and not args.audio:
@@ -180,8 +185,8 @@ def main():
 
     # Force CPU provider — CoreML fails with "model_path must not be empty"
     # when loading from HuggingFace cache on macOS.
-    print(f"Loading {MODEL_NAME}...", file=sys.stderr)
-    model = onnx_asr.load_model(MODEL_NAME, providers=["CPUExecutionProvider"])
+    print(f"Loading {args.model}...", file=sys.stderr)
+    model = onnx_asr.load_model(args.model, providers=["CPUExecutionProvider"])
     print("Model loaded.", file=sys.stderr)
 
     if args.server:

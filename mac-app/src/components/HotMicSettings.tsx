@@ -9,8 +9,6 @@ import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 type HotMicRuntimeStatus = Awaited<
   ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>
 >;
-const DRAWER_TEXT_SIZE_LIMITS = { min: 11, max: 22, step: 1 } as const;
-
 function clampInt(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
   const rounded = Math.round(value);
@@ -25,7 +23,6 @@ export default function HotMicSettings() {
   const [enabled, setEnabled] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(4);
-  const [drawerTextSize, setDrawerTextSize] = useState(14);
   const [currentState, setCurrentState] = useState('idle');
   const [runtimeStatus, setRuntimeStatus] = useState<HotMicRuntimeStatus | null>(null);
   const [currentMuted, setCurrentMuted] = useState(false);
@@ -113,7 +110,6 @@ export default function HotMicSettings() {
         rsw,
         rsc,
         wc,
-        drawerTextSizeValue,
       ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
         window.transcribeAPI!.getSelectedModel(),
@@ -143,7 +139,6 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getRestartServerWords(),
         window.hotMicAPI!.getRestartServerCommand(),
         window.hotMicAPI!.getShowWordCount(),
-        window.hotMicAPI!.getDrawerTextSize(),
       ]);
       setEnabled(en);
       setSelectedWhisperModel(selectedModel);
@@ -174,11 +169,6 @@ export default function HotMicSettings() {
       setRestartServerWords(rsw);
       setRestartServerCommand(rsc);
       setShowWordCount(wc);
-      setDrawerTextSize(clampInt(
-        drawerTextSizeValue,
-        DRAWER_TEXT_SIZE_LIMITS.min,
-        DRAWER_TEXT_SIZE_LIMITS.max
-      ));
 
       // Load system commands
       window.hotMicAPI!.getSystemCommands().then(cmds => {
@@ -239,14 +229,6 @@ export default function HotMicSettings() {
     setBackgroundFilterStrength(normalized);
     const saved = await window.hotMicAPI.setBackgroundFilterStrength(normalized);
     setBackgroundFilterStrength(Math.max(0, Math.min(100, Math.round(saved))));
-  }, []);
-
-  const handleDrawerTextSizeChange = useCallback(async (value: number) => {
-    if (!window.hotMicAPI?.setDrawerTextSize) return;
-    const normalized = clampInt(value, DRAWER_TEXT_SIZE_LIMITS.min, DRAWER_TEXT_SIZE_LIMITS.max);
-    setDrawerTextSize(normalized);
-    const saved = await window.hotMicAPI.setDrawerTextSize(normalized);
-    setDrawerTextSize(clampInt(saved, DRAWER_TEXT_SIZE_LIMITS.min, DRAWER_TEXT_SIZE_LIMITS.max));
   }, []);
 
   const handleSubmitWordSave = useCallback(async () => {
@@ -574,11 +556,11 @@ export default function HotMicSettings() {
       </div>
       {whisperModelReady ? (
         <p style={styles.description}>
-          Hot Mic follows Voice & Transcription and uses Whisper only.
+          Hot Mic follows Voice & Transcription. This Whisper model is used when fallback is needed.
         </p>
       ) : (
         <p style={{ ...styles.description, color: theme.textSecondary }}>
-          Whisper model is missing or incomplete. Download it in Voice & Transcription settings.
+          Whisper fallback model is missing or incomplete. Download it in Voice & Transcription settings.
         </p>
       )}
 
@@ -612,29 +594,6 @@ export default function HotMicSettings() {
           Higher values reject more far-field speech. Set to 0 or disable if your voice is being filtered out.
         </p>
       </div>
-
-      <div style={styles.divider} />
-
-      <div style={{ padding: '4px 0' }}>
-        <div style={styles.rangeHeader}>
-          <span style={styles.rangeLabel}>Drawer Transcript Text Size</span>
-          <span style={styles.rangeValue}>{drawerTextSize}px</span>
-        </div>
-        <input
-          type="range"
-          min={DRAWER_TEXT_SIZE_LIMITS.min}
-          max={DRAWER_TEXT_SIZE_LIMITS.max}
-          step={DRAWER_TEXT_SIZE_LIMITS.step}
-          value={drawerTextSize}
-          onChange={(e) => void handleDrawerTextSizeChange(Number(e.target.value))}
-          style={styles.rangeInput}
-        />
-        <p style={{ ...styles.description, marginTop: 6 }}>
-          Adjust only the live drawer transcript size. The drawer stays fixed and text remains single-line.
-        </p>
-      </div>
-
-      <div style={styles.divider} />
 
       <div style={styles.divider} />
 
@@ -1183,7 +1142,9 @@ function getConditionColor(condition: string): string {
   }
 }
 
-function formatEngineLabel(engine: 'whisper' | 'qwen' | 'mlx-whisper'): string {
+function formatEngineLabel(engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): string {
+  if (engine === 'parakeet-multilingual') return 'Parakeet Multilingual';
+  if (engine === 'parakeet') return 'Parakeet English';
   if (engine === 'mlx-whisper') return 'MLX Whisper (large-v3-turbo)';
   if (engine === 'qwen') return 'Qwen3-ASR';
   return 'Whisper';

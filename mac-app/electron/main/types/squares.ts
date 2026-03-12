@@ -118,6 +118,7 @@ export interface SquaresConfig {
   maxHistorySize: number;           // How many undo states to keep (default: 50)
   focusHeightPercent: number;       // % of screen height for focus action (default: 80)
   focusKeepHeight: boolean;         // If true, focus preserves current window height
+  focusWidthPercent: number;        // % of screen width for focus action (default: 60)
   horizontalHeightPercent: number;  // % of screen height for horizontal spread (default: 80)
   horizontalKeepHeight: boolean;    // If true, horizontal preserves current window height
 }
@@ -131,6 +132,7 @@ export const DEFAULT_SQUARES_CONFIG: SquaresConfig = {
   maxHistorySize: 50,
   focusHeightPercent: 80,
   focusKeepHeight: false,
+  focusWidthPercent: 60,
   horizontalHeightPercent: 80,
   horizontalKeepHeight: true,
 };

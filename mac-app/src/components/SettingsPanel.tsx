@@ -172,10 +172,55 @@ function IslandGeometrySliders({ theme }: { theme: Theme }) {
     return String(val);
   };
 
+  const btnStyle = (active: boolean) => ({
+    padding: '4px 10px',
+    fontSize: '11px',
+    color: active ? theme.text : theme.textSecondary,
+    backgroundColor: active ? (theme.isDark ? theme.surface1 : '#fff') : 'transparent',
+    border: `1px solid ${active ? theme.border : 'transparent'}`,
+    borderRadius: '4px',
+    cursor: active ? 'default' as const : 'pointer' as const,
+    opacity: active ? 1 : 0.7,
+  });
+
+  const displayValues = isAllAuto && resolved
+    ? { ...resolved, _detected: undefined } as IslandGeometrySettings
+    : geometry;
+
   return (
     <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+        <button onClick={() => void handleAuto()} style={btnStyle(isAllAuto)}>
+          Auto
+        </button>
+        <button
+          onClick={() => {
+            if (isAllAuto && resolved) {
+              const custom: IslandGeometrySettings = {
+                notchWidthOverride: resolved.notchWidthOverride,
+                pillWidth: resolved.pillWidth,
+                pillHeight: resolved.pillHeight,
+                offsetX: 0,
+                offsetY: 0,
+              };
+              setGeometry(custom);
+              void window.hotMicAPI?.setIslandGeometry(custom);
+            }
+          }}
+          style={btnStyle(!isAllAuto)}
+        >
+          Custom
+        </button>
+        {resolved?._detected && (
+          <span style={{ marginLeft: '4px', fontSize: '10px', color: theme.textSecondary }}>
+            {resolved._detected.modeWidth}pt {resolved._detected.scaleFactor}x
+            {resolved._detected.isInternal ? ' internal' : ' external'}
+            , menu bar {resolved._detected.menuBarHeight}pt
+          </span>
+        )}
+      </div>
       {ISLAND_GEOMETRY_FIELDS.map(({ key, label }) => (
-        <div key={key} style={{ padding: '4px 0' }}>
+        <div key={key} style={{ padding: '4px 0', opacity: isAllAuto ? 0.35 : 1 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
             <span style={{ fontSize: '12px', color: theme.text }}>{label}</span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
@@ -184,10 +229,11 @@ function IslandGeometrySliders({ theme }: { theme: Theme }) {
           </div>
           <input
             type="range"
+            disabled={isAllAuto}
             min={ISLAND_GEOMETRY_LIMITS[key].min}
             max={ISLAND_GEOMETRY_LIMITS[key].max}
             step={ISLAND_GEOMETRY_LIMITS[key].step}
-            value={geometry[key]}
+            value={displayValues[key]}
             onChange={(e) => handleChange(key, Number(e.target.value))}
             style={{
               width: '100%',
@@ -197,35 +243,11 @@ function IslandGeometrySliders({ theme }: { theme: Theme }) {
               background: theme.border,
               borderRadius: '2px',
               outline: 'none',
-              cursor: 'pointer',
+              cursor: isAllAuto ? 'default' : 'pointer',
             }}
           />
         </div>
       ))}
-      <div style={{ marginTop: '8px' }}>
-        <button
-          onClick={() => void handleAuto()}
-          style={{
-            padding: '4px 10px',
-            fontSize: '11px',
-            color: isAllAuto ? theme.textSecondary : theme.text,
-            backgroundColor: theme.isDark ? theme.surface1 : '#fff',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '4px',
-            cursor: isAllAuto ? 'default' : 'pointer',
-            opacity: isAllAuto ? 0.6 : 1,
-          }}
-        >
-          Auto
-        </button>
-        {resolved?._detected && (
-          <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
-            {resolved._detected.modeWidth}pt {resolved._detected.scaleFactor}x
-            {resolved._detected.isInternal ? ' internal' : ' external'}
-            , menu bar {resolved._detected.menuBarHeight}pt
-          </span>
-        )}
-      </div>
     </>
   );
 }
@@ -368,7 +390,7 @@ export default function SettingsPanel({
   const [showPermissionReminders, setShowPermissionReminders] = useState(true);
   
   // Hide status labels - show only colored dots.
-  const [hideStatusLabels, setHideStatusLabels] = useState(false);
+  // hideStatusLabels toggle removed from UI
 
   // Window management (Squares) enabled state.
   const [squaresEnabled, setSquaresEnabled] = useState(true);
@@ -383,7 +405,7 @@ export default function SettingsPanel({
   const [showInDock, setShowInDock] = useState(false);
 
   // Show fieldtheory.dev link in footer.
-  const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
+  // showFieldTheoryLink always true — toggle removed from UI
 
   // In-app performance HUD toggle.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
@@ -465,11 +487,6 @@ export default function SettingsPanel({
         setShowPermissionReminders(!hide);
       });
       
-      // Load hide status labels setting
-      window.clipboardAPI.getHideStatusLabels?.().then(hide => {
-        setHideStatusLabels(hide);
-      });
-
       // Load window management (Squares) enabled state
       window.squaresAPI?.getConfig?.().then(config => {
         setSquaresEnabled(config?.enabled ?? true);
@@ -498,11 +515,6 @@ export default function SettingsPanel({
       // Load show in dock setting
       window.clipboardAPI.getShowInDock?.().then(show => {
         setShowInDock(show);
-      });
-
-      // Load show fieldtheory.dev link setting
-      window.clipboardAPI.getShowFieldTheoryLink?.().then(show => {
-        setShowFieldTheoryLink(show);
       });
 
       // Load in-app performance HUD setting.
@@ -642,20 +654,6 @@ export default function SettingsPanel({
     }
   };
   
-  // Handler for toggling hide status labels (show only dots, no text).
-  const handleToggleHideStatusLabels = async (hide: boolean) => {
-    if (!window.clipboardAPI?.setHideStatusLabels) return;
-
-    try {
-      const success = await window.clipboardAPI.setHideStatusLabels(hide);
-      if (success) {
-        setHideStatusLabels(hide);
-      }
-    } catch (err) {
-      console.error('Failed to toggle hide status labels:', err);
-    }
-  };
-
   // Handler for toggling cursor status debug mode (shows blue background).
   const handleToggleCursorStatusDebugMode = async (enabled: boolean) => {
     if (!window.clipboardAPI?.setCursorStatusDebugMode) return;
@@ -1528,26 +1526,6 @@ export default function SettingsPanel({
           </div>
         )}
 
-        {/* Show fieldtheory.dev link in footer */}
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={styles.rowLabel}>Show Website Link</span>
-            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Display fieldtheory.dev in footer
-            </span>
-          </div>
-          <button
-            onClick={async () => {
-              const newValue = !showFieldTheoryLink;
-              setShowFieldTheoryLink(newValue);
-              await window.clipboardAPI?.setShowFieldTheoryLink?.(newValue);
-            }}
-            style={{ ...styles.toggle, backgroundColor: showFieldTheoryLink ? theme.success : '#d1d5db' }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: showFieldTheoryLink ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-
         {/* In-app Performance HUD */}
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -1965,22 +1943,6 @@ export default function SettingsPanel({
         {/* Show in Dock - WIP feature, hidden until ready */}
         {/* Permission Reminders - removed, always show until permissions granted */}
         {/* Cursor Status Indicator - removed, always show the dot */}
-
-        {/* Show Transcription Status Text */}
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Show transcription status text</span>
-            <span style={styles.rowHint}>Display text labels alongside status indicator</span>
-          </div>
-          <div style={styles.rowControls}>
-            <button
-              onClick={() => handleToggleHideStatusLabels(!hideStatusLabels)}
-              style={{ ...styles.toggle, backgroundColor: !hideStatusLabels ? theme.accent : '#d1d5db' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: !hideStatusLabels ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
 
         {hotkeyError && <p style={styles.error}>{hotkeyError}</p>}
       </div>

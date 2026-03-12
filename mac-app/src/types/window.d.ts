@@ -257,8 +257,8 @@ interface TranscribeAPI {
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
   resetAutoImproveStats?: () => Promise<void>;
-  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
-  setTranscriptionEngine?: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<void>;
+  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngine?: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
   isQwenInstalled?: () => Promise<boolean>;
   isMlxWhisperInstalled?: () => Promise<boolean>;
   isParakeetInstalled?: () => Promise<boolean>;
@@ -1177,8 +1177,8 @@ interface HotMicAPI {
   onRuntimeStatusChanged: (handler: (status: HotMicRuntimeStatus) => void) => () => void;
   getMuted: () => Promise<boolean>;
   getEnabled: () => Promise<boolean>;
-  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
-  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet') => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet'>;
+  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
   getWhisperModel: () => Promise<string>;
   setWhisperModel: (model: string) => Promise<string>;
   setEnabled: (enabled: boolean) => Promise<boolean>;
@@ -1682,6 +1682,7 @@ declare global {
     maxHistorySize: number;
     focusHeightPercent: number;
     focusKeepHeight: boolean;
+    focusWidthPercent: number;
     horizontalHeightPercent: number;
     horizontalKeepHeight: boolean;
   }
