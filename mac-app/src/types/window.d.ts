@@ -1219,6 +1219,13 @@ interface HotMicAPI {
     offsetX: number;
     offsetY: number;
   }>;
+  getResolvedIslandGeometry: () => Promise<{
+    notchWidthOverride: number;
+    pillWidth: number;
+    pillHeight: number;
+    offsetX: number;
+    offsetY: number;
+  } | null>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
