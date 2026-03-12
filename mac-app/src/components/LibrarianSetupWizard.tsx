@@ -30,6 +30,8 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
   const [claudeHookInstalling, setClaudeHookInstalling] = useState(false);
   const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
   const [cursorHookInstalling, setCursorHookInstalling] = useState(false);
+  const [codexHookInstalled, setCodexHookInstalled] = useState(false);
+  const [codexHookInstalling, setCodexHookInstalling] = useState(false);
 
   // Personalization state
   const [discoveryFrequency, setDiscoveryFrequency] = useState<'often' | 'sometimes' | 'rarely'>('sometimes');
@@ -42,10 +44,12 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
         window.librarianAPI?.getClaudeCodeStatus(),
         window.librarianAPI?.isStateEnforcedHookInstalled(),
         window.librarianAPI?.isCursorHookInstalled(),
-      ]).then(([status, claudeHook, cursorHook]) => {
+        window.librarianAPI?.isCodexHookInstalled(),
+      ]).then(([status, claudeHook, cursorHook, codexHook]) => {
         if (status) setClaudeCodeStatus(status as 'installed' | 'directory-only' | 'not-installed');
         setClaudeHookInstalled(claudeHook ?? false);
         setCursorHookInstalled(cursorHook ?? false);
+        setCodexHookInstalled(codexHook ?? false);
       });
     }
   }, [phase]);
@@ -94,6 +98,22 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
       setCursorHookInstalling(false);
     }
   }, [cursorHookInstalled]);
+
+  // Handle Codex hook toggle
+  const handleCodexToggle = useCallback(async () => {
+    setCodexHookInstalling(true);
+    try {
+      if (codexHookInstalled) {
+        await window.librarianAPI?.uninstallCodexHook();
+        setCodexHookInstalled(false);
+      } else {
+        const success = await window.librarianAPI?.installCodexHook();
+        setCodexHookInstalled(success ?? false);
+      }
+    } finally {
+      setCodexHookInstalling(false);
+    }
+  }, [codexHookInstalled]);
 
   // Handle final completion
   const handleComplete = useCallback(async () => {
@@ -197,8 +217,8 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
 
   // Phase 2: Platforms
   const renderPlatforms = () => {
-    const hasAnyPlatform = claudeCodeStatus !== 'not-installed' || true; // Cursor is always available
-    const hasConnection = claudeHookInstalled || cursorHookInstalled;
+    const hasAnyPlatform = claudeCodeStatus !== 'not-installed' || true; // Cursor/Codex always available
+    const hasConnection = claudeHookInstalled || cursorHookInstalled || codexHookInstalled;
 
     return (
       <div style={{ maxWidth: '480px', width: '100%' }}>
@@ -329,6 +349,60 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
               }}
             >
               {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
+            </button>
+          </div>
+
+          {/* Codex */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              padding: '14px 16px',
+              borderRadius: '8px',
+              backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
+              border: `1px solid ${codexHookInstalled ? theme.accent : theme.border}`,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+              <div style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '14px',
+                fontFamily: 'monospace',
+              }}>
+                {'cx'}
+              </div>
+              <div>
+                <div style={{ fontSize: '13px', fontWeight: 500, color: theme.text }}>
+                  Codex
+                </div>
+                <div style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  {codexHookInstalled ? 'Connected' : 'Available'}
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={handleCodexToggle}
+              disabled={codexHookInstalling}
+              style={{
+                padding: '6px 14px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: codexHookInstalled ? theme.textSecondary : '#fff',
+                backgroundColor: codexHookInstalled ? 'transparent' : theme.accent,
+                border: codexHookInstalled ? `1px solid ${theme.border}` : 'none',
+                borderRadius: '6px',
+                cursor: codexHookInstalling ? 'wait' : 'pointer',
+                opacity: codexHookInstalling ? 0.5 : 1,
+              }}
+            >
+              {codexHookInstalling ? '...' : codexHookInstalled ? 'Disconnect' : 'Connect'}
             </button>
           </div>
         </div>

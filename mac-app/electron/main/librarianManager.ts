@@ -9,6 +9,81 @@ import { createLogger } from './logger';
 
 const log = createLogger('Librarian');
 
+// ===========================================================================
+// Pure TOML editing helpers (exported for testing)
+// ===========================================================================
+
+/**
+ * Add a `notify` command to TOML content. Replaces existing notify line
+ * or appends if absent. Returns updated content.
+ */
+export function tomlSetNotify(content: string, command: string): string {
+  if (content.includes(command)) return content;
+  if (content.match(/^notify\s*=/m)) {
+    return content.replace(/^notify\s*=.*$/m, `notify = "${command}"`);
+  }
+  return content.trimEnd() + `\nnotify = "${command}"\n`;
+}
+
+/**
+ * Remove a `notify` line that matches the given script name from TOML content.
+ */
+export function tomlRemoveNotify(content: string, scriptName: string): string {
+  const escaped = scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return content.replace(new RegExp(`^notify\\s*=\\s*".*${escaped}.*"\\s*\\n?`, 'm'), '');
+}
+
+/**
+ * Add a path to the `writable_roots` array in TOML content.
+ * Creates the array if absent, appends to it if present.
+ */
+export function tomlAddWritableRoot(content: string, dirPath: string): string {
+  if (content.includes(dirPath)) return content;
+  if (content.match(/^writable_roots\s*=/m)) {
+    return content.replace(
+      /^(writable_roots\s*=\s*\[)(.*?)(\])/ms,
+      (match, prefix, items, suffix) => {
+        const trimmed = items.trimEnd();
+        const needsComma = trimmed.length > 0 && !trimmed.endsWith(',');
+        return `${prefix}${items}${needsComma ? ',' : ''}\n  "${dirPath}"${suffix}`;
+      }
+    );
+  }
+  return content.trimEnd() + `\nwritable_roots = [\n  "${dirPath}"\n]\n`;
+}
+
+/**
+ * Remove a path from the `writable_roots` array in TOML content.
+ * Cleans up empty array if nothing remains.
+ */
+export function tomlRemoveWritableRoot(content: string, dirPath: string): string {
+  const escaped = dirPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  let result = content.replace(
+    new RegExp(`^\\s*"${escaped}"\\s*,?\\s*\\n?`, 'm'),
+    ''
+  );
+  // Clean up empty writable_roots array
+  result = result.replace(/^writable_roots\s*=\s*\[\s*\]\s*\n?/m, '');
+  return result;
+}
+
+/**
+ * Add or remove a managed section in markdown content, delimited by HTML comments.
+ */
+export function managedSectionUpsert(content: string, marker: string, section: string): string {
+  if (content.includes(marker)) return content;
+  return content.trimEnd() + '\n' + section;
+}
+
+export function managedSectionRemove(content: string, startMarker: string, endMarker: string): string {
+  const startEscaped = startMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const endEscaped = endMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return content.replace(
+    new RegExp(`\\n?${startEscaped}[\\s\\S]*?${endEscaped}\\n?`),
+    ''
+  );
+}
+
 /**
  * Parse markdown content to extract metadata (title, context, reading time).
  * Only reads first ~20 lines for efficiency.
@@ -1040,6 +1115,7 @@ export class LibrarianManager extends EventEmitter {
       // If hooks point to non-existent scripts, Claude Code fails entirely.
       this.uninstallStateEnforcedHook();
       this.uninstallCursorHook();
+      this.uninstallCodexHook();
     }
 
     const success = this.syncClaudeMd();
@@ -4071,6 +4147,56 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
   }
 
   // ===========================================================================
+  // Shared Hook Install Helpers
+  // ===========================================================================
+
+  /**
+   * Ensure central librarian directories, rule file, config, and watched dirs
+   * exist and are properly configured. Shared by all platform install methods.
+   * Returns the central directory path.
+   */
+  private ensureCentralLibrarianSetup(): string {
+    const centralDir = this.getCentralLibrarianDir();
+    const dirs = [
+      centralDir,
+      path.join(centralDir, 'jobs'),
+      path.join(centralDir, 'artifacts'),
+      path.join(centralDir, 'rules'),
+    ];
+    for (const dir of dirs) {
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+    }
+
+    // Ensure rule file exists
+    const ruleFile = path.join(centralDir, 'rules', 'history_reading.md');
+    if (!fs.existsSync(ruleFile)) {
+      fs.writeFileSync(ruleFile, this.getEffectiveRuleContent());
+    }
+
+    // Ensure config file exists and is enabled
+    const configFile = path.join(centralDir, 'config.json');
+    if (!fs.existsSync(configFile)) {
+      fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
+    } else {
+      try {
+        const config = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
+        config.enabled = true;
+        fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
+      } catch {
+        fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
+      }
+    }
+
+    // Auto-add GLOBAL artifacts directory to watched dirs
+    const globalArtifactsDir = path.join(os.homedir(), '.fieldtheory', 'librarian', 'artifacts');
+    this.addWatchedDir(globalArtifactsDir);
+
+    return centralDir;
+  }
+
+  // ===========================================================================
   // Cursor Hook Management
   // ===========================================================================
 
@@ -4407,54 +4533,22 @@ if __name__ == "__main__":
    */
   installCursorHook(): boolean {
     try {
-      // 1. Ensure central librarian directories exist
-      const centralDir = this.getCentralLibrarianDir();
-      const dirs = [
-        centralDir,
-        path.join(centralDir, 'jobs'),
-        path.join(centralDir, 'artifacts'),
-        path.join(centralDir, 'rules'),
-      ];
-      for (const dir of dirs) {
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-      }
+      // 1. Shared setup: directories, rule file, config, watched dirs
+      this.ensureCentralLibrarianSetup();
 
-      // Ensure ~/.cursor directory exists
+      // 2. Ensure ~/.cursor directory exists
       const cursorDir = path.dirname(this.getCursorHooksConfigPath());
       if (!fs.existsSync(cursorDir)) {
         fs.mkdirSync(cursorDir, { recursive: true });
       }
 
-      // 2. Write preToolUse hook script (for artifact enforcement via deny pattern)
+      // 3. Write preToolUse hook script (for artifact enforcement via deny pattern)
       // NOTE: We don't write a beforeSubmitPrompt hook - Cursor reads Claude's hook.py
       // from ~/.claude/settings.json for counting.
       const preToolPath = this.getCursorPreToolScriptPath();
       fs.writeFileSync(preToolPath, this.generateCursorPreToolScript(), { mode: 0o755 });
 
-      // 4. Ensure rule file exists
-      const ruleFile = path.join(centralDir, 'rules', 'history_reading.md');
-      if (!fs.existsSync(ruleFile)) {
-        fs.writeFileSync(ruleFile, this.getEffectiveRuleContent());
-      }
-
-      // 5. Ensure config file exists
-      const configFile = path.join(centralDir, 'config.json');
-      if (!fs.existsSync(configFile)) {
-        fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
-      } else {
-        // Make sure it's enabled
-        try {
-          const config = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
-          config.enabled = true;
-          fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
-        } catch {
-          fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
-        }
-      }
-
-      // 6. Register hooks in Cursor's ~/.cursor/hooks.json
+      // 4. Register hooks in Cursor's ~/.cursor/hooks.json
       const cursorConfigPath = this.getCursorHooksConfigPath();
       let cursorConfig: Record<string, unknown> = { version: 1, hooks: {} };
 
@@ -4490,12 +4584,7 @@ if __name__ == "__main__":
       // Write updated Cursor config
       fs.writeFileSync(cursorConfigPath, JSON.stringify(cursorConfig, null, 2));
 
-      // 7. Auto-add GLOBAL artifacts directory to watched dirs
-      // Use global path (same as hook.py writes to), not per-user path
-      const globalArtifactsDir = path.join(os.homedir(), '.fieldtheory', 'librarian', 'artifacts');
-      this.addWatchedDir(globalArtifactsDir);
-
-      // 8. Add librarian paths to Cursor's permissions allow list
+      // 5. Add librarian paths to Cursor's permissions allow list
       const cursorCliConfigPath = path.join(os.homedir(), '.cursor', 'cli-config.json');
       try {
         let cliConfig: Record<string, unknown> = { version: 1, permissions: { allow: [], deny: [] } };
@@ -4612,6 +4701,650 @@ if __name__ == "__main__":
       return true;
     } catch (error) {
       log.error('Failed to uninstall Cursor hooks:', error);
+      return false;
+    }
+  }
+
+  // ===========================================================================
+  // Codex CLI Hook Management
+  // ===========================================================================
+
+  /**
+   * Get the path to the Codex hooks config file.
+   */
+  private getCodexHooksConfigPath(): string {
+    return path.join(os.homedir(), '.codex', 'hooks.json');
+  }
+
+  /**
+   * Get the path to the Codex config file.
+   */
+  private getCodexConfigPath(): string {
+    return path.join(os.homedir(), '.codex', 'config.toml');
+  }
+
+  /**
+   * Get the path to the Codex AGENTS.md file.
+   */
+  private getCodexAgentsMdPath(): string {
+    return path.join(os.homedir(), '.codex', 'AGENTS.md');
+  }
+
+  /**
+   * Get the path to the Codex notify hook script.
+   */
+  private getCodexNotifyScriptPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'librarian', 'codex-notify.py');
+  }
+
+  /**
+   * Get the path to the Codex session-start hook script.
+   */
+  private getCodexSessionStartScriptPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'librarian', 'codex-session-start.py');
+  }
+
+  /**
+   * Get the path to the Codex stop hook script.
+   */
+  private getCodexStopScriptPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'librarian', 'codex-stop.py');
+  }
+
+  /**
+   * Generate the Codex notify hook script (Python).
+   * Receives AfterAgent payload as argv, increments shared state.json counter,
+   * creates jobs at threshold, and writes a sentinel file for the Stop hook.
+   */
+  private generateCodexNotifyScript(): string {
+    return `#!/usr/bin/env python3
+"""
+Field Theory Librarian Notify Hook for Codex CLI (AfterAgent)
+
+Counts agent turns and creates job files when threshold is reached.
+Writes a sentinel file so the Stop hook can enforce artifact creation
+in the same session.
+
+State is GLOBAL at ~/.fieldtheory/librarian/state.json
+"""
+import json
+import os
+import sys
+import fcntl
+from pathlib import Path
+from datetime import datetime
+
+DEFAULT_THRESHOLD = 7
+
+
+def main():
+    # Read config
+    central_dir = Path.home() / ".fieldtheory" / "librarian"
+    config_path = central_dir / "config.json"
+    if not config_path.exists():
+        return
+
+    with open(config_path) as f:
+        cfg = json.load(f)
+
+    if not cfg.get("enabled", False):
+        return
+
+    # Paths
+    jobs_dir = central_dir / "jobs"
+    artifacts_dir = central_dir / "artifacts"
+    rules_dir = central_dir / "rules"
+    rule_file = rules_dir / "history_reading.md"
+    state_file = central_dir / "state.json"
+    lock_file = central_dir / ".lock"
+    seq_file = central_dir / ".seq"
+    sentinel_file = central_dir / ".codex-pending"
+
+    # Check mute status
+    if state_file.exists():
+        try:
+            import time
+            state_data = json.loads(state_file.read_text())
+            muted_until = state_data.get("mutedUntil", 0)
+            if muted_until and time.time() * 1000 < muted_until:
+                return
+        except:
+            pass
+
+    # Ensure directories exist
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+
+    # Try to get project name from cwd
+    project_root = Path(os.getcwd())
+    project_name = project_root.name
+
+    # File-locked state update
+    with open(lock_file, "w") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+
+        # Read current state
+        state = {"count": 0, "threshold": DEFAULT_THRESHOLD}
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text())
+            except:
+                pass
+
+        count = state.get("count", 0) + 1
+        threshold = state.get("threshold", DEFAULT_THRESHOLD)
+        triggered = count >= threshold
+
+        # Single write: either incremented count, or reset to 0 if triggered
+        state["count"] = 0 if triggered else count
+        state_file.write_text(json.dumps(state, indent=2))
+
+        if not triggered:
+            return
+
+        # Threshold reached - create artifact job
+        seq = 0
+        if seq_file.exists():
+            try:
+                seq = int(seq_file.read_text().strip())
+            except:
+                seq = 0
+        seq += 1
+        seq_file.write_text(str(seq))
+
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        job_file = jobs_dir / f"job_{seq}.json"
+        out_file = artifacts_dir / f"{project_name}-{timestamp}-artifact.md"
+
+        # Single pending job rule: abandon any existing pending jobs
+        for old_job_file in sorted(jobs_dir.glob("job_*.json")):
+            if old_job_file == job_file:
+                continue
+            try:
+                old_job = json.loads(old_job_file.read_text())
+                if old_job.get("status") == "pending":
+                    old_job["status"] = "abandoned"
+                    old_job["abandoned_at"] = datetime.now().isoformat()
+                    old_job_file.write_text(json.dumps(old_job, indent=2) + "\\n")
+            except:
+                continue
+
+        # Create job file
+        if not job_file.exists():
+            job_file.write_text(json.dumps({
+                "schema_version": 1,
+                "id": seq,
+                "type": "history_artifact",
+                "status": "pending",
+                "project": project_name,
+                "project_path": str(project_root),
+                "output": str(out_file),
+                "rule_file": str(rule_file),
+                "created_at": datetime.now().isoformat()
+            }, indent=2) + "\\n")
+
+        # Write sentinel file so Stop hook can block in same session
+        sentinel_file.write_text(json.dumps({
+            "job_file": str(job_file),
+            "output": str(out_file),
+            "created_at": datetime.now().isoformat()
+        }, indent=2))
+
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Generate the Codex session-start hook script (Python).
+   * Checks for pending jobs from prior sessions and injects artifact
+   * instructions via additionalContext.
+   */
+  private generateCodexSessionStartScript(): string {
+    return `#!/usr/bin/env python3
+"""
+Field Theory Librarian SessionStart Hook for Codex CLI
+
+Checks for pending artifact jobs (from prior sessions or cross-tool).
+If found, outputs additionalContext so the model creates the artifact.
+"""
+import json
+import sys
+from pathlib import Path
+
+LIBRARIAN_DIR = Path.home() / ".fieldtheory" / "librarian"
+CONFIG_PATH = LIBRARIAN_DIR / "config.json"
+
+
+def main():
+    # Check if enabled
+    if not CONFIG_PATH.exists():
+        return
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+        if not cfg.get("enabled", False):
+            return
+    except:
+        return
+
+    # Check mute status
+    state_file = LIBRARIAN_DIR / "state.json"
+    if state_file.exists():
+        try:
+            import time
+            state_data = json.loads(state_file.read_text())
+            muted_until = state_data.get("mutedUntil", 0)
+            if muted_until and time.time() * 1000 < muted_until:
+                return
+        except:
+            pass
+
+    # Find pending jobs
+    jobs_dir = LIBRARIAN_DIR / "jobs"
+    if not jobs_dir.exists():
+        return
+
+    pending_job = None
+    for job_file in sorted(jobs_dir.glob("job_*.json"), reverse=True):
+        try:
+            job = json.loads(job_file.read_text())
+            if job.get("status") == "pending":
+                pending_job = (job_file, job)
+                break
+        except:
+            continue
+
+    if not pending_job:
+        return
+
+    job_file, job = pending_job
+
+    # Read rule_content from config
+    rule_content = "Write a short reflective story (120-200 words) connecting current work to science/history."
+    try:
+        rule_content = cfg.get("rule_content", rule_content)
+    except:
+        pass
+
+    context = f"""[STATE-ENFORCED] Before responding to the user, you must complete this Librarian artifact job.
+
+Job file: {job_file}
+Output path: {job.get('output')}
+
+Rule: {rule_content}
+
+Steps:
+1. Write the artifact to the output path following the rule above
+2. Update the job file, setting "status" to "done"
+3. Then proceed with the user's request"""
+
+    # Output additionalContext for Codex to inject into session
+    print(json.dumps({
+        "additionalContext": context
+    }))
+
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Generate the Codex stop hook script (Python).
+   * Blocks agent completion when a sentinel file exists (job was just created
+   * in this session). Returns blocking instructions as the reason.
+   * Once the artifact is written and job marked done, allows completion.
+   */
+  private generateCodexStopScript(): string {
+    return `#!/usr/bin/env python3
+"""
+Field Theory Librarian Stop Hook for Codex CLI
+
+Blocks agent from completing when a Librarian artifact job was just
+created in this session (sentinel file exists). The model must write
+the artifact and mark the job done before proceeding.
+"""
+import json
+import sys
+from pathlib import Path
+
+LIBRARIAN_DIR = Path.home() / ".fieldtheory" / "librarian"
+CONFIG_PATH = LIBRARIAN_DIR / "config.json"
+SENTINEL_FILE = LIBRARIAN_DIR / ".codex-pending"
+
+
+def main():
+    # Check if enabled
+    if not CONFIG_PATH.exists():
+        return
+    try:
+        cfg = json.loads(CONFIG_PATH.read_text())
+        if not cfg.get("enabled", False):
+            return
+    except:
+        return
+
+    # No sentinel = no pending job from this session
+    if not SENTINEL_FILE.exists():
+        return
+
+    # Read sentinel
+    try:
+        sentinel = json.loads(SENTINEL_FILE.read_text())
+    except:
+        # Corrupt sentinel, clean up
+        SENTINEL_FILE.unlink(missing_ok=True)
+        return
+
+    job_file = Path(sentinel.get("job_file", ""))
+    output_path = sentinel.get("output", "")
+
+    # Check if the job is still pending
+    if not job_file.exists():
+        SENTINEL_FILE.unlink(missing_ok=True)
+        return
+
+    try:
+        job = json.loads(job_file.read_text())
+    except:
+        SENTINEL_FILE.unlink(missing_ok=True)
+        return
+
+    if job.get("status") != "pending":
+        # Job completed - clean up sentinel and allow
+        SENTINEL_FILE.unlink(missing_ok=True)
+        return
+
+    # Read rule_content from config
+    rule_content = "Write a short reflective story (120-200 words) connecting current work to science/history."
+    try:
+        rule_content = cfg.get("rule_content", rule_content)
+    except:
+        pass
+
+    # Job still pending - block with instructions
+    reason = f"""[LIBRARIAN] A Librarian artifact must be written before completing.
+
+Job file: {job_file}
+Output path: {output_path}
+
+Rule: {rule_content}
+
+Steps:
+1. Write the artifact to the output path following the rule above
+2. Update the job file, setting "status" to "done"
+3. Then you may complete"""
+
+    # Exit code 1 signals Codex to block completion
+    print(reason, file=sys.stderr)
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+`;
+  }
+
+  /**
+   * Check if Codex CLI appears to be installed.
+   */
+  getCodexStatus(): 'installed' | 'not-installed' {
+    const codexDir = path.join(os.homedir(), '.codex');
+    return fs.existsSync(codexDir) ? 'installed' : 'not-installed';
+  }
+
+  /**
+   * Check if the Codex hooks are installed.
+   * Checks that all 3 hook scripts exist and hooks.json has our entries.
+   */
+  isCodexHookInstalled(): boolean {
+    const notifyPath = this.getCodexNotifyScriptPath();
+    const sessionStartPath = this.getCodexSessionStartScriptPath();
+    const stopPath = this.getCodexStopScriptPath();
+    const hooksConfigPath = this.getCodexHooksConfigPath();
+
+    // Check that at least the main scripts exist
+    if (!fs.existsSync(notifyPath) || !fs.existsSync(stopPath)) {
+      return false;
+    }
+
+    // Check hooks.json has our Stop entry (most critical hook)
+    if (!fs.existsSync(hooksConfigPath)) {
+      return false;
+    }
+
+    try {
+      const config = JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8'));
+      const stopHooks = config.hooks?.Stop;
+      if (!Array.isArray(stopHooks)) {
+        return false;
+      }
+      // Check for our stop hook in the nested structure
+      return stopHooks.some((entry: { hooks?: Array<{ command?: string }> }) =>
+        entry.hooks?.some(h => h.command?.includes('codex-stop.py'))
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Install all Codex hooks.
+   * 1. Ensure directories exist
+   * 2. Write 3 Python scripts
+   * 3. Merge hooks into ~/.codex/hooks.json
+   * 4. Add notify line to ~/.codex/config.toml
+   * 5. Add writable_roots for librarian dir to config.toml
+   * 6. Append Librarian section to ~/.codex/AGENTS.md
+   * 7. Add global artifacts dir to watched dirs
+   */
+  installCodexHook(): boolean {
+    try {
+      // 1. Shared setup: directories, rule file, config, watched dirs
+      this.ensureCentralLibrarianSetup();
+
+      // 2. Ensure ~/.codex directory exists
+      const codexDir = path.join(os.homedir(), '.codex');
+      if (!fs.existsSync(codexDir)) {
+        fs.mkdirSync(codexDir, { recursive: true });
+      }
+
+      // 3. Write 3 Python hook scripts
+      const notifyPath = this.getCodexNotifyScriptPath();
+      const sessionStartPath = this.getCodexSessionStartScriptPath();
+      const stopPath = this.getCodexStopScriptPath();
+
+      fs.writeFileSync(notifyPath, this.generateCodexNotifyScript(), { mode: 0o755 });
+      fs.writeFileSync(sessionStartPath, this.generateCodexSessionStartScript(), { mode: 0o755 });
+      fs.writeFileSync(stopPath, this.generateCodexStopScript(), { mode: 0o755 });
+
+      // 4. Register hooks in ~/.codex/hooks.json
+      const hooksConfigPath = this.getCodexHooksConfigPath();
+      let hooksConfig: Record<string, unknown> = { hooks: {} };
+
+      if (fs.existsSync(hooksConfigPath)) {
+        try {
+          hooksConfig = JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8'));
+        } catch {
+          // Start fresh if unparseable
+        }
+      }
+
+      if (!hooksConfig.hooks || typeof hooksConfig.hooks !== 'object') {
+        hooksConfig.hooks = {};
+      }
+      const hooks = hooksConfig.hooks as Record<string, unknown>;
+
+      // Register SessionStart hook
+      if (!Array.isArray(hooks.SessionStart)) {
+        hooks.SessionStart = [];
+      }
+      const sessionStartHooks = hooks.SessionStart as Array<{ hooks?: Array<{ type?: string; command?: string; timeout_sec?: number }> }>;
+      const sessionStartCommand = `python3 ${sessionStartPath}`;
+      const hasSessionStart = sessionStartHooks.some(entry =>
+        entry.hooks?.some(h => h.command?.includes('codex-session-start.py'))
+      );
+      if (!hasSessionStart) {
+        sessionStartHooks.push({
+          hooks: [{ type: 'command', command: sessionStartCommand, timeout_sec: 10 }]
+        });
+      }
+
+      // Register Stop hook
+      if (!Array.isArray(hooks.Stop)) {
+        hooks.Stop = [];
+      }
+      const stopHooks = hooks.Stop as Array<{ hooks?: Array<{ type?: string; command?: string; timeout_sec?: number }> }>;
+      const stopCommand = `python3 ${stopPath}`;
+      const hasStop = stopHooks.some(entry =>
+        entry.hooks?.some(h => h.command?.includes('codex-stop.py'))
+      );
+      if (!hasStop) {
+        stopHooks.push({
+          hooks: [{ type: 'command', command: stopCommand, timeout_sec: 10 }]
+        });
+      }
+
+      fs.writeFileSync(hooksConfigPath, JSON.stringify(hooksConfig, null, 2));
+
+      // 6. Add notify line and writable_roots to ~/.codex/config.toml
+      const configTomlPath = this.getCodexConfigPath();
+      let tomlContent = '';
+      if (fs.existsSync(configTomlPath)) {
+        tomlContent = fs.readFileSync(configTomlPath, 'utf-8');
+      }
+
+      const notifyCommand = `python3 ${notifyPath}`;
+      const librarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
+      tomlContent = tomlSetNotify(tomlContent, notifyCommand);
+      tomlContent = tomlAddWritableRoot(tomlContent, librarianDir);
+      fs.writeFileSync(configTomlPath, tomlContent);
+
+      // 7. Append Librarian section to ~/.codex/AGENTS.md (if not present)
+      const agentsMdPath = this.getCodexAgentsMdPath();
+      let agentsMd = '';
+      if (fs.existsSync(agentsMdPath)) {
+        agentsMd = fs.readFileSync(agentsMdPath, 'utf-8');
+      }
+
+      const librarianSection = `
+<!-- Field Theory Librarian - managed section, do not edit -->
+## Field Theory Librarian
+When you receive instructions prefixed with [STATE-ENFORCED] or [LIBRARIAN],
+follow them before proceeding. These create short reflective artifacts.
+Artifacts go in ~/.fieldtheory/librarian/artifacts/.
+After writing, update the job file in ~/.fieldtheory/librarian/jobs/ setting "status" to "done".
+<!-- End Field Theory Librarian -->
+`;
+      agentsMd = managedSectionUpsert(agentsMd, 'Field Theory Librarian - managed section', librarianSection);
+      fs.writeFileSync(agentsMdPath, agentsMd);
+
+      log.info('Installed Codex hooks');
+      return true;
+    } catch (error) {
+      log.error('Failed to install Codex hooks:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Uninstall all Codex hooks.
+   */
+  uninstallCodexHook(): boolean {
+    try {
+      // Remove hook scripts
+      const scripts = [
+        this.getCodexNotifyScriptPath(),
+        this.getCodexSessionStartScriptPath(),
+        this.getCodexStopScriptPath(),
+      ];
+      for (const scriptPath of scripts) {
+        if (fs.existsSync(scriptPath)) {
+          fs.unlinkSync(scriptPath);
+        }
+      }
+
+      // Remove sentinel file
+      const sentinelFile = path.join(os.homedir(), '.fieldtheory', 'librarian', '.codex-pending');
+      if (fs.existsSync(sentinelFile)) {
+        fs.unlinkSync(sentinelFile);
+      }
+
+      // Remove from ~/.codex/hooks.json
+      const hooksConfigPath = this.getCodexHooksConfigPath();
+      if (fs.existsSync(hooksConfigPath)) {
+        try {
+          const config = JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8'));
+
+          // Remove SessionStart entries
+          if (Array.isArray(config.hooks?.SessionStart)) {
+            config.hooks.SessionStart = config.hooks.SessionStart.filter(
+              (entry: { hooks?: Array<{ command?: string }> }) =>
+                !entry.hooks?.some(h => h.command?.includes('codex-session-start.py'))
+            );
+            if (config.hooks.SessionStart.length === 0) {
+              delete config.hooks.SessionStart;
+            }
+          }
+
+          // Remove Stop entries
+          if (Array.isArray(config.hooks?.Stop)) {
+            config.hooks.Stop = config.hooks.Stop.filter(
+              (entry: { hooks?: Array<{ command?: string }> }) =>
+                !entry.hooks?.some(h => h.command?.includes('codex-stop.py'))
+            );
+            if (config.hooks.Stop.length === 0) {
+              delete config.hooks.Stop;
+            }
+          }
+
+          // Clean up empty hooks object
+          if (config.hooks && Object.keys(config.hooks).length === 0) {
+            delete config.hooks;
+          }
+
+          fs.writeFileSync(hooksConfigPath, JSON.stringify(config, null, 2));
+        } catch {
+          // Could not update hooks.json
+        }
+      }
+
+      // Remove notify line and writable_roots from ~/.codex/config.toml
+      const configTomlPath = this.getCodexConfigPath();
+      if (fs.existsSync(configTomlPath)) {
+        try {
+          let tomlContent = fs.readFileSync(configTomlPath, 'utf-8');
+          const librarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
+          tomlContent = tomlRemoveNotify(tomlContent, 'codex-notify.py');
+          tomlContent = tomlRemoveWritableRoot(tomlContent, librarianDir);
+          fs.writeFileSync(configTomlPath, tomlContent);
+        } catch {
+          // Could not update config.toml
+        }
+      }
+
+      // Remove managed section from ~/.codex/AGENTS.md
+      const agentsMdPath = this.getCodexAgentsMdPath();
+      if (fs.existsSync(agentsMdPath)) {
+        try {
+          let agentsMd = fs.readFileSync(agentsMdPath, 'utf-8');
+          agentsMd = managedSectionRemove(
+            agentsMd,
+            '<!-- Field Theory Librarian - managed section, do not edit -->',
+            '<!-- End Field Theory Librarian -->'
+          );
+          fs.writeFileSync(agentsMdPath, agentsMd);
+        } catch {
+          // Could not update AGENTS.md
+        }
+      }
+
+      log.info('Uninstalled Codex hooks');
+      return true;
+    } catch (error) {
+      log.error('Failed to uninstall Codex hooks:', error);
       return false;
     }
   }

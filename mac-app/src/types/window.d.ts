@@ -1353,6 +1353,11 @@ interface LibrarianAPI {
   isCursorHookInstalled: () => Promise<boolean>;
   installCursorHook: () => Promise<boolean>;
   uninstallCursorHook: () => Promise<boolean>;
+  // Codex Hook API
+  getCodexStatus: () => Promise<'installed' | 'not-installed'>;
+  isCodexHookInstalled: () => Promise<boolean>;
+  installCodexHook: () => Promise<boolean>;
+  uninstallCodexHook: () => Promise<boolean>;
   // Discovery Frequency API
   getDiscoveryFrequency: () => Promise<string>;
   setDiscoveryFrequency: (frequency: string) => Promise<boolean>;

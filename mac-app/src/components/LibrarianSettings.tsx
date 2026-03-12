@@ -50,6 +50,8 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [stateEnforcedHookInstalled, setStateEnforcedHookInstalled] = useState(false);
   const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
   const [cursorHookInstalling, setCursorHookInstalling] = useState(false);
+  const [codexHookInstalled, setCodexHookInstalled] = useState(false);
+  const [codexHookInstalling, setCodexHookInstalling] = useState(false);
 
   // Discovery frequency (often/sometimes/rarely)
   const [discoveryFrequency, setDiscoveryFrequency] = useState<'often' | 'sometimes' | 'rarely'>('sometimes');
@@ -184,6 +186,18 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     checkCursorHookStatus();
   }, []);
 
+  // Check Codex hook status
+  useEffect(() => {
+    if (!window.librarianAPI) return;
+
+    const checkCodexHookStatus = async () => {
+      const isInstalled = await window.librarianAPI?.isCodexHookInstalled();
+      setCodexHookInstalled(isInstalled ?? false);
+    };
+
+    checkCodexHookStatus();
+  }, []);
+
   // Fetch narration status and voice options (feature flagged)
   useEffect(() => {
     if (!FEATURE_NARRATION_ENABLED || !window.narrationAPI) return;
@@ -284,7 +298,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   }, [manualPath, isScanning]);
 
   // Check if any platform is connected (required for Librarian)
-  const anyPlatformConnected = stateEnforcedHookInstalled || cursorHookInstalled;
+  const anyPlatformConnected = stateEnforcedHookInstalled || cursorHookInstalled || codexHookInstalled;
 
   // Handle enable toggle - controls both feature AND tab visibility
   const handleEnabledToggle = useCallback(async () => {
@@ -398,6 +412,20 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                     }}
                   >
                     Cursor
+                  </span>
+                )}
+                {codexHookInstalled && (
+                  <span
+                    style={{
+                      fontSize: '10px',
+                      fontWeight: 500,
+                      color: theme.accent,
+                      backgroundColor: theme.isDark ? 'rgba(99, 102, 241, 0.15)' : 'rgba(99, 102, 241, 0.1)',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                    }}
+                  >
+                    Codex
                   </span>
                 )}
               </>
@@ -579,6 +607,62 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 }}
               >
                 {cursorHookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
+              </button>
+            </div>
+
+            {/* Codex */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Codex</span>
+                {codexHookInstalled ? (
+                  <span style={{ fontSize: '10px', color: theme.success, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)', borderRadius: '4px' }}>
+                    Connected
+                  </span>
+                ) : (
+                  <span style={{ fontSize: '10px', color: theme.warning, padding: '2px 6px', backgroundColor: theme.isDark ? 'rgba(234, 179, 8, 0.15)' : 'rgba(234, 179, 8, 0.1)', borderRadius: '4px' }}>
+                    Setup needed
+                  </span>
+                )}
+              </div>
+              <button
+                onClick={async () => {
+                  setCodexHookInstalling(true);
+                  try {
+                    if (codexHookInstalled) {
+                      await window.librarianAPI?.uninstallCodexHook();
+                      setCodexHookInstalled(false);
+                    } else {
+                      const success = await window.librarianAPI?.installCodexHook();
+                      setCodexHookInstalled(success ?? false);
+                    }
+                  } finally {
+                    setCodexHookInstalling(false);
+                  }
+                }}
+                disabled={codexHookInstalling}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  color: codexHookInstalled ? theme.textSecondary : '#fff',
+                  backgroundColor: codexHookInstalled ? 'transparent' : theme.accent,
+                  border: codexHookInstalled ? `1px solid ${theme.border}` : 'none',
+                  borderRadius: '4px',
+                  cursor: codexHookInstalling ? 'wait' : 'pointer',
+                  opacity: codexHookInstalling ? 0.5 : 1,
+                }}
+              >
+                {codexHookInstalling ? '...' : codexHookInstalled ? 'Disconnect' : 'Connect'}
               </button>
             </div>
           </div>
