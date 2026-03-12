@@ -9,20 +9,74 @@ import { createLogger } from './logger';
 
 const log = createLogger('Librarian');
 
+const TOML_TABLE_HEADER_RE = /^\s*\[/;
+const TOML_NOTIFY_LINE_RE = /^\s*notify\s*=.*$\n?/gm;
+const TOML_WRITABLE_ROOTS_BLOCK_RE = /^\s*writable_roots\s*=\s*\[[\s\S]*?\]\s*\n?/gm;
+
+function splitTomlTopLevel(content: string): { topLevel: string; tables: string } {
+  const lines = content.split('\n');
+  const firstTableIndex = lines.findIndex(line => TOML_TABLE_HEADER_RE.test(line));
+
+  if (firstTableIndex === -1) {
+    return { topLevel: content, tables: '' };
+  }
+
+  return {
+    topLevel: lines.slice(0, firstTableIndex).join('\n'),
+    tables: lines.slice(firstTableIndex).join('\n'),
+  };
+}
+
+function tidyTomlSpacing(content: string): string {
+  const trimmed = content.replace(/\n{3,}/g, '\n\n').trimEnd();
+  return trimmed ? `${trimmed}\n` : '';
+}
+
+function upsertTopLevelTomlBlock(content: string, block: string): string {
+  const { topLevel, tables } = splitTomlTopLevel(content);
+  const trimmedTopLevel = topLevel.trimEnd();
+  const trimmedTables = tables.replace(/^\n+/, '').trimEnd();
+
+  if (!trimmedTopLevel && !trimmedTables) {
+    return `\n${block}\n`;
+  }
+
+  if (!trimmedTables) {
+    return trimmedTopLevel ? `${trimmedTopLevel}\n${block}\n` : `\n${block}\n`;
+  }
+
+  if (!trimmedTopLevel) {
+    return `${block}\n\n${trimmedTables}\n`;
+  }
+
+  return `${trimmedTopLevel}\n${block}\n\n${trimmedTables}\n`;
+}
+
+function collectWritableRoots(content: string): string[] {
+  const blocks = [...content.matchAll(/^\s*writable_roots\s*=\s*\[([\s\S]*?)\]\s*$/gm)];
+  return blocks.flatMap(([, items]) =>
+    [...items.matchAll(/"([^"]+)"/g)].map(match => match[1])
+  );
+}
+
 // ===========================================================================
 // Pure TOML editing helpers (exported for testing)
 // ===========================================================================
 
 /**
  * Add a `notify` command to TOML content. Replaces existing notify line
- * or appends if absent. Returns updated content.
+ * or inserts it at the top level if absent. Returns updated content.
  */
 export function tomlSetNotify(content: string, command: string): string {
-  if (content.includes(command)) return content;
-  if (content.match(/^notify\s*=/m)) {
-    return content.replace(/^notify\s*=.*$/m, `notify = "${command}"`);
+  const notifyLine = `notify = "${command}"`;
+  const { topLevel, tables } = splitTomlTopLevel(content);
+
+  if (topLevel.split('\n').some(line => line.trim() === notifyLine) && !tables.match(/^\s*notify\s*=/m)) {
+    return content;
   }
-  return content.trimEnd() + `\nnotify = "${command}"\n`;
+
+  const withoutNotify = content.replace(TOML_NOTIFY_LINE_RE, '');
+  return upsertTopLevelTomlBlock(withoutNotify, notifyLine);
 }
 
 /**
@@ -30,41 +84,51 @@ export function tomlSetNotify(content: string, command: string): string {
  */
 export function tomlRemoveNotify(content: string, scriptName: string): string {
   const escaped = scriptName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return content.replace(new RegExp(`^notify\\s*=\\s*".*${escaped}.*"\\s*\\n?`, 'm'), '');
+  return tidyTomlSpacing(content.replace(new RegExp(`^\\s*notify\\s*=\\s*".*${escaped}.*"\\s*$\\n?`, 'gm'), ''));
 }
 
 /**
  * Add a path to the `writable_roots` array in TOML content.
- * Creates the array if absent, appends to it if present.
+ * Creates the array if absent, appends to it if present, and keeps it top-level.
  */
 export function tomlAddWritableRoot(content: string, dirPath: string): string {
-  if (content.includes(dirPath)) return content;
-  if (content.match(/^writable_roots\s*=/m)) {
-    return content.replace(
-      /^(writable_roots\s*=\s*\[)(.*?)(\])/ms,
-      (match, prefix, items, suffix) => {
-        const trimmed = items.trimEnd();
-        const needsComma = trimmed.length > 0 && !trimmed.endsWith(',');
-        return `${prefix}${items}${needsComma ? ',' : ''}\n  "${dirPath}"${suffix}`;
-      }
-    );
+  const { topLevel, tables } = splitTomlTopLevel(content);
+  const topLevelRoots = collectWritableRoots(topLevel);
+  const nestedRoots = collectWritableRoots(tables);
+
+  if (topLevelRoots.includes(dirPath) && nestedRoots.length === 0) {
+    return content;
   }
-  return content.trimEnd() + `\nwritable_roots = [\n  "${dirPath}"\n]\n`;
+
+  const roots = [...new Set([...topLevelRoots, ...nestedRoots, dirPath])];
+  const block = `writable_roots = [\n${roots.map(root => `  "${root}"`).join(',\n')}\n]`;
+  const withoutWritableRoots = content.replace(TOML_WRITABLE_ROOTS_BLOCK_RE, '');
+
+  return upsertTopLevelTomlBlock(withoutWritableRoots, block);
 }
 
 /**
  * Remove a path from the `writable_roots` array in TOML content.
- * Cleans up empty array if nothing remains.
+ * Cleans up empty array if nothing remains and keeps remaining roots top-level.
  */
 export function tomlRemoveWritableRoot(content: string, dirPath: string): string {
-  const escaped = dirPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  let result = content.replace(
-    new RegExp(`^\\s*"${escaped}"\\s*,?\\s*\\n?`, 'm'),
-    ''
-  );
-  // Clean up empty writable_roots array
-  result = result.replace(/^writable_roots\s*=\s*\[\s*\]\s*\n?/m, '');
-  return result;
+  const hadWritableRoots = TOML_WRITABLE_ROOTS_BLOCK_RE.test(content);
+  TOML_WRITABLE_ROOTS_BLOCK_RE.lastIndex = 0;
+
+  if (!hadWritableRoots) {
+    return content;
+  }
+
+  const remainingRoots = [...new Set(collectWritableRoots(content))].filter(root => root !== dirPath);
+  const withoutWritableRoots = tidyTomlSpacing(content.replace(TOML_WRITABLE_ROOTS_BLOCK_RE, ''));
+  TOML_WRITABLE_ROOTS_BLOCK_RE.lastIndex = 0;
+
+  if (remainingRoots.length === 0) {
+    return withoutWritableRoots;
+  }
+
+  const block = `writable_roots = [\n${remainingRoots.map(root => `  "${root}"`).join(',\n')}\n]`;
+  return upsertTopLevelTomlBlock(withoutWritableRoots, block);
 }
 
 /**
