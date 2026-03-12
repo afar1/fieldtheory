@@ -79,9 +79,6 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
-  // Path input for empty state
-  const [pathInput, setPathInput] = useState('');
-
   // Edit mode
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
@@ -364,8 +361,12 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       // Initialize the commands manager
       await window.commandsAPI?.initialize();
 
-      // Load watched directories
-      const dirs = await window.commandsAPI?.getWatchedDirs();
+      // Load watched directories — auto-create default if none exist
+      let dirs = await window.commandsAPI?.getWatchedDirs();
+      if (!dirs || dirs.length === 0) {
+        await window.commandsAPI?.createDefaultDirectory();
+        dirs = await window.commandsAPI?.getWatchedDirs();
+      }
       if (dirs) {
         setWatchedDirs(dirs);
       }
@@ -374,9 +375,12 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       const result = await window.commandsAPI?.getCommands();
       if (result) {
         setCommands(result);
-        // Select first command if any
         if (result.length > 0 && selectedPath === null) {
           setSelectedPath(result[0].filePath);
+        }
+        // Default to Shared tab if no user commands yet
+        if (result.length === 0) {
+          setViewMode('popular');
         }
       }
       setLoading(false);
@@ -597,7 +601,6 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     const result = await window.commandsAPI?.addWatchedDir(trimmed);
     if (result) {
       setWatchedDirs((prev) => [...prev, result]);
-      setPathInput('');
     } else {
       // Check if the path (expanded) matches an existing watched dir
       // The backend expands ~ to the full home path
@@ -767,103 +770,6 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     };
   }, [contextMenu]);
 
-  // Common command directory paths
-  const examplePaths = [
-    { label: '~/.cursor/commands', path: '~/.cursor/commands' },
-    { label: '~/.claude/commands', path: '~/.claude/commands' },
-  ];
-
-  // Empty state - no directories configured
-  if (!loading && watchedDirs.length === 0) {
-    return (
-      <div
-        ref={containerRef}
-        tabIndex={0}
-        style={{
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          height: '100%',
-          padding: '32px',
-          color: theme.textSecondary,
-          outline: 'none',
-        }}
-      >
-        <div style={{ width: '100%', maxWidth: '380px' }}>
-          <div style={{ fontSize: '15px', fontWeight: 500, marginBottom: '16px', color: theme.text }}>
-            Make existing commands portable
-          </div>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            <input
-              type="text"
-              value={pathInput}
-              onChange={(e) => setPathInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  handleAddDirectory(pathInput);
-                }
-              }}
-              placeholder="Enter path to commands directory"
-              style={{
-                flex: 1,
-                padding: '10px 12px',
-                fontSize: '13px',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '6px',
-                color: theme.text,
-                outline: 'none',
-              }}
-              autoFocus
-            />
-            <button
-              onClick={() => handleAddDirectory(pathInput)}
-              disabled={!pathInput.trim()}
-              style={{
-                padding: '10px 16px',
-                fontSize: '13px',
-                fontWeight: 500,
-                color: pathInput.trim() ? 'white' : theme.textSecondary,
-                backgroundColor: pathInput.trim() ? theme.accent : 'transparent',
-                border: pathInput.trim() ? 'none' : `1px solid ${theme.border}`,
-                borderRadius: '6px',
-                cursor: pathInput.trim() ? 'pointer' : 'default',
-                opacity: pathInput.trim() ? 1 : 0.5,
-              }}
-            >
-              Add
-            </button>
-          </div>
-          <div style={{ marginTop: '12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {examplePaths.map((ex, i) => (
-              <span key={ex.path} style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                {i > 0 && <span style={{ color: theme.textSecondary }}>·</span>}
-                <button
-                  onClick={() => setPathInput(ex.path)}
-                  style={{
-                    padding: '4px 8px',
-                    fontSize: '12px',
-                    fontFamily: "'SF Mono', Monaco, monospace",
-                    color: theme.accent,
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                    textUnderlineOffset: '2px',
-                  }}
-                  title={`Click to fill: ${ex.path}`}
-                >
-                  {ex.label}
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}
@@ -956,6 +862,11 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
             </svg>
           </button>
+        </div>
+
+        {/* Hotkey hint */}
+        <div style={{ padding: '0 12px 6px', fontSize: '10px', color: theme.isDark ? 'rgba(255,255,255,0.25)' : 'rgba(0,0,0,0.25)' }}>
+          <kbd style={{ fontFamily: fonts.mono, fontSize: '10px' }}>&#8679;&#8984;K</kbd> to invoke
         </div>
 
         {/* Collapsible search input */}

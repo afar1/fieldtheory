@@ -1006,17 +1006,18 @@ export class SquaresManager extends EventEmitter {
       log.info('Focus: moved %d same-app windows off-screen', otherWindows.length);
     }
 
-    // Expand to configured % screen height (or keep current), center both axes, keep current width.
     const targetScreen = this.getScreenForWindow(frontWindow.frame);
     const s = targetScreen.visibleFrame;
     const focusHeight = resolveHeight(
       frontWindow.frame.height, s.height,
       this.config.focusKeepHeight, this.config.focusHeightPercent,
     );
+    const focusWidthPct = Math.max(MIN_HEIGHT_PERCENT, this.config.focusWidthPercent ?? 60);
+    const focusWidth = Math.floor(s.width * (focusWidthPct / 100));
     const focusFrame: WindowFrame = {
-      x: s.x + Math.floor((s.width - frontWindow.frame.width) / 2),
+      x: s.x + Math.floor((s.width - focusWidth) / 2),
       y: s.y + Math.floor((s.height - focusHeight) / 2),
-      width: frontWindow.frame.width,
+      width: focusWidth,
       height: focusHeight,
     };
 
