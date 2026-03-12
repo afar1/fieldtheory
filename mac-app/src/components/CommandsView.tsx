@@ -514,8 +514,9 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
         return;
       }
 
-      // Don't handle navigation keys in edit mode
-      if (isEditing) return;
+      // Don't handle navigation keys when typing in any input
+      const activeEl = document.activeElement;
+      if (isEditing || activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) return;
 
       if (filteredCommands.length === 0) return;
 
