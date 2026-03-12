@@ -119,6 +119,10 @@ npm-debug.*
 .cursor/plans/*.plan.md
 **/TESTING.md
 
+# Local AI worktree and command aliases
+.claude/worktrees/
+.cursor/commands/worktree*.md
+
 # Electron build outputs
 mac-app/electron-dist/
 mac-app/release/

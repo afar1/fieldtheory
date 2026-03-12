@@ -1677,6 +1677,7 @@ declare global {
     maxHistorySize: number;
     focusHeightPercent: number;
     focusKeepHeight: boolean;
+    focusWidthPercent: number;
     horizontalHeightPercent: number;
     horizontalKeepHeight: boolean;
   }
