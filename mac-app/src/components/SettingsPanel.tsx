@@ -88,6 +88,148 @@ interface SettingsPanelProps {
   initialSection?: SettingsSection;
 }
 
+// =============================================================================
+// Island Geometry Sliders — self-contained, renders in the Appearance section.
+// =============================================================================
+
+interface IslandGeometrySettings {
+  notchWidthOverride: number;
+  pillWidth: number;
+  pillHeight: number;
+  offsetX: number;
+  offsetY: number;
+}
+
+const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
+  notchWidthOverride: 0,
+  pillWidth: 0,
+  pillHeight: 0,
+  offsetX: 0,
+  offsetY: 0,
+};
+
+const ISLAND_GEOMETRY_LIMITS = {
+  notchWidthOverride: { min: 0, max: 320, step: 1 },
+  pillWidth: { min: 0, max: 120, step: 1 },
+  pillHeight: { min: 0, max: 120, step: 1 },
+  offsetX: { min: -240, max: 240, step: 1 },
+  offsetY: { min: -160, max: 160, step: 1 },
+} as const;
+
+const ISLAND_GEOMETRY_FIELDS: Array<{ key: keyof IslandGeometrySettings; label: string; help: string }> = [
+  { key: 'notchWidthOverride', label: 'Notch Width', help: '0 = auto' },
+  { key: 'pillWidth', label: 'Pill Width', help: '0 = auto' },
+  { key: 'pillHeight', label: 'Pill Height', help: '0 = auto' },
+  { key: 'offsetX', label: 'Horizontal Offset', help: '' },
+  { key: 'offsetY', label: 'Vertical Offset', help: '' },
+];
+
+function clampGeometry(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+interface ResolvedGeometry extends IslandGeometrySettings {
+  _detected?: { modeWidth: number; scaleFactor: number; menuBarHeight: number; isInternal: boolean };
+}
+
+function IslandGeometrySliders({ theme }: { theme: Theme }) {
+  const [geometry, setGeometry] = useState<IslandGeometrySettings>(DEFAULT_ISLAND_GEOMETRY);
+  const [resolved, setResolved] = useState<ResolvedGeometry | null>(null);
+
+  useEffect(() => {
+    window.hotMicAPI?.getIslandGeometry?.().then((g) => {
+      if (g) setGeometry(g);
+    }).catch(() => {});
+    window.hotMicAPI?.getResolvedIslandGeometry?.().then((r: ResolvedGeometry | null) => {
+      if (r) setResolved(r);
+    }).catch(() => {});
+  }, []);
+
+  const isAllAuto = geometry.notchWidthOverride === 0 && geometry.pillWidth === 0 && geometry.pillHeight === 0
+    && geometry.offsetX === 0 && geometry.offsetY === 0;
+
+  const handleChange = useCallback((key: keyof IslandGeometrySettings, value: number) => {
+    const limits = ISLAND_GEOMETRY_LIMITS[key];
+    const normalized = clampGeometry(value, limits.min, limits.max);
+    setGeometry((prev) => ({ ...prev, [key]: normalized }));
+    void window.hotMicAPI?.setIslandGeometry({ [key]: normalized });
+  }, []);
+
+  const handleAuto = useCallback(async () => {
+    if (!window.hotMicAPI) return;
+    const reset = await window.hotMicAPI.resetIslandGeometry();
+    setGeometry(reset ?? DEFAULT_ISLAND_GEOMETRY);
+    const r = await window.hotMicAPI.getResolvedIslandGeometry?.();
+    if (r) setResolved(r);
+  }, []);
+
+  const formatValue = (key: keyof IslandGeometrySettings, val: number): string => {
+    const field = ISLAND_GEOMETRY_FIELDS.find((f) => f.key === key);
+    if (val === 0 && field?.help) {
+      return resolved ? `auto (${resolved[key]})` : 'auto';
+    }
+    return String(val);
+  };
+
+  return (
+    <>
+      {ISLAND_GEOMETRY_FIELDS.map(({ key, label }) => (
+        <div key={key} style={{ padding: '4px 0' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+            <span style={{ fontSize: '12px', color: theme.text }}>{label}</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              {formatValue(key, geometry[key])}
+            </span>
+          </div>
+          <input
+            type="range"
+            min={ISLAND_GEOMETRY_LIMITS[key].min}
+            max={ISLAND_GEOMETRY_LIMITS[key].max}
+            step={ISLAND_GEOMETRY_LIMITS[key].step}
+            value={geometry[key]}
+            onChange={(e) => handleChange(key, Number(e.target.value))}
+            style={{
+              width: '100%',
+              height: '4px',
+              WebkitAppearance: 'none',
+              appearance: 'none',
+              background: theme.border,
+              borderRadius: '2px',
+              outline: 'none',
+              cursor: 'pointer',
+            }}
+          />
+        </div>
+      ))}
+      <div style={{ marginTop: '8px' }}>
+        <button
+          onClick={() => void handleAuto()}
+          style={{
+            padding: '4px 10px',
+            fontSize: '11px',
+            color: isAllAuto ? theme.textSecondary : theme.text,
+            backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '4px',
+            cursor: isAllAuto ? 'default' : 'pointer',
+            opacity: isAllAuto ? 0.6 : 1,
+          }}
+        >
+          Auto
+        </button>
+        {resolved?._detected && (
+          <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+            {resolved._detected.modeWidth}pt {resolved._detected.scaleFactor}x
+            {resolved._detected.isInternal ? ' internal' : ' external'}
+            , menu bar {resolved._detected.menuBarHeight}pt
+          </span>
+        )}
+      </div>
+    </>
+  );
+}
+
 /**
  * SettingsPanel - Settings content designed to live inside the clipboard history window.
  * Keeps the same functionality as the original App.tsx settings, but styled for the
@@ -1421,6 +1563,15 @@ export default function SettingsPanel({
             <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
+      </div>
+
+      {/* Dynamic Island Geometry */}
+      <div style={styles.section}>
+        <SectionHeader title="Dynamic Island Geometry" />
+        <p style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
+          Tune notch alignment. Changes apply immediately.
+        </p>
+        <IslandGeometrySliders theme={theme} />
       </div>
 
       {/* System Access Section - Permission status with quick links to settings */}

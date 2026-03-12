@@ -6,33 +6,9 @@ import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 
-interface IslandGeometrySettings {
-  notchWidthOverride: number;
-  pillWidth: number;
-  pillHeight: number;
-  offsetX: number;
-  offsetY: number;
-}
-
 type HotMicRuntimeStatus = Awaited<
   ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>
 >;
-
-const DEFAULT_ISLAND_GEOMETRY: IslandGeometrySettings = {
-  notchWidthOverride: 0,
-  pillWidth: 72,
-  pillHeight: 38,
-  offsetX: 0,
-  offsetY: 0,
-};
-
-const ISLAND_GEOMETRY_LIMITS = {
-  notchWidthOverride: { min: 0, max: 320, step: 1 },
-  pillWidth: { min: 72, max: 120, step: 1 },
-  pillHeight: { min: 24, max: 120, step: 1 },
-  offsetX: { min: -240, max: 240, step: 1 },
-  offsetY: { min: -160, max: 160, step: 1 },
-} as const;
 const DRAWER_TEXT_SIZE_LIMITS = { min: 11, max: 22, step: 1 } as const;
 
 function clampInt(value: number, min: number, max: number): number {
@@ -78,8 +54,6 @@ export default function HotMicSettings() {
   const [restartServerWords, setRestartServerWords] = useState('');
   const [restartServerCommand, setRestartServerCommand] = useState('');
   const [showWordCount, setShowWordCount] = useState(false);
-  const [islandGeometry, setIslandGeometry] = useState<IslandGeometrySettings>(DEFAULT_ISLAND_GEOMETRY);
-  const [islandGeometryExpanded, setIslandGeometryExpanded] = useState(false);
 
   // App voice aliases
   const [appAliases, setAppAliases] = useState<Array<{ appName: string; aliases: string }>>([]);
@@ -139,7 +113,6 @@ export default function HotMicSettings() {
         rsw,
         rsc,
         wc,
-        geometry,
         drawerTextSizeValue,
       ] = await Promise.all([
         window.hotMicAPI!.getEnabled(),
@@ -170,7 +143,6 @@ export default function HotMicSettings() {
         window.hotMicAPI!.getRestartServerWords(),
         window.hotMicAPI!.getRestartServerCommand(),
         window.hotMicAPI!.getShowWordCount(),
-        window.hotMicAPI!.getIslandGeometry(),
         window.hotMicAPI!.getDrawerTextSize(),
       ]);
       setEnabled(en);
@@ -202,7 +174,6 @@ export default function HotMicSettings() {
       setRestartServerWords(rsw);
       setRestartServerCommand(rsc);
       setShowWordCount(wc);
-      setIslandGeometry(geometry ?? DEFAULT_ISLAND_GEOMETRY);
       setDrawerTextSize(clampInt(
         drawerTextSizeValue,
         DRAWER_TEXT_SIZE_LIMITS.min,
@@ -276,22 +247,6 @@ export default function HotMicSettings() {
     setDrawerTextSize(normalized);
     const saved = await window.hotMicAPI.setDrawerTextSize(normalized);
     setDrawerTextSize(clampInt(saved, DRAWER_TEXT_SIZE_LIMITS.min, DRAWER_TEXT_SIZE_LIMITS.max));
-  }, []);
-
-  const handleIslandGeometryChange = useCallback((
-    key: keyof IslandGeometrySettings,
-    value: number
-  ) => {
-    const limits = ISLAND_GEOMETRY_LIMITS[key];
-    const normalized = clampInt(value, limits.min, limits.max);
-    setIslandGeometry((prev) => ({ ...prev, [key]: normalized }));
-    void window.hotMicAPI?.setIslandGeometry({ [key]: normalized });
-  }, []);
-
-  const handleResetIslandGeometry = useCallback(async () => {
-    if (!window.hotMicAPI) return;
-    const reset = await window.hotMicAPI.resetIslandGeometry();
-    setIslandGeometry(reset ?? DEFAULT_ISLAND_GEOMETRY);
   }, []);
 
   const handleSubmitWordSave = useCallback(async () => {
@@ -680,86 +635,6 @@ export default function HotMicSettings() {
       </div>
 
       <div style={styles.divider} />
-
-      {/* Dynamic Island geometry tuning */}
-      <div style={{ padding: '4px 0' }}>
-        <button
-          onClick={() => setIslandGeometryExpanded((prev) => !prev)}
-          style={styles.sectionToggle}
-          aria-expanded={islandGeometryExpanded}
-        >
-          <span style={styles.rowLabel}>Dynamic Island Geometry</span>
-          <span style={styles.sectionToggleIndicator}>
-            {islandGeometryExpanded ? 'Hide' : 'Show'}
-          </span>
-        </button>
-        <p style={styles.description}>
-          Tune notch hugging live. Changes apply immediately.
-        </p>
-      </div>
-      {islandGeometryExpanded && (
-        <>
-          {([
-            {
-              key: 'notchWidthOverride',
-              label: 'Notch Width',
-              help: '0 = auto profile',
-            },
-            {
-              key: 'pillWidth',
-              label: 'Pill Width',
-              help: '',
-            },
-            {
-              key: 'pillHeight',
-              label: 'Pill Height',
-              help: '',
-            },
-            {
-              key: 'offsetX',
-              label: 'Horizontal Offset',
-              help: '',
-            },
-            {
-              key: 'offsetY',
-              label: 'Vertical Offset',
-              help: '',
-            },
-          ] as Array<{ key: keyof IslandGeometrySettings; label: string; help: string }>).map(({ key, label, help }) => (
-            <div key={key} style={{ padding: '4px 0' }}>
-              <div style={styles.rangeHeader}>
-                <span style={styles.rangeLabel}>{label}</span>
-                <span style={styles.rangeValue}>
-                  {islandGeometry[key]}
-                  {help ? ` (${help})` : ''}
-                </span>
-              </div>
-              <input
-                type="range"
-                min={ISLAND_GEOMETRY_LIMITS[key].min}
-                max={ISLAND_GEOMETRY_LIMITS[key].max}
-                step={ISLAND_GEOMETRY_LIMITS[key].step}
-                value={islandGeometry[key]}
-                onChange={(e) => handleIslandGeometryChange(key, Number(e.target.value))}
-                style={styles.rangeInput}
-              />
-            </div>
-          ))}
-          <div style={{ marginTop: '8px', display: 'flex', justifyContent: 'flex-start' }}>
-            <button
-              onClick={() => void handleResetIslandGeometry()}
-              style={{
-                ...styles.hookButton,
-                backgroundColor: theme.surface0,
-                color: theme.text,
-                border: `1px solid ${theme.border}`,
-              }}
-            >
-              Reset Island Geometry
-            </button>
-          </div>
-        </>
-      )}
 
       <div style={styles.divider} />
 
