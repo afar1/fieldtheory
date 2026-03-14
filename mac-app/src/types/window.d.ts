@@ -1439,6 +1439,7 @@ declare global {
     title: string;
     context: string | null;
     readingTime: string | null;
+    modelSignature: string | null;
     createdAt: number;
     mtime: number;
   }

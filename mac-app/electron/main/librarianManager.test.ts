@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { parseMarkdownHeader } from './librarianManager';
+import {
+  extractArtifactModelSignature,
+  hasArtifactModelSignatureInstruction,
+  parseMarkdownHeader,
+} from './librarianManager';
 
 describe('parseMarkdownHeader', () => {
   it('extracts H1 title', () => {
@@ -50,8 +54,41 @@ describe('parseMarkdownHeader', () => {
     expect(result.context).toBe('Auth architecture refactoring');
   });
 
+  it('extracts model signature', () => {
+    const content = '# Title\n\n*Model: GPT-5 Codex*';
+    const result = parseMarkdownHeader(content);
+    expect(result.modelSignature).toBe('GPT-5 Codex');
+  });
+
+  it('extracts signed-by signature alias', () => {
+    const content = '# Title\n\n*Signed by: Claude Sonnet*';
+    const result = parseMarkdownHeader(content);
+    expect(result.modelSignature).toBe('Claude Sonnet');
+  });
+
+  it('finds metadata after a braille art block', () => {
+    const art = Array.from({ length: 15 }, () => '⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀').join('\n');
+    const content = `# Title\n\n${art}\n\n*Model: GPT-5 Codex*\n*Context: Artifact signing*\n*Reading time: ~2 minutes*\n\nBody.`;
+    const result = parseMarkdownHeader(content);
+    expect(result.modelSignature).toBe('GPT-5 Codex');
+    expect(result.context).toBe('Artifact signing');
+    expect(result.readingTime).toBe('~2 minutes');
+  });
+
   it('does not match hashtags without space', () => {
     const content = '#not-a-heading\n\nBody.';
     expect(parseMarkdownHeader(content).title).toBe('Untitled Reading');
+  });
+});
+
+describe('artifact signature helpers', () => {
+  it('extracts signature metadata from supported header lines', () => {
+    expect(extractArtifactModelSignature('*Model: GPT-5 Codex*')).toBe('GPT-5 Codex');
+    expect(extractArtifactModelSignature('*Signed by: Claude Sonnet*')).toBe('Claude Sonnet');
+  });
+
+  it('detects when rule content already includes signature instructions', () => {
+    expect(hasArtifactModelSignatureInstruction('Required metadata: *Model: GPT-5 Codex*')).toBe(true);
+    expect(hasArtifactModelSignatureInstruction('Write a short reflective story.')).toBe(false);
   });
 });
