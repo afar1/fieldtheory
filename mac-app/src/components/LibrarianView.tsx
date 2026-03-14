@@ -63,6 +63,10 @@ function groupByDate(readings: ReadingMeta[]): Map<string, ReadingMeta[]> {
   return groups;
 }
 
+function isArtifactModelSignatureText(text: string): boolean {
+  return /^(Model|Signed by):\s+.+$/i.test(text.trim());
+}
+
 export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed }: LibrarianViewProps) {
   const { theme } = useTheme();
 
@@ -458,6 +462,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           title: reading.title,
           context: reading.context,
           readingTime: reading.readingTime,
+          modelSignature: reading.modelSignature,
           createdAt: reading.createdAt,
           mtime: reading.mtime,
         },
@@ -1563,7 +1568,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       return '';
                     };
                     const textContent = extractText(node);
+                    const normalizedText = textContent.trim();
                     const hasBraille = /[\u2800-\u28FF]/.test(textContent);
+                    const isModelSignatureLine = isArtifactModelSignatureText(normalizedText);
 
                     if (hasBraille) {
                       return (
@@ -1582,6 +1589,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                           {children}
                         </p>
                       );
+                    }
+
+                    if (isModelSignatureLine) {
+                      return null;
                     }
 
                     return (
@@ -1753,6 +1764,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     <div style={{ fontSize: '12px', marginTop: '2px', fontStyle: 'italic' }}>
                       Inspired by <span title={shareStatus?.slug || ''} style={{ cursor: shareStatus?.slug ? 'help' : 'default' }}>your work</span>
                     </div>
+                    {selectedReading.modelSignature && (
+                      <div style={{ fontSize: '12px', marginTop: '6px' }}>
+                        Signed by {selectedReading.modelSignature}
+                      </div>
+                    )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: '8px' }}>
                     {/* Mute button */}

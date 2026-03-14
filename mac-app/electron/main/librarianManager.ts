@@ -13,7 +13,15 @@ const TOML_TABLE_HEADER_RE = /^\s*\[/;
 const TOML_NOTIFY_LINE_RE = /^\s*notify\s*=.*$\n?/gm;
 const TOML_WRITABLE_ROOTS_BLOCK_RE = /^\s*writable_roots\s*=\s*\[[\s\S]*?\]\s*\n?/gm;
 const TOML_SANDBOX_WORKSPACE_WRITE_HEADER = '[sandbox_workspace_write]';
-const DEFAULT_LIBRARIAN_RULE_CONTENT = 'Write a short reflective story (120-200 words) connecting current work to science/history.';
+const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
+const LIBRARIAN_INDEX_VERSION = 2;
+const ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE = /^\*(?:Model|Signed by):\s*(.+?)\*$/i;
+const ARTIFACT_MODEL_SIGNATURE_INSTRUCTION_RE = /\*(?:model|signed by):\s*/i;
+const ARTIFACT_MODEL_SIGNATURE_TEMPLATE = '*Model: <the exact model or assistant name that wrote this artifact>*';
+const ARTIFACT_MODEL_SIGNATURE_GUIDANCE =
+  `Include an italic metadata line after the braille art in the form \`${ARTIFACT_MODEL_SIGNATURE_TEMPLATE}\`. If the exact model name is unavailable, use the assistant or runtime name you are operating as.`;
+const DEFAULT_LIBRARIAN_RULE_CONTENT =
+  `Write a short reflective story (120-200 words) connecting current work to science/history. ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
 
 type CursorHookEntry = {
   command?: string;
@@ -896,14 +904,31 @@ if __name__ == "__main__":
 }
 
 /**
- * Parse markdown content to extract metadata (title, context, reading time).
- * Only reads first ~20 lines for efficiency.
+ * Parse markdown content to extract metadata (title, context, reading time,
+ * model signature). Only reads the first ~40 lines for efficiency.
  */
-export function parseMarkdownHeader(content: string): { title: string; context: string | null; readingTime: string | null } {
-  const lines = content.split('\n').slice(0, 20);
+export interface ParsedMarkdownHeader {
+  title: string;
+  context: string | null;
+  readingTime: string | null;
+  modelSignature: string | null;
+}
+
+export function extractArtifactModelSignature(line: string): string | null {
+  const match = line.trim().match(ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE);
+  return match ? match[1].trim() : null;
+}
+
+export function hasArtifactModelSignatureInstruction(content: string): boolean {
+  return ARTIFACT_MODEL_SIGNATURE_INSTRUCTION_RE.test(content);
+}
+
+export function parseMarkdownHeader(content: string): ParsedMarkdownHeader {
+  const lines = content.split('\n').slice(0, MARKDOWN_HEADER_SCAN_LINE_COUNT);
   let title = 'Untitled Reading';
   let context: string | null = null;
   let readingTime: string | null = null;
+  let modelSignature: string | null = null;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -928,9 +953,16 @@ export function parseMarkdownHeader(content: string): { title: string; context: 
       context = contextMatch[1].trim();
       continue;
     }
+
+    // Extract model signature (e.g., *Model: GPT-5 Codex*)
+    const parsedModelSignature = extractArtifactModelSignature(trimmed);
+    if (parsedModelSignature) {
+      modelSignature = parsedModelSignature;
+      continue;
+    }
   }
 
-  return { title, context, readingTime };
+  return { title, context, readingTime, modelSignature };
 }
 
 /**
@@ -964,6 +996,7 @@ export interface ReadingMeta {
   title: string;
   context: string | null;
   readingTime: string | null;
+  modelSignature: string | null;
   createdAt: number;
   mtime: number;
 }
@@ -1017,6 +1050,7 @@ interface LibrarianIndex {
     title: string;
     context: string | null;
     readingTime: string | null;
+    modelSignature: string | null;
     createdAt: number;
     mtime: number;
   }>;
@@ -1285,13 +1319,14 @@ export class LibrarianManager extends EventEmitter {
     try {
       if (fs.existsSync(this.indexPath)) {
         const data: LibrarianIndex = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8'));
-        if (data.version === 1 && data.files) {
+        if ((data.version === 1 || data.version === LIBRARIAN_INDEX_VERSION) && data.files) {
           for (const [filePath, meta] of Object.entries(data.files)) {
             this.cache.set(filePath, {
               path: filePath,
               title: meta.title,
               context: meta.context,
               readingTime: meta.readingTime,
+              modelSignature: meta.modelSignature ?? null,
               createdAt: meta.createdAt,
               mtime: meta.mtime,
             });
@@ -1310,7 +1345,7 @@ export class LibrarianManager extends EventEmitter {
   private saveIndex(): void {
     try {
       const index: LibrarianIndex = {
-        version: 1,
+        version: LIBRARIAN_INDEX_VERSION,
         files: {},
       };
       for (const [filePath, meta] of this.cache.entries()) {
@@ -1318,6 +1353,7 @@ export class LibrarianManager extends EventEmitter {
           title: meta.title,
           context: meta.context,
           readingTime: meta.readingTime,
+          modelSignature: meta.modelSignature,
           createdAt: meta.createdAt,
           mtime: meta.mtime,
         };
@@ -1415,7 +1451,7 @@ export class LibrarianManager extends EventEmitter {
   // Markdown Parsing
   // ===========================================================================
 
-  private parseMarkdownHeader(content: string): { title: string; context: string | null; readingTime: string | null } {
+  private parseMarkdownHeader(content: string): ParsedMarkdownHeader {
     return parseMarkdownHeader(content);
   }
 
@@ -1426,13 +1462,14 @@ export class LibrarianManager extends EventEmitter {
     try {
       const stats = fs.statSync(filePath);
       const content = fs.readFileSync(filePath, 'utf-8');
-      const { title, context, readingTime } = this.parseMarkdownHeader(content);
+      const { title, context, readingTime, modelSignature } = this.parseMarkdownHeader(content);
 
       return {
         path: filePath,
         title,
         context,
         readingTime,
+        modelSignature,
         createdAt: Math.floor(stats.birthtimeMs),
         mtime: Math.floor(stats.mtimeMs),
       };
@@ -1957,7 +1994,21 @@ export class LibrarianManager extends EventEmitter {
    * 120-200 word reflective story format.
    */
   private readonly DEFAULT_RULE_CONTENT =
-    'Write a short reflective story (120–200 words) that connects the current work to science, technology, companies, history, biology, chemistry, or physics. Stories are memorable. Don\'t hallucinate.\n\nDefault behavior:\n\t•\tBe grounded, calm, and practical.\n\t•\tMake the connection feel natural but also surprising.\n\t•\tFavor novelty.\n\nOccasionally—but not predictably—shift modes and do one of the following:\n\t•\tReveal an adjacent historical or technical parallel that reframes the work.\n\t•\tIntroduce a concept from another discipline that subtly changes how the problem can be seen.\n\nAvoid forced cleverness.\nAvoid maximalism.';
+    `Write a short reflective story (120–200 words) that connects the current work to science, technology, companies, history, biology, chemistry, or physics. Stories are memorable. Don't hallucinate.
+
+Default behavior:
+	•	Be grounded, calm, and practical.
+	•	Make the connection feel natural but also surprising.
+	•	Favor novelty.
+
+Occasionally—but not predictably—shift modes and do one of the following:
+	•	Reveal an adjacent historical or technical parallel that reframes the work.
+	•	Introduce a concept from another discipline that subtly changes how the problem can be seen.
+
+Avoid forced cleverness.
+Avoid maximalism.
+
+${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
 
   /**
    * Get the state-enforced mode threshold (prompts before job creation).
@@ -2072,12 +2123,19 @@ export class LibrarianManager extends EventEmitter {
   getEffectiveRuleContent(): string {
     const baseRule = this.settings.stateEnforcedRuleContent || this.DEFAULT_RULE_CONTENT;
     const expertise = this.settings.userExpertiseContext;
+    const additions: string[] = [];
 
-    if (!expertise) {
-      return baseRule;
+    if (!hasArtifactModelSignatureInstruction(baseRule)) {
+      additions.push(`Required metadata: ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`);
     }
 
-    return `${baseRule}\n\nContext about the reader: ${expertise}`;
+    if (expertise) {
+      additions.push(`Context about the reader: ${expertise}`);
+    }
+
+    return additions.length > 0
+      ? `${baseRule}\n\n${additions.join('\n\n')}`
+      : baseRule;
   }
 
   /**
@@ -2373,8 +2431,9 @@ export class LibrarianManager extends EventEmitter {
   private readonly DEFAULT_CONTENT_GUIDANCE = `Structure:
 1. Title (# heading)
 2. Braille halftone illustration (immediately after title, NOT in a code block)
-3. 1-2 paragraphs connecting the task to engineering history, physics, systems theory, or speculative futures
-4. Include at least one concrete technical/historical detail
+3. Signature metadata line: \`${ARTIFACT_MODEL_SIGNATURE_TEMPLATE}\`
+4. 1-2 paragraphs connecting the task to engineering history, physics, systems theory, or speculative futures
+5. Include at least one concrete technical/historical detail
 
 ### Braille Halftone Art Requirements
 
@@ -2387,7 +2446,11 @@ Canvas: exactly 56 characters wide × 15 lines tall
 - Subject: single object that metaphorically connects to the reading
 
 Tone mapping (light → dark):
-⠀ (empty) → ⠁⠈ (12%) → ⠃⠉ (25%) → ⠇⠋ (37%) → ⠏⠛ (50%) → ⠟⠻ (62%) → ⠿⡿ (75%) → ⣷⣾ (87%) → ⣿ (black)`;
+⠀ (empty) → ⠁⠈ (12%) → ⠃⠉ (25%) → ⠇⠋ (37%) → ⠏⠛ (50%) → ⠟⠻ (62%) → ⠿⡿ (75%) → ⣷⣾ (87%) → ⣿ (black)
+
+### Signature Requirement
+
+${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
 
   /**
    * Get the default content guidance.
@@ -4992,6 +5055,8 @@ if __name__ == "__main__":
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠻⣿⣿⣿⣿⣿⣿⣿⣶⣤⣀⣀⣀⣤⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⠟⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠋⠀⠀⠀⠀⠀⠀
 ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠻⠿⢿⣿⣿⣿⣿⣿⣿⡿⠿⠟⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
+
+*Model: Field Theory Librarian*
 
 Librarian connects your coding sessions to the deeper history of engineering thought. Each artifact captures not just what you're building, but why it matters—drawing threads to physics, systems theory, and the accumulated wisdom of those who built before us.
 
