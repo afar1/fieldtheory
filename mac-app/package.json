@@ -15,6 +15,7 @@
     "dev:electron:active": "npm run build:electron --silent && wait-on tcp:5173 && LOG_LEVEL=warn LOG_ACTIVE_COMPONENTS_FILE=.active-components LOG_ACTIVE_FILE=.logs/active-debug.log LOG_ACTIVE_RESET=true ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:electron:verbose": "npm run build:electron && wait-on tcp:5173 && LOG_LEVEL=debug ELECTRON_START_URL=http://localhost:5173 electron .",
     "dev:experimental": "EXPERIMENTAL=true npm run dev",
+    "dev:mock": "VITE_MOCK=$MOCK npm run dev",
     "build": "npm run build:electron && npm run build:vite",
     "build:vite": "vite build",
     "build:electron": "tsc -p tsconfig.electron.json",

@@ -121,6 +121,7 @@ export interface SquaresConfig {
   focusWidthPercent: number;        // % of screen width for focus action (default: 60)
   horizontalHeightPercent: number;  // % of screen height for horizontal spread (default: 80)
   horizontalKeepHeight: boolean;    // If true, horizontal preserves current window height
+  horizontalHideOthers: boolean;    // If true, hide other apps when spreading horizontally (default: true)
 }
 
 /**
@@ -135,6 +136,7 @@ export const DEFAULT_SQUARES_CONFIG: SquaresConfig = {
   focusWidthPercent: 60,
   horizontalHeightPercent: 80,
   horizontalKeepHeight: true,
+  horizontalHideOthers: true,
 };
 
 /**

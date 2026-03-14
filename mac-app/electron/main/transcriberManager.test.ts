@@ -1227,7 +1227,7 @@ describe('TranscriberManager silent stacking', () => {
 });
 
 describe('TranscriberManager engine revert on init', () => {
-  function createInitHarness(prefValues: Record<string, unknown>) {
+  function createInitHarness(prefValues: Record<string, unknown>, opts?: { parakeetInstalled?: boolean }) {
     const save = vi.fn(async () => {});
     const manager: any = {
       preferences: {
@@ -1239,6 +1239,7 @@ describe('TranscriberManager engine revert on init', () => {
       overlay: { setOverlayStyle: vi.fn() },
       registerPrimaryHotkeyWithFallback: vi.fn(async () => {}),
       registerSecondaryHotkey: vi.fn(async () => {}),
+      isParakeetInstalled: () => opts?.parakeetInstalled ?? false,
       hotkey: null,
       secondaryHotkey: null,
       registeredHotkey: null,
@@ -1247,22 +1248,44 @@ describe('TranscriberManager engine revert on init', () => {
     return { manager, save };
   }
 
-  it('reverts qwen engine to whisper on init', async () => {
+  it('reverts qwen engine to parakeet when parakeet is installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'qwen',
       selectedModel: 'small',
-    });
+    }, { parakeetInstalled: true });
+    await manager.init();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
+    );
+  });
+
+  it('reverts qwen engine to whisper when parakeet is not installed', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'qwen',
+      selectedModel: 'small',
+    }, { parakeetInstalled: false });
     await manager.init();
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ transcriptionEngine: 'whisper' })
     );
   });
 
-  it('reverts mlx-whisper engine to whisper on init', async () => {
+  it('reverts mlx-whisper engine to parakeet when parakeet is installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'mlx-whisper',
       selectedModel: 'small',
-    });
+    }, { parakeetInstalled: true });
+    await manager.init();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
+    );
+  });
+
+  it('reverts mlx-whisper engine to whisper when parakeet is not installed', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'mlx-whisper',
+      selectedModel: 'small',
+    }, { parakeetInstalled: false });
     await manager.init();
     expect(save).toHaveBeenCalledWith(
       expect.objectContaining({ transcriptionEngine: 'whisper' })
@@ -1291,14 +1314,25 @@ describe('TranscriberManager engine revert on init', () => {
     );
   });
 
-  it('does not revert whisper engine on init', async () => {
+  it('does not revert whisper engine when parakeet is not installed', async () => {
     const { manager, save } = createInitHarness({
       transcriptionEngine: 'whisper',
       selectedModel: 'small',
-    });
+    }, { parakeetInstalled: false });
     await manager.init();
     expect(save).not.toHaveBeenCalledWith(
       expect.objectContaining({ transcriptionEngine: expect.anything() })
+    );
+  });
+
+  it('auto-migrates whisper to parakeet when parakeet is installed', async () => {
+    const { manager, save } = createInitHarness({
+      transcriptionEngine: 'whisper',
+      selectedModel: 'small',
+    }, { parakeetInstalled: true });
+    await manager.init();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'parakeet' })
     );
   });
 
@@ -1353,5 +1387,103 @@ describe('TranscriberManager hotkey fallback', () => {
 
     expect(save).not.toHaveBeenCalled();
     expect(emit).not.toHaveBeenCalledWith('hotkeyChanged', expect.anything());
+  });
+});
+
+describe('TranscriberManager hotkey clearing', () => {
+  it('clears primary hotkey when setHotkey receives null', async () => {
+    const save = vi.fn(async () => {});
+    const emit = vi.fn();
+    const manager: any = {
+      hotkey: 'Alt+K',
+      registeredHotkey: 'Alt+K',
+      preferences: { save },
+      emit,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.setHotkey(null);
+
+    expect(result).toBe(true);
+    expect(save).toHaveBeenCalledWith({ transcriptionHotkey: '' });
+    expect(emit).toHaveBeenCalledWith('hotkeyChanged', '');
+    expect(manager.hotkey).toBe('');
+    expect(manager.registeredHotkey).toBeNull();
+  });
+
+  it('clears primary hotkey when setHotkey receives empty string', async () => {
+    const save = vi.fn(async () => {});
+    const emit = vi.fn();
+    const manager: any = {
+      hotkey: 'Alt+K',
+      registeredHotkey: 'Alt+K',
+      preferences: { save },
+      emit,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.setHotkey('');
+
+    expect(result).toBe(true);
+    expect(save).toHaveBeenCalledWith({ transcriptionHotkey: '' });
+    expect(emit).toHaveBeenCalledWith('hotkeyChanged', '');
+  });
+});
+
+describe('TranscriberManager parakeet uninstall', () => {
+  it('reverts engine to whisper when using parakeet and venv does not exist', async () => {
+    const save = vi.fn(async () => {});
+    const manager: any = {
+      stopParakeetServer: vi.fn(),
+      getParakeetPythonPath: () => '/tmp/nonexistent-parakeet-venv/bin/python3',
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined,
+        save,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.uninstallParakeet();
+
+    expect(result).toEqual({ success: true });
+    expect(manager.stopParakeetServer).toHaveBeenCalled();
+    expect(save).toHaveBeenCalledWith(
+      expect.objectContaining({ transcriptionEngine: 'whisper' })
+    );
+  });
+
+  it('does not revert engine when not using parakeet', async () => {
+    const save = vi.fn(async () => {});
+    const manager: any = {
+      stopParakeetServer: vi.fn(),
+      getParakeetPythonPath: () => '/tmp/nonexistent-parakeet-venv/bin/python3',
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
+        save,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.uninstallParakeet();
+
+    expect(result).toEqual({ success: true });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('returns error when stopParakeetServer throws', async () => {
+    const manager: any = {
+      stopParakeetServer: vi.fn(() => { throw new Error('server busy'); }),
+      getParakeetPythonPath: () => '/tmp/nonexistent-parakeet-venv/bin/python3',
+      preferences: {
+        getPreference: () => 'parakeet',
+        save: vi.fn(async () => {}),
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.uninstallParakeet();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('server busy');
   });
 });

@@ -16,6 +16,17 @@ export function buildHotkeyString(event: KeyboardEvent): string {
   if (event.altKey) parts.push('Alt');
   if (event.shiftKey) parts.push('Shift');
 
+  // Filter out modifier-only key presses (both the base name and Left/Right variants).
+  const modifierCodes = [
+    'Meta', 'MetaLeft', 'MetaRight',
+    'Control', 'ControlLeft', 'ControlRight',
+    'Alt', 'AltLeft', 'AltRight',
+    'Shift', 'ShiftLeft', 'ShiftRight'
+  ];
+  if (modifierCodes.includes(event.code)) {
+    return '';
+  }
+
   // Use physical key code to avoid locale-specific characters.
   let key = event.code;
 
@@ -69,17 +80,6 @@ export function buildHotkeyString(event: KeyboardEvent): string {
     }
   }
 
-  // Filter out modifier-only key presses (both the base name and Left/Right variants).
-  const modifierCodes = [
-    'Meta', 'MetaLeft', 'MetaRight',
-    'Control', 'ControlLeft', 'ControlRight',
-    'Alt', 'AltLeft', 'AltRight',
-    'Shift', 'ShiftLeft', 'ShiftRight'
-  ];
-  if (modifierCodes.includes(event.code)) {
-    return '';
-  }
-
   return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
 }
 
@@ -88,6 +88,24 @@ export function buildHotkeyString(event: KeyboardEvent): string {
  */
 export function isModifierOnly(s: string): boolean {
   return s === 'Command' || s === 'Control' || s === 'Alt' || s === 'Shift';
+}
+
+/**
+ * Let the browser/app handle Cmd+C when the user is interacting with editable
+ * content or has an actual text selection.
+ */
+export function shouldDeferCopyShortcutToNative(): boolean {
+  const activeElement = document.activeElement as HTMLElement | null;
+  if (activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA' || activeElement?.isContentEditable) {
+    return true;
+  }
+
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed) {
+    return false;
+  }
+
+  return selection.toString().length > 0;
 }
 
 /**

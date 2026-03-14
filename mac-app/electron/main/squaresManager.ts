@@ -1087,9 +1087,18 @@ export class SquaresManager extends EventEmitter {
     const appWindows = await this.getFrontmostAppWindows();
     if (appWindows.length === 0) return false;
 
-    const targetScreen = this.getTargetScreenForAppWindows(appWindows);
+    const hideOthers = direction === 'horizontal' && this.config.horizontalHideOthers;
 
-    this.saveHistory(appWindows);
+    if (hideOthers) {
+      // Save ALL windows (like focus) so undo can unhide + restore positions.
+      const allWindows = await this.getWindows();
+      this.saveHistory(allWindows, 'focus');
+      await this.hideOtherApps(appWindows[0].ownerPID);
+    } else {
+      this.saveHistory(appWindows);
+    }
+
+    const targetScreen = this.getTargetScreenForAppWindows(appWindows);
 
     const targetFrames = direction === 'horizontal'
       ? this.calculateHorizontalSpread(appWindows, targetScreen)
