@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import AudioSettingsPanel from './components/AudioSettingsPanel';
 import TranscriptionSettings from './components/TranscriptionSettings';
 import CommandsSettings from './components/CommandsSettings';
+import { buildHotkeyString, isModifierOnly } from './utils/hotkeys';
 
 export default function App() {
   const [darkMode, setDarkMode] = useState(() => {
@@ -80,81 +81,6 @@ export default function App() {
       unsubscribe?.();
     };
   }, []);
-  
-  // Helper function to build hotkey string from keyboard event (uses physical key codes)
-  const buildHotkeyString = (event: KeyboardEvent): string => {
-    const parts: string[] = [];
-    if (event.metaKey) parts.push('Command');
-    if (event.ctrlKey) parts.push('Control');
-    if (event.altKey) parts.push('Alt');
-    if (event.shiftKey) parts.push('Shift');
-
-    // Use physical key code to avoid locale-specific characters (e.g., Alt+¡)
-    let key = event.code;
-
-    if (key.startsWith('Key')) {
-      key = key.substring(3).toUpperCase(); // KeyA -> A
-    } else if (key.startsWith('Digit')) {
-      key = key.substring(5); // Digit1 -> 1
-    } else {
-      const codeMap: Record<string, string> = {
-        'Space': 'Space',
-        'Backquote': '`',
-        'Backslash': '\\',
-        'BracketLeft': '[',
-        'BracketRight': ']',
-        'Comma': ',',
-        'Equal': '=',
-        'Minus': '-',
-        'Period': '.',
-        'Quote': "'",
-        'Semicolon': ';',
-        'Slash': '/',
-        'CapsLock': 'CapsLock',
-        'Escape': 'Escape',
-        'Enter': 'Enter',
-        'Tab': 'Tab',
-        'Backspace': 'Backspace',
-        'Delete': 'Delete',
-        'ArrowUp': 'Up',
-        'ArrowDown': 'Down',
-        'ArrowLeft': 'Left',
-        'ArrowRight': 'Right',
-        'PageUp': 'PageUp',
-        'PageDown': 'PageDown',
-        'Home': 'Home',
-        'End': 'End',
-        'Insert': 'Insert',
-        'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
-        'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
-        'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
-      };
-      if (codeMap[key]) {
-        key = codeMap[key];
-      } else {
-        // Fallback only for single ASCII characters
-        const fallback = event.key;
-        if (fallback && fallback.length === 1 && fallback.charCodeAt(0) < 128) {
-          key = fallback.toUpperCase();
-        } else {
-          console.warn(`[Hotkey] Unsupported key: ${event.code} (key: ${event.key})`);
-          return '';
-        }
-      }
-    }
-
-    // If only a modifier was pressed, return empty to indicate invalid
-    if (key === 'Meta' || key === 'Control' || key === 'Alt' || key === 'Shift') {
-      return '';
-    }
-
-    return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
-  };
-
-  // Utility: detect modifier-only strings
-  const isModifierOnly = (s: string) => {
-    return s === 'Command' || s === 'Control' || s === 'Alt' || s === 'Shift';
-  };
   
   // Handler for setting screenshot hotkey
   const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {

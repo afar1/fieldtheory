@@ -242,7 +242,7 @@ interface TranscribeAPI {
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
-  setHotkey: (hotkey: string) => Promise<boolean>;
+  setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey?: () => Promise<string | null>;
   setSecondaryHotkey?: (hotkey: string | null) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
@@ -266,6 +266,7 @@ interface TranscribeAPI {
   setupQwen?: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
   setupParakeet?: () => Promise<{ success: boolean; error?: string }>;
+  uninstallParakeet?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
   getSoundConfig?: () => Promise<SoundConfig>;
@@ -1526,6 +1527,15 @@ declare global {
   }
 
   /**
+   * Codex Read Permission API - Auto-approve Field Theory file reads in Codex CLI.
+   */
+  interface CodexReadPermissionAPI {
+    isReadPermissionHookInstalled: () => Promise<boolean>;
+    installReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
+    uninstallReadPermissionHook: () => Promise<{ success: boolean; message: string }>;
+  }
+
+  /**
    * Metrics API - User-visible usage stats
    * "The metrics you see are the metrics we see."
    */
@@ -1685,6 +1695,7 @@ declare global {
     focusWidthPercent: number;
     horizontalHeightPercent: number;
     horizontalKeepHeight: boolean;
+    horizontalHideOthers: boolean;
   }
 
   /**
@@ -1805,6 +1816,7 @@ declare global {
     librarianAPI?: LibrarianAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
+    codexReadPermissionAPI?: CodexReadPermissionAPI;
     metricsAPI?: MetricsAPI;
     diagnosticsAPI?: DiagnosticsAPI;
     narrationAPI?: NarrationAPI;  // Stub - feature disabled

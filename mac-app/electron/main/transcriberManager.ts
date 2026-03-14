@@ -330,12 +330,24 @@ export class TranscriberManager extends EventEmitter {
       && configuredEngine !== 'whisper'
       && !isParakeetEngine(configuredEngine)
     ) {
+      // Hidden engine (qwen, mlx-whisper) — migrate to parakeet if installed, otherwise whisper
+      const target = this.isParakeetInstalled() ? 'parakeet' : 'whisper';
       log.info(
-        'Transcription engine "%s" is no longer exposed in settings; reverting to whisper',
-        configuredEngine
+        'Transcription engine "%s" is no longer exposed in settings; reverting to %s',
+        configuredEngine,
+        target
       );
       await this.preferences.save({
-        transcriptionEngine: 'whisper',
+        transcriptionEngine: target,
+        hotMicTranscriptionEngine: 'default',
+      });
+    }
+
+    // Auto-migrate existing whisper users to parakeet when parakeet is installed
+    if (configuredEngine === 'whisper' && this.isParakeetInstalled()) {
+      log.info('Auto-migrating from whisper to parakeet (parakeet is installed)');
+      await this.preferences.save({
+        transcriptionEngine: 'parakeet',
         hotMicTranscriptionEngine: 'default',
       });
     }
@@ -480,14 +492,11 @@ export class TranscriberManager extends EventEmitter {
     if (!result.success) {
       log.error(`Failed to register hotkey: ${normalizedHotkey}`);
 
-      // Provide helpful error message
       let errorMessage = `Failed to register hotkey: ${hotkey}`;
       if (result.conflictWith) {
         errorMessage += `. Conflicts with ${result.conflictWith}. Please choose a different hotkey.`;
       } else if (result.error) {
         errorMessage += `. ${result.error}`;
-      } else if (!hotkey.includes('+')) {
-        errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
       }
 
       log.warn('Hotkey registration skipped: %s', errorMessage);
@@ -501,8 +510,19 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Set a new hotkey and save to preferences.
+   * Pass null or empty string to clear the hotkey.
    */
-  async setHotkey(hotkey: string): Promise<boolean> {
+  async setHotkey(hotkey: string | null): Promise<boolean> {
+    if (!hotkey) {
+      const hotkeyManager = getHotkeyManager();
+      hotkeyManager.unregister('transcription');
+      this.hotkey = '';
+      this.registeredHotkey = null;
+      await this.preferences.save({ transcriptionHotkey: '' });
+      this.emit('hotkeyChanged', '');
+      return true;
+    }
+
     const success = await this.registerHotkey(hotkey);
     if (success) {
       await this.preferences.save({ transcriptionHotkey: hotkey });
@@ -539,8 +559,6 @@ export class TranscriberManager extends EventEmitter {
         errorMessage += `. Conflicts with ${result.conflictWith}. Please choose a different hotkey.`;
       } else if (result.error) {
         errorMessage += `. ${result.error}`;
-      } else if (!hotkey.includes('+')) {
-        errorMessage += '. Single keys may not be supported. Try using a modifier key combination (e.g., Alt+Space, Command+K).';
       }
       log.warn('Hotkey registration skipped: %s', errorMessage);
       return false;
@@ -2466,6 +2484,36 @@ export class TranscriberManager extends EventEmitter {
     } catch (error: any) {
       const message = error?.message || String(error);
       log.error('Parakeet setup failed: %s', message);
+      return { success: false, error: message };
+    }
+  }
+
+  async uninstallParakeet(): Promise<{ success: boolean; error?: string }> {
+    try {
+      // Stop running server first
+      this.stopParakeetServer();
+
+      // Delete the venv directory
+      const venvDir = path.dirname(this.getParakeetPythonPath()); // .../venv/bin → .../venv
+      const venvBase = path.dirname(venvDir); // .../venv → .../build-parakeet
+      if (fs.existsSync(venvBase)) {
+        fs.rmSync(venvBase, { recursive: true, force: true });
+        log.info('Parakeet uninstalled: deleted %s', venvBase);
+      }
+
+      // If current engine is parakeet, revert to whisper as fallback
+      const currentEngine = this.preferences.getPreference('transcriptionEngine');
+      if (isParakeetEngine(currentEngine)) {
+        await this.preferences.save({
+          transcriptionEngine: 'whisper',
+          hotMicTranscriptionEngine: 'default',
+        });
+      }
+
+      return { success: true };
+    } catch (error: any) {
+      const message = error?.message || String(error);
+      log.error('Parakeet uninstall failed: %s', message);
       return { success: false, error: message };
     }
   }

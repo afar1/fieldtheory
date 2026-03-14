@@ -701,6 +701,11 @@ function registerHotkeysAfterOnboarding(): void {
         // Match blur-dismiss behavior: avoid app.hide() here because that compositor
         // path can reintroduce white corner artifacts on transparent island windows.
         clipboardHistoryWindow.hide(false, 'hotkey-toggle-hide');
+        // Restore focus to the app that was active before clipboard history opened
+        const previousApp = clipboardHistoryWindow.getPreviousApp();
+        if (previousApp?.bundleId) {
+          clipboardHistoryWindow.activateApp(previousApp.bundleId);
+        }
         cursorStatusManager?.refreshWindowProperties();
         dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-hotkey');
       }
@@ -2118,6 +2123,21 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.uninstallCursorReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
   });
 
+  // Check if Codex read permission hook is installed
+  ipcMain.handle('codex:isReadPermissionHookInstalled', (): boolean => {
+    return librarianManager?.isCodexReadPermissionHookInstalled() ?? false;
+  });
+
+  // Install Codex read permission hook
+  ipcMain.handle('codex:installReadPermissionHook', (): { success: boolean; message: string } => {
+    return librarianManager?.installCodexReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
+  // Uninstall Codex read permission hook
+  ipcMain.handle('codex:uninstallReadPermissionHook', (): { success: boolean; message: string } => {
+    return librarianManager?.uninstallCodexReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
   // ===========================================================================
   // Metrics IPC handlers - User-visible usage stats
   // "The metrics you see are the metrics we see."
@@ -2474,7 +2494,7 @@ function setupTranscribeIPCHandlers(): void {
     return transcriberManager.getHotkey();
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SET_HOTKEY, async (_event, hotkey: string) => {
+  ipcMain.handle(TranscribeIPCChannels.SET_HOTKEY, async (_event, hotkey: string | null) => {
     if (!transcriberManager) {
       throw new Error('TranscriberManager not initialized');
     }
@@ -2484,7 +2504,7 @@ function setupTranscribeIPCHandlers(): void {
     if (success && trayManager && clipboardManager) {
       const historyHotkey = clipboardManager.getHotkeys().history || 'Option+Space';
       const screenshotHotkey = clipboardManager.getHotkeys().screenshot || 'Command+4';
-      trayManager.setHotkeys(historyHotkey, hotkey, screenshotHotkey);
+      trayManager.setHotkeys(historyHotkey, hotkey || '', screenshotHotkey);
     }
 
     return success;
@@ -2569,9 +2589,9 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE, () => {
     if (!preferencesManager) {
-      return 'whisper';
+      return 'parakeet';
     }
-    return preferencesManager.getPreference('transcriptionEngine') || 'whisper';
+    return preferencesManager.getPreference('transcriptionEngine') || 'parakeet';
   });
 
   ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: TranscriptionEngine) => {
@@ -2696,6 +2716,13 @@ function setupTranscribeIPCHandlers(): void {
       return { success: false, error: 'Transcriber manager not initialized' };
     }
     return transcriberManager.setupParakeet();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.UNINSTALL_PARAKEET, async () => {
+    if (!transcriberManager) {
+      return { success: false, error: 'Transcriber manager not initialized' };
+    }
+    return transcriberManager.uninstallParakeet();
   });
 
   ipcMain.handle('transcribe:getStackCount', () => {
@@ -6269,6 +6296,9 @@ async function initTranscriberSystem(): Promise<void> {
   }
   if (librarianManager) {
     librarianManager.setUserDataManager(userDataManager);
+    if (userDataManager.isLoggedIn()) {
+      await librarianManager.reinitializeForUser();
+    }
   }
   if (commandsManager) {
     commandsManager.setUserDataManager(userDataManager);

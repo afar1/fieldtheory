@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import { buildHotkeyString, formatHotkeyDisplay } from '../utils/hotkeys';
 import {
   DEFAULT_VISIBLE_PARAKEET_ENGINE,
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
@@ -374,24 +375,23 @@ function ModelPhase({
           </div>
         )}
 
-        {/* Whisper engine card */}
+        {/* Whisper fallback - de-emphasized */}
         <div
           onClick={() => onSelectEngine('whisper')}
           style={{
             ...styles.modelCard,
-            borderColor: selectedEngine === 'whisper' ? theme.accent : theme.border,
-            boxShadow: selectedEngine === 'whisper'
-              ? (theme.isDark ? '0 2px 8px rgba(59, 130, 246, 0.1)' : '0 2px 8px rgba(59, 130, 246, 0.15)')
-              : 'none',
+            borderColor: selectedEngine === 'whisper' ? (theme.isDark ? '#6b7280' : '#9ca3af') : theme.border,
+            boxShadow: 'none',
             backgroundColor: selectedEngine === 'whisper'
-              ? (theme.isDark ? theme.surface1 : '#fff')
+              ? (theme.isDark ? 'rgba(107, 114, 128, 0.1)' : '#f9fafb')
               : 'transparent',
+            opacity: 0.6,
             cursor: 'pointer',
           }}
         >
           <div style={styles.modelCardCheck}>
             {selectedEngine === 'whisper' ? (
-              <span style={styles.checkmark}>✓</span>
+              <span style={{ ...styles.checkmark, color: '#6b7280' }}>✓</span>
             ) : (
               <span style={styles.unchecked}>○</span>
             )}
@@ -401,14 +401,12 @@ function ModelPhase({
               <span style={{ fontWeight: 500, fontSize: '12px', color: theme.text }}>
                 Whisper
               </span>
-              <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-                466 MB
-              </span>
+              <span style={{ fontSize: '10px', color: theme.textSecondary }}>Legacy</span>
             </div>
             <div style={{ fontSize: '11px', color: theme.textSecondary }}>
-              whisper.cpp — backup English model
+              whisper.cpp — slower, less accurate than Parakeet
             </div>
-            {downloadingModel && (
+            {selectedEngine === 'whisper' && downloadingModel && (
               <div style={styles.progressContainer}>
                 <div style={styles.progressBar}>
                   <div style={{ ...styles.progressFill, width: `${downloadProgress}%` }} />
@@ -418,26 +416,28 @@ function ModelPhase({
             )}
           </div>
           <div style={styles.modelCardRight}>
-            {isWhisperReady ? (
-              <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Downloaded</span>
-            ) : downloadingModel ? (
-              <button
-                onClick={(e) => { e.stopPropagation(); onCancelDownload(); }}
-                style={styles.cancelButton}
-              >
-                Cancel
-              </button>
-            ) : (
-              <button
-                onClick={(e) => { e.stopPropagation(); onDownloadModel(selectedModel); }}
-                disabled={downloadingModel !== null}
-                style={{
-                  ...styles.downloadButton,
-                  opacity: downloadingModel !== null ? 0.5 : 1,
-                }}
-              >
-                Download
-              </button>
+            {selectedEngine === 'whisper' && (
+              isWhisperReady ? (
+                <span style={{ fontSize: '11px', color: theme.textSecondary, fontWeight: 500 }}>Downloaded</span>
+              ) : downloadingModel ? (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onCancelDownload(); }}
+                  style={styles.cancelButton}
+                >
+                  Cancel
+                </button>
+              ) : (
+                <button
+                  onClick={(e) => { e.stopPropagation(); onDownloadModel(selectedModel); }}
+                  disabled={downloadingModel !== null}
+                  style={{
+                    ...styles.downloadButton,
+                    opacity: downloadingModel !== null ? 0.5 : 1,
+                  }}
+                >
+                  Download
+                </button>
+              )
             )}
           </div>
         </div>
@@ -1178,90 +1178,6 @@ interface ShortcutsPhaseProps {
 
 type ShortcutCapture = 'history' | 'transcription' | 'screenshot' | null;
 
-// Helper function to build hotkey string from keyboard event (matches Settings exactly)
-function buildHotkeyString(event: KeyboardEvent): string {
-  const parts: string[] = [];
-  if (event.metaKey) parts.push('Command');
-  if (event.ctrlKey) parts.push('Control');
-  if (event.altKey) parts.push('Alt');
-  if (event.shiftKey) parts.push('Shift');
-
-  let key = event.code;
-
-  if (key.startsWith('Key')) {
-    key = key.substring(3).toUpperCase();
-  } else if (key.startsWith('Digit')) {
-    key = key.substring(5);
-  } else {
-    const codeMap: Record<string, string> = {
-      'Space': 'Space',
-      'Backquote': '`',
-      'Backslash': '\\',
-      'BracketLeft': '[',
-      'BracketRight': ']',
-      'Comma': ',',
-      'Equal': '=',
-      'Minus': '-',
-      'Period': '.',
-      'Quote': "'",
-      'Semicolon': ';',
-      'Slash': '/',
-      'CapsLock': 'CapsLock',
-      'Escape': 'Escape',
-      'Enter': 'Enter',
-      'Tab': 'Tab',
-      'Backspace': 'Backspace',
-      'Delete': 'Delete',
-      'ArrowUp': 'Up',
-      'ArrowDown': 'Down',
-      'ArrowLeft': 'Left',
-      'ArrowRight': 'Right',
-      'PageUp': 'PageUp',
-      'PageDown': 'PageDown',
-      'Home': 'Home',
-      'End': 'End',
-      'Insert': 'Insert',
-      'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
-      'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
-      'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
-    };
-    if (codeMap[key]) {
-      key = codeMap[key];
-    } else {
-      const fallback = event.key;
-      if (fallback && fallback.length === 1 && fallback.charCodeAt(0) < 128) {
-        key = fallback.toUpperCase();
-      } else {
-        return '';
-      }
-    }
-  }
-
-  // Filter out modifier-only key presses
-  const modifierCodes = [
-    'Meta', 'MetaLeft', 'MetaRight',
-    'Control', 'ControlLeft', 'ControlRight',
-    'Alt', 'AltLeft', 'AltRight',
-    'Shift', 'ShiftLeft', 'ShiftRight'
-  ];
-  if (modifierCodes.includes(event.code)) {
-    return '';
-  }
-
-  return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
-}
-
-// Format hotkey for display (e.g., "Command+Shift+K" -> "⌘ Shift K")
-function formatHotkeyDisplay(hotkeyStr: string): string {
-  if (!hotkeyStr) return 'Not set';
-  return hotkeyStr
-    .replace(/Command/g, '⌘')
-    .replace(/Control/g, '⌃')
-    .replace(/Alt/g, '⌥')
-    .replace(/Shift/g, '⇧')
-    .replace(/\+/g, ' ');
-}
-
 function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
   // Current hotkey values
   const [historyHotkey, setHistoryHotkey] = useState('Alt+Space');
@@ -1485,7 +1401,7 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
                     disabled={capturing !== null && !isCapturing}
                     style={isCapturing ? btnActiveStyle : btnStyle}
                   >
-                    {isCapturing ? 'Press keys...' : formatHotkeyDisplay(shortcut.hotkey)}
+                    {isCapturing ? 'Press keys...' : (formatHotkeyDisplay(shortcut.hotkey) || 'Not set')}
                   </button>
                   {isCapturing && (
                     <button

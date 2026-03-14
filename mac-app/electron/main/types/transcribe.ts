@@ -80,6 +80,7 @@ export const TranscribeIPCChannels = {
   SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
   SETUP_PARAKEET: 'transcribe:setupParakeet',
+  UNINSTALL_PARAKEET: 'transcribe:uninstallParakeet',
 
   // Main -> Renderer (send pattern)
   STATUS_CHANGED: 'transcribe:statusChanged',

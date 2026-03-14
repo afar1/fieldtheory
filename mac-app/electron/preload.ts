@@ -90,6 +90,7 @@ const TranscribeIPCChannels = {
   SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
   SETUP_PARAKEET: 'transcribe:setupParakeet',
+  UNINSTALL_PARAKEET: 'transcribe:uninstallParakeet',
 } as const;
 
 const ClipboardIPCChannels = {
@@ -721,7 +722,7 @@ export interface TranscribeAPI {
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
   getHotkey: () => Promise<string>;
-  setHotkey: (hotkey: string) => Promise<boolean>;
+  setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey: () => Promise<string | null>;
   setSecondaryHotkey: (hotkey: string | null) => Promise<boolean>;
   getOverlayStyle: () => Promise<'rectangle' | 'top-emerging'>;
@@ -745,6 +746,7 @@ export interface TranscribeAPI {
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
   setupParakeet: () => Promise<{ success: boolean; error?: string }>;
+  uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
@@ -1164,7 +1166,7 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_HOTKEY);
   },
 
-  setHotkey: async (hotkey: string): Promise<boolean> => {
+  setHotkey: async (hotkey: string | null): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_HOTKEY, hotkey);
   },
 
@@ -1256,6 +1258,9 @@ const transcribeAPI: TranscribeAPI = {
   },
   setupParakeet: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET);
+  },
+  uninstallParakeet: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.UNINSTALL_PARAKEET);
   },
 
   toggleRecording: async (): Promise<void> => {
@@ -3328,6 +3333,24 @@ const cursorAPI = {
 type CursorAPI = typeof cursorAPI;
 
 // =============================================================================
+// Codex API - Codex CLI integration settings
+// =============================================================================
+
+const codexReadPermissionAPI = {
+  // Read permission hooks (auto-approve Field Theory file reads)
+  isReadPermissionHookInstalled: (): Promise<boolean> =>
+    ipcRenderer.invoke('codex:isReadPermissionHookInstalled'),
+
+  installReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('codex:installReadPermissionHook'),
+
+  uninstallReadPermissionHook: (): Promise<{ success: boolean; message: string }> =>
+    ipcRenderer.invoke('codex:uninstallReadPermissionHook'),
+};
+
+type CodexReadPermissionAPI = typeof codexReadPermissionAPI;
+
+// =============================================================================
 // Squares API - Window Management (Rectangle-inspired instant snap)
 // =============================================================================
 
@@ -3469,6 +3492,7 @@ contextBridge.exposeInMainWorld('commandsAPI', commandsAPI);
 contextBridge.exposeInMainWorld('metricsAPI', metricsAPI);
 contextBridge.exposeInMainWorld('claudeAPI', claudeAPI);
 contextBridge.exposeInMainWorld('cursorAPI', cursorAPI);
+contextBridge.exposeInMainWorld('codexReadPermissionAPI', codexReadPermissionAPI);
 contextBridge.exposeInMainWorld('squaresAPI', squaresAPI);
 
 // Hot Mic API - continuous voice input for Claude Code terminals

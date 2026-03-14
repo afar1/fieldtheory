@@ -50,6 +50,7 @@ import {
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
+import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
 import { smartTruncateText, detectColor } from '../utils/textUtils';
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
@@ -2644,6 +2645,10 @@ export default function ClipboardHistory() {
 
       // Cmd+C: Copy selected/hovered item to clipboard
       if (key === 'c' && hasMeta && !hasShift) {
+        if (shouldDeferCopyShortcutToNative()) {
+          return;
+        }
+
         const selectedRow = listRows[selectedIndex];
         if (selectedRow?.type === 'item') {
           e.preventDefault();

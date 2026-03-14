@@ -56,12 +56,16 @@ export default function TranscriptionSettings() {
   const [parakeetInstalled, setParakeetInstalled] = useState(false);
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
   const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
+  const [uninstallingParakeet, setUninstallingParakeet] = useState(false);
 
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
   const [isCapturingAbandonHotkey, setIsCapturingAbandonHotkey] = useState(false);
   const [abandonHotkeyError, setAbandonHotkeyError] = useState<string | null>(null);
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
+
+  // MOCK=whisper-nudge npm run dev:mock — preview the upgrade nudge banner
+  const mockMode = import.meta.env.VITE_MOCK as string | undefined;
 
   const styles = getStyles(theme);
 
@@ -107,11 +111,11 @@ export default function TranscriptionSettings() {
         setHotMicHotkey(currentHotMicHotkey);
 
         // Fetch current engine selection. Only Whisper and Parakeet variants are user-facing.
-        const currentEngine = await window.transcribeAPI!.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
+        const currentEngine = mockMode === 'whisper-nudge' ? 'whisper' : (await window.transcribeAPI!.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
         setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
 
         // Check Parakeet installation status.
-        const parakeetInstalled = await window.transcribeAPI!.isParakeetInstalled?.() ?? false;
+        const parakeetInstalled = mockMode === 'whisper-nudge' ? false : (await window.transcribeAPI!.isParakeetInstalled?.() ?? false);
         setParakeetInstalled(parakeetInstalled);
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
@@ -235,6 +239,27 @@ export default function TranscriptionSettings() {
     }
   }, [settingUpParakeet]);
 
+  const handleUninstallParakeet = useCallback(async () => {
+    if (!window.transcribeAPI || uninstallingParakeet) return;
+    setUninstallingParakeet(true);
+    setParakeetSetupError(null);
+    try {
+      const result = await window.transcribeAPI.uninstallParakeet?.();
+      if (result?.success) {
+        setParakeetInstalled(false);
+        // Engine will have been reverted to whisper by the backend
+        const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
+        setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
+      } else {
+        setParakeetSetupError(result?.error ?? 'Uninstall failed');
+      }
+    } catch (err) {
+      setParakeetSetupError(err instanceof Error ? err.message : 'Uninstall failed');
+    } finally {
+      setUninstallingParakeet(false);
+    }
+  }, [uninstallingParakeet]);
+
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
 
@@ -300,7 +325,7 @@ export default function TranscriptionSettings() {
     setHotkeyError(null);
   }, []);
 
-  const handleSetHotkey = useCallback(async (newHotkey: string) => {
+  const handleSetHotkey = useCallback(async (newHotkey: string | null) => {
     if (!window.transcribeAPI) return;
 
     setIsCapturingHotkey(false);
@@ -308,7 +333,9 @@ export default function TranscriptionSettings() {
 
     try {
       const success = await window.transcribeAPI.setHotkey(newHotkey);
-      if (!success) {
+      if (success) {
+        setHotkey(newHotkey || '');
+      } else {
         setHotkeyError('Failed to register hotkey. It may be in use by another application.');
       }
     } catch (err) {
@@ -507,23 +534,39 @@ export default function TranscriptionSettings() {
         <div style={styles.row}>
           <span style={styles.rowLabel}>Standard Recording</span>
           <div style={styles.rowControls}>
-            <button
-              onClick={handleStartCaptureHotkey}
-              disabled={isCapturingHotMicHotkey || isCapturingAbandonHotkey}
-              style={{ ...styles.btn, ...(isCapturingHotkey ? styles.btnActive : {}) }}
-            >
-              {isCapturingHotkey ? 'Press keys...' : hotkey}
-            </button>
-            {isCapturingHotkey && (
-              <button
-                onClick={() => {
-                  setIsCapturingHotkey(false);
-                  setHotkeyError(null);
-                }}
-                style={styles.btnGhost}
-              >
-                Cancel
-              </button>
+            {isCapturingHotkey ? (
+              <>
+                <button style={{ ...styles.btn, ...styles.btnActive }}>
+                  Press keys...
+                </button>
+                <button
+                  onClick={() => {
+                    setIsCapturingHotkey(false);
+                    setHotkeyError(null);
+                  }}
+                  style={styles.btnGhost}
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <>
+                {hotkey && (
+                  <button
+                    onClick={() => void handleSetHotkey(null)}
+                    style={styles.btnGhost}
+                  >
+                    Clear
+                  </button>
+                )}
+                <button
+                  onClick={handleStartCaptureHotkey}
+                  disabled={isCapturingHotMicHotkey || isCapturingAbandonHotkey}
+                  style={styles.btn}
+                >
+                  {hotkey || 'Not set'}
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -648,16 +691,38 @@ export default function TranscriptionSettings() {
             </div>
           )}
 
-          {/* Whisper engine option */}
+          {/* Upgrade nudge - shown when whisper is active and parakeet is not installed */}
+          {selectedEngine === 'whisper' && !parakeetInstalled && (
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${theme.isDark ? 'rgba(59, 130, 246, 0.3)' : '#bfdbfe'}`,
+                backgroundColor: theme.isDark ? 'rgba(59, 130, 246, 0.08)' : '#eff6ff',
+                marginBottom: '4px',
+              }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
+                Upgrade to Parakeet
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                Parakeet is faster, more reliable, and produces higher quality transcriptions than Whisper.
+                Install above to switch — your Whisper setup will remain as a fallback.
+              </div>
+            </div>
+          )}
+
+          {/* Whisper fallback - de-emphasized */}
           <div
             style={{
               ...styles.modelCard,
               borderLeft: selectedEngine === 'whisper'
-                ? `3px solid ${theme.info}`
+                ? `3px solid ${theme.isDark ? '#6b7280' : '#9ca3af'}`
                 : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
               backgroundColor: selectedEngine === 'whisper'
-                ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
+                ? (theme.isDark ? 'rgba(107, 114, 128, 0.1)' : '#f9fafb')
                 : 'transparent',
+              opacity: selectedEngine === 'whisper' ? 0.85 : 0.6,
               cursor: 'pointer',
             }}
             onClick={() => handleEngineChange('whisper')}
@@ -667,120 +732,34 @@ export default function TranscriptionSettings() {
                 <span style={{ ...styles.rowValue, fontWeight: selectedEngine === 'whisper' ? 600 : 500 }}>
                   Whisper
                 </span>
+                <span style={{ fontSize: '10px', color: theme.textSecondary }}>Legacy</span>
               </div>
-              <span style={styles.modelHint}>whisper.cpp — backup English model</span>
+              <span style={styles.modelHint}>whisper.cpp — local fallback engine</span>
             </div>
             {selectedEngine === 'whisper' && (
-              <span style={styles.downloadedBadge}>Active</span>
+              <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Active</span>
             )}
           </div>
+
+          {/* Reinstall option - shown when parakeet is installed */}
+          {parakeetInstalled && (
+            <div style={{ marginTop: '8px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <button
+                onClick={handleUninstallParakeet}
+                disabled={uninstallingParakeet || settingUpParakeet}
+                style={{
+                  ...styles.btnGhost,
+                  fontSize: '11px',
+                  color: theme.textSecondary,
+                  opacity: uninstallingParakeet ? 0.5 : 1,
+                }}
+              >
+                {uninstallingParakeet ? 'Uninstalling...' : 'Uninstall Parakeet'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
-
-      {selectedEngine === 'whisper' && (
-      <div style={styles.modelsSection}>
-        <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>WHISPER MODELS</span>
-          <div style={styles.sectionLine} />
-        </div>
-
-        <div style={styles.row}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={styles.rowLabel}>Active</span>
-            <span style={{ fontSize: '10px', color: getStatusColor(), display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ ...styles.statusDot, backgroundColor: getStatusColor(), width: '6px', height: '6px' }} />
-              {selectedModel === 'none' ? 'No model' : `${getStatusText()} • ${selectedModel} ${modelStatus === 'downloaded' ? '✓' : modelStatus === 'downloading' ? '↓' : '✗'}`}
-            </span>
-          </div>
-          <select
-            value={selectedModel}
-            onChange={(e) => handleModelChange(e.target.value)}
-            disabled={downloadingModel !== null}
-            style={styles.select}
-          >
-            {!Object.values(modelDownloadStatus).some(Boolean) && (
-              <option value="none">No models downloaded</option>
-            )}
-            {Object.entries(availableModels).map(([size, info]) => {
-                const isDownloaded = modelDownloadStatus[size] || false;
-                return (
-                  <option key={size} value={size} disabled={!isDownloaded}>
-                    {info.description} {isDownloaded ? '' : '(not downloaded)'}
-                  </option>
-                );
-              })}
-          </select>
-        </div>
-
-        <div style={styles.modelsList}>
-          {Object.entries(availableModels).map(([size, info]) => {
-              const isDownloaded = modelDownloadStatus[size] || false;
-              const isSelected = size === selectedModel;
-              const isDownloadingThis = downloadingModel === size;
-              const isDeletingThis = deletingModel === size;
-              const progress = modelDownloadProgress[size];
-              const progressPercent = progress ? Math.round((progress.downloaded / progress.total) * 100) : 0;
-              const sizeMB = (info.sizeBytes / 1024 / 1024).toFixed(0);
-
-              const qualityHint = size === 'small'
-                ? 'Fast and reliable accuracy'
-                : '';
-
-              return (
-                <div
-                  key={size}
-                  style={{
-                    ...styles.modelCard,
-                    borderLeft: isSelected ? `3px solid ${theme.info}` : isDownloaded ? `3px solid ${theme.success}` : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
-                    backgroundColor: isSelected
-                      ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
-                      : 'transparent',
-                  }}
-                >
-                  <div style={styles.modelCardContent}>
-                    <div style={styles.modelCardHeader}>
-                      <span style={{ ...styles.rowValue, fontWeight: isSelected ? 600 : 500 }}>
-                        {info.description.split(' - ')[0]}
-                      </span>
-                      <span style={styles.modelSize}>{sizeMB}MB</span>
-                    </div>
-                    <span style={styles.modelHint}>{qualityHint}</span>
-                  </div>
-
-                  <div style={styles.rowControls}>
-                    {isDownloadingThis && progress ? (
-                      <div style={styles.progressBar}>
-                        <div style={{ ...styles.progressFill, width: `${progressPercent}%` }} />
-                        <span style={styles.progressText}>{progressPercent}%</span>
-                      </div>
-                    ) : isDownloaded ? (
-                      <>
-                        <span style={styles.downloadedBadge}>Downloaded</span>
-                        <button
-                          onClick={() => handleDeleteModel(size)}
-                          disabled={isDeletingThis}
-                          style={{ ...styles.btnGhost, color: '#9ca3af', opacity: isDeletingThis ? 0.5 : 1 }}
-                          title="Delete model"
-                        >
-                          {isDeletingThis ? '...' : '×'}
-                        </button>
-                      </>
-                    ) : (
-                      <button
-                        onClick={() => handleDownloadModelForSize(size)}
-                        disabled={downloadingModel !== null}
-                        style={{ ...styles.btn, opacity: downloadingModel !== null ? 0.5 : 1 }}
-                      >
-                        Download
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-        </div>
-      </div>
-      )}
 
       {error && (
         <div style={styles.copyableErrorBlock}>
