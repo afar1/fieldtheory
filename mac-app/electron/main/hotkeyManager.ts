@@ -168,6 +168,45 @@ interface RegisteredHotkey {
  * - Proper cleanup on quit
  */
 export class HotkeyManager {
+  private static readonly MODIFIER_KEYS = new Set([
+    'command',
+    'control',
+    'ctrl',
+    'alt',
+    'shift',
+    'super',
+    'meta',
+    'commandorcontrol',
+    'cmdorctrl',
+  ]);
+  private static readonly NON_SHIFT_MODIFIER_KEYS = new Set([
+    'command',
+    'control',
+    'ctrl',
+    'alt',
+    'super',
+    'meta',
+    'commandorcontrol',
+    'cmdorctrl',
+  ]);
+  private static readonly RESERVED_SHORTCUTS = new Set([
+    'Command+C',
+    'Command+V',
+    'Command+X',
+    'Command+Z',
+    'Command+Shift+Z',
+    'Command+A',
+    'Command+W',
+    'Command+Q',
+    'Command+H',
+    'Command+M',
+    'Command+N',
+    'Command+O',
+    'Command+S',
+    'Command+P',
+    'Command+F',
+    'Command+,',
+  ]);
   private registeredHotkeys: Map<HotkeyId, RegisteredHotkey> = new Map();
   private callbacks: Map<HotkeyId, HotkeyCallback> = new Map();
 
@@ -237,6 +276,43 @@ export class HotkeyManager {
     'plus','minus','=','[',']','\\',';','\'',',','.','/','`',
   ]);
 
+  private static readonly MODIFIER_OPTIONAL_IDS = new Set<HotkeyId>([
+    'abandonRecording',
+    'transcription',
+    'transcriptionSecondary',
+    'hotMic',
+  ]);
+
+  private allowsModifierlessShortcut(id?: HotkeyId): boolean {
+    return !!id && HotkeyManager.MODIFIER_OPTIONAL_IDS.has(id);
+  }
+
+  private validateKeyPolicy(key: string, id?: HotkeyId): string | null {
+    const normalizedKey = this.normalizeKey(key);
+    const parts = normalizedKey.toLowerCase().split('+');
+    const nonModifiers = parts.filter(p => !HotkeyManager.MODIFIER_KEYS.has(p));
+
+    if (nonModifiers.length === 0) {
+      return 'Please include a non-modifier key.';
+    }
+
+    if (nonModifiers.some(k => !HotkeyManager.VALID_KEYS.has(k))) {
+      const invalid = nonModifiers.filter(k => !HotkeyManager.VALID_KEYS.has(k));
+      return `Key "${invalid.join(', ')}" is not supported. Try a letter, number, or function key.`;
+    }
+
+    const hasRequiredModifier = parts.some(p => HotkeyManager.NON_SHIFT_MODIFIER_KEYS.has(p));
+    if (!hasRequiredModifier && !this.allowsModifierlessShortcut(id)) {
+      return 'Global shortcuts must include Command, Control, or Alt. Shift alone is not enough.';
+    }
+
+    if (HotkeyManager.RESERVED_SHORTCUTS.has(normalizedKey)) {
+      return 'Shortcut is reserved by standard macOS behavior.';
+    }
+
+    return null;
+  }
+
   register(id: HotkeyId, key: string, callback: HotkeyCallback): HotkeyResult {
     if (!key || key.trim() === '') {
       return { success: true }; // Empty key = intentionally disabled
@@ -244,16 +320,12 @@ export class HotkeyManager {
 
     const normalizedKey = this.normalizeKey(key);
 
-    // Validate that the non-modifier key is supported by Electron
-    const parts = normalizedKey.toLowerCase().split('+');
-    const modifiers = new Set(['command', 'control', 'ctrl', 'alt', 'shift', 'super', 'meta', 'commandorcontrol', 'cmdorctrl']);
-    const nonModifiers = parts.filter(p => !modifiers.has(p));
-    if (nonModifiers.length === 0 || nonModifiers.some(k => !HotkeyManager.VALID_KEYS.has(k))) {
-      const invalid = nonModifiers.filter(k => !HotkeyManager.VALID_KEYS.has(k));
-      log.error(`Invalid key in shortcut for ${id}: "${invalid.join(', ')}" — not supported by Electron`);
+    const validationError = this.validateKeyPolicy(normalizedKey, id);
+    if (validationError) {
+      log.error(`Invalid shortcut for ${id}: "${normalizedKey}" — ${validationError}`);
       return {
         success: false,
-        error: `Key "${invalid.join(', ')}" is not supported. Try a letter, number, or function key.`,
+        error: validationError,
       };
     }
 
@@ -323,14 +395,6 @@ export class HotkeyManager {
    * Atomic: only updates state if registration succeeds.
    */
   change(id: HotkeyId, newKey: string): HotkeyResult {
-    const existingCallback = this.callbacks.get(id);
-
-    // If no callback registered yet (e.g., during onboarding), just return success.
-    // The actual registration will happen later when the callback is set.
-    if (!existingCallback) {
-      return { success: true };
-    }
-
     // If clearing the hotkey
     if (!newKey || newKey.trim() === '') {
       this.unregister(id);
@@ -338,6 +402,22 @@ export class HotkeyManager {
     }
 
     const normalizedKey = this.normalizeKey(newKey);
+    const validationError = this.validateKeyPolicy(normalizedKey, id);
+    if (validationError) {
+      return {
+        success: false,
+        error: validationError,
+      };
+    }
+
+    const existingCallback = this.callbacks.get(id);
+
+    // If no callback registered yet (e.g., during onboarding), only validate and save.
+    // The actual registration will happen later when the callback is set.
+    if (!existingCallback) {
+      return { success: true };
+    }
+
     const oldRegistered = this.registeredHotkeys.get(id);
 
     // Check for conflicts (excluding self)
@@ -486,6 +566,10 @@ export class HotkeyManager {
     }
 
     const normalizedKey = this.normalizeKey(key);
+    const validationError = this.validateKeyPolicy(normalizedKey);
+    if (validationError) {
+      return { success: false, callbackFired: false, error: validationError };
+    }
 
     // Check if this hotkey is already registered by our app
     let existingId: HotkeyId | null = null;

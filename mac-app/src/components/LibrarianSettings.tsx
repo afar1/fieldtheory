@@ -1079,7 +1079,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               Cursor Instructions
             </h3>
             <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '16px' }}>
-              Copy this text and paste it into Cursor Settings → General → Rules for AI
+              Optional: paste this into Cursor Settings → General → Rules for AI to reinforce the hook behavior
             </p>
             <pre
               style={{

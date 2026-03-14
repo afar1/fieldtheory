@@ -6,7 +6,62 @@
  */
 
 import { useEffect, useState, useCallback } from 'react';
-import { useTheme } from '../contexts/ThemeContext';
+import { useTheme, Theme } from '../contexts/ThemeContext';
+
+/** Reusable row for a simple connected/not-connected hook toggle. */
+function HookRow({ label, installed, disabled, theme, onToggle }: {
+  label: string;
+  installed: boolean;
+  disabled: boolean;
+  theme: Theme;
+  onToggle: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: '8px 12px',
+        borderRadius: '6px',
+        backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+        <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>{label}</span>
+        <span style={{
+          fontSize: '10px',
+          color: installed ? theme.success : theme.textSecondary,
+          padding: '2px 6px',
+          backgroundColor: installed
+            ? (theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)')
+            : (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
+          borderRadius: '4px',
+        }}>
+          {installed ? 'Connected' : 'Not connected'}
+        </span>
+      </div>
+      <button
+        onClick={onToggle}
+        disabled={disabled}
+        style={{
+          padding: '4px 10px',
+          fontSize: '11px',
+          fontWeight: 500,
+          color: installed ? theme.textSecondary : '#fff',
+          backgroundColor: installed ? 'transparent' : theme.accent,
+          border: installed ? `1px solid ${theme.border}` : 'none',
+          borderRadius: '4px',
+          cursor: disabled ? 'wait' : 'pointer',
+          opacity: disabled ? 0.5 : 1,
+        }}
+      >
+        {disabled ? '...' : installed ? 'Disconnect' : 'Connect'}
+      </button>
+    </div>
+  );
+}
 
 interface PermissionProfile {
   id: string;
@@ -38,6 +93,7 @@ export default function ClaudeSettings() {
   const [claudeHookInstalled, setClaudeHookInstalled] = useState(false);
   const [claudeNeedsUpdate, setClaudeNeedsUpdate] = useState(false);
   const [cursorHookInstalled, setCursorHookInstalled] = useState(false);
+  const [codexHookInstalled, setCodexHookInstalled] = useState(false);
   const [hookInstalling, setHookInstalling] = useState(false);
   const [hookMessage, setHookMessage] = useState<string | null>(null);
 
@@ -49,18 +105,20 @@ export default function ClaudeSettings() {
     }
 
     try {
-      const [profilesData, statusData, claudeHook, claudeUpdate, cursorHook] = await Promise.all([
+      const [profilesData, statusData, claudeHook, claudeUpdate, cursorHook, codexHook] = await Promise.all([
         window.claudeAPI.getAvailableProfiles(),
         window.claudeAPI.getPermissionStatus(),
         window.claudeAPI.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
         window.claudeAPI.needsReadPermissionUpdate?.() ?? Promise.resolve(false),
         window.cursorAPI?.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
+        window.codexReadPermissionAPI?.isReadPermissionHookInstalled?.() ?? Promise.resolve(false),
       ]);
       setProfiles(profilesData);
       setStatus(statusData);
       setClaudeHookInstalled(claudeHook);
       setClaudeNeedsUpdate(claudeUpdate);
       setCursorHookInstalled(cursorHook);
+      setCodexHookInstalled(codexHook);
     } catch (err) {
       console.error('Failed to load Claude settings:', err);
       setError('Failed to load settings');
@@ -297,77 +355,60 @@ export default function ClaudeSettings() {
         </div>
 
         {/* Cursor */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '8px 12px',
-            borderRadius: '6px',
-            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Cursor</span>
-            {cursorHookInstalled ? (
-              <span style={{
-                fontSize: '10px',
-                color: theme.success,
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
-                borderRadius: '4px',
-              }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{
-                fontSize: '10px',
-                color: theme.textSecondary,
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                borderRadius: '4px',
-              }}>
-                Not connected
-              </span>
-            )}
-          </div>
-          <button
-            onClick={async () => {
-              if (hookInstalling) return;
-              setHookInstalling(true);
-              setHookMessage(null);
-              try {
-                const result = cursorHookInstalled
-                  ? await window.cursorAPI?.uninstallReadPermissionHook?.()
-                  : await window.cursorAPI?.installReadPermissionHook?.();
-                if (result?.success) {
-                  setCursorHookInstalled(!cursorHookInstalled);
-                  setHookMessage(result.message);
-                  setTimeout(() => setHookMessage(null), 5000);
-                } else {
-                  setError(result?.message || 'Failed');
-                }
-              } finally {
-                setHookInstalling(false);
+        <HookRow
+          label="Cursor"
+          installed={cursorHookInstalled}
+          disabled={hookInstalling}
+          theme={theme}
+          onToggle={async () => {
+            if (hookInstalling) return;
+            setHookInstalling(true);
+            setHookMessage(null);
+            try {
+              const result = cursorHookInstalled
+                ? await window.cursorAPI?.uninstallReadPermissionHook?.()
+                : await window.cursorAPI?.installReadPermissionHook?.();
+              if (result?.success) {
+                setCursorHookInstalled(!cursorHookInstalled);
+                setHookMessage(result.message);
+                setTimeout(() => setHookMessage(null), 5000);
+              } else {
+                setError(result?.message || 'Failed');
               }
-            }}
-            disabled={hookInstalling}
-            style={{
-              padding: '4px 10px',
-              fontSize: '11px',
-              fontWeight: 500,
-              color: cursorHookInstalled ? theme.textSecondary : '#fff',
-              backgroundColor: cursorHookInstalled ? 'transparent' : theme.accent,
-              border: cursorHookInstalled ? `1px solid ${theme.border}` : 'none',
-              borderRadius: '4px',
-              cursor: hookInstalling ? 'wait' : 'pointer',
-              opacity: hookInstalling ? 0.5 : 1,
-            }}
-          >
-            {hookInstalling ? '...' : cursorHookInstalled ? 'Disconnect' : 'Connect'}
-          </button>
-        </div>
+            } finally {
+              setHookInstalling(false);
+            }
+          }}
+        />
+
+        <div style={{ height: '8px' }} />
+
+        {/* Codex */}
+        <HookRow
+          label="Codex"
+          installed={codexHookInstalled}
+          disabled={hookInstalling}
+          theme={theme}
+          onToggle={async () => {
+            if (hookInstalling) return;
+            setHookInstalling(true);
+            setHookMessage(null);
+            try {
+              const result = codexHookInstalled
+                ? await window.codexReadPermissionAPI?.uninstallReadPermissionHook?.()
+                : await window.codexReadPermissionAPI?.installReadPermissionHook?.();
+              if (result?.success) {
+                setCodexHookInstalled(!codexHookInstalled);
+                setHookMessage(result.message);
+                setTimeout(() => setHookMessage(null), 5000);
+              } else {
+                setError(result?.message || 'Failed');
+              }
+            } finally {
+              setHookInstalling(false);
+            }
+          }}
+        />
 
         {/* Feedback message */}
         {hookMessage && (
@@ -671,13 +712,21 @@ export default function ClaudeSettings() {
             borderRadius: '3px'
           }}>~/.claude/settings.json</code>
         </p>
-        <p style={{ margin: 0 }}>
+        <p style={{ margin: '0 0 4px 0' }}>
           Cursor: <code style={{
             fontSize: '9px',
             backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
             padding: '1px 4px',
             borderRadius: '3px'
           }}>~/.cursor/hooks.json</code>
+        </p>
+        <p style={{ margin: 0 }}>
+          Codex: <code style={{
+            fontSize: '9px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
+            padding: '1px 4px',
+            borderRadius: '3px'
+          }}>~/.codex/hooks.json</code>
         </p>
       </div>
     </div>

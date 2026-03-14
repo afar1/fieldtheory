@@ -11,6 +11,7 @@ interface HeightConfig {
   focusWidthPercent: number;
   horizontalHeightPercent: number;
   horizontalKeepHeight: boolean;
+  horizontalHideOthers: boolean;
 }
 
 type ActionMeta = { label: string; description: string };
@@ -67,6 +68,7 @@ export default function RectangleSettings() {
     focusWidthPercent: 60,
     horizontalHeightPercent: 80,
     horizontalKeepHeight: true,
+    horizontalHideOthers: true,
   });
   const styles = getStyles(theme);
 
@@ -88,6 +90,7 @@ export default function RectangleSettings() {
         focusWidthPercent: config.focusWidthPercent ?? 60,
         horizontalHeightPercent: config.horizontalHeightPercent ?? 80,
         horizontalKeepHeight: config.horizontalKeepHeight ?? true,
+        horizontalHideOthers: config.horizontalHideOthers ?? true,
       });
     });
   }, []);
@@ -100,6 +103,18 @@ export default function RectangleSettings() {
       return next;
     });
   }, []);
+
+  // Update local state without saving (for typing in number inputs)
+  const updateLocalConfig = useCallback((updates: Partial<HeightConfig>) => {
+    setHeightConfig((prev) => ({ ...prev, ...updates }));
+  }, []);
+
+  // Clamp and save a numeric field on blur
+  const commitNumericField = useCallback((field: keyof HeightConfig, min: number, max: number) => {
+    const raw = Number(heightConfig[field]);
+    const clamped = Math.max(min, Math.min(max, isNaN(raw) ? min : raw));
+    saveHeightConfig({ [field]: clamped });
+  }, [heightConfig, saveHeightConfig]);
 
   const handleVoiceSave = useCallback(async (action: string) => {
     if (!window.hotMicAPI) return;
@@ -154,7 +169,8 @@ export default function RectangleSettings() {
                   max={100}
                   step={5}
                   value={heightConfig.focusHeightPercent}
-                  onChange={(e) => saveHeightConfig({ focusHeightPercent: Math.max(30, Math.min(100, Number(e.target.value))) })}
+                  onChange={(e) => updateLocalConfig({ focusHeightPercent: Number(e.target.value) })}
+                  onBlur={() => commitNumericField('focusHeightPercent', 30, 100)}
                   style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
                 />
                 <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
@@ -168,7 +184,8 @@ export default function RectangleSettings() {
                 max={100}
                 step={5}
                 value={heightConfig.focusWidthPercent}
-                onChange={(e) => saveHeightConfig({ focusWidthPercent: Math.max(30, Math.min(100, Number(e.target.value))) })}
+                onChange={(e) => updateLocalConfig({ focusWidthPercent: Number(e.target.value) })}
+                onBlur={() => commitNumericField('focusWidthPercent', 30, 100)}
                 style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
               />
               <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
@@ -184,7 +201,16 @@ export default function RectangleSettings() {
             <span style={styles.actionLabel}>Horizontal</span>
           </div>
           <p style={styles.description}>Height of windows when spread horizontally</p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={heightConfig.horizontalHideOthers}
+                onChange={(e) => saveHeightConfig({ horizontalHideOthers: e.target.checked })}
+                style={{ accentColor: theme.accent }}
+              />
+              <span style={{ fontSize: '12px', color: theme.text }}>Hide other windows</span>
+            </label>
             <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
               <input
                 type="checkbox"
@@ -203,7 +229,8 @@ export default function RectangleSettings() {
                   max={100}
                   step={5}
                   value={heightConfig.horizontalHeightPercent}
-                  onChange={(e) => saveHeightConfig({ horizontalHeightPercent: Math.max(30, Math.min(100, Number(e.target.value))) })}
+                  onChange={(e) => updateLocalConfig({ horizontalHeightPercent: Number(e.target.value) })}
+                  onBlur={() => commitNumericField('horizontalHeightPercent', 30, 100)}
                   style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
                 />
                 <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>

@@ -9,7 +9,7 @@ export type VisibleTranscriptionEngineOption = {
   recommended?: boolean;
 };
 
-export const DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE: VisibleTranscriptionEngine = 'whisper';
+export const DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE: VisibleTranscriptionEngine = 'parakeet';
 export const DEFAULT_VISIBLE_PARAKEET_ENGINE: VisibleParakeetEngine = 'parakeet';
 
 export const PARAKEET_VISIBLE_ENGINE_OPTIONS: VisibleTranscriptionEngineOption[] = [

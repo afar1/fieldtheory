@@ -19,6 +19,7 @@ import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
+import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 
 // Settings sections in alphabetical order
 type SettingsSection =
@@ -61,7 +62,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'stats': 'Stats',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
-  'rectangle': 'Windows',
+  'rectangle': 'Window Management',
 };
 
 // Alphabetically ordered sections for navigation
@@ -70,13 +71,13 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'terminal-commands', // Allowlist
   'appearance',
   'audio',
+  'hot-mic', // Hot Mic
   'keyboard',
   'librarian',
   'commands', // Portable Commands
-  'hot-mic', // Hot Mic
-  'rectangle', // Window management
   'sounds',
   'stats',
+  'rectangle', // Window Management
 ];
 
 interface SettingsPanelProps {
@@ -922,85 +923,6 @@ export default function SettingsPanel({
     }
   };
   
-  // Helper function to build hotkey string from keyboard event (uses physical key codes)
-  const buildHotkeyString = (event: KeyboardEvent): string => {
-    const parts: string[] = [];
-    if (event.metaKey) parts.push('Command');
-    if (event.ctrlKey) parts.push('Control');
-    if (event.altKey) parts.push('Alt');
-    if (event.shiftKey) parts.push('Shift');
-
-    // Use physical key code to avoid locale-specific characters
-    let key = event.code;
-
-    if (key.startsWith('Key')) {
-      key = key.substring(3).toUpperCase();
-    } else if (key.startsWith('Digit')) {
-      key = key.substring(5);
-    } else {
-      const codeMap: Record<string, string> = {
-        'Space': 'Space',
-        'Backquote': '`',
-        'Backslash': '\\',
-        'BracketLeft': '[',
-        'BracketRight': ']',
-        'Comma': ',',
-        'Equal': '=',
-        'Minus': '-',
-        'Period': '.',
-        'Quote': "'",
-        'Semicolon': ';',
-        'Slash': '/',
-        'CapsLock': 'CapsLock',
-        'Escape': 'Escape',
-        'Enter': 'Enter',
-        'Tab': 'Tab',
-        'Backspace': 'Backspace',
-        'Delete': 'Delete',
-        'ArrowUp': 'Up',
-        'ArrowDown': 'Down',
-        'ArrowLeft': 'Left',
-        'ArrowRight': 'Right',
-        'PageUp': 'PageUp',
-        'PageDown': 'PageDown',
-        'Home': 'Home',
-        'End': 'End',
-        'Insert': 'Insert',
-        'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
-        'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
-        'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
-      };
-      if (codeMap[key]) {
-        key = codeMap[key];
-      } else {
-        const fallback = event.key;
-        if (fallback && fallback.length === 1 && fallback.charCodeAt(0) < 128) {
-          key = fallback.toUpperCase();
-        } else {
-          console.warn(`[Hotkey] Unsupported key: ${event.code} (key: ${event.key})`);
-          return '';
-        }
-      }
-    }
-
-    // Filter out modifier-only key presses (both the base name and Left/Right variants).
-    const modifierCodes = [
-      'Meta', 'MetaLeft', 'MetaRight',
-      'Control', 'ControlLeft', 'ControlRight',
-      'Alt', 'AltLeft', 'AltRight',
-      'Shift', 'ShiftLeft', 'ShiftRight'
-    ];
-    if (modifierCodes.includes(event.code)) {
-      return '';
-    }
-
-    return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
-  };
-
-  const isModifierOnly = (s: string) => {
-    return s === 'Command' || s === 'Control' || s === 'Alt' || s === 'Shift';
-  };
-  
   // Handler for setting screenshot hotkey
   const handleSetScreenshotHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1662,11 +1584,6 @@ export default function SettingsPanel({
             {capturingHotkey === 'history' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
-            {hotkeyTestResults.history?.status === 'conflict' && (
-              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.history.conflictApp || 'Conflict detected'}>
-                !
-              </span>
-            )}
           </div>
         </div>
         
@@ -1683,11 +1600,6 @@ export default function SettingsPanel({
             </button>
             {capturingHotkey === 'transcription' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-            {hotkeyTestResults.transcription?.status === 'conflict' && (
-              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.transcription.conflictApp || 'Conflict detected'}>
-                !
-              </span>
             )}
           </div>
         </div>
@@ -1715,11 +1627,6 @@ export default function SettingsPanel({
             {capturingHotkey === 'secondaryTranscription' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
-            {hotkeyTestResults.secondaryTranscription?.status === 'conflict' && (
-              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.secondaryTranscription.conflictApp || 'Conflict detected'}>
-                !
-              </span>
-            )}
           </div>
         </div>
 
@@ -1745,11 +1652,6 @@ export default function SettingsPanel({
             </button>
             {capturingHotkey === 'screenshot' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-            {hotkeyTestResults.screenshot?.status === 'conflict' && (
-              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.screenshot.conflictApp || 'Conflict detected'}>
-                !
-              </span>
             )}
           </div>
         </div>
@@ -1777,11 +1679,6 @@ export default function SettingsPanel({
             {capturingHotkey === 'fullScreen' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
-            {hotkeyTestResults.fullScreen?.status === 'conflict' && (
-              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.fullScreen.conflictApp || 'Conflict detected'}>
-                !
-              </span>
-            )}
           </div>
         </div>
 
@@ -1807,11 +1704,6 @@ export default function SettingsPanel({
             </button>
             {capturingHotkey === 'activeWindow' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
-            )}
-            {hotkeyTestResults.activeWindow?.status === 'conflict' && (
-              <span style={{ color: '#f59e0b', fontSize: '11px' }} title={hotkeyTestResults.activeWindow.conflictApp || 'Conflict detected'}>
-                !
-              </span>
             )}
           </div>
         </div>

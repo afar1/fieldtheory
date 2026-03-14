@@ -7,6 +7,7 @@ import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
 import { Session } from '@supabase/supabase-js';
+import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
 import {
   DndContext,
   DragOverlay,
@@ -1292,6 +1293,10 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
 
       // Cmd+C - Copy selected/hovered item to clipboard.
       if (key === 'c' && hasMeta && !hasShift) {
+        if (shouldDeferCopyShortcutToNative()) {
+          return;
+        }
+
         if (selectedRow?.type === 'item') {
           e.preventDefault();
           copyItemToClipboard(selectedRow.item, `item-${selectedRow.item.id}`);

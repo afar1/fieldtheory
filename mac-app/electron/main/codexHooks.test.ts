@@ -1,3 +1,7 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   tomlSetNotify,
@@ -6,7 +10,34 @@ import {
   tomlRemoveWritableRoot,
   managedSectionUpsert,
   managedSectionRemove,
+  generateCodexStopScript,
+  hasCodexCommandHook,
+  removeCodexCommandHook,
 } from './librarianManager';
+
+function withTempHome(run: (homeDir: string) => void): void {
+  const homeDir = mkdtempSync(join(tmpdir(), 'codex-hooks-test-'));
+  try {
+    run(homeDir);
+  } finally {
+    rmSync(homeDir, { recursive: true, force: true });
+  }
+}
+
+function writeJson(filePath: string, value: unknown): void {
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function runHook(script: string, homeDir: string): string {
+  const scriptPath = join(homeDir, 'hook.py');
+  writeFileSync(scriptPath, script);
+  return execFileSync('python3', [scriptPath], {
+    cwd: homeDir,
+    env: { ...process.env, HOME: homeDir },
+    encoding: 'utf8',
+  });
+}
 
 // ===========================================================================
 // TOML editing helpers
@@ -14,41 +45,41 @@ import {
 
 describe('tomlSetNotify', () => {
   it('appends notify to empty content', () => {
-    const result = tomlSetNotify('', 'python3 /path/to/codex-notify.py');
-    expect(result).toBe('\nnotify = "python3 /path/to/codex-notify.py"\n');
+    const result = tomlSetNotify('', ['python3', '/path/to/codex-notify.py']);
+    expect(result).toBe('\nnotify = ["python3", "/path/to/codex-notify.py"]\n');
   });
 
   it('appends notify to content without existing notify', () => {
-    const result = tomlSetNotify('model = "o3"\n', 'python3 /path/to/codex-notify.py');
-    expect(result).toBe('model = "o3"\nnotify = "python3 /path/to/codex-notify.py"\n');
+    const result = tomlSetNotify('model = "o3"\n', ['python3', '/path/to/codex-notify.py']);
+    expect(result).toBe('model = "o3"\nnotify = ["python3", "/path/to/codex-notify.py"]\n');
   });
 
-  it('replaces existing notify line', () => {
+  it('replaces existing legacy notify line', () => {
     const content = 'model = "o3"\nnotify = "some-old-command"\napproval_mode = "suggest"\n';
-    const result = tomlSetNotify(content, 'python3 /path/to/codex-notify.py');
-    expect(result).toContain('notify = "python3 /path/to/codex-notify.py"');
+    const result = tomlSetNotify(content, ['python3', '/path/to/codex-notify.py']);
+    expect(result).toContain('notify = ["python3", "/path/to/codex-notify.py"]');
     expect(result).not.toContain('some-old-command');
     expect(result).toContain('model = "o3"');
     expect(result).toContain('approval_mode = "suggest"');
   });
 
-  it('is idempotent when command already present', () => {
-    const content = 'notify = "python3 /path/to/codex-notify.py"\n';
-    const result = tomlSetNotify(content, 'python3 /path/to/codex-notify.py');
+  it('is idempotent when command array is already present', () => {
+    const content = 'notify = ["python3", "/path/to/codex-notify.py"]\n';
+    const result = tomlSetNotify(content, ['python3', '/path/to/codex-notify.py']);
     expect(result).toBe(content);
   });
 
   it('moves notify to top level when appended after a table header', () => {
     const content = '[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\nnotify = "old-command"\n';
-    const result = tomlSetNotify(content, 'python3 /path/to/codex-notify.py');
-    expect(result).toContain('notify = "python3 /path/to/codex-notify.py"\n\n[notice.model_migrations]');
+    const result = tomlSetNotify(content, ['python3', '/path/to/codex-notify.py']);
+    expect(result).toContain('notify = ["python3", "/path/to/codex-notify.py"]\n\n[notice.model_migrations]');
     expect(result).not.toContain('old-command');
   });
 });
 
 describe('tomlRemoveNotify', () => {
   it('removes notify line matching script name', () => {
-    const content = 'model = "o3"\nnotify = "python3 /path/to/codex-notify.py"\napproval_mode = "suggest"\n';
+    const content = 'model = "o3"\nnotify = ["python3", "/path/to/codex-notify.py"]\napproval_mode = "suggest"\n';
     const result = tomlRemoveNotify(content, 'codex-notify.py');
     expect(result).not.toContain('notify');
     expect(result).toContain('model = "o3"');
@@ -69,56 +100,62 @@ describe('tomlRemoveNotify', () => {
 });
 
 describe('tomlAddWritableRoot', () => {
-  it('creates writable_roots array when absent', () => {
+  it('creates sandbox_workspace_write table when writable_roots are absent', () => {
     const result = tomlAddWritableRoot('model = "o3"\n', '/home/user/.fieldtheory/librarian');
+    expect(result).toContain('[sandbox_workspace_write]');
     expect(result).toContain('writable_roots = [');
     expect(result).toContain('"/home/user/.fieldtheory/librarian"');
-    expect(result).toContain(']');
+    expect(result).not.toContain('\nwritable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]\n\n[notice');
   });
 
-  it('appends to existing empty writable_roots', () => {
-    const content = 'writable_roots = []\n';
+  it('appends to existing empty writable_roots in sandbox_workspace_write', () => {
+    const content = '[sandbox_workspace_write]\nwritable_roots = []\n';
     const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
     expect(result).toContain('"/home/user/.fieldtheory/librarian"');
   });
 
   it('appends to existing populated writable_roots', () => {
-    const content = 'writable_roots = [\n  "/home/user/projects"\n]\n';
+    const content = '[sandbox_workspace_write]\nwritable_roots = [\n  "/home/user/projects"\n]\n';
     const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
     expect(result).toContain('"/home/user/projects"');
     expect(result).toContain('"/home/user/.fieldtheory/librarian"');
-    // Should add comma after existing entry
-    expect(result).toMatch(/projects",?\n/);
+    expect(result).toContain('[sandbox_workspace_write]');
   });
 
   it('is idempotent when path already present', () => {
-    const content = 'writable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]\n';
+    const content = '[sandbox_workspace_write]\nwritable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]\n';
     const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
     expect(result).toBe(content);
   });
 
-  it('moves writable_roots to top level when appended after a table header', () => {
+  it('moves legacy writable_roots into sandbox_workspace_write before other tables', () => {
     const content = '[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\nwritable_roots = [\n  "/tmp/old"\n]\n';
     const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
-    expect(result).toContain('writable_roots = [\n  "/tmp/old",\n  "/home/user/.fieldtheory/librarian"\n]\n\n[notice.model_migrations]');
+    expect(result).toContain('[sandbox_workspace_write]\nwritable_roots = [\n  "/tmp/old",\n  "/home/user/.fieldtheory/librarian"\n]\n\n[notice.model_migrations]');
+  });
+
+  it('preserves other sandbox_workspace_write settings', () => {
+    const content = '[sandbox_workspace_write]\nnetwork_access = false\n\n[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\n';
+    const result = tomlAddWritableRoot(content, '/home/user/.fieldtheory/librarian');
+    expect(result).toContain('[sandbox_workspace_write]\nnetwork_access = false\n\nwritable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]');
   });
 });
 
 describe('tomlRemoveWritableRoot', () => {
   it('removes path from writable_roots', () => {
-    const content = 'writable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]\n';
+    const content = '[sandbox_workspace_write]\nwritable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]\n';
     const result = tomlRemoveWritableRoot(content, '/home/user/.fieldtheory/librarian');
-    // Should clean up the now-empty array entirely
     expect(result).not.toContain('writable_roots');
-    expect(result).not.toContain('.fieldtheory/librarian');
+    expect(result).not.toContain('[sandbox_workspace_write]');
   });
 
   it('removes only our path, keeps others', () => {
-    const content = 'writable_roots = [\n  "/home/user/projects",\n  "/home/user/.fieldtheory/librarian"\n]\n';
+    const content = '[sandbox_workspace_write]\nwritable_roots = [\n  "/home/user/projects",\n  "/home/user/.fieldtheory/librarian"\n]\n';
     const result = tomlRemoveWritableRoot(content, '/home/user/.fieldtheory/librarian');
     expect(result).toContain('writable_roots');
     expect(result).toContain('/home/user/projects');
     expect(result).not.toContain('.fieldtheory/librarian');
+    expect(result).toContain('[sandbox_workspace_write]');
   });
 
   it('handles content without writable_roots', () => {
@@ -127,11 +164,18 @@ describe('tomlRemoveWritableRoot', () => {
     expect(result).toBe(content);
   });
 
-  it('removes our path from a nested writable_roots block and keeps the rest top level', () => {
+  it('removes our path from a legacy nested writable_roots block and keeps the rest in sandbox_workspace_write', () => {
     const content = '[notice.model_migrations]\n"gpt-5.3-codex" = "gpt-5.4"\nwritable_roots = [\n  "/home/user/projects",\n  "/home/user/.fieldtheory/librarian"\n]\n';
     const result = tomlRemoveWritableRoot(content, '/home/user/.fieldtheory/librarian');
-    expect(result).toContain('writable_roots = [\n  "/home/user/projects"\n]\n\n[notice.model_migrations]');
+    expect(result).toContain('[sandbox_workspace_write]\nwritable_roots = [\n  "/home/user/projects"\n]\n\n[notice.model_migrations]');
     expect(result).not.toContain('/home/user/.fieldtheory/librarian');
+  });
+
+  it('preserves other sandbox_workspace_write settings when removing the last root', () => {
+    const content = '[sandbox_workspace_write]\nnetwork_access = false\nwritable_roots = [\n  "/home/user/.fieldtheory/librarian"\n]\n';
+    const result = tomlRemoveWritableRoot(content, '/home/user/.fieldtheory/librarian');
+    expect(result).toContain('[sandbox_workspace_write]\nnetwork_access = false\n');
+    expect(result).not.toContain('writable_roots');
   });
 });
 
@@ -200,20 +244,13 @@ follow them before proceeding.
 });
 
 // ===========================================================================
-// Codex hooks.json structure
+// Codex hooks.json structure (librarian hooks)
 // ===========================================================================
 
 describe('Codex hooks.json structure', () => {
   it('supports the nested hook format Codex expects', () => {
     const hooksConfig = {
       hooks: {
-        SessionStart: [{
-          hooks: [{
-            type: 'command',
-            command: 'python3 /path/to/codex-session-start.py',
-            timeout_sec: 10,
-          }],
-        }],
         Stop: [{
           hooks: [{
             type: 'command',
@@ -224,20 +261,9 @@ describe('Codex hooks.json structure', () => {
       },
     };
 
-    // Verify detection logic matches the pattern used in isCodexHookInstalled
-    const stopHooks = hooksConfig.hooks.Stop;
-    expect(Array.isArray(stopHooks)).toBe(true);
-    const hasStop = stopHooks.some((entry: { hooks?: Array<{ command?: string }> }) =>
-      entry.hooks?.some(h => h.command?.includes('codex-stop.py'))
-    );
-    expect(hasStop).toBe(true);
-
-    // Verify uninstall filter logic
-    const filtered = stopHooks.filter(
-      (entry: { hooks?: Array<{ command?: string }> }) =>
-        !entry.hooks?.some(h => h.command?.includes('codex-stop.py'))
-    );
-    expect(filtered).toHaveLength(0);
+    expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(true);
+    removeCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py');
+    expect(hooksConfig.hooks?.Stop).toBeUndefined();
   });
 
   it('preserves other hooks during uninstall', () => {
@@ -254,11 +280,179 @@ describe('Codex hooks.json structure', () => {
       },
     };
 
-    const filtered = hooksConfig.hooks.Stop.filter(
-      (entry: { hooks?: Array<{ command?: string }> }) =>
-        !entry.hooks?.some(h => h.command?.includes('codex-stop.py'))
+    removeCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py');
+    expect(hooksConfig.hooks?.Stop).toHaveLength(1);
+    expect((hooksConfig.hooks?.Stop as Array<{ hooks: Array<{ command: string }> }>)[0].hooks[0].command).toBe('some-other-hook');
+  });
+
+  it('removes legacy SessionStart hooks without touching Stop', () => {
+    const hooksConfig = {
+      hooks: {
+        SessionStart: [{
+          hooks: [{ type: 'command', command: 'python3 /path/to/codex-session-start.py' }],
+        }],
+        Stop: [{
+          hooks: [{ type: 'command', command: 'python3 /path/to/codex-stop.py' }],
+        }],
+      },
+    };
+
+    removeCodexCommandHook(hooksConfig, 'SessionStart', 'codex-session-start.py');
+    expect(hooksConfig.hooks?.SessionStart).toBeUndefined();
+    expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(true);
+  });
+});
+
+describe('Codex hook script generation', () => {
+  it('generates a Stop hook that blocks on any pending global job and clears stale sentinel state', () => {
+    const script = generateCodexStopScript();
+    expect(script).toContain('def find_pending_job():');
+    expect(script).toContain('pending_job = find_pending_job()');
+    expect(script).toContain('SENTINEL_FILE.unlink(missing_ok=True)');
+    expect(script).toContain('SENTINEL_FILE.write_text');
+    expect(script).toContain('"decision": "block"');
+  });
+
+  it('Stop blocks on a pending job and writes the sentinel for same-session flow', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), {
+        enabled: true,
+        rule_content: 'Write the artifact.',
+      });
+      writeJson(join(librarianDir, 'jobs', 'job_3.json'), {
+        schema_version: 1,
+        id: 3,
+        status: 'pending',
+        output: '/tmp/pending.md',
+      });
+
+      const stdout = runHook(generateCodexStopScript(), homeDir);
+      const output = JSON.parse(stdout);
+      const sentinelPath = join(librarianDir, '.codex-pending');
+      const sentinel = JSON.parse(readFileSync(sentinelPath, 'utf8'));
+
+      expect(output.decision).toBe('block');
+      expect(output.reason).toContain('job_3.json');
+      expect(output.reason).toContain('/tmp/pending.md');
+      expect(sentinel.job_file).toContain('job_3.json');
+      expect(sentinel.output).toBe('/tmp/pending.md');
+    });
+  });
+
+  it('Stop clears stale sentinel state when no pending jobs remain', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), { enabled: true });
+      writeJson(join(librarianDir, 'jobs', 'job_4.json'), {
+        schema_version: 1,
+        id: 4,
+        status: 'done',
+        output: '/tmp/done.md',
+      });
+      const sentinelPath = join(librarianDir, '.codex-pending');
+      writeJson(sentinelPath, { job_file: 'stale', output: 'stale' });
+
+      const stdout = runHook(generateCodexStopScript(), homeDir);
+
+      expect(stdout).toBe('');
+      expect(existsSync(sentinelPath)).toBe(false);
+    });
+  });
+});
+
+// ===========================================================================
+// Codex read permission hooks (PreToolUse)
+// ===========================================================================
+
+describe('Codex read permission hook detection', () => {
+  const command = 'python3 "/Users/test/.codex/fieldtheory-read-permission-hook.py"';
+
+  type HookEntry = { matcher?: string; hooks?: Array<{ type?: string; command?: string }> };
+
+  it('detects installed PreToolUse hook', () => {
+    const config = {
+      hooks: {
+        PreToolUse: [{
+          matcher: 'Read|Write|Edit',
+          hooks: [{ type: 'command', command }],
+        }],
+      },
+    };
+    const found = (config.hooks.PreToolUse as HookEntry[]).some(
+      h => h.hooks?.some(hh => hh.command === command)
+    );
+    expect(found).toBe(true);
+  });
+
+  it('returns false when PreToolUse is empty', () => {
+    const config = { hooks: { PreToolUse: [] as HookEntry[] } };
+    const found = config.hooks.PreToolUse.some(
+      h => h.hooks?.some(hh => hh.command === command)
+    );
+    expect(found).toBe(false);
+  });
+
+  it('returns false when PreToolUse contains other hooks', () => {
+    const config = {
+      hooks: {
+        PreToolUse: [{
+          matcher: 'Read',
+          hooks: [{ type: 'command', command: 'python3 /other/hook.py' }],
+        }],
+      },
+    };
+    const found = (config.hooks.PreToolUse as HookEntry[]).some(
+      h => h.hooks?.some(hh => hh.command === command)
+    );
+    expect(found).toBe(false);
+  });
+
+  it('uninstall filter removes only our hook', () => {
+    const config = {
+      hooks: {
+        PreToolUse: [
+          { matcher: 'Read', hooks: [{ type: 'command', command: 'python3 /other/hook.py' }] },
+          { matcher: 'Read|Write|Edit', hooks: [{ type: 'command', command }] },
+        ],
+      },
+    };
+    const filtered = (config.hooks.PreToolUse as HookEntry[]).filter(
+      h => !h.hooks?.some(hh => hh.command === command)
     );
     expect(filtered).toHaveLength(1);
-    expect(filtered[0].hooks[0].command).toBe('some-other-hook');
+    expect(filtered[0].hooks![0].command).toBe('python3 /other/hook.py');
+  });
+
+  it('install skips if already present', () => {
+    const preToolUse: HookEntry[] = [
+      { matcher: 'Read|Write|Edit', hooks: [{ type: 'command', command }] },
+    ];
+    const exists = preToolUse.some(h => h.hooks?.some(hh => hh.command === command));
+    expect(exists).toBe(true);
+    // Should not push a duplicate
+  });
+
+  it('coexists with librarian Stop hooks', () => {
+    const config = {
+      hooks: {
+        Stop: [{
+          hooks: [{ type: 'command', command: 'python3 /path/to/codex-stop.py' }],
+        }],
+        PreToolUse: [{
+          matcher: 'Read|Write|Edit',
+          hooks: [{ type: 'command', command }],
+        }],
+      },
+    };
+    // Both should be detectable independently
+    const hasStop = config.hooks.Stop.some(
+      (e: { hooks?: Array<{ command?: string }> }) => e.hooks?.some(h => h.command?.includes('codex-stop.py'))
+    );
+    const hasPreTool = (config.hooks.PreToolUse as HookEntry[]).some(
+      h => h.hooks?.some(hh => hh.command === command)
+    );
+    expect(hasStop).toBe(true);
+    expect(hasPreTool).toBe(true);
   });
 });

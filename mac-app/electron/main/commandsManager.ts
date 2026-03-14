@@ -26,6 +26,56 @@ import { createLogger } from './logger';
 
 const log = createLogger('Commands');
 
+const DEFAULT_INTERNAL_COMMAND_TEMPLATES: Array<{ name: string; content: string }> = [
+  {
+    name: 'refactor',
+    content: "Now that you've done some work are there any parts you would go back and refactor. Refactor those. Write tests that you think should be written along the way.\n",
+  },
+  {
+    name: 'review',
+    content: "Review what we've just proposed, implemented, or outlined against our engineering principles. And as a second set of technical eyes.\n\nAre there any minor changes, major changes, logical flaws, or are we good to go?\n\nFeel free to use the questions command if you need more info.\n",
+  },
+  {
+    name: 'questions',
+    content: "Ask me as many questions as you may need until you have a full comprehension of my intent and what I'm trying to do and any important dependencies. I'm happy to answer as many questions as you'd like, even after I've answered some of your first sets of questions.\n",
+  },
+  {
+    name: 'commit',
+    content: `# Remove AI code slop
+
+Check the diff against main, and remove all AI generated slop introduced in this branch.
+
+This includes:
+- Extra comments that a human wouldn't add or is inconsistent with the rest of the file
+- Extra defensive checks or try/catch blocks that are abnormal for that area of the codebase (especially if called by trusted / validated codepaths)
+- Casts to any to get around type issues
+- Any other style that is inconsistent with the file
+
+Report with only a 1-3 sentence summary of what you changed
+
+# Commit current work
+Commit all current work and push to origin. But if we are working on a web app of any kind (this does not apply to dmg or ios apps) before you do, try to build this locally using npm run build. Once we confirm that it built properly locally since it takes such a short time, we can then commit and push to origin. If it fails to build locally, identify and fix those issues first, then commit and push to origin.
+
+## Important
+- Always commit ALL modified and staged files (use \`git add -A\` to stage everything)
+- If you can't get information from git diff, use your working memory to determine what has changed
+- Review the staged files to write an accurate commit message
+
+## Instructions
+1. Stage all changes: \`git add -A\` (or \`git add .\` to include untracked files)
+2. Review what will be committed using \`git status\` and \`git diff --staged\`
+3. Write a brief commit message in the following format:
+   - Short title description (< 80 characters)
+   - 2~3 bullet points (< 80 characters) with a quick description
+4. Commit and push: \`git commit -m "..." && git push origin main\`
+
+## Notes
+- You should only commit work when instructed. Do not keep committing subsequent work unless explicitly told so
+- If there are unrelated changes mixed in, mention them in the commit message or ask the user if they should be split into separate commits
+`,
+  },
+];
+
 /**
  * Settings stored in JSON file.
  */
@@ -166,6 +216,10 @@ export class CommandsManager extends EventEmitter {
 
     this.loadSettings();
 
+    if (this.settings.watchedDirs.length === 0) {
+      await this.createDefaultDirectory();
+    }
+
     // Rescan all directories
     await this.initialize();
   }
@@ -236,11 +290,23 @@ export class CommandsManager extends EventEmitter {
 
   /**
    * Get the default commands directory path.
-   * Creates ~/Library/Application Support/field-theory/commands/ if it doesn't exist.
+   * Uses a per-user internal commands directory when available.
    */
   getDefaultDirectory(): string {
+    if (this.userDataManager?.isLoggedIn()) {
+      return this.userDataManager.getUserDataPath('commands');
+    }
     const userDataPath = app.getPath('userData');
     return path.join(userDataPath, 'commands');
+  }
+
+  private seedDefaultCommands(defaultDir: string): void {
+    for (const command of DEFAULT_INTERNAL_COMMAND_TEMPLATES) {
+      const filePath = path.join(defaultDir, `${command.name}.md`);
+      if (!fs.existsSync(filePath)) {
+        fs.writeFileSync(filePath, command.content);
+      }
+    }
   }
 
   /**
@@ -248,15 +314,27 @@ export class CommandsManager extends EventEmitter {
    * Returns the path if successful, null otherwise.
    */
   async createDefaultDirectory(): Promise<string | null> {
-    const defaultDir = this.getDefaultDirectory();
+    const defaultDir = this.normalizePath(this.getDefaultDirectory());
 
     try {
+      const dirAlreadyExisted = fs.existsSync(defaultDir);
+      const wasWatched = this.settings.watchedDirs.includes(defaultDir);
       if (!fs.existsSync(defaultDir)) {
         fs.mkdirSync(defaultDir, { recursive: true });
       }
 
+      const hasMarkdownFiles = fs.readdirSync(defaultDir).some(entry => this.isMarkdownFile(entry));
+      const seededDefaults = !dirAlreadyExisted || !hasMarkdownFiles;
+      if (seededDefaults) {
+        this.seedDefaultCommands(defaultDir);
+      }
+
       // Add to watched directories
       const result = await this.addWatchedDir(defaultDir);
+      if (!result && wasWatched && seededDefaults) {
+        await this.scanDirectory(defaultDir);
+        this.emit('commandsChanged', this.getCommands());
+      }
       if (result) {
         return defaultDir;
       }
