@@ -37,6 +37,36 @@ function withDefaultWhisperModels(models: Record<string, ModelInfo>): Record<str
   };
 }
 
+function getParakeetActionLabel(
+  needsReinstall: boolean,
+  runtimeInstalled: boolean
+): 'Install' | 'Verify' | 'Reinstall' {
+  if (needsReinstall) return 'Reinstall';
+  return runtimeInstalled ? 'Verify' : 'Install';
+}
+
+function getParakeetPendingActionLabel(
+  actionLabel: 'Install' | 'Verify' | 'Reinstall'
+): 'Installing...' | 'Verifying...' | 'Reinstalling...' {
+  if (actionLabel === 'Verify') return 'Verifying...';
+  if (actionLabel === 'Reinstall') return 'Reinstalling...';
+  return 'Installing...';
+}
+
+function getParakeetVerifiedBadge(isSelected: boolean): {
+  label: 'Selected' | 'Installed';
+  muted: boolean;
+} {
+  if (isSelected) {
+    return { label: 'Selected', muted: false };
+  }
+
+  return {
+    label: 'Installed',
+    muted: true,
+  };
+}
+
 export default function TranscriptionSettings() {
   const { theme } = useTheme();
   const [status, setStatus] = useState<TranscriptionStatus>('idle');
@@ -557,7 +587,7 @@ export default function TranscriptionSettings() {
     <div style={styles.container}>
       <div style={{ marginTop: '16px' }}>
         <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>SHORTCUTS</span>
+          <span style={styles.sectionTitle}>Shortcuts</span>
           <div style={styles.sectionLine} />
         </div>
         <div style={styles.row}>
@@ -657,7 +687,7 @@ export default function TranscriptionSettings() {
 
       <div style={styles.modelsSection}>
         <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>PRIMARY ENGINE</span>
+          <span style={styles.sectionTitle}>Primary Engine</span>
           <div style={styles.sectionLine} />
         </div>
 
@@ -667,11 +697,13 @@ export default function TranscriptionSettings() {
             const engineStatus = getParakeetEngineStatus(engineOption.id);
             const engineVerified = isVisibleParakeetEngineVerified(parakeetStatus, engineOption.id);
             const engineNeedsReinstall = engineStatus?.needsReinstall ?? false;
-              const actionLabel = engineNeedsReinstall
-                ? 'Reinstall'
-              : hasVisibleParakeetRuntime(parakeetStatus)
-                ? 'Verify'
-                : 'Install';
+            const actionLabel = getParakeetActionLabel(
+              engineNeedsReinstall,
+              hasVisibleParakeetRuntime(parakeetStatus)
+            );
+            const pendingActionLabel = getParakeetPendingActionLabel(actionLabel);
+            const isPendingAction = settingUpParakeet && settingUpParakeetEngine === engineOption.id;
+            const verifiedBadge = getParakeetVerifiedBadge(isActive);
             return (
               <div
                 key={engineOption.id}
@@ -707,16 +739,18 @@ export default function TranscriptionSettings() {
                       onClick={(e) => { e.stopPropagation(); handleSetupParakeet(engineOption.id); }}
                       style={styles.btn}
                     >
-                      {settingUpParakeet && settingUpParakeetEngine === engineOption.id ? 'Reinstalling...' : actionLabel}
+                      {isPendingAction ? pendingActionLabel : actionLabel}
                     </button>
                   ) : engineVerified ? (
-                    isActive ? (
-                      <span style={styles.downloadedBadge}>Active</span>
-                    ) : (
-                      <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Ready</span>
-                    )
-                  ) : settingUpParakeet && settingUpParakeetEngine === engineOption.id ? (
-                    <span style={{ fontSize: '11px', color: theme.warning }}>Installing...</span>
+                    <span
+                      style={verifiedBadge.muted
+                        ? { ...styles.downloadedBadge, color: theme.textSecondary }
+                        : styles.downloadedBadge}
+                    >
+                      {verifiedBadge.label}
+                    </span>
+                  ) : isPendingAction ? (
+                    <span style={{ fontSize: '11px', color: theme.warning }}>{pendingActionLabel}</span>
                   ) : (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleSetupParakeet(engineOption.id); }}
@@ -800,7 +834,7 @@ export default function TranscriptionSettings() {
               <span style={styles.modelHint}>whisper.cpp — local fallback engine</span>
             </div>
             {selectedEngine === 'whisper' && (
-              <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Active</span>
+              <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Selected</span>
             )}
           </div>
 
@@ -994,21 +1028,20 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   sectionHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
-    marginBottom: '8px',
+    gap: '10px',
+    marginBottom: '14px',
   },
   sectionTitle: {
-    fontSize: '11px',
+    fontSize: '13px',
     fontWeight: 600,
-    color: theme.textSecondary,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.08em',
+    color: theme.text,
+    letterSpacing: '-0.01em',
     whiteSpace: 'nowrap' as const,
   },
   sectionLine: {
     flex: 1,
     height: '1px',
-    backgroundColor: theme.border,
+    backgroundColor: theme.isDark ? theme.border : '#edf1f5',
   },
 
   // Model list and cards.
