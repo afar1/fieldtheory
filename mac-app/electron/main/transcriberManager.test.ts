@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
+import { EventEmitter } from 'events';
 
 vi.mock('electron', () => ({
   app: {
@@ -171,6 +172,82 @@ describe('TranscriberManager warmup', () => {
   });
 });
 
+describe('TranscriberManager whisper-server shutdown', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it('waits for the tracked process to exit before clearing the reference', async () => {
+    const proc = new EventEmitter() as any;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn(() => true);
+
+    const manager: any = {
+      whisperServerProcess: proc,
+      whisperServerReady: true,
+      whisperServerReadyPromise: Promise.resolve(),
+      whisperServerShutdownPromise: null,
+      whisperServerLifecycleGeneration: 0,
+      whisperServerPort: 1234,
+      whisperServerModelPath: '/tmp/model.bin',
+      terminateTrackedWhisperServer: TranscriberManager.prototype['terminateTrackedWhisperServer'],
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const stopPromise = manager.stopWhisperServer();
+
+    expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+    expect(manager.whisperServerProcess).toBe(proc);
+    expect(manager.whisperServerReady).toBe(false);
+
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+    await stopPromise;
+
+    expect(manager.whisperServerProcess).toBeNull();
+    expect(manager.whisperServerShutdownPromise).toBeNull();
+    expect(manager.whisperServerPort).toBe(0);
+    expect(manager.whisperServerModelPath).toBeNull();
+  });
+
+  it('escalates to SIGKILL when the tracked process ignores SIGTERM', async () => {
+    vi.useFakeTimers();
+
+    const proc = new EventEmitter() as any;
+    proc.exitCode = null;
+    proc.signalCode = null;
+    proc.kill = vi.fn((signal: string) => {
+      if (signal === 'SIGKILL') {
+        proc.signalCode = 'SIGKILL';
+      }
+      return true;
+    });
+
+    const manager: any = {
+      whisperServerProcess: proc,
+      whisperServerReady: true,
+      whisperServerReadyPromise: Promise.resolve(),
+      whisperServerShutdownPromise: null,
+      whisperServerLifecycleGeneration: 0,
+      whisperServerPort: 1234,
+      whisperServerModelPath: '/tmp/model.bin',
+      terminateTrackedWhisperServer: TranscriberManager.prototype['terminateTrackedWhisperServer'],
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const stopPromise = manager.stopWhisperServer();
+    await vi.advanceTimersByTimeAsync(TranscriberManager['WHISPER_SERVER_STOP_TIMEOUT_MS']);
+
+    expect(proc.kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+    expect(proc.kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+
+    proc.emit('close', null);
+    await stopPromise;
+  });
+});
+
 describe('TranscriberManager fallback tracking', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -304,6 +381,32 @@ describe('TranscriberManager runtime restart', () => {
 
     expect(h.startMlxWhisperServer).toHaveBeenCalledTimes(1);
     expect(h.startQwenServer).not.toHaveBeenCalled();
+  });
+
+  it('waits for whisper shutdown before starting a replacement runtime', async () => {
+    let releaseStop!: () => void;
+    const h = createRestartHarness({
+      transcriptionEngine: 'whisper',
+      hotMicTranscriptionEngine: 'default',
+    });
+    h.stopWhisperServer.mockImplementationOnce(
+      () => new Promise<void>((resolve) => { releaseStop = resolve; })
+    );
+
+    let settled = false;
+    const restartPromise = h.manager.restartTranscriptionRuntime().then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(h.startWhisperServer).not.toHaveBeenCalled();
+    expect(settled).toBe(false);
+
+    releaseStop();
+    await restartPromise;
+
+    expect(h.startWhisperServer).toHaveBeenCalledTimes(1);
+    expect(settled).toBe(true);
   });
 });
 

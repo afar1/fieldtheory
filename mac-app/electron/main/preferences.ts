@@ -284,12 +284,27 @@ const DEFAULT_PREFERENCES: Preferences = {
   gazeScreenOverlayEnabled: false,
 };
 
+const SHARED_HOTKEY_PREFERENCE_KEYS = [
+  'transcriptionHotkey',
+  'transcriptionSecondaryHotkey',
+  'clipboardScreenshotHotkey',
+  'clipboardDesktopScreenshotHotkey',
+  'clipboardHistoryHotkey',
+  'continuousContextHotkey',
+  'superPasteHotkey',
+  'commandLauncherHotkey',
+  'autoImproveHotkey',
+  'abandonRecordingHotkey',
+  'hotMicHotkey',
+] as const satisfies ReadonlyArray<keyof Preferences>;
+
 /**
  * Manages application preferences stored as JSON.
  *
  * Supports per-user data isolation via UserDataManager.
  * When a user logs in, call setUserDataManager() and then load() to load their preferences.
- * When a user logs out, call reset() to clear in-memory state.
+ * When a user logs out, call resetForSignedOutState() to clear per-user state
+ * while preserving device-level shortcut settings.
  */
 export class PreferencesManager {
   private prefsPath: string;
@@ -330,6 +345,55 @@ export class PreferencesManager {
     }
   }
 
+  private getSharedPrefsPath(): string {
+    return path.join(app.getPath('userData'), 'preferences.json');
+  }
+
+  private async readPrefsFile(filePath: string): Promise<Partial<Preferences> | null> {
+    try {
+      const data = await fs.readFile(filePath, 'utf-8');
+      return JSON.parse(data) as Partial<Preferences>;
+    } catch {
+      return null;
+    }
+  }
+
+  private pickSharedHotkeys(source: Partial<Preferences>): Partial<Preferences> {
+    const shared: Partial<Preferences> = {};
+
+    for (const key of SHARED_HOTKEY_PREFERENCE_KEYS) {
+      const value = source[key];
+      if (value !== undefined) {
+        shared[key] = value;
+      }
+    }
+
+    return shared;
+  }
+
+  private async syncSharedHotkeysFromPreferences(source: Partial<Preferences>): Promise<void> {
+    const sharedPrefsPath = this.getSharedPrefsPath();
+    if (sharedPrefsPath === this.prefsPath) {
+      return;
+    }
+
+    const nextSharedHotkeys = this.pickSharedHotkeys(source);
+    const existingSharedPrefs = (await this.readPrefsFile(sharedPrefsPath)) ?? {};
+    const existingSharedHotkeys = this.pickSharedHotkeys(existingSharedPrefs);
+
+    if (JSON.stringify(existingSharedHotkeys) === JSON.stringify(nextSharedHotkeys)) {
+      return;
+    }
+
+    const dir = path.dirname(sharedPrefsPath);
+    await fs.mkdir(dir, { recursive: true }).catch(() => {});
+    await fs.writeFile(
+      sharedPrefsPath,
+      JSON.stringify({ ...existingSharedPrefs, ...nextSharedHotkeys }, null, 2),
+      'utf-8',
+    );
+  }
+
   /**
    * Load preferences from disk.
    * If logged in with per-user path but file doesn't exist, migrates from legacy path.
@@ -337,33 +401,35 @@ export class PreferencesManager {
   async load(): Promise<Preferences> {
     // Update path in case user changed
     this.updatePrefsPath();
+    const sharedPrefsPath = this.getSharedPrefsPath();
+    const sharedHotkeys =
+      this.prefsPath === sharedPrefsPath
+        ? {}
+        : this.pickSharedHotkeys((await this.readPrefsFile(sharedPrefsPath)) ?? {});
 
-    try {
-      const data = await fs.readFile(this.prefsPath, 'utf-8');
-      const loaded = JSON.parse(data) as Partial<Preferences>;
-      this.preferences = { ...DEFAULT_PREFERENCES, ...loaded };
-      return this.preferences;
-    } catch (error) {
-      // File doesn't exist at current path - try migrating from legacy path if logged in
-      if (this.userDataManager?.isLoggedIn()) {
-        const legacyPath = path.join(app.getPath('userData'), 'preferences.json');
-        if (legacyPath !== this.prefsPath) {
-          try {
-            const legacyData = await fs.readFile(legacyPath, 'utf-8');
-            const legacyPrefs = JSON.parse(legacyData) as Partial<Preferences>;
-            this.preferences = { ...DEFAULT_PREFERENCES, ...legacyPrefs };
-            // Save to new per-user path
-            await this.save({});
-            return this.preferences;
-          } catch (migrationError) {
-            // Legacy file also not found or invalid - use defaults
-          }
-        }
-      }
-
-      this.preferences = { ...DEFAULT_PREFERENCES };
+    const loaded = await this.readPrefsFile(this.prefsPath);
+    if (loaded) {
+      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...loaded };
+      await this.syncSharedHotkeysFromPreferences(this.preferences);
       return this.preferences;
     }
+
+    // File doesn't exist at current path - try migrating from legacy path if logged in
+    if (this.userDataManager?.isLoggedIn()) {
+      const legacyPath = path.join(app.getPath('userData'), 'preferences.json');
+      if (legacyPath !== this.prefsPath) {
+        const legacyPrefs = await this.readPrefsFile(legacyPath);
+        if (legacyPrefs) {
+          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...legacyPrefs };
+          // Save to new per-user path
+          await this.save({});
+          return this.preferences;
+        }
+      }
+    }
+
+    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys };
+    return this.preferences;
   }
 
   /**
@@ -417,6 +483,7 @@ export class PreferencesManager {
 
     try {
       await fs.writeFile(this.prefsPath, JSON.stringify(this.preferences, null, 2), 'utf-8');
+      await this.syncSharedHotkeysFromPreferences(this.preferences);
     } catch (error) {
       log.error('Failed to save preferences:', error);
       throw error;
@@ -428,6 +495,17 @@ export class PreferencesManager {
    */
   reset(): void {
     this.preferences = { ...DEFAULT_PREFERENCES };
+  }
+
+  /**
+   * Reset to signed-out defaults while preserving shared keyboard shortcuts.
+   */
+  async resetForSignedOutState(): Promise<void> {
+    this.updatePrefsPath();
+    const sharedHotkeys = this.pickSharedHotkeys(
+      (await this.readPrefsFile(this.getSharedPrefsPath())) ?? {}
+    );
+    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys };
   }
 
   /**

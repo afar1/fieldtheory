@@ -52,6 +52,12 @@ import {
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
 import { smartTruncateText, detectColor } from '../utils/textUtils';
+import {
+  FIELD_THEORY_VIEW_STORAGE_KEY,
+  SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY,
+  persistClipboardSurface,
+  resolveClipboardRestoreState,
+} from '../utils/clipboardHistoryRestore';
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 
@@ -82,7 +88,6 @@ function combineStackText(items: ClipboardItem[], useImproved: boolean = false):
     })
     .join('\n\n');
 }
-
 
 /**
  * DraggableDroppableRow - wrapper that makes a row both draggable and a drop target.
@@ -229,26 +234,10 @@ export default function ClipboardHistory() {
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
   }, []);
-  const [showSettings, setShowSettings] = useState(() => {
-    return localStorage.getItem('fieldTheoryShowSettings') === 'true';
-  });
+  const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
-  const [viewMode, setViewMode] = useState<ViewMode>(() => {
-    // If user started a transcription, always show Fields on next open.
-    const shouldShowFields = localStorage.getItem('shouldShowFieldsOnOpen') === 'true';
-    if (shouldShowFields) {
-      localStorage.removeItem('shouldShowFieldsOnOpen');
-      localStorage.setItem('fieldTheoryView', 'clipboard');
-      return 'clipboard';
-    }
-    
-    const saved = localStorage.getItem('fieldTheoryView');
-    if (saved === 'clipboard' || saved === 'todo' || saved === 'feedback' || saved === 'commands' || saved === 'librarian') {
-      return saved;
-    }
-    return 'clipboard';
-  });
+  const [viewMode, setViewMode] = useState<ViewMode>(() => resolveClipboardRestoreState(localStorage).viewMode);
 
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
   const [sketchBackgroundImage, setSketchBackgroundImage] = useState<{
@@ -827,7 +816,7 @@ export default function ClipboardHistory() {
       // When transcription starts, set a flag so the next window open shows Fields.
       // This ensures the user sees their new transcript in Fields, not Shared Fields.
       if (status === 'recording') {
-        localStorage.setItem('shouldShowFieldsOnOpen', 'true');
+        localStorage.setItem(SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY, 'true');
       }
     });
     
@@ -864,7 +853,7 @@ export default function ClipboardHistory() {
 
     // Check current view to avoid race condition where async query overwrites cleared state.
     window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
-      const currentView = localStorage.getItem('fieldTheoryView');
+      const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
       console.log('[FeedbackDot] hasUnreadFeedback API returned:', hasUnread, 'currentView:', currentView);
       if (hasUnread && currentView !== 'feedback') {
         console.log('[FeedbackDot] Setting hasUnreadFeedback to TRUE');
@@ -874,7 +863,7 @@ export default function ClipboardHistory() {
 
     // Listen for incoming feedback messages.
     const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
-      const currentView = localStorage.getItem('fieldTheoryView');
+      const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
       if (message.type === 'feedback') {
         if (currentView !== 'feedback') {
           console.log('[FeedbackDot] New feedback message received - setting hasUnreadFeedback to TRUE');
@@ -1315,11 +1304,11 @@ export default function ClipboardHistory() {
   useEffect(() => {
     // Performance debugging: track view switches
     const switchStartTime = performance.now();
-    console.log(`[Performance] Switching to view: ${viewMode}`);
+    const surface = showSettings ? 'settings' : viewMode;
+    console.log(`[Performance] Switching to view: ${surface}`);
 
-    if (viewMode !== 'sketch') {
-      localStorage.setItem('fieldTheoryView', viewMode);
-    }
+    persistClipboardSurface(localStorage, { viewMode, showSettings });
+
     // Close settings when entering sketch mode (sketch needs full screen).
     if (viewMode === 'sketch') {
       setShowSettings(false);
@@ -1335,13 +1324,12 @@ export default function ClipboardHistory() {
     // Log completion time
     requestAnimationFrame(() => {
       const switchEndTime = performance.now();
-      console.log(`[Performance] View switch to ${viewMode} completed in ${(switchEndTime - switchStartTime).toFixed(2)}ms`);
+      console.log(`[Performance] View switch to ${surface} completed in ${(switchEndTime - switchStartTime).toFixed(2)}ms`);
     });
-  }, [viewMode]);
+  }, [showSettings, viewMode]);
 
-  // Persist showSettings state when it changes and clear section override when closing
+  // Clear section override when settings closes.
   useEffect(() => {
-    localStorage.setItem('fieldTheoryShowSettings', showSettings ? 'true' : 'false');
     if (!showSettings) {
       setSettingsSection(undefined);  // Clear section override when settings closes
     }
@@ -1466,6 +1454,8 @@ export default function ClipboardHistory() {
     setIsMultiSelect(false);
 
     const unsubscribeShowHistory = window.clipboardAPI.onShowHistory(() => {
+      const pendingSketch = localStorage.getItem('pendingSketch');
+
       setSearchQuery('');
       setDebouncedSearchQuery('');
       setSelectedIndex(0);
@@ -1473,16 +1463,12 @@ export default function ClipboardHistory() {
       setIsMultiSelect(false);
       setFilter('all');
 
-      // Restore showSettings from localStorage - ensures we return to settings if that was the last view
-      const savedSettings = localStorage.getItem('fieldTheoryShowSettings') === 'true';
-      setShowSettings(savedSettings);
-
       // Check for pending sketch to restore (user was drawing and accidentally closed)
       try {
-        const pendingSketch = localStorage.getItem('pendingSketch');
         if (pendingSketch) {
           const restored = JSON.parse(pendingSketch);
           if (restored.elements?.length > 0 && Date.now() - restored.timestamp < 24 * 60 * 60 * 1000) {
+            setShowSettings(false);
             setViewMode('sketch');
             setEditingSketchItem(null);
             setSketchBackgroundImage(null);
@@ -1495,13 +1481,9 @@ export default function ClipboardHistory() {
         localStorage.removeItem('pendingSketch');
       }
 
-      // Restore viewMode from localStorage - ensures we return to the last viewed tab
-      // even if the window was recreated or state got out of sync.
-      const savedView = localStorage.getItem('fieldTheoryView');
-      if (savedView === 'clipboard' || savedView === 'todo' || savedView === 'feedback' ||
-          savedView === 'commands' || savedView === 'librarian') {
-        setViewMode(savedView);
-      }
+      const restoreState = resolveClipboardRestoreState(localStorage);
+      setViewMode(restoreState.viewMode);
+      setShowSettings(restoreState.showSettings);
     });
 
     const unsubscribeShowTranscriptHistory = window.clipboardAPI.onShowTranscriptHistory?.(() => {
