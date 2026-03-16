@@ -55,6 +55,7 @@ import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -898,22 +899,50 @@ function registerHotkeysAfterOnboarding(): void {
   // Register Command Launcher hotkey - now customizable via HotkeyManager
   // Simple toggle: open or close the command launcher
   const commandLauncherHotkey = prefs.commandLauncherHotkey || 'Command+Shift+K';
+  appendCommandLauncherTrace('hotkey-registered', {
+    hotkey: commandLauncherHotkey,
+    tracePath: getCommandLauncherTracePath(),
+  });
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
+      const launcherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
+      const immersiveMode = clipboardHistoryWindow?.getImmersiveMode() ?? false;
 
-      if (launcherVisible) {
-        // Command launcher is visible → close it
-        commandLauncherWindow?.hide();
-      } else {
-        // Command launcher not visible → open it
-        if (commandLauncherWindow) {
-          // If immersive view is open, dismiss it first to avoid z-order conflicts
-          if (clipboardHistoryWindow?.getImmersiveMode()) {
-            clipboardHistoryWindow.hide();
-          }
-          await commandLauncherWindow.show();
-          metricsManager?.recordCommandLauncherUse();
+      appendCommandLauncherTrace('hotkey-trigger', {
+        hotkey: commandLauncherHotkey,
+        launcherVisible,
+        launcherShowingOrVisible,
+        immersiveMode,
+      });
+
+      try {
+        if (launcherVisible) {
+          appendCommandLauncherTrace('hotkey-hide-request');
+          commandLauncherWindow?.hide();
+          return;
         }
+
+        if (!commandLauncherWindow) {
+          appendCommandLauncherTrace('hotkey-show-missing-window');
+          return;
+        }
+
+        // If immersive view is open, dismiss it first to avoid z-order conflicts
+        if (immersiveMode) {
+          appendCommandLauncherTrace('hotkey-hide-immersive-window');
+          clipboardHistoryWindow?.hide();
+        }
+
+        appendCommandLauncherTrace('hotkey-show-request');
+        await commandLauncherWindow.show();
+        appendCommandLauncherTrace('hotkey-show-complete', {
+          launcherVisible: commandLauncherWindow.isVisible(),
+          launcherShowingOrVisible: commandLauncherWindow.isShowingOrVisible(),
+        });
+        metricsManager?.recordCommandLauncherUse();
+      } catch (error) {
+        appendCommandLauncherTrace('hotkey-show-error', { error });
+        log.error('Command launcher hotkey failed:', error);
       }
   });
 
@@ -6436,7 +6465,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Listen for logout to clear manager state.
   authManager.on('userLoggedOut', async () => {
     if (preferencesManager) {
-      preferencesManager.reset();
+      await preferencesManager.resetForSignedOutState();
     }
     dynamicIslandManager?.setEnabled(false);
     dynamicIslandManager?.setGeometryTuning(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
@@ -6508,7 +6537,7 @@ async function initTranscriberSystem(): Promise<void> {
     }
     transcriberManager?.stopQwenServer();
     transcriberManager?.stopMlxWhisperServer();
-    transcriberManager?.stopWhisperServer();
+    void transcriberManager?.stopWhisperServer();
   });
 
   powerMonitor.on('resume', () => {

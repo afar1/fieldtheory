@@ -92,6 +92,24 @@ describe('StdioJsonServer', () => {
     expect(server.isReady).toBe(false);
   });
 
+  it('rejects start() when ready signal never arrives', async () => {
+    vi.useFakeTimers();
+    try {
+      const server = createServer({ startupTimeoutMs: 500 });
+      const startPromise = server.start();
+      void startPromise.catch(() => {});
+      await flushMicrotasks();
+
+      await vi.advanceTimersByTimeAsync(500);
+
+      await expect(startPromise).rejects.toThrow('Test server startup timed out (0.5s)');
+      expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
+      expect(server.isReady).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('runs preStart validation before spawning', async () => {
     const preStart = vi.fn(async () => {});
     const server = createServer({ preStart });
