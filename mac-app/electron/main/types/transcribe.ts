@@ -25,6 +25,26 @@ export const PARAKEET_ENGINE_LABELS: Record<ParakeetEngine, string> = {
   'parakeet-multilingual': 'Parakeet Multilingual',
 };
 
+export interface ParakeetEngineStatus {
+  engine: ParakeetEngine;
+  label: string;
+  verified: boolean;
+  needsReinstall: boolean;
+  lastError: string | null;
+  lastErrorAt: string | null;
+}
+
+export interface ParakeetStatus {
+  runtimeInstalled: boolean;
+  pythonPath: string;
+  scriptPath: string;
+  cacheDir: string;
+  cacheExists: boolean;
+  serverState: 'idle' | 'warming' | 'ready';
+  activeEngine: ParakeetEngine | null;
+  engines: ParakeetEngineStatus[];
+}
+
 export function isParakeetEngine(
   engine: string | null | undefined
 ): engine is ParakeetEngine {
@@ -76,6 +96,7 @@ export const TranscribeIPCChannels = {
   IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
   IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
   IS_PARAKEET_INSTALLED: 'transcribe:isParakeetInstalled',
+  GET_PARAKEET_STATUS: 'transcribe:getParakeetStatus',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
   SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
@@ -179,10 +200,12 @@ export interface TranscribeAPI {
   isQwenInstalled: () => Promise<boolean>;
   isMlxWhisperInstalled: () => Promise<boolean>;
   isParakeetInstalled: () => Promise<boolean>;
+  getParakeetStatus: () => Promise<ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet: () => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: (engine?: ParakeetEngine) => Promise<{ success: boolean; error?: string }>;
+  uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
   getSoundConfig: () => Promise<SoundConfig>;
   setSoundConfig: (config: Partial<SoundConfig>) => Promise<void>;
   getAvailableSounds: () => Promise<SoundOption[]>;

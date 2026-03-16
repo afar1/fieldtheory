@@ -6,6 +6,7 @@ import { PreferencesManager } from './preferences';
 import { SoundManager } from './soundManager';
 import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
+import type { NativeHelper } from './nativeHelper';
 
 const log = createLogger('ClipboardHistory');
 
@@ -112,11 +113,28 @@ export class ClipboardHistoryWindow {
   // Timer for smooth window resize animation.
   private animationTimer: ReturnType<typeof setInterval> | null = null;
 
+  // Dedupes blur dismissal when both blur handlers fire for one click-away.
+  private blurDismissPromise: Promise<void> | null = null;
+
+  // Tracks an in-flight previous-app capture so close/restore paths can await it
+  // without forcing open() itself to block on AppleScript.
+  private previousAppCapturePromise: Promise<void> | null = null;
+
   // Sound manager for playing window open/close sounds.
   private soundManager: SoundManager;
   
   // Preferences manager for checking settings like showInDock.
   private preferencesManager: PreferencesManager;
+
+  // Optional native helper with cached frontmost-app info for fast open.
+  private nativeHelper: Pick<NativeHelper, 'getFrontmostApp'> | null = null;
+
+  // Re-enables window focusability after blur-dismiss hands focus back to macOS.
+  private blurFocusableResetTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // Tracks when the native clipboard-history window blur fired so the app-level
+  // blur hook can act as a true fallback instead of racing it.
+  private lastNativeWindowBlurAt = 0;
 
   constructor(preferences?: PreferencesManager) {
     // Create sound manager with preferences (or create new PreferencesManager if none provided).
@@ -151,6 +169,60 @@ export class ClipboardHistoryWindow {
       bounds.height,
       details
     );
+  }
+
+  setNativeHelper(nativeHelper: Pick<NativeHelper, 'getFrontmostApp'> | null): void {
+    this.nativeHelper = nativeHelper;
+  }
+
+  private getCachedFrontmostExternalApp(): RunningApp | null {
+    const frontmost = this.nativeHelper?.getFrontmostApp();
+    const bundleId = frontmost?.bundleId ?? null;
+    const name = frontmost?.name ?? null;
+
+    if (!bundleId || !name || isElectronApp(bundleId, name)) {
+      return null;
+    }
+
+    return { bundleId, name };
+  }
+
+  private commitPreviousAppForFreshShow(frontmostApp: RunningApp | null): void {
+    this.previousApp = frontmostApp;
+    this.selectedTargetApp = null;
+    this.sendTargetAppInfo();
+  }
+
+  private commitPreviousAppIfCaptured(frontmostApp: RunningApp | null): RunningApp | null {
+    if (!frontmostApp) {
+      return null;
+    }
+
+    const isFirstCapture = this.previousApp === null;
+    this.previousApp = frontmostApp;
+    if (isFirstCapture) {
+      this.selectedTargetApp = null;
+    }
+    return this.previousApp;
+  }
+
+  private beginPreviousAppCapture(reason: string): void {
+    if (this.previousAppCapturePromise) {
+      return;
+    }
+
+    const startedAt = Date.now();
+    this.previousAppCapturePromise = this.capturePreviousAppBeforeShow()
+      .catch((error) => {
+        log.error('Failed to capture previous app (%s):', reason, error);
+      })
+      .finally(() => {
+        const durationMs = Date.now() - startedAt;
+        if (durationMs >= 50) {
+          log.info('Clipboard history previous-app capture (%s) took %dms', reason, durationMs);
+        }
+        this.previousAppCapturePromise = null;
+      });
   }
 
   /**
@@ -261,32 +333,106 @@ export class ClipboardHistoryWindow {
     this.show();
   }
 
+  private getBlurDismissState() {
+    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    return {
+      showInDock,
+      immersive: this.isImmersiveMode,
+      sketch: this.sketchModeActive,
+      scenario: this.scenarioTestingActive,
+      recording: this.isRecordingActive,
+    };
+  }
+
+  /**
+   * Whether blur should dismiss the clipboard history window in panel mode.
+   */
+  shouldAutoHideOnBlur(): boolean {
+    const state = this.getBlurDismissState();
+    return !state.showInDock
+      && !state.immersive
+      && !state.sketch
+      && !state.scenario
+      && !state.recording;
+  }
+
+  /**
+   * Start previous-app capture, then show the window immediately.
+   * Prefer the native helper's cached frontmost app when available; otherwise
+   * fall back to an async AppleScript capture without blocking the UI.
+   */
+  capturePreviousAppAndShow(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    showSettingsMode: boolean = false,
+    skipSound: boolean = false,
+    transcriptHistoryMode: boolean = false,
+    activateWindow: boolean = true,
+  ): void {
+    const cachedFrontmost = this.getCachedFrontmostExternalApp();
+    if (cachedFrontmost) {
+      this.commitPreviousAppForFreshShow(cachedFrontmost);
+    } else {
+      this.commitPreviousAppForFreshShow(null);
+      this.beginPreviousAppCapture('show');
+    }
+    this.show(savedBounds, showSettingsMode, skipSound, transcriptHistoryMode, activateWindow);
+  }
+
+  private restoreWindowFocusabilitySoon(): void {
+    if (this.blurFocusableResetTimer) {
+      clearTimeout(this.blurFocusableResetTimer);
+      this.blurFocusableResetTimer = null;
+    }
+
+    this.blurFocusableResetTimer = setTimeout(() => {
+      this.blurFocusableResetTimer = null;
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.setFocusable(true);
+      }
+    }, 0);
+  }
+
+  private prepareWindowForShow(): void {
+    if (this.blurFocusableResetTimer) {
+      clearTimeout(this.blurFocusableResetTimer);
+      this.blurFocusableResetTimer = null;
+    }
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.setFocusable(true);
+    }
+  }
+
   /**
    * Show the clipboard history window.
-   * Window takes focus like Alfred - uses standard keyboard input.
+   * By default, the window takes focus like Alfred and uses standard keyboard
+   * input. Auto-open flows can opt out and reveal it without activation.
    * Shows window immediately, then fetches app data in background for instant UX.
    * @param savedBounds Optional saved bounds to restore position/size (absolute screen coords)
    * @param showSettingsMode If true, open the window with settings panel visible
    * @param skipSound If true, skip playing open sound (used when sound was already played externally for faster feedback)
    * @param transcriptHistoryMode If true, renderer opens directly in transcript-only history mode
+   * @param activateWindow If false, show the window without making Field Theory frontmost
    */
   show(
     savedBounds?: { x: number; y: number; width: number; height: number },
     showSettingsMode: boolean = false,
     skipSound: boolean = false,
-    transcriptHistoryMode: boolean = false
+    transcriptHistoryMode: boolean = false,
+    activateWindow: boolean = true,
   ): void {
     this.logLifecycle(
       'show:begin',
-      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
+      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} activateWindow=${activateWindow} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
     );
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
 
-    // Always reactivate so the panel can receive focus after a paste flow
-    // (app.isHidden() is false but inactive — panel couldn't handle clicks).
-    app.show();
+    if (activateWindow) {
+      // Always reactivate so the panel can receive focus after a paste flow
+      // (app.isHidden() is false but inactive — panel couldn't handle clicks).
+      app.show();
+    }
     if (!showInDock && process.platform === 'darwin') {
       app.dock.hide();
     }
@@ -294,6 +440,7 @@ export class ClipboardHistoryWindow {
     // If window exists, reposition and show it.
     // For existing windows, we can use renderer-based sound (instant via Web Audio API).
     if (this.window && !this.window.isDestroyed()) {
+      this.prepareWindowForShow();
       // Reposition window if bounds provided.
       if (savedBounds) {
         this.window.setBounds({
@@ -316,10 +463,14 @@ export class ClipboardHistoryWindow {
         this.window.setAlwaysOnTop(true, 'screen-saver', 1);
       }
 
-      this.window.show();
-      // Bring window to front of window stack (important when not alwaysOnTop)
-      this.window.moveTop();
-      this.window.focus();
+      if (activateWindow) {
+        this.window.show();
+        this.window.moveTop();
+        this.window.focus();
+      } else {
+        this.window.showInactive();
+        this.window.moveTop();
+      }
       this.logLifecycle('show:existing-window-complete');
 
       // Notify renderer to reset search query.
@@ -344,7 +495,7 @@ export class ClipboardHistoryWindow {
     }
 
     // Create new window.
-    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode);
+    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode, activateWindow);
     this.logLifecycle('show:created-window');
 
     // Fetch app data in background (don't await).
@@ -391,7 +542,8 @@ export class ClipboardHistoryWindow {
     savedBounds?: { x: number; y: number; width: number; height: number },
     showSettingsMode: boolean = false,
     preloadOnly: boolean = false,
-    transcriptHistoryMode: boolean = false
+    transcriptHistoryMode: boolean = false,
+    activateWindow: boolean = true,
   ): void {
     // Calculate window position/size.
     // savedBounds are now in absolute screen coordinates (simpler than old overlay-relative).
@@ -492,40 +644,22 @@ export class ClipboardHistoryWindow {
     // When showInDock is enabled, skip this entirely - user expects normal app behavior.
     // When immersive mode is active, also skip - user positioned window intentionally.
     this.window.on('blur', () => {
-      const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+      const blurState = this.getBlurDismissState();
       this.logLifecycle(
         'window:blur-handler',
-        `showInDock=${showInDock} immersive=${this.isImmersiveMode} sketch=${this.sketchModeActive} scenario=${this.scenarioTestingActive} recording=${this.isRecordingActive}`
+        `showInDock=${blurState.showInDock} immersive=${blurState.immersive} sketch=${blurState.sketch} scenario=${blurState.scenario} recording=${blurState.recording}`
       );
 
-      // When showInDock is enabled, don't auto-hide on blur.
-      // User expects normal app behavior where windows stay visible.
-      if (showInDock) {
+      if (!this.shouldAutoHideOnBlur()) {
         return;
       }
 
-      // When in immersive/fullscreen reading mode, don't auto-hide.
-      // User may have positioned window to read while working.
-      if (this.isImmersiveMode) {
-        return;
-      }
-
-      // Don't hide when sketch/draw mode is active.
-      // User may be in the middle of drawing and accidentally clicked away.
-      if (this.sketchModeActive) {
-        return;
-      }
-
-      // Don't hide when scenario testing panel is active.
-      // User needs to see changes in real-time while adjusting overrides.
-      if (this.scenarioTestingActive) {
-        return;
-      }
-
-      // Blur means another app already gained focus, so hiding the entire app is
-      // unnecessary here and can trigger compositor resets in transparent overlays.
-      this.logLifecycle('window:blur-handler-hide', 'hideApp=false');
-      this.hide(false, 'window-blur-handler');
+      // Yield to macOS so the clicked target window/control can keep first responder.
+      // We use a short settle delay plus a focused-window check to avoid hiding when
+      // another Field Theory window takes focus instead.
+      this.markNativeWindowBlur();
+      this.logLifecycle('window:blur-handler-hide', 'dismissForExternalBlur=true');
+      void this.dismissForExternalBlur('window-blur-handler', 20);
     });
     
     // Save bounds when window is moved or resized (for persistence).
@@ -585,8 +719,15 @@ export class ClipboardHistoryWindow {
         return;
       }
       if (this.window && !this.window.isDestroyed()) {
-        this.window.show();
-        this.window.focus();
+        this.prepareWindowForShow();
+        if (activateWindow) {
+          this.window.show();
+          this.window.moveTop();
+          this.window.focus();
+        } else {
+          this.window.showInactive();
+          this.window.moveTop();
+        }
         // Notify renderer to reset search query.
         this.window.webContents.send('clipboard:showHistory');
         if (transcriptHistoryMode) {
@@ -617,8 +758,27 @@ export class ClipboardHistoryWindow {
   }
 
   /**
+   * Raise the existing window without stealing focus from the current app.
+   * Used when a new artifact arrives while the immersive window is already open.
+   */
+  revealWithoutFocus(): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    if (!showInDock) {
+      this.window.setAlwaysOnTop(true, 'screen-saver', 1);
+    }
+
+    this.window.showInactive();
+    this.window.moveTop();
+  }
+
+  /**
    * Hide the clipboard history window.
-   * Restores focus to the previous app (including exact input field).
+   * By default this only hides the window. Call `hideAndRestorePreviousApp()`
+   * when dismissal should explicitly reactivate the prior external app.
    * @param hideApp - Whether to hide the entire app. Set to false when other windows (like recording overlay) should remain visible.
    */
   hide(hideApp: boolean = true, reason: string = 'unspecified'): void {
@@ -669,9 +829,8 @@ export class ClipboardHistoryWindow {
       this.window.hide();
     }
 
-    // Hide entire app to guarantee focus returns to previous app
-    // This ensures the exact input field that was active gets focus back
-    // Skip if other windows need to stay visible (e.g., recording overlay)
+    // Hide the whole app when callers want macOS to complete a native focus
+    // handoff. Skip if other windows need to stay visible (e.g., recording overlay).
     if (hideApp) {
       if (process.platform === 'darwin') {
         app.dock.hide();
@@ -692,6 +851,55 @@ export class ClipboardHistoryWindow {
       this.onHidden({ reason, hideApp, wasVisible });
     }
     this.logLifecycle('hide:complete');
+  }
+
+  /**
+   * Hide the window without hiding the whole app, then restore the previously
+   * focused external app when one is known.
+   */
+  async hideAndRestorePreviousApp(reason: string = 'unspecified'): Promise<void> {
+    let previousApp = this.getPreviousApp();
+    const pendingCapture = !previousApp?.bundleId ? this.previousAppCapturePromise : null;
+    this.hide(false, reason);
+    if (!previousApp?.bundleId) {
+      previousApp = await this.resolvePreviousAppForRestore(pendingCapture);
+    }
+    if (previousApp?.bundleId) {
+      await this.activateApp(previousApp.bundleId);
+    }
+  }
+
+  /**
+   * Hide on external blur and let macOS keep the clicked target window active.
+   * Using app.hide() here is closer to the old native click-away behavior than
+   * post-blur app reactivation.
+   */
+  async dismissForExternalBlur(
+    reason: string = 'unspecified',
+    settleDelayMs: number = 0,
+  ): Promise<void> {
+    if (this.blurDismissPromise) {
+      return this.blurDismissPromise;
+    }
+
+    this.blurDismissPromise = (async () => {
+      if (settleDelayMs > 0) {
+        await new Promise(resolve => setTimeout(resolve, settleDelayMs));
+      }
+      const shouldDismiss = this.shouldCompleteExternalBlurDismiss();
+      if (!shouldDismiss) {
+        return;
+      }
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.setFocusable(false);
+      }
+      this.hide(false, reason);
+      this.restoreWindowFocusabilitySoon();
+    })().finally(() => {
+      this.blurDismissPromise = null;
+    });
+
+    return this.blurDismissPromise;
   }
 
   /**
@@ -970,41 +1178,26 @@ export class ClipboardHistoryWindow {
   }
 
   /**
-   * Get the frontmost app's bundle ID and name using AppleScript.
-   * Called before showing the clipboard history to track what app to paste into.
-   * Excludes the Electron app itself - if Electron app is frontmost, returns null.
-   * Only resets selectedTargetApp on first capture to preserve user's manual selections.
+   * Read the current frontmost external app without mutating clipboard-history state.
    */
-  async capturePreviousApp(): Promise<RunningApp | null> {
+  private async getFrontmostExternalApp(): Promise<RunningApp | null> {
+    const cachedFrontmost = this.getCachedFrontmostExternalApp();
+    if (cachedFrontmost) {
+      return cachedFrontmost;
+    }
+
     try {
-      // Get both bundle ID and name in a single AppleScript call.
       const script = `
         tell application "System Events"
           set frontApp to first application process whose frontmost is true
           return (bundle identifier of frontApp) & "|" & (name of frontApp)
         end tell
       `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const { stdout } = await execFileAsync('osascript', ['-e', script]);
       const [bundleId, name] = stdout.trim().split('|');
-      
-      if (bundleId && name) {
-        // Skip if this is the Electron app itself
-        if (isElectronApp(bundleId, name)) {
-          return null;
-        }
-        
-        // Only reset selectedTargetApp if this is the first time capturing previousApp.
-        // This preserves user's manual target app selections when window is reopened.
-        const isFirstCapture = this.previousApp === null;
-        this.previousApp = { bundleId, name };
-        
-        if (isFirstCapture) {
-          // Reset selected target to previous app only on first capture.
-          this.selectedTargetApp = null;
-        }
-        // Otherwise, preserve user's manual selection (if any).
-        
-        return this.previousApp;
+
+      if (bundleId && name && !isElectronApp(bundleId, name)) {
+        return { bundleId, name };
       }
     } catch (error) {
       log.error('Failed to get frontmost app:', error);
@@ -1013,32 +1206,45 @@ export class ClipboardHistoryWindow {
   }
 
   /**
-   * Capture the frontmost app BEFORE showing the window.
-   * Must be called before show() because once the window takes focus, Field Theory becomes frontmost.
-   * Always resets selectedTargetApp since this is a fresh window open.
+   * Get the frontmost app's bundle ID and name using AppleScript.
+   * Called before showing the clipboard history to track what app to paste into.
+   * Excludes the Electron app itself - if Electron app is frontmost, returns null.
+   * Only resets selectedTargetApp on first capture to preserve user's manual selections.
+   */
+  async capturePreviousApp(): Promise<RunningApp | null> {
+    const frontmostApp = await this.getFrontmostExternalApp();
+    return this.commitPreviousAppIfCaptured(frontmostApp);
+  }
+
+  /**
+   * Capture the frontmost app for a fresh window open.
+   * Uses cached native state when available and falls back to AppleScript.
    */
   async capturePreviousAppBeforeShow(): Promise<void> {
-    try {
-      const script = `
-        tell application "System Events"
-          set frontApp to first application process whose frontmost is true
-          return (bundle identifier of frontApp) & "|" & (name of frontApp)
-        end tell
-      `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
-      const [bundleId, name] = stdout.trim().split('|');
-      
-      if (bundleId && name && !isElectronApp(bundleId, name)) {
-        this.previousApp = { bundleId, name };
-        // Reset selected target when opening window fresh.
-        this.selectedTargetApp = null;
-        
-        // Send updated target app info to renderer (in case window already shown).
-        this.sendTargetAppInfo();
-      }
-    } catch (error) {
-      log.error('Failed to capture previous app:', error);
+    const frontmostApp = await this.getFrontmostExternalApp();
+    this.commitPreviousAppForFreshShow(frontmostApp);
+  }
+
+  private async resolvePreviousAppForRestore(pendingCapture: Promise<void> | null): Promise<RunningApp | null> {
+    if (pendingCapture) {
+      await pendingCapture;
     }
+    return this.getPreviousApp();
+  }
+
+  private shouldCompleteExternalBlurDismiss(): boolean {
+    if (!this.isVisible() || !this.shouldAutoHideOnBlur()) {
+      return false;
+    }
+    return !BrowserWindow.getFocusedWindow();
+  }
+
+  markNativeWindowBlur(): void {
+    this.lastNativeWindowBlurAt = Date.now();
+  }
+
+  hadRecentNativeWindowBlur(maxAgeMs: number): boolean {
+    return this.lastNativeWindowBlurAt > 0 && (Date.now() - this.lastNativeWindowBlurAt) <= maxAgeMs;
   }
 
   /**
@@ -1075,8 +1281,8 @@ export class ClipboardHistoryWindow {
 
   /**
    * Refresh app data in background after window is shown.
-   * Only refreshes running apps list - previousApp is captured before show() via
-   * capturePreviousAppBeforeShow() to avoid race condition where Field Theory becomes frontmost.
+   * Only refreshes running apps list. Previous-app capture is kicked off before show()
+   * and may finish shortly afterward without blocking window open.
    */
   private async refreshAppDataInBackground(): Promise<void> {
     // Only refresh running apps - previousApp was captured before show().

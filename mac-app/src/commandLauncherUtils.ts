@@ -36,6 +36,138 @@ export function formatTimeAgo(timestamp: number): string {
 }
 
 // =============================================================================
+// Command Launcher Built-in Actions
+// =============================================================================
+
+export const DEFAULT_LAUNCHER_HOTKEYS = {
+  screenshot: 'Alt+4',
+  fullScreen: 'Alt+3',
+  activeWindow: 'Shift+Alt+3',
+  history: 'Option+Space',
+  transcription: 'Option+/',
+  superPaste: 'Shift+Command+V',
+} as const;
+
+export interface BuiltInLauncherAction {
+  id: string;
+  type: 'action';
+  name: string;
+  displayName: string;
+  keywords: string[];
+  hotkey?: string;
+  hotkeyDisplay?: string;
+  actionId: string;
+}
+
+export function buildBuiltInLauncherActions(
+  hotkeys: typeof DEFAULT_LAUNCHER_HOTKEYS,
+  isDarkMode: boolean,
+  squaresHotkeys: Record<string, string> = DEFAULT_SQUARES_HOTKEYS,
+  showSquaresInCommandLauncher = true
+): BuiltInLauncherAction[] {
+  const baseActions: BuiltInLauncherAction[] = [
+    {
+      id: 'action-settings',
+      type: 'action',
+      name: 'settings',
+      displayName: 'Open Settings',
+      keywords: ['settings', 'preferences', 'config', 'configure', 'options'],
+      hotkey: 'Command+,',
+      hotkeyDisplay: '⌘ ,',
+      actionId: 'settings',
+    },
+    {
+      id: 'action-screenshot',
+      type: 'action',
+      name: 'screenshot',
+      displayName: 'Take Screenshot',
+      keywords: ['screenshot', 'capture', 'screen', 'region', 'selection', 'snap'],
+      hotkey: hotkeys.screenshot,
+      hotkeyDisplay: formatHotkeyDisplay(hotkeys.screenshot),
+      actionId: 'take-screenshot',
+    },
+    {
+      id: 'action-fullscreen',
+      type: 'action',
+      name: 'full screen',
+      displayName: 'Full Screen Screenshot',
+      keywords: ['full', 'screen', 'screenshot', 'entire', 'whole', 'desktop'],
+      hotkey: hotkeys.fullScreen,
+      hotkeyDisplay: formatHotkeyDisplay(hotkeys.fullScreen),
+      actionId: 'full-screen-screenshot',
+    },
+    {
+      id: 'action-window',
+      type: 'action',
+      name: 'active window',
+      displayName: 'Active Window Screenshot',
+      keywords: ['active', 'window', 'screenshot', 'focused', 'current'],
+      hotkey: hotkeys.activeWindow,
+      hotkeyDisplay: formatHotkeyDisplay(hotkeys.activeWindow),
+      actionId: 'active-window-screenshot',
+    },
+    {
+      id: 'action-recording',
+      type: 'action',
+      name: 'recording',
+      displayName: 'Start Recording',
+      keywords: ['record', 'recording', 'transcribe', 'transcription', 'voice', 'audio', 'dictate'],
+      hotkey: hotkeys.transcription,
+      hotkeyDisplay: formatHotkeyDisplay(hotkeys.transcription),
+      actionId: 'start-recording',
+    },
+    {
+      id: 'action-superpaste',
+      type: 'action',
+      name: 'terminal image paste',
+      displayName: 'Terminal Image Paste',
+      keywords: ['terminal', 'image', 'paste', 'base64', 'stack', 'quick'],
+      hotkey: hotkeys.superPaste,
+      hotkeyDisplay: formatHotkeyDisplay(hotkeys.superPaste),
+      actionId: 'super-paste',
+    },
+    {
+      id: 'action-history',
+      type: 'action',
+      name: 'history',
+      displayName: 'Open Clipboard History',
+      keywords: ['history', 'clipboard', 'clips', 'copied', 'recent'],
+      hotkey: hotkeys.history,
+      hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
+      actionId: 'open-history',
+    },
+    {
+      id: 'action-theme',
+      type: 'action',
+      name: 'theme',
+      displayName: isDarkMode ? 'Toggle Light Mode (Field Theory)' : 'Toggle Dark Mode (Field Theory)',
+      keywords: ['theme', 'dark', 'light', 'mode', 'appearance', 'color', 'field', 'theory'],
+      hotkey: 'Shift+Command+L',
+      hotkeyDisplay: '⇧ ⌘ L',
+      actionId: 'toggle-theme',
+    },
+  ];
+
+  if (!showSquaresInCommandLauncher) {
+    return baseActions;
+  }
+
+  return [
+    ...baseActions,
+    ...SQUARES_ACTION_DEFS.map((def) => ({
+      id: `action-${def.actionId.replace(/([A-Z])/g, '-$1').toLowerCase()}`,
+      type: 'action' as const,
+      name: def.name,
+      displayName: def.displayName,
+      keywords: [...def.keywords, 'windows'],
+      hotkey: squaresHotkeys[def.actionId],
+      hotkeyDisplay: formatHotkeyDisplay(squaresHotkeys[def.actionId]),
+      actionId: def.actionId,
+    })),
+  ];
+}
+
+// =============================================================================
 // Squares Action Definitions
 // =============================================================================
 

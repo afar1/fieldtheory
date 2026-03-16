@@ -13,7 +13,14 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
-import { formatHotkeyDisplay, formatTimeAgo, SQUARES_ACTION_DEFS, SQUARES_ACTION_IDS, DEFAULT_SQUARES_HOTKEYS } from './commandLauncherUtils';
+import {
+  buildBuiltInLauncherActions,
+  DEFAULT_LAUNCHER_HOTKEYS,
+  formatTimeAgo,
+  SQUARES_ACTION_IDS,
+  DEFAULT_SQUARES_HOTKEYS,
+} from './commandLauncherUtils';
+import { normalizeSquaresConfig } from './utils/squaresConfig';
 
 // =============================================================================
 // Types
@@ -84,8 +91,10 @@ interface LauncherThemeAPI {
 }
 
 interface LauncherSquaresAPI {
-  executeAction: (action: string) => Promise<boolean>;
+  executeAction: (action: string, source?: 'default' | 'command-launcher') => Promise<boolean>;
   getHotkeys: () => Promise<Record<string, string>>;
+  getConfig: () => Promise<{ showInCommandLauncher?: boolean }>;
+  onConfigChanged?: (callback: (config: { showInCommandLauncher?: boolean }) => void) => () => void;
 }
 
 // Type-safe accessors for the launcher context
@@ -99,113 +108,7 @@ const squaresAPI = window.squaresAPI as unknown as LauncherSquaresAPI;
 // Default Hotkeys
 // =============================================================================
 
-const DEFAULT_HOTKEYS = {
-  screenshot: 'Alt+4',
-  fullScreen: 'Alt+3',
-  activeWindow: 'Shift+Alt+3',
-  history: 'Option+Space',
-  transcription: 'Option+/',
-  superPaste: 'Shift+Command+V',
-};
-
-// =============================================================================
-// Built-in Actions
-// =============================================================================
-
-function getBuiltInActions(hotkeys: typeof DEFAULT_HOTKEYS, isDarkMode: boolean, squaresHotkeys: Record<string, string> = DEFAULT_SQUARES_HOTKEYS): LauncherItem[] {
-  return [
-    {
-      id: 'action-settings',
-      type: 'action',
-      name: 'settings',
-      displayName: 'Open Settings',
-      keywords: ['settings', 'preferences', 'config', 'configure', 'options'],
-      hotkey: 'Command+,',
-      hotkeyDisplay: '⌘ ,',
-      actionId: 'settings',
-    },
-    {
-      id: 'action-screenshot',
-      type: 'action',
-      name: 'screenshot',
-      displayName: 'Take Screenshot',
-      keywords: ['screenshot', 'capture', 'screen', 'region', 'selection', 'snap'],
-      hotkey: hotkeys.screenshot,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.screenshot),
-      actionId: 'take-screenshot',
-    },
-    {
-      id: 'action-fullscreen',
-      type: 'action',
-      name: 'full screen',
-      displayName: 'Full Screen Screenshot',
-      keywords: ['full', 'screen', 'screenshot', 'entire', 'whole', 'desktop'],
-      hotkey: hotkeys.fullScreen,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.fullScreen),
-      actionId: 'full-screen-screenshot',
-    },
-    {
-      id: 'action-window',
-      type: 'action',
-      name: 'active window',
-      displayName: 'Active Window Screenshot',
-      keywords: ['active', 'window', 'screenshot', 'focused', 'current'],
-      hotkey: hotkeys.activeWindow,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.activeWindow),
-      actionId: 'active-window-screenshot',
-    },
-    {
-      id: 'action-recording',
-      type: 'action',
-      name: 'recording',
-      displayName: 'Start Recording',
-      keywords: ['record', 'recording', 'transcribe', 'transcription', 'voice', 'audio', 'dictate'],
-      hotkey: hotkeys.transcription,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.transcription),
-      actionId: 'start-recording',
-    },
-    {
-      id: 'action-superpaste',
-      type: 'action',
-      name: 'terminal image paste',
-      displayName: 'Terminal Image Paste',
-      keywords: ['terminal', 'image', 'paste', 'base64', 'stack', 'quick'],
-      hotkey: hotkeys.superPaste,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.superPaste),
-      actionId: 'super-paste',
-    },
-    {
-      id: 'action-history',
-      type: 'action',
-      name: 'history',
-      displayName: 'Open Clipboard History',
-      keywords: ['history', 'clipboard', 'clips', 'copied', 'recent'],
-      hotkey: hotkeys.history,
-      hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
-      actionId: 'open-history',
-    },
-    {
-      id: 'action-theme',
-      type: 'action',
-      name: 'theme',
-      displayName: isDarkMode ? 'Toggle Light Mode (Field Theory)' : 'Toggle Dark Mode (Field Theory)',
-      keywords: ['theme', 'dark', 'light', 'mode', 'appearance', 'color', 'field', 'theory'],
-      hotkey: 'Shift+Command+L',
-      hotkeyDisplay: '⇧ ⌘ L',
-      actionId: 'toggle-theme',
-    },
-    ...SQUARES_ACTION_DEFS.map(def => ({
-      id: `action-${def.actionId.replace(/([A-Z])/g, '-$1').toLowerCase()}`,
-      type: 'action' as const,
-      name: def.name,
-      displayName: def.displayName,
-      keywords: [...def.keywords, 'windows'],
-      hotkey: squaresHotkeys[def.actionId],
-      hotkeyDisplay: formatHotkeyDisplay(squaresHotkeys[def.actionId]),
-      actionId: def.actionId,
-    })),
-  ];
-}
+const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
 
 // =============================================================================
 // Styles (dynamic based on theme)
@@ -301,6 +204,7 @@ function CommandLauncher() {
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [hotkeys, setHotkeys] = useState(DEFAULT_HOTKEYS);
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
+  const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -333,10 +237,11 @@ function CommandLauncher() {
   // Load hotkeys from preferences.
   const loadHotkeys = useCallback(async () => {
     try {
-      const [clipboardHotkeys, transcriptionHotkey, sqHotkeys] = await Promise.all([
+      const [clipboardHotkeys, transcriptionHotkey, sqHotkeys, sqConfig] = await Promise.all([
         clipboardAPI.getHotkeys?.() ?? {},
         transcribeAPI.getHotkey?.() ?? DEFAULT_HOTKEYS.transcription,
         squaresAPI.getHotkeys?.() ?? DEFAULT_SQUARES_HOTKEYS,
+        squaresAPI.getConfig?.() ?? { showInCommandLauncher: true },
       ]);
 
       setHotkeys({
@@ -351,6 +256,7 @@ function CommandLauncher() {
       if (sqHotkeys && typeof sqHotkeys === 'object') {
         setSquaresHotkeys({ ...DEFAULT_SQUARES_HOTKEYS, ...sqHotkeys });
       }
+      setShowSquaresInCommandLauncher(normalizeSquaresConfig(sqConfig).showInCommandLauncher);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load hotkeys:', err);
     }
@@ -386,7 +292,13 @@ function CommandLauncher() {
     };
 
     const unsubscribe = commandsAPI.onLauncherReset(handleReset);
-    return () => unsubscribe();
+    const unsubscribeSquaresConfig = squaresAPI.onConfigChanged?.((config) => {
+      setShowSquaresInCommandLauncher(normalizeSquaresConfig(config).showInCommandLauncher);
+    });
+    return () => {
+      unsubscribe();
+      unsubscribeSquaresConfig?.();
+    };
   }, [loadCommands, loadHandoffs, loadHotkeys]);
 
   // Build all items (commands + actions + handoffs).
@@ -410,10 +322,10 @@ function CommandLauncher() {
       timeAgo: formatTimeAgo(h.lastModified),
     }));
 
-    const actionItems = getBuiltInActions(hotkeys, isDarkMode, squaresHotkeys);
+    const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher);
 
     return [...commandItems, ...handoffItems, ...actionItems];
-  }, [commands, handoffs, hotkeys, squaresHotkeys, isDarkMode]);
+  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -599,7 +511,7 @@ function CommandLauncher() {
         // Route Squares window management actions.
         default:
           if (item.actionId && SQUARES_ACTION_IDS.has(item.actionId)) {
-            squaresAPI.executeAction(item.actionId);
+            squaresAPI.executeAction(item.actionId, 'command-launcher');
           }
           break;
       }

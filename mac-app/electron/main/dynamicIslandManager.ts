@@ -98,6 +98,7 @@ export class DynamicIslandManager extends EventEmitter {
   private gapFillRendererReady: boolean = false;
   private pendingShow: boolean = false;
   private historyVisible: boolean = false;
+  private leftWindowFocusable: boolean = true;
 
   private readonly ISLAND_WIDTH = 460;
   private readonly ISLAND_WIDTH_IDLE = 72;
@@ -580,6 +581,13 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
+  setLeftWindowFocusable(focusable: boolean): void {
+    this.leftWindowFocusable = focusable;
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.setFocusable(focusable);
+    }
+  }
+
   private hide(): void {
     this.pendingShow = false;
     if (this.window && !this.window.isDestroyed()) {
@@ -615,7 +623,7 @@ export class DynamicIslandManager extends EventEmitter {
       hiddenInMissionControl: true,
       resizable: false,
       movable: false,
-      focusable: true,
+      focusable: this.leftWindowFocusable,
       show: false,
       webPreferences: {
         nodeIntegration: false,
@@ -1207,6 +1215,7 @@ export class DynamicIslandManager extends EventEmitter {
       );
     }
     this.updateWindowSize();
+    this.refreshWindowProperties('display-metrics-changed');
   };
 
   private clampInt(

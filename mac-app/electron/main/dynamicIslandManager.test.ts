@@ -6,7 +6,8 @@ const testState = vi.hoisted(() => {
 
   let primaryDisplay = {
     bounds: { x: 0, y: 0, width: 2560, height: 1440 },
-    workAreaSize: { width: 2560, height: 1415 },
+    workArea: { x: 0, y: 38, width: 2560, height: 1402 },
+    workAreaSize: { width: 2560, height: 1402 },
     internal: true,
   };
 
@@ -18,6 +19,8 @@ const testState = vi.hoisted(() => {
     once(event: string, callback: () => void): void {
       if (event === 'did-finish-load') callback();
     }
+
+    on(_event: string, _callback: (...args: unknown[]) => void): void {}
 
     send(channel: string, ...args: unknown[]): void {
       this.sent.push({ channel, args });
@@ -160,7 +163,8 @@ const testState = vi.hoisted(() => {
   const reset = (): void => {
     primaryDisplay = {
       bounds: { x: 0, y: 0, width: 2560, height: 1440 },
-      workAreaSize: { width: 2560, height: 1415 },
+      workArea: { x: 0, y: 38, width: 2560, height: 1402 },
+      workAreaSize: { width: 2560, height: 1402 },
       internal: true,
     };
     screenListeners.clear();
@@ -185,6 +189,12 @@ const testState = vi.hoisted(() => {
         x: overrides.x ?? primaryDisplay.bounds.x,
         y: overrides.y ?? primaryDisplay.bounds.y,
         width: overrides.boundsWidth ?? primaryDisplay.bounds.width,
+      },
+      workArea: {
+        ...primaryDisplay.workArea,
+        x: overrides.x ?? primaryDisplay.workArea.x,
+        y: overrides.y ?? primaryDisplay.workArea.y,
+        width: overrides.workAreaWidth ?? primaryDisplay.workArea.width,
       },
       workAreaSize: {
         ...primaryDisplay.workAreaSize,
@@ -239,7 +249,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager = null;
   });
 
-  it('documents that internal primary displays keep the center gap transparent (real notch is used)', () => {
+  it('keeps a center filler visible on internal primary displays so the island stays contiguous', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -248,10 +258,12 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(testState.getWindowBySide('left')).toBeDefined();
     expect(testState.getWindowBySide('right')).toBeDefined();
     expect(testState.getWindowBySide('drawer')).toBeDefined();
-    expect(testState.getWindowBySide('filler')).toBeUndefined();
+    const filler = testState.getWindowBySide('filler');
+    expect(filler).toBeDefined();
+    expect(filler?.isVisible()).toBe(true);
   });
 
-  it('documents that external primary displays add a center filler to remove the fake-notch gap', () => {
+  it('keeps the center filler visible on external primary displays', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
@@ -282,7 +294,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(testState.getWindowBySide('drawer')).toBeDefined();
   });
 
-  it('documents that switching primary back to internal hides the center filler immediately', () => {
+  it('keeps the center filler visible when switching primary back to internal', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
@@ -297,8 +309,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     testState.setPrimaryInternal(true);
     testState.emitScreenEvent('display-metrics-changed');
 
-    expect(filler?.isVisible()).toBe(false);
-    expect(filler?.hideCalls).toBeGreaterThan(0);
+    expect(filler?.isVisible()).toBe(true);
   });
 
   it('restores the right pill visibility when hot mic is re-enabled', () => {
@@ -351,7 +362,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(listener).toHaveBeenCalledTimes(1);
     expect(left?.getSize()).toEqual([72, 38]);
     expect(left?.constructorOptions.transparent).toBe(true);
-    expect(left?.backgroundColorCalls).toEqual([]);
+    expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
 
   it('documents that dynamic-island IPC can dismiss the live hot-mic transcript buffer', () => {
@@ -623,10 +634,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(left).toBeDefined();
     expect(right).toBeDefined();
 
-    // 1728 width maps to the profile notch width 140.
-    // Left: floor((1728 - 140) / 2 - 72) = 722
-    expect(left?.getPosition()).toEqual([722, 0]);
-    expect(right?.getPosition()).toEqual([934, 0]);
+    // 1728 width maps to the current profile notch width 170.
+    // Left: floor((1728 - 170) / 2 - 72) = 707
+    expect(left?.getPosition()).toEqual([707, 0]);
+    expect(right?.getPosition()).toEqual([949, 0]);
     expect(left?.getSize()).toEqual([72, 38]);
     expect(right?.getSize()).toEqual([72, 38]);
   });
@@ -717,7 +728,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(2);
   });
 
-  it('does not send stack count to the left pill', () => {
+  it('forwards stack count to the left pill so the renderer can keep state in sync', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -731,7 +742,8 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const stackEvents = left?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-stack-changed'
     ) ?? [];
-    expect(stackEvents.length).toBe(0);
+    expect(stackEvents.length).toBeGreaterThan(0);
+    expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(3);
   });
 
   it('restores stack count when right pill reconnects', () => {
@@ -771,7 +783,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const left = testState.getWindowBySide('left');
     const filler = testState.getWindowBySide('filler');
     expect(left).toBeDefined();
-    expect(filler).toBeUndefined();
+    expect(filler).toBeDefined();
 
     const initialCalls = left?.backgroundColorCalls.length ?? 0;
     manager.refreshWindowProperties('refresh-1');
@@ -781,5 +793,30 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     // Each forced refresh re-applies transparent color to recover from white flashes.
     expect(afterCalls).toBeGreaterThan(initialCalls);
     expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
+  });
+
+  it('re-applies island backing when display metrics change', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const left = testState.getWindowBySide('left');
+    const right = testState.getWindowBySide('right');
+    const filler = testState.getWindowBySide('filler');
+    expect(left).toBeDefined();
+    expect(right).toBeDefined();
+    expect(filler).toBeDefined();
+
+    const leftCallsBefore = left?.backgroundColorCalls.length ?? 0;
+    const rightCallsBefore = right?.backgroundColorCalls.length ?? 0;
+    const fillerCallsBefore = filler?.backgroundColorCalls.length ?? 0;
+
+    testState.emitScreenEvent('display-metrics-changed');
+
+    expect((left?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(leftCallsBefore);
+    expect((right?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(rightCallsBefore);
+    expect((filler?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(fillerCallsBefore);
+    expect(filler?.isVisible()).toBe(true);
   });
 });

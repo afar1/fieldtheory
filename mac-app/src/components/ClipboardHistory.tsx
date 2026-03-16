@@ -234,18 +234,6 @@ export default function ClipboardHistory() {
   });
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
-  // Shared Librarian counter from ~/.fieldtheory/librarian/state.json
-  const [librarianStatus, setLibrarianStatus] = useState<{ edits: number; threshold: number; frequency: string } | null>(null);
-  useEffect(() => {
-    const fetchStatus = async () => {
-      const status = await window.librarianAPI?.getEditStatus();
-      setLibrarianStatus(status ?? null);
-    };
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 2000); // Poll every 2 seconds
-    return () => clearInterval(interval);
-  }, []);
-
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     // If user started a transcription, always show Fields on next open.
     const shouldShowFields = localStorage.getItem('shouldShowFieldsOnOpen') === 'true';
@@ -1660,9 +1648,7 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
-  // Poll for pending reading AND counter state (single source of truth for resets)
-  // This poll is the ONLY place counter resets happen during active use.
-  // Also handles showing new readings in immersive mode.
+  // Poll for pending readings and handle immersive librarian handoff.
   useEffect(() => {
     if (!isWindowVisible) return;
 
@@ -1678,8 +1664,6 @@ export default function ClipboardHistory() {
         setLibrarianImmersive(true);
       }
 
-      // Counter state (edits, threshold, didReset) is available if UI wants to display it
-      // For now we just let the poll handle the reset logic in main process
     };
 
     // Check immediately on mount
@@ -6478,11 +6462,6 @@ export default function ClipboardHistory() {
                     {userCallsign && (
                       <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
                         {userCallsign}
-                      </span>
-                    )}
-                    {librarianStatus && (
-                      <span style={{ color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : theme.textSecondary, fontSize: '9px' }}>
-                        {librarianStatus.edits}/{librarianStatus.threshold}
                       </span>
                     )}
                     <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>

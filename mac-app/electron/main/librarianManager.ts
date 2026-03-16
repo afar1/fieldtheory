@@ -17,11 +17,19 @@ const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
 const LIBRARIAN_INDEX_VERSION = 2;
 const ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE = /^\*(?:Model|Signed by):\s*(.+?)\*$/i;
 const ARTIFACT_MODEL_SIGNATURE_INSTRUCTION_RE = /\*(?:model|signed by):\s*/i;
+const ARTIFACT_TITLE_INSTRUCTION_RE = /\btitle\s*\(#\s*heading\)|\bmarkdown\s+h1\s+title\b/i;
 const ARTIFACT_MODEL_SIGNATURE_TEMPLATE = '*Model: <the exact model or assistant name that wrote this artifact>*';
+const ARTIFACT_STRUCTURE_GUIDANCE = `Structure:
+1. Title (# heading)
+2. Signature metadata line: \`${ARTIFACT_MODEL_SIGNATURE_TEMPLATE}\`
+3. 1-2 paragraphs connecting the task to engineering history, physics, systems theory, or speculative futures
+4. Include at least one concrete technical/historical detail`;
 const ARTIFACT_MODEL_SIGNATURE_GUIDANCE =
-  `Include an italic metadata line after the braille art in the form \`${ARTIFACT_MODEL_SIGNATURE_TEMPLATE}\`. If the exact model name is unavailable, use the assistant or runtime name you are operating as.`;
+  `Include an italic metadata line near the top of the artifact in the form \`${ARTIFACT_MODEL_SIGNATURE_TEMPLATE}\`. If the exact model name is unavailable, use the assistant or runtime name you are operating as.`;
 const DEFAULT_LIBRARIAN_RULE_CONTENT =
-  `Write a short reflective story (120-200 words) connecting current work to science/history. ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
+  buildEffectiveArtifactRuleContent(
+    'Write a short reflective story (120-200 words) connecting current work to science/history.'
+  );
 
 type CursorHookEntry = {
   command?: string;
@@ -760,6 +768,24 @@ export function hasCodexCommandHook(config: CodexHooksConfig, eventName: string,
   return Array.isArray(eventHooks) && eventHooks.some(entry => codexHookMatchesScript(entry, scriptName));
 }
 
+export function upsertCodexCommandHook(
+  config: CodexHooksConfig,
+  eventName: string,
+  entry: CodexHookEntry,
+  scriptName: string,
+): CodexHooksConfig {
+  if (!config.hooks || typeof config.hooks !== 'object') {
+    config.hooks = {};
+  }
+
+  const hooks = config.hooks as Record<string, unknown>;
+  const existing = Array.isArray(hooks[eventName]) ? hooks[eventName] as CodexHookEntry[] : [];
+  hooks[eventName] = existing.filter(existingEntry => !codexHookMatchesScript(existingEntry, scriptName));
+  (hooks[eventName] as CodexHookEntry[]).push(entry);
+
+  return config;
+}
+
 export function removeCodexCommandHook(
   config: CodexHooksConfig,
   eventName: string,
@@ -797,6 +823,9 @@ LIBRARIAN_DIR = Path.home() / ".fieldtheory" / "librarian"
 CONFIG_PATH = LIBRARIAN_DIR / "config.json"
 JOBS_DIR = LIBRARIAN_DIR / "jobs"
 SENTINEL_FILE = LIBRARIAN_DIR / ".codex-pending"
+CODEX_DIR = Path.home() / ".codex"
+CODEX_HOOKS_PATH = CODEX_DIR / "hooks.json"
+CODEX_STOP_SCRIPT = LIBRARIAN_DIR / "codex-stop.py"
 DEFAULT_RULE_CONTENT = ${JSON.stringify(DEFAULT_LIBRARIAN_RULE_CONTENT)}
 
 
@@ -840,11 +869,217 @@ def find_pending_job():
     return None
 
 
-def load_rule_content(cfg):
+def get_rule_file_path(job):
+    rule_file = job.get("rule_file") if isinstance(job, dict) else None
+    if isinstance(rule_file, str) and rule_file.strip():
+        return rule_file
+    return str(LIBRARIAN_DIR / "rules" / "history_reading.md")
+
+
+def build_stop_reason(job_file, job):
+    output_path = job.get("output", "") if isinstance(job, dict) else ""
+    rule_file = get_rule_file_path(job)
+    return f"""[LIBRARIAN] Complete the pending artifact before replying.
+
+Job file: {job_file}
+Output path: {output_path}
+Rule file: {rule_file}
+
+Steps:
+1. Write the artifact to the output path
+2. Follow the rule file for the required format
+3. Update the job file, setting "status" to "done"
+4. Then you may complete"""
+
+
+def load_codex_hooks_config():
+    if not CODEX_HOOKS_PATH.exists():
+        return {"hooks": {}}
     try:
-        return cfg.get("rule_content", DEFAULT_RULE_CONTENT)
+        config = json.loads(CODEX_HOOKS_PATH.read_text())
+        return config if isinstance(config, dict) else {"hooks": {}}
     except:
-        return DEFAULT_RULE_CONTENT
+        return {"hooks": {}}
+
+
+def ensure_codex_hooks_root(config):
+    hooks = config.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+        config["hooks"] = hooks
+    return hooks
+
+
+def codex_hook_matches_script(entry, script_path):
+    hooks = entry.get("hooks") if isinstance(entry, dict) else None
+    if not isinstance(hooks, list):
+        return False
+    for hook in hooks:
+        command = hook.get("command") if isinstance(hook, dict) else None
+        if isinstance(command, str) and str(script_path) in command:
+            return True
+    return False
+
+
+def sync_stop_hook(enabled):
+    config = load_codex_hooks_config()
+    hooks = ensure_codex_hooks_root(config)
+    stop_entries = hooks.get("Stop")
+    if not isinstance(stop_entries, list):
+        stop_entries = []
+
+    stop_entries = [
+        entry for entry in stop_entries
+        if not codex_hook_matches_script(entry, CODEX_STOP_SCRIPT)
+    ]
+
+    if enabled:
+        stop_entries.append({
+            "hooks": [{
+                "type": "command",
+                "command": f"python3 {CODEX_STOP_SCRIPT}",
+                "timeout_sec": 10
+            }]
+        })
+
+    if stop_entries:
+        hooks["Stop"] = stop_entries
+    elif "Stop" in hooks:
+        del hooks["Stop"]
+
+    if not hooks:
+        config.pop("hooks", None)
+
+    CODEX_DIR.mkdir(parents=True, exist_ok=True)
+    CODEX_HOOKS_PATH.write_text(json.dumps(config, indent=2))
+`;
+}
+
+export function generateCodexNotifyHookScript(): string {
+  return `#!/usr/bin/env python3
+"""
+Field Theory Librarian Notify Hook for Codex CLI (AfterAgent)
+
+Counts agent turns and creates job files when threshold is reached.
+Registers the Stop hook only while a Librarian artifact is pending.
+
+State is GLOBAL at ~/.fieldtheory/librarian/state.json
+"""
+${generateCodexHookSharedPython()}
+import os
+import fcntl
+from datetime import datetime
+
+DEFAULT_THRESHOLD = 7
+
+
+def main():
+    cfg = load_config()
+    if not cfg:
+        SENTINEL_FILE.unlink(missing_ok=True)
+        sync_stop_hook(False)
+        return
+
+    central_dir = LIBRARIAN_DIR
+    jobs_dir = central_dir / "jobs"
+    artifacts_dir = central_dir / "artifacts"
+    rules_dir = central_dir / "rules"
+    rule_file = rules_dir / "history_reading.md"
+    state_file = central_dir / "state.json"
+    lock_file = central_dir / ".lock"
+    seq_file = central_dir / ".seq"
+
+    if is_muted():
+        return
+
+    pending_job = find_pending_job()
+    if pending_job:
+        job_file, job = pending_job
+        SENTINEL_FILE.write_text(json.dumps({
+            "job_file": str(job_file),
+            "output": job.get("output", ""),
+            "created_at": datetime.now().isoformat()
+        }, indent=2))
+        sync_stop_hook(True)
+        return
+
+    jobs_dir.mkdir(parents=True, exist_ok=True)
+    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    rules_dir.mkdir(parents=True, exist_ok=True)
+
+    project_root = Path(os.getcwd())
+    project_name = project_root.name
+
+    with open(lock_file, "w") as lf:
+        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
+
+        state = {"count": 0, "threshold": DEFAULT_THRESHOLD}
+        if state_file.exists():
+            try:
+                state = json.loads(state_file.read_text())
+            except:
+                pass
+
+        count = state.get("count", 0) + 1
+        threshold = state.get("threshold", DEFAULT_THRESHOLD)
+        triggered = count >= threshold
+
+        state["count"] = 0 if triggered else count
+        state_file.write_text(json.dumps(state, indent=2))
+
+        if not triggered:
+            SENTINEL_FILE.unlink(missing_ok=True)
+            sync_stop_hook(False)
+            return
+
+        seq = 0
+        if seq_file.exists():
+            try:
+                seq = int(seq_file.read_text().strip())
+            except:
+                seq = 0
+        seq += 1
+        seq_file.write_text(str(seq))
+
+        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
+        job_file = jobs_dir / f"job_{seq}.json"
+        out_file = artifacts_dir / f"{project_name}-{timestamp}-artifact.md"
+
+        for old_job_file in sorted(jobs_dir.glob("job_*.json")):
+            if old_job_file == job_file:
+                continue
+            try:
+                old_job = json.loads(old_job_file.read_text())
+                if old_job.get("status") == "pending":
+                    old_job["status"] = "abandoned"
+                    old_job["abandoned_at"] = datetime.now().isoformat()
+                    old_job_file.write_text(json.dumps(old_job, indent=2) + "\\n")
+            except:
+                continue
+
+        if not job_file.exists():
+            job_file.write_text(json.dumps({
+                "schema_version": 1,
+                "id": seq,
+                "type": "history_artifact",
+                "status": "pending",
+                "project": project_name,
+                "project_path": str(project_root),
+                "output": str(out_file),
+                "rule_file": str(rule_file),
+                "created_at": datetime.now().isoformat()
+            }, indent=2) + "\\n")
+
+        SENTINEL_FILE.write_text(json.dumps({
+            "job_file": str(job_file),
+            "output": str(out_file),
+            "created_at": datetime.now().isoformat()
+        }, indent=2))
+        sync_stop_hook(True)
+
+
+if __name__ == "__main__":
+    main()
 `;
 }
 
@@ -862,39 +1097,29 @@ ${generateCodexHookSharedPython()}
 def main():
     cfg = load_config()
     if not cfg:
+        SENTINEL_FILE.unlink(missing_ok=True)
+        sync_stop_hook(False)
         return
 
     pending_job = find_pending_job()
     if not pending_job:
         SENTINEL_FILE.unlink(missing_ok=True)
+        sync_stop_hook(False)
         return
 
     job_file, job = pending_job
-    output_path = job.get("output", "")
-    rule_content = load_rule_content(cfg)
 
     # Job still pending - keep the current pending job pinned for same-session flow.
     SENTINEL_FILE.write_text(json.dumps({
         "job_file": str(job_file),
-        "output": output_path
+        "output": job.get("output", "")
     }, indent=2))
+    sync_stop_hook(True)
 
     # Job still pending - block with structured stop-hook output
-    reason = f"""[LIBRARIAN] A Librarian artifact must be written before completing.
-
-Job file: {job_file}
-Output path: {output_path}
-
-Rule: {rule_content}
-
-Steps:
-1. Write the artifact to the output path following the rule above
-2. Update the job file, setting "status" to "done"
-3. Then you may complete"""
-
     print(json.dumps({
         "decision": "block",
-        "reason": reason
+        "reason": build_stop_reason(job_file, job)
     }))
 
 
@@ -921,6 +1146,36 @@ export function extractArtifactModelSignature(line: string): string | null {
 
 export function hasArtifactModelSignatureInstruction(content: string): boolean {
   return ARTIFACT_MODEL_SIGNATURE_INSTRUCTION_RE.test(content);
+}
+
+export function hasArtifactTitleInstruction(content: string): boolean {
+  return ARTIFACT_TITLE_INSTRUCTION_RE.test(content);
+}
+
+export function hasArtifactStructureInstruction(content: string): boolean {
+  return hasArtifactTitleInstruction(content) && hasArtifactModelSignatureInstruction(content);
+}
+
+export function buildEffectiveArtifactRuleContent(baseRule: string, expertise?: string): string {
+  const normalizedExpertise = expertise?.trim();
+  const additions: string[] = [];
+
+  if (!hasArtifactStructureInstruction(baseRule)) {
+    additions.push(`Required artifact format:
+${ARTIFACT_STRUCTURE_GUIDANCE}
+
+${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`);
+  } else if (!hasArtifactModelSignatureInstruction(baseRule)) {
+    additions.push(`Required metadata: ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`);
+  }
+
+  if (normalizedExpertise) {
+    additions.push(`Context about the reader: ${normalizedExpertise}`);
+  }
+
+  return additions.length > 0
+    ? `${baseRule}\n\n${additions.join('\n\n')}`
+    : baseRule;
 }
 
 export function parseMarkdownHeader(content: string): ParsedMarkdownHeader {
@@ -1024,6 +1279,7 @@ interface LibrarianSettings {
   watchedDirs: string[];
   enabled: boolean;                    // Single master toggle
   autoShowEnabled: boolean;
+  autoShowStealsFocus?: boolean;
   resumeAfterClose?: boolean;          // If true, reopen to last artifact instead of clipboard
   librarianSetupComplete?: boolean;    // True after setup wizard completes
   // State-enforced mode settings (the only mode now)
@@ -1259,6 +1515,7 @@ export class LibrarianManager extends EventEmitter {
       watchedDirs: [],
       enabled: true,
       autoShowEnabled: true,
+      autoShowStealsFocus: true,
       librarianSetupComplete: undefined,
       stateEnforcedThreshold: 7,  // Default to 'sometimes' frequency (7-13 prompts)
       stateEnforcedRuleContent: undefined,
@@ -1280,6 +1537,7 @@ export class LibrarianManager extends EventEmitter {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
           enabled: enabled ?? defaults.enabled,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
+          autoShowStealsFocus: data.autoShowStealsFocus ?? defaults.autoShowStealsFocus,
           resumeAfterClose: data.resumeAfterClose,
           librarianSetupComplete: data.librarianSetupComplete,
           // State-enforced mode settings (the only mode now)
@@ -2006,9 +2264,7 @@ Occasionally—but not predictably—shift modes and do one of the following:
 	•	Introduce a concept from another discipline that subtly changes how the problem can be seen.
 
 Avoid forced cleverness.
-Avoid maximalism.
-
-${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
+Avoid maximalism.`;
 
   /**
    * Get the state-enforced mode threshold (prompts before job creation).
@@ -2044,7 +2300,7 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
    * Get the default rule content for state-enforced mode.
    */
   getDefaultRuleContent(): string {
-    return this.DEFAULT_RULE_CONTENT;
+    return buildEffectiveArtifactRuleContent(this.DEFAULT_RULE_CONTENT);
   }
 
   /**
@@ -2122,20 +2378,7 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
    */
   getEffectiveRuleContent(): string {
     const baseRule = this.settings.stateEnforcedRuleContent || this.DEFAULT_RULE_CONTENT;
-    const expertise = this.settings.userExpertiseContext;
-    const additions: string[] = [];
-
-    if (!hasArtifactModelSignatureInstruction(baseRule)) {
-      additions.push(`Required metadata: ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`);
-    }
-
-    if (expertise) {
-      additions.push(`Context about the reader: ${expertise}`);
-    }
-
-    return additions.length > 0
-      ? `${baseRule}\n\n${additions.join('\n\n')}`
-      : baseRule;
+    return buildEffectiveArtifactRuleContent(baseRule, this.settings.userExpertiseContext);
   }
 
   /**
@@ -2321,19 +2564,48 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
     }
 
     const codexHooksConfigPath = this.getCodexHooksConfigPath();
+    const codexConfigTomlPath = this.getCodexConfigPath();
+    const codexAgentsMdPath = this.getCodexAgentsMdPath();
+    let hasLegacySessionStart = false;
+    let hasDynamicStopHook = false;
+    let hasManagedCodexInstall = false;
+
     if (fs.existsSync(codexHooksConfigPath)) {
       try {
         const codexConfig = JSON.parse(fs.readFileSync(codexHooksConfigPath, 'utf-8'));
-        const hasLegacySessionStart = hasCodexCommandHook(codexConfig, 'SessionStart', LEGACY_CODEX_SESSION_START_SCRIPT);
-        const hasAnyCodexHook = hasLegacySessionStart
-          || hasCodexCommandHook(codexConfig, 'Stop', CODEX_STOP_SCRIPT);
-
-        if (hasAnyCodexHook && (hasLegacySessionStart || !this.isCodexHookInstalled())) {
-          this.installCodexHook();
-        }
+        hasLegacySessionStart = hasCodexCommandHook(codexConfig, 'SessionStart', LEGACY_CODEX_SESSION_START_SCRIPT);
+        hasDynamicStopHook = hasCodexCommandHook(codexConfig, 'Stop', CODEX_STOP_SCRIPT);
+        hasManagedCodexInstall = hasLegacySessionStart || hasDynamicStopHook;
       } catch (error) {
-        log.error('Failed to upgrade Codex hook config:', error);
+        log.error('Failed to read Codex hook config:', error);
       }
+    }
+
+    if (fs.existsSync(codexConfigTomlPath)) {
+      try {
+        hasManagedCodexInstall = this.hasCodexNotifyConfiguration(fs.readFileSync(codexConfigTomlPath, 'utf-8'))
+          || hasManagedCodexInstall;
+      } catch (error) {
+        log.error('Failed to read Codex config.toml:', error);
+      }
+    }
+
+    if (fs.existsSync(codexAgentsMdPath)) {
+      try {
+        hasManagedCodexInstall = this.hasCodexManagedSection(fs.readFileSync(codexAgentsMdPath, 'utf-8'))
+          || hasManagedCodexInstall;
+      } catch (error) {
+        log.error('Failed to read Codex AGENTS.md:', error);
+      }
+    }
+
+    hasManagedCodexInstall = hasManagedCodexInstall
+      || fs.existsSync(this.getCodexNotifyScriptPath())
+      || fs.existsSync(this.getCodexStopScriptPath());
+
+    const shouldHaveDynamicStop = this.hasPendingCodexArtifactJob();
+    if (hasManagedCodexInstall && (hasLegacySessionStart || !this.isCodexHookInstalled() || hasDynamicStopHook !== shouldHaveDynamicStop)) {
+      this.installCodexHook();
     }
   }
 
@@ -2405,6 +2677,21 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
   }
 
   /**
+   * Check whether auto-show should activate and focus the Field Theory window.
+   */
+  doesAutoShowStealFocus(): boolean {
+    return this.settings.autoShowStealsFocus ?? true;
+  }
+
+  /**
+   * Set whether auto-show should activate and focus the Field Theory window.
+   */
+  setAutoShowStealsFocus(enabled: boolean): void {
+    this.settings.autoShowStealsFocus = enabled;
+    this.saveSettings();
+  }
+
+  /**
    * Check if resume after close is enabled.
    * When true, reopening the window returns to the last artifact instead of clipboard.
    */
@@ -2428,25 +2715,7 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`;
    * Default content guidance for readings.
    * This shapes what type of intellectual content is produced.
    */
-  private readonly DEFAULT_CONTENT_GUIDANCE = `Structure:
-1. Title (# heading)
-2. Braille halftone illustration (immediately after title, NOT in a code block)
-3. Signature metadata line: \`${ARTIFACT_MODEL_SIGNATURE_TEMPLATE}\`
-4. 1-2 paragraphs connecting the task to engineering history, physics, systems theory, or speculative futures
-5. Include at least one concrete technical/historical detail
-
-### Braille Halftone Art Requirements
-
-Place art directly after the title as plain text (no code fence—this lets it inherit the page background).
-
-Canvas: exactly 56 characters wide × 15 lines tall
-- Every line must be exactly 56 characters (pad with braille blank ⠀ U+2800)
-- Center the subject using ⠀ padding on both sides
-- Light source: top-left (sparse dots = highlight, dense dots = shadow)
-- Subject: single object that metaphorically connects to the reading
-
-Tone mapping (light → dark):
-⠀ (empty) → ⠁⠈ (12%) → ⠃⠉ (25%) → ⠇⠋ (37%) → ⠏⠛ (50%) → ⠟⠻ (62%) → ⠿⡿ (75%) → ⣷⣾ (87%) → ⣿ (black)
+  private readonly DEFAULT_CONTENT_GUIDANCE = `${ARTIFACT_STRUCTURE_GUIDANCE}
 
 ### Signature Requirement
 
@@ -3563,7 +3832,7 @@ if [ "\$NEW_PROMPTS" -ge "\$THRESHOLD" ]; then
   log "TRIGGERING at prompt \$NEW_PROMPTS"
 
   # Output JSON with jq (guarantees valid JSON)
-  MSG="[LIBRARIAN] Prompt \${NEW_PROMPTS}/\${THRESHOLD}. Create .librarian/\$(date +%Y-%m-%d)-{slug}.md with: title, then braille halftone art (56×15 chars, no code fence, ⠀-padded lines), then 1-2 paragraphs on engineering history/physics/systems theory."
+  MSG="[LIBRARIAN] Prompt \${NEW_PROMPTS}/\${THRESHOLD}. Create .librarian/\$(date +%Y-%m-%d)-{slug}.md with: a title, a model signature line, and 1-2 paragraphs on engineering history/physics/systems theory."
 
   jq -n --arg msg "\$MSG" '{
     hookSpecificOutput: {
@@ -4403,7 +4672,7 @@ import fcntl
 from pathlib import Path
 from datetime import datetime
 
-DEFAULT_RULE_CONTENT = """${this.DEFAULT_RULE_CONTENT.replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/"/g, '\\"')}"""
+DEFAULT_RULE_CONTENT = """${this.getDefaultRuleContent().replace(/\\/g, '\\\\').replace(/`/g, '\\`').replace(/"/g, '\\"')}"""
 
 def main():
     # Get project root from environment (set by Claude Code)
@@ -5011,7 +5280,7 @@ if __name__ == "__main__":
 
   /**
    * Create a welcome artifact in the specified directory.
-   * This introduces users to the Librarian format and braille art style.
+   * This introduces users to the Librarian format.
    */
   createWelcomeArtifact(dirPath: string): boolean {
     const expandedPath = this.expandPath(dirPath);
@@ -5040,29 +5309,11 @@ if __name__ == "__main__":
 
     const content = `# Welcome to Librarian
 
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣤⣴⣶⣶⣶⣦⣤⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣴⣾⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣦⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⢀⣴⣿⣿⣿⣿⣿⣿⣿⡿⠿⠿⠿⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⢀⣾⣿⣿⣿⣿⣿⡿⠋⠁⠀⠀⠀⠀⠀⠀⠈⠙⢿⣿⣿⣿⣿⣿⣿⣷⡀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⣾⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠹⣿⣿⣿⣿⣿⣿⣷⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⢸⣿⣿⣿⣿⣿⡏⠀⠀⠀⠀⢀⣀⣀⣀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⠁⠀⠀⠀⣴⣿⣿⣿⣿⣷⡄⠀⠀⠀⠀⠈⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⡇⠀⠀⠀⠹⣿⣿⣿⣿⣿⠏⠀⠀⠀⠀⢰⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⢹⣿⣿⣿⣿⣿⣿⡀⠀⠀⠀⠈⠻⠿⠟⠁⠀⠀⠀⠀⢀⣿⣿⣿⣿⣿⣿⣿⡏⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⢻⣿⣿⣿⣿⣿⣷⣄⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣠⣾⣿⣿⣿⣿⣿⣿⡿⠁⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠻⣿⣿⣿⣿⣿⣿⣿⣶⣤⣀⣀⣀⣤⣴⣶⣿⣿⣿⣿⣿⣿⣿⣿⠟⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠙⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠿⠋⠀⠀⠀⠀⠀⠀
-⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠉⠛⠻⠿⢿⣿⣿⣿⣿⣿⣿⡿⠿⠟⠛⠉⠁⠀⠀⠀⠀⠀⠀⠀⠀⠀
-
 *Model: Field Theory Librarian*
 
 Librarian connects your coding sessions to the deeper history of engineering thought. Each artifact captures not just what you're building, but why it matters—drawing threads to physics, systems theory, and the accumulated wisdom of those who built before us.
 
 This is your first artifact. As you work with Claude Code, Librarian will prompt you to create more, building a collection of insights that contextualize your work within the broader story of technology.
-
-The braille halftone illustrations above each reading are a signature element. They're rendered as Unicode braille characters—a form of ASCII art that dates back to the earliest days of computing, when programmers found creative ways to produce images using only text. Each image is exactly 56 characters wide by 15 lines tall, with density ranging from sparse (⠀) to full (⣿).
 
 Your readings will accumulate here in \`.librarian/\` directories, one per meaningful session. Let them be serendipitous—not every session needs one, but substantial work deserves reflection.
 `;
@@ -5517,147 +5768,11 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
   /**
    * Generate the Codex notify hook script (Python).
    * Receives AfterAgent payload as argv, increments shared state.json counter,
-   * creates jobs at threshold, and writes a sentinel file for the Stop hook.
+   * creates jobs at threshold, and installs the Stop hook only while a job
+   * remains pending.
    */
   private generateCodexNotifyScript(): string {
-    return `#!/usr/bin/env python3
-"""
-Field Theory Librarian Notify Hook for Codex CLI (AfterAgent)
-
-Counts agent turns and creates job files when threshold is reached.
-Writes a sentinel file so the Stop hook can enforce artifact creation
-in the same session.
-
-State is GLOBAL at ~/.fieldtheory/librarian/state.json
-"""
-import json
-import os
-import sys
-import fcntl
-from pathlib import Path
-from datetime import datetime
-
-DEFAULT_THRESHOLD = 7
-
-
-def main():
-    # Read config
-    central_dir = Path.home() / ".fieldtheory" / "librarian"
-    config_path = central_dir / "config.json"
-    if not config_path.exists():
-        return
-
-    with open(config_path) as f:
-        cfg = json.load(f)
-
-    if not cfg.get("enabled", False):
-        return
-
-    # Paths
-    jobs_dir = central_dir / "jobs"
-    artifacts_dir = central_dir / "artifacts"
-    rules_dir = central_dir / "rules"
-    rule_file = rules_dir / "history_reading.md"
-    state_file = central_dir / "state.json"
-    lock_file = central_dir / ".lock"
-    seq_file = central_dir / ".seq"
-    sentinel_file = central_dir / ".codex-pending"
-
-    # Check mute status
-    if state_file.exists():
-        try:
-            import time
-            state_data = json.loads(state_file.read_text())
-            muted_until = state_data.get("mutedUntil", 0)
-            if muted_until and time.time() * 1000 < muted_until:
-                return
-        except:
-            pass
-
-    # Ensure directories exist
-    jobs_dir.mkdir(parents=True, exist_ok=True)
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-    rules_dir.mkdir(parents=True, exist_ok=True)
-
-    # Try to get project name from cwd
-    project_root = Path(os.getcwd())
-    project_name = project_root.name
-
-    # File-locked state update
-    with open(lock_file, "w") as lf:
-        fcntl.flock(lf.fileno(), fcntl.LOCK_EX)
-
-        # Read current state
-        state = {"count": 0, "threshold": DEFAULT_THRESHOLD}
-        if state_file.exists():
-            try:
-                state = json.loads(state_file.read_text())
-            except:
-                pass
-
-        count = state.get("count", 0) + 1
-        threshold = state.get("threshold", DEFAULT_THRESHOLD)
-        triggered = count >= threshold
-
-        # Single write: either incremented count, or reset to 0 if triggered
-        state["count"] = 0 if triggered else count
-        state_file.write_text(json.dumps(state, indent=2))
-
-        if not triggered:
-            return
-
-        # Threshold reached - create artifact job
-        seq = 0
-        if seq_file.exists():
-            try:
-                seq = int(seq_file.read_text().strip())
-            except:
-                seq = 0
-        seq += 1
-        seq_file.write_text(str(seq))
-
-        timestamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-        job_file = jobs_dir / f"job_{seq}.json"
-        out_file = artifacts_dir / f"{project_name}-{timestamp}-artifact.md"
-
-        # Single pending job rule: abandon any existing pending jobs
-        for old_job_file in sorted(jobs_dir.glob("job_*.json")):
-            if old_job_file == job_file:
-                continue
-            try:
-                old_job = json.loads(old_job_file.read_text())
-                if old_job.get("status") == "pending":
-                    old_job["status"] = "abandoned"
-                    old_job["abandoned_at"] = datetime.now().isoformat()
-                    old_job_file.write_text(json.dumps(old_job, indent=2) + "\\n")
-            except:
-                continue
-
-        # Create job file
-        if not job_file.exists():
-            job_file.write_text(json.dumps({
-                "schema_version": 1,
-                "id": seq,
-                "type": "history_artifact",
-                "status": "pending",
-                "project": project_name,
-                "project_path": str(project_root),
-                "output": str(out_file),
-                "rule_file": str(rule_file),
-                "created_at": datetime.now().isoformat()
-            }, indent=2) + "\\n")
-
-        # Write sentinel file so Stop hook can block in same session
-        sentinel_file.write_text(json.dumps({
-            "job_file": str(job_file),
-            "output": str(out_file),
-            "created_at": datetime.now().isoformat()
-        }, indent=2))
-
-
-if __name__ == "__main__":
-    main()
-`;
+    return generateCodexNotifyHookScript();
   }
 
   /**
@@ -5670,6 +5785,75 @@ if __name__ == "__main__":
     return generateCodexStopScript();
   }
 
+  private hasPendingCodexArtifactJob(): boolean {
+    const jobsDir = path.join(this.getCentralLibrarianDir(), 'jobs');
+    if (!fs.existsSync(jobsDir)) {
+      return false;
+    }
+
+    try {
+      for (const fileName of fs.readdirSync(jobsDir)) {
+        if (!fileName.endsWith('.json')) {
+          continue;
+        }
+        const job = JSON.parse(fs.readFileSync(path.join(jobsDir, fileName), 'utf-8')) as { status?: string };
+        if (job.status === 'pending') {
+          return true;
+        }
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
+  }
+
+  private hasCodexNotifyConfiguration(configToml: string): boolean {
+    const librarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
+    return configToml.includes('notify = [')
+      && configToml.includes('codex-notify.py')
+      && configToml.includes(TOML_SANDBOX_WORKSPACE_WRITE_HEADER)
+      && configToml.includes(librarianDir);
+  }
+
+  private hasCodexManagedSection(agentsMd: string): boolean {
+    return agentsMd.includes('Field Theory Librarian - managed section');
+  }
+
+  private syncCodexStopHookRegistration(installStop: boolean): void {
+    const hooksConfigPath = this.getCodexHooksConfigPath();
+    let hooksConfig: CodexHooksConfig = { hooks: {} };
+
+    if (fs.existsSync(hooksConfigPath)) {
+      try {
+        hooksConfig = JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8'));
+      } catch {
+        hooksConfig = { hooks: {} };
+      }
+    }
+
+    removeCodexCommandHook(hooksConfig, 'SessionStart', LEGACY_CODEX_SESSION_START_SCRIPT);
+
+    if (installStop) {
+      upsertCodexCommandHook(
+        hooksConfig,
+        'Stop',
+        {
+          hooks: [{
+            type: 'command',
+            command: `python3 ${this.getCodexStopScriptPath()}`,
+            timeout_sec: 10,
+          }],
+        },
+        CODEX_STOP_SCRIPT,
+      );
+    } else {
+      removeCodexCommandHook(hooksConfig, 'Stop', CODEX_STOP_SCRIPT);
+    }
+
+    fs.writeFileSync(hooksConfigPath, JSON.stringify(hooksConfig, null, 2));
+  }
+
   /**
    * Check if Codex CLI appears to be installed.
    */
@@ -5680,30 +5864,26 @@ if __name__ == "__main__":
 
   /**
    * Check if the Codex hooks are installed.
-   * Checks the notify/Stop wiring plus required config.toml entries.
+   * Checks the notify wiring, stop script availability, and required config.
+   * Stop registration is dynamic and may be absent when no job is pending.
    */
   isCodexHookInstalled(): boolean {
     const notifyPath = this.getCodexNotifyScriptPath();
     const stopPath = this.getCodexStopScriptPath();
     const hooksConfigPath = this.getCodexHooksConfigPath();
     const configTomlPath = this.getCodexConfigPath();
-    const librarianDir = path.join(os.homedir(), '.fieldtheory', 'librarian');
 
     // Check that at least the main scripts exist
     if (!fs.existsSync(notifyPath) || !fs.existsSync(stopPath)) {
       return false;
     }
 
-    // Check hooks.json has our Stop entry (most critical hook)
     if (!fs.existsSync(hooksConfigPath)) {
       return false;
     }
 
     try {
-      const config = JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8')) as CodexHooksConfig;
-      if (!hasCodexCommandHook(config, 'Stop', CODEX_STOP_SCRIPT)) {
-        return false;
-      }
+      JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8'));
     } catch {
       return false;
     }
@@ -5714,9 +5894,7 @@ if __name__ == "__main__":
 
     try {
       const configToml = fs.readFileSync(configTomlPath, 'utf-8');
-      const hasNotify = configToml.includes('notify = [') && configToml.includes('codex-notify.py');
-      const hasWritableRoots = configToml.includes(TOML_SANDBOX_WORKSPACE_WRITE_HEADER) && configToml.includes(librarianDir);
-      return hasNotify && hasWritableRoots;
+      return this.hasCodexNotifyConfiguration(configToml);
     } catch {
       return false;
     }
@@ -5725,8 +5903,8 @@ if __name__ == "__main__":
   /**
    * Install all Codex hooks.
    * 1. Ensure directories exist
-   * 2. Write 2 Python scripts
-   * 3. Merge hooks into ~/.codex/hooks.json
+   * 2. Write the notify and stop scripts
+   * 3. Reconcile ~/.codex/hooks.json
    * 4. Add notify line to ~/.codex/config.toml
    * 5. Add writable_roots for librarian dir to config.toml
    * 6. Append Librarian section to ~/.codex/AGENTS.md
@@ -5754,40 +5932,9 @@ if __name__ == "__main__":
         fs.unlinkSync(sessionStartPath);
       }
 
-      // 4. Register hooks in ~/.codex/hooks.json
-      const hooksConfigPath = this.getCodexHooksConfigPath();
-      let hooksConfig: CodexHooksConfig = { hooks: {} };
-
-      if (fs.existsSync(hooksConfigPath)) {
-        try {
-          hooksConfig = JSON.parse(fs.readFileSync(hooksConfigPath, 'utf-8'));
-        } catch {
-          // Start fresh if unparseable
-        }
-      }
-
-      if (!hooksConfig.hooks || typeof hooksConfig.hooks !== 'object') {
-        hooksConfig.hooks = {};
-      }
-      const hooks = hooksConfig.hooks as Record<string, unknown>;
-
-      // Remove legacy SessionStart hook entries. Stop handles enforcement without startup noise.
-      removeCodexCommandHook(hooksConfig, 'SessionStart', LEGACY_CODEX_SESSION_START_SCRIPT);
-
-      // Register Stop hook
-      if (!Array.isArray(hooks.Stop)) {
-        hooks.Stop = [];
-      }
-      const stopHooks = hooks.Stop as Array<{ hooks?: Array<{ type?: string; command?: string; timeout_sec?: number }> }>;
-      const stopCommand = `python3 ${stopPath}`;
-      const hasStop = hasCodexCommandHook(hooksConfig, 'Stop', CODEX_STOP_SCRIPT);
-      if (!hasStop) {
-        stopHooks.push({
-          hooks: [{ type: 'command', command: stopCommand, timeout_sec: 10 }]
-        });
-      }
-
-      fs.writeFileSync(hooksConfigPath, JSON.stringify(hooksConfig, null, 2));
+      // 4. Reconcile ~/.codex/hooks.json. Stop stays installed only while a
+      // pending Librarian job exists.
+      this.syncCodexStopHookRegistration(this.hasPendingCodexArtifactJob());
 
       // 6. Add notify line and writable_roots to ~/.codex/config.toml
       const configTomlPath = this.getCodexConfigPath();

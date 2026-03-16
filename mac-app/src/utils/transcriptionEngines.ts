@@ -1,6 +1,19 @@
 export type VisibleTranscriptionEngine = 'whisper' | 'parakeet' | 'parakeet-multilingual';
 export type VisibleParakeetEngine = Exclude<VisibleTranscriptionEngine, 'whisper'>;
 
+export type VisibleParakeetEngineStatus = {
+  engine: VisibleParakeetEngine;
+  verified: boolean;
+  needsReinstall: boolean;
+  lastError: string | null;
+  lastErrorAt?: string | null;
+};
+
+export type VisibleParakeetStatus = {
+  runtimeInstalled: boolean;
+  engines: VisibleParakeetEngineStatus[];
+} | null | undefined;
+
 export type VisibleTranscriptionEngineOption = {
   id: VisibleTranscriptionEngine;
   label: string;
@@ -35,4 +48,22 @@ export function normalizeVisibleTranscriptionEngine(
     return engine;
   }
   return DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
+}
+
+export function getVisibleParakeetEngineStatus(
+  status: VisibleParakeetStatus,
+  engine: VisibleParakeetEngine
+): VisibleParakeetEngineStatus | null {
+  return status?.engines.find((entry) => entry.engine === engine) ?? null;
+}
+
+export function isVisibleParakeetEngineVerified(
+  status: VisibleParakeetStatus,
+  engine: VisibleParakeetEngine
+): boolean {
+  return Boolean(getVisibleParakeetEngineStatus(status, engine)?.verified);
+}
+
+export function hasVisibleParakeetRuntime(status: VisibleParakeetStatus): boolean {
+  return Boolean(status?.runtimeInstalled);
 }

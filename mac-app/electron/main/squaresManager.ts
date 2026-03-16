@@ -18,6 +18,7 @@ import {
   ScreenInfo,
   WindowSnapshot,
   SquaresAction,
+  SquaresActionSource,
   SquaresConfig,
   SquaresHotkeys,
   DEFAULT_SQUARES_CONFIG,
@@ -844,8 +845,14 @@ export class SquaresManager extends EventEmitter {
    * Execute a Squares action.
    * This is the main public API - called by hotkeys and voice commands.
    */
-  async executeAction(action: SquaresAction): Promise<boolean> {
-    if (!this.config.enabled) {
+  async executeAction(
+    action: SquaresAction,
+    options: { source?: SquaresActionSource } = {}
+  ): Promise<boolean> {
+    const source = options.source ?? 'default';
+    const canRunFromLauncher = source === 'command-launcher' && this.config.showInCommandLauncher;
+
+    if (!this.config.enabled && !canRunFromLauncher) {
       log.info('Squares is disabled');
       return false;
     }
