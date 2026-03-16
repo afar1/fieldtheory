@@ -337,6 +337,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly AUDIO_DIAG_WINDOW_MS = 2200;
   private static readonly AUDIO_DIAG_NO_EVENT_WARN_MS = 3200;
   private static readonly AUDIO_DIAG_WARN_COOLDOWN_MS = 5000;
+  private static readonly FAILURE_ALERT_COOLDOWN_MS = 15000;
   private static readonly BACKGROUND_FILTER_THRESHOLD_BASE = 0.004;
   private static readonly BACKGROUND_FILTER_THRESHOLD_SPAN = 0.085;
   private static readonly BACKGROUND_FILTER_RATIO_BASE = 0.04;
@@ -402,6 +403,8 @@ export class HotMicManager extends EventEmitter {
   private lastAudioLevelEventMs: number = 0;
   private lastAudioNoEventWarnMs: number = 0;
   private lastSpeechMissWarnMs: number = 0;
+  private lastFailureAlertAtMs: number = 0;
+  private lastFailureAlertKey: string | null = null;
   private audioDiagnosticsTimer: NodeJS.Timeout | null = null;
   private currentHarvestMode: HarvestMode | null = null;
 
@@ -1048,6 +1051,7 @@ export class HotMicManager extends EventEmitter {
         }).catch((err) => {
           // Keep chunk processing alive so engine-level fallback can still run.
           log.error('Hot Mic: warmup failed:', err);
+          this.maybeShowTranscriptionFailure(err, 'warmup');
           this.engineReady = false;
           this.setCondition('degraded');
         })
@@ -1570,6 +1574,38 @@ export class HotMicManager extends EventEmitter {
     }
   }
 
+  private maybeShowTranscriptionFailure(
+    error: unknown,
+    context: 'warmup' | 'chunk' = 'chunk'
+  ): void {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const normalized = rawMessage.replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+
+    const now = Date.now();
+    const alertKey = `${context}:${normalized}`;
+    if (
+      this.lastFailureAlertKey === alertKey &&
+      (now - this.lastFailureAlertAtMs) < HotMicManager.FAILURE_ALERT_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    this.lastFailureAlertAtMs = now;
+    this.lastFailureAlertKey = alertKey;
+
+    let userMessage = 'Hot Mic: transcription failed';
+    if (/startup timed out/i.test(normalized)) {
+      userMessage = 'Hot Mic: transcription engine startup timed out';
+    } else if (context === 'warmup') {
+      userMessage = 'Hot Mic: primary transcription engine failed to start';
+    } else if (/timed out/i.test(normalized)) {
+      userMessage = 'Hot Mic: transcription timed out';
+    }
+
+    this.cursorStatusManager?.showCriticalMessage(userMessage);
+  }
+
   private evaluateChunkBackgroundFilter(stats: ChunkAudioStats): {
     suppressed: boolean;
     acceptedLevel: number;
@@ -2034,6 +2070,7 @@ export class HotMicManager extends EventEmitter {
       this.setRealtimeHarvestMode();
     } catch (error) {
       log.error('Hot Mic chunk error:', error);
+      this.maybeShowTranscriptionFailure(error, 'chunk');
       // A transcription failure that wasn't caught by fallback means degraded state.
       if (!this.whisperFallbackActive) {
         this.setCondition('degraded');

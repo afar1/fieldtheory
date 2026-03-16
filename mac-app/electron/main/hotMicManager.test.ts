@@ -1464,6 +1464,22 @@ describe('HotMicManager chunk queue backpressure', () => {
     manager.destroy();
   });
 
+  it('surfaces startup timeouts to the user instead of failing silently', () => {
+    const { manager } = createManager();
+    const cursorStatusManager = { showCriticalMessage: vi.fn() };
+    manager.setCursorStatusManager(cursorStatusManager as any);
+
+    (manager as any).maybeShowTranscriptionFailure(
+      new Error('Qwen server startup timed out (60s)'),
+      'chunk'
+    );
+
+    expect(cursorStatusManager.showCriticalMessage).toHaveBeenCalledWith(
+      'Hot Mic: transcription engine startup timed out'
+    );
+    manager.destroy();
+  });
+
   it('passes silenceMs 0 for parakeet engine', () => {
     const { manager, nativeHelper } = createManager({ transcriptionEngine: 'parakeet' });
 

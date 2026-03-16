@@ -4,6 +4,7 @@ import { BrowserWindow } from 'electron';
 const mockApp = vi.hoisted(() => ({
   hide: vi.fn(),
   show: vi.fn(),
+  focus: vi.fn(),
   getName: vi.fn(() => 'Field Theory'),
   getAppPath: vi.fn(() => '/tmp'),
   dock: { hide: vi.fn() },
@@ -46,6 +47,23 @@ vi.mock('./clipboardManager', () => ({
 }));
 
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+
+function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<typeof vi.fn>) {
+  (window as any).window = {
+    isDestroyed: vi.fn(() => false),
+    setFocusable: vi.fn(),
+    setAlwaysOnTop: vi.fn(),
+    show: vi.fn(),
+    moveTop: vi.fn(),
+    focus: vi.fn(),
+    webContents: {
+      send,
+    },
+  };
+
+  vi.spyOn(window as any, 'sendTargetAppInfo').mockImplementation(() => {});
+  vi.spyOn(window as any, 'refreshAppDataInBackground').mockResolvedValue(undefined);
+}
 
 describe('ClipboardHistoryWindow helper methods', () => {
   let window: ClipboardHistoryWindow;
@@ -209,6 +227,39 @@ describe('ClipboardHistoryWindow helper methods', () => {
     await window.dismissForExternalBlur('window-blur-handler', 0);
 
     expect(window.hide).not.toHaveBeenCalled();
+  });
+
+  it('sends showHistory before showSettings when reusing an existing window', () => {
+    const send = vi.fn();
+    attachExistingWindow(window, send);
+
+    window.show(undefined, true, true);
+
+    expect(send.mock.calls.map(([channel]) => channel)).toEqual([
+      'clipboard:showHistory',
+      'clipboard:showSettings',
+    ]);
+  });
+
+  it('activates panel mode with app.focus instead of app.show', () => {
+    attachExistingWindow(window, vi.fn());
+
+    window.show(undefined, false, true);
+
+    expect(mockApp.focus).toHaveBeenCalledWith({ steal: true });
+    expect(mockApp.show).not.toHaveBeenCalled();
+  });
+
+  it('sends showHistory before showTranscriptHistory when reusing an existing window', () => {
+    const send = vi.fn();
+    attachExistingWindow(window, send);
+
+    window.show(undefined, false, true, true);
+
+    expect(send.mock.calls.map(([channel]) => channel)).toEqual([
+      'clipboard:showHistory',
+      'clipboard:showTranscriptHistory',
+    ]);
   });
 
   it('dedupes blur dismissal when both blur handlers fire', async () => {

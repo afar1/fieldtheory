@@ -14,6 +14,42 @@ const log = createLogger('Clipboard');
 
 const execAsync = promisify(exec);
 
+export function buildScreencaptureCommand(options: {
+  region?: boolean;
+  fullScreen?: boolean;
+  activeWindow?: boolean;
+  saveToDesktop?: boolean;
+  capturePath?: string | null;
+}): string {
+  const {
+    region = false,
+    fullScreen = false,
+    activeWindow = false,
+    saveToDesktop = false,
+    capturePath = null,
+  } = options;
+
+  if (region) {
+    let command = 'screencapture -i -o';
+    if (saveToDesktop && capturePath) {
+      command += ` "${capturePath}"`;
+    } else {
+      command += ' -c';
+    }
+    return command;
+  }
+
+  if (fullScreen && capturePath) {
+    return `screencapture "${capturePath}"`;
+  }
+
+  if (activeWindow && capturePath) {
+    return `screencapture -w -o "${capturePath}"`;
+  }
+
+  throw new Error('Invalid screencapture options');
+}
+
 /**
  * Terminal/CLI bundle IDs that don't support image pasting.
  * For these apps, we need to paste file paths instead of image buffers.
@@ -44,6 +80,7 @@ const IDE_WITH_TERMINAL_BUNDLE_IDS = new Set([
   'dev.zed.Zed',                   // Zed
   'dev.zed.Zed-Preview',           // Zed Preview
   'com.anthropic.claudefordesktop', // Claude (Claude Code needs text paths)
+  'com.openai.codex',              // Codex desktop
 ]);
 
 /**
@@ -1268,7 +1305,6 @@ export class ClipboardManager extends EventEmitter {
       if (region) {
         // Interactive selection mode: drag to select area
         let capturePath: string | null = null;
-        let command = 'screencapture -i';
         
         if (saveToDesktop) {
           // Generate desktop filename. If figure info is provided, include it for searchability.
@@ -1286,13 +1322,9 @@ export class ClipboardManager extends EventEmitter {
           }
           
           capturePath = path.join(desktopPath, filename);
-          command += ` "${capturePath}"`;
-        } else {
-          // Default: save directly to clipboard
-          command += ' -c';
         }
 
-        await execAsync(command);
+        await execAsync(buildScreencaptureCommand({ region: true, saveToDesktop, capturePath }));
         
         // Small delay to ensure clipboard or file is updated
         await new Promise(resolve => setTimeout(resolve, 100));
@@ -1335,7 +1367,7 @@ export class ClipboardManager extends EventEmitter {
       } else if (fullScreen) {
         // Full screen capture: captures all displays immediately without interaction
         const tempPath = path.join(app.getPath('temp'), `screenshot-${Date.now()}.png`);
-        await execAsync(`screencapture "${tempPath}"`);
+        await execAsync(buildScreencaptureCommand({ fullScreen: true, capturePath: tempPath }));
 
         // Read the captured image
         const fs = await import('fs/promises');
@@ -1367,7 +1399,7 @@ export class ClipboardManager extends EventEmitter {
       } else if (activeWindow) {
         // Active window capture: captures just the frontmost window
         const tempPath = path.join(app.getPath('temp'), `screenshot-${Date.now()}.png`);
-        await execAsync(`screencapture -w "${tempPath}"`);
+        await execAsync(buildScreencaptureCommand({ activeWindow: true, capturePath: tempPath }));
 
         // Read the captured image
         const fs = await import('fs/promises');

@@ -112,6 +112,7 @@ export class TranscriberManager extends EventEmitter {
   private whisperServerPort: number = 0;
   private whisperServerReady: boolean = false;
   private whisperServerReadyPromise: Promise<void> | null = null;
+  private whisperServerShutdownPromise: Promise<void> | null = null;
   private whisperServerLifecycleGeneration: number = 0;
   private whisperServerDisabledReason: string | null = null;
   private whisperServerModelPath: string | null = null;
@@ -174,6 +175,8 @@ export class TranscriberManager extends EventEmitter {
     'com.fieldtheory.experimental',
     'com.github.electron',
   ]);
+  private static readonly WHISPER_SERVER_STOP_TIMEOUT_MS = 2_000;
+  private static readonly WHISPER_SERVER_FORCE_KILL_TIMEOUT_MS = 1_000;
 
   // GPU fallback: if whisper-cli crashes due to Metal shader compilation failure,
   // disable GPU and retry with CPU-only mode for the rest of the session.
@@ -373,6 +376,7 @@ export class TranscriberManager extends EventEmitter {
       await this.preferences.save({ selectedModel: DEFAULT_MODEL_SIZE });
     }
     this.modelManager.setSelectedModel(selectedModel);
+    await this.reapStaleWhisperServerProcesses();
 
     // Overlay style hardcoded to 'rectangle' (cursor status indicator is primary UI)
     this.overlay.setOverlayStyle('rectangle');
@@ -2054,18 +2058,22 @@ export class TranscriberManager extends EventEmitter {
    * Loads the model once and listens on a random localhost port.
    * Returns when the server reports healthy via GET /health.
    */
-  private startWhisperServer(modelOverride?: ModelSize): Promise<void> {
+  private async startWhisperServer(modelOverride?: ModelSize): Promise<void> {
     if (this.whisperServerDisabledReason) {
-      return Promise.reject(new Error(this.whisperServerDisabledReason));
+      throw new Error(this.whisperServerDisabledReason);
     }
 
     const modelPath = modelOverride
       ? this.modelManager.getModelPathForSize(modelOverride)
       : this.modelManager.getModelPath();
 
+    if (this.whisperServerShutdownPromise) {
+      await this.whisperServerShutdownPromise;
+    }
+
     // If the server is already running with the same model, reuse it.
     if (this.whisperServerReady && this.whisperServerProcess && this.whisperServerModelPath === modelPath) {
-      return Promise.resolve();
+      return;
     }
 
     // If currently starting with the same model, wait for it.
@@ -2073,9 +2081,10 @@ export class TranscriberManager extends EventEmitter {
       return this.whisperServerReadyPromise;
     }
 
-    // If a different model is requested, stop the old server first.
-    if (this.whisperServerProcess && this.whisperServerModelPath !== modelPath) {
-      this.stopWhisperServer();
+    // If any tracked server process still exists here, it is stale or uses the
+    // wrong model. Stop it fully before spawning a replacement.
+    if (this.whisperServerProcess) {
+      await this.stopWhisperServer();
     }
 
     this.whisperServerModelPath = modelPath;
@@ -2083,6 +2092,8 @@ export class TranscriberManager extends EventEmitter {
 
     this.whisperServerReadyPromise = (async () => {
       const startupInvalidated = (): boolean => startupGeneration !== this.whisperServerLifecycleGeneration;
+
+      await this.reapStaleWhisperServerProcesses();
 
       const serverPath = this.getWhisperServerPath();
       if (!fs.existsSync(serverPath)) {
@@ -2114,7 +2125,7 @@ export class TranscriberManager extends EventEmitter {
       });
 
       if (startupInvalidated()) {
-        proc.kill('SIGTERM');
+        void this.terminateTrackedWhisperServer(proc);
         this.whisperServerReadyPromise = null;
         throw new Error('whisper-server startup cancelled');
       }
@@ -2173,9 +2184,7 @@ export class TranscriberManager extends EventEmitter {
           if (settled || startupInvalidated()) return;
           if (Date.now() > deadline) {
             settled = true;
-            proc.kill('SIGTERM');
-            this.whisperServerProcess = null;
-            this.whisperServerReadyPromise = null;
+            void this.stopWhisperServer();
             reject(new Error('whisper-server startup timed out after 30s'));
             return;
           }
@@ -2218,14 +2227,177 @@ export class TranscriberManager extends EventEmitter {
    * Kill the persistent whisper-server. Called on suspend/sleep or model change.
    * The next transcription will restart it automatically.
    */
-  stopWhisperServer(): void {
+  stopWhisperServer(): Promise<void> {
     this.whisperServerLifecycleGeneration += 1;
-    if (this.whisperServerProcess) {
-      this.whisperServerProcess.kill('SIGTERM');
-      this.whisperServerProcess = null;
-    }
     this.whisperServerReady = false;
     this.whisperServerReadyPromise = null;
+
+    if (this.whisperServerShutdownPromise) {
+      return this.whisperServerShutdownPromise;
+    }
+
+    const proc = this.whisperServerProcess;
+    if (!proc) {
+      this.whisperServerPort = 0;
+      this.whisperServerModelPath = null;
+      return Promise.resolve();
+    }
+
+    this.whisperServerShutdownPromise = this.terminateTrackedWhisperServer(proc).finally(() => {
+      if (this.whisperServerProcess === proc) {
+        this.whisperServerProcess = null;
+      }
+      this.whisperServerReady = false;
+      this.whisperServerReadyPromise = null;
+      this.whisperServerShutdownPromise = null;
+      this.whisperServerPort = 0;
+      this.whisperServerModelPath = null;
+    });
+
+    return this.whisperServerShutdownPromise;
+  }
+
+  private terminateTrackedWhisperServer(proc: ChildProcess): Promise<void> {
+    return new Promise((resolve) => {
+      let settled = false;
+      let forceKillTimer: NodeJS.Timeout | null = null;
+      let finishTimer: NodeJS.Timeout | null = null;
+
+      const cleanup = () => {
+        proc.removeListener('close', onExit);
+        proc.removeListener('exit', onExit);
+        if (forceKillTimer) clearTimeout(forceKillTimer);
+        if (finishTimer) clearTimeout(finishTimer);
+      };
+
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve();
+      };
+
+      const onExit = () => {
+        finish();
+      };
+
+      proc.once('close', onExit);
+      proc.once('exit', onExit);
+
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        finish();
+        return;
+      }
+
+      try {
+        proc.kill('SIGTERM');
+      } catch (error) {
+        log.warn('Failed to send SIGTERM to whisper-server: %s', error instanceof Error ? error.message : String(error));
+        finish();
+        return;
+      }
+
+      forceKillTimer = setTimeout(() => {
+        if (settled || proc.exitCode !== null || proc.signalCode !== null) {
+          finish();
+          return;
+        }
+
+        log.warn('whisper-server did not exit after SIGTERM; sending SIGKILL');
+        try {
+          proc.kill('SIGKILL');
+        } catch (error) {
+          log.warn('Failed to send SIGKILL to whisper-server: %s', error instanceof Error ? error.message : String(error));
+          finish();
+          return;
+        }
+
+        finishTimer = setTimeout(() => {
+          log.warn('whisper-server did not report exit after SIGKILL');
+          finish();
+        }, TranscriberManager.WHISPER_SERVER_FORCE_KILL_TIMEOUT_MS);
+        finishTimer.unref?.();
+      }, TranscriberManager.WHISPER_SERVER_STOP_TIMEOUT_MS);
+      forceKillTimer.unref?.();
+    });
+  }
+
+  private async reapStaleWhisperServerProcesses(): Promise<void> {
+    const serverPath = this.getWhisperServerPath();
+
+    try {
+      const { stdout } = await execAsync('ps -axo pid=,command=');
+      const stalePids = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => {
+          const match = line.match(/^(\d+)\s+(.*)$/);
+          if (!match) return null;
+          return {
+            pid: Number(match[1]),
+            command: match[2],
+          };
+        })
+        .filter((entry): entry is { pid: number; command: string } => Boolean(entry))
+        .filter(({ pid, command }) => {
+          if (!Number.isFinite(pid) || pid <= 0) return false;
+          if (this.whisperServerProcess?.pid && pid === this.whisperServerProcess.pid) return false;
+          return command === serverPath || command.startsWith(`${serverPath} `);
+        })
+        .map(({ pid }) => pid);
+
+      if (stalePids.length === 0) return;
+
+      log.warn('Reaping %d stale whisper-server process(es)', stalePids.length);
+      for (const pid of stalePids) {
+        await this.terminatePid(pid);
+      }
+    } catch (error) {
+      log.warn(
+        'Failed to reap stale whisper-server processes: %s',
+        error instanceof Error ? error.message : String(error)
+      );
+    }
+  }
+
+  private async terminatePid(pid: number): Promise<void> {
+    const isRunning = () => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    if (!isRunning()) return;
+
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch {
+      return;
+    }
+
+    const deadline = Date.now() + TranscriberManager.WHISPER_SERVER_STOP_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      if (!isRunning()) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+
+    if (!isRunning()) return;
+
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      return;
+    }
+
+    const killDeadline = Date.now() + TranscriberManager.WHISPER_SERVER_FORCE_KILL_TIMEOUT_MS;
+    while (Date.now() < killDeadline) {
+      if (!isRunning()) return;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
 
   /**
@@ -2733,7 +2905,7 @@ export class TranscriberManager extends EventEmitter {
         }
 
         log.warn('whisper-server failed, falling back to whisper-cli: %s', message);
-        this.stopWhisperServer();
+        void this.stopWhisperServer();
       }
     }
 
@@ -2951,7 +3123,7 @@ export class TranscriberManager extends EventEmitter {
     this.stopQwenServer();
     this.stopMlxWhisperServer();
     this.stopParakeetServer();
-    this.stopWhisperServer();
+    await this.stopWhisperServer();
 
     const primaryEngine = this.getConfiguredTranscriptionEngine();
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
@@ -4026,7 +4198,7 @@ export class TranscriberManager extends EventEmitter {
     }
     this.stopQwenServer();
     this.stopMlxWhisperServer();
-    this.stopWhisperServer();
+    void this.stopWhisperServer();
     this.overlay.destroy();
   }
 }

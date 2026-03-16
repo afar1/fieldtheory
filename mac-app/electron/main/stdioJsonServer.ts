@@ -25,6 +25,7 @@ export interface StdioJsonServerConfig {
   command: string;
   args: string[];
   timeoutMs?: number;
+  startupTimeoutMs?: number;
   preStart?: () => Promise<void>;
   env?: NodeJS.ProcessEnv;
   /** Override for testing — defaults to child_process.spawn. */
@@ -36,6 +37,7 @@ export class StdioJsonServer {
   private command: string;
   private args: string[];
   private timeoutMs: number;
+  private startupTimeoutMs: number;
   private preStart?: () => Promise<void>;
   private env?: NodeJS.ProcessEnv;
   private spawnFn: SpawnFn;
@@ -53,6 +55,7 @@ export class StdioJsonServer {
     this.command = config.command;
     this.args = config.args;
     this.timeoutMs = config.timeoutMs ?? 120_000;
+    this.startupTimeoutMs = config.startupTimeoutMs ?? Math.min(this.timeoutMs, 60_000);
     this.preStart = config.preStart;
     this.env = config.env;
     this.spawnFn = config.spawnFn ?? spawn;
@@ -96,6 +99,13 @@ export class StdioJsonServer {
 
     this.readyPromise = new Promise<void>((resolve, reject) => {
       const invalidated = (): boolean => startupGeneration !== this.lifecycleGeneration;
+      let settled = false;
+
+      const finish = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        fn();
+      };
 
       const launch = async () => {
         // Optional pre-start validation (e.g. Python version check).
@@ -103,14 +113,14 @@ export class StdioJsonServer {
           try {
             await this.preStart();
           } catch (error) {
-            if (invalidated()) { reject(new Error(`${this.name} startup cancelled`)); return; }
+            if (invalidated()) { finish(() => reject(new Error(`${this.name} startup cancelled`))); return; }
             this.resetState();
-            reject(error as Error);
+            finish(() => reject(error as Error));
             return;
           }
         }
 
-        if (invalidated()) { reject(new Error(`${this.name} startup cancelled`)); return; }
+        if (invalidated()) { finish(() => reject(new Error(`${this.name} startup cancelled`))); return; }
 
         const proc = this.spawnFn(this.command, this.args, {
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -119,12 +129,21 @@ export class StdioJsonServer {
 
         if (invalidated()) {
           proc.kill('SIGTERM');
-          reject(new Error(`${this.name} startup cancelled`));
+          finish(() => reject(new Error(`${this.name} startup cancelled`)));
           return;
         }
 
         this.process = proc;
         let buffer = '';
+        const startupTimeout = setTimeout(() => {
+          if (invalidated()) {
+            finish(() => reject(new Error(`${this.name} startup cancelled`)));
+            return;
+          }
+          this.resetState();
+          proc.kill('SIGTERM');
+          finish(() => reject(new Error(`${this.name} server startup timed out (${this.startupTimeoutMs / 1000}s)`)));
+        }, this.startupTimeoutMs);
 
         // During startup, watch for the {"ready": true} JSON line.
         const onData = (data: Buffer) => {
@@ -139,7 +158,8 @@ export class StdioJsonServer {
               if (msg.ready) {
                 if (invalidated()) {
                   proc.kill('SIGTERM');
-                  reject(new Error(`${this.name} startup cancelled`));
+                  clearTimeout(startupTimeout);
+                  finish(() => reject(new Error(`${this.name} startup cancelled`)));
                   return;
                 }
                 this.ready = true;
@@ -147,7 +167,8 @@ export class StdioJsonServer {
                 this.setupLineHandler(proc, buffer);
                 buffer = '';
                 log.info('%s server ready', this.name);
-                resolve();
+                clearTimeout(startupTimeout);
+                finish(resolve);
                 return;
               }
             } catch {
@@ -163,18 +184,28 @@ export class StdioJsonServer {
         });
 
         proc.on('error', (error) => {
-          if (invalidated()) { reject(new Error(`${this.name} startup cancelled`)); return; }
+          if (invalidated()) {
+            clearTimeout(startupTimeout);
+            finish(() => reject(new Error(`${this.name} startup cancelled`)));
+            return;
+          }
           this.resetState();
-          reject(new Error(`Failed to start ${this.name} server: ${error.message}`));
+          clearTimeout(startupTimeout);
+          finish(() => reject(new Error(`Failed to start ${this.name} server: ${error.message}`)));
         });
 
         proc.on('close', (code) => {
-          if (invalidated()) { reject(new Error(`${this.name} startup cancelled`)); return; }
+          if (invalidated()) {
+            clearTimeout(startupTimeout);
+            finish(() => reject(new Error(`${this.name} startup cancelled`)));
+            return;
+          }
           const wasReady = this.ready;
           this.resetState();
+          clearTimeout(startupTimeout);
 
           if (!wasReady) {
-            reject(new Error(`${this.name} server exited during startup with code ${code}`));
+            finish(() => reject(new Error(`${this.name} server exited during startup with code ${code}`)));
           } else {
             log.warn('%s server exited (code %d), will restart on next request', this.name, code);
           }

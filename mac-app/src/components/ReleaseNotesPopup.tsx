@@ -13,7 +13,7 @@ export function hasReleaseNotes(version: string): boolean {
 
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
-const CURRENT_RELEASE_NOTES = [
+const RELEASE_NOTES_0_1_95 = [
     '__SECTION__:Features',
     'Codex now works with Librarian in a simpler setup flow',
     'Artifacts have clearer titles and show which model wrote them',
@@ -32,9 +32,19 @@ const CURRENT_RELEASE_NOTES = [
     'Fixed several settings sync and visibility issues',
   ];
 
+const CURRENT_RELEASE_NOTES = RELEASE_NOTES_0_1_95.flatMap((note) => (
+  note === '__SECTION__:Fixes'
+    ? [
+        note,
+        'Fixed a whisper-server cleanup bug that could drive memory and CPU up over time',
+      ]
+    : [note]
+));
+
 const RELEASE_NOTES: Record<string, string[]> = {
-  '0.1.95': CURRENT_RELEASE_NOTES,
-  '0.1.94': CURRENT_RELEASE_NOTES,
+  '0.1.96': CURRENT_RELEASE_NOTES,
+  '0.1.95': RELEASE_NOTES_0_1_95,
+  '0.1.94': RELEASE_NOTES_0_1_95,
   '0.1.93': [
     'Dynamic Island pills now hidden from Mission Control and hot corners',
     'Fixed white background flash when clicking pills or using Super Paste',
@@ -280,6 +290,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.96': 'Mar 16 2026',
   '0.1.95': 'Mar 15 2026',
   '0.1.94': 'Mar 15 2026',
   '0.1.93': 'Mar 10 2026',

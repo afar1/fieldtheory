@@ -79,7 +79,7 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { ClipboardManager } from './clipboardManager';
+import { buildScreencaptureCommand, ClipboardManager, isIDEWithTerminal } from './clipboardManager';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private members in tests
 function createManager(): any {
@@ -268,5 +268,35 @@ describe('ClipboardManager.checkClipboard', () => {
     await manager.checkClipboard();
 
     expect(manager.storeImage).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('buildScreencaptureCommand', () => {
+  it('removes window shadow in interactive capture mode', () => {
+    expect(buildScreencaptureCommand({ region: true })).toBe('screencapture -i -o -c');
+    expect(
+      buildScreencaptureCommand({
+        region: true,
+        saveToDesktop: true,
+        capturePath: '/tmp/capture.png',
+      })
+    ).toBe('screencapture -i -o "/tmp/capture.png"');
+  });
+
+  it('removes window shadow for active-window capture', () => {
+    expect(
+      buildScreencaptureCommand({
+        activeWindow: true,
+        capturePath: '/tmp/window.png',
+      })
+    ).toBe('screencapture -w -o "/tmp/window.png"');
+  });
+});
+
+describe('isIDEWithTerminal', () => {
+  it('treats Codex desktop like Cursor and Claude for portable commands', () => {
+    expect(isIDEWithTerminal('com.anthropic.claudefordesktop')).toBe(true);
+    expect(isIDEWithTerminal('com.todesktop.230313mzl4w4u92')).toBe(true);
+    expect(isIDEWithTerminal('com.openai.codex')).toBe(true);
   });
 });
