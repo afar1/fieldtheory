@@ -1790,19 +1790,40 @@ declare global {
   }
 
   type CouncilState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
+  type CouncilMatchup =
+    | 'opus-vs-opus'
+    | 'opus-vs-sonnet'
+    | 'opus-vs-codex'
+    | 'sonnet-vs-opus'
+    | 'sonnet-vs-sonnet'
+    | 'sonnet-vs-codex'
+    | 'codex-vs-opus'
+    | 'codex-vs-sonnet'
+    | 'codex-vs-codex';
 
   interface CouncilStatus {
     state: CouncilState;
     currentRound: number;
     topic: string | null;
     error: string | null;
+    matchup: CouncilMatchup;
+    transcriptPath: string | null;
+    consensusPath: string | null;
   }
 
   interface CouncilConfig {
     topic: string;
     maxTurns?: number;
     repoPath?: string;
+    matchup?: CouncilMatchup;
     opusVsOpus?: boolean;
+  }
+
+  interface CouncilPreferences {
+    defaultMatchup: CouncilMatchup;
+    defaultMaxTurns: number;
+    autoOpenWindow: boolean;
+    autoPasteConsensus: boolean;
   }
 
   interface CouncilEvent {
@@ -1815,6 +1836,8 @@ declare global {
     stop: () => Promise<void>;
     showWindow: () => Promise<void>;
     getStatus: () => Promise<CouncilStatus>;
+    getPreferences: () => Promise<CouncilPreferences>;
+    savePreferences: (prefs: Partial<CouncilPreferences>) => Promise<boolean>;
     onEvent: (callback: (event: CouncilEvent) => void) => () => void;
     onStatusChanged: (callback: (status: CouncilStatus) => void) => () => void;
   }

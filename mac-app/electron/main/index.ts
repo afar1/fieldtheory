@@ -66,8 +66,8 @@ import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CouncilManager } from './councilManager';
 import { CouncilWindow } from './councilWindow';
-import { CouncilIPCChannels } from './types/council';
-import type { CouncilConfig } from './types/council';
+import { CouncilIPCChannels, DEFAULT_COUNCIL_MATCHUP, DEFAULT_COUNCIL_MAX_TURNS } from './types/council';
+import type { CouncilConfig, CouncilPreferences } from './types/council';
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
 import { GazeDebugOverlayManager } from './gaze/gazeDebugOverlayManager';
@@ -114,6 +114,54 @@ async function activateAndPaste(targetApp: { bundleId: string; name: string } | 
     await execFileAsync('osascript', ['-e', script], { timeout: 3000 });
   } else {
     await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+  }
+}
+
+function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
+  if (!bundleId) return false;
+  const lower = bundleId.toLowerCase();
+  return lower.includes('fieldtheory') || lower.includes('electron');
+}
+
+function getCouncilPreferences(): CouncilPreferences {
+  return {
+    defaultMatchup: preferencesManager?.getPreference('councilDefaultMatchup') ?? DEFAULT_COUNCIL_MATCHUP,
+    defaultMaxTurns: preferencesManager?.getPreference('councilDefaultMaxTurns') ?? DEFAULT_COUNCIL_MAX_TURNS,
+    autoOpenWindow: preferencesManager?.getPreference('councilAutoOpenWindow') ?? true,
+    autoPasteConsensus: preferencesManager?.getPreference('councilAutoPasteConsensus') ?? true,
+  };
+}
+
+async function pasteCouncilConsensusBack(consensusPath: string): Promise<void> {
+  const info = councilManager?.getPasteBackInfo();
+  if (!info || info.source !== 'kickoff') {
+    return;
+  }
+
+  let content = '';
+  try {
+    content = fs.readFileSync(consensusPath, 'utf-8').trim();
+  } catch (error) {
+    log.error('Failed reading council consensus %s: %s', consensusPath, error);
+    return;
+  }
+
+  if (!content) {
+    return;
+  }
+
+  clipboard.writeText(content);
+  clipboardManager?.syncClipboardHash();
+
+  if (!info.returnTargetApp || isFieldTheoryBundleId(info.returnTargetApp.bundleId)) {
+    log.warn('Council consensus copied to clipboard but no safe return target was captured');
+    return;
+  }
+
+  try {
+    await activateAndPaste(info.returnTargetApp);
+  } catch (error) {
+    log.error('Failed to paste council consensus back into %s: %s', info.returnTargetApp.bundleId, error);
   }
 }
 
@@ -4966,7 +5014,7 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'Council not initialized' };
     }
     const result = await councilManager.start(config);
-    if (result.success) {
+    if (result.success && getCouncilPreferences().autoOpenWindow) {
       councilWindow?.show();
     }
     return result;
@@ -4981,7 +5029,45 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CouncilIPCChannels.GET_STATUS, async () => {
-    return councilManager?.getStatus() ?? { state: 'idle', currentRound: 0, topic: null, error: null };
+    return councilManager?.getStatus() ?? {
+      state: 'idle',
+      currentRound: 0,
+      topic: null,
+      error: null,
+      matchup: DEFAULT_COUNCIL_MATCHUP,
+      transcriptPath: null,
+      consensusPath: null,
+    };
+  });
+
+  ipcMain.handle(CouncilIPCChannels.GET_PREFERENCES, async () => {
+    return getCouncilPreferences();
+  });
+
+  ipcMain.handle(CouncilIPCChannels.SAVE_PREFERENCES, async (_event, prefs: Partial<CouncilPreferences>) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    const nextPrefs: {
+      councilDefaultMatchup?: CouncilPreferences['defaultMatchup'];
+      councilDefaultMaxTurns?: number;
+      councilAutoOpenWindow?: boolean;
+      councilAutoPasteConsensus?: boolean;
+    } = {};
+    if (prefs.defaultMatchup !== undefined) {
+      nextPrefs.councilDefaultMatchup = prefs.defaultMatchup;
+    }
+    if (prefs.defaultMaxTurns !== undefined) {
+      nextPrefs.councilDefaultMaxTurns = prefs.defaultMaxTurns;
+    }
+    if (prefs.autoOpenWindow !== undefined) {
+      nextPrefs.councilAutoOpenWindow = prefs.autoOpenWindow;
+    }
+    if (prefs.autoPasteConsensus !== undefined) {
+      nextPrefs.councilAutoPasteConsensus = prefs.autoPasteConsensus;
+    }
+    await preferencesManager.save(nextPrefs);
+    return true;
   });
 
   // =========================================================================
@@ -6266,7 +6352,25 @@ async function initTranscriberSystem(): Promise<void> {
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined);
 
   // Initialize council manager and window for AI debate feature.
-  councilManager = new CouncilManager();
+  councilManager = new CouncilManager({
+    getKickoffDefaults: () => {
+      const prefs = getCouncilPreferences();
+      return {
+        matchup: prefs.defaultMatchup,
+        maxTurns: prefs.defaultMaxTurns,
+      };
+    },
+    getFrontmostApp: () => {
+      const frontmost = nativeHelper?.getFrontmostApp() ?? null;
+      if (!frontmost?.bundleId || !frontmost?.name || isFieldTheoryBundleId(frontmost.bundleId)) {
+        return null;
+      }
+      return {
+        bundleId: frontmost.bundleId,
+        name: frontmost.name,
+      };
+    },
+  });
   councilWindow = new CouncilWindow({
     getShowInDock: () => preferencesManager?.getPreference('showInDock') ?? false,
   });
@@ -6281,11 +6385,16 @@ async function initTranscriberSystem(): Promise<void> {
   councilManager.watchKickoffs(kickoffsDir);
 
   councilManager.on('kickoffDetected', () => {
-    councilWindow?.show();
+    if (getCouncilPreferences().autoOpenWindow) {
+      councilWindow?.show();
+    }
   });
 
   // Forward council events to the council window.
   councilManager.on('event', (event) => {
+    if (event.type === 'consensus_written' && getCouncilPreferences().autoPasteConsensus) {
+      void pasteCouncilConsensusBack(event.path);
+    }
     councilWindow?.getWindow()?.webContents.send(CouncilIPCChannels.EVENT, event);
   });
 

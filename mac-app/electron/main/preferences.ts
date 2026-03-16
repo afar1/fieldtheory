@@ -10,6 +10,8 @@ import {
   type GazePersonalOffsets,
   type GazeWindowFocusConfig,
 } from './types/gaze';
+import { DEFAULT_COUNCIL_MATCHUP, DEFAULT_COUNCIL_MAX_TURNS } from './types/council';
+import type { CouncilMatchup } from './types/council';
 
 const log = createLogger('Preferences');
 import { UserDataManager, getUserDataManager } from './userDataManager';
@@ -114,6 +116,12 @@ interface Preferences {
   
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
+
+  // Council defaults for debate kickoff flow.
+  councilDefaultMatchup?: CouncilMatchup;
+  councilDefaultMaxTurns?: number;
+  councilAutoOpenWindow?: boolean;
+  councilAutoPasteConsensus?: boolean;
 
   // Show fieldtheory.dev link in footer - toggleable per user preference.
   showFieldTheoryLink?: boolean;
@@ -247,6 +255,12 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Show in Dock - disabled by default (panel mode). WIP feature.
   showInDock: false,
+
+  // Council defaults favor a short mixed-model debate and immediate return.
+  councilDefaultMatchup: DEFAULT_COUNCIL_MATCHUP,
+  councilDefaultMaxTurns: DEFAULT_COUNCIL_MAX_TURNS,
+  councilAutoOpenWindow: true,
+  councilAutoPasteConsensus: true,
 
   // Dark mode - disabled by default (light mode).
   darkMode: false,
