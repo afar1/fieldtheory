@@ -66,7 +66,7 @@ describe('CouncilManager', () => {
     expect(result.success).toBe(true);
     expect(mockSpawn).toHaveBeenCalledWith(
       'bash',
-      expect.arrayContaining(['--json-events', '--opus-vs-opus', 'Test topic']),
+      expect.arrayContaining(['--json-events', '--matchup', 'opus-vs-opus', 'Test topic']),
       expect.any(Object)
     );
   });
@@ -272,6 +272,9 @@ describe('CouncilManager', () => {
     expect(status.state).toBe('idle');
     expect(status.currentRound).toBe(0);
     expect(status.topic).toBeNull();
+    expect(status.matchup).toBe('opus-vs-codex');
+    expect(status.transcriptPath).toBeNull();
+    expect(status.consensusPath).toBeNull();
   });
 
   // -- lifecycle --
@@ -304,10 +307,17 @@ describe('CouncilManager', () => {
     expect(mockExecSync).toHaveBeenCalledWith('which codex', expect.any(Object));
   });
 
-  it('does not include --opus-vs-opus flag when opusVsOpus is false', async () => {
+  it('supports codex-vs-codex without checking claude', async () => {
+    await manager.start({ topic: 'Test', matchup: 'codex-vs-codex' });
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(mockExecSync).toHaveBeenCalledWith('which codex', expect.any(Object));
+  });
+
+  it('passes the default matchup when opus-vs-opus is not requested', async () => {
     await manager.start({ topic: 'Test', opusVsOpus: false });
     const args = mockSpawn.mock.calls[0][1];
-    expect(args).not.toContain('--opus-vs-opus');
+    expect(args).toContain('--matchup');
+    expect(args).toContain('opus-vs-codex');
   });
 
   it('passes --max-turns 0 when maxTurns is explicitly 0', async () => {
@@ -463,6 +473,31 @@ describe('CouncilManager', () => {
       await kickoffManager.handleKickoff('/tmp/kickoff.md');
 
       expect(kickoffManager.getStatus().topic).toBe('Actual topic here');
+    });
+
+    it('parses kickoff frontmatter for matchup and max turns', async () => {
+      mockReadFileSync.mockReturnValue(`---
+matchup: codex-vs-codex
+max-turns: 4
+repo-path: /tmp/repo
+---
+# Debate title
+
+Context body`);
+
+      const proc2 = createFakeProcess();
+      mockSpawn.mockReturnValue(proc2);
+
+      await kickoffManager.handleKickoff('/tmp/kickoff.md');
+
+      const args = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1];
+      expect(args).toContain('--matchup');
+      expect(args).toContain('codex-vs-codex');
+      expect(args).toContain('--max-turns');
+      expect(args).toContain('4');
+      expect(args).toContain('--repo');
+      expect(args).toContain('/tmp/repo');
+      expect(args[args.length - 1]).toContain('# Debate title');
     });
   });
 });

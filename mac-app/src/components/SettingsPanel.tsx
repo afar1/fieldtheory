@@ -19,6 +19,14 @@ import { supabase } from '../supabaseClient';
 import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
+import {
+  clampCouncilMaxTurns,
+  COUNCIL_MATCHUP_OPTIONS,
+  DEFAULT_COUNCIL_MATCHUP,
+  DEFAULT_COUNCIL_MAX_TURNS,
+  MAX_COUNCIL_MAX_TURNS,
+  MIN_COUNCIL_MAX_TURNS,
+} from '../utils/council';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
 import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
@@ -407,6 +415,12 @@ export default function SettingsPanel({
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
 
+  // Council defaults - used by background debate kickoff flow.
+  const [councilDefaultMatchup, setCouncilDefaultMatchup] = useState<CouncilMatchup>(DEFAULT_COUNCIL_MATCHUP);
+  const [councilDefaultMaxTurns, setCouncilDefaultMaxTurns] = useState(DEFAULT_COUNCIL_MAX_TURNS);
+  const [councilAutoOpenWindow, setCouncilAutoOpenWindow] = useState(true);
+  const [councilAutoPasteConsensus, setCouncilAutoPasteConsensus] = useState(true);
+
   // Show fieldtheory.dev link in footer.
   // showFieldTheoryLink always true — toggle removed from UI
 
@@ -513,6 +527,14 @@ export default function SettingsPanel({
       // Load show in dock setting
       window.clipboardAPI.getShowInDock?.().then(show => {
         setShowInDock(show);
+      });
+
+      window.councilAPI?.getPreferences?.().then((prefs) => {
+        if (!prefs) return;
+        setCouncilDefaultMatchup(prefs.defaultMatchup);
+        setCouncilDefaultMaxTurns(prefs.defaultMaxTurns);
+        setCouncilAutoOpenWindow(prefs.autoOpenWindow);
+        setCouncilAutoPasteConsensus(prefs.autoPasteConsensus);
       });
 
       // Load in-app performance HUD setting.
@@ -740,6 +762,14 @@ export default function SettingsPanel({
       console.error('Failed to toggle performance HUD:', err);
     }
   };
+
+  const saveCouncilPreferences = useCallback(async (next: Partial<CouncilPreferences>) => {
+    try {
+      await window.councilAPI?.savePreferences?.(next);
+    } catch (err) {
+      console.error('Failed to save council preferences:', err);
+    }
+  }, []);
   
   // Check auth state on mount and listen for changes.
   // Auth is managed by main process AuthManager - get session from there first,
@@ -1996,10 +2026,102 @@ export default function SettingsPanel({
 
       {/* Portable Commands Section */}
       {selectedSection === 'commands' && (
+      <>
       <div style={styles.section}>
         <SectionHeader title="Portable Commands" />
         <CommandsSettings />
       </div>
+
+      <div style={styles.section}>
+        <SectionHeader title="Council" />
+        <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
+          Defaults for background debates launched from the `debate` command.
+        </p>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+            <span style={styles.rowLabel}>Default matchup</span>
+            <span style={styles.rowHint}>Used when the command does not override the model pairing.</span>
+          </div>
+          <div style={styles.rowControls}>
+            <select
+              value={councilDefaultMatchup}
+              onChange={(e) => {
+                const next = e.target.value as CouncilMatchup;
+                setCouncilDefaultMatchup(next);
+                saveCouncilPreferences({ defaultMatchup: next });
+              }}
+              style={styles.select}
+            >
+              {COUNCIL_MATCHUP_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
+            <span style={styles.rowLabel}>Default turn limit</span>
+            <span style={styles.rowHint}>A lower number keeps debates fast and easier to watch live.</span>
+          </div>
+          <div style={styles.rowControls}>
+            <input
+              type="number"
+              min={MIN_COUNCIL_MAX_TURNS}
+              max={MAX_COUNCIL_MAX_TURNS}
+              value={councilDefaultMaxTurns}
+              onChange={(e) => {
+                const next = clampCouncilMaxTurns(parseInt(e.target.value || '0', 10));
+                setCouncilDefaultMaxTurns(next);
+                saveCouncilPreferences({ defaultMaxTurns: next });
+              }}
+              style={{ ...styles.input, width: '72px' }}
+            />
+          </div>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Auto-open council window</span>
+            <span style={styles.rowHint}>Pop the dedicated debate viewer to the front as soon as a council starts.</span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => {
+                const next = !councilAutoOpenWindow;
+                setCouncilAutoOpenWindow(next);
+                saveCouncilPreferences({ autoOpenWindow: next });
+              }}
+              style={{ ...styles.toggle, backgroundColor: councilAutoOpenWindow ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: councilAutoOpenWindow ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Paste consensus back</span>
+            <span style={styles.rowHint}>Copy and paste the finished council consensus into the app that launched the debate.</span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => {
+                const next = !councilAutoPasteConsensus;
+                setCouncilAutoPasteConsensus(next);
+                saveCouncilPreferences({ autoPasteConsensus: next });
+              }}
+              style={{ ...styles.toggle, backgroundColor: councilAutoPasteConsensus ? theme.accent : '#d1d5db' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: councilAutoPasteConsensus ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+        </div>
+      </div>
+      </>
       )}
 
       {/* Librarian Section */}

@@ -12,9 +12,20 @@ import fs from 'fs';
 import { app } from 'electron';
 import chokidar from 'chokidar';
 import { createLogger } from './logger';
-import type { CouncilConfig, CouncilState, CouncilStatus, CouncilEvent } from './types/council';
+import {
+  DEFAULT_COUNCIL_MATCHUP,
+  isCouncilMatchup,
+} from './types/council';
+import type { CouncilConfig, CouncilEvent, CouncilMatchup, CouncilState, CouncilStatus } from './types/council';
 
 const log = createLogger('Council');
+
+type CouncilStartSource = 'manual' | 'kickoff';
+
+export interface CouncilTargetApp {
+  bundleId: string;
+  name: string;
+}
 
 export interface CouncilManagerOptions {
   spawnFn?: typeof defaultSpawn;
@@ -22,6 +33,8 @@ export interface CouncilManagerOptions {
   existsSyncFn?: typeof fs.existsSync;
   readFileSyncFn?: typeof fs.readFileSync;
   mkdirSyncFn?: typeof fs.mkdirSync;
+  getKickoffDefaults?: () => Partial<Pick<CouncilConfig, 'matchup' | 'maxTurns' | 'repoPath'>>;
+  getFrontmostApp?: () => CouncilTargetApp | null;
 }
 
 export class CouncilManager extends EventEmitter {
@@ -30,6 +43,11 @@ export class CouncilManager extends EventEmitter {
   private currentRound = 0;
   private topic: string | null = null;
   private error: string | null = null;
+  private matchup: CouncilMatchup = DEFAULT_COUNCIL_MATCHUP;
+  private transcriptPath: string | null = null;
+  private consensusPath: string | null = null;
+  private source: CouncilStartSource = 'manual';
+  private returnTargetApp: CouncilTargetApp | null = null;
   private handoffsDir: string | null = null;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private kickoffWatcher: chokidar.FSWatcher | null = null;
@@ -38,6 +56,8 @@ export class CouncilManager extends EventEmitter {
   private existsSyncFn: typeof fs.existsSync;
   private readFileSyncFn: typeof fs.readFileSync;
   private mkdirSyncFn: typeof fs.mkdirSync;
+  private getKickoffDefaults: () => Partial<Pick<CouncilConfig, 'matchup' | 'maxTurns' | 'repoPath'>>;
+  private getFrontmostApp: () => CouncilTargetApp | null;
 
   constructor(options: CouncilManagerOptions = {}) {
     super();
@@ -46,6 +66,8 @@ export class CouncilManager extends EventEmitter {
     this.existsSyncFn = options.existsSyncFn || fs.existsSync;
     this.readFileSyncFn = options.readFileSyncFn || fs.readFileSync;
     this.mkdirSyncFn = options.mkdirSyncFn || fs.mkdirSync;
+    this.getKickoffDefaults = options.getKickoffDefaults || (() => ({}));
+    this.getFrontmostApp = options.getFrontmostApp || (() => null);
   }
 
   /**
@@ -66,10 +88,26 @@ export class CouncilManager extends EventEmitter {
     this.handoffsDir = dir;
   }
 
+  getPasteBackInfo(): {
+    source: CouncilStartSource;
+    returnTargetApp: CouncilTargetApp | null;
+    transcriptPath: string | null;
+    consensusPath: string | null;
+  } {
+    return {
+      source: this.source,
+      returnTargetApp: this.returnTargetApp,
+      transcriptPath: this.transcriptPath,
+      consensusPath: this.consensusPath,
+    };
+  }
+
   /**
    * Start a council debate.
    */
-  async start(config: CouncilConfig): Promise<{ success: boolean; error?: string }> {
+  async start(
+    config: CouncilConfig & { source?: CouncilStartSource; returnTargetApp?: CouncilTargetApp | null }
+  ): Promise<{ success: boolean; error?: string }> {
     if (this.process) {
       return { success: false, error: 'A debate is already running' };
     }
@@ -80,34 +118,39 @@ export class CouncilManager extends EventEmitter {
       return { success: false, error: `council.sh not found at ${councilPath}` };
     }
 
-    // Check that claude CLI is available
-    try {
-      this.execSyncFn('which claude', { stdio: 'ignore' });
-    } catch {
-      return { success: false, error: 'claude CLI not found on PATH' };
+    const matchup = this.resolveMatchup(config);
+
+    if (this.matchupNeedsClaude(matchup)) {
+      try {
+        this.execSyncFn('which claude', { stdio: 'ignore' });
+      } catch {
+        return { success: false, error: 'claude CLI not found on PATH' };
+      }
     }
 
-    // Check codex CLI if not opus-vs-opus
-    if (!config.opusVsOpus) {
+    if (this.matchupNeedsCodex(matchup)) {
       try {
         this.execSyncFn('which codex', { stdio: 'ignore' });
       } catch {
-        return { success: false, error: 'codex CLI not found on PATH. Enable Opus vs Opus mode or install codex.' };
+        return { success: false, error: 'codex CLI not found on PATH for the selected matchup.' };
       }
     }
 
     this.topic = config.topic;
     this.currentRound = 0;
     this.error = null;
+    this.matchup = matchup;
+    this.transcriptPath = null;
+    this.consensusPath = null;
+    this.source = config.source ?? 'manual';
+    this.returnTargetApp = config.returnTargetApp ?? null;
     this.setState('starting');
 
     // Build args
     const args = ['--json-events'];
+    args.push('--matchup', matchup);
     if (config.maxTurns != null) {
       args.push('--max-turns', String(config.maxTurns));
-    }
-    if (config.opusVsOpus) {
-      args.push('--opus-vs-opus');
     }
     if (config.repoPath) {
       args.push('--repo', config.repoPath);
@@ -214,6 +257,9 @@ export class CouncilManager extends EventEmitter {
       currentRound: this.currentRound,
       topic: this.topic,
       error: this.error,
+      matchup: this.matchup,
+      transcriptPath: this.transcriptPath,
+      consensusPath: this.consensusPath,
     };
   }
 
@@ -223,6 +269,9 @@ export class CouncilManager extends EventEmitter {
   private handleEvent(event: CouncilEvent): void {
     switch (event.type) {
       case 'debate_start':
+        if (event.matchup) {
+          this.matchup = event.matchup;
+        }
         this.setState('debating');
         break;
 
@@ -240,6 +289,14 @@ export class CouncilManager extends EventEmitter {
 
       case 'error':
         log.error('Council error from %s: %s', event.speaker, event.message);
+        break;
+
+      case 'transcript_written':
+        this.transcriptPath = event.path;
+        break;
+
+      case 'consensus_written':
+        this.consensusPath = event.path;
         break;
 
       case 'debate_complete':
@@ -303,23 +360,104 @@ export class CouncilManager extends EventEmitter {
       return;
     }
 
-    // First non-empty line is the display topic
-    const lines = content.split('\n');
-    const displayTopic = lines.find(l => l.trim())?.trim() || 'Council Debate';
+    const kickoff = this.parseKickoff(content);
 
-    log.info('Kickoff detected: %s (topic: %s)', filePath, displayTopic);
+    log.info('Kickoff detected: %s (topic: %s)', filePath, kickoff.displayTopic);
 
-    const result = await this.start({ topic: content, opusVsOpus: true });
+    const defaultConfig = this.getKickoffDefaults();
+    const result = await this.start({
+      topic: kickoff.topic,
+      matchup: kickoff.config.matchup ?? defaultConfig.matchup,
+      maxTurns: kickoff.config.maxTurns ?? defaultConfig.maxTurns,
+      repoPath: kickoff.config.repoPath ?? defaultConfig.repoPath,
+      source: 'kickoff',
+      returnTargetApp: this.getFrontmostApp(),
+    });
 
     if (result.success) {
       // Override topic with display-friendly first line (start() sets it to full content)
-      this.topic = displayTopic;
-      this.emit('kickoffDetected', { filePath, displayTopic });
+      this.topic = kickoff.displayTopic;
+      this.emit('kickoffDetected', { filePath, displayTopic: kickoff.displayTopic });
     } else {
       log.error('Failed to start debate from kickoff: %s', result.error);
     }
   }
 
+  private resolveMatchup(config: CouncilConfig): CouncilMatchup {
+    if (config.matchup) {
+      return config.matchup;
+    }
+    if (config.opusVsOpus) {
+      return 'opus-vs-opus';
+    }
+    return DEFAULT_COUNCIL_MATCHUP;
+  }
+
+  private matchupNeedsClaude(matchup: CouncilMatchup): boolean {
+    return matchup.includes('opus') || matchup.includes('sonnet');
+  }
+
+  private matchupNeedsCodex(matchup: CouncilMatchup): boolean {
+    return matchup.includes('codex');
+  }
+
+  private parseKickoff(content: string): {
+    topic: string;
+    displayTopic: string;
+    config: Partial<Pick<CouncilConfig, 'matchup' | 'maxTurns' | 'repoPath'>>;
+  } {
+    const { body, frontmatter } = this.extractFrontmatter(content);
+    const topic = body.trim() || content.trim();
+    const lines = topic.split('\n');
+    const displayTopic = lines.find((line) => line.trim())?.trim() || 'Council Debate';
+    const config: Partial<Pick<CouncilConfig, 'matchup' | 'maxTurns' | 'repoPath'>> = {};
+
+    if (isCouncilMatchup(frontmatter['matchup'])) {
+      config.matchup = frontmatter['matchup'];
+    }
+
+    const maxTurnsRaw = frontmatter['max-turns'] ?? frontmatter['max_turns'];
+    if (maxTurnsRaw && /^-?\d+$/.test(maxTurnsRaw)) {
+      config.maxTurns = parseInt(maxTurnsRaw, 10);
+    }
+
+    const repoPath = frontmatter['repo-path'] ?? frontmatter['repo_path'];
+    if (repoPath) {
+      config.repoPath = repoPath;
+    }
+
+    return { topic, displayTopic, config };
+  }
+
+  private extractFrontmatter(content: string): {
+    body: string;
+    frontmatter: Record<string, string>;
+  } {
+    const lines = content.split(/\r?\n/);
+    if (lines[0]?.trim() !== '---') {
+      return { body: content, frontmatter: {} };
+    }
+
+    const frontmatter: Record<string, string> = {};
+    let index = 1;
+    for (; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (line.trim() === '---') {
+        index += 1;
+        return {
+          body: lines.slice(index).join('\n'),
+          frontmatter,
+        };
+      }
+
+      const match = line.match(/^([a-z0-9_-]+):\s*(.*)$/i);
+      if (match) {
+        frontmatter[match[1].toLowerCase()] = match[2].trim();
+      }
+    }
+
+    return { body: content, frontmatter: {} };
+  }
   /**
    * Clean up on app quit. Force-kills immediately rather than waiting for SIGTERM grace period.
    */

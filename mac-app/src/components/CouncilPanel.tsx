@@ -7,6 +7,16 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  clampCouncilMaxTurns,
+  COUNCIL_MATCHUP_OPTIONS,
+  DEFAULT_COUNCIL_MATCHUP,
+  DEFAULT_COUNCIL_MAX_TURNS,
+  formatCouncilMatchup,
+  getCouncilSpeakerColor,
+  MAX_COUNCIL_MAX_TURNS,
+  MIN_COUNCIL_MAX_TURNS,
+} from '../utils/council';
 
 const councilAPI = window.councilAPI!;
 const themeAPI = window.themeAPI;
@@ -30,19 +40,6 @@ type DebateState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'e
 // Styles
 // =============================================================================
 
-const SPEAKER_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  'Claude': { bg: '#1e3a5f', text: '#93c5fd', border: '#3b82f6' },
-  'Claude A': { bg: '#1e3a5f', text: '#93c5fd', border: '#3b82f6' },
-  'Codex': { bg: '#1a3d2e', text: '#86efac', border: '#22c55e' },
-  'Claude B': { bg: '#3d1a3d', text: '#d8b4fe', border: '#a855f7' },
-};
-
-const DEFAULT_SPEAKER_COLOR = { bg: '#2d2d2d', text: '#e5e5e5', border: '#525252' };
-
-function getSpeakerColor(speaker: string) {
-  return SPEAKER_COLORS[speaker] || DEFAULT_SPEAKER_COLOR;
-}
-
 // =============================================================================
 // Component
 // =============================================================================
@@ -50,13 +47,15 @@ function getSpeakerColor(speaker: string) {
 export function CouncilPanel() {
   const [isDark, setIsDark] = useState(true);
   const [topic, setTopic] = useState('');
-  const [opusVsOpus, setOpusVsOpus] = useState(true);
+  const [matchup, setMatchup] = useState<CouncilMatchup>(DEFAULT_COUNCIL_MATCHUP);
+  const [maxTurns, setMaxTurns] = useState(DEFAULT_COUNCIL_MAX_TURNS);
   const [debateState, setDebateState] = useState<DebateState>('idle');
   const [turns, setTurns] = useState<Turn[]>([]);
   const [currentTurn, setCurrentTurn] = useState<Turn | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentRound, setCurrentRound] = useState(0);
   const [activeTopic, setActiveTopic] = useState('');
+  const [activeMatchup, setActiveMatchup] = useState<CouncilMatchup>(DEFAULT_COUNCIL_MATCHUP);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -70,6 +69,11 @@ export function CouncilPanel() {
   // Get theme
   useEffect(() => {
     themeAPI?.getTheme?.().then(setIsDark);
+    councilAPI.getPreferences?.().then((prefs) => {
+      if (!prefs) return;
+      setMatchup(prefs.defaultMatchup);
+      setMaxTurns(prefs.defaultMaxTurns);
+    });
   }, []);
 
   // Focus input on mount
@@ -84,6 +88,7 @@ export function CouncilPanel() {
         setDebateState(status.state as DebateState);
         setCurrentRound(status.currentRound);
         if (status.topic) setActiveTopic(status.topic);
+        if (status.matchup) setActiveMatchup(status.matchup);
         if (status.error) setError(status.error);
       }
     });
@@ -112,6 +117,7 @@ export function CouncilPanel() {
       switch (event.type) {
         case 'debate_start':
           setActiveTopic(event.topic);
+          if (event.matchup) setActiveMatchup(event.matchup);
           break;
 
         case 'turn_start':
@@ -202,14 +208,15 @@ export function CouncilPanel() {
 
     const result = await councilAPI.start({
       topic: topic.trim(),
-      opusVsOpus,
+      matchup,
+      maxTurns,
     });
 
     if (!result.success) {
       setError(result.error || 'Failed to start debate');
       setDebateState('error');
     }
-  }, [topic, opusVsOpus]);
+  }, [topic, matchup, maxTurns]);
 
   const handleStop = useCallback(async () => {
     await councilAPI.stop();
@@ -220,10 +227,11 @@ export function CouncilPanel() {
     setTurns([]);
     setCurrentTurn(null);
     setActiveTopic('');
+    setActiveMatchup(matchup);
     setTopic('');
     setError(null);
     pendingTurnRef.current = null;
-  }, []);
+  }, [matchup]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -283,6 +291,9 @@ export function CouncilPanel() {
                   color: '#fff',
                 }}>
                   {debateState === 'done' ? 'Complete' : debateState === 'finalizing' ? 'Finalizing' : `Round ${currentRound}`}
+                </span>
+                <span style={{ fontSize: 11, color: mutedColor }}>
+                  {formatCouncilMatchup(activeMatchup)}
                 </span>
                 <span style={{ fontSize: 11, color: mutedColor }}>
                   {allTurns.length} turns
@@ -349,27 +360,49 @@ export function CouncilPanel() {
               }}
             />
             <div style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
+              display: 'grid',
+              gridTemplateColumns: '1fr 84px auto',
+              gap: 8,
               marginTop: 8,
+              alignItems: 'center',
             }}>
-              <label style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                fontSize: 12,
-                color: mutedColor,
-                cursor: 'pointer',
-              }}>
-                <input
-                  type="checkbox"
-                  checked={opusVsOpus}
-                  onChange={(e) => setOpusVsOpus(e.target.checked)}
-                  style={{ margin: 0 }}
-                />
-                Opus vs Opus
-              </label>
+              <select
+                value={matchup}
+                onChange={(e) => setMatchup(e.target.value as CouncilMatchup)}
+                style={{
+                  padding: '7px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${borderColor}`,
+                  background: inputBg,
+                  color: textColor,
+                  fontSize: 12,
+                  outline: 'none',
+                }}
+              >
+                {COUNCIL_MATCHUP_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              <input
+                type="number"
+                min={MIN_COUNCIL_MAX_TURNS}
+                max={MAX_COUNCIL_MAX_TURNS}
+                value={maxTurns}
+                onChange={(e) => setMaxTurns(clampCouncilMaxTurns(parseInt(e.target.value || '0', 10)))}
+                style={{
+                  width: '100%',
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: `1px solid ${borderColor}`,
+                  background: inputBg,
+                  color: textColor,
+                  fontSize: 12,
+                  outline: 'none',
+                  boxSizing: 'border-box',
+                }}
+              />
               <button
                 onClick={handleStart}
                 disabled={!topic.trim()}
@@ -386,6 +419,9 @@ export function CouncilPanel() {
               >
                 Start
               </button>
+            </div>
+            <div style={{ marginTop: 6, fontSize: 11, color: mutedColor }}>
+              Matchup and turn limit default from Council settings; this window can override them per debate.
             </div>
             {error && (
               <div style={{
@@ -425,7 +461,7 @@ export function CouncilPanel() {
         )}
 
         {allTurns.map((turn, i) => {
-          const colors = getSpeakerColor(turn.speaker);
+          const colors = getCouncilSpeakerColor(turn.speaker);
           return (
             <div
               key={i}

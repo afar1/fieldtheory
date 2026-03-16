@@ -24,7 +24,8 @@ MAX_TURNS=20
 REPO_PATH=""
 TOPIC=""
 TRANSCRIPT_DIR="$HOME/council-transcripts"
-CLAUDE_MODEL="opus"
+MATCHUP="opus-vs-codex"
+CLAUDE_MODEL=""
 CODEX_MODEL=""
 SUPERVISED=false
 CALL_TIMEOUT=300  # seconds per model call
@@ -70,6 +71,7 @@ while [[ $# -gt 0 ]]; do
         --rounds)
             echo -e "${YELLOW}Warning: --rounds is deprecated, use --max-turns instead${RESET}" >&2
             MAX_TURNS="$2"; shift 2 ;;
+        --matchup)       MATCHUP="$2"; shift 2 ;;
         --repo)          REPO_PATH="$2"; shift 2 ;;
         --model-claude)  CLAUDE_MODEL="$2"; shift 2 ;;
         --model-codex)   CODEX_MODEL="$2"; shift 2 ;;
@@ -85,8 +87,9 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --max-turns N     Safety ceiling for debate turns (default: 20)"
+            echo "  --matchup NAME    Debate matchup (default: opus-vs-codex)"
             echo "  --repo PATH       Point both models at a repo for context"
-            echo "  --model-claude M  Claude model override (default: opus)"
+            echo "  --model-claude M  Claude model override for any Claude side"
             echo "  --model-codex M   Codex model override"
             echo "  --supervised      Pause between rounds for human guidance"
             echo "  -i, --interactive Alias for --supervised"
@@ -102,6 +105,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [[ "$OPUS_VS_OPUS" == "true" && "$MATCHUP" == "opus-vs-codex" ]]; then
+    MATCHUP="opus-vs-opus"
+fi
+
 if [[ -z "$TOPIC" ]]; then
     if [[ "$JSON_EVENTS" == "true" ]]; then
         die "No topic provided (required in --json-events mode)."
@@ -112,9 +119,130 @@ fi
 
 [[ -z "$TOPIC" ]] && die "No topic provided."
 
+matchup_needs_claude() {
+    local matchup="$1"
+    [[ "$matchup" == *opus* || "$matchup" == *sonnet* ]]
+}
+
+matchup_needs_codex() {
+    local matchup="$1"
+    [[ "$matchup" == *codex* ]]
+}
+
+side_short_name() {
+    local provider="$1"
+    local model="$2"
+    if [[ "$provider" == "claude" ]]; then
+        case "$model" in
+            opus) printf 'Opus' ;;
+            sonnet) printf 'Sonnet' ;;
+            *) printf 'Claude' ;;
+        esac
+    else
+        printf 'Codex'
+    fi
+}
+
+side_model_label() {
+    local provider="$1"
+    local model="$2"
+    if [[ "$provider" == "claude" ]]; then
+        case "$model" in
+            opus) printf 'Claude Opus 4.6' ;;
+            sonnet) printf 'Claude Sonnet' ;;
+            *) printf 'Claude %s' "${model:-default}" ;;
+        esac
+    else
+        if [[ -n "$model" ]]; then
+            printf 'Codex %s' "$model"
+        else
+            printf 'Codex'
+        fi
+    fi
+}
+
+resolve_matchup() {
+    case "$MATCHUP" in
+        opus-vs-opus)
+            PROVIDER_A="claude"; MODEL_A="${CLAUDE_MODEL:-opus}"
+            PROVIDER_B="claude"; MODEL_B="${CLAUDE_MODEL:-opus}"
+            ;;
+        opus-vs-sonnet)
+            PROVIDER_A="claude"; MODEL_A="${CLAUDE_MODEL:-opus}"
+            PROVIDER_B="claude"; MODEL_B="sonnet"
+            ;;
+        opus-vs-codex)
+            PROVIDER_A="claude"; MODEL_A="${CLAUDE_MODEL:-opus}"
+            PROVIDER_B="codex"; MODEL_B="$CODEX_MODEL"
+            ;;
+        sonnet-vs-opus)
+            PROVIDER_A="claude"; MODEL_A="sonnet"
+            PROVIDER_B="claude"; MODEL_B="${CLAUDE_MODEL:-opus}"
+            ;;
+        sonnet-vs-sonnet)
+            PROVIDER_A="claude"; MODEL_A="sonnet"
+            PROVIDER_B="claude"; MODEL_B="sonnet"
+            ;;
+        sonnet-vs-codex)
+            PROVIDER_A="claude"; MODEL_A="sonnet"
+            PROVIDER_B="codex"; MODEL_B="$CODEX_MODEL"
+            ;;
+        codex-vs-opus)
+            PROVIDER_A="codex"; MODEL_A="$CODEX_MODEL"
+            PROVIDER_B="claude"; MODEL_B="${CLAUDE_MODEL:-opus}"
+            ;;
+        codex-vs-sonnet)
+            PROVIDER_A="codex"; MODEL_A="$CODEX_MODEL"
+            PROVIDER_B="claude"; MODEL_B="sonnet"
+            ;;
+        codex-vs-codex)
+            PROVIDER_A="codex"; MODEL_A="$CODEX_MODEL"
+            PROVIDER_B="codex"; MODEL_B="$CODEX_MODEL"
+            ;;
+        *)
+            die "Unsupported matchup: $MATCHUP"
+            ;;
+    esac
+
+    local base_a base_b
+    base_a=$(side_short_name "$PROVIDER_A" "$MODEL_A")
+    base_b=$(side_short_name "$PROVIDER_B" "$MODEL_B")
+    if [[ "$base_a" == "$base_b" ]]; then
+        SPEAKER_A="${base_a} A"
+        SPEAKER_B="${base_b} B"
+    else
+        SPEAKER_A="$base_a"
+        SPEAKER_B="$base_b"
+    fi
+
+    MODEL_A_LABEL=$(side_model_label "$PROVIDER_A" "$MODEL_A")
+    MODEL_B_LABEL=$(side_model_label "$PROVIDER_B" "$MODEL_B")
+}
+
+build_side_prompt() {
+    local speaker="$1"
+    local model_label="$2"
+    local provider="$3"
+    local opponent="$4"
+    local opponent_label="$5"
+    local toolchain="Codex"
+    if [[ "$provider" == "claude" ]]; then
+        toolchain="Claude Code"
+    fi
+
+    cat <<EOF
+${DEBATE_CONTEXT}
+
+You are ${speaker} (${model_label}), debating with ${opponent} (${opponent_label}). You have your full ${toolchain} toolchain available — use it. Read files, search the codebase, and run commands if it helps you make better arguments.
+EOF
+}
+
 # ── Preflight checks ───────────────────────────────────────────────────────
-command -v claude >/dev/null 2>&1 || die "claude CLI not found. Install it and authenticate first."
-if [[ "$OPUS_VS_OPUS" != "true" ]]; then
+resolve_matchup
+if matchup_needs_claude "$MATCHUP"; then
+    command -v claude >/dev/null 2>&1 || die "claude CLI not found. Install it and authenticate first."
+fi
+if matchup_needs_codex "$MATCHUP"; then
     command -v codex >/dev/null 2>&1  || die "codex CLI not found. Install it and authenticate first."
 fi
 
@@ -131,6 +259,7 @@ mkdir -p "$TRANSCRIPT_DIR"
 TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
 SLUG=$(printf '%s' "$TOPIC" | tr '\n' ' ' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40 | sed 's/-$//')
 TRANSCRIPT="$TRANSCRIPT_DIR/${TIMESTAMP}_${SLUG}.md"
+CONSENSUS_FILE="$TRANSCRIPT_DIR/${TIMESTAMP}_${SLUG}_consensus.md"
 
 # Resolve repo path
 if [[ -n "$REPO_PATH" ]]; then
@@ -204,27 +333,8 @@ Rules:
 - When you believe you and the other model have genuinely converged, signal finalize. Don't keep debating for the sake of it.
 - If you need human input on something fundamental, note it in your response and consider signaling pause — but only if you've genuinely exhausted what you can debate without it.${SIGNAL_INSTRUCTIONS}"
 
-if [[ "$OPUS_VS_OPUS" == "true" ]]; then
-    SPEAKER_A="Claude A"
-    SPEAKER_B="Claude B"
-    SYSTEM_PROMPT_CLAUDE="${DEBATE_CONTEXT}
-
-You are Claude A (Opus 4.6), debating with Claude B (another instance of yourself). You have your full Claude Code toolchain available — use it. Read files, grep, run commands if it helps you make better arguments. Despite being the same model, take distinct positions and challenge each other's reasoning."
-
-    CODEX_PREAMBLE="${DEBATE_CONTEXT}
-
-You are Claude B (Opus 4.6), debating with Claude A (another instance of yourself). You have your full Claude Code toolchain available — use it. Read files, search the codebase, run commands if it helps you make better arguments. Despite being the same model, take distinct positions and challenge Claude A's reasoning."
-else
-    SPEAKER_A="Claude"
-    SPEAKER_B="Codex"
-    SYSTEM_PROMPT_CLAUDE="${DEBATE_CONTEXT}
-
-You are Claude (Opus 4.6), debating with GPT-5.3 (Codex). You have your full Claude Code toolchain available — use it. Read files, grep, run commands if it helps you make better arguments."
-
-    CODEX_PREAMBLE="${DEBATE_CONTEXT}
-
-You are GPT-5.3 (Codex), debating with Claude (Opus 4.6). You have your full Codex toolchain available — use it. Read files, search the codebase, run commands if it helps you make better arguments."
-fi
+SYSTEM_PROMPT_A=$(build_side_prompt "$SPEAKER_A" "$MODEL_A_LABEL" "$PROVIDER_A" "$SPEAKER_B" "$MODEL_B_LABEL")
+SYSTEM_PROMPT_B=$(build_side_prompt "$SPEAKER_B" "$MODEL_B_LABEL" "$PROVIDER_B" "$SPEAKER_A" "$MODEL_A_LABEL")
 
 PLAN_PROMPT="The debate is complete and both sides have converged. Produce a FINAL PLAN as a self-contained, copy-pasteable prompt that a human can give to another AI coding assistant to execute the work.
 
@@ -237,12 +347,24 @@ The plan must include:
 
 Be specific and practical. This is the deliverable — it should be immediately actionable."
 
+CONSENSUS_PROMPT="The debate is complete. Produce a FINAL CONSENSUS for the original user in markdown.
+
+Requirements:
+1. Start with a concise title.
+2. Include a short summary of the consensus.
+3. Include a bullet list of the decisions the council reached.
+4. Include a bullet list of outstanding questions or tradeoffs that still need human judgment.
+5. End with a short recommended next step for the original session.
+
+Write it as something that can be pasted directly back into the original AI session."
+
 # ── Transcript header ───────────────────────────────────────────────────────
 cat > "$TRANSCRIPT" << EOF
 # Council Debate
 **Topic**: $TOPIC
 **Date**: $(date "+%B %d, %Y at %I:%M %p")
 **Mode**: Open-ended (max $MAX_TURNS turns)
+**Matchup**: $MATCHUP
 **Models**: $SPEAKER_A vs $SPEAKER_B
 $(if [[ -n "$REPO_PATH" ]]; then echo "**Repo**: $REPO_PATH"; fi)
 
@@ -355,12 +477,26 @@ stream_and_capture() {
     fi
 }
 
-# ── Helper: call Claude ─────────────────────────────────────────────────────
-call_claude() {
-    local prompt="$1"
-    local capture_file="$2"
-    local -a cmd=(env -u CLAUDECODE claude -p --verbose --model "$CLAUDE_MODEL" --append-system-prompt "$SYSTEM_PROMPT_CLAUDE")
-    cmd+=("$prompt")
+call_provider() {
+    local provider="$1"
+    local model="$2"
+    local system_prompt="$3"
+    local prompt="$4"
+    local capture_file="$5"
+    local -a cmd=()
+
+    if [[ "$provider" == "claude" ]]; then
+        cmd=(env -u CLAUDECODE claude -p --verbose --model "${model:-opus}" --append-system-prompt "$system_prompt")
+        cmd+=("$prompt")
+    else
+        cmd=(codex exec --full-auto --skip-git-repo-check)
+        if [[ -n "$model" ]]; then
+            cmd+=(-m "$model")
+        fi
+        cmd+=("${system_prompt}
+
+${prompt}")
+    fi
 
     if [[ -n "$REPO_PATH" ]]; then
         (cd "$REPO_PATH" && stream_and_capture "$capture_file" "${cmd[@]}") || return 1
@@ -369,28 +505,16 @@ call_claude() {
     fi
 }
 
-# ── Helper: call Codex (or Claude B in opus-vs-opus mode) ──────────────────
-call_codex() {
+call_speaker_a() {
     local prompt="$1"
     local capture_file="$2"
+    call_provider "$PROVIDER_A" "$MODEL_A" "$SYSTEM_PROMPT_A" "$prompt" "$capture_file"
+}
 
-    if [[ "$OPUS_VS_OPUS" == "true" ]]; then
-        # Use claude CLI with the B-side system prompt
-        local -a cmd=(env -u CLAUDECODE claude -p --verbose --model "$CLAUDE_MODEL" --append-system-prompt "$CODEX_PREAMBLE")
-        cmd+=("$prompt")
-    else
-        local -a cmd=(codex exec --full-auto --skip-git-repo-check)
-        if [[ -n "$CODEX_MODEL" ]]; then
-            cmd+=(-m "$CODEX_MODEL")
-        fi
-        cmd+=("$prompt")
-    fi
-
-    if [[ -n "$REPO_PATH" ]]; then
-        (cd "$REPO_PATH" && stream_and_capture "$capture_file" "${cmd[@]}") || return 1
-    else
-        stream_and_capture "$capture_file" "${cmd[@]}" || return 1
-    fi
+call_speaker_b() {
+    local prompt="$1"
+    local capture_file="$2"
+    call_provider "$PROVIDER_B" "$MODEL_B" "$SYSTEM_PROMPT_B" "$prompt" "$capture_file"
 }
 
 # ── Helper: print header ──────────────────────────────────────────────────
@@ -545,9 +669,9 @@ run_model_turn() {
 
     local call_ok=true
     if [[ "$speaker" == "$SPEAKER_A" ]]; then
-        call_claude "$prompt" "$TMPFILE" || call_ok=false
+        call_speaker_a "$prompt" "$TMPFILE" || call_ok=false
     else
-        call_codex "$prompt" "$TMPFILE" || call_ok=false
+        call_speaker_b "$prompt" "$TMPFILE" || call_ok=false
     fi
 
     # Update fail counters
@@ -695,7 +819,7 @@ TMPFILE=$(mktemp)
 LAST_CLEAN_OUTPUT=""
 trap 'rm -f "$TMPFILE"; trap - INT' EXIT
 
-emit_event "debate_start" "topic" "$TOPIC" "maxTurns" "$MAX_TURNS"
+emit_event "debate_start" "topic" "$TOPIC" "maxTurns" "$MAX_TURNS" "matchup" "$MATCHUP"
 
 # ── Main debate loop ────────────────────────────────────────────────────────
 while [[ "$STATE" == "DEBATING" || "$STATE" == "PAUSED" ]]; do
@@ -756,9 +880,7 @@ Continue the debate. Respond directly to ${SPEAKER_B}'s latest points. Where do 
 
     # ── Codex's turn ─────────────────────────────────────────────────────
     if [[ "$ROUND" -eq 1 ]]; then
-        CODEX_PROMPT="$CODEX_PREAMBLE
-
-Topic for debate: $SAFE_TOPIC
+        CODEX_PROMPT="Topic for debate: $SAFE_TOPIC
 
 Another AI ($SPEAKER_A) has presented this opening argument:
 
@@ -767,9 +889,7 @@ $LAST_CLEAN_OUTPUT
 Now present your response. Engage directly with their points — agree where they're right, challenge where they're wrong, and add what they missed."
     else
         RECENT=$(trim_history "$HISTORY")
-        CODEX_PROMPT="$CODEX_PREAMBLE
-
-Here is the debate so far:
+        CODEX_PROMPT="Here is the debate so far:
 
 $RECENT
 
@@ -880,7 +1000,7 @@ if [[ "$STATE" == "FINALIZING" ]]; then
 
     FULL_FORMATTED=$(format_history "$HISTORY")
 
-    # Claude's plan
+    # Speaker A's plan
     CLAUDE_PLAN_PROMPT="Here is the full debate:
 
 $FULL_FORMATTED
@@ -892,7 +1012,7 @@ $PLAN_PROMPT"
     term_echo "\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
     term_echo "${BLUE}${BOLD}  ${SPEAKER_A}'S FINAL PLAN${RESET}"
     term_echo "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-    call_claude "$CLAUDE_PLAN_PROMPT" "$TMPFILE" || true
+    call_speaker_a "$CLAUDE_PLAN_PROMPT" "$TMPFILE" || true
     CLAUDE_PLAN=$(strip_signal "$(cat "$TMPFILE")")
 
     printf '%s\n\n%s\n\n' "### ${SPEAKER_A}'s Plan" "$CLAUDE_PLAN" >> "$TRANSCRIPT"
@@ -902,10 +1022,8 @@ $PLAN_PROMPT"
         term_echo "\n${YELLOW}Interrupted during finalization. ${SPEAKER_A}'s plan saved. Skipping ${SPEAKER_B}.${RESET}"
         printf '\n%s\n' "*[PARTIAL — interrupted after ${SPEAKER_A}'s plan, before ${SPEAKER_B}'s plan]*" >> "$TRANSCRIPT"
     else
-        # Codex's plan
-        CODEX_PLAN_PROMPT="$CODEX_PREAMBLE
-
-Here is the full debate:
+        # Speaker B's plan
+        CODEX_PLAN_PROMPT="Here is the full debate:
 
 $FULL_FORMATTED
 
@@ -916,10 +1034,33 @@ $PLAN_PROMPT"
         term_echo "\n${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
         term_echo "${GREEN}${BOLD}  ${SPEAKER_B}'S FINAL PLAN${RESET}"
         term_echo "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}\n"
-        call_codex "$CODEX_PLAN_PROMPT" "$TMPFILE" || true
+        call_speaker_b "$CODEX_PLAN_PROMPT" "$TMPFILE" || true
         CODEX_PLAN=$(strip_signal "$(cat "$TMPFILE")")
 
         printf '%s\n\n%s\n\n' "### ${SPEAKER_B}'s Plan" "$CODEX_PLAN" >> "$TRANSCRIPT"
+    fi
+
+    if [[ "$INTERRUPTED" -eq 0 ]]; then
+        CONSENSUS_PROMPT_INPUT="Here is the full debate:
+
+$FULL_FORMATTED
+
+Here are the final plans:
+
+### ${SPEAKER_A}'s Plan
+$CLAUDE_PLAN
+
+### ${SPEAKER_B}'s Plan
+${CODEX_PLAN:-[Unavailable]}
+
+$CONSENSUS_PROMPT"
+
+        CURRENT_SPEAKER="$SPEAKER_A"
+        call_speaker_a "$CONSENSUS_PROMPT_INPUT" "$TMPFILE" || true
+        CONSENSUS_CONTENT=$(strip_signal "$(cat "$TMPFILE")")
+        printf '%s\n' "$CONSENSUS_CONTENT" > "$CONSENSUS_FILE"
+        printf '%s\n\n%s\n\n' "## Council Consensus" "$CONSENSUS_CONTENT" >> "$TRANSCRIPT"
+        emit_event "consensus_written" "path" "$CONSENSUS_FILE"
     fi
 fi
 

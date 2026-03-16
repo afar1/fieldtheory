@@ -3818,13 +3818,21 @@ const CouncilIPCChannels = {
   START: 'council:start',
   STOP: 'council:stop',
   GET_STATUS: 'council:getStatus',
+  GET_PREFERENCES: 'council:getPreferences',
+  SAVE_PREFERENCES: 'council:savePreferences',
   SHOW_WINDOW: 'council:showWindow',
   EVENT: 'council:event',
   STATUS_CHANGED: 'council:statusChanged',
 } as const;
 
 const councilAPI = {
-  start: async (config: { topic: string; maxTurns?: number; repoPath?: string; opusVsOpus?: boolean }): Promise<{ success: boolean; error?: string }> => {
+  start: async (config: {
+    topic: string;
+    maxTurns?: number;
+    repoPath?: string;
+    matchup?: string;
+    opusVsOpus?: boolean;
+  }): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(CouncilIPCChannels.START, config);
   },
 
@@ -3836,8 +3844,34 @@ const councilAPI = {
     return ipcRenderer.invoke(CouncilIPCChannels.SHOW_WINDOW);
   },
 
-  getStatus: async (): Promise<{ state: string; currentRound: number; topic: string | null; error: string | null }> => {
+  getStatus: async (): Promise<{
+    state: string;
+    currentRound: number;
+    topic: string | null;
+    error: string | null;
+    matchup: string;
+    transcriptPath: string | null;
+    consensusPath: string | null;
+  }> => {
     return ipcRenderer.invoke(CouncilIPCChannels.GET_STATUS);
+  },
+
+  getPreferences: async (): Promise<{
+    defaultMatchup: string;
+    defaultMaxTurns: number;
+    autoOpenWindow: boolean;
+    autoPasteConsensus: boolean;
+  }> => {
+    return ipcRenderer.invoke(CouncilIPCChannels.GET_PREFERENCES);
+  },
+
+  savePreferences: async (prefs: {
+    defaultMatchup?: string;
+    defaultMaxTurns?: number;
+    autoOpenWindow?: boolean;
+    autoPasteConsensus?: boolean;
+  }): Promise<boolean> => {
+    return ipcRenderer.invoke(CouncilIPCChannels.SAVE_PREFERENCES, prefs);
   },
 
   onEvent: (callback: (event: any) => void): (() => void) => {
