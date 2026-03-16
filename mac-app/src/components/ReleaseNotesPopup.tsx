@@ -15,14 +15,22 @@ export function hasReleaseNotes(version: string): boolean {
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
   '0.1.94': [
-    'Codex CLI now supports Librarian artifact hooks and setup flows',
-    'Librarian artifacts now use cleaner titles plus signed model metadata',
-    'Artifacts can auto-open without stealing focus from your current app',
-    'New users now get built-in internal commands like refactor, review, and commit',
-    'Parakeet is now the recommended transcription engine, with a multilingual option',
-    'Dynamic Island geometry now auto-detects and is managed from Appearance',
-    'Window Management adds focus width, better sizing controls, and a shared master toggle',
-    'Fixed several Librarian/Codex hook issues and shortened Codex block messages',
+    '__SECTION__:Features',
+    'Codex now works with Librarian in a simpler setup flow',
+    'Artifacts have clearer titles and show which model wrote them',
+    'Artifacts can open without pulling you out of the app you are using',
+    'New users now get built-in commands like refactor, review, and commit',
+    'Parakeet is now the recommended speech-to-text engine, with multilingual support',
+    'Dynamic Island and Window Management settings are easier to tune',
+    '__SECTION__:Fixes',
+    'Fixed clipboard focus issues when closing, hiding, or clicking away',
+    'Fixed clipboard history opening slower than expected',
+    'Fixed screenshot stack behavior when left idle in Dynamic Island',
+    'Fixed Dynamic Island layout issues across different display setups',
+    'Fixed command keyboard handling issues in Portable Commands',
+    'Fixed Codex and Cursor hook setup problems and shortened Codex block messages',
+    'Fixed Parakeet installs failing silently and made reinstall status clearer',
+    'Fixed several settings sync and visibility issues',
   ],
   '0.1.93': [
     'Dynamic Island pills now hidden from Mission Control and hot corners',
@@ -347,6 +355,9 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
     }, 200);
   };
 
+  const isSectionNote = (note: string) => note.startsWith('__SECTION__:');
+  const getSectionTitle = (note: string) => note.replace('__SECTION__:', '');
+
   if (!isVisible) {
     return null;
   }
@@ -461,27 +472,44 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
           listStyle: 'none',
         }}>
           {notes.map((note, index) => (
-            <li
-              key={index}
-              style={{
-                display: 'flex',
-                alignItems: 'flex-start',
-                gap: '8px',
-                marginBottom: index < notes.length - 1 ? '8px' : 0,
-                fontSize: '12px',
-                color: theme.text,
-                lineHeight: '1.45',
-              }}
-            >
-              <span style={{
-                color: theme.accent,
-                flexShrink: 0,
-                marginTop: '2px',
-              }}>
-                •
-              </span>
-              <span>{note}</span>
-            </li>
+            isSectionNote(note) ? (
+              <li
+                key={index}
+                style={{
+                  marginTop: index === 0 ? 0 : '12px',
+                  marginBottom: '6px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  letterSpacing: '0.04em',
+                  textTransform: 'uppercase',
+                  color: theme.textSecondary,
+                }}
+              >
+                {getSectionTitle(note)}
+              </li>
+            ) : (
+              <li
+                key={index}
+                style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: '8px',
+                  marginBottom: index < notes.length - 1 ? '8px' : 0,
+                  fontSize: '12px',
+                  color: theme.text,
+                  lineHeight: '1.45',
+                }}
+              >
+                <span style={{
+                  color: theme.accent,
+                  flexShrink: 0,
+                  marginTop: '2px',
+                }}>
+                  •
+                </span>
+                <span>{note}</span>
+              </li>
+            )
           ))}
         </ul>
       </div>
