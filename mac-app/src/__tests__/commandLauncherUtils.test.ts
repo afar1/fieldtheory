@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
+  buildBuiltInLauncherActions,
+  DEFAULT_LAUNCHER_HOTKEYS,
   formatHotkeyDisplay,
   formatTimeAgo,
   SQUARES_ACTION_DEFS,
@@ -108,5 +110,39 @@ describe('SQUARES_ACTION_DEFS', () => {
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
+  });
+});
+
+describe('buildBuiltInLauncherActions', () => {
+  it('includes Squares actions when portable command visibility is enabled', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true, DEFAULT_SQUARES_HOTKEYS, true);
+
+    const actionIds = new Set(actions.map((action) => action.actionId));
+
+    for (const def of SQUARES_ACTION_DEFS) {
+      expect(actionIds.has(def.actionId)).toBe(true);
+    }
+  });
+
+  it('omits Squares actions when portable command visibility is disabled', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true, DEFAULT_SQUARES_HOTKEYS, false);
+
+    const actionIds = new Set(actions.map((action) => action.actionId));
+
+    for (const def of SQUARES_ACTION_DEFS) {
+      expect(actionIds.has(def.actionId)).toBe(false);
+    }
+    expect(actionIds.has('settings')).toBe(true);
+    expect(actionIds.has('take-screenshot')).toBe(true);
+  });
+
+  it('uses theme-sensitive labeling for the theme toggle action', () => {
+    const darkActions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const lightActions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, false);
+
+    expect(darkActions.find((action) => action.actionId === 'toggle-theme')?.displayName)
+      .toBe('Toggle Light Mode (Field Theory)');
+    expect(lightActions.find((action) => action.actionId === 'toggle-theme')?.displayName)
+      .toBe('Toggle Dark Mode (Field Theory)');
   });
 });

@@ -31,6 +31,7 @@ import {
   PARAKEET_ENGINE_LABELS,
   PARAKEET_ENGINE_MODEL_IDS,
   isParakeetEngine,
+  type ParakeetStatus,
   type TranscriptionEngine,
   type HotMicEngine,
   type ParakeetEngine,
@@ -45,6 +46,16 @@ const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
 
 const execAsync = promisify(exec);
 const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
+
+interface PersistedParakeetEngineState {
+  verifiedAt?: string;
+  lastError?: string | null;
+  lastErrorAt?: string | null;
+}
+
+interface PersistedParakeetState {
+  engines?: Partial<Record<ParakeetEngine, PersistedParakeetEngineState>>;
+}
 
 /**
  * Transcription status states.
@@ -2432,12 +2443,16 @@ export class TranscriberManager extends EventEmitter {
   // Parakeet (NVIDIA Parakeet TDT 0.6B v2 via onnx-asr)
   // ---------------------------------------------------------------------------
 
-  private getParakeetPythonPath(): string {
+  private getParakeetBasePath(): string {
     if (app.isPackaged) {
-      return path.join(app.getPath('userData'), 'build-parakeet', 'venv', 'bin', 'python');
+      return path.join(app.getPath('userData'), 'build-parakeet');
     }
     const macAppRoot = path.resolve(__dirname, '../..');
-    return path.join(macAppRoot, 'build-parakeet', 'venv', 'bin', 'python');
+    return path.join(macAppRoot, 'build-parakeet');
+  }
+
+  private getParakeetPythonPath(): string {
+    return path.join(this.getParakeetBasePath(), 'venv', 'bin', 'python');
   }
 
   private getParakeetScriptPath(): string {
@@ -2446,6 +2461,76 @@ export class TranscriberManager extends EventEmitter {
     }
     const macAppRoot = path.resolve(__dirname, '../..');
     return path.join(macAppRoot, 'scripts', 'parakeet-transcribe.py');
+  }
+
+  private getParakeetCacheDir(): string {
+    return path.join(this.getParakeetBasePath(), 'cache');
+  }
+
+  private getParakeetStatusPath(): string {
+    return path.join(this.getParakeetBasePath(), 'status.json');
+  }
+
+  private getParakeetProcessEnv(): NodeJS.ProcessEnv {
+    const cacheDir = this.getParakeetCacheDir();
+    const huggingFaceHome = path.join(cacheDir, 'huggingface');
+    return {
+      FIELD_THEORY_PARAKEET_CACHE_DIR: cacheDir,
+      HF_HOME: huggingFaceHome,
+      HUGGINGFACE_HUB_CACHE: path.join(huggingFaceHome, 'hub'),
+      XDG_CACHE_HOME: path.join(cacheDir, 'xdg'),
+    };
+  }
+
+  private readPersistedParakeetState(): PersistedParakeetState {
+    try {
+      const raw = fs.readFileSync(this.getParakeetStatusPath(), 'utf-8');
+      return JSON.parse(raw) as PersistedParakeetState;
+    } catch {
+      return {};
+    }
+  }
+
+  private writePersistedParakeetState(state: PersistedParakeetState): void {
+    fs.mkdirSync(this.getParakeetBasePath(), { recursive: true });
+    fs.writeFileSync(this.getParakeetStatusPath(), JSON.stringify(state, null, 2), 'utf-8');
+  }
+
+  private normalizeParakeetErrorMessage(error: unknown): string {
+    const raw = error instanceof Error ? error.message : String(error);
+    return raw.replace(/\s+/g, ' ').trim().slice(0, 400);
+  }
+
+  private updatePersistedParakeetEngineState(
+    engine: ParakeetEngine,
+    updates: Partial<PersistedParakeetEngineState>
+  ): PersistedParakeetEngineState {
+    const state = this.readPersistedParakeetState();
+    const engines = { ...(state.engines ?? {}) };
+    const nextState = {
+      ...(engines[engine] ?? {}),
+      ...updates,
+    };
+    engines[engine] = nextState;
+    this.writePersistedParakeetState({ engines });
+    return nextState;
+  }
+
+  private markParakeetEngineVerified(engine: ParakeetEngine): void {
+    this.updatePersistedParakeetEngineState(engine, {
+      verifiedAt: new Date().toISOString(),
+      lastError: null,
+      lastErrorAt: null,
+    });
+  }
+
+  private markParakeetEngineFailure(engine: ParakeetEngine, error: unknown): string {
+    const message = this.normalizeParakeetErrorMessage(error);
+    this.updatePersistedParakeetEngineState(engine, {
+      lastError: message,
+      lastErrorAt: new Date().toISOString(),
+    });
+    return message;
   }
 
   isParakeetInstalled(): boolean {
@@ -2465,24 +2550,63 @@ export class TranscriberManager extends EventEmitter {
     return path.join(macAppRoot, 'scripts', 'setup-parakeet.sh');
   }
 
-  async setupParakeet(): Promise<{ success: boolean; error?: string }> {
+  getParakeetStatus(): ParakeetStatus {
+    const persisted = this.readPersistedParakeetState();
+    const runtimeInstalled = this.isParakeetInstalled();
+    const cacheDir = this.getParakeetCacheDir();
+
+    return {
+      runtimeInstalled,
+      pythonPath: this.getParakeetPythonPath(),
+      scriptPath: this.getParakeetScriptPath(),
+      cacheDir,
+      cacheExists: fs.existsSync(cacheDir),
+      serverState: this.parakeetServer?.isReady
+        ? 'ready'
+        : this.parakeetServer?.isStarting
+          ? 'warming'
+          : 'idle',
+      activeEngine: this.parakeetServerEngine,
+      engines: (Object.keys(PARAKEET_ENGINE_LABELS) as ParakeetEngine[]).map((engine) => {
+        const state = persisted.engines?.[engine];
+        const verified = Boolean(state?.verifiedAt);
+        const lastError = state?.lastError ?? null;
+        return {
+          engine,
+          label: PARAKEET_ENGINE_LABELS[engine],
+          verified,
+          needsReinstall: runtimeInstalled && Boolean(lastError) && !verified,
+          lastError,
+          lastErrorAt: state?.lastErrorAt ?? null,
+        };
+      }),
+    };
+  }
+
+  async setupParakeet(engine: ParakeetEngine = 'parakeet'): Promise<{ success: boolean; error?: string }> {
     const setupScript = this.getParakeetSetupScriptPath();
     if (!fs.existsSync(setupScript)) {
       return { success: false, error: `Setup script not found: ${setupScript}` };
     }
 
-    const venvDir = path.dirname(this.getParakeetPythonPath());
-    const venvBase = path.dirname(venvDir);
+    const venvDir = path.join(this.getParakeetBasePath(), 'venv');
 
     try {
-      const { stdout, stderr } = await execAsync(`bash "${setupScript}" "${venvBase}"`, {
+      const { stdout, stderr } = await execAsync(`bash "${setupScript}" "${venvDir}"`, {
         timeout: 300_000,
+        env: {
+          ...process.env,
+          ...this.getParakeetProcessEnv(),
+        },
       });
       log.info('Parakeet setup stdout: %s', stdout);
       if (stderr) log.info('Parakeet setup stderr: %s', stderr);
+      await this.startParakeetServer(engine);
+      this.stopParakeetServer();
       return { success: true };
     } catch (error: any) {
-      const message = error?.message || String(error);
+      this.stopParakeetServer();
+      const message = this.markParakeetEngineFailure(engine, error);
       log.error('Parakeet setup failed: %s', message);
       return { success: false, error: message };
     }
@@ -2493,12 +2617,10 @@ export class TranscriberManager extends EventEmitter {
       // Stop running server first
       this.stopParakeetServer();
 
-      // Delete the venv directory
-      const venvDir = path.dirname(this.getParakeetPythonPath()); // .../venv/bin → .../venv
-      const venvBase = path.dirname(venvDir); // .../venv → .../build-parakeet
-      if (fs.existsSync(venvBase)) {
-        fs.rmSync(venvBase, { recursive: true, force: true });
-        log.info('Parakeet uninstalled: deleted %s', venvBase);
+      const basePath = this.getParakeetBasePath();
+      if (fs.existsSync(basePath)) {
+        fs.rmSync(basePath, { recursive: true, force: true });
+        log.info('Parakeet uninstalled: deleted %s', basePath);
       }
 
       // If current engine is parakeet, revert to whisper as fallback
@@ -2525,14 +2647,22 @@ export class TranscriberManager extends EventEmitter {
         name: PARAKEET_ENGINE_LABELS[engine],
         command: this.getParakeetPythonPath(),
         args: [this.getParakeetScriptPath(), '--server', '--model', PARAKEET_ENGINE_MODEL_IDS[engine]],
+        timeoutMs: 300_000,
+        env: this.getParakeetProcessEnv(),
       });
       this.parakeetServerEngine = engine;
     }
     return this.parakeetServer;
   }
 
-  private startParakeetServer(engine: ParakeetEngine): Promise<void> {
-    return this.getOrCreateParakeetServer(engine).start();
+  private async startParakeetServer(engine: ParakeetEngine): Promise<void> {
+    try {
+      await this.getOrCreateParakeetServer(engine).start();
+      this.markParakeetEngineVerified(engine);
+    } catch (error) {
+      const message = this.markParakeetEngineFailure(engine, error);
+      throw new Error(message);
+    }
   }
 
   stopParakeetServer(): void {
@@ -2950,6 +3080,8 @@ export class TranscriberManager extends EventEmitter {
     // Parakeet runs on any architecture (ONNX Runtime CPU), no Apple Silicon needed.
     if (isParakeetEngine(selectedEngine)) {
       const engineLabel = PARAKEET_ENGINE_LABELS[selectedEngine];
+      const parakeetStatus = this.getParakeetStatus();
+      const engineStatus = parakeetStatus.engines.find((engine) => engine.engine === selectedEngine);
       if (!this.isParakeetInstalled()) {
         return this.buildHotMicEngineStatus(
           selectedEngine,
@@ -2966,6 +3098,15 @@ export class TranscriberManager extends EventEmitter {
           fallbackAvailable,
           'disabled',
           this.parakeetServer.disabledReason
+        );
+      }
+      if (engineStatus?.needsReinstall && engineStatus.lastError) {
+        return this.buildHotMicEngineStatus(
+          selectedEngine,
+          whisperModel,
+          fallbackAvailable,
+          'disabled',
+          `${engineLabel} needs reinstall: ${engineStatus.lastError}`
         );
       }
       if (this.parakeetServer?.isReady) {

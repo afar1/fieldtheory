@@ -1,0 +1,235 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { BrowserWindow } from 'electron';
+
+const mockApp = vi.hoisted(() => ({
+  hide: vi.fn(),
+  show: vi.fn(),
+  getName: vi.fn(() => 'Field Theory'),
+  getAppPath: vi.fn(() => '/tmp'),
+  dock: { hide: vi.fn() },
+}));
+
+vi.mock('electron', () => ({
+  app: mockApp,
+  BrowserWindow: Object.assign(vi.fn(), {
+    getFocusedWindow: vi.fn(() => null),
+  }),
+  screen: {
+    getAllDisplays: vi.fn(() => [{ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }]),
+    getPrimaryDisplay: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })),
+    getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
+    getDisplayNearestPoint: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })),
+  },
+  Menu: {
+    buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })),
+  },
+}));
+
+vi.mock('./logger', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
+
+vi.mock('./soundManager', () => ({
+  SoundManager: class MockSoundManager {
+    isEnabled(): boolean { return false; }
+    play(): void {}
+  },
+}));
+
+vi.mock('./clipboardManager', () => ({
+  isFinder: vi.fn(() => false),
+}));
+
+import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+
+describe('ClipboardHistoryWindow helper methods', () => {
+  let window: ClipboardHistoryWindow;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    window = new ClipboardHistoryWindow({
+      getPreference: vi.fn(() => false),
+    } as any);
+  });
+
+  it('uses cached native frontmost app on open when available', () => {
+    const bounds = { x: 10, y: 20, width: 900, height: 600 };
+    window.setNativeHelper({
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.apple.Safari',
+        name: 'Safari',
+        windowBounds: null,
+      })),
+    } as any);
+
+    vi.spyOn(window, 'show').mockImplementation(() => {});
+    const captureSpy = vi.spyOn(window, 'capturePreviousAppBeforeShow');
+
+    window.capturePreviousAppAndShow(bounds, false, true, true, false);
+
+    expect(captureSpy).not.toHaveBeenCalled();
+    expect(window.getPreviousApp()).toEqual({
+      bundleId: 'com.apple.Safari',
+      name: 'Safari',
+    });
+    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false);
+  });
+
+  it('shows immediately while previous-app capture continues in background when cache is unavailable', async () => {
+    const callOrder: string[] = [];
+    const bounds = { x: 10, y: 20, width: 900, height: 600 };
+    let resolveCapture!: () => void;
+
+    vi.spyOn(window, 'capturePreviousAppBeforeShow').mockImplementation(async () => {
+      callOrder.push('capture-start');
+      await new Promise<void>((resolve) => {
+        resolveCapture = () => {
+          callOrder.push('capture-end');
+          resolve();
+        };
+      });
+    });
+    vi.spyOn(window, 'show').mockImplementation(() => {
+      callOrder.push('show');
+    });
+
+    window.capturePreviousAppAndShow(bounds, false, true, true, false);
+
+    expect(callOrder).toEqual(['capture-start', 'show']);
+    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false);
+
+    resolveCapture();
+    await Promise.resolve();
+  });
+
+  it('uses one shared blur-dismiss rule for panel mode', () => {
+    expect(window.shouldAutoHideOnBlur()).toBe(true);
+
+    window.setRecordingActive(true);
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+    window.setRecordingActive(false);
+
+    window.setImmersiveMode(true);
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+    window.setImmersiveMode(false);
+
+    window.setScenarioTestingActive(true);
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+    window.setScenarioTestingActive(false);
+
+    window.setSketchModeActive(true);
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+  });
+
+  it('hides the window and restores the previous app when one is known', async () => {
+    const callOrder: string[] = [];
+
+    vi.spyOn(window, 'getPreviousApp').mockReturnValue({
+      bundleId: 'com.apple.Safari',
+      name: 'Safari',
+    });
+    vi.spyOn(window, 'hide').mockImplementation((_hideApp?: boolean, _reason?: string) => {
+      callOrder.push('hide');
+    });
+    vi.spyOn(window, 'activateApp').mockImplementation(async () => {
+      callOrder.push('activate');
+      return true;
+    });
+
+    await window.hideAndRestorePreviousApp('hotkey-toggle-hide');
+
+    expect(callOrder).toEqual(['hide', 'activate']);
+    expect(window.hide).toHaveBeenCalledWith(false, 'hotkey-toggle-hide');
+    expect(window.activateApp).toHaveBeenCalledWith('com.apple.Safari');
+  });
+
+  it('skips activation when no previous app is known', async () => {
+    vi.spyOn(window, 'getPreviousApp').mockReturnValue(null);
+    vi.spyOn(window, 'hide').mockImplementation(() => {});
+    vi.spyOn(window, 'activateApp').mockImplementation(async () => true);
+
+    await window.hideAndRestorePreviousApp('ipc-close-window');
+
+    expect(window.hide).toHaveBeenCalledWith(false, 'ipc-close-window');
+    expect(window.activateApp).not.toHaveBeenCalled();
+  });
+
+  it('waits for an in-flight previous-app capture only after hiding on explicit close', async () => {
+    const callOrder: string[] = [];
+    let resolveCapture!: () => void;
+
+    vi.spyOn(window, 'capturePreviousAppBeforeShow').mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        resolveCapture = () => {
+          (window as any).previousApp = { bundleId: 'com.apple.Safari', name: 'Safari' };
+          resolve();
+        };
+      });
+    });
+    vi.spyOn(window, 'show').mockImplementation(() => {});
+    vi.spyOn(window, 'hide').mockImplementation((_hideApp?: boolean, _reason?: string) => {
+      callOrder.push('hide');
+    });
+    vi.spyOn(window, 'activateApp').mockImplementation(async () => {
+      callOrder.push('activate');
+      return true;
+    });
+
+    window.capturePreviousAppAndShow();
+    const restorePromise = window.hideAndRestorePreviousApp('ipc-close-window');
+
+    expect(callOrder).toEqual(['hide']);
+
+    resolveCapture();
+    await restorePromise;
+
+    expect(callOrder).toEqual(['hide', 'activate']);
+  });
+
+  it('dismisses only the window on external blur once focus has left Field Theory', async () => {
+    vi.spyOn(window, 'isVisible').mockReturnValue(true);
+    vi.spyOn(window, 'hide').mockImplementation(() => {});
+    vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(null as any);
+
+    await window.dismissForExternalBlur('window-blur-handler', 0);
+
+    expect(window.hide).toHaveBeenCalledWith(false, 'window-blur-handler');
+  });
+
+  it('skips blur dismissal when another Field Theory window has focus', async () => {
+    vi.spyOn(window, 'isVisible').mockReturnValue(true);
+    vi.spyOn(window, 'hide').mockImplementation(() => {});
+    vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue({} as any);
+
+    await window.dismissForExternalBlur('window-blur-handler', 0);
+
+    expect(window.hide).not.toHaveBeenCalled();
+  });
+
+  it('dedupes blur dismissal when both blur handlers fire', async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(window, 'isVisible').mockReturnValue(true);
+      const hideSpy = vi.spyOn(window, 'hide').mockImplementation(() => {});
+      vi.mocked(BrowserWindow.getFocusedWindow).mockReturnValue(null as any);
+
+      const first = window.dismissForExternalBlur('window-blur-handler', 10);
+      const second = window.dismissForExternalBlur('app-browser-window-blur', 10);
+
+      expect(hideSpy).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10);
+      await Promise.all([first, second]);
+
+      expect(hideSpy).toHaveBeenCalledTimes(1);
+      expect(hideSpy).toHaveBeenCalledWith(false, 'window-blur-handler');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

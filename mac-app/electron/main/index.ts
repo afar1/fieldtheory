@@ -68,7 +68,7 @@ import { CouncilManager } from './councilManager';
 import { CouncilWindow } from './councilWindow';
 import { CouncilIPCChannels } from './types/council';
 import type { CouncilConfig } from './types/council';
-import { SquaresIPCChannels, SquaresAction } from './types/squares';
+import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
 import { GazeDebugOverlayManager } from './gaze/gazeDebugOverlayManager';
 import { GazeScreenOverlayManager } from './gaze/gazeScreenOverlayManager';
@@ -281,6 +281,7 @@ let gazeScreenOverlayManager: GazeScreenOverlayManager | null = null;
 let clipboardHistoryLastHideAt = 0;
 let clipboardHistoryLastHideReason: string | null = null;
 const DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS = 450;
+let clipboardHistoryDynamicIslandFocusRestoreTimer: ReturnType<typeof setTimeout> | null = null;
 
 const HOT_MIC_ISLAND_GEOMETRY_LIMITS = {
   notchWidthOverride: { min: 0, max: 320 },
@@ -687,8 +688,8 @@ function registerHotkeysAfterOnboarding(): void {
     if (!showing) {
       clipboardHistoryWindow.playOpenSound();
       const boundsToUse = restoreClipboardHistoryBounds();
-      clipboardHistoryWindow.show(boundsToUse, false, true);
-      clipboardHistoryWindow.capturePreviousAppBeforeShow();
+      suspendDynamicIslandFocusForClipboardHistory('show-hotkey');
+      clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
       // Opening clipboard history during recording can corrupt transparent
       // overlay backing on some macOS compositor paths.
       cursorStatusManager?.refreshWindowProperties();
@@ -698,14 +699,8 @@ function registerHotkeysAfterOnboarding(): void {
       if (clipboardHistoryWindow.getImmersiveMode()) {
         clipboardHistoryWindow.sendExitFullscreen();
       } else {
-        // Match blur-dismiss behavior: avoid app.hide() here because that compositor
-        // path can reintroduce white corner artifacts on transparent island windows.
-        clipboardHistoryWindow.hide(false, 'hotkey-toggle-hide');
-        // Restore focus to the app that was active before clipboard history opened
-        const previousApp = clipboardHistoryWindow.getPreviousApp();
-        if (previousApp?.bundleId) {
-          clipboardHistoryWindow.activateApp(previousApp.bundleId);
-        }
+        // Explicit hotkey close should return to the previous app deterministically.
+        await clipboardHistoryWindow.hideAndRestorePreviousApp('hotkey-toggle-hide');
         cursorStatusManager?.refreshWindowProperties();
         dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-hotkey');
       }
@@ -717,16 +712,18 @@ function registerHotkeysAfterOnboarding(): void {
   // If there's an active stack in TranscriberManager (transcript + screenshots), paste the full stack.
   // Otherwise, paste the most recent item from clipboard history.
   const superPasteHotkey = prefs.superPasteHotkey || 'Command+Shift+V';
-  let lastSuperPasteTime: number = 0;
-  const SUPER_PASTE_DEBOUNCE_MS = 500; // Ignore rapid triggers within 500ms
+  let lastSuperPasteTriggerTime = 0;
+  const SUPER_PASTE_DUPLICATE_GUARD_MS = 120;
 
   hotkeyManager.register('superPaste', superPasteHotkey, async () => {
-      // Debounce: ignore if triggered too recently (handles key repeat / multiple triggers)
+      // Keep only a tiny guard against duplicate callbacks from the same
+      // physical keypress; a larger debounce makes intentional repeats feel
+      // unreliable.
       const now = Date.now();
-      if (now - lastSuperPasteTime < SUPER_PASTE_DEBOUNCE_MS) {
+      if (now - lastSuperPasteTriggerTime < SUPER_PASTE_DUPLICATE_GUARD_MS) {
         return;
       }
-      lastSuperPasteTime = now;
+      lastSuperPasteTriggerTime = now;
 
       if (!clipboardManager) {
         return;
@@ -1195,6 +1192,7 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
 
   // Wire up native helper for fast sound playback if available.
   if (nativeHelper) {
+    window.setNativeHelper(nativeHelper);
     window.getSoundManager().setNativeHelper(nativeHelper);
   }
 
@@ -1225,10 +1223,26 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   window.setOnHidden(({ reason }) => {
     clipboardHistoryLastHideAt = Date.now();
     clipboardHistoryLastHideReason = reason;
+    if (clipboardHistoryDynamicIslandFocusRestoreTimer) {
+      clearTimeout(clipboardHistoryDynamicIslandFocusRestoreTimer);
+      clipboardHistoryDynamicIslandFocusRestoreTimer = null;
+    }
+    clipboardHistoryDynamicIslandFocusRestoreTimer = setTimeout(() => {
+      clipboardHistoryDynamicIslandFocusRestoreTimer = null;
+      dynamicIslandManager?.setLeftWindowFocusable(true);
+    }, 150);
     dynamicIslandManager?.refreshWindowProperties(`clipboard-history:hidden:${reason}`);
   });
 
   return window;
+}
+
+function suspendDynamicIslandFocusForClipboardHistory(_reason: string): void {
+  if (clipboardHistoryDynamicIslandFocusRestoreTimer) {
+    clearTimeout(clipboardHistoryDynamicIslandFocusRestoreTimer);
+    clipboardHistoryDynamicIslandFocusRestoreTimer = null;
+  }
+  dynamicIslandManager?.setLeftWindowFocusable(false);
 }
 
 /**
@@ -1248,6 +1262,7 @@ function showSettingsInClipboardWindow(): void {
   }
 
   const boundsToUse = restoreClipboardHistoryBounds();
+  suspendDynamicIslandFocusForClipboardHistory('show-settings');
   clipboardHistoryWindow.show(boundsToUse, true);
 }
 
@@ -1280,6 +1295,7 @@ function showClipboardHistoryOnActivate(): void {
 
   // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
+  suspendDynamicIslandFocusForClipboardHistory('show-app-activate');
   clipboardHistoryWindow.show(boundsToUse);
   // Re-assert transparent overlay properties after clipboard window show.
   cursorStatusManager?.refreshWindowProperties();
@@ -1711,6 +1727,16 @@ function setupLibrarianIPCHandlers(): void {
   // Set auto-show setting
   ipcMain.handle('librarian:setAutoShowEnabled', (_event, enabled: boolean): void => {
     librarianManager?.setAutoShowEnabled(enabled);
+  });
+
+  // Get whether auto-show steals focus
+  ipcMain.handle('librarian:getAutoShowStealsFocus', (): boolean => {
+    return librarianManager?.doesAutoShowStealFocus() ?? true;
+  });
+
+  // Set whether auto-show steals focus
+  ipcMain.handle('librarian:setAutoShowStealsFocus', (_event, enabled: boolean): void => {
+    librarianManager?.setAutoShowStealsFocus(enabled);
   });
 
   // Get resume after close setting
@@ -2213,9 +2239,12 @@ function setupLibrarianIPCHandlers(): void {
  */
 function setupSquaresIPCHandlers(): void {
   // Execute a window management action (e.g., leftHalf, grid, focus)
-  ipcMain.handle(SquaresIPCChannels.EXECUTE_ACTION, async (_event, action: SquaresAction) => {
-    return squaresManager?.executeAction(action) ?? false;
-  });
+  ipcMain.handle(
+    SquaresIPCChannels.EXECUTE_ACTION,
+    async (_event, action: SquaresAction, source?: SquaresActionSource) => {
+      return squaresManager?.executeAction(action, { source }) ?? false;
+    }
+  );
 
   // Get all visible windows
   ipcMain.handle(SquaresIPCChannels.GET_WINDOWS, async () => {
@@ -2711,11 +2740,18 @@ function setupTranscribeIPCHandlers(): void {
     return transcriberManager.isParakeetInstalled();
   });
 
-  ipcMain.handle(TranscribeIPCChannels.SETUP_PARAKEET, async () => {
+  ipcMain.handle(TranscribeIPCChannels.GET_PARAKEET_STATUS, async () => {
+    if (!transcriberManager) {
+      return null;
+    }
+    return transcriberManager.getParakeetStatus();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SETUP_PARAKEET, async (_event, engine?: 'parakeet' | 'parakeet-multilingual') => {
     if (!transcriberManager) {
       return { success: false, error: 'Transcriber manager not initialized' };
     }
-    return transcriberManager.setupParakeet();
+    return transcriberManager.setupParakeet(engine);
   });
 
   ipcMain.handle(TranscribeIPCChannels.UNINSTALL_PARAKEET, async () => {
@@ -3398,11 +3434,7 @@ function setupClipboardIPCHandlers(): void {
     // Avoid app.hide() here: that compositor path can destabilize transparent
     // overlay corners. Hide only the window, then explicitly restore focus.
     if (clipboardHistoryWindow) {
-      const previousApp = clipboardHistoryWindow.getPreviousApp();
-      clipboardHistoryWindow.hide(false, 'ipc-close-window');
-      if (previousApp?.bundleId) {
-        await clipboardHistoryWindow.activateApp(previousApp.bundleId);
-      }
+      await clipboardHistoryWindow.hideAndRestorePreviousApp('ipc-close-window');
     }
   });
 
@@ -4247,6 +4279,7 @@ function setupClipboardIPCHandlers(): void {
         
         // If it was visible, show it again at the same position.
         if (wasVisible && bounds) {
+          suspendDynamicIslandFocusForClipboardHistory('show-window-type-toggle');
           clipboardHistoryWindow.show(bounds);
         }
       }
@@ -5509,30 +5542,25 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   // app-level blur detection with a small delay to check if any Field Theory window
   // still has focus.
   app.on('browser-window-blur', () => {
-    // Don't auto-hide if showInDock mode (user expects normal app behavior)
-    const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
-    if (showInDock) return;
-
-    // Don't auto-hide if in immersive reading mode
-    if (clipboardHistoryWindow?.getImmersiveMode()) return;
-
-    // Don't auto-hide during recording
-    if (clipboardHistoryWindow?.getRecordingActive()) return;
+    const historyWindow = clipboardHistoryWindow;
+    const shouldAutoHide = historyWindow?.shouldAutoHideOnBlur() ?? false;
+    if (!shouldAutoHide) return;
+    if (!historyWindow) return;
 
     // Don't auto-hide if council window is open (user needs persistent window)
     if (councilWindow?.isVisible()) return;
 
-    // Small delay to allow focus to settle - another Field Theory window
-    // might be gaining focus (e.g., switching between our windows)
     setTimeout(() => {
-      const focusedWindow = BrowserWindow.getFocusedWindow();
-
-      // If no Field Theory window has focus, another app is active - hide.
-      // Do not call app.hide() here: focus already transferred away, and
-      // forcing an app-level hide can destabilize transparent overlay surfaces.
-      if (!focusedWindow && clipboardHistoryWindow?.isVisible()) {
-        clipboardHistoryWindow.hide(false, 'app-browser-window-blur');
+      if (!clipboardHistoryWindow || clipboardHistoryWindow !== historyWindow) {
+        return;
       }
+
+      const recentNativeBlur = historyWindow.hadRecentNativeWindowBlur(150);
+      if (recentNativeBlur) {
+        return;
+      }
+
+      void historyWindow.dismissForExternalBlur('app-browser-window-blur', 0);
     }, 50);
   });
   
@@ -5850,6 +5878,7 @@ async function initTranscriberSystem(): Promise<void> {
 
     // Auto-show the window if enabled
     if (librarianManager!.isAutoShowEnabled()) {
+      const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
       pendingImmersiveReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
@@ -5857,11 +5886,16 @@ async function initTranscriberSystem(): Promise<void> {
 
       // If already in immersive mode, bring window to front and notify renderer
       if (clipboardHistoryWindow.getImmersiveMode()) {
-        clipboardHistoryWindow.getWindow()?.focus();
+        if (shouldStealFocus) {
+          clipboardHistoryWindow.getWindow()?.focus();
+        } else {
+          clipboardHistoryWindow.revealWithoutFocus();
+        }
         clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
       } else {
         const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse, false, true);
+        suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
+        clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
       }
 
       // Only bounce dock if the icon is visible (showInDock mode).
@@ -5875,7 +5909,11 @@ async function initTranscriberSystem(): Promise<void> {
       // If already in immersive mode, still update the reading
       if (clipboardHistoryWindow?.getImmersiveMode()) {
         pendingImmersiveReading = reading.path;
-        clipboardHistoryWindow.getWindow()?.focus();
+        if (librarianManager!.doesAutoShowStealFocus()) {
+          clipboardHistoryWindow.getWindow()?.focus();
+        } else {
+          clipboardHistoryWindow.revealWithoutFocus();
+        }
         clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
         clipboardHistoryWindow.playArtifactDiscoverySound();
       } else {
@@ -6026,12 +6064,12 @@ async function initTranscriberSystem(): Promise<void> {
           void applyInputMode('standard');
         }
       });
-      dynamicIslandManager.on('open-field-theory', () => {
+      dynamicIslandManager.on('open-field-theory', async () => {
         if (!clipboardHistoryWindow) {
           clipboardHistoryWindow = initClipboardHistoryWindow();
         }
         if (clipboardHistoryWindow.isShowing()) {
-          clipboardHistoryWindow.hide(false, 'dynamic-island-toggle-history-window');
+          await clipboardHistoryWindow.hideAndRestorePreviousApp('dynamic-island-toggle-history-window');
           cursorStatusManager?.refreshWindowProperties();
           dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-open-field-theory');
           return;
@@ -6048,8 +6086,8 @@ async function initTranscriberSystem(): Promise<void> {
 
         clipboardHistoryWindow.playOpenSound();
         const boundsToUse = restoreClipboardHistoryBounds();
-        clipboardHistoryWindow.show(boundsToUse, false, true, true);
-        clipboardHistoryWindow.capturePreviousAppBeforeShow();
+        suspendDynamicIslandFocusForClipboardHistory('show-open-field-theory');
+        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true, true);
         // Opening clipboard history while recording can affect overlay transparency;
         // refresh transparent overlay window properties to keep them stable.
         cursorStatusManager?.refreshWindowProperties();
@@ -6127,6 +6165,7 @@ async function initTranscriberSystem(): Promise<void> {
   diagnosticsCollector = new DiagnosticsCollector(preferencesManager);
   if (transcriberManager) {
     diagnosticsCollector.setModelManager(transcriberManager.getModelManager());
+    diagnosticsCollector.setTranscriberManager(transcriberManager);
   }
   if (audioManager) {
     diagnosticsCollector.setAudioManager(audioManager);
@@ -6307,7 +6346,6 @@ async function initTranscriberSystem(): Promise<void> {
       await commandsManager.reinitializeForUser();
     }
   }
-
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
 
@@ -6447,9 +6485,27 @@ async function initTranscriberSystem(): Promise<void> {
   // Delay to allow DNS/network to come back online before attempting refresh.
   let wakeNetworkPoll: ReturnType<typeof setInterval> | null = null;
   let wakeNetworkTimeout: ReturnType<typeof setTimeout> | null = null;
+  let wakeOverlayRefreshTimeout: ReturnType<typeof setTimeout> | null = null;
+
+  const scheduleWakeOverlayRefresh = (reason: string): void => {
+    if (wakeOverlayRefreshTimeout) {
+      clearTimeout(wakeOverlayRefreshTimeout);
+      wakeOverlayRefreshTimeout = null;
+    }
+
+    wakeOverlayRefreshTimeout = setTimeout(() => {
+      wakeOverlayRefreshTimeout = null;
+      cursorStatusManager?.refreshWindowProperties();
+      dynamicIslandManager?.refreshWindowProperties(reason);
+    }, 450);
+  };
 
   powerMonitor.on('suspend', () => {
     log.info('[PowerMonitor] System going to sleep, stopping transcription servers');
+    if (wakeOverlayRefreshTimeout) {
+      clearTimeout(wakeOverlayRefreshTimeout);
+      wakeOverlayRefreshTimeout = null;
+    }
     transcriberManager?.stopQwenServer();
     transcriberManager?.stopMlxWhisperServer();
     transcriberManager?.stopWhisperServer();
@@ -6457,6 +6513,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   powerMonitor.on('resume', () => {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
+    scheduleWakeOverlayRefresh('power-monitor:resume');
 
     // Pre-warm Qwen server if Hot Mic is active so it's ready when the user speaks
     if (hotMicManager?.isActive) {
@@ -6489,6 +6546,10 @@ async function initTranscriberSystem(): Promise<void> {
         log.warn('[PowerMonitor] Gave up waiting for network after wake');
       }, 120000);
     }, 3000);
+  });
+
+  powerMonitor.on('unlock-screen', () => {
+    scheduleWakeOverlayRefresh('power-monitor:unlock-screen');
   });
 
   // The userChanged handler handles preference reloading when session is restored.
@@ -6632,6 +6693,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
       // Show and focus the clipboard history window (show() handles focusing)
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds();
+        suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.show(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
         if (fullscreen) {

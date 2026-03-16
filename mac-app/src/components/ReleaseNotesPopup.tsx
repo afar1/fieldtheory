@@ -14,10 +14,20 @@ export function hasReleaseNotes(version: string): boolean {
 // Release notes are embedded in the app. Update this with each release.
 // Keep it brief: 1-4 bullet points highlighting the main changes.
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.94': [
+    'Codex CLI now supports Librarian artifact hooks and setup flows',
+    'Librarian artifacts now use cleaner titles plus signed model metadata',
+    'Artifacts can auto-open without stealing focus from your current app',
+    'New users now get built-in internal commands like refactor, review, and commit',
+    'Parakeet is now the recommended transcription engine, with a multilingual option',
+    'Dynamic Island geometry now auto-detects and is managed from Appearance',
+    'Window Management adds focus width, better sizing controls, and a shared master toggle',
+    'Fixed several Librarian/Codex hook issues and shortened Codex block messages',
+  ],
   '0.1.93': [
     'Dynamic Island pills now hidden from Mission Control and hot corners',
     'Fixed white background flash when clicking pills or using Super Paste',
-    'Screenshots now stack idle — take multiple, then Cmd+Shift+V to paste all at once',
+    'Screenshots now stack idle — take multiple, then ⌘⇧V to paste all at once',
     'Focus voice command expands window to 80% height and centers it',
   ],
   '0.1.92': [
@@ -80,14 +90,14 @@ const RELEASE_NOTES: Record<string, string[]> = {
   ],
   '0.1.77': [
     'Super paste detects SSH sessions and copies images to the remote machine',
-    'Fixed Cmd+Shift+T shortcut conflict',
+    'Fixed ⌘⇧T shortcut conflict',
     'Fixed previous app detection for Electron-based apps like Superhuman',
   ],
   '0.1.76': [
-    'Fixed Cmd+Shift+T shortcut conflict (no longer registers a global hotkey)',
+    'Fixed ⌘⇧T shortcut conflict (no longer registers a global hotkey)',
   ],
   '0.1.75': [
-    'Global session handoffs: access handoffs from any project via Cmd+Shift+K',
+    'Global session handoffs: access handoffs from any project via ⌘⇧K',
     'Handoffs show project path context (e.g., ↩ fieldtheory/mac-app · Feb 11)',
     'Type "handoff" in command launcher to see recent sessions across all projects',
   ],
@@ -188,7 +198,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
     'Sound settings redesigned: Librarian sound on by default, quick toggles',
     'Librarian tab moved to secondary position for cleaner navigation',
     'Release notes toggle button in footer',
-    'Fixed Cmd+Shift+V to paste all item types including paths',
+    'Fixed ⌘⇧V to paste all item types including paths',
   ],
   '0.1.50': [
     'Fixed Command Launcher paste in Claude Code',
@@ -202,7 +212,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
   ],
   '0.1.47': [
     'Settings redesign with sidebar navigation',
-    'Librarian: Cmd+Delete to delete readings, toggle to hide tab',
+    'Librarian: ⌘⌫ deletes readings, plus a toggle to hide the tab',
     'Fixed Settings dark mode colors',
   ],
   '0.1.46': [
@@ -259,6 +269,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.94': 'Mar 15 2026',
   '0.1.93': 'Mar 10 2026',
   '0.1.92': 'Mar 9 2026',
   '0.1.91': 'Mar 9 2026',
@@ -346,7 +357,8 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
         position: 'fixed',
         bottom: '40px',
         right: '8px',
-        width: '280px',
+        width: '340px',
+        maxWidth: 'calc(100vw - 16px)',
         backgroundColor: theme.isDark ? '#1a1a1a' : '#ffffff',
         border: `1px solid ${theme.border}`,
         borderRadius: '12px',
@@ -359,6 +371,9 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
         transform: isClosing ? 'translateY(10px)' : 'translateY(0)',
         transition: 'opacity 0.3s ease, transform 0.3s ease',
         fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '12px',
       }}
     >
       {/* Header with version and dismiss button */}
@@ -366,7 +381,8 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
         display: 'flex',
         alignItems: 'flex-start',
         justifyContent: 'space-between',
-        marginBottom: '12px',
+        marginBottom: 0,
+        flexShrink: 0,
       }}>
         <div style={{
           display: 'flex',
@@ -433,35 +449,42 @@ export default function ReleaseNotesPopup({ currentVersion, onDismiss, isLatestM
       </div>
 
       {/* Release notes list */}
-      <ul style={{
-        margin: 0,
-        padding: 0,
-        listStyle: 'none',
+      <div style={{
+        maxHeight: '320px',
+        overflowY: 'auto',
+        paddingRight: '4px',
+        marginRight: '-4px',
       }}>
-        {notes.map((note, index) => (
-          <li
-            key={index}
-            style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '8px',
-              marginBottom: index < notes.length - 1 ? '8px' : 0,
-              fontSize: '12px',
-              color: theme.text,
-              lineHeight: '1.4',
-            }}
-          >
-            <span style={{
-              color: theme.accent,
-              flexShrink: 0,
-              marginTop: '2px',
-            }}>
-              •
-            </span>
-            <span>{note}</span>
-          </li>
-        ))}
-      </ul>
+        <ul style={{
+          margin: 0,
+          padding: 0,
+          listStyle: 'none',
+        }}>
+          {notes.map((note, index) => (
+            <li
+              key={index}
+              style={{
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '8px',
+                marginBottom: index < notes.length - 1 ? '8px' : 0,
+                fontSize: '12px',
+                color: theme.text,
+                lineHeight: '1.45',
+              }}
+            >
+              <span style={{
+                color: theme.accent,
+                flexShrink: 0,
+                marginTop: '2px',
+              }}>
+                •
+              </span>
+              <span>{note}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
     </div>
   );
 }

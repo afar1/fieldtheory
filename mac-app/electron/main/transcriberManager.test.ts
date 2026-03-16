@@ -1,9 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync } from 'fs';
+import os from 'os';
+import path from 'path';
 
 vi.mock('electron', () => ({
   app: {
     isPackaged: false,
     getAppPath: vi.fn(() => '/tmp'),
+    getPath: vi.fn(() => '/tmp'),
     on: vi.fn(),
   },
   globalShortcut: {
@@ -1435,7 +1439,7 @@ describe('TranscriberManager parakeet uninstall', () => {
     const save = vi.fn(async () => {});
     const manager: any = {
       stopParakeetServer: vi.fn(),
-      getParakeetPythonPath: () => '/tmp/nonexistent-parakeet-venv/bin/python3',
+      getParakeetBasePath: () => '/tmp/nonexistent-parakeet-runtime',
       preferences: {
         getPreference: (key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined,
         save,
@@ -1456,7 +1460,7 @@ describe('TranscriberManager parakeet uninstall', () => {
     const save = vi.fn(async () => {});
     const manager: any = {
       stopParakeetServer: vi.fn(),
-      getParakeetPythonPath: () => '/tmp/nonexistent-parakeet-venv/bin/python3',
+      getParakeetBasePath: () => '/tmp/nonexistent-parakeet-runtime',
       preferences: {
         getPreference: (key: string) => key === 'transcriptionEngine' ? 'whisper' : undefined,
         save,
@@ -1473,7 +1477,7 @@ describe('TranscriberManager parakeet uninstall', () => {
   it('returns error when stopParakeetServer throws', async () => {
     const manager: any = {
       stopParakeetServer: vi.fn(() => { throw new Error('server busy'); }),
-      getParakeetPythonPath: () => '/tmp/nonexistent-parakeet-venv/bin/python3',
+      getParakeetBasePath: () => '/tmp/nonexistent-parakeet-runtime',
       preferences: {
         getPreference: () => 'parakeet',
         save: vi.fn(async () => {}),
@@ -1485,5 +1489,31 @@ describe('TranscriberManager parakeet uninstall', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toContain('server busy');
+  });
+
+  it('reports reinstall-needed status after a failed Parakeet startup', () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-status-'));
+    const manager: any = {
+      getParakeetBasePath: () => tempDir,
+      getParakeetPythonPath: () => path.join(tempDir, 'venv', 'bin', 'python'),
+      getParakeetScriptPath: () => path.join(tempDir, 'parakeet-transcribe.py'),
+      isParakeetInstalled: () => true,
+      parakeetServer: null,
+      parakeetServerEngine: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.markParakeetEngineFailure('parakeet', new Error('server exited during startup with code 1'));
+
+    const status = manager.getParakeetStatus();
+    const english = status.engines.find((engine: any) => engine.engine === 'parakeet');
+
+    expect(english).toEqual(expect.objectContaining({
+      verified: false,
+      needsReinstall: true,
+    }));
+    expect(english?.lastError).toContain('server exited during startup');
+
+    rmSync(tempDir, { recursive: true, force: true });
   });
 });

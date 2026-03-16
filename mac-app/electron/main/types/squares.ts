@@ -108,12 +108,15 @@ export type SquaresAction =
   | 'verticalSpread'
   | 'cascade';
 
+export type SquaresActionSource = 'default' | 'command-launcher';
+
 /**
  * Squares configuration.
  * Stored in preferences. Sensible defaults out of the box.
  */
 export interface SquaresConfig {
   enabled: boolean;
+  showInCommandLauncher: boolean;   // If true, expose/allow Squares actions in portable commands launcher
   gapSize: number;                  // Gap between windows in grid/spread layouts (px)
   maxHistorySize: number;           // How many undo states to keep (default: 50)
   focusHeightPercent: number;       // % of screen height for focus action (default: 80)
@@ -129,6 +132,7 @@ export interface SquaresConfig {
  */
 export const DEFAULT_SQUARES_CONFIG: SquaresConfig = {
   enabled: true,
+  showInCommandLauncher: true,
   gapSize: 8,
   maxHistorySize: 50,
   focusHeightPercent: 80,

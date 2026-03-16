@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildEffectiveArtifactRuleContent,
   extractArtifactModelSignature,
+  hasArtifactStructureInstruction,
+  hasArtifactTitleInstruction,
   hasArtifactModelSignatureInstruction,
   parseMarkdownHeader,
 } from './librarianManager';
@@ -90,5 +93,25 @@ describe('artifact signature helpers', () => {
   it('detects when rule content already includes signature instructions', () => {
     expect(hasArtifactModelSignatureInstruction('Required metadata: *Model: GPT-5 Codex*')).toBe(true);
     expect(hasArtifactModelSignatureInstruction('Write a short reflective story.')).toBe(false);
+  });
+
+  it('detects when rule content includes artifact title/structure instructions', () => {
+    expect(hasArtifactTitleInstruction('Structure:\n1. Title (# heading)\n2. Signature metadata line: *Model: GPT-5 Codex*')).toBe(true);
+    expect(hasArtifactStructureInstruction('Structure:\n1. Title (# heading)\n2. Signature metadata line: *Model: GPT-5 Codex*')).toBe(true);
+    expect(hasArtifactStructureInstruction('Write a short reflective story.')).toBe(false);
+  });
+
+  it('appends artifact structure requirements when the rule only asks for prose', () => {
+    const result = buildEffectiveArtifactRuleContent('Write a short reflective story.');
+    expect(result).toContain('Title (# heading)');
+    expect(result).toContain('Signature metadata line');
+    expect(result).toContain('*Model: <the exact model or assistant name that wrote this artifact>*');
+  });
+
+  it('preserves explicit title instructions while still appending signature metadata when needed', () => {
+    const result = buildEffectiveArtifactRuleContent('Start with a markdown H1 title, then write the story body.');
+    expect(result).toContain('Required artifact format:');
+    expect(result).toContain('Signature metadata line');
+    expect(result).toContain('*Model: <the exact model or assistant name that wrote this artifact>*');
   });
 });

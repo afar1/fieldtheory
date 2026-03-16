@@ -20,6 +20,8 @@ import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
+import { normalizeSquaresConfig } from '../utils/squaresConfig';
+import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 
 // Settings sections in alphabetical order
 type SettingsSection =
@@ -488,11 +490,6 @@ export default function SettingsPanel({
         setShowPermissionReminders(!hide);
       });
       
-      // Load window management (Squares) enabled state
-      window.squaresAPI?.getConfig?.().then(config => {
-        setSquaresEnabled(config?.enabled ?? true);
-      });
-
       // Load cursor status debug mode setting
       window.clipboardAPI.getCursorStatusDebugMode?.().then(enabled => {
         setCursorStatusDebugMode(enabled);
@@ -948,6 +945,18 @@ export default function SettingsPanel({
     }
   }, []);
 
+  useEffect(() => {
+    if (!window.squaresAPI) return;
+
+    window.squaresAPI.getConfig().then(config => {
+      setSquaresEnabled(normalizeSquaresConfig(config).enabled);
+    });
+
+    return window.squaresAPI.onConfigChanged((config) => {
+      setSquaresEnabled(normalizeSquaresConfig(config).enabled);
+    });
+  }, []);
+
   // Handler for clearing screenshot hotkey
   const handleClearScreenshotHotkey = useCallback(async () => {
     if (!window.clipboardAPI) return;
@@ -1347,8 +1356,12 @@ export default function SettingsPanel({
               onClick={() => setSelectedSection(section)}
               style={{
                 ...styles.sidebarItem,
-                backgroundColor: selectedSection === section ? theme.accent : 'transparent',
-                color: selectedSection === section ? '#fff' : theme.textSecondary,
+                backgroundColor: selectedSection === section ? theme.selectedBg : 'transparent',
+                borderColor: selectedSection === section ? theme.border : 'transparent',
+                color: selectedSection === section ? theme.text : theme.textSecondary,
+                boxShadow: selectedSection === section
+                  ? (theme.isDark ? 'inset 0 1px 0 rgba(255,255,255,0.03)' : '0 1px 1px rgba(15, 23, 42, 0.04)')
+                  : 'none',
                 cursor: 'pointer',
               }}
             >
@@ -1361,6 +1374,7 @@ export default function SettingsPanel({
 
       {/* Right Content Area */}
       <div style={styles.content}>
+      <div style={styles.contentInner}>
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       {selectedSection === 'appearance' && (
         <>
@@ -1797,7 +1811,7 @@ export default function SettingsPanel({
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span style={styles.rowLabel}>Window management</span>
-            <span style={styles.rowHint}>Snap, tile, and arrange windows via voice or command launcher</span>
+            <span style={styles.rowHint}>Turn spoken window actions on or off. Portable command visibility is configured in Window Management.</span>
           </div>
           <div style={styles.rowControls}>
             <button
@@ -1813,12 +1827,11 @@ export default function SettingsPanel({
           </div>
         </div>
 
-        {squaresEnabled && (
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span style={styles.rowLabel}>Window voice commands</span>
             <span style={styles.rowHint}>
-              Configure spoken window actions (tile, focus, snap)
+              Configure spoken window actions and portable-command availability.
             </span>
           </div>
           <div style={styles.rowControls}>
@@ -1830,7 +1843,6 @@ export default function SettingsPanel({
             </button>
           </div>
         </div>
-        )}
 
         {/* Show in Dock - WIP feature, hidden until ready */}
         {/* Permission Reminders - removed, always show until permissions granted */}
@@ -2019,6 +2031,7 @@ export default function SettingsPanel({
       {/* Hot Mic Section */}
       {selectedSection === 'hot-mic' && (
       <div style={styles.section}>
+        <SectionHeader title="Hot Mic" />
         <HotMicSettings />
       </div>
       )}
@@ -2033,6 +2046,7 @@ export default function SettingsPanel({
       {/* Sounds Section */}
       {selectedSection === 'sounds' && (
       <div style={styles.section}>
+        <SectionHeader title="Sounds" />
         <SoundsSettings />
       </div>
       )}
@@ -2523,13 +2537,14 @@ export default function SettingsPanel({
         </div>
       )}
 
+      </div>
+
       {/* Diagnostics Modal */}
       <DiagnosticsModal
         isOpen={showDiagnostics}
         onClose={() => setShowDiagnostics(false)}
         onSendAsFeedback={onNavigateToFeedback}
       />
-
     </div>
   );
 }
@@ -2546,36 +2561,41 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     position: 'relative' as const,
   },
   sidebar: {
-    width: '180px',
-    minWidth: '180px',
-    padding: '8px 12px 16px 12px',
+    width: '208px',
+    minWidth: '208px',
+    padding: '16px 14px 24px 14px',
     borderRight: `1px solid ${theme.border}`,
-    backgroundColor: theme.bgSecondary,
+    backgroundColor: theme.surface0,
     overflowY: 'auto',
     boxSizing: 'border-box',
   },
   sidebarNav: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '2px',
+    gap: '4px',
   },
   sidebarItem: {
-    padding: '8px 12px',
-    fontSize: '11px',
+    padding: '9px 12px',
+    fontSize: '12px',
     fontWeight: 500,
     textAlign: 'left',
-    border: 'none',
-    borderRadius: '6px',
+    border: '1px solid transparent',
+    borderRadius: '10px',
     cursor: 'pointer',
-    transition: 'background-color 0.15s',
+    transition: 'background-color 0.15s, color 0.15s, border-color 0.15s',
     outline: 'none',
   },
   content: {
     flex: 1,
     minHeight: 0, // Required for flex children to shrink below content size
-    padding: '16px 16px 32px 16px', // Extra bottom padding to ensure last items are scrollable
+    padding: '24px 28px 40px 28px',
     overflowY: 'auto',
     boxSizing: 'border-box',
+  },
+  contentInner: {
+    width: '100%',
+    maxWidth: '780px',
+    margin: '0 auto',
   },
   // Legacy container (kept for compatibility)
   container: {
@@ -2611,27 +2631,27 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
 
   // Section with divider line
   section: {
+    ...getSettingsSurfaceStyle(theme),
     marginBottom: '20px',
   },
   sectionHeader: {
     display: 'flex',
     alignItems: 'center',
-    gap: '12px',
-    marginTop: '20px',
-    marginBottom: '8px',
+    gap: '10px',
+    marginTop: 0,
+    marginBottom: '14px',
   },
   sectionTitle: {
-    fontSize: '11px',
+    fontSize: '13px',
     fontWeight: 600,
-    color: theme.textSecondary,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.08em',
+    color: theme.text,
+    letterSpacing: '-0.01em',
     whiteSpace: 'nowrap' as const,
   },
   sectionLine: {
     flex: 1,
     height: '1px',
-    backgroundColor: theme.border,
+    backgroundColor: theme.isDark ? theme.border : '#edf1f5',
   },
 
   // Flat row layout: label left, control right
@@ -2639,13 +2659,13 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '4px 0',
-    minHeight: '32px',
+    padding: '10px 0',
+    minHeight: '42px',
   },
   rowLabel: {
     fontSize: '12px',
     color: theme.text,
-    fontWeight: 400,
+    fontWeight: 500,
   },
   rowValue: {
     fontSize: '12px',
@@ -2658,20 +2678,21 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     gap: '8px',
   },
   rowHint: {
-    fontSize: '12px',
+    fontSize: '11px',
     color: theme.textSecondary,
     fontWeight: 400,
+    lineHeight: 1.45,
   },
 
   // Unified button styles
   btn: {
-    padding: '6px 12px',
+    padding: '7px 12px',
     fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg : '#fff',
+    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
     border: `1px solid ${theme.border}`,
-    borderRadius: '6px',
+    borderRadius: '8px',
     cursor: 'pointer',
     minWidth: '80px',
     textAlign: 'center' as const,
@@ -2737,24 +2758,24 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
 
   // Select dropdown
   select: {
-    padding: '6px 12px',
+    padding: '8px 12px',
     fontSize: '12px',
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg : '#fff',
+    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
     border: `1px solid ${theme.border}`,
-    borderRadius: '6px',
+    borderRadius: '8px',
     cursor: 'pointer',
     minWidth: '160px',
   },
 
   // Input field
   input: {
-    padding: '6px 12px',
+    padding: '8px 12px',
     fontSize: '12px',
     color: theme.text,
-    backgroundColor: theme.isDark ? theme.bg : '#fff',
+    backgroundColor: theme.isDark ? theme.surface2 : '#fff',
     border: `1px solid ${theme.border}`,
-    borderRadius: '6px',
+    borderRadius: '8px',
     outline: 'none',
     flex: 1,
   },

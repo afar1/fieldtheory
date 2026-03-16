@@ -8,6 +8,7 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { SettingsInsetGroup, SettingsNotice, SettingsSectionHeading } from './settings/SettingsPrimitives';
 
 type PortableCommandInfo = {
   name: string;
@@ -198,23 +199,14 @@ export default function CommandsSettings() {
         Use <strong>⌘⇧K</strong> to invoke a command in any application, or say "use the [name] command" during transcription.
       </p>
 
-      <div style={{
-        padding: '16px',
-        borderRadius: '8px',
-        backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-      }}>
+      <SettingsInsetGroup theme={theme}>
         {/* Watched Directories */}
         <div>
-          <label style={{
-            display: 'block',
-            marginBottom: '8px',
-            fontSize: '12px',
-            fontWeight: 600,
-            color: theme.text,
-          }}>
-            Watched Directories
-          </label>
+          <SettingsSectionHeading
+            theme={theme}
+            title="Watched Directories"
+            description="Field Theory watches these folders and exposes the markdown commands they contain."
+          />
 
           {/* List of watched directories with command counts */}
           {watchedDirs.length > 0 && (
@@ -386,14 +378,9 @@ export default function CommandsSettings() {
 
         {/* Error display */}
         {error && (
-          <p style={{
-            marginTop: '8px',
-            marginBottom: '0',
-            fontSize: '12px',
-            color: theme.error,
-          }}>
+          <SettingsNotice theme={theme} tone="warning">
             {error}
-          </p>
+          </SettingsNotice>
         )}
 
         {/* View commands note */}
@@ -410,49 +397,18 @@ export default function CommandsSettings() {
 
         {/* Mobile sync status */}
         {remoteCount > 0 && (
-          <div style={{
-            marginTop: '12px',
-            padding: '8px 12px',
-            backgroundColor: theme.isDark ? 'rgba(16, 185, 129, 0.1)' : '#ecfdf5',
-            borderRadius: '6px',
-            border: `1px solid ${theme.isDark ? 'rgba(16, 185, 129, 0.3)' : '#a7f3d0'}`,
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-          }}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={theme.isDark ? '#34d399' : '#059669'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-              <line x1="12" y1="18" x2="12" y2="18"/>
-            </svg>
-            <span style={{
-              fontSize: '12px',
-              color: theme.isDark ? '#34d399' : '#059669',
-            }}>
-              <strong>{remoteCount}</strong> command{remoteCount !== 1 ? 's' : ''} synced to mobile
-            </span>
-          </div>
+          <SettingsNotice theme={theme} tone="success">
+            <strong>{remoteCount}</strong> command{remoteCount !== 1 ? 's' : ''} synced to mobile
+          </SettingsNotice>
         )}
 
         {/* Usage instructions */}
-        <div style={{
-          marginTop: '16px',
-          padding: '12px',
-          backgroundColor: theme.isDark ? theme.surface2 : '#f0f9ff',
-          borderRadius: '6px',
-          border: `1px solid ${theme.isDark ? theme.border : '#bfdbfe'}`,
-        }}>
-          <p style={{
-            margin: 0,
-            fontSize: '12px',
-            color: theme.isDark ? theme.textSecondary : '#1e40af',
-            lineHeight: '1.5',
-          }}>
-            <strong>How it works:</strong> During transcription, say something like
-            "please use the debug command" or "use the review command".
-            The markdown content will be injected into your prompt.
-          </p>
-        </div>
-      </div>
+        <SettingsNotice theme={theme}>
+          <strong>How it works:</strong> During transcription, say something like
+          {' '}"please use the debug command" or "use the review command".
+          The markdown content will be injected into your prompt.
+        </SettingsNotice>
+      </SettingsInsetGroup>
 
       {/* Keyboard shortcut notice */}
       <div style={{
@@ -461,11 +417,8 @@ export default function CommandsSettings() {
         marginTop: '16px',
         textAlign: 'center',
         padding: '8px 12px',
-        backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)',
-        border: `1px solid ${theme.border}`,
-        borderRadius: '6px',
       }}>
-        Use <strong style={{ color: theme.text }}>Command + Shift + K</strong> to invoke a command in any application
+        Use <strong style={{ color: theme.text }}>⌘⇧K</strong> to invoke a command in any application
       </div>
     </div>
   );

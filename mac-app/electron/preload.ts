@@ -86,6 +86,7 @@ const TranscribeIPCChannels = {
   IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
   IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
   IS_PARAKEET_INSTALLED: 'transcribe:isParakeetInstalled',
+  GET_PARAKEET_STATUS: 'transcribe:getParakeetStatus',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
   SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
@@ -742,10 +743,11 @@ export interface TranscribeAPI {
   isQwenInstalled: () => Promise<boolean>;
   isMlxWhisperInstalled: () => Promise<boolean>;
   isParakeetInstalled: () => Promise<boolean>;
+  getParakeetStatus: () => Promise<import('./main/types/transcribe').ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
   setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet: () => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
   uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
@@ -1226,7 +1228,7 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.RESET_AUTO_IMPROVE_STATS);
   },
 
-  getTranscriptionEngine: async (): Promise<'whisper' | 'qwen' | 'mlx-whisper'> => {
+  getTranscriptionEngine: async (): Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE);
   },
 
@@ -1244,6 +1246,9 @@ const transcribeAPI: TranscribeAPI = {
   isParakeetInstalled: async (): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.IS_PARAKEET_INSTALLED);
   },
+  getParakeetStatus: async () => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_PARAKEET_STATUS);
+  },
 
   isAppleSilicon: async (): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.IS_APPLE_SILICON);
@@ -1256,8 +1261,8 @@ const transcribeAPI: TranscribeAPI = {
   setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_MLX_WHISPER);
   },
-  setupParakeet: async (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET);
+  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET, engine);
   },
   uninstallParakeet: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.UNINSTALL_PARAKEET);
@@ -3160,6 +3165,8 @@ const librarianAPI = {
   // Auto-show on new reading settings
   getAutoShowEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:getAutoShowEnabled'),
   setAutoShowEnabled: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setAutoShowEnabled', enabled),
+  getAutoShowStealsFocus: (): Promise<boolean> => ipcRenderer.invoke('librarian:getAutoShowStealsFocus'),
+  setAutoShowStealsFocus: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setAutoShowStealsFocus', enabled),
 
   // Resume after close settings (return to last artifact vs clipboard)
   getResumeAfterClose: (): Promise<boolean> => ipcRenderer.invoke('librarian:getResumeAfterClose'),
@@ -3371,8 +3378,8 @@ const SquaresIPCChannels = {
 
 const squaresAPI = {
   // Execute a window management action (e.g., leftHalf, grid, focus)
-  executeAction: (action: string): Promise<boolean> =>
-    ipcRenderer.invoke(SquaresIPCChannels.EXECUTE_ACTION, action),
+  executeAction: (action: string, source?: 'default' | 'command-launcher'): Promise<boolean> =>
+    ipcRenderer.invoke(SquaresIPCChannels.EXECUTE_ACTION, action, source),
 
   // Get all visible windows
   getWindows: (): Promise<any[]> =>
