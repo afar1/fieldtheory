@@ -405,6 +405,15 @@ export default function LibrarianSetupWizard({ onComplete }: LibrarianSetupWizar
               {codexHookInstalling ? '...' : codexHookInstalled ? 'Disconnect' : 'Connect'}
             </button>
           </div>
+          <div style={{
+            marginTop: '8px',
+            padding: '0 4px',
+            fontSize: '11px',
+            lineHeight: 1.4,
+            color: theme.textSecondary,
+          }}>
+            Connect once and Field Theory will configure Codex hooks automatically.
+          </div>
         </div>
 
         {!hasConnection && (

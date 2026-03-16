@@ -151,3 +151,39 @@ describe('SquaresManager config-driven layout heights', () => {
     expect(config.horizontalKeepHeight).toBe(true);
   });
 });
+
+describe('SquaresManager command launcher execution', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('allows launcher-triggered window actions when window management is off but launcher visibility is enabled', async () => {
+    const manager = createManager({ enabled: false, showInCommandLauncher: true });
+    const executeGridAction = vi.spyOn(manager as any, 'executeGridAction').mockResolvedValue(true);
+
+    const result = await manager.executeAction('grid', { source: 'command-launcher' });
+
+    expect(result).toBe(true);
+    expect(executeGridAction).toHaveBeenCalledOnce();
+  });
+
+  it('blocks launcher-triggered window actions when portable command visibility is disabled', async () => {
+    const manager = createManager({ enabled: false, showInCommandLauncher: false });
+    const executeGridAction = vi.spyOn(manager as any, 'executeGridAction').mockResolvedValue(true);
+
+    const result = await manager.executeAction('grid', { source: 'command-launcher' });
+
+    expect(result).toBe(false);
+    expect(executeGridAction).not.toHaveBeenCalled();
+  });
+
+  it('still blocks non-launcher execution when window management is off', async () => {
+    const manager = createManager({ enabled: false, showInCommandLauncher: true });
+    const executeGridAction = vi.spyOn(manager as any, 'executeGridAction').mockResolvedValue(true);
+
+    const result = await manager.executeAction('grid');
+
+    expect(result).toBe(false);
+    expect(executeGridAction).not.toHaveBeenCalled();
+  });
+});

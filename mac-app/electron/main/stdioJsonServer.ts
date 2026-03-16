@@ -26,6 +26,7 @@ export interface StdioJsonServerConfig {
   args: string[];
   timeoutMs?: number;
   preStart?: () => Promise<void>;
+  env?: NodeJS.ProcessEnv;
   /** Override for testing — defaults to child_process.spawn. */
   spawnFn?: SpawnFn;
 }
@@ -36,6 +37,7 @@ export class StdioJsonServer {
   private args: string[];
   private timeoutMs: number;
   private preStart?: () => Promise<void>;
+  private env?: NodeJS.ProcessEnv;
   private spawnFn: SpawnFn;
 
   private process: ChildProcess | null = null;
@@ -52,6 +54,7 @@ export class StdioJsonServer {
     this.args = config.args;
     this.timeoutMs = config.timeoutMs ?? 120_000;
     this.preStart = config.preStart;
+    this.env = config.env;
     this.spawnFn = config.spawnFn ?? spawn;
   }
 
@@ -111,6 +114,7 @@ export class StdioJsonServer {
 
         const proc = this.spawnFn(this.command, this.args, {
           stdio: ['pipe', 'pipe', 'pipe'],
+          env: this.env ? { ...process.env, ...this.env } : process.env,
         });
 
         if (invalidated()) {

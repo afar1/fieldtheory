@@ -7,40 +7,67 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import {
+  SettingsBadge,
+  type SettingsBadgeTone,
+  SettingsInsetGroup,
+  SettingsNotice,
+  SettingsSectionHeading,
+} from './settings/SettingsPrimitives';
 
 /** Reusable row for a simple connected/not-connected hook toggle. */
-function HookRow({ label, installed, disabled, theme, onToggle }: {
+function HookRow({
+  label,
+  disabled,
+  theme,
+  onToggle,
+  statusLabel,
+  statusTone = 'neutral',
+  actionLabel,
+  actionTone = 'primary',
+}: {
   label: string;
-  installed: boolean;
   disabled: boolean;
   theme: Theme;
   onToggle: () => void;
+  statusLabel: string;
+  statusTone?: SettingsBadgeTone;
+  actionLabel: string;
+  actionTone?: 'primary' | 'warning' | 'ghost';
 }) {
+  const actionStyle = {
+    primary: {
+      color: '#fff',
+      backgroundColor: theme.accent,
+      border: 'none',
+    },
+    warning: {
+      color: '#fff',
+      backgroundColor: theme.warning,
+      border: 'none',
+    },
+    ghost: {
+      color: theme.textSecondary,
+      backgroundColor: 'transparent',
+      border: `1px solid ${theme.border}`,
+    },
+  }[actionTone];
+
   return (
     <div
       style={{
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'space-between',
-        padding: '8px 12px',
-        borderRadius: '6px',
-        backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+        padding: '10px 12px',
+        borderRadius: '10px',
+        backgroundColor: theme.isDark ? theme.surface2 : '#fcfcfd',
         border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
       }}
     >
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>{label}</span>
-        <span style={{
-          fontSize: '10px',
-          color: installed ? theme.success : theme.textSecondary,
-          padding: '2px 6px',
-          backgroundColor: installed
-            ? (theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)')
-            : (theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'),
-          borderRadius: '4px',
-        }}>
-          {installed ? 'Connected' : 'Not connected'}
-        </span>
+        <SettingsBadge theme={theme} tone={statusTone}>{statusLabel}</SettingsBadge>
       </div>
       <button
         onClick={onToggle}
@@ -49,15 +76,13 @@ function HookRow({ label, installed, disabled, theme, onToggle }: {
           padding: '4px 10px',
           fontSize: '11px',
           fontWeight: 500,
-          color: installed ? theme.textSecondary : '#fff',
-          backgroundColor: installed ? 'transparent' : theme.accent,
-          border: installed ? `1px solid ${theme.border}` : 'none',
-          borderRadius: '4px',
+          ...actionStyle,
+          borderRadius: '8px',
           cursor: disabled ? 'wait' : 'pointer',
           opacity: disabled ? 0.5 : 1,
         }}
       >
-        {disabled ? '...' : installed ? 'Disconnect' : 'Connect'}
+        {disabled ? '...' : actionLabel}
       </button>
     </div>
   );
@@ -237,129 +262,88 @@ export default function ClaudeSettings() {
     dev: 'Dev',
   };
 
+  const claudeStatusLabel = claudeHookInstalled && claudeNeedsUpdate
+    ? 'Update available'
+    : claudeHookInstalled
+      ? 'Connected'
+      : 'Not connected';
+  const claudeStatusTone: SettingsBadgeTone = claudeHookInstalled && claudeNeedsUpdate
+    ? 'warning'
+    : claudeHookInstalled
+      ? 'success'
+      : 'neutral';
+  const claudeActionLabel = claudeNeedsUpdate
+    ? 'Update'
+    : claudeHookInstalled
+      ? 'Disconnect'
+      : 'Connect';
+  const claudeActionTone: 'primary' | 'warning' | 'ghost' = claudeNeedsUpdate
+    ? 'warning'
+    : claudeHookInstalled
+      ? 'ghost'
+      : 'primary';
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {/* Read Permission Hooks - Auto-approve without prompts */}
-      <div
-        style={{
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-        }}
-      >
-        <div style={{ marginBottom: '12px' }}>
-          <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
-            Auto-Approve File Reads
-          </div>
-          <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '4px', lineHeight: '1.5' }}>
-            This feature reduces agent babysitting. It gives an agent permission to read the screenshots you take, the command directories you link, and read/write handoff documents.
-          </div>
-        </div>
+      <SettingsInsetGroup theme={theme}>
+        <SettingsSectionHeading
+          theme={theme}
+          title="Auto-Approve File Reads"
+          description="This feature reduces agent babysitting. It gives an agent permission to read the screenshots you take, the command directories you link, and read or write handoff documents."
+        />
 
-        {/* Claude Code */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            padding: '8px 12px',
-            borderRadius: '6px',
-            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-            marginBottom: '8px',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>Claude Code</span>
-            {claudeHookInstalled && claudeNeedsUpdate ? (
-              <span style={{
-                fontSize: '10px',
-                color: '#d97706',
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(217, 119, 6, 0.15)' : 'rgba(217, 119, 6, 0.1)',
-                borderRadius: '4px',
-              }}>
-                Update available
-              </span>
-            ) : claudeHookInstalled ? (
-              <span style={{
-                fontSize: '10px',
-                color: theme.success,
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.15)' : 'rgba(34, 197, 94, 0.1)',
-                borderRadius: '4px',
-              }}>
-                Connected
-              </span>
-            ) : (
-              <span style={{
-                fontSize: '10px',
-                color: theme.textSecondary,
-                padding: '2px 6px',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                borderRadius: '4px',
-              }}>
-                Not connected
-              </span>
-            )}
-          </div>
-          <button
-            onClick={async () => {
-              if (hookInstalling) return;
-              setHookInstalling(true);
-              setHookMessage(null);
-              try {
-                if (claudeHookInstalled && !claudeNeedsUpdate) {
-                  // Disconnect
-                  const result = await window.claudeAPI?.uninstallReadPermissionHook?.();
-                  if (result?.success) {
-                    setClaudeHookInstalled(false);
-                    setClaudeNeedsUpdate(false);
-                    setHookMessage(result.message);
-                    setTimeout(() => setHookMessage(null), 5000);
-                  } else {
-                    setError(result?.message || 'Failed');
-                  }
+        <HookRow
+          label="Claude Code"
+          disabled={hookInstalling}
+          theme={theme}
+          statusLabel={claudeStatusLabel}
+          statusTone={claudeStatusTone}
+          actionLabel={claudeActionLabel}
+          actionTone={claudeActionTone}
+          onToggle={async () => {
+            if (hookInstalling) return;
+            setHookInstalling(true);
+            setHookMessage(null);
+            try {
+              if (claudeHookInstalled && !claudeNeedsUpdate) {
+                const result = await window.claudeAPI?.uninstallReadPermissionHook?.();
+                if (result?.success) {
+                  setClaudeHookInstalled(false);
+                  setClaudeNeedsUpdate(false);
+                  setHookMessage(result.message);
+                  setTimeout(() => setHookMessage(null), 5000);
                 } else {
-                  // Connect or Update (both call install)
-                  const result = await window.claudeAPI?.installReadPermissionHook?.();
-                  if (result?.success) {
-                    setClaudeHookInstalled(true);
-                    setClaudeNeedsUpdate(false);
-                    setHookMessage(result.message);
-                    setTimeout(() => setHookMessage(null), 5000);
-                  } else {
-                    setError(result?.message || 'Failed');
-                  }
+                  setError(result?.message || 'Failed');
                 }
-              } finally {
-                setHookInstalling(false);
+              } else {
+                const result = await window.claudeAPI?.installReadPermissionHook?.();
+                if (result?.success) {
+                  setClaudeHookInstalled(true);
+                  setClaudeNeedsUpdate(false);
+                  setHookMessage(result.message);
+                  setTimeout(() => setHookMessage(null), 5000);
+                } else {
+                  setError(result?.message || 'Failed');
+                }
               }
-            }}
-            disabled={hookInstalling}
-            style={{
-              padding: '4px 10px',
-              fontSize: '11px',
-              fontWeight: 500,
-              color: claudeHookInstalled && !claudeNeedsUpdate ? theme.textSecondary : '#fff',
-              backgroundColor: claudeNeedsUpdate ? '#d97706' : claudeHookInstalled ? 'transparent' : theme.accent,
-              border: claudeHookInstalled && !claudeNeedsUpdate ? `1px solid ${theme.border}` : 'none',
-              borderRadius: '4px',
-              cursor: hookInstalling ? 'wait' : 'pointer',
-              opacity: hookInstalling ? 0.5 : 1,
-            }}
-          >
-            {hookInstalling ? '...' : claudeNeedsUpdate ? 'Update' : claudeHookInstalled ? 'Disconnect' : 'Connect'}
-          </button>
-        </div>
+            } finally {
+              setHookInstalling(false);
+            }
+          }}
+        />
+
+        <div style={{ height: '8px' }} />
 
         {/* Cursor */}
         <HookRow
           label="Cursor"
-          installed={cursorHookInstalled}
           disabled={hookInstalling}
           theme={theme}
+          statusLabel={cursorHookInstalled ? 'Connected' : 'Not connected'}
+          statusTone={cursorHookInstalled ? 'success' : 'neutral'}
+          actionLabel={cursorHookInstalled ? 'Disconnect' : 'Connect'}
+          actionTone={cursorHookInstalled ? 'ghost' : 'primary'}
           onToggle={async () => {
             if (hookInstalling) return;
             setHookInstalling(true);
@@ -386,9 +370,12 @@ export default function ClaudeSettings() {
         {/* Codex */}
         <HookRow
           label="Codex"
-          installed={codexHookInstalled}
           disabled={hookInstalling}
           theme={theme}
+          statusLabel={codexHookInstalled ? 'Connected' : 'Not connected'}
+          statusTone={codexHookInstalled ? 'success' : 'neutral'}
+          actionLabel={codexHookInstalled ? 'Disconnect' : 'Connect'}
+          actionTone={codexHookInstalled ? 'ghost' : 'primary'}
           onToggle={async () => {
             if (hookInstalling) return;
             setHookInstalling(true);
@@ -412,19 +399,16 @@ export default function ClaudeSettings() {
 
         {/* Feedback message */}
         {hookMessage && (
-          <p style={{
-            fontSize: '11px',
-            color: theme.success,
-            marginTop: '12px',
-            marginBottom: 0,
-            padding: '8px 12px',
-            backgroundColor: theme.isDark ? 'rgba(34, 197, 94, 0.1)' : 'rgba(34, 197, 94, 0.05)',
-            borderRadius: '6px',
-          }}>
+          <SettingsNotice theme={theme} tone="success">
             {hookMessage}
-          </p>
+          </SettingsNotice>
         )}
-      </div>
+        {error && (
+          <SettingsNotice theme={theme} tone="warning">
+            {error}
+          </SettingsNotice>
+        )}
+      </SettingsInsetGroup>
 
       {/* Terminal Command Allowlist - Hidden until ready */}
       {false && (

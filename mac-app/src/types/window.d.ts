@@ -229,6 +229,26 @@ interface SoundOption {
   category: string;
 }
 
+interface ParakeetEngineStatus {
+  engine: 'parakeet' | 'parakeet-multilingual';
+  label: string;
+  verified: boolean;
+  needsReinstall: boolean;
+  lastError: string | null;
+  lastErrorAt: string | null;
+}
+
+interface ParakeetStatus {
+  runtimeInstalled: boolean;
+  pythonPath: string;
+  scriptPath: string;
+  cacheDir: string;
+  cacheExists: boolean;
+  serverState: 'idle' | 'warming' | 'ready';
+  activeEngine: 'parakeet' | 'parakeet-multilingual' | null;
+  engines: ParakeetEngineStatus[];
+}
+
 /**
  * The transcription API exposed by the preload script.
  */
@@ -262,10 +282,11 @@ interface TranscribeAPI {
   isQwenInstalled?: () => Promise<boolean>;
   isMlxWhisperInstalled?: () => Promise<boolean>;
   isParakeetInstalled?: () => Promise<boolean>;
+  getParakeetStatus?: () => Promise<ParakeetStatus | null>;
   isAppleSilicon?: () => Promise<boolean>;
   setupQwen?: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet?: () => Promise<{ success: boolean; error?: string }>;
+  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
   uninstallParakeet?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
@@ -1376,6 +1397,8 @@ interface LibrarianAPI {
   writeConfigFile: (filePath: string, content: string) => Promise<boolean>;
   getAutoShowEnabled: () => Promise<boolean>;
   setAutoShowEnabled: (enabled: boolean) => Promise<void>;
+  getAutoShowStealsFocus: () => Promise<boolean>;
+  setAutoShowStealsFocus: (enabled: boolean) => Promise<void>;
   getResumeAfterClose: () => Promise<boolean>;
   setResumeAfterClose: (enabled: boolean) => Promise<void>;
   getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;
@@ -1689,6 +1712,7 @@ declare global {
    */
   interface SquaresConfig {
     enabled: boolean;
+    showInCommandLauncher: boolean;
     gapSize: number;
     maxHistorySize: number;
     focusHeightPercent: number;
@@ -1743,7 +1767,7 @@ declare global {
    */
   interface SquaresAPI {
     // Execute a layout action (e.g., leftHalf, grid, focus)
-    executeAction: (action: SquaresAction) => Promise<boolean>;
+    executeAction: (action: SquaresAction, source?: 'default' | 'command-launcher') => Promise<boolean>;
 
     // Window and screen discovery
     getWindows: () => Promise<SquaresWindowInfo[]>;

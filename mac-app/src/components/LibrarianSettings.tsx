@@ -8,6 +8,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
 
 interface LibrarianSettingsProps {
   librarianEnabled?: boolean;
@@ -64,6 +65,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Auto-show on new reading
   const [autoShowEnabled, setAutoShowEnabled] = useState(true);
+  const [autoShowStealsFocus, setAutoShowStealsFocus] = useState(true);
 
   // Resume after close (return to last artifact vs clipboard)
   const [resumeAfterClose, setResumeAfterClose] = useState(false);
@@ -120,6 +122,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getReadings(),
       window.librarianAPI.isEnabled(),
       window.librarianAPI.getAutoShowEnabled(),
+      window.librarianAPI.getAutoShowStealsFocus(),
       window.librarianAPI.getClaudeCodeStatus(),
       // State-enforced mode settings
       window.librarianAPI.getStateEnforcedThreshold(),
@@ -132,7 +135,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       // Mute status
       window.librarianAPI.isMutedForToday(),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, mutedStatus]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, mutedStatus]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -141,6 +144,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           onLibrarianEnabledChange?.(isEnabled);
         }
         setAutoShowEnabled(autoShow);
+        setAutoShowStealsFocus(autoShowFocus);
         setClaudeCodeStatus(ccStatus as 'installed' | 'directory-only' | 'not-installed');
         // State-enforced mode settings
         setStateEnforcedThreshold(seThreshold);
@@ -332,6 +336,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     setAutoShowEnabled(newValue);
     await window.librarianAPI.setAutoShowEnabled(newValue);
   }, [autoShowEnabled]);
+
+  const handleAutoShowStealsFocusToggle = useCallback(async () => {
+    if (!window.librarianAPI) return;
+    const newValue = !autoShowStealsFocus;
+    setAutoShowStealsFocus(newValue);
+    await window.librarianAPI.setAutoShowStealsFocus(newValue);
+  }, [autoShowStealsFocus]);
 
   // Handle showing Cursor instructions
   const handleShowCursorInstructions = useCallback(async () => {
@@ -665,9 +676,21 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
                 {codexHookInstalling ? '...' : codexHookInstalled ? 'Disconnect' : 'Connect'}
               </button>
             </div>
+            <div
+              style={{
+                marginTop: '-2px',
+                padding: '0 2px 0 12px',
+                fontSize: '10px',
+                lineHeight: 1.4,
+                color: theme.textSecondary,
+              }}
+            >
+              Connect once and Field Theory will configure Codex hooks automatically.
+            </div>
           </div>
         </div>
 
+        <SettingsDisabledBlock disabled={!enabled}>
         {/* Auto-open on new artifact */}
         <label
           style={{
@@ -683,7 +706,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               Auto-open on new artifact
             </span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Bring Field Theory to foreground when a new artifact appears
+              Open the Librarian window when a new artifact appears
             </span>
           </div>
           <input
@@ -691,6 +714,33 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             checked={autoShowEnabled}
             onChange={handleAutoShowToggle}
             style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+          />
+        </label>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 0',
+            cursor: autoShowEnabled ? 'pointer' : 'not-allowed',
+            opacity: autoShowEnabled ? 1 : 0.6,
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+              Steal focus when auto-opening
+            </span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Bring Field Theory to the foreground instead of leaving focus in your current app
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            checked={autoShowStealsFocus}
+            disabled={!autoShowEnabled}
+            onChange={handleAutoShowStealsFocusToggle}
+            style={{ width: '18px', height: '18px', cursor: autoShowEnabled ? 'pointer' : 'not-allowed' }}
           />
         </label>
 
@@ -911,6 +961,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
               </div>
             )}
+        </SettingsDisabledBlock>
 
         {claudeConfigError && (
           <p style={{ fontSize: '11px', color: theme.error, marginTop: '12px' }}>

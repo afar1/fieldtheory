@@ -3,7 +3,11 @@ import { useTheme, Theme } from '../contexts/ThemeContext';
 import {
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
   PARAKEET_VISIBLE_ENGINE_OPTIONS,
+  getVisibleParakeetEngineStatus,
+  hasVisibleParakeetRuntime,
+  isVisibleParakeetEngineVerified,
   normalizeVisibleTranscriptionEngine,
+  type VisibleParakeetEngine,
   type VisibleTranscriptionEngine,
 } from '../utils/transcriptionEngines';
 
@@ -54,7 +58,9 @@ export default function TranscriptionSettings() {
   // Engine selection state.
   const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
   const [parakeetInstalled, setParakeetInstalled] = useState(false);
+  const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
+  const [settingUpParakeetEngine, setSettingUpParakeetEngine] = useState<VisibleParakeetEngine | null>(null);
   const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
   const [uninstallingParakeet, setUninstallingParakeet] = useState(false);
 
@@ -68,6 +74,14 @@ export default function TranscriptionSettings() {
   const mockMode = import.meta.env.VITE_MOCK as string | undefined;
 
   const styles = getStyles(theme);
+
+  const refreshParakeetStatus = useCallback(async () => {
+    if (!window.transcribeAPI) return null;
+    const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
+    setParakeetStatus(status);
+    setParakeetInstalled(hasVisibleParakeetRuntime(status));
+    return status;
+  }, []);
 
   useEffect(() => {
     if (!isMacOS || !window.transcribeAPI) {
@@ -115,8 +129,12 @@ export default function TranscriptionSettings() {
         setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
 
         // Check Parakeet installation status.
-        const parakeetInstalled = mockMode === 'whisper-nudge' ? false : (await window.transcribeAPI!.isParakeetInstalled?.() ?? false);
-        setParakeetInstalled(parakeetInstalled);
+        if (mockMode === 'whisper-nudge') {
+          setParakeetStatus(null);
+          setParakeetInstalled(false);
+        } else {
+          await refreshParakeetStatus();
+        }
       } catch (err) {
         console.error('Failed to fetch transcription status:', err);
       }
@@ -160,7 +178,7 @@ export default function TranscriptionSettings() {
       unsubscribeProgress();
       unsubscribeHotkey();
     };
-  }, [isMacOS, downloadingModel]);
+  }, [isMacOS, downloadingModel, mockMode, refreshParakeetStatus]);
 
   const handleDownloadModelForSize = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || downloadingModel) return;
@@ -221,23 +239,26 @@ export default function TranscriptionSettings() {
     }
   }, []);
 
-  const handleSetupParakeet = useCallback(async () => {
+  const handleSetupParakeet = useCallback(async (engine: VisibleParakeetEngine) => {
     if (!window.transcribeAPI || settingUpParakeet) return;
     setSettingUpParakeet(true);
+    setSettingUpParakeetEngine(engine);
     setParakeetSetupError(null);
     try {
-      const result = await window.transcribeAPI.setupParakeet?.();
+      const result = await window.transcribeAPI.setupParakeet?.(engine);
       if (result?.success) {
-        setParakeetInstalled(true);
+        await refreshParakeetStatus();
       } else {
         setParakeetSetupError(result?.error ?? 'Setup failed');
+        await refreshParakeetStatus();
       }
     } catch (err) {
       setParakeetSetupError(err instanceof Error ? err.message : 'Setup failed');
     } finally {
       setSettingUpParakeet(false);
+      setSettingUpParakeetEngine(null);
     }
-  }, [settingUpParakeet]);
+  }, [refreshParakeetStatus, settingUpParakeet]);
 
   const handleUninstallParakeet = useCallback(async () => {
     if (!window.transcribeAPI || uninstallingParakeet) return;
@@ -246,7 +267,7 @@ export default function TranscriptionSettings() {
     try {
       const result = await window.transcribeAPI.uninstallParakeet?.();
       if (result?.success) {
-        setParakeetInstalled(false);
+        await refreshParakeetStatus();
         // Engine will have been reverted to whisper by the backend
         const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
         setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
@@ -258,7 +279,15 @@ export default function TranscriptionSettings() {
     } finally {
       setUninstallingParakeet(false);
     }
-  }, [uninstallingParakeet]);
+  }, [refreshParakeetStatus, uninstallingParakeet]);
+
+  const getParakeetEngineStatus = useCallback((engine: VisibleParakeetEngine) => {
+    return getVisibleParakeetEngineStatus(parakeetStatus, engine);
+  }, [parakeetStatus]);
+
+  const selectedParakeetEngineStatus = selectedEngine === 'whisper'
+    ? null
+    : getParakeetEngineStatus(selectedEngine);
 
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
@@ -635,6 +664,14 @@ export default function TranscriptionSettings() {
         <div style={styles.modelsList}>
           {PARAKEET_VISIBLE_ENGINE_OPTIONS.map((engineOption) => {
             const isActive = selectedEngine === engineOption.id;
+            const engineStatus = getParakeetEngineStatus(engineOption.id);
+            const engineVerified = isVisibleParakeetEngineVerified(parakeetStatus, engineOption.id);
+            const engineNeedsReinstall = engineStatus?.needsReinstall ?? false;
+              const actionLabel = engineNeedsReinstall
+                ? 'Reinstall'
+              : hasVisibleParakeetRuntime(parakeetStatus)
+                ? 'Verify'
+                : 'Install';
             return (
               <div
                 key={engineOption.id}
@@ -646,9 +683,9 @@ export default function TranscriptionSettings() {
                   backgroundColor: isActive
                     ? (theme.isDark ? 'rgba(59, 130, 246, 0.15)' : '#f0f9ff')
                     : 'transparent',
-                  cursor: parakeetInstalled ? 'pointer' : 'default',
+                  cursor: engineVerified ? 'pointer' : 'default',
                 }}
-                onClick={() => parakeetInstalled && handleEngineChange(engineOption.id)}
+                onClick={() => engineVerified && handleEngineChange(engineOption.id)}
               >
                 <div style={styles.modelCardContent}>
                   <div style={styles.modelCardHeader}>
@@ -665,26 +702,52 @@ export default function TranscriptionSettings() {
                   <span style={styles.modelHint}>{engineOption.description}</span>
                 </div>
                 <div style={styles.rowControls}>
-                  {parakeetInstalled ? (
+                  {engineNeedsReinstall ? (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleSetupParakeet(engineOption.id); }}
+                      style={styles.btn}
+                    >
+                      {settingUpParakeet && settingUpParakeetEngine === engineOption.id ? 'Reinstalling...' : actionLabel}
+                    </button>
+                  ) : engineVerified ? (
                     isActive ? (
                       <span style={styles.downloadedBadge}>Active</span>
                     ) : (
-                      <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Installed</span>
+                      <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Ready</span>
                     )
-                  ) : settingUpParakeet ? (
+                  ) : settingUpParakeet && settingUpParakeetEngine === engineOption.id ? (
                     <span style={{ fontSize: '11px', color: theme.warning }}>Installing...</span>
                   ) : (
                     <button
-                      onClick={(e) => { e.stopPropagation(); handleSetupParakeet(); }}
+                      onClick={(e) => { e.stopPropagation(); handleSetupParakeet(engineOption.id); }}
                       style={styles.btn}
                     >
-                      Install
+                      {actionLabel}
                     </button>
                   )}
                 </div>
               </div>
             );
           })}
+          {selectedParakeetEngineStatus?.needsReinstall && selectedParakeetEngineStatus.lastError && (
+            <div
+              style={{
+                padding: '10px 12px',
+                borderRadius: '6px',
+                border: `1px solid ${theme.isDark ? 'rgba(239, 68, 68, 0.35)' : '#fecaca'}`,
+                backgroundColor: theme.isDark ? 'rgba(239, 68, 68, 0.08)' : '#fef2f2',
+                marginBottom: '4px',
+              }}
+            >
+              <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
+                {selectedParakeetEngineStatus.label} needs to be reinstalled
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
+                {selectedParakeetEngineStatus.lastError}
+                {' '}Remove Parakeet and downloaded models below, then install it again.
+              </div>
+            </div>
+          )}
           {parakeetSetupError && (
             <div style={{ fontSize: '11px', color: theme.error, marginTop: '4px', padding: '0 4px' }}>
               {parakeetSetupError}
@@ -754,7 +817,7 @@ export default function TranscriptionSettings() {
                   opacity: uninstallingParakeet ? 0.5 : 1,
                 }}
               >
-                {uninstallingParakeet ? 'Uninstalling...' : 'Uninstall Parakeet'}
+                {uninstallingParakeet ? 'Removing...' : 'Remove Parakeet & downloaded models'}
               </button>
             </div>
           )}

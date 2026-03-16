@@ -1,6 +1,7 @@
 import { CSSProperties, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { summarizeGazeTrackingHealth } from '../lib/gazeTrackingDiagnostics';
+import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
 
 const PREVIEW_STORAGE_KEY = 'fieldTheoryVisionPreviewEnabled';
 type GazeAPI = NonNullable<Window['gazeAPI']>;
@@ -322,216 +323,218 @@ export default function VisionSettings() {
           </div>
         )}
 
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.label(theme)}>Calibration</span>
-            <span style={styles.hint(theme)}>
-              {calibrationAgeLabel}
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <button
-              onClick={onStartCalibration}
-              disabled={busy}
-              style={styles.button(theme)}
-            >
-              {calibration?.active ? 'Restart' : 'Recalibrate now'}
-            </button>
-            {calibration?.active && (
-              <button
-                onClick={onCancelCalibration}
-                disabled={busy}
-                style={styles.ghostButton(theme)}
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.label(theme)}>Vision Preview</span>
-            <span style={styles.hint(theme)}>
-              Structured particle grid that follows calibrated gaze.
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            {previewEnabled && (
-              <button
-                onClick={() => setManualAdjustEnabled((prev) => !prev)}
-                style={manualAdjustEnabled ? styles.button(theme) : styles.ghostButton(theme)}
-              >
-                {manualAdjustEnabled ? 'Drag Adjust On' : 'Enable Drag Adjust'}
-              </button>
-            )}
-            <button
-              onClick={() => setPreviewEnabled((prev) => !prev)}
-              style={{ ...styles.toggle, backgroundColor: previewEnabled ? theme.accent : '#cbd5e1' }}
-            >
-              <span style={{ ...styles.toggleKnob, transform: previewEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-            </button>
-          </div>
-        </div>
-
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.label(theme)}>Debug Overlay Window</span>
-            <span style={styles.hint(theme)}>
-              Floating mirrored camera panel with live landmarks and gaze telemetry.
-            </span>
-          </div>
-          <button
-            onClick={onToggleDebugOverlay}
-            disabled={busy}
-            style={{ ...styles.toggle, backgroundColor: debugOverlayState?.enabled ? theme.accent : '#cbd5e1' }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: debugOverlayState?.enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.label(theme)}>Screen Gaze Overlay</span>
-            <span style={styles.hint(theme)}>
-              Transparent full-screen pink crosshair at mapped gaze point.
-            </span>
-          </div>
-          <button
-            onClick={onToggleScreenOverlay}
-            disabled={busy}
-            style={{ ...styles.toggle, backgroundColor: screenOverlayState?.enabled ? theme.accent : '#cbd5e1' }}
-          >
-            <span style={{ ...styles.toggleKnob, transform: screenOverlayState?.enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-          </button>
-        </div>
-
-        <div style={styles.healthCard(theme, trackingHealth.level)}>
-          <div style={styles.healthHeader}>
-            <span style={styles.label(theme)}>Tracking Health</span>
-            <span style={styles.healthBadge(theme, trackingHealth.level)}>{trackingHealth.level.toUpperCase()}</span>
-          </div>
-          <div style={styles.hint(theme)}>{trackingHealth.headline}</div>
-          <div style={styles.healthMetrics}>
-            <span style={styles.metric(theme)}>Age {formatSampleAge(trackingHealth.sampleAgeMs)}</span>
-            <span style={styles.metric(theme)}>FPS {formatRate(trackingHealth.sampleRateHz)}</span>
-            <span style={styles.metric(theme)}>Conf {formatConfidence(trackingHealth.averageConfidence)}</span>
-            <span style={styles.metric(theme)}>Landmarks {formatPercent(trackingHealth.landmarkRate)}</span>
-            <span style={styles.metric(theme)}>Mapped {trackingHealth.mappedPointAvailable ? 'yes' : 'no'}</span>
-          </div>
-          {trackingHealth.reasons.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-              {trackingHealth.reasons.slice(0, 3).map((reason) => (
-                <span key={reason} style={styles.hint(theme)}>{reason}</span>
-              ))}
+        <SettingsDisabledBlock disabled={!status?.enabled}>
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={styles.label(theme)}>Calibration</span>
+              <span style={styles.hint(theme)}>
+                {calibrationAgeLabel}
+              </span>
             </div>
-          )}
-        </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <button
+                onClick={onStartCalibration}
+                disabled={busy}
+                style={styles.button(theme)}
+              >
+                {calibration?.active ? 'Restart' : 'Recalibrate now'}
+              </button>
+              {calibration?.active && (
+                <button
+                  onClick={onCancelCalibration}
+                  disabled={busy}
+                  style={styles.ghostButton(theme)}
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          </div>
 
-        <div style={styles.sliderGroup}>
-          <span style={styles.label(theme)}>Dwell Duration</span>
-          <div style={styles.sliderWrap}>
-            <input
-              type="range"
-              min={200}
-              max={2000}
-              step={50}
-              value={focusConfig?.dwellDurationMs ?? 400}
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={styles.label(theme)}>Vision Preview</span>
+              <span style={styles.hint(theme)}>
+                Structured particle grid that follows calibrated gaze.
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {previewEnabled && (
+                <button
+                  onClick={() => setManualAdjustEnabled((prev) => !prev)}
+                  style={manualAdjustEnabled ? styles.button(theme) : styles.ghostButton(theme)}
+                >
+                  {manualAdjustEnabled ? 'Drag Adjust On' : 'Enable Drag Adjust'}
+                </button>
+              )}
+              <button
+                onClick={() => setPreviewEnabled((prev) => !prev)}
+                style={{ ...styles.toggle, backgroundColor: previewEnabled ? theme.accent : '#cbd5e1' }}
+              >
+                <span style={{ ...styles.toggleKnob, transform: previewEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+              </button>
+            </div>
+          </div>
+
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={styles.label(theme)}>Debug Overlay Window</span>
+              <span style={styles.hint(theme)}>
+                Floating mirrored camera panel with live landmarks and gaze telemetry.
+              </span>
+            </div>
+            <button
+              onClick={onToggleDebugOverlay}
+              disabled={busy}
+              style={{ ...styles.toggle, backgroundColor: debugOverlayState?.enabled ? theme.accent : '#cbd5e1' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: debugOverlayState?.enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={styles.label(theme)}>Screen Gaze Overlay</span>
+              <span style={styles.hint(theme)}>
+                Transparent full-screen pink crosshair at mapped gaze point.
+              </span>
+            </div>
+            <button
+              onClick={onToggleScreenOverlay}
+              disabled={busy}
+              style={{ ...styles.toggle, backgroundColor: screenOverlayState?.enabled ? theme.accent : '#cbd5e1' }}
+            >
+              <span style={{ ...styles.toggleKnob, transform: screenOverlayState?.enabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            </button>
+          </div>
+
+          <div style={styles.healthCard(theme, trackingHealth.level)}>
+            <div style={styles.healthHeader}>
+              <span style={styles.label(theme)}>Tracking Health</span>
+              <span style={styles.healthBadge(theme, trackingHealth.level)}>{trackingHealth.level.toUpperCase()}</span>
+            </div>
+            <div style={styles.hint(theme)}>{trackingHealth.headline}</div>
+            <div style={styles.healthMetrics}>
+              <span style={styles.metric(theme)}>Age {formatSampleAge(trackingHealth.sampleAgeMs)}</span>
+              <span style={styles.metric(theme)}>FPS {formatRate(trackingHealth.sampleRateHz)}</span>
+              <span style={styles.metric(theme)}>Conf {formatConfidence(trackingHealth.averageConfidence)}</span>
+              <span style={styles.metric(theme)}>Landmarks {formatPercent(trackingHealth.landmarkRate)}</span>
+              <span style={styles.metric(theme)}>Mapped {trackingHealth.mappedPointAvailable ? 'yes' : 'no'}</span>
+            </div>
+            {trackingHealth.reasons.length > 0 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                {trackingHealth.reasons.slice(0, 3).map((reason) => (
+                  <span key={reason} style={styles.hint(theme)}>{reason}</span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={styles.sliderGroup}>
+            <span style={styles.label(theme)}>Dwell Duration</span>
+            <div style={styles.sliderWrap}>
+              <input
+                type="range"
+                min={200}
+                max={2000}
+                step={50}
+                value={focusConfig?.dwellDurationMs ?? 400}
+                disabled={focusControlsDisabled}
+                onChange={(event) => {
+                  void onUpdateFocusConfig({ dwellDurationMs: Number(event.currentTarget.value) });
+                }}
+                style={styles.slider}
+              />
+              <span style={styles.metric(theme)}>{focusConfig?.dwellDurationMs ?? 400}ms</span>
+            </div>
+          </div>
+
+          <div style={styles.sliderGroup}>
+            <span style={styles.label(theme)}>Confidence Threshold</span>
+            <div style={styles.sliderWrap}>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={focusConfig?.confidenceThreshold ?? 0.6}
+                disabled={focusControlsDisabled}
+                onChange={(event) => {
+                  void onUpdateFocusConfig({ confidenceThreshold: Number(event.currentTarget.value) });
+                }}
+                style={styles.slider}
+              />
+              <span style={styles.metric(theme)}>
+                {Math.round((focusConfig?.confidenceThreshold ?? 0.6) * 100)}%
+              </span>
+            </div>
+          </div>
+
+          <div style={styles.sliderGroup}>
+            <span style={styles.label(theme)}>Dead Zone</span>
+            <div style={styles.sliderWrap}>
+              <input
+                type="range"
+                min={40}
+                max={200}
+                step={5}
+                value={focusConfig?.deadZonePx ?? 80}
+                disabled={focusControlsDisabled}
+                onChange={(event) => {
+                  void onUpdateFocusConfig({ deadZonePx: Number(event.currentTarget.value) });
+                }}
+                style={styles.slider}
+              />
+              <span style={styles.metric(theme)}>{focusConfig?.deadZonePx ?? 80}px</span>
+            </div>
+          </div>
+
+          <div style={styles.row}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <span style={styles.label(theme)}>Dwell Action</span>
+              <span style={styles.hint(theme)}>
+                Event feed, border highlight signal, or bring target window to front.
+              </span>
+            </div>
+            <select
+              value={focusConfig?.dwellAction ?? 'eventOnly'}
               disabled={focusControlsDisabled}
               onChange={(event) => {
-                void onUpdateFocusConfig({ dwellDurationMs: Number(event.currentTarget.value) });
+                void onUpdateFocusConfig({
+                  dwellAction: event.currentTarget.value as GazeWindowFocusConfig['dwellAction'],
+                });
               }}
-              style={styles.slider}
-            />
-            <span style={styles.metric(theme)}>{focusConfig?.dwellDurationMs ?? 400}ms</span>
+              style={styles.select(theme)}
+            >
+              <option value="eventOnly">Event only</option>
+              <option value="highlightBorder">Highlight border</option>
+              <option value="bringToFront">Bring to front</option>
+            </select>
           </div>
-        </div>
 
-        <div style={styles.sliderGroup}>
-          <span style={styles.label(theme)}>Confidence Threshold</span>
-          <div style={styles.sliderWrap}>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={focusConfig?.confidenceThreshold ?? 0.6}
-              disabled={focusControlsDisabled}
-              onChange={(event) => {
-                void onUpdateFocusConfig({ confidenceThreshold: Number(event.currentTarget.value) });
-              }}
-              style={styles.slider}
-            />
-            <span style={styles.metric(theme)}>
-              {Math.round((focusConfig?.confidenceThreshold ?? 0.6) * 100)}%
-            </span>
+          <div style={styles.hint(theme)}>
+            Last dwell: {lastDwellEvent
+              ? `${lastDwellEvent.window.ownerName} (${lastDwellEvent.window.title || 'untitled'})`
+              : 'No dwell events yet'}
           </div>
-        </div>
 
-        <div style={styles.sliderGroup}>
-          <span style={styles.label(theme)}>Dead Zone</span>
-          <div style={styles.sliderWrap}>
-            <input
-              type="range"
-              min={40}
-              max={200}
-              step={5}
-              value={focusConfig?.deadZonePx ?? 80}
-              disabled={focusControlsDisabled}
-              onChange={(event) => {
-                void onUpdateFocusConfig({ deadZonePx: Number(event.currentTarget.value) });
-              }}
-              style={styles.slider}
-            />
-            <span style={styles.metric(theme)}>{focusConfig?.deadZonePx ?? 80}px</span>
-          </div>
-        </div>
-
-        <div style={styles.row}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.label(theme)}>Dwell Action</span>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
             <span style={styles.hint(theme)}>
-              Event feed, border highlight signal, or bring target window to front.
+              {calibration?.accuracy?.message || 'Run calibration to estimate precision.'}
             </span>
+            <button
+              onClick={onResetData}
+              disabled={busy}
+              style={styles.resetButton(theme)}
+            >
+              Reset all eye tracking data
+            </button>
           </div>
-          <select
-            value={focusConfig?.dwellAction ?? 'eventOnly'}
-            disabled={focusControlsDisabled}
-            onChange={(event) => {
-              void onUpdateFocusConfig({
-                dwellAction: event.currentTarget.value as GazeWindowFocusConfig['dwellAction'],
-              });
-            }}
-            style={styles.select(theme)}
-          >
-            <option value="eventOnly">Event only</option>
-            <option value="highlightBorder">Highlight border</option>
-            <option value="bringToFront">Bring to front</option>
-          </select>
-        </div>
 
-        <div style={styles.hint(theme)}>
-          Last dwell: {lastDwellEvent
-            ? `${lastDwellEvent.window.ownerName} (${lastDwellEvent.window.title || 'untitled'})`
-            : 'No dwell events yet'}
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
-          <span style={styles.hint(theme)}>
-            {calibration?.accuracy?.message || 'Run calibration to estimate precision.'}
-          </span>
-          <button
-            onClick={onResetData}
-            disabled={busy}
-            style={styles.resetButton(theme)}
-          >
-            Reset all eye tracking data
-          </button>
-        </div>
-
-        <div style={styles.hint(theme)}>
-          Manual refinements this session: {calibration?.manualCorrectionCount ?? 0}
-        </div>
+          <div style={styles.hint(theme)}>
+            Manual refinements this session: {calibration?.manualCorrectionCount ?? 0}
+          </div>
+        </SettingsDisabledBlock>
       </div>
 
       {calibration?.needsRecalibrationPrompt && (

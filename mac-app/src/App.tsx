@@ -10,18 +10,6 @@ export default function App() {
     const saved = localStorage.getItem('darkMode');
     return saved === 'true';
   });
-
-  // Shared Librarian counter from ~/.fieldtheory/librarian/state.json
-  const [librarianStatus, setLibrarianStatus] = useState<{ edits: number; threshold: number; frequency: string } | null>(null);
-  useEffect(() => {
-    const fetchStatus = async () => {
-      const status = await window.librarianAPI?.getEditStatus();
-      setLibrarianStatus(status ?? null);
-    };
-    fetchStatus();
-    const interval = setInterval(fetchStatus, 2000); // Poll every 2 seconds
-    return () => clearInterval(interval);
-  }, []);
   
   // Permissions state
   const [permissions, setPermissions] = useState<{ accessibilityGranted: boolean } | null>(null);
@@ -742,19 +730,6 @@ export default function App() {
           </button>
         </div>
 
-        {librarianStatus && (
-          <div
-            title={`Librarian counter (${librarianStatus.frequency})`}
-            style={{
-              ...styles.footerStatus,
-              color: librarianStatus.edits >= librarianStatus.threshold ? '#f59e0b' : (darkMode ? '#9ca3af' : '#6b7280'),
-              backgroundColor: darkMode ? 'rgba(17, 24, 39, 0.9)' : 'rgba(255, 255, 255, 0.92)',
-              borderColor: darkMode ? 'rgba(75, 85, 99, 0.75)' : 'rgba(229, 231, 235, 0.95)',
-            }}
-          >
-            Librarian {librarianStatus.edits}/{librarianStatus.threshold}
-          </div>
-        )}
       </div>
     </>
   );

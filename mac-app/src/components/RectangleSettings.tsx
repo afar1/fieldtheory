@@ -4,15 +4,19 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import { normalizeSquaresConfig, type NormalizedSquaresConfig } from '../utils/squaresConfig';
+import {
+  SettingsDisabledBlock,
+  SettingsDivider,
+  SettingsRow,
+  SettingsSectionHeading,
+  SettingsToggle,
+} from './settings/SettingsPrimitives';
 
-interface HeightConfig {
-  focusHeightPercent: number;
-  focusKeepHeight: boolean;
-  focusWidthPercent: number;
-  horizontalHeightPercent: number;
-  horizontalKeepHeight: boolean;
-  horizontalHideOthers: boolean;
-}
+type HeightConfig = Pick<
+  NormalizedSquaresConfig,
+  'focusHeightPercent' | 'focusKeepHeight' | 'focusWidthPercent' | 'horizontalHeightPercent' | 'horizontalKeepHeight' | 'horizontalHideOthers'
+>;
 
 type ActionMeta = { label: string; description: string };
 
@@ -62,6 +66,8 @@ export default function RectangleSettings() {
   const { theme } = useTheme();
   const [commands, setCommands] = useState<Record<string, string>>({});
   const [editValues, setEditValues] = useState<Record<string, string>>({});
+  const [squaresEnabled, setSquaresEnabled] = useState(true);
+  const [showInCommandLauncher, setShowInCommandLauncher] = useState(true);
   const [heightConfig, setHeightConfig] = useState<HeightConfig>({
     focusHeightPercent: 80,
     focusKeepHeight: false,
@@ -82,17 +88,22 @@ export default function RectangleSettings() {
 
   useEffect(() => {
     if (!window.squaresAPI) return;
-    window.squaresAPI.getConfig().then((config) => {
-      if (!config) return;
+    const applyConfig = (config: Partial<NormalizedSquaresConfig>) => {
+      const nextConfig = normalizeSquaresConfig(config);
+      setSquaresEnabled(nextConfig.enabled);
+      setShowInCommandLauncher(nextConfig.showInCommandLauncher);
       setHeightConfig({
-        focusHeightPercent: config.focusHeightPercent ?? 80,
-        focusKeepHeight: config.focusKeepHeight ?? false,
-        focusWidthPercent: config.focusWidthPercent ?? 60,
-        horizontalHeightPercent: config.horizontalHeightPercent ?? 80,
-        horizontalKeepHeight: config.horizontalKeepHeight ?? true,
-        horizontalHideOthers: config.horizontalHideOthers ?? true,
+        focusHeightPercent: nextConfig.focusHeightPercent,
+        focusKeepHeight: nextConfig.focusKeepHeight,
+        focusWidthPercent: nextConfig.focusWidthPercent,
+        horizontalHeightPercent: nextConfig.horizontalHeightPercent,
+        horizontalKeepHeight: nextConfig.horizontalKeepHeight,
+        horizontalHideOthers: nextConfig.horizontalHideOthers,
       });
-    });
+    };
+
+    window.squaresAPI.getConfig().then(applyConfig);
+    return window.squaresAPI.onConfigChanged(applyConfig);
   }, []);
 
   const saveHeightConfig = useCallback(async (updates: Partial<HeightConfig>) => {
@@ -137,147 +148,198 @@ export default function RectangleSettings() {
 
   return (
     <div style={styles.container}>
-      {/* Window Height Settings */}
-      <div style={styles.group}>
-        <h3 style={styles.groupTitle}>Window Height</h3>
-        <p style={styles.headerDescription}>
-          Control the size of windows when using Focus and Horizontal actions.
-        </p>
+      <SettingsSectionHeading
+        theme={theme}
+        title="Window Management"
+        description="Turn spoken window actions on or off. Portable command visibility can stay on separately."
+      />
 
-        {/* Focus */}
-        <div style={{ padding: '4px 0' }}>
-          <div style={styles.actionHeader}>
-            <span style={styles.actionLabel}>Focus</span>
-          </div>
-          <p style={styles.description}>Size of the focused window</p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={heightConfig.focusKeepHeight}
-                onChange={(e) => saveHeightConfig({ focusKeepHeight: e.target.checked })}
-                style={{ accentColor: theme.accent }}
-              />
-              <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
-            </label>
-            {!heightConfig.focusKeepHeight && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>Height</span>
-                <input
-                  type="number"
-                  min={30}
-                  max={100}
-                  step={5}
-                  value={heightConfig.focusHeightPercent}
-                  onChange={(e) => updateLocalConfig({ focusHeightPercent: Number(e.target.value) })}
-                  onBlur={() => commitNumericField('focusHeightPercent', 30, 100)}
-                  style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
-                />
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
-              </label>
-            )}
-            <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>Width</span>
-              <input
-                type="number"
-                min={30}
-                max={100}
-                step={5}
-                value={heightConfig.focusWidthPercent}
-                onChange={(e) => updateLocalConfig({ focusWidthPercent: Number(e.target.value) })}
-                onBlur={() => commitNumericField('focusWidthPercent', 30, 100)}
-                style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
-              />
-              <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
-            </label>
-          </div>
-        </div>
+      <SettingsRow
+        theme={theme}
+        label="Enable window management"
+        hint="When off, Field Theory will stop moving and arranging windows until you turn it back on."
+        control={(
+          <SettingsToggle
+            theme={theme}
+            checked={squaresEnabled}
+            onClick={() => {
+              const nextEnabled = !squaresEnabled;
+              setSquaresEnabled(nextEnabled);
+              window.squaresAPI?.setConfig({ enabled: nextEnabled });
+            }}
+          />
+        )}
+      />
 
-        <div style={styles.divider} />
+      <SettingsDivider theme={theme} />
 
-        {/* Horizontal height */}
-        <div style={{ padding: '4px 0' }}>
-          <div style={styles.actionHeader}>
-            <span style={styles.actionLabel}>Horizontal</span>
-          </div>
-          <p style={styles.description}>Height of windows when spread horizontally</p>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={heightConfig.horizontalHideOthers}
-                onChange={(e) => saveHeightConfig({ horizontalHideOthers: e.target.checked })}
-                style={{ accentColor: theme.accent }}
-              />
-              <span style={{ fontSize: '12px', color: theme.text }}>Hide other windows</span>
-            </label>
-            <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={heightConfig.horizontalKeepHeight}
-                onChange={(e) => saveHeightConfig({ horizontalKeepHeight: e.target.checked })}
-                style={{ accentColor: theme.accent }}
-              />
-              <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
-            </label>
-            {!heightConfig.horizontalKeepHeight && (
-              <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>Height</span>
-                <input
-                  type="number"
-                  min={30}
-                  max={100}
-                  step={5}
-                  value={heightConfig.horizontalHeightPercent}
-                  onChange={(e) => updateLocalConfig({ horizontalHeightPercent: Number(e.target.value) })}
-                  onBlur={() => commitNumericField('horizontalHeightPercent', 30, 100)}
-                  style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
-                />
-                <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
-              </label>
-            )}
-          </div>
-        </div>
-      </div>
+      <SettingsSectionHeading
+        theme={theme}
+        title="Portable Commands"
+      />
+      <SettingsRow
+        theme={theme}
+        label="Show in portable commands"
+        hint="Keep window actions available in `⌘⇧K` even when the main window-management toggle is off."
+        control={(
+          <input
+            type="checkbox"
+            checked={showInCommandLauncher}
+            onChange={(e) => {
+              const next = e.target.checked;
+              setShowInCommandLauncher(next);
+              window.squaresAPI?.setConfig({ showInCommandLauncher: next });
+            }}
+            style={styles.checkbox}
+          />
+        )}
+        align="flex-start"
+      />
 
-      <div style={styles.sectionDivider} />
+      <SettingsDisabledBlock disabled={!squaresEnabled}>
+        <SettingsDivider theme={theme} />
 
-      {/* Voice Commands */}
-      <div style={styles.group}>
-        <h3 style={styles.groupTitle}>Voice Commands (Hot Mic)</h3>
-        <p style={styles.headerDescription}>
-          Voice commands trigger window management actions. Keyboard shortcuts are not configured
-          here anymore; use your normal macOS/app shortcuts if needed.
-        </p>
+        {/* Window Height Settings */}
+        <div style={styles.group}>
+          <SettingsSectionHeading
+            theme={theme}
+            title="Window Height"
+            description="Control the size of windows when using Focus and Horizontal actions."
+          />
 
-        {allVoiceActions.map((action, i) => {
-          const meta = VOICE_ACTION_META[action];
-          const label = meta?.label || action;
-          const desc = meta?.description || `Window action: ${action}`;
-
-          return (
-            <div key={action}>
-              {i > 0 && <div style={styles.divider} />}
-              <div style={{ padding: '4px 0' }}>
-                <div style={styles.actionHeader}>
-                  <span style={styles.actionLabel}>{label}</span>
-                  <span style={styles.actionName}>{action}</span>
-                </div>
-                <input
-                  type="text"
-                  value={editValues[action] ?? commands[action] ?? ''}
-                  onChange={(e) => handleVoiceChange(action, e.target.value)}
-                  placeholder={`Trigger phrases for ${action}`}
-                  style={{ ...styles.input, marginTop: '4px', width: '100%' }}
-                  onBlur={() => handleVoiceSave(action)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleVoiceSave(action)}
-                />
-              </div>
-              <p style={styles.description}>{desc}</p>
+          {/* Focus */}
+          <div style={{ padding: '4px 0' }}>
+            <div style={styles.actionHeader}>
+              <span style={styles.actionLabel}>Focus</span>
             </div>
-          );
-        })}
-      </div>
+            <p style={styles.description}>Size of the focused window</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={heightConfig.focusKeepHeight}
+                  onChange={(e) => saveHeightConfig({ focusKeepHeight: e.target.checked })}
+                  style={{ accentColor: theme.accent }}
+                />
+                <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
+              </label>
+              {!heightConfig.focusKeepHeight && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ fontSize: '12px', color: theme.textSecondary }}>Height</span>
+                  <input
+                    type="number"
+                    min={30}
+                    max={100}
+                    step={5}
+                    value={heightConfig.focusHeightPercent}
+                    onChange={(e) => updateLocalConfig({ focusHeightPercent: Number(e.target.value) })}
+                    onBlur={() => commitNumericField('focusHeightPercent', 30, 100)}
+                    style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
+                  />
+                  <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+                </label>
+              )}
+              <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>Width</span>
+                <input
+                  type="number"
+                  min={30}
+                  max={100}
+                  step={5}
+                  value={heightConfig.focusWidthPercent}
+                  onChange={(e) => updateLocalConfig({ focusWidthPercent: Number(e.target.value) })}
+                  onBlur={() => commitNumericField('focusWidthPercent', 30, 100)}
+                  style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
+                />
+                <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+              </label>
+            </div>
+          </div>
+
+          <div style={styles.divider} />
+
+          {/* Horizontal height */}
+          <div style={{ padding: '4px 0' }}>
+            <div style={styles.actionHeader}>
+              <span style={styles.actionLabel}>Horizontal</span>
+            </div>
+            <p style={styles.description}>Height of windows when spread horizontally</p>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginTop: '6px', flexWrap: 'wrap' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={heightConfig.horizontalHideOthers}
+                  onChange={(e) => saveHeightConfig({ horizontalHideOthers: e.target.checked })}
+                  style={{ accentColor: theme.accent }}
+                />
+                <span style={{ fontSize: '12px', color: theme.text }}>Hide other windows</span>
+              </label>
+              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer' }}>
+                <input
+                  type="checkbox"
+                  checked={heightConfig.horizontalKeepHeight}
+                  onChange={(e) => saveHeightConfig({ horizontalKeepHeight: e.target.checked })}
+                  style={{ accentColor: theme.accent }}
+                />
+                <span style={{ fontSize: '12px', color: theme.text }}>Keep current height</span>
+              </label>
+              {!heightConfig.horizontalKeepHeight && (
+                <label style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <span style={{ fontSize: '12px', color: theme.textSecondary }}>Height</span>
+                  <input
+                    type="number"
+                    min={30}
+                    max={100}
+                    step={5}
+                    value={heightConfig.horizontalHeightPercent}
+                    onChange={(e) => updateLocalConfig({ horizontalHeightPercent: Number(e.target.value) })}
+                    onBlur={() => commitNumericField('horizontalHeightPercent', 30, 100)}
+                    style={{ width: '48px', fontSize: '12px', padding: '2px 4px', borderRadius: '4px', border: `1px solid ${theme.border}`, backgroundColor: theme.isDark ? theme.surface1 : '#fff', color: theme.text, textAlign: 'center' }}
+                  />
+                  <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+                </label>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <SettingsDivider theme={theme} />
+
+        {/* Voice Commands */}
+        <div style={styles.group}>
+          <SettingsSectionHeading
+            theme={theme}
+            title="Voice Commands (Hot Mic)"
+            description="Voice commands trigger window management actions. Keyboard shortcuts are not configured here anymore; use your normal macOS or app shortcuts if needed."
+          />
+
+          {allVoiceActions.map((action, i) => {
+            const meta = VOICE_ACTION_META[action];
+            const label = meta?.label || action;
+            const header = meta?.description || label;
+
+            return (
+              <div key={action}>
+                {i > 0 && <div style={styles.divider} />}
+                <div style={{ padding: '4px 0' }}>
+                  <div style={styles.actionHeader}>
+                    <span style={styles.actionLabel}>{header}</span>
+                  </div>
+                  <input
+                    type="text"
+                    value={editValues[action] ?? commands[action] ?? ''}
+                    onChange={(e) => handleVoiceChange(action, e.target.value)}
+                    placeholder={`Trigger phrases for ${label}`}
+                    style={{ ...styles.input, marginTop: '4px', width: '100%' }}
+                    onBlur={() => handleVoiceSave(action)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleVoiceSave(action)}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </SettingsDisabledBlock>
     </div>
   );
 }
@@ -289,24 +351,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   group: {
     padding: 0,
   },
-  groupTitle: {
-    fontSize: '11px',
-    fontWeight: 600,
-    letterSpacing: '0.08em',
-    textTransform: 'uppercase',
-    color: theme.textSecondary,
-    margin: '0 0 8px 0',
-  },
-  sectionDivider: {
-    height: '1px',
-    backgroundColor: theme.border,
-    margin: '16px 0',
-  },
-  headerDescription: {
-    fontSize: '11px',
-    color: theme.textSecondary,
-    margin: '0 0 12px 0',
-    lineHeight: 1.4,
+  checkbox: {
+    width: '16px',
+    height: '16px',
+    marginTop: '2px',
+    flexShrink: 0,
   },
   divider: {
     height: '1px',
@@ -321,18 +370,13 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   actionLabel: {
     fontSize: '12px',
     color: theme.text,
-    fontWeight: 400,
-  },
-  actionName: {
-    fontSize: '10px',
-    color: theme.textSecondary,
-    fontFamily: 'monospace',
+    fontWeight: 600,
   },
   description: {
-    fontSize: '11px',
+    margin: '4px 0 0',
+    fontSize: '12px',
+    lineHeight: 1.45,
     color: theme.textSecondary,
-    margin: '4px 0 0 0',
-    lineHeight: 1.4,
   },
   input: {
     fontSize: '12px',

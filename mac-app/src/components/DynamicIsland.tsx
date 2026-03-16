@@ -333,7 +333,8 @@ const rightStyles: Record<string, React.CSSProperties> = {
 };
 
 // =============================================================================
-// Center filler — paints the notch gap black on non-notched primary displays
+// Center filler — keeps the island visually contiguous across notched,
+// mirrored, and external display layouts.
 // =============================================================================
 
 function GapFill() {

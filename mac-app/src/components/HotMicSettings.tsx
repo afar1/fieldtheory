@@ -5,6 +5,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
+import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
 
 type HotMicRuntimeStatus = Awaited<
   ReturnType<NonNullable<Window['hotMicAPI']>['getRuntimeStatus']>
@@ -64,7 +65,6 @@ export default function HotMicSettings() {
   const styles = getStyles(theme);
   const canEnableHotMic = whisperModelReady;
   const canToggleHotMic = enabled || canEnableHotMic;
-
   useEffect(() => {
     if (!window.hotMicAPI) return;
 
@@ -506,6 +506,7 @@ export default function HotMicSettings() {
         </button>
       </div>
 
+      <SettingsDisabledBlock disabled={!enabled}>
       <div style={styles.row}>
         <span style={styles.rowLabel}>Mode Toggle Hotkey</span>
         <div style={styles.rowControls}>
@@ -1127,6 +1128,7 @@ export default function HotMicSettings() {
           </div>
         </div>
       )}
+      </SettingsDisabledBlock>
     </div>
   );
 }

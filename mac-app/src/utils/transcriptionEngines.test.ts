@@ -3,6 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
   PARAKEET_VISIBLE_ENGINE_OPTIONS,
+  getVisibleParakeetEngineStatus,
+  hasVisibleParakeetRuntime,
+  isVisibleParakeetEngineVerified,
   normalizeVisibleTranscriptionEngine,
 } from './transcriptionEngines';
 
@@ -27,5 +30,35 @@ describe('transcriptionEngines utils', () => {
       { id: 'parakeet', recommended: true },
       { id: 'parakeet-multilingual', recommended: false },
     ]);
+  });
+
+  it('reads visible Parakeet engine status from runtime status payloads', () => {
+    const status = {
+      runtimeInstalled: true,
+      engines: [
+        {
+          engine: 'parakeet' as const,
+          verified: true,
+          needsReinstall: false,
+          lastError: null,
+        },
+        {
+          engine: 'parakeet-multilingual' as const,
+          verified: false,
+          needsReinstall: true,
+          lastError: 'startup timed out',
+        },
+      ],
+    };
+
+    expect(hasVisibleParakeetRuntime(status)).toBe(true);
+    expect(isVisibleParakeetEngineVerified(status, 'parakeet')).toBe(true);
+    expect(isVisibleParakeetEngineVerified(status, 'parakeet-multilingual')).toBe(false);
+    expect(getVisibleParakeetEngineStatus(status, 'parakeet-multilingual')).toEqual(
+      expect.objectContaining({
+        needsReinstall: true,
+        lastError: 'startup timed out',
+      })
+    );
   });
 });

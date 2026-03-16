@@ -3,7 +3,8 @@
 // =============================================================================
 
 import { useEffect, useState, useCallback } from 'react';
-import { useTheme, Theme } from '../contexts/ThemeContext';
+import { useTheme } from '../contexts/ThemeContext';
+import { SettingsDivider, SettingsRow, SettingsToggle } from './settings/SettingsPrimitives';
 
 interface SoundConfig {
   enabled: boolean;
@@ -15,9 +16,6 @@ export default function SoundsSettings() {
 
   const [librarianSoundEnabled, setLibrarianSoundEnabled] = useState(true);
   const [soundsEnabled, setSoundsEnabled] = useState(false);
-
-  const styles = getStyles(theme);
-
   useEffect(() => {
     if (!window.transcribeAPI) return;
 
@@ -61,91 +59,38 @@ export default function SoundsSettings() {
   }, []);
 
   return (
-    <div style={styles.container}>
-      {/* Librarian Sound Toggle */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Librarian Sound</span>
-        <button
-          onClick={() => handleLibrarianSoundChange(!librarianSoundEnabled)}
-          style={{ ...styles.toggle, backgroundColor: librarianSoundEnabled ? theme.success : '#d1d5db' }}
-          title={librarianSoundEnabled ? 'Librarian sound enabled' : 'Librarian sound disabled'}
-        >
-          <span style={{ ...styles.toggleKnob, transform: librarianSoundEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-        </button>
-      </div>
-      <p style={styles.description}>
-        Plays when a new Librarian reading is created.
-      </p>
+    <div style={{ padding: 0 }}>
+      <SettingsRow
+        theme={theme}
+        label="Librarian Sound"
+        hint="Plays when a new Librarian artifact is created."
+        control={(
+          <SettingsToggle
+            theme={theme}
+            checked={librarianSoundEnabled}
+            onClick={() => handleLibrarianSoundChange(!librarianSoundEnabled)}
+            activeColor={theme.success}
+            title={librarianSoundEnabled ? 'Librarian sound enabled' : 'Librarian sound disabled'}
+          />
+        )}
+      />
 
-      <div style={styles.divider} />
+      <SettingsDivider theme={theme} margin="12px 0" />
 
-      {/* Other Sounds Toggle */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Other Sounds</span>
-        <button
-          onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
-          style={{ ...styles.toggle, backgroundColor: soundsEnabled ? theme.success : '#d1d5db' }}
-          title={soundsEnabled ? 'Other sounds enabled' : 'Other sounds disabled'}
-        >
-          <span style={{ ...styles.toggleKnob, transform: soundsEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
-        </button>
-      </div>
-      <p style={styles.description}>
-        Recording, transcription, window, and paste sounds.
-      </p>
+      <SettingsRow
+        theme={theme}
+        label="Other Sounds"
+        hint="Recording, transcription, window, and paste sounds."
+        control={(
+          <SettingsToggle
+            theme={theme}
+            checked={soundsEnabled}
+            onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
+            activeColor={theme.success}
+            title={soundsEnabled ? 'Other sounds enabled' : 'Other sounds disabled'}
+          />
+        )}
+      />
     </div>
   );
 }
-
-const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
-  container: {
-    padding: 0,
-  },
-  row: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: '4px 0',
-    minHeight: '32px',
-  },
-  rowLabel: {
-    fontSize: '12px',
-    color: theme.text,
-    fontWeight: 400,
-  },
-  toggle: {
-    position: 'relative' as const,
-    width: '44px',
-    minWidth: '44px',
-    height: '24px',
-    minHeight: '24px',
-    borderRadius: '12px',
-    cursor: 'pointer',
-    border: 'none',
-    padding: 0,
-    flexShrink: 0,
-    transition: 'background-color 0.2s',
-  },
-  toggleKnob: {
-    position: 'absolute' as const,
-    top: '2px',
-    left: 0,
-    width: '20px',
-    height: '20px',
-    borderRadius: '10px',
-    backgroundColor: '#fff',
-    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
-    transition: 'transform 0.2s',
-  },
-  divider: {
-    height: '1px',
-    backgroundColor: theme.border,
-    margin: '12px 0',
-  },
-  description: {
-    fontSize: '11px',
-    color: theme.textSecondary,
-    margin: '4px 0 0 0',
-    lineHeight: 1.4,
-  },
-});

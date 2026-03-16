@@ -12,12 +12,31 @@ Usage:
 
 import argparse
 import json
+import os
 import struct
 import sys
 
 import numpy as np
 
 DEFAULT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v2"
+
+
+def configure_cache_dirs():
+    """Route Parakeet/HuggingFace caches into an app-owned location when provided."""
+    cache_root = os.environ.get("FIELD_THEORY_PARAKEET_CACHE_DIR")
+    if not cache_root:
+        return
+
+    hf_home = os.path.join(cache_root, "huggingface")
+    hub_cache = os.path.join(hf_home, "hub")
+    xdg_cache = os.path.join(cache_root, "xdg")
+
+    os.makedirs(hub_cache, exist_ok=True)
+    os.makedirs(xdg_cache, exist_ok=True)
+
+    os.environ.setdefault("HF_HOME", hf_home)
+    os.environ.setdefault("HUGGINGFACE_HUB_CACHE", hub_cache)
+    os.environ.setdefault("XDG_CACHE_HOME", xdg_cache)
 
 
 def read_wav_float32(path):
@@ -172,6 +191,8 @@ def main():
     if not args.server and not args.audio:
         parser.error("Either --audio or --server is required")
 
+    configure_cache_dirs()
+
     try:
         import onnx_asr
     except ImportError as e:
@@ -186,7 +207,11 @@ def main():
     # Force CPU provider — CoreML fails with "model_path must not be empty"
     # when loading from HuggingFace cache on macOS.
     print(f"Loading {args.model}...", file=sys.stderr)
-    model = onnx_asr.load_model(args.model, providers=["CPUExecutionProvider"])
+    try:
+        model = onnx_asr.load_model(args.model, providers=["CPUExecutionProvider"])
+    except Exception as e:
+        print(f"Failed to load {args.model}: {e}", file=sys.stderr)
+        sys.exit(1)
     print("Model loaded.", file=sys.stderr)
 
     if args.server:

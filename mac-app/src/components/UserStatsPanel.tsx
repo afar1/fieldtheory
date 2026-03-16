@@ -8,6 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { SettingsInsetGroup, SettingsSectionHeading } from './settings/SettingsPrimitives';
 
 interface UserMetrics {
   transcriptions: number;
@@ -222,105 +223,82 @@ export default function UserStatsPanel() {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-      {/* Header */}
-      <div>
-        <h3 style={{
-          margin: 0,
-          fontSize: '14px',
-          fontWeight: 600,
-          color: theme.text,
-          letterSpacing: '-0.01em'
-        }}>
-          Stats
-        </h3>
-        <p style={{
-          margin: '4px 0 0 0',
-          fontSize: '11px',
-          color: theme.textSecondary,
-          lineHeight: 1.4
-        }}>
-          These are the only metrics we aggregate. We don't track clipboard content,
-          transcription text, or anything outside this list.
-        </p>
-      </div>
+      <SettingsSectionHeading
+        theme={theme}
+        title="Stats"
+        description="These are the only metrics we aggregate. We do not track clipboard content, transcription text, or anything outside this list."
+      />
 
-      {/* Stats sections - compact layout */}
-      <div style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '2px',
-        backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-        borderRadius: '8px',
-        padding: '12px',
-        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`
-      }}>
-        {sections.map((section, sectionIndex) => (
-          <div key={section.title}>
-            {sectionIndex > 0 && (
-              <div style={{
-                height: '1px',
-                backgroundColor: theme.isDark ? theme.border : '#e5e7eb',
-                margin: '8px 0'
-              }} />
-            )}
-            <div style={{
-              fontSize: '10px',
-              fontWeight: 600,
-              color: theme.textSecondary,
-              textTransform: 'uppercase',
-              letterSpacing: '0.05em',
-              marginBottom: '4px'
-            }}>
-              {section.title}
-              {section.quotaInfo && (
-                <span style={{
-                  marginLeft: '6px',
-                  textTransform: 'none',
-                  fontWeight: section.atQuota ? 600 : (tier === 'pro' ? 500 : 400),
-                  color: section.atQuota ? theme.error : (tier === 'pro' ? theme.accent : theme.textSecondary),
-                }}>
-                  {section.atQuota ? 'Limit reached' : section.quotaInfo}
-                </span>
+      <SettingsInsetGroup theme={theme}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {sections.map((section, sectionIndex) => (
+            <div key={section.title}>
+              {sectionIndex > 0 && (
+                <div style={{
+                  height: '1px',
+                  backgroundColor: theme.isDark ? theme.border : '#e5e7eb',
+                  margin: '8px 0'
+                }} />
               )}
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-              {section.items.map((item) => (
-                <div
-                  key={item.label}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    fontSize: '12px',
-                    lineHeight: '1.4'
-                  }}
-                >
-                  <span style={{ color: theme.text }}>
-                    {item.label}
-                    {item.quotaInfo && (
-                      <span style={{
-                        marginLeft: '6px',
-                        fontSize: '10px',
-                        color: item.atQuota ? theme.error : (tier === 'pro' ? theme.accent : theme.textSecondary),
-                        fontWeight: item.atQuota ? 600 : (tier === 'pro' ? 500 : 400),
-                      }}>
-                        {item.atQuota ? 'Limit reached' : item.quotaInfo}
-                      </span>
-                    )}
-                  </span>
+              <div style={{
+                fontSize: '10px',
+                fontWeight: 600,
+                color: theme.textSecondary,
+                textTransform: 'uppercase',
+                letterSpacing: '0.05em',
+                marginBottom: '4px'
+              }}>
+                {section.title}
+                {section.quotaInfo && (
                   <span style={{
-                    color: item.atQuota ? theme.error : (item.value > 0 ? theme.accent : theme.textSecondary),
-                    fontWeight: 500,
-                    fontVariantNumeric: 'tabular-nums'
+                    marginLeft: '6px',
+                    textTransform: 'none',
+                    fontWeight: section.atQuota ? 600 : (tier === 'pro' ? 500 : 400),
+                    color: section.atQuota ? theme.error : (tier === 'pro' ? theme.accent : theme.textSecondary),
                   }}>
-                    {formatNumber(item.value)}
+                    {section.atQuota ? 'Limit reached' : section.quotaInfo}
                   </span>
-                </div>
-              ))}
+                )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                {section.items.map((item) => (
+                  <div
+                    key={item.label}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      fontSize: '12px',
+                      lineHeight: '1.4'
+                    }}
+                  >
+                    <span style={{ color: theme.text }}>
+                      {item.label}
+                      {item.quotaInfo && (
+                        <span style={{
+                          marginLeft: '6px',
+                          fontSize: '10px',
+                          color: item.atQuota ? theme.error : (tier === 'pro' ? theme.accent : theme.textSecondary),
+                          fontWeight: item.atQuota ? 600 : (tier === 'pro' ? 500 : 400),
+                        }}>
+                          {item.atQuota ? 'Limit reached' : item.quotaInfo}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{
+                      color: item.atQuota ? theme.error : (item.value > 0 ? theme.accent : theme.textSecondary),
+                      fontWeight: 500,
+                      fontVariantNumeric: 'tabular-nums'
+                    }}>
+                      {formatNumber(item.value)}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      </SettingsInsetGroup>
     </div>
   );
 }
