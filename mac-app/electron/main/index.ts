@@ -5565,6 +5565,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   nativeHelper = new NativeHelper();
   nativeHelper.start();
+  nativeHelper.warmupAudio();
 
   // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
   // NSPanel windows don't always trigger blur events on other panels, so we use

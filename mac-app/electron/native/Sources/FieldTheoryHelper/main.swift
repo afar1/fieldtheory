@@ -28,6 +28,7 @@ enum MessageType: String, Codable {
     case getDefaultInput
     case setDefaultInput
     case startMonitoring
+    case warmupAudio
     case startRecording
     case stopRecording
     case snapshotRecording
@@ -1592,6 +1593,22 @@ final class RecordingHelper {
         resetHarvestSpeechState()
     }
 
+    /// Pre-warm the CoreAudio hardware so the first real recording starts instantly.
+    /// Creates a temporary engine, starts and stops it to initialize the HAL driver,
+    /// then lets it deallocate. No tap is installed so there's no CPU work or audio capture.
+    func warmupAudio() {
+        let engine = AVAudioEngine()
+        _ = engine.inputNode
+        engine.prepare()
+        do {
+            try engine.start()
+            engine.stop()
+            sendLog(level: "info", message: "Audio engine warmed up")
+        } catch {
+            sendLog(level: "warn", message: "Audio warmup failed (non-fatal): \(error.localizedDescription)")
+        }
+    }
+
     /// Start recording from the default input device.
     /// Records to a temporary WAV file at 16kHz mono PCM.
     func startRecording() -> Bool {
@@ -2066,6 +2083,9 @@ final class MessageHandler {
         case .startMonitoring:
             CoreAudioHelper.shared.startMonitoring()
             
+        case .warmupAudio:
+            RecordingHelper.shared.warmupAudio()
+
         case .startRecording:
             if RecordingHelper.shared.startRecording() {
                 let response = RecordingStartedMessage()

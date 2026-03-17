@@ -32,7 +32,7 @@ const RELEASE_NOTES_0_1_95 = [
     'Fixed several settings sync and visibility issues',
   ];
 
-const CURRENT_RELEASE_NOTES = RELEASE_NOTES_0_1_95.flatMap((note) => (
+const RELEASE_NOTES_0_1_96 = RELEASE_NOTES_0_1_95.flatMap((note) => (
   note === '__SECTION__:Fixes'
     ? [
         note,
@@ -41,8 +41,18 @@ const CURRENT_RELEASE_NOTES = RELEASE_NOTES_0_1_95.flatMap((note) => (
     : [note]
 ));
 
+const RELEASE_NOTES_0_1_97 = RELEASE_NOTES_0_1_96.flatMap((note) => (
+  note === '__SECTION__:Fixes'
+    ? [
+        note,
+        'Fixed first-launch recording delays by warming the audio engine at startup',
+      ]
+    : [note]
+));
+
 const RELEASE_NOTES: Record<string, string[]> = {
-  '0.1.96': CURRENT_RELEASE_NOTES,
+  '0.1.97': RELEASE_NOTES_0_1_97,
+  '0.1.96': RELEASE_NOTES_0_1_96,
   '0.1.95': RELEASE_NOTES_0_1_95,
   '0.1.94': RELEASE_NOTES_0_1_95,
   '0.1.93': [
@@ -290,6 +300,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.97': 'Mar 16 2026',
   '0.1.96': 'Mar 16 2026',
   '0.1.95': 'Mar 15 2026',
   '0.1.94': 'Mar 15 2026',
