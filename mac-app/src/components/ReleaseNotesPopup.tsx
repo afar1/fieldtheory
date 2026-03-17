@@ -50,7 +50,17 @@ const RELEASE_NOTES_0_1_97 = RELEASE_NOTES_0_1_96.flatMap((note) => (
     : [note]
 ));
 
+const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
+  note === '__SECTION__:Fixes'
+    ? [
+        note,
+        'Fixed Hot Mic using Whisper when Parakeet was selected',
+      ]
+    : [note]
+));
+
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.98': RELEASE_NOTES_0_1_98,
   '0.1.97': RELEASE_NOTES_0_1_97,
   '0.1.96': RELEASE_NOTES_0_1_96,
   '0.1.95': RELEASE_NOTES_0_1_95,
@@ -300,6 +310,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.98': 'Mar 16 2026',
   '0.1.97': 'Mar 16 2026',
   '0.1.96': 'Mar 16 2026',
   '0.1.95': 'Mar 15 2026',

@@ -31,6 +31,7 @@ import {
   PARAKEET_ENGINE_LABELS,
   PARAKEET_ENGINE_MODEL_IDS,
   isParakeetEngine,
+  isTranscriptionEngine,
   type ParakeetStatus,
   type TranscriptionEngine,
   type HotMicEngine,
@@ -99,13 +100,11 @@ export class TranscriberManager extends EventEmitter {
   private registeredSecondaryHotkey: string | null = null; // Track currently registered secondary hotkey
   private whisperProcess: ChildProcess | null = null;
 
-  // Persistent JSON server for Qwen, MLX Whisper, and Parakeet engines.
+  // Persistent JSON server for MLX Whisper and Parakeet engines.
   // All use the same stdin/stdout JSON protocol via StdioJsonServer.
-  private qwenServer: StdioJsonServer | null = null;
   private mlxWhisperServer: StdioJsonServer | null = null;
   private parakeetServer: StdioJsonServer | null = null;
   private parakeetServerEngine: ParakeetEngine | null = null;
-  private qwenFallbackLoggedForDisabledReason: boolean = false;
 
   // Persistent whisper-server (HTTP) state for whisper.cpp.
   private whisperServerProcess: ChildProcess | null = null;
@@ -338,16 +337,16 @@ export class TranscriberManager extends EventEmitter {
   async init(): Promise<void> {
     // Load preferences
     await this.preferences.load();
-    const configuredEngine = this.preferences.getPreference('transcriptionEngine');
+    const configuredEngine = this.preferences.getPreference('transcriptionEngine') as string | undefined;
     if (
       configuredEngine
       && configuredEngine !== 'whisper'
       && !isParakeetEngine(configuredEngine)
     ) {
-      // Hidden engine (qwen, mlx-whisper) — migrate to parakeet if installed, otherwise whisper
+      // Hidden engine (legacy or experimental) — migrate to parakeet if installed, otherwise whisper
       const target = this.isParakeetInstalled() ? 'parakeet' : 'whisper';
       log.info(
-        'Transcription engine "%s" is no longer exposed in settings; reverting to %s',
+        'Transcription engine "%s" is no longer supported; reverting to %s',
         configuredEngine,
         target
       );
@@ -707,8 +706,8 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    // Block recording if no model is downloaded (whisper only - Qwen manages its own model).
-    const engineForStart = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    // Block recording if no Whisper model is downloaded.
+    const engineForStart = this.getConfiguredTranscriptionEngine();
     if (engineForStart === 'whisper') {
       const modelAvailable = await this.modelManager.isModelAvailable();
       if (!modelAvailable) {
@@ -921,7 +920,7 @@ export class TranscriberManager extends EventEmitter {
       return 'dictation';
     }
 
-    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const engine = this.getConfiguredTranscriptionEngine();
     if (engine === 'mlx-whisper' && queueDepth > 0) {
       return 'command';
     }
@@ -934,7 +933,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private getEngineSilenceMs(): number | undefined {
-    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const engine = this.getConfiguredTranscriptionEngine();
     if (isParakeetEngine(engine)) return 0;
     return undefined;
   }
@@ -978,7 +977,7 @@ export class TranscriberManager extends EventEmitter {
       if (this.status !== 'recording') return;
       if (this.pendingImmediateSquaresAction) return;
 
-      const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+      const engine = this.getConfiguredTranscriptionEngine();
       const asrStart = performance.now();
       const rawChunkText = await this.transcribeWithEngineFallback(wavPath, engine);
       const asrMs = Math.round(performance.now() - asrStart);
@@ -1208,7 +1207,7 @@ export class TranscriberManager extends EventEmitter {
         // execute the command deterministically even if recording is stopped mid-phrase.
         cleanedText = this.sanitizeTranscriptText(immediateSquaresText);
       } else {
-        const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+        const engine = this.getConfiguredTranscriptionEngine();
 
         // With realtime chunking, the tail file from stopRecording() only contains audio
         // after the last snapshot — often just silence. If live chunks already produced a
@@ -1678,223 +1677,8 @@ export class TranscriberManager extends EventEmitter {
   }
 
   /**
-   * Get the path to the Qwen transcription Python script.
-   */
-  private getQwenScriptPath(): string {
-    if (app.isPackaged) {
-      return path.join(process.resourcesPath, 'scripts', 'qwen-transcribe.py');
-    }
-    // __dirname in compiled code is mac-app/electron-dist/main
-    // So we need to go up 2 levels: main -> electron-dist -> mac-app
-    const macAppRoot = path.resolve(__dirname, '../..');
-    return path.join(macAppRoot, 'scripts', 'qwen-transcribe.py');
-  }
-
-  /**
-   * Get the path to the Python interpreter in the Qwen venv.
-   */
-  private getQwenPythonPath(): string {
-    if (app.isPackaged) {
-      // In production the app bundle is read-only, so install the venv in userData.
-      return path.join(app.getPath('userData'), 'build-qwen', 'venv', 'bin', 'python');
-    }
-    const macAppRoot = path.resolve(__dirname, '../..');
-    return path.join(macAppRoot, 'build-qwen', 'venv', 'bin', 'python');
-  }
-
-  /**
-   * Check if Qwen is installed by verifying the venv Python binary exists.
-   */
-  async isQwenInstalled(): Promise<boolean> {
-    const pythonPath = this.getQwenPythonPath();
-    try {
-      await fs.promises.access(pythonPath);
-      await this.ensureQwenPythonCompatible(pythonPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private isQwenInstalledSync(): boolean {
-    try {
-      return fs.existsSync(this.getQwenPythonPath()) && fs.existsSync(this.getQwenScriptPath());
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Run a lightweight python probe to get major/minor version for Qwen runtime checks.
-   * We intentionally avoid importing mlx here to prevent crash loops on bad environments.
-   */
-  private probeQwenPythonVersion(pythonPath: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const proc = spawn(
-        pythonPath,
-        ['-c', 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}")'],
-        { stdio: ['ignore', 'pipe', 'pipe'] }
-      );
-
-      let stdout = '';
-      let stderr = '';
-      let settled = false;
-
-      const done = (fn: () => void) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        fn();
-      };
-
-      const timeout = setTimeout(() => {
-        done(() => {
-          proc.kill('SIGTERM');
-          reject(new Error('Timed out while probing Qwen Python runtime'));
-        });
-      }, 5000);
-
-      proc.stdout?.on('data', (data: Buffer) => {
-        stdout += data.toString();
-      });
-      proc.stderr?.on('data', (data: Buffer) => {
-        stderr += data.toString();
-      });
-      proc.on('error', (error) => {
-        done(() => {
-          reject(new Error(`Failed to launch Qwen Python probe: ${error.message}`));
-        });
-      });
-      proc.on('close', (code, signal) => {
-        done(() => {
-          if (code !== 0) {
-            const details = stderr.trim() || stdout.trim() || `exit code ${code ?? 'unknown'}`;
-            const signalSuffix = signal ? `, signal ${signal}` : '';
-            reject(new Error(`Qwen Python probe failed (${details}${signalSuffix})`));
-            return;
-          }
-          const version = stdout.trim();
-          if (!version) {
-            reject(new Error('Qwen Python probe returned an empty version string'));
-            return;
-          }
-          resolve(version);
-        });
-      });
-    });
-  }
-
-  private async ensureQwenPythonCompatible(pythonPath: string): Promise<void> {
-    const version = await this.probeQwenPythonVersion(pythonPath);
-    const match = version.match(/^(\d+)\.(\d+)\./);
-    if (!match) {
-      throw new Error(`Unable to parse Qwen Python version "${version}"`);
-    }
-
-    const major = Number(match[1]);
-    const minor = Number(match[2]);
-    if (major < 3 || (major === 3 && minor < 10)) {
-      throw new Error(
-        `Qwen requires Python 3.10+ in its virtual environment (found ${version}). ` +
-        'Run Qwen setup from Settings > Transcription after installing Homebrew Python (brew install python).'
-      );
-    }
-
-    if (major > 3 || (major === 3 && minor >= 14)) {
-      throw new Error(
-        `Qwen currently supports Python 3.10-3.13 in its virtual environment (found ${version}). ` +
-        'Install Python 3.12 (brew install python@3.12), then rerun Qwen setup from Settings > Transcription.'
-      );
-    }
-  }
-
-  /**
-   * Get or create the Qwen StdioJsonServer instance.
-   * Lazily initialized because paths depend on runtime state.
-   */
-  private getOrCreateQwenServer(): StdioJsonServer {
-    if (!this.qwenServer) {
-      const pythonPath = this.getQwenPythonPath();
-      this.qwenServer = new StdioJsonServer({
-        name: 'Qwen',
-        command: pythonPath,
-        args: [this.getQwenScriptPath(), '--server'],
-        preStart: () => this.ensureQwenPythonCompatible(pythonPath),
-      });
-    }
-    return this.qwenServer;
-  }
-
-  private startQwenServer(): Promise<void> {
-    return this.getOrCreateQwenServer().start();
-  }
-
-  stopQwenServer(): void {
-    this.qwenServer?.stop();
-  }
-
-  private sendQwenCommand(cmd: Record<string, unknown>) {
-    return this.getOrCreateQwenServer().send(cmd);
-  }
-
-  /**
-   * Transcribe audio file using Qwen3-ASR via persistent server.
-   * Starts the server on first use, auto-restarts on crash (one retry).
-   */
-  private async transcribeWithQwen(wavPath: string): Promise<string> {
-    const needTimestamps = this.screenshotMetadata.length > 0;
-
-    const doTranscribe = async (): Promise<string> => {
-      await this.startQwenServer();
-
-      const response = await this.sendQwenCommand({
-        cmd: 'transcribe',
-        audio: wavPath,
-        timestamps: needTimestamps,
-      });
-
-      if (!response.ok) {
-        throw new Error(`Qwen transcription failed: ${response.error}`);
-      }
-
-      const rawText = response.text || '';
-
-      if (needTimestamps) {
-        return this.parseTimestampedOutput(rawText);
-      } else {
-        return rawText.trim();
-      }
-    };
-
-    try {
-      return await doTranscribe();
-    } catch (error) {
-      const message = (error as Error)?.message || '';
-      const isFatalQwenRuntimeError =
-        message.includes('Qwen requires Python 3.10+') ||
-        message.includes('Qwen currently supports Python 3.10-3.13') ||
-        message.includes('Qwen server exited during startup with code 134') ||
-        message.includes('Qwen server exited with code 134') ||
-        message.includes('MLX runtime crashed');
-      const shouldRetry = !isFatalQwenRuntimeError;
-      if (!shouldRetry) {
-        const server = this.getOrCreateQwenServer();
-        if (!server.disabledReason) {
-          server.disable(message || 'Qwen runtime is unavailable in this session');
-        }
-        throw error;
-      }
-
-      // One retry: restart server and try again
-      log.warn('Qwen transcription failed, restarting server: %s', (error as Error).message);
-      this.stopQwenServer();
-      return await doTranscribe();
-    }
-  }
-
-  /**
-   * Transcribe with the configured engine, falling back to Whisper if Qwen fails
-   * and a Whisper model is available locally.
+   * Transcribe with the configured engine, falling back to whisper.cpp when
+   * the selected runtime fails and a Whisper model is available locally.
    */
   private async transcribeWithEngineFallback(
     wavPath: string,
@@ -1962,44 +1746,7 @@ export class TranscriberManager extends EventEmitter {
       }
     }
 
-    // Qwen — falls back to whisper.cpp on failure.
-    try {
-      return await this.transcribeWithQwen(wavPath);
-    } catch (qwenError) {
-      if (!allowWhisperFallback) {
-        throw qwenError;
-      }
-
-      const whisperAvailable = whisperModelOverride
-        ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
-        : await this.modelManager.isModelAvailable();
-      if (!whisperAvailable) {
-        throw qwenError;
-      }
-
-      const qwenMessage = (qwenError as Error).message;
-      const qwenDisabled = this.qwenServer?.disabledReason ?? null;
-      const isDisabledReason = qwenDisabled !== null && qwenMessage === qwenDisabled;
-      if (!isDisabledReason || !this.qwenFallbackLoggedForDisabledReason) {
-        log.warn(
-          'Qwen transcription failed, falling back to Whisper: %s',
-          qwenMessage
-        );
-        if (isDisabledReason) {
-          this.qwenFallbackLoggedForDisabledReason = true;
-        }
-      }
-
-      this.lastHotMicUsedWhisperFallback = true;
-
-      try {
-        return await this.transcribe(wavPath, whisperModelOverride);
-      } catch (whisperError) {
-        throw new Error(
-          `Qwen failed: ${(qwenError as Error).message}; Whisper fallback failed: ${(whisperError as Error).message}`
-        );
-      }
-    }
+    return this.transcribe(wavPath, whisperModelOverride);
   }
 
   // ---------------------------------------------------------------------------
@@ -2510,7 +2257,7 @@ export class TranscriberManager extends EventEmitter {
   }
 
   // ---------------------------------------------------------------------------
-  // MLX Whisper server — uses StdioJsonServer (same as Qwen)
+  // MLX Whisper server — uses the shared StdioJsonServer JSON protocol.
   // ---------------------------------------------------------------------------
 
   private getMlxWhisperPythonPath(): string {
@@ -3093,17 +2840,14 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Pre-start transcription engines so the first transcription is fast.
-   * Starts Qwen server if Qwen is selected, and pre-warms the persistent
-   * whisper-server if Whisper is selected and the server binary is available.
+   * Pre-warms the persistent whisper-server when Whisper is selected and the
+   * server binary is available.
    */
   async warmup(): Promise<void> {
     const primaryEngine = this.getConfiguredTranscriptionEngine();
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
     const engines = Array.from(new Set<TranscriptionEngine>([primaryEngine, hotMicEngine]));
 
-    if (engines.includes('qwen')) {
-      await this.startQwenServer();
-    }
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
       await this.startMlxWhisperServer();
     }
@@ -3120,7 +2864,6 @@ export class TranscriberManager extends EventEmitter {
    * Restart runtime after engine/model settings change to avoid stale worker state.
    */
   async restartTranscriptionRuntime(): Promise<void> {
-    this.stopQwenServer();
     this.stopMlxWhisperServer();
     this.stopParakeetServer();
     await this.stopWhisperServer();
@@ -3129,9 +2872,6 @@ export class TranscriberManager extends EventEmitter {
     const hotMicEngine = this.resolveHotMicTranscriptionEngine();
     const engines = Array.from(new Set<TranscriptionEngine>([primaryEngine, hotMicEngine]));
 
-    if (engines.includes('qwen')) {
-      await this.startQwenServer();
-    }
     if (engines.includes('mlx-whisper') && this.isMlxWhisperInstalled()) {
       await this.startMlxWhisperServer();
     }
@@ -3144,12 +2884,12 @@ export class TranscriberManager extends EventEmitter {
     }
   }
 
-  private getConfiguredTranscriptionEngine(): TranscriptionEngine {
-    const configured = this.preferences.getPreference('transcriptionEngine');
-    if (configured === 'qwen' || configured === 'mlx-whisper' || isParakeetEngine(configured)) {
+  getConfiguredTranscriptionEngine(): TranscriptionEngine {
+    const configured = this.preferences.getPreference('transcriptionEngine') as string | undefined;
+    if (isTranscriptionEngine(configured)) {
       return configured;
     }
-    return 'whisper';
+    return this.isParakeetInstalled() ? 'parakeet' : 'whisper';
   }
 
   private resolveHotMicTranscriptionEngine(): TranscriptionEngine {
@@ -3318,52 +3058,6 @@ export class TranscriberManager extends EventEmitter {
       );
     }
 
-    if (selectedEngine === 'qwen') {
-      if (!this.isQwenInstalledSync()) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'not-installed',
-          'Qwen runtime is not installed'
-        );
-      }
-      if (this.qwenServer?.disabledReason) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'disabled',
-          this.qwenServer.disabledReason
-        );
-      }
-      if (this.qwenServer?.isReady) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'ready',
-          'Qwen server is ready'
-        );
-      }
-      if (this.qwenServer?.isStarting) {
-        return this.buildHotMicEngineStatus(
-          selectedEngine,
-          whisperModel,
-          fallbackAvailable,
-          'warming',
-          'Qwen server is warming up'
-        );
-      }
-      return this.buildHotMicEngineStatus(
-        selectedEngine,
-        whisperModel,
-        fallbackAvailable,
-        'cold',
-        'Qwen server is idle (starts on first chunk)'
-      );
-    }
-
     if (!this.isMlxWhisperInstalled()) {
       return this.buildHotMicEngineStatus(
         selectedEngine,
@@ -3414,11 +3108,6 @@ export class TranscriberManager extends EventEmitter {
    */
   async warmupForHotMic(): Promise<void> {
     const engine = this.resolveHotMicTranscriptionEngine();
-    if (engine === 'qwen') {
-      await this.startQwenServer();
-      return;
-    }
-
     if (engine === 'mlx-whisper') {
       if (!this.isMlxWhisperInstalled()) {
         return;
@@ -3443,48 +3132,28 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Transcribe for Hot Mic using the global engine and Whisper model settings.
-   * After each call, check lastHotMicUsedWhisperFallback to know if fallback was triggered.
+   * Hot Mic now uses the selected engine directly and does not silently fall
+   * back to whisper.cpp when another engine fails.
    */
   async transcribeAudioForHotMic(wavPath: string): Promise<string> {
     this.lastHotMicUsedWhisperFallback = false;
     const engine = this.resolveHotMicTranscriptionEngine();
     const whisperModel = this.resolveHotMicWhisperModel();
-    const allowWhisperFallback = this.preferences.getPreference('hotMicAllowWhisperFallback') ?? true;
 
-    if (engine !== 'qwen') {
-      return this.transcribeWithEngineFallback(wavPath, engine, {
-        allowWhisperFallback,
-        whisperModelOverride: whisperModel,
-      });
-    }
-
-    try {
-      return await this.transcribeWithEngineFallback(wavPath, engine, {
-        allowWhisperFallback,
-        whisperModelOverride: whisperModel,
-      });
-      } catch (error) {
-      // If Qwen failed and fallback was not allowed, we still want callers
-      // to know this was a Qwen failure they may want to surface.
-      throw error;
-    }
-  }
-
-  /**
-   * Whether Qwen is permanently disabled for this session (fatal runtime error).
-   */
-  isQwenDisabledForSession(): boolean {
-    return this.qwenServer?.disabledReason !== null && this.qwenServer?.disabledReason !== undefined;
+    return this.transcribeWithEngineFallback(wavPath, engine, {
+      allowWhisperFallback: false,
+      whisperModelOverride: whisperModel,
+    });
   }
 
   lastHotMicUsedWhisperFallback: boolean = false;
 
   /**
-   * Transcribe an audio file using the user's configured engine (whisper or qwen).
-   * Exposed for HotMicManager so it can share the persistent Qwen server.
+   * Transcribe an audio file using the user's configured engine.
+   * Exposed for HotMicManager so it can share the active runtime.
    */
   async transcribeAudio(wavPath: string): Promise<string> {
-    const engine = this.preferences.getPreference('transcriptionEngine') || 'whisper';
+    const engine = this.getConfiguredTranscriptionEngine();
     return this.transcribeWithEngineFallback(wavPath, engine);
   }
 
@@ -4196,7 +3865,6 @@ export class TranscriberManager extends EventEmitter {
       this.whisperProcess.kill();
       this.whisperProcess = null;
     }
-    this.stopQwenServer();
     this.stopMlxWhisperServer();
     void this.stopWhisperServer();
     this.overlay.destroy();

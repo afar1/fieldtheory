@@ -23,7 +23,10 @@ interface ModelDiagnostics {
   error?: string;
 }
 
-type DiagnosticsTranscriber = Pick<TranscriberManager, 'getHotMicEngineStatus' | 'getParakeetStatus'>;
+type DiagnosticsTranscriber = Pick<
+  TranscriberManager,
+  'getConfiguredTranscriptionEngine' | 'getHotMicEngineStatus' | 'getParakeetStatus'
+>;
 
 export interface DiagnosticsReport {
   timestamp: string;
@@ -321,7 +324,9 @@ export class DiagnosticsCollector {
 
   private async collectTranscriptionInfo(): Promise<DiagnosticsReport['transcription']> {
     return {
-      selectedEngine: this.preferencesManager.getPreference('transcriptionEngine') ?? 'parakeet',
+      selectedEngine: this.transcriberManager?.getConfiguredTranscriptionEngine()
+        ?? this.preferencesManager.getPreference('transcriptionEngine')
+        ?? 'whisper',
       engineStatus: this.transcriberManager?.getHotMicEngineStatus() ?? null,
       whisperModels: await this.collectWhisperModels(),
       parakeet: this.transcriberManager?.getParakeetStatus() ?? null,
@@ -431,7 +436,7 @@ export class DiagnosticsCollector {
       enabled: this.preferencesManager.getPreference('hotMicEnabled') ?? false,
       muted: this.preferencesManager.getPreference('hotMicMuted') ?? false,
       soundsEnabled: this.preferencesManager.getPreference('hotMicSoundsEnabled') ?? true,
-      allowWhisperFallback: this.preferencesManager.getPreference('hotMicAllowWhisperFallback') ?? true,
+      allowWhisperFallback: false,
       hotkey: this.preferencesManager.getPreference('hotMicHotkey') ?? null,
       targetBundleId: this.preferencesManager.getPreference('hotMicTargetBundleId') ?? null,
       submitWord: this.preferencesManager.getPreference('hotMicSubmitWord') ?? null,
