@@ -18,6 +18,7 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS } from './hotMicDefau
 import { getHotkeyManager } from './hotkeyManager';
 import {
   isParakeetEngine,
+  isTranscriptionEngine,
   type TranscriptionEngine,
 } from './types/transcribe';
 import type { HotMicEngineStatus } from './types/hotMic';
@@ -96,7 +97,7 @@ export type HotMicState = 'idle' | 'armed' | 'listening' | 'recording';
 /**
  * Fine-grained operational condition overlaid on the base state.
  * Tells the UI/IPC exactly what's happening inside the hot mic session:
- * - warming: transcription engine is starting up (e.g. Qwen server loading)
+ * - warming: transcription engine is starting up
  * - ready: engine warm, processing chunks normally
  * - degraded: primary engine failed, fell back to Whisper
  * - yielded: temporarily paused while the standard transcriber records
@@ -362,7 +363,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly BOUNDARY_STITCH_MIN_WORDS = 2;
   private static readonly BOUNDARY_STITCH_MAX_WORDS = 6;
 
-  // Warmup promise — awaited before first transcription to avoid race with Qwen startup
+  // Warmup promise — awaited before first transcription to avoid racing the runtime startup
   private warmupPromise: Promise<void> | null = null;
 
   // Transcript buffer — accumulates chunks until submit word or silence discard
@@ -789,7 +790,22 @@ export class HotMicManager extends EventEmitter {
   }
 
   private getConfiguredTranscriptionEngineForLogs(): TranscriptionEngine {
-    return this.preferences.getPreference('transcriptionEngine') ?? 'whisper';
+    if (this.engineStatusGetter) {
+      try {
+        const selectedEngine = this.engineStatusGetter()?.selectedEngine;
+        if (isTranscriptionEngine(selectedEngine)) {
+          return selectedEngine;
+        }
+      } catch {
+        // Fall through to raw preference lookup for logs only.
+      }
+    }
+
+    const configured = this.preferences.getPreference('transcriptionEngine') as string | undefined;
+    if (isTranscriptionEngine(configured)) {
+      return configured;
+    }
+    return 'whisper';
   }
 
   /**
@@ -1777,8 +1793,16 @@ export class HotMicManager extends EventEmitter {
     while (this.pendingChunkQueue.length >= HotMicManager.MAX_CHUNK_QUEUE_DEPTH) {
       const dropped = this.pendingChunkQueue.shift();
       if (dropped) {
-        log.warn('Hot Mic: chunk queue full (%d), dropping oldest chunk: %s',
-          HotMicManager.MAX_CHUNK_QUEUE_DEPTH, dropped.filePath);
+        log.warn(
+          'Hot Mic: chunk queue full (%d), dropping oldest chunk: %s (engine=%s ready=%s lastQueue=%sms avgAsr=%sms avgTotal=%sms)',
+          HotMicManager.MAX_CHUNK_QUEUE_DEPTH,
+          dropped.filePath,
+          this.getConfiguredTranscriptionEngineForLogs(),
+          this.engineReady,
+          this.formatTimingMs(this.lastQueueWaitMs),
+          this.formatTimingMs(this.avgTranscribeMs),
+          this.formatTimingMs(this.avgTotalPipelineMs),
+        );
         void fs.promises.unlink(dropped.filePath).catch(() => {});
       }
     }
@@ -1997,8 +2021,8 @@ export class HotMicManager extends EventEmitter {
       // Don't reset lastSpeechDetectedMs — it tracks real audio activity
       // and is used by the timer callback to survive natural pauses.
 
-      // Wait for warmup to complete before first transcription — prevents race
-      // where a chunk arrives before the Qwen server finishes loading
+      // Wait for warmup to complete before first transcription so the first
+      // chunk does not outrun the runtime startup sequence.
       if (this.warmupPromise) {
         await this.warmupPromise;
         this.warmupPromise = null;
@@ -2297,7 +2321,7 @@ export class HotMicManager extends EventEmitter {
 
     // No submit word — add to buffer
     // Normalize for natural dictation: lowercase and strip trailing periods
-    // (Qwen treats each chunk as a standalone utterance, adding false sentence-ending
+    // (Some engines treat each chunk as a standalone utterance, adding false sentence-ending
     // periods at chunk boundaries). Internal periods and ?/! are preserved.
     const normalized = this.pushNormalizedTextToBuffer(trimmed);
     if (LOG_TRANSCRIPT_PAYLOADS) {
@@ -2962,7 +2986,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Remove Whisper/Qwen metadata-like artifacts while preserving Figure refs.
+   * Remove transcription metadata-like artifacts while preserving Figure refs.
    */
   private sanitizeTranscriptText(text: string): string {
     const trimmedText = text ? text.trim() : '';
@@ -3361,7 +3385,7 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async transcribe(wavPath: string): Promise<string> {
-    // Use the user's configured engine (Qwen/Whisper) via TranscriberManager when available
+    // Use the user's configured engine via TranscriberManager when available.
     if (this.externalTranscribe) {
       return this.externalTranscribe(wavPath);
     }

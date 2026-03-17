@@ -2646,10 +2646,9 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE, () => {
-    if (!preferencesManager) {
-      return 'parakeet';
-    }
-    return preferencesManager.getPreference('transcriptionEngine') || 'parakeet';
+    return transcriberManager?.getConfiguredTranscriptionEngine()
+      ?? preferencesManager?.getPreference('transcriptionEngine')
+      ?? 'whisper';
   });
 
   ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: TranscriptionEngine) => {
@@ -2698,38 +2697,8 @@ function setupTranscribeIPCHandlers(): void {
     transcriberManager.getSoundManager().preview(soundId);
   });
 
-  ipcMain.handle(TranscribeIPCChannels.IS_QWEN_INSTALLED, async () => {
-    if (!transcriberManager) {
-      return false;
-    }
-    return transcriberManager.isQwenInstalled();
-  });
-
   ipcMain.handle(TranscribeIPCChannels.IS_APPLE_SILICON, () => {
     return process.arch === 'arm64';
-  });
-
-  ipcMain.handle(TranscribeIPCChannels.SETUP_QWEN, async () => {
-    const macAppRoot = path.resolve(__dirname, '../..');
-    const scriptPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'scripts', 'setup-qwen.sh')
-      : path.join(macAppRoot, 'scripts', 'setup-qwen.sh');
-    const setupCwd = app.isPackaged ? app.getPath('userData') : macAppRoot;
-
-    if (!fs.existsSync(scriptPath)) {
-      return { success: false, error: `Qwen setup script not found at: ${scriptPath}` };
-    }
-
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      exec(`bash "${scriptPath}"`, { cwd: setupCwd, timeout: 600000 }, (error: Error | null, stdout: string, stderr: string) => {
-        if (error) {
-          const details = [stderr?.trim(), stdout?.trim(), error.message].filter(Boolean).join('\n');
-          resolve({ success: false, error: details });
-        } else {
-          resolve({ success: true });
-        }
-      });
-    });
   });
 
   ipcMain.handle(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED, async () => {
@@ -3671,7 +3640,7 @@ function setupClipboardIPCHandlers(): void {
     // Clean up LibrarianManager (stop file watchers, close database)
     librarianManager?.destroy();
 
-    // Clean up TranscriberManager (kill persistent Qwen server, unregister hotkeys)
+    // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
 
     // Clean up Council (kill debate process)
@@ -6536,7 +6505,6 @@ async function initTranscriberSystem(): Promise<void> {
       clearTimeout(wakeOverlayRefreshTimeout);
       wakeOverlayRefreshTimeout = null;
     }
-    transcriberManager?.stopQwenServer();
     transcriberManager?.stopMlxWhisperServer();
     void transcriberManager?.stopWhisperServer();
   });
@@ -6545,9 +6513,9 @@ async function initTranscriberSystem(): Promise<void> {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');
 
-    // Pre-warm Qwen server if Hot Mic is active so it's ready when the user speaks
+    // Pre-warm the configured transcription runtime if Hot Mic is active.
     if (hotMicManager?.isActive) {
-      log.info('[PowerMonitor] Hot Mic active, pre-warming Qwen server');
+      log.info('[PowerMonitor] Hot Mic active, pre-warming transcription runtime');
       transcriberManager?.warmup().catch(() => {});
     }
 

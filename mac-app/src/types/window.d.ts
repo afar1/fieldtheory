@@ -277,14 +277,12 @@ interface TranscribeAPI {
   setAutoImproveMinWords?: (minWords: number) => Promise<void>;
   getAutoImproveStats?: () => Promise<{ wordsImproved: number; apiCalls: number; inputTokens: number; outputTokens: number }>;
   resetAutoImproveStats?: () => Promise<void>;
-  getTranscriptionEngine?: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
-  setTranscriptionEngine?: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
-  isQwenInstalled?: () => Promise<boolean>;
+  getTranscriptionEngine?: () => Promise<'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngine?: (engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
   isMlxWhisperInstalled?: () => Promise<boolean>;
   isParakeetInstalled?: () => Promise<boolean>;
   getParakeetStatus?: () => Promise<ParakeetStatus | null>;
   isAppleSilicon?: () => Promise<boolean>;
-  setupQwen?: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
   setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
   uninstallParakeet?: () => Promise<{ success: boolean; error?: string }>;
@@ -1170,7 +1168,7 @@ interface HotMicRuntimeStatus {
   chunksReceived: number;
   micHealthy: boolean;
   engine: {
-    selectedEngine: 'whisper' | 'qwen' | 'mlx-whisper';
+    selectedEngine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual';
     source: 'global';
     whisperModel: string | null;
     readiness:
@@ -1199,8 +1197,8 @@ interface HotMicAPI {
   onRuntimeStatusChanged: (handler: (status: HotMicRuntimeStatus) => void) => () => void;
   getMuted: () => Promise<boolean>;
   getEnabled: () => Promise<boolean>;
-  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
-  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  getTranscriptionEngineMode: () => Promise<'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngineMode: (mode: 'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
   getWhisperModel: () => Promise<string>;
   setWhisperModel: (model: string) => Promise<string>;
   setEnabled: (enabled: boolean) => Promise<boolean>;

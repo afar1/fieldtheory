@@ -83,12 +83,10 @@ const TranscribeIPCChannels = {
   ADD_TO_STACK: 'transcribe:addToStack',
   GET_TRANSCRIPTION_ENGINE: 'transcribe:getTranscriptionEngine',
   SET_TRANSCRIPTION_ENGINE: 'transcribe:setTranscriptionEngine',
-  IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
   IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
   IS_PARAKEET_INSTALLED: 'transcribe:isParakeetInstalled',
   GET_PARAKEET_STATUS: 'transcribe:getParakeetStatus',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
-  SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
   SETUP_PARAKEET: 'transcribe:setupParakeet',
   UNINSTALL_PARAKEET: 'transcribe:uninstallParakeet',
@@ -738,14 +736,12 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
-  isQwenInstalled: () => Promise<boolean>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
   isMlxWhisperInstalled: () => Promise<boolean>;
   isParakeetInstalled: () => Promise<boolean>;
   getParakeetStatus: () => Promise<import('./main/types/transcribe').ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
-  setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
   setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
   uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
@@ -1228,16 +1224,12 @@ const transcribeAPI: TranscribeAPI = {
     return ipcRenderer.invoke(TranscribeIPCChannels.RESET_AUTO_IMPROVE_STATS);
   },
 
-  getTranscriptionEngine: async (): Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
+  getTranscriptionEngine: async (): Promise<'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE);
   },
 
-  setTranscriptionEngine: async (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): Promise<void> => {
+  setTranscriptionEngine: async (engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, engine);
-  },
-
-  isQwenInstalled: async (): Promise<boolean> => {
-    return ipcRenderer.invoke(TranscribeIPCChannels.IS_QWEN_INSTALLED);
   },
 
   isMlxWhisperInstalled: async (): Promise<boolean> => {
@@ -1252,10 +1244,6 @@ const transcribeAPI: TranscribeAPI = {
 
   isAppleSilicon: async (): Promise<boolean> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.IS_APPLE_SILICON);
-  },
-
-  setupQwen: async (): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_QWEN);
   },
 
   setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
@@ -3522,10 +3510,10 @@ const hotMicAPI = {
   getEnabled: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getEnabled');
   },
-  getTranscriptionEngineMode: async (): Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
+  getTranscriptionEngineMode: async (): Promise<'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
     return ipcRenderer.invoke('hotmic:getTranscriptionEngineMode');
   },
-  setTranscriptionEngineMode: async (mode: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): Promise<'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
+  setTranscriptionEngineMode: async (mode: 'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): Promise<'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'> => {
     return ipcRenderer.invoke('hotmic:setTranscriptionEngineMode', mode);
   },
   getWhisperModel: async (): Promise<string> => {

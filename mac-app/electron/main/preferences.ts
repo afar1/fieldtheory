@@ -144,14 +144,14 @@ interface Preferences {
   cachedTier?: 'free' | 'pro';
 
   // Transcription engine selection. See TranscriptionEngine type in types/transcribe.ts.
-  transcriptionEngine?: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual';
+  transcriptionEngine?: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual';
 
   // Hot Mic - continuous voice input for Claude Code terminals.
   // When enabled, auto-records voice fragments and injects them into a target terminal.
   hotMicEnabled?: boolean;
   hotMicMuted?: boolean;
-  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'; // Deprecated: Hot Mic now follows transcriptionEngine
-  hotMicAllowWhisperFallback?: boolean; // Allow Qwen->Whisper fallback for Hot Mic when Qwen fails
+  hotMicTranscriptionEngine?: 'default' | 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'; // Deprecated: Hot Mic now follows transcriptionEngine
+  hotMicAllowWhisperFallback?: boolean; // Deprecated: Hot Mic no longer silently falls back to whisper.cpp
   hotMicWhisperModel?: ModelSize; // Deprecated: Hot Mic now follows selectedModel
   hotMicTargetBundleId?: string; // e.g., "com.mitchellh.ghostty"
   hotMicSoundsEnabled?: boolean;
@@ -263,7 +263,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Hot Mic background filtering is opt-in by default.
   hotMicMuted: false,
   hotMicTranscriptionEngine: 'default',
-  hotMicAllowWhisperFallback: true,
+  hotMicAllowWhisperFallback: false,
   hotMicWhisperModel: 'small',
   hotMicBackgroundFilterEnabled: false,
   hotMicBackgroundFilterStrength: 4,

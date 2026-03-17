@@ -1,6 +1,6 @@
 /**
  * Generic persistent subprocess that communicates via newline-delimited JSON
- * over stdin/stdout. Used by both Qwen and MLX Whisper transcription engines.
+ * over stdin/stdout. Used by the MLX Whisper and Parakeet transcription engines.
  *
  * Lifecycle:
  *   1. start() → spawn process, wait for {"ready": true} on stdout
