@@ -481,6 +481,10 @@ export interface StartMonitoringCommand {
   type: 'startMonitoring';
 }
 
+export interface WarmupAudioCommand {
+  type: 'warmupAudio';
+}
+
 export interface StartRecordingCommand {
   type: 'startRecording';
 }
@@ -596,6 +600,7 @@ export type HelperIncomingCommand =
   | GetDefaultInputCommand
   | SetDefaultInputCommand
   | StartMonitoringCommand
+  | WarmupAudioCommand
   | StartRecordingCommand
   | StopRecordingCommand
   | SnapshotRecordingCommand

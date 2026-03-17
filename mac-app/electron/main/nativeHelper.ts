@@ -285,6 +285,15 @@ export class NativeHelper extends EventEmitter {
   }
 
   /**
+   * Pre-warm the CoreAudio hardware so the first recording starts instantly.
+   * Fire-and-forget — no response expected.
+   */
+  async warmupAudio(): Promise<void> {
+    await this.waitForReady();
+    this.send({ type: 'warmupAudio' });
+  }
+
+  /**
    * Start recording audio from the default input device.
    * Returns a promise that resolves when recording starts.
    */

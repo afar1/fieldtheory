@@ -1,14 +1,12 @@
 /**
  * Transcription engine identifiers. Defined once, used everywhere.
  * 'whisper': whisper.cpp (local binary, CPU/Metal)
- * 'qwen': Qwen3-ASR-0.6B via mlx-audio (Apple Silicon)
  * 'mlx-whisper': Whisper large-v3-turbo via mlx-whisper (Apple Silicon)
  * 'parakeet': NVIDIA Parakeet TDT 0.6B v2 (English) via onnx-asr (CPU/ONNX Runtime)
  * 'parakeet-multilingual': NVIDIA Parakeet TDT 0.6B v3 (multilingual) via onnx-asr (CPU/ONNX Runtime)
  */
 export type TranscriptionEngine =
   | 'whisper'
-  | 'qwen'
   | 'mlx-whisper'
   | 'parakeet'
   | 'parakeet-multilingual';
@@ -49,6 +47,12 @@ export function isParakeetEngine(
   engine: string | null | undefined
 ): engine is ParakeetEngine {
   return engine === 'parakeet' || engine === 'parakeet-multilingual';
+}
+
+export function isTranscriptionEngine(
+  engine: string | null | undefined
+): engine is TranscriptionEngine {
+  return engine === 'whisper' || engine === 'mlx-whisper' || isParakeetEngine(engine);
 }
 
 /**
@@ -93,12 +97,10 @@ export const TranscribeIPCChannels = {
   PLAY_PASTE_SOUND: 'transcribe:playPasteSound',
 
   // Engine installation and setup
-  IS_QWEN_INSTALLED: 'transcribe:isQwenInstalled',
   IS_MLX_WHISPER_INSTALLED: 'transcribe:isMlxWhisperInstalled',
   IS_PARAKEET_INSTALLED: 'transcribe:isParakeetInstalled',
   GET_PARAKEET_STATUS: 'transcribe:getParakeetStatus',
   IS_APPLE_SILICON: 'transcribe:isAppleSilicon',
-  SETUP_QWEN: 'transcribe:setupQwen',
   SETUP_MLX_WHISPER: 'transcribe:setupMlxWhisper',
   SETUP_PARAKEET: 'transcribe:setupParakeet',
   UNINSTALL_PARAKEET: 'transcribe:uninstallParakeet',
@@ -195,14 +197,12 @@ export interface TranscribeAPI {
   setAutoImproveMinWords: (minWords: number) => Promise<void>;
   getAutoImproveStats: () => Promise<AutoImproveStats>;
   resetAutoImproveStats: () => Promise<void>;
-  getTranscriptionEngine: () => Promise<'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
-  setTranscriptionEngine: (engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
-  isQwenInstalled: () => Promise<boolean>;
+  getTranscriptionEngine: () => Promise<'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'>;
+  setTranscriptionEngine: (engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual') => Promise<void>;
   isMlxWhisperInstalled: () => Promise<boolean>;
   isParakeetInstalled: () => Promise<boolean>;
   getParakeetStatus: () => Promise<ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
-  setupQwen: () => Promise<{ success: boolean; error?: string }>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
   setupParakeet: (engine?: ParakeetEngine) => Promise<{ success: boolean; error?: string }>;
   uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
