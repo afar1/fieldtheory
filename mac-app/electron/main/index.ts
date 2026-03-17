@@ -55,6 +55,7 @@ import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -946,22 +947,50 @@ function registerHotkeysAfterOnboarding(): void {
   // Register Command Launcher hotkey - now customizable via HotkeyManager
   // Simple toggle: open or close the command launcher
   const commandLauncherHotkey = prefs.commandLauncherHotkey || 'Command+Shift+K';
+  appendCommandLauncherTrace('hotkey-registered', {
+    hotkey: commandLauncherHotkey,
+    tracePath: getCommandLauncherTracePath(),
+  });
   hotkeyManager.register('commandLauncher', commandLauncherHotkey, async () => {
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
+      const launcherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
+      const immersiveMode = clipboardHistoryWindow?.getImmersiveMode() ?? false;
 
-      if (launcherVisible) {
-        // Command launcher is visible → close it
-        commandLauncherWindow?.hide();
-      } else {
-        // Command launcher not visible → open it
-        if (commandLauncherWindow) {
-          // If immersive view is open, dismiss it first to avoid z-order conflicts
-          if (clipboardHistoryWindow?.getImmersiveMode()) {
-            clipboardHistoryWindow.hide();
-          }
-          await commandLauncherWindow.show();
-          metricsManager?.recordCommandLauncherUse();
+      appendCommandLauncherTrace('hotkey-trigger', {
+        hotkey: commandLauncherHotkey,
+        launcherVisible,
+        launcherShowingOrVisible,
+        immersiveMode,
+      });
+
+      try {
+        if (launcherVisible) {
+          appendCommandLauncherTrace('hotkey-hide-request');
+          commandLauncherWindow?.hide();
+          return;
         }
+
+        if (!commandLauncherWindow) {
+          appendCommandLauncherTrace('hotkey-show-missing-window');
+          return;
+        }
+
+        // If immersive view is open, dismiss it first to avoid z-order conflicts
+        if (immersiveMode) {
+          appendCommandLauncherTrace('hotkey-hide-immersive-window');
+          clipboardHistoryWindow?.hide();
+        }
+
+        appendCommandLauncherTrace('hotkey-show-request');
+        await commandLauncherWindow.show();
+        appendCommandLauncherTrace('hotkey-show-complete', {
+          launcherVisible: commandLauncherWindow.isVisible(),
+          launcherShowingOrVisible: commandLauncherWindow.isShowingOrVisible(),
+        });
+        metricsManager?.recordCommandLauncherUse();
+      } catch (error) {
+        appendCommandLauncherTrace('hotkey-show-error', { error });
+        log.error('Command launcher hotkey failed:', error);
       }
   });
 
@@ -2665,10 +2694,9 @@ function setupTranscribeIPCHandlers(): void {
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_TRANSCRIPTION_ENGINE, () => {
-    if (!preferencesManager) {
-      return 'parakeet';
-    }
-    return preferencesManager.getPreference('transcriptionEngine') || 'parakeet';
+    return transcriberManager?.getConfiguredTranscriptionEngine()
+      ?? preferencesManager?.getPreference('transcriptionEngine')
+      ?? 'whisper';
   });
 
   ipcMain.handle(TranscribeIPCChannels.SET_TRANSCRIPTION_ENGINE, async (_event, engine: TranscriptionEngine) => {
@@ -2717,38 +2745,8 @@ function setupTranscribeIPCHandlers(): void {
     transcriberManager.getSoundManager().preview(soundId);
   });
 
-  ipcMain.handle(TranscribeIPCChannels.IS_QWEN_INSTALLED, async () => {
-    if (!transcriberManager) {
-      return false;
-    }
-    return transcriberManager.isQwenInstalled();
-  });
-
   ipcMain.handle(TranscribeIPCChannels.IS_APPLE_SILICON, () => {
     return process.arch === 'arm64';
-  });
-
-  ipcMain.handle(TranscribeIPCChannels.SETUP_QWEN, async () => {
-    const macAppRoot = path.resolve(__dirname, '../..');
-    const scriptPath = app.isPackaged
-      ? path.join(process.resourcesPath, 'scripts', 'setup-qwen.sh')
-      : path.join(macAppRoot, 'scripts', 'setup-qwen.sh');
-    const setupCwd = app.isPackaged ? app.getPath('userData') : macAppRoot;
-
-    if (!fs.existsSync(scriptPath)) {
-      return { success: false, error: `Qwen setup script not found at: ${scriptPath}` };
-    }
-
-    return new Promise<{ success: boolean; error?: string }>((resolve) => {
-      exec(`bash "${scriptPath}"`, { cwd: setupCwd, timeout: 600000 }, (error: Error | null, stdout: string, stderr: string) => {
-        if (error) {
-          const details = [stderr?.trim(), stdout?.trim(), error.message].filter(Boolean).join('\n');
-          resolve({ success: false, error: details });
-        } else {
-          resolve({ success: true });
-        }
-      });
-    });
   });
 
   ipcMain.handle(TranscribeIPCChannels.IS_MLX_WHISPER_INSTALLED, async () => {
@@ -3690,7 +3688,7 @@ function setupClipboardIPCHandlers(): void {
     // Clean up LibrarianManager (stop file watchers, close database)
     librarianManager?.destroy();
 
-    // Clean up TranscriberManager (kill persistent Qwen server, unregister hotkeys)
+    // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
 
     // Clean up Council (kill debate process)
@@ -5622,6 +5620,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   nativeHelper = new NativeHelper();
   nativeHelper.start();
+  nativeHelper.warmupAudio();
 
   // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
   // NSPanel windows don't always trigger blur events on other panels, so we use
@@ -6545,7 +6544,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Listen for logout to clear manager state.
   authManager.on('userLoggedOut', async () => {
     if (preferencesManager) {
-      preferencesManager.reset();
+      await preferencesManager.resetForSignedOutState();
     }
     dynamicIslandManager?.setEnabled(false);
     dynamicIslandManager?.setGeometryTuning(DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING);
@@ -6615,18 +6614,17 @@ async function initTranscriberSystem(): Promise<void> {
       clearTimeout(wakeOverlayRefreshTimeout);
       wakeOverlayRefreshTimeout = null;
     }
-    transcriberManager?.stopQwenServer();
     transcriberManager?.stopMlxWhisperServer();
-    transcriberManager?.stopWhisperServer();
+    void transcriberManager?.stopWhisperServer();
   });
 
   powerMonitor.on('resume', () => {
     log.info('[PowerMonitor] System resumed from sleep, checking token expiry');
     scheduleWakeOverlayRefresh('power-monitor:resume');
 
-    // Pre-warm Qwen server if Hot Mic is active so it's ready when the user speaks
+    // Pre-warm the configured transcription runtime if Hot Mic is active.
     if (hotMicManager?.isActive) {
-      log.info('[PowerMonitor] Hot Mic active, pre-warming Qwen server');
+      log.info('[PowerMonitor] Hot Mic active, pre-warming transcription runtime');
       transcriberManager?.warmup().catch(() => {});
     }
 

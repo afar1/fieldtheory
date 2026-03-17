@@ -18,6 +18,7 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS } from './hotMicDefau
 import { getHotkeyManager } from './hotkeyManager';
 import {
   isParakeetEngine,
+  isTranscriptionEngine,
   type TranscriptionEngine,
 } from './types/transcribe';
 import type { HotMicEngineStatus } from './types/hotMic';
@@ -96,7 +97,7 @@ export type HotMicState = 'idle' | 'armed' | 'listening' | 'recording';
 /**
  * Fine-grained operational condition overlaid on the base state.
  * Tells the UI/IPC exactly what's happening inside the hot mic session:
- * - warming: transcription engine is starting up (e.g. Qwen server loading)
+ * - warming: transcription engine is starting up
  * - ready: engine warm, processing chunks normally
  * - degraded: primary engine failed, fell back to Whisper
  * - yielded: temporarily paused while the standard transcriber records
@@ -337,6 +338,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly AUDIO_DIAG_WINDOW_MS = 2200;
   private static readonly AUDIO_DIAG_NO_EVENT_WARN_MS = 3200;
   private static readonly AUDIO_DIAG_WARN_COOLDOWN_MS = 5000;
+  private static readonly FAILURE_ALERT_COOLDOWN_MS = 15000;
   private static readonly BACKGROUND_FILTER_THRESHOLD_BASE = 0.004;
   private static readonly BACKGROUND_FILTER_THRESHOLD_SPAN = 0.085;
   private static readonly BACKGROUND_FILTER_RATIO_BASE = 0.04;
@@ -361,7 +363,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly BOUNDARY_STITCH_MIN_WORDS = 2;
   private static readonly BOUNDARY_STITCH_MAX_WORDS = 6;
 
-  // Warmup promise — awaited before first transcription to avoid race with Qwen startup
+  // Warmup promise — awaited before first transcription to avoid racing the runtime startup
   private warmupPromise: Promise<void> | null = null;
 
   // Transcript buffer — accumulates chunks until submit word or silence discard
@@ -402,6 +404,8 @@ export class HotMicManager extends EventEmitter {
   private lastAudioLevelEventMs: number = 0;
   private lastAudioNoEventWarnMs: number = 0;
   private lastSpeechMissWarnMs: number = 0;
+  private lastFailureAlertAtMs: number = 0;
+  private lastFailureAlertKey: string | null = null;
   private audioDiagnosticsTimer: NodeJS.Timeout | null = null;
   private currentHarvestMode: HarvestMode | null = null;
 
@@ -786,7 +790,22 @@ export class HotMicManager extends EventEmitter {
   }
 
   private getConfiguredTranscriptionEngineForLogs(): TranscriptionEngine {
-    return this.preferences.getPreference('transcriptionEngine') ?? 'whisper';
+    if (this.engineStatusGetter) {
+      try {
+        const selectedEngine = this.engineStatusGetter()?.selectedEngine;
+        if (isTranscriptionEngine(selectedEngine)) {
+          return selectedEngine;
+        }
+      } catch {
+        // Fall through to raw preference lookup for logs only.
+      }
+    }
+
+    const configured = this.preferences.getPreference('transcriptionEngine') as string | undefined;
+    if (isTranscriptionEngine(configured)) {
+      return configured;
+    }
+    return 'whisper';
   }
 
   /**
@@ -1048,6 +1067,7 @@ export class HotMicManager extends EventEmitter {
         }).catch((err) => {
           // Keep chunk processing alive so engine-level fallback can still run.
           log.error('Hot Mic: warmup failed:', err);
+          this.maybeShowTranscriptionFailure(err, 'warmup');
           this.engineReady = false;
           this.setCondition('degraded');
         })
@@ -1570,6 +1590,38 @@ export class HotMicManager extends EventEmitter {
     }
   }
 
+  private maybeShowTranscriptionFailure(
+    error: unknown,
+    context: 'warmup' | 'chunk' = 'chunk'
+  ): void {
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const normalized = rawMessage.replace(/\s+/g, ' ').trim();
+    if (!normalized) return;
+
+    const now = Date.now();
+    const alertKey = `${context}:${normalized}`;
+    if (
+      this.lastFailureAlertKey === alertKey &&
+      (now - this.lastFailureAlertAtMs) < HotMicManager.FAILURE_ALERT_COOLDOWN_MS
+    ) {
+      return;
+    }
+
+    this.lastFailureAlertAtMs = now;
+    this.lastFailureAlertKey = alertKey;
+
+    let userMessage = 'Hot Mic: transcription failed';
+    if (/startup timed out/i.test(normalized)) {
+      userMessage = 'Hot Mic: transcription engine startup timed out';
+    } else if (context === 'warmup') {
+      userMessage = 'Hot Mic: primary transcription engine failed to start';
+    } else if (/timed out/i.test(normalized)) {
+      userMessage = 'Hot Mic: transcription timed out';
+    }
+
+    this.cursorStatusManager?.showCriticalMessage(userMessage);
+  }
+
   private evaluateChunkBackgroundFilter(stats: ChunkAudioStats): {
     suppressed: boolean;
     acceptedLevel: number;
@@ -1741,8 +1793,16 @@ export class HotMicManager extends EventEmitter {
     while (this.pendingChunkQueue.length >= HotMicManager.MAX_CHUNK_QUEUE_DEPTH) {
       const dropped = this.pendingChunkQueue.shift();
       if (dropped) {
-        log.warn('Hot Mic: chunk queue full (%d), dropping oldest chunk: %s',
-          HotMicManager.MAX_CHUNK_QUEUE_DEPTH, dropped.filePath);
+        log.warn(
+          'Hot Mic: chunk queue full (%d), dropping oldest chunk: %s (engine=%s ready=%s lastQueue=%sms avgAsr=%sms avgTotal=%sms)',
+          HotMicManager.MAX_CHUNK_QUEUE_DEPTH,
+          dropped.filePath,
+          this.getConfiguredTranscriptionEngineForLogs(),
+          this.engineReady,
+          this.formatTimingMs(this.lastQueueWaitMs),
+          this.formatTimingMs(this.avgTranscribeMs),
+          this.formatTimingMs(this.avgTotalPipelineMs),
+        );
         void fs.promises.unlink(dropped.filePath).catch(() => {});
       }
     }
@@ -1961,8 +2021,8 @@ export class HotMicManager extends EventEmitter {
       // Don't reset lastSpeechDetectedMs — it tracks real audio activity
       // and is used by the timer callback to survive natural pauses.
 
-      // Wait for warmup to complete before first transcription — prevents race
-      // where a chunk arrives before the Qwen server finishes loading
+      // Wait for warmup to complete before first transcription so the first
+      // chunk does not outrun the runtime startup sequence.
       if (this.warmupPromise) {
         await this.warmupPromise;
         this.warmupPromise = null;
@@ -2034,6 +2094,7 @@ export class HotMicManager extends EventEmitter {
       this.setRealtimeHarvestMode();
     } catch (error) {
       log.error('Hot Mic chunk error:', error);
+      this.maybeShowTranscriptionFailure(error, 'chunk');
       // A transcription failure that wasn't caught by fallback means degraded state.
       if (!this.whisperFallbackActive) {
         this.setCondition('degraded');
@@ -2260,7 +2321,7 @@ export class HotMicManager extends EventEmitter {
 
     // No submit word — add to buffer
     // Normalize for natural dictation: lowercase and strip trailing periods
-    // (Qwen treats each chunk as a standalone utterance, adding false sentence-ending
+    // (Some engines treat each chunk as a standalone utterance, adding false sentence-ending
     // periods at chunk boundaries). Internal periods and ?/! are preserved.
     const normalized = this.pushNormalizedTextToBuffer(trimmed);
     if (LOG_TRANSCRIPT_PAYLOADS) {
@@ -2925,7 +2986,7 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Remove Whisper/Qwen metadata-like artifacts while preserving Figure refs.
+   * Remove transcription metadata-like artifacts while preserving Figure refs.
    */
   private sanitizeTranscriptText(text: string): string {
     const trimmedText = text ? text.trim() : '';
@@ -3324,7 +3385,7 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private async transcribe(wavPath: string): Promise<string> {
-    // Use the user's configured engine (Qwen/Whisper) via TranscriberManager when available
+    // Use the user's configured engine via TranscriberManager when available.
     if (this.externalTranscribe) {
       return this.externalTranscribe(wavPath);
     }

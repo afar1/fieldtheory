@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.1.95",
+  "version": "0.1.98",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -126,24 +126,12 @@
           "to": "council.sh"
         },
         {
-          "from": "electron/main/prompts",
-          "to": "prompts"
-        },
-        {
           "from": "public/sounds",
           "to": "sounds"
         },
         {
           "from": "resources/chatterbox",
           "to": "chatterbox"
-        },
-        {
-          "from": "scripts/qwen-transcribe.py",
-          "to": "scripts/qwen-transcribe.py"
-        },
-        {
-          "from": "scripts/setup-qwen.sh",
-          "to": "scripts/setup-qwen.sh"
         },
         {
           "from": "scripts/find-mlx-python.sh",
