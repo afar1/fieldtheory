@@ -1145,7 +1145,7 @@ interface CommandsAPI {
   unshareCommand: (commandId: string) => Promise<{ success?: boolean; error?: string }>;
 
   // Handoffs - global session handoff files
-  getHandoffs?: () => Promise<HandoffInfo[]>;
+  getHandoffs?: (limit?: number) => Promise<HandoffInfo[]>;
   getHandoffContent?: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   invokeHandoff?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
 }

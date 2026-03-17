@@ -2,6 +2,8 @@ export const DEFAULT_COUNCIL_MATCHUP: CouncilMatchup = 'opus-vs-codex';
 export const DEFAULT_COUNCIL_MAX_TURNS = 6;
 export const MIN_COUNCIL_MAX_TURNS = 0;
 export const MAX_COUNCIL_MAX_TURNS = 20;
+export const COUNCIL_STALL_WARNING_MS = 45_000;
+export const COUNCIL_STALL_ERROR_MS = 120_000;
 
 export const COUNCIL_MATCHUP_OPTIONS: Array<{ value: CouncilMatchup; label: string }> = [
   { value: 'opus-vs-codex', label: 'Opus vs Codex' },
@@ -27,6 +29,32 @@ export const DEFAULT_COUNCIL_SPEAKER_COLOR = {
   border: '#525252',
 };
 
+const COUNCIL_WARMUP_PHRASES = [
+  'Reticulating splines',
+  'Scanning the repo',
+  'Pressure-testing assumptions',
+  'Walking the code paths',
+  'Comparing implementation options',
+  'Gathering its case',
+];
+
+const COUNCIL_STREAMING_PHRASES = [
+  'Streaming its turn',
+  'Comparing tradeoffs',
+  'Cross-checking evidence',
+  'Sharpening the argument',
+  'Working through the edge cases',
+  'Writing up the response',
+];
+
+export type CouncilTurnActivityTone = 'working' | 'quiet' | 'warning' | 'error';
+
+export interface CouncilTurnActivityState {
+  tone: CouncilTurnActivityTone;
+  headline: string;
+  detail: string;
+}
+
 export function formatCouncilMatchup(matchup: string): string {
   return COUNCIL_MATCHUP_OPTIONS.find((option) => option.value === matchup)?.label
     ?? matchup.split('-vs-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' vs ');
@@ -42,4 +70,108 @@ export function clampCouncilMaxTurns(value: number): number {
 export function getCouncilSpeakerColor(speaker: string) {
   const normalized = speaker.replace(/\s+[AB]$/, '');
   return COUNCIL_SPEAKER_COLORS[normalized as keyof typeof COUNCIL_SPEAKER_COLORS] ?? DEFAULT_COUNCIL_SPEAKER_COLOR;
+}
+
+export function formatCouncilElapsed(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes < 10) {
+    return `${minutes}m ${seconds}s`;
+  }
+  return `${minutes}m`;
+}
+
+export function getCouncilTurnActivityState(input: {
+  speaker: string;
+  startedAtMs: number;
+  lastOutputAtMs: number | null;
+  hasOutput: boolean;
+  latestError?: string | null;
+  nowMs?: number;
+}): CouncilTurnActivityState {
+  const nowMs = Number.isFinite(input.nowMs) ? Math.round(input.nowMs as number) : Date.now();
+  const elapsedMs = Math.max(0, nowMs - input.startedAtMs);
+  const quietMs = Math.max(0, nowMs - (input.lastOutputAtMs ?? input.startedAtMs));
+  const elapsedLabel = formatCouncilElapsed(elapsedMs);
+  const quietLabel = formatCouncilElapsed(quietMs);
+
+  if (input.latestError) {
+    return {
+      tone: 'error',
+      headline: `${input.speaker} hit an error`,
+      detail: input.latestError,
+    };
+  }
+
+  if (!input.hasOutput) {
+    if (elapsedMs < 12_000) {
+      return {
+        tone: 'working',
+        headline: pickCouncilPhrase(input.speaker, elapsedMs, COUNCIL_WARMUP_PHRASES),
+        detail: `Waiting for first output. ${elapsedLabel} elapsed.`,
+      };
+    }
+
+    if (elapsedMs < COUNCIL_STALL_WARNING_MS) {
+      return {
+        tone: 'quiet',
+        headline: `${input.speaker} is still working`,
+        detail: `No output yet. ${elapsedLabel} elapsed.`,
+      };
+    }
+
+    if (elapsedMs < COUNCIL_STALL_ERROR_MS) {
+      return {
+        tone: 'warning',
+        headline: `${input.speaker} is taking longer than usual`,
+        detail: `Still no output after ${elapsedLabel}. This may be normal on larger prompts, but keep an eye on it.`,
+      };
+    }
+
+    return {
+      tone: 'error',
+      headline: `Possible stall while waiting on ${input.speaker}`,
+      detail: `No output for ${elapsedLabel}. The turn is still running, but it may be blocked or hung.`,
+    };
+  }
+
+  if (quietMs < 12_000) {
+    return {
+      tone: 'working',
+      headline: pickCouncilPhrase(input.speaker, quietMs, COUNCIL_STREAMING_PHRASES),
+      detail: `Last output ${quietLabel} ago.`,
+    };
+  }
+
+  if (quietMs < COUNCIL_STALL_WARNING_MS) {
+    return {
+      tone: 'quiet',
+      headline: `${input.speaker} went quiet between bursts`,
+      detail: `Last output ${quietLabel} ago. ${elapsedLabel} total for this turn.`,
+    };
+  }
+
+  if (quietMs < COUNCIL_STALL_ERROR_MS) {
+    return {
+      tone: 'warning',
+      headline: `${input.speaker} may be slowing down`,
+      detail: `No new output for ${quietLabel}. The turn is still active, but this is slower than normal.`,
+    };
+  }
+
+  return {
+    tone: 'error',
+    headline: `Possible stall during ${input.speaker}'s turn`,
+    detail: `No new output for ${quietLabel}. Consider stopping if this does not recover.`,
+  };
+}
+
+function pickCouncilPhrase(speaker: string, elapsedMs: number, phrases: string[]): string {
+  const bucket = Math.floor(Math.max(0, elapsedMs) / 3500);
+  const seed = `${speaker}:${bucket}`.split('').reduce((sum, char) => sum + char.charCodeAt(0), 0);
+  return phrases[seed % phrases.length];
 }

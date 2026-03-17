@@ -4852,11 +4852,12 @@ function setupClipboardIPCHandlers(): void {
   // Handoffs - Global session handoff files
   // =========================================================================
 
-  ipcMain.handle(CommandsIPCChannels.GET_HANDOFFS, async () => {
+  ipcMain.handle(CommandsIPCChannels.GET_HANDOFFS, async (_event, limit?: number) => {
     if (!commandsManager) {
       return [];
     }
-    const handoffs = await commandsManager.getHandoffs(10);
+    const resolvedLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.round(limit as number))) : 10;
+    const handoffs = await commandsManager.getHandoffs(resolvedLimit);
     return handoffs.map(h => ({
       name: h.name,
       displayName: h.displayName,

@@ -2898,9 +2898,9 @@ const commandsAPI = {
   // Handoffs - Global session handoff files
   // ==========================================================================
 
-  // Get the 10 most recent handoff files.
-  getHandoffs: async (): Promise<HandoffInfo[]> => {
-    return ipcRenderer.invoke(CommandsIPCChannels.GET_HANDOFFS);
+  // Get the most recent handoff files.
+  getHandoffs: async (limit: number = 10): Promise<HandoffInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_HANDOFFS, limit);
   },
 
   // Get the content of a specific handoff by file path.

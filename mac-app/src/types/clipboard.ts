@@ -2,7 +2,7 @@
  * Shared types for clipboard history components.
  */
 
-export type ViewMode = 'clipboard' | 'todo' | 'feedback' | 'commands' | 'sketch' | 'librarian';
+export type ViewMode = 'clipboard' | 'todo' | 'feedback' | 'commands' | 'council' | 'sketch' | 'librarian';
 
 export type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 export type ClipboardSource = 'mac' | 'ios';
@@ -71,6 +71,7 @@ export const TAB_LABELS: Record<ViewMode, string> = {
   todo: 'Tasks',
   feedback: 'Feedback',
   commands: 'Commands',
+  council: 'Council',
   sketch: 'Sketch',
 };
 

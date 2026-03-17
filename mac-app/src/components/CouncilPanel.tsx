@@ -9,11 +9,14 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   clampCouncilMaxTurns,
+  CouncilTurnActivityState,
   COUNCIL_MATCHUP_OPTIONS,
   DEFAULT_COUNCIL_MATCHUP,
   DEFAULT_COUNCIL_MAX_TURNS,
+  formatCouncilElapsed,
   formatCouncilMatchup,
   getCouncilSpeakerColor,
+  getCouncilTurnActivityState,
   MAX_COUNCIL_MAX_TURNS,
   MIN_COUNCIL_MAX_TURNS,
 } from '../utils/council';
@@ -36,6 +39,34 @@ interface Turn {
 
 type DebateState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
 
+interface CouncilDiagnostic {
+  speaker: string;
+  message: string;
+  level: 'stderr' | 'error';
+  atMs: number;
+}
+
+function getActivityDotStyle(activity: CouncilTurnActivityState | null, nowMs: number): React.CSSProperties {
+  const tone = activity?.tone ?? 'working';
+  const colors = {
+    working: '#3b82f6',
+    quiet: '#94a3b8',
+    warning: '#f59e0b',
+    error: '#ef4444',
+  } as const;
+  const pulse = 0.78 + ((Math.sin(nowMs / 260) + 1) * 0.16);
+  return {
+    width: 10,
+    height: 10,
+    borderRadius: 999,
+    background: colors[tone],
+    boxShadow: `0 0 0 4px ${colors[tone]}22`,
+    transform: `scale(${pulse})`,
+    opacity: tone === 'quiet' ? 0.7 : 1,
+    flexShrink: 0,
+  };
+}
+
 // =============================================================================
 // Styles
 // =============================================================================
@@ -56,6 +87,10 @@ export function CouncilPanel() {
   const [currentRound, setCurrentRound] = useState(0);
   const [activeTopic, setActiveTopic] = useState('');
   const [activeMatchup, setActiveMatchup] = useState<CouncilMatchup>(DEFAULT_COUNCIL_MATCHUP);
+  const [turnStartedAtMs, setTurnStartedAtMs] = useState<number | null>(null);
+  const [lastOutputAtMs, setLastOutputAtMs] = useState<number | null>(null);
+  const [diagnostics, setDiagnostics] = useState<CouncilDiagnostic[]>([]);
+  const [nowMs, setNowMs] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -108,6 +143,25 @@ export function CouncilPanel() {
     }
   }, []);
 
+  const addDiagnostic = useCallback((level: CouncilDiagnostic['level'], speaker: string, message: string) => {
+    const normalizedMessage = message.replace(/\s+/g, ' ').trim();
+    if (!normalizedMessage) {
+      return;
+    }
+    setDiagnostics((items) => [
+      ...items.slice(-5),
+      {
+        speaker,
+        level,
+        message: normalizedMessage.slice(0, 280),
+        atMs: Date.now(),
+      },
+    ]);
+  }, []);
+
+  const isActive = debateState !== 'idle' && debateState !== 'error';
+  const allTurns = currentTurn ? [...turns, currentTurn] : turns;
+
   // Subscribe to events
   useEffect(() => {
     // Throttle UI updates for turn_chunk events
@@ -123,6 +177,8 @@ export function CouncilPanel() {
         case 'turn_start':
           // Commit any previous in-progress turn
           commitPendingTurn();
+          setTurnStartedAtMs(Date.now());
+          setLastOutputAtMs(null);
           pendingTurnRef.current = {
             speaker: event.speaker,
             content: '',
@@ -136,6 +192,7 @@ export function CouncilPanel() {
           break;
 
         case 'turn_chunk':
+          setLastOutputAtMs(Date.now());
           if (pendingTurnRef.current) {
             pendingTurnRef.current = {
               ...pendingTurnRef.current,
@@ -163,6 +220,8 @@ export function CouncilPanel() {
             clearTimeout(chunkFlushTimer);
             chunkFlushTimer = null;
           }
+          setTurnStartedAtMs(null);
+          setLastOutputAtMs(null);
           commitPendingTurn({
             convergence: event.convergence,
             action: event.action,
@@ -175,11 +234,21 @@ export function CouncilPanel() {
           }
           break;
 
+        case 'stderr':
+          addDiagnostic('stderr', event.speaker, event.content);
+          break;
+
+        case 'error':
+          addDiagnostic('error', event.speaker, event.message);
+          break;
+
         case 'debate_complete':
           if (chunkFlushTimer) {
             clearTimeout(chunkFlushTimer);
             chunkFlushTimer = null;
           }
+          setTurnStartedAtMs(null);
+          setLastOutputAtMs(null);
           commitPendingTurn();
           setDebateState('done');
           break;
@@ -197,13 +266,26 @@ export function CouncilPanel() {
       unsubStatus();
       if (chunkFlushTimer) clearTimeout(chunkFlushTimer);
     };
-  }, [commitPendingTurn]);
+  }, [addDiagnostic, commitPendingTurn]);
+
+  useEffect(() => {
+    if (!isActive && !currentTurn) {
+      return;
+    }
+    const timer = setInterval(() => {
+      setNowMs(Date.now());
+    }, 400);
+    return () => clearInterval(timer);
+  }, [currentTurn?.round, currentTurn?.speaker, isActive]);
 
   const handleStart = useCallback(async () => {
     if (!topic.trim()) return;
     setError(null);
     setTurns([]);
     setCurrentTurn(null);
+    setDiagnostics([]);
+    setTurnStartedAtMs(null);
+    setLastOutputAtMs(null);
     setDebateState('starting');
 
     const result = await councilAPI.start({
@@ -230,6 +312,9 @@ export function CouncilPanel() {
     setActiveMatchup(matchup);
     setTopic('');
     setError(null);
+    setDiagnostics([]);
+    setTurnStartedAtMs(null);
+    setLastOutputAtMs(null);
     pendingTurnRef.current = null;
   }, [matchup]);
 
@@ -244,8 +329,25 @@ export function CouncilPanel() {
     navigator.clipboard.writeText(content);
   }, []);
 
-  const isActive = debateState !== 'idle' && debateState !== 'error';
-  const allTurns = currentTurn ? [...turns, currentTurn] : turns;
+  const latestErrorForCurrentTurn = currentTurn
+    ? diagnostics
+        .slice()
+        .reverse()
+        .find((entry) => entry.level === 'error' && entry.speaker === currentTurn.speaker)?.message ?? null
+    : null;
+
+  const currentTurnActivity: CouncilTurnActivityState | null = currentTurn && turnStartedAtMs
+    ? getCouncilTurnActivityState({
+        speaker: currentTurn.speaker,
+        startedAtMs: turnStartedAtMs,
+        lastOutputAtMs,
+        hasOutput: currentTurn.content.trim().length > 0,
+        latestError: latestErrorForCurrentTurn,
+        nowMs,
+      })
+    : null;
+
+  const recentDiagnostics = diagnostics.slice(-3).reverse();
 
   // Colors
   const bg = isDark ? '#1a1a1a' : '#fafafa';
@@ -277,62 +379,123 @@ export function CouncilPanel() {
         ...({ WebkitAppRegion: 'no-drag' } as any),
       }}>
         {isActive ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
-                {activeTopic}
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 4 }}>
+                  {activeTopic}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{
+                    fontSize: 11,
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: debateState === 'done' ? '#166534' : debateState === 'finalizing' ? '#854d0e' : '#1e40af',
+                    color: '#fff',
+                  }}>
+                    {debateState === 'done' ? 'Complete' : debateState === 'finalizing' ? 'Finalizing' : `Round ${currentRound}`}
+                  </span>
+                  <span style={{ fontSize: 11, color: mutedColor }}>
+                    {formatCouncilMatchup(activeMatchup)}
+                  </span>
+                  <span style={{ fontSize: 11, color: mutedColor }}>
+                    {allTurns.length} turns
+                  </span>
+                </div>
               </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                <span style={{
-                  fontSize: 11,
-                  padding: '2px 6px',
-                  borderRadius: 4,
-                  background: debateState === 'done' ? '#166534' : debateState === 'finalizing' ? '#854d0e' : '#1e40af',
-                  color: '#fff',
-                }}>
-                  {debateState === 'done' ? 'Complete' : debateState === 'finalizing' ? 'Finalizing' : `Round ${currentRound}`}
-                </span>
-                <span style={{ fontSize: 11, color: mutedColor }}>
-                  {formatCouncilMatchup(activeMatchup)}
-                </span>
-                <span style={{ fontSize: 11, color: mutedColor }}>
-                  {allTurns.length} turns
-                </span>
-              </div>
+              {debateState !== 'done' && (
+                <button
+                  onClick={handleStop}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 6,
+                    border: 'none',
+                    background: '#dc2626',
+                    color: '#fff',
+                    fontSize: 12,
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Stop
+                </button>
+              )}
+              {debateState === 'done' && (
+                <button
+                  onClick={handleNewDebate}
+                  style={{
+                    padding: '6px 14px',
+                    borderRadius: 6,
+                    border: `1px solid ${borderColor}`,
+                    background: 'transparent',
+                    color: textColor,
+                    fontSize: 12,
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                  }}
+                >
+                  New Debate
+                </button>
+              )}
             </div>
+
             {debateState !== 'done' && (
-              <button
-                onClick={handleStop}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: 6,
-                  border: 'none',
-                  background: '#dc2626',
-                  color: '#fff',
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                }}
-              >
-                Stop
-              </button>
-            )}
-            {debateState === 'done' && (
-              <button
-                onClick={handleNewDebate}
-                style={{
-                  padding: '6px 14px',
-                  borderRadius: 6,
-                  border: `1px solid ${borderColor}`,
-                  background: 'transparent',
-                  color: textColor,
-                  fontSize: 12,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                }}
-              >
-                New Debate
-              </button>
+              <div style={{
+                marginTop: 10,
+                padding: '10px 12px',
+                borderRadius: 8,
+                border: `1px solid ${borderColor}`,
+                background: isDark ? '#202020' : '#fff',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={getActivityDotStyle(currentTurnActivity, nowMs)} />
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: textColor }}>
+                      {currentTurnActivity
+                        ? currentTurnActivity.headline
+                        : debateState === 'starting'
+                          ? 'Launching council process'
+                          : 'Waiting for the next turn'}
+                    </span>
+                    <span style={{ fontSize: 11, color: mutedColor }}>
+                      {currentTurnActivity
+                        ? currentTurnActivity.detail
+                        : debateState === 'starting'
+                          ? 'Setting up the debate and waiting for the first model turn.'
+                          : 'No model is actively streaming right now.'}
+                    </span>
+                  </div>
+                </div>
+
+                {recentDiagnostics.length > 0 && (
+                  <div style={{ display: 'grid', gap: 6, marginTop: 10 }}>
+                    {recentDiagnostics.map((entry, index) => (
+                      <div
+                        key={`${entry.atMs}-${index}`}
+                        style={{
+                          padding: '7px 8px',
+                          borderRadius: 6,
+                          background: entry.level === 'error'
+                            ? (isDark ? '#3b1111' : '#fef2f2')
+                            : (isDark ? '#1f2937' : '#eff6ff'),
+                          color: entry.level === 'error' ? '#fca5a5' : (isDark ? '#bfdbfe' : '#1d4ed8'),
+                          fontSize: 11,
+                          lineHeight: 1.4,
+                        }}
+                      >
+                        <strong style={{ fontWeight: 600 }}>
+                          {entry.speaker} {entry.level === 'error' ? 'error' : 'stderr'}
+                        </strong>
+                        {' '}
+                        {entry.message}
+                        <span style={{ color: mutedColor }}>
+                          {' · '} {formatCouncilElapsed(Math.max(0, nowMs - entry.atMs))} ago
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             )}
           </div>
         ) : (
@@ -462,6 +625,9 @@ export function CouncilPanel() {
 
         {allTurns.map((turn, i) => {
           const colors = getCouncilSpeakerColor(turn.speaker);
+          const isCurrentTurn = !turn.complete && currentTurn?.speaker === turn.speaker && currentTurn?.round === turn.round;
+          const turnActivity = isCurrentTurn ? currentTurnActivity : null;
+          const showWaitingState = !turn.complete && !turn.content.trim();
           return (
             <div
               key={i}
@@ -523,21 +689,54 @@ export function CouncilPanel() {
               </div>
 
               {/* Turn content */}
-              <pre style={{
-                margin: 0,
-                padding: '8px 10px',
-                fontSize: 12,
-                lineHeight: 1.5,
-                whiteSpace: 'pre-wrap',
-                wordBreak: 'break-word',
-                fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
-                color: textColor,
-                background: 'transparent',
-                maxHeight: 400,
-                overflowY: 'auto',
-              }}>
-                {turn.content}
-              </pre>
+              {showWaitingState ? (
+                <div style={{ padding: '12px 12px 14px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <span style={getActivityDotStyle(turnActivity, nowMs)} />
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: textColor }}>
+                        {turnActivity?.headline ?? `${turn.speaker} is working`}
+                      </span>
+                      <span style={{ fontSize: 11, color: mutedColor }}>
+                        {turnActivity?.detail ?? 'Waiting for the first output from this turn.'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <pre style={{
+                    margin: 0,
+                    padding: '8px 10px',
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace',
+                    color: textColor,
+                    background: 'transparent',
+                    maxHeight: 400,
+                    overflowY: 'auto',
+                  }}>
+                    {turn.content}
+                  </pre>
+                  {!turn.complete && turnActivity && (
+                    <div style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '0 10px 10px',
+                      color: mutedColor,
+                      fontSize: 11,
+                    }}>
+                      <span style={getActivityDotStyle(turnActivity, nowMs)} />
+                      <span>
+                        {turnActivity.headline} · {turnActivity.detail}
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           );
         })}
