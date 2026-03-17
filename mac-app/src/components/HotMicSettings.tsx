@@ -1144,11 +1144,10 @@ function getConditionColor(condition: string): string {
   }
 }
 
-function formatEngineLabel(engine: 'whisper' | 'qwen' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): string {
+function formatEngineLabel(engine: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual'): string {
   if (engine === 'parakeet-multilingual') return 'Parakeet Multilingual';
   if (engine === 'parakeet') return 'Parakeet English';
   if (engine === 'mlx-whisper') return 'MLX Whisper (large-v3-turbo)';
-  if (engine === 'qwen') return 'Qwen3-ASR';
   return 'Whisper';
 }
 
