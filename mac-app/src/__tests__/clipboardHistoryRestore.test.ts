@@ -65,6 +65,18 @@ describe('clipboardHistoryRestore', () => {
     });
   });
 
+  it('restores council as a normal persisted surface', () => {
+    const storage = createStorage({
+      [FIELD_THEORY_VIEW_STORAGE_KEY]: 'council',
+      [FIELD_THEORY_LAST_SURFACE_STORAGE_KEY]: 'council',
+    });
+
+    expect(resolveClipboardRestoreState(storage)).toEqual({
+      viewMode: 'council',
+      showSettings: false,
+    });
+  });
+
   it('persists settings as the last surface without losing the base view', () => {
     const storage = createStorage({
       [FIELD_THEORY_VIEW_STORAGE_KEY]: 'clipboard',

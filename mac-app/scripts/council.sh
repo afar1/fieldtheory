@@ -298,6 +298,8 @@ CLAUDE_CONVERGENCE=""
 CLAUDE_ACTION=""
 CODEX_CONVERGENCE=""
 CODEX_ACTION=""
+LAST_OUTPUT_A=""
+LAST_OUTPUT_B=""
 
 # ── System prompts ──────────────────────────────────────────────────────────
 SIGNAL_INSTRUCTIONS="
@@ -347,13 +349,15 @@ The plan must include:
 
 Be specific and practical. This is the deliverable — it should be immediately actionable."
 
-CONSENSUS_PROMPT="The debate is complete. Produce a FINAL CONSENSUS for the original user in markdown.
+CONSENSUS_PROMPT="The debate is complete. Produce a FINAL CONCLUSION for the original user in markdown.
+
+Do not force false agreement. Extract the strongest useful ideas from both sides, reconcile them where possible, and clearly label any unresolved tradeoffs.
 
 Requirements:
 1. Start with a concise title.
-2. Include a short summary of the consensus.
-3. Include a bullet list of the decisions the council reached.
-4. Include a bullet list of outstanding questions or tradeoffs that still need human judgment.
+2. Include a short summary of the best overall conclusion.
+3. Include a bullet list of the strongest ideas or decisions worth carrying forward.
+4. Include a bullet list of unresolved questions or tradeoffs that still need human judgment.
 5. End with a short recommended next step for the original session.
 
 Write it as something that can be pasted directly back into the original AI session."
@@ -439,17 +443,21 @@ stream_and_capture() {
     if [[ "$JSON_EVENTS" == "true" ]]; then
         # JSON mode: emit turn_chunk events instead of terminal output
         > "$capture_file"
-        local stderr_log
-        stderr_log=$(mktemp)
-        ${timeout_prefix[@]+"${timeout_prefix[@]}"} "$@" 2>"$stderr_log" | while IFS= read -r line; do
+        local stderr_reader_pid stderr_path
+        stderr_path=$(mktemp "${TMPDIR:-/tmp}/council-stderr.XXXXXX")
+        rm -f "$stderr_path"
+        mkfifo "$stderr_path"
+        while IFS= read -r line; do
+            [[ -n "$line" ]] && emit_event "stderr" "speaker" "$CURRENT_SPEAKER" "content" "$line"
+        done < "$stderr_path" &
+        stderr_reader_pid=$!
+        ${timeout_prefix[@]+"${timeout_prefix[@]}"} "$@" 2> >(tee "$stderr_path" >/dev/null) | while IFS= read -r line; do
             printf '%s\n' "$line" >> "$capture_file"
             emit_event "turn_chunk" "speaker" "$CURRENT_SPEAKER" "content" "$line"
         done
         local exit_code=${PIPESTATUS[0]}
-        if [[ -s "$stderr_log" ]]; then
-            emit_event "stderr" "speaker" "$CURRENT_SPEAKER" "content" "$(cat "$stderr_log")"
-        fi
-        rm -f "$stderr_log"
+        wait "$stderr_reader_pid" 2>/dev/null || true
+        rm -f "$stderr_path"
         if [[ "$exit_code" -ne 0 ]]; then
             if [[ "$exit_code" -eq 124 ]]; then
                 emit_event "error" "speaker" "$CURRENT_SPEAKER" "message" "Timed out after ${CALL_TIMEOUT}s"
@@ -653,6 +661,74 @@ strip_signal() {
     ' | awk '{ lines[NR]=$0 } /[^ \t]/ { last=NR } END { for(i=1;i<=last;i++) print lines[i] }'
 }
 
+has_meaningful_output() {
+    local content="$1"
+    local trimmed
+    trimmed=$(printf '%s' "$content" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [[ -n "$trimmed" ]] || return 1
+    [[ "$trimmed" != \[* ]] || return 1
+    [[ ${#trimmed} -ge 80 ]]
+}
+
+build_consensus_fallback() {
+    cat <<EOF
+# Council Conclusion
+
+## Summary
+The debate completed, but the automatic combined conclusion step did not return a reliable synthesis. Review the strongest final positions from each side below.
+
+## Strongest ideas from ${SPEAKER_A}
+
+${LAST_OUTPUT_A:-[Unavailable]}
+
+## Strongest ideas from ${SPEAKER_B}
+
+${LAST_OUTPUT_B:-[Unavailable]}
+
+## Outstanding questions
+- Review the transcript to resolve any remaining differences between the two positions.
+- Re-run the debate if you want a fresh combined conclusion after fixing the finalization issue.
+
+## Recommended next step
+Use the strongest points above as the handoff back into the original session, then decide which unresolved tradeoffs need human judgment.
+EOF
+}
+
+write_consensus_artifact() {
+    local content="$1"
+    printf '%s\n' "$content" > "$CONSENSUS_FILE"
+    printf '%s\n\n%s\n\n' "## Council Conclusion" "$content" >> "$TRANSCRIPT"
+    emit_event "consensus_written" "path" "$CONSENSUS_FILE"
+}
+
+generate_consensus_artifact() {
+    local formatted_history="$1"
+    local consensus_input
+    local consensus_content=""
+
+    consensus_input="Here is the full debate transcript:
+
+$formatted_history
+
+$CONSENSUS_PROMPT"
+
+    CURRENT_SPEAKER="$SPEAKER_A"
+    call_speaker_a "$consensus_input" "$TMPFILE" || true
+    consensus_content=$(strip_signal "$(cat "$TMPFILE")")
+
+    if ! has_meaningful_output "$consensus_content"; then
+        CURRENT_SPEAKER="$SPEAKER_B"
+        call_speaker_b "$consensus_input" "$TMPFILE" || true
+        consensus_content=$(strip_signal "$(cat "$TMPFILE")")
+    fi
+
+    if ! has_meaningful_output "$consensus_content"; then
+        consensus_content=$(build_consensus_fallback)
+    fi
+
+    write_consensus_artifact "$consensus_content"
+}
+
 # ── Helper: run one model's turn ──────────────────────────────────────────
 # Usage: run_model_turn <speaker> <prompt>
 # Sets: ${SPEAKER}_CONVERGENCE, ${SPEAKER}_ACTION (via PARSED_*)
@@ -715,6 +791,12 @@ run_model_turn() {
     clean_output=$(strip_signal "$raw_output")
     log_to_transcript "$speaker" "$ROUND" "$clean_output"
     append_history "$speaker" "$ROUND" "$clean_output"
+
+    if [[ "$speaker" == "$SPEAKER_A" ]]; then
+        LAST_OUTPUT_A="$clean_output"
+    else
+        LAST_OUTPUT_B="$clean_output"
+    fi
 
     emit_event "turn_end" "speaker" "$speaker" "round" "$ROUND" "convergence" "$PARSED_CONVERGENCE" "action" "$PARSED_ACTION"
 
@@ -992,13 +1074,16 @@ done
 
 # ── Finalization ─────────────────────────────────────────────────────────
 if [[ "$STATE" == "FINALIZING" ]]; then
-    emit_event "state_change" "from" "DEBATING" "to" "FINALIZING" "reason" "Producing final plans"
+    emit_event "state_change" "from" "DEBATING" "to" "FINALIZING" "reason" "Producing conclusion and final plans"
     term_echo "\n${MAGENTA}${BOLD}▶ FINALIZATION${RESET}"
-    term_echo "${DIM}  Both models producing their final plan...${RESET}"
-
-    printf '%s\n\n' "## Final Plans" >> "$TRANSCRIPT"
+    term_echo "${DIM}  Generating the combined conclusion first...${RESET}"
 
     FULL_FORMATTED=$(format_history "$HISTORY")
+
+    generate_consensus_artifact "$FULL_FORMATTED"
+
+    term_echo "${DIM}  Both models producing their final plan...${RESET}"
+    printf '%s\n\n' "## Final Plans" >> "$TRANSCRIPT"
 
     # Speaker A's plan
     CLAUDE_PLAN_PROMPT="Here is the full debate:
@@ -1038,29 +1123,6 @@ $PLAN_PROMPT"
         CODEX_PLAN=$(strip_signal "$(cat "$TMPFILE")")
 
         printf '%s\n\n%s\n\n' "### ${SPEAKER_B}'s Plan" "$CODEX_PLAN" >> "$TRANSCRIPT"
-    fi
-
-    if [[ "$INTERRUPTED" -eq 0 ]]; then
-        CONSENSUS_PROMPT_INPUT="Here is the full debate:
-
-$FULL_FORMATTED
-
-Here are the final plans:
-
-### ${SPEAKER_A}'s Plan
-$CLAUDE_PLAN
-
-### ${SPEAKER_B}'s Plan
-${CODEX_PLAN:-[Unavailable]}
-
-$CONSENSUS_PROMPT"
-
-        CURRENT_SPEAKER="$SPEAKER_A"
-        call_speaker_a "$CONSENSUS_PROMPT_INPUT" "$TMPFILE" || true
-        CONSENSUS_CONTENT=$(strip_signal "$(cat "$TMPFILE")")
-        printf '%s\n' "$CONSENSUS_CONTENT" > "$CONSENSUS_FILE"
-        printf '%s\n\n%s\n\n' "## Council Consensus" "$CONSENSUS_CONTENT" >> "$TRANSCRIPT"
-        emit_event "consensus_written" "path" "$CONSENSUS_FILE"
     fi
 fi
 
