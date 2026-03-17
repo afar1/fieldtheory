@@ -137,7 +137,7 @@ describe('DiagnosticsCollector audio diagnostics', () => {
         enabled: true,
         muted: false,
         soundsEnabled: true,
-        allowWhisperFallback: true,
+        allowWhisperFallback: false,
         hotkey: null,
         targetBundleId: 'com.mitchellh.ghostty',
         submitWord: 'go',

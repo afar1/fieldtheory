@@ -1260,11 +1260,11 @@ describe('HotMicManager runtime status', () => {
   it('includes engine status from the injected getter', () => {
     const { manager } = createManager();
     const engineStatus = {
-      selectedEngine: 'qwen',
+      selectedEngine: 'mlx-whisper',
       source: 'global',
       whisperModel: 'small',
       readiness: 'warming',
-      detail: 'Qwen server is warming up',
+      detail: 'MLX Whisper server is warming up',
       fallbackAvailable: true,
     } as const;
 
@@ -1290,6 +1290,21 @@ describe('HotMicManager runtime status', () => {
       fallbackAvailable: false,
     });
     expect(status.engine?.detail).toContain('engine probe failed');
+    manager.destroy();
+  });
+
+  it('uses the injected engine status for log-facing engine resolution', () => {
+    const { manager } = createManager({ transcriptionEngine: 'whisper' });
+    manager.setEngineStatusGetter(() => ({
+      selectedEngine: 'parakeet',
+      source: 'global',
+      whisperModel: 'small',
+      readiness: 'ready',
+      detail: null,
+      fallbackAvailable: true,
+    }));
+
+    expect((manager as any).getConfiguredTranscriptionEngineForLogs()).toBe('parakeet');
     manager.destroy();
   });
 
@@ -1461,6 +1476,22 @@ describe('HotMicManager chunk queue backpressure', () => {
 
     expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(1, 'command', undefined);
     expect(nativeHelper.setHarvestMode).toHaveBeenNthCalledWith(2, 'dictation', undefined);
+    manager.destroy();
+  });
+
+  it('surfaces startup timeouts to the user instead of failing silently', () => {
+    const { manager } = createManager();
+    const cursorStatusManager = { showCriticalMessage: vi.fn() };
+    manager.setCursorStatusManager(cursorStatusManager as any);
+
+    (manager as any).maybeShowTranscriptionFailure(
+      new Error('Transcription engine startup timed out (60s)'),
+      'chunk'
+    );
+
+    expect(cursorStatusManager.showCriticalMessage).toHaveBeenCalledWith(
+      'Hot Mic: transcription engine startup timed out'
+    );
     manager.destroy();
   });
 

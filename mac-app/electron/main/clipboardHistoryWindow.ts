@@ -171,6 +171,47 @@ export class ClipboardHistoryWindow {
     );
   }
 
+  private sendRendererEvent(
+    channel: 'clipboard:showHistory' | 'clipboard:showTranscriptHistory' | 'clipboard:showSettings',
+  ): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    this.window.webContents.send(channel);
+  }
+
+  private activateApplicationForClipboardWindow(showInDock: boolean): void {
+    if (showInDock) {
+      app.show();
+      return;
+    }
+
+    if (process.platform === 'darwin') {
+      app.focus({ steal: true });
+      return;
+    }
+
+    app.show();
+  }
+
+  private revealWindow(activateWindow: boolean, showInDock: boolean): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    if (activateWindow) {
+      this.window.show();
+      this.window.moveTop();
+      this.window.focus();
+      this.activateApplicationForClipboardWindow(showInDock);
+      return;
+    }
+
+    this.window.showInactive();
+    this.window.moveTop();
+  }
+
   setNativeHelper(nativeHelper: Pick<NativeHelper, 'getFrontmostApp'> | null): void {
     this.nativeHelper = nativeHelper;
   }
@@ -428,11 +469,6 @@ export class ClipboardHistoryWindow {
     this._isShowing = true;
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
 
-    if (activateWindow) {
-      // Always reactivate so the panel can receive focus after a paste flow
-      // (app.isHidden() is false but inactive — panel couldn't handle clicks).
-      app.show();
-    }
     if (!showInDock && process.platform === 'darwin') {
       app.dock.hide();
     }
@@ -463,23 +499,16 @@ export class ClipboardHistoryWindow {
         this.window.setAlwaysOnTop(true, 'screen-saver', 1);
       }
 
-      if (activateWindow) {
-        this.window.show();
-        this.window.moveTop();
-        this.window.focus();
-      } else {
-        this.window.showInactive();
-        this.window.moveTop();
-      }
+      this.revealWindow(activateWindow, showInDock);
       this.logLifecycle('show:existing-window-complete');
 
       // Notify renderer to reset search query.
-      this.window.webContents.send('clipboard:showHistory');
+      this.sendRendererEvent('clipboard:showHistory');
       if (transcriptHistoryMode) {
-        this.window.webContents.send('clipboard:showTranscriptHistory');
+        this.sendRendererEvent('clipboard:showTranscriptHistory');
       }
       if (showSettingsMode) {
-        this.window.webContents.send('clipboard:showSettings');
+        this.sendRendererEvent('clipboard:showSettings');
       }
       this.sendTargetAppInfo();
 
@@ -720,22 +749,15 @@ export class ClipboardHistoryWindow {
       }
       if (this.window && !this.window.isDestroyed()) {
         this.prepareWindowForShow();
-        if (activateWindow) {
-          this.window.show();
-          this.window.moveTop();
-          this.window.focus();
-        } else {
-          this.window.showInactive();
-          this.window.moveTop();
-        }
+        this.revealWindow(activateWindow, showInDock);
         // Notify renderer to reset search query.
-        this.window.webContents.send('clipboard:showHistory');
+        this.sendRendererEvent('clipboard:showHistory');
         if (transcriptHistoryMode) {
-          this.window.webContents.send('clipboard:showTranscriptHistory');
+          this.sendRendererEvent('clipboard:showTranscriptHistory');
         }
         // If settings mode requested, send that event too.
         if (showSettingsMode) {
-          this.window.webContents.send('clipboard:showSettings');
+          this.sendRendererEvent('clipboard:showSettings');
         }
         // Send target app info.
         this.sendTargetAppInfo();
