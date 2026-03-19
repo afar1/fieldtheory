@@ -152,6 +152,26 @@ export class ThreadStore {
     this.save(thread);
   }
 
+  setResumeStatePath(threadId: string, resumeStatePath: string | null): void {
+    const thread = this.load(threadId);
+    if (!thread) {
+      return;
+    }
+
+    thread.resumeStatePath = resumeStatePath;
+    this.save(thread);
+  }
+
+  setLastInjectedHumanMessageId(threadId: string, messageId: string | null): void {
+    const thread = this.load(threadId);
+    if (!thread) {
+      return;
+    }
+
+    thread.lastInjectedHumanMessageId = messageId;
+    this.save(thread);
+  }
+
   getAllKnownMessageIds(): Set<string> {
     const ids = new Set<string>();
 
@@ -166,6 +186,19 @@ export class ThreadStore {
 
   getReplyableRootMessageIds(): string[] {
     return this.listReplyable().map((thread) => thread.rootMessageId);
+  }
+
+  getReplyableTrackedMessageIds(): string[] {
+    const ids = new Set<string>();
+
+    for (const thread of this.listReplyable()) {
+      ids.add(thread.rootMessageId);
+      for (const message of thread.messages) {
+        ids.add(message.messageId);
+      }
+    }
+
+    return [...ids];
   }
 
   findThreadByReference(references: string[]): EmailThread | null {

@@ -55,6 +55,12 @@ export interface CouncilTurnActivityState {
   detail: string;
 }
 
+interface CouncilTurnProgressInput {
+  phase: 'attempt_start' | 'waiting' | 'streaming' | 'retrying';
+  detail: string;
+  updatedAtMs: number;
+}
+
 export function formatCouncilMatchup(matchup: string): string {
   return COUNCIL_MATCHUP_OPTIONS.find((option) => option.value === matchup)?.label
     ?? matchup.split('-vs-').map((part) => part.charAt(0).toUpperCase() + part.slice(1)).join(' vs ');
@@ -91,6 +97,7 @@ export function getCouncilTurnActivityState(input: {
   lastOutputAtMs: number | null;
   hasOutput: boolean;
   latestError?: string | null;
+  latestProgress?: CouncilTurnProgressInput | null;
   nowMs?: number;
 }): CouncilTurnActivityState {
   const nowMs = Number.isFinite(input.nowMs) ? Math.round(input.nowMs as number) : Date.now();
@@ -98,12 +105,40 @@ export function getCouncilTurnActivityState(input: {
   const quietMs = Math.max(0, nowMs - (input.lastOutputAtMs ?? input.startedAtMs));
   const elapsedLabel = formatCouncilElapsed(elapsedMs);
   const quietLabel = formatCouncilElapsed(quietMs);
+  const latestProgressAgeMs = input.latestProgress
+    ? Math.max(0, nowMs - input.latestProgress.updatedAtMs)
+    : Number.POSITIVE_INFINITY;
+  const hasFreshProgress = latestProgressAgeMs <= 20_000;
 
   if (input.latestError) {
     return {
       tone: 'error',
       headline: `${input.speaker} hit an error`,
       detail: input.latestError,
+    };
+  }
+
+  if (hasFreshProgress && input.latestProgress) {
+    if (input.latestProgress.phase === 'retrying') {
+      return {
+        tone: 'warning',
+        headline: `Retrying ${input.speaker}'s turn`,
+        detail: `${input.latestProgress.detail} ${elapsedLabel} elapsed.`,
+      };
+    }
+
+    if (!input.hasOutput) {
+      return {
+        tone: elapsedMs < COUNCIL_STALL_ERROR_MS ? 'working' : 'quiet',
+        headline: `${input.speaker} is still processing`,
+        detail: `${input.latestProgress.detail} ${elapsedLabel} elapsed.`,
+      };
+    }
+
+    return {
+      tone: 'working',
+      headline: `${input.speaker} is still processing`,
+      detail: `${input.latestProgress.detail} ${elapsedLabel} total for this turn.`,
     };
   }
 

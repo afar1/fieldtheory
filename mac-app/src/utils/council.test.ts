@@ -85,6 +85,25 @@ describe('getCouncilTurnActivityState', () => {
     expect(state.headline).toContain('taking longer than usual');
   });
 
+  it('stays in a working state when the runner is still sending fresh progress heartbeats', () => {
+    const state = getCouncilTurnActivityState({
+      speaker: 'Codex',
+      startedAtMs: 0,
+      lastOutputAtMs: null,
+      hasOutput: false,
+      latestProgress: {
+        phase: 'waiting',
+        detail: 'Process is still active and working, but has not produced visible output yet (48s).',
+        updatedAtMs: COUNCIL_STALL_WARNING_MS + 2_000,
+      },
+      nowMs: COUNCIL_STALL_WARNING_MS + 5_000,
+    });
+
+    expect(state.tone).toBe('working');
+    expect(state.headline).toContain('still processing');
+    expect(state.detail).toContain('still active and working');
+  });
+
   it('shows an error state for a likely stall after output has stopped for too long', () => {
     const state = getCouncilTurnActivityState({
       speaker: 'Sonnet',

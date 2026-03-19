@@ -34,6 +34,12 @@ function makeThread(overrides: Partial<EmailThread> = {}): EmailThread {
     updatedAt: new Date().toISOString(),
     transcriptPath: null,
     consensusPath: null,
+    resumeStatePath: null,
+    lastInjectedHumanMessageId: null,
+    source: 'local',
+    inboundMessageId: null,
+    addressedModels: [],
+    preferredStartSide: null,
     ...overrides,
   };
 }
@@ -141,6 +147,39 @@ describe('ThreadStore', () => {
     expect(loaded?.consensusPath).toBe('/path/to/consensus.md');
   });
 
+  it('persists a resume state path for paused debates', () => {
+    store.save(makeThread());
+    store.setResumeStatePath('test-thread-1', '/tmp/paused.state.json');
+
+    const loaded = store.load('test-thread-1');
+    expect(loaded?.resumeStatePath).toBe('/tmp/paused.state.json');
+  });
+
+  it('tracks the last injected human message id', () => {
+    store.save(makeThread());
+    store.setLastInjectedHumanMessageId('test-thread-1', '<reply-1@ft>');
+
+    const loaded = store.load('test-thread-1');
+    expect(loaded?.lastInjectedHumanMessageId).toBe('<reply-1@ft>');
+  });
+
+  it('persists inbound routing metadata for email-started threads', () => {
+    store.save(
+      makeThread({
+        source: 'email',
+        inboundMessageId: '<orig@fieldtheory.dev>',
+        addressedModels: ['codex', 'opus'],
+        preferredStartSide: 'a',
+      })
+    );
+
+    const loaded = store.load('test-thread-1');
+    expect(loaded?.source).toBe('email');
+    expect(loaded?.inboundMessageId).toBe('<orig@fieldtheory.dev>');
+    expect(loaded?.addressedModels).toEqual(['codex', 'opus']);
+    expect(loaded?.preferredStartSide).toBe('a');
+  });
+
   it('returns known message ids only for active threads', () => {
     store.save(
       makeThread({
@@ -183,6 +222,27 @@ describe('ThreadStore', () => {
     expect(roots).toContain('<root1@ft>');
     expect(roots).toContain('<root2@ft>');
     expect(roots).not.toContain('<root3@ft>');
+  });
+
+  it('returns tracked message ids for replyable threads', () => {
+    store.save(makeThread({
+      id: 't1',
+      status: 'active',
+      rootMessageId: '<root1@ft>',
+      messages: [makeMessage({ messageId: '<turn1@ft>' })],
+    }));
+    store.save(makeThread({
+      id: 't2',
+      status: 'closed',
+      rootMessageId: '<root2@ft>',
+      messages: [makeMessage({ messageId: '<turn2@ft>' })],
+    }));
+
+    const ids = store.getReplyableTrackedMessageIds();
+    expect(ids).toContain('<root1@ft>');
+    expect(ids).toContain('<turn1@ft>');
+    expect(ids).not.toContain('<root2@ft>');
+    expect(ids).not.toContain('<turn2@ft>');
   });
 
   it('finds a thread by root reference', () => {

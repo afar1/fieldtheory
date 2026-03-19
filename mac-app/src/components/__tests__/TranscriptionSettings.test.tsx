@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ParakeetStatus } from '../../types/window';
 import TranscriptionSettings from '../TranscriptionSettings';
 
 vi.mock('../../contexts/ThemeContext', () => ({

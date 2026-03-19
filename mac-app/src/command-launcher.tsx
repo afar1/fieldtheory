@@ -19,6 +19,7 @@ import {
   formatTimeAgo,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
+  type LauncherHotkeyMap,
 } from './commandLauncherUtils';
 import { normalizeSquaresConfig } from './utils/squaresConfig';
 
@@ -202,7 +203,7 @@ function CommandLauncher() {
   const [query, setQuery] = useState('');
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
-  const [hotkeys, setHotkeys] = useState(DEFAULT_HOTKEYS);
+  const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);

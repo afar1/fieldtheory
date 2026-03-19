@@ -34,16 +34,36 @@ interface Turn {
   round: string;
   convergence?: string;
   action?: string;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  totalTokens?: number | null;
   complete: boolean;
 }
 
-type DebateState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
+type DebateState = 'idle' | 'starting' | 'debating' | 'paused' | 'finalizing' | 'done' | 'error';
 
 interface CouncilDiagnostic {
   speaker: string;
   message: string;
   level: 'stderr' | 'error';
   atMs: number;
+}
+
+interface CouncilTurnProgress {
+  speaker: string;
+  round: string;
+  phase: 'attempt_start' | 'waiting' | 'streaming' | 'retrying';
+  detail: string;
+  attempt: number | null;
+  atMs: number;
+}
+
+function createEmptyTokenUsage() {
+  return {
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+  };
 }
 
 function getActivityDotStyle(activity: CouncilTurnActivityState | null, nowMs: number): React.CSSProperties {
@@ -67,6 +87,35 @@ function getActivityDotStyle(activity: CouncilTurnActivityState | null, nowMs: n
   };
 }
 
+function parseEventTokenCount(value: unknown): number | null {
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = typeof value === 'number' ? value : parseInt(String(value), 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatTokenCount(value: number | null | undefined): string | null {
+  if (value == null || !Number.isFinite(value)) {
+    return null;
+  }
+  return value.toLocaleString();
+}
+
+function formatTokenSummary(
+  inputTokens: number | null | undefined,
+  outputTokens: number | null | undefined,
+  totalTokens: number | null | undefined,
+): string | null {
+  const parts = [
+    inputTokens != null ? `in ${formatTokenCount(inputTokens)}` : null,
+    outputTokens != null ? `out ${formatTokenCount(outputTokens)}` : null,
+    totalTokens != null ? `total ${formatTokenCount(totalTokens)}` : null,
+  ].filter(Boolean);
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 // =============================================================================
 // Styles
 // =============================================================================
@@ -87,9 +136,18 @@ export function CouncilPanel() {
   const [currentRound, setCurrentRound] = useState(0);
   const [activeTopic, setActiveTopic] = useState('');
   const [activeMatchup, setActiveMatchup] = useState<CouncilMatchup>(DEFAULT_COUNCIL_MATCHUP);
+  const [transcriptPath, setTranscriptPath] = useState<string | null>(null);
+  const [consensusPath, setConsensusPath] = useState<string | null>(null);
   const [turnStartedAtMs, setTurnStartedAtMs] = useState<number | null>(null);
   const [lastOutputAtMs, setLastOutputAtMs] = useState<number | null>(null);
   const [diagnostics, setDiagnostics] = useState<CouncilDiagnostic[]>([]);
+  const [currentTurnProgress, setCurrentTurnProgress] = useState<CouncilTurnProgress | null>(null);
+  const [tokenUsage, setTokenUsage] = useState<{
+    inputTokens: number | null;
+    outputTokens: number | null;
+    totalTokens: number | null;
+  }>(createEmptyTokenUsage);
+  const [isStopping, setIsStopping] = useState(false);
   const [nowMs, setNowMs] = useState(() => Date.now());
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -125,6 +183,9 @@ export function CouncilPanel() {
         if (status.topic) setActiveTopic(status.topic);
         if (status.matchup) setActiveMatchup(status.matchup);
         if (status.error) setError(status.error);
+        setTranscriptPath(status.transcriptPath);
+        setConsensusPath(status.consensusPath);
+        setTokenUsage(status.tokenUsage);
       }
     });
   }, []);
@@ -185,6 +246,7 @@ export function CouncilPanel() {
             round: event.round,
             complete: false,
           };
+          setCurrentTurnProgress(null);
           setCurrentTurn(pendingTurnRef.current);
           if (event.round !== 'final') {
             setCurrentRound(parseInt(event.round, 10) || 0);
@@ -215,6 +277,17 @@ export function CouncilPanel() {
           }
           break;
 
+        case 'turn_status':
+          setCurrentTurnProgress({
+            speaker: event.speaker,
+            round: event.round,
+            phase: event.phase,
+            detail: event.detail,
+            attempt: parseEventTokenCount(event.attempt),
+            atMs: Date.now(),
+          });
+          break;
+
         case 'turn_end':
           if (chunkFlushTimer) {
             clearTimeout(chunkFlushTimer);
@@ -225,13 +298,25 @@ export function CouncilPanel() {
           commitPendingTurn({
             convergence: event.convergence,
             action: event.action,
+            inputTokens: parseEventTokenCount(event.inputTokens),
+            outputTokens: parseEventTokenCount(event.outputTokens),
+            totalTokens: parseEventTokenCount(event.totalTokens),
           });
+          setCurrentTurnProgress(null);
           break;
 
         case 'state_change':
           if (event.to === 'FINALIZING') {
             setDebateState('finalizing');
           }
+          break;
+
+        case 'transcript_written':
+          setTranscriptPath(event.path);
+          break;
+
+        case 'consensus_written':
+          setConsensusPath(event.path);
           break;
 
         case 'stderr':
@@ -250,6 +335,8 @@ export function CouncilPanel() {
           setTurnStartedAtMs(null);
           setLastOutputAtMs(null);
           commitPendingTurn();
+          setCurrentTurnProgress(null);
+          setIsStopping(false);
           setDebateState('done');
           break;
       }
@@ -258,7 +345,13 @@ export function CouncilPanel() {
     const unsubStatus = councilAPI.onStatusChanged((status) => {
       setDebateState(status.state as DebateState);
       setCurrentRound(status.currentRound);
+      setTokenUsage(status.tokenUsage);
+      setTranscriptPath(status.transcriptPath);
+      setConsensusPath(status.consensusPath);
       if (status.error) setError(status.error);
+      if (status.state === 'idle' || status.state === 'paused' || status.state === 'done' || status.state === 'error') {
+        setIsStopping(false);
+      }
     });
 
     return () => {
@@ -284,8 +377,13 @@ export function CouncilPanel() {
     setTurns([]);
     setCurrentTurn(null);
     setDiagnostics([]);
+    setTranscriptPath(null);
+    setConsensusPath(null);
+    setCurrentTurnProgress(null);
     setTurnStartedAtMs(null);
     setLastOutputAtMs(null);
+    setTokenUsage(createEmptyTokenUsage());
+    setIsStopping(false);
     setDebateState('starting');
 
     const result = await councilAPI.start({
@@ -301,6 +399,7 @@ export function CouncilPanel() {
   }, [topic, matchup, maxTurns]);
 
   const handleStop = useCallback(async () => {
+    setIsStopping(true);
     await councilAPI.stop();
   }, []);
 
@@ -310,11 +409,16 @@ export function CouncilPanel() {
     setCurrentTurn(null);
     setActiveTopic('');
     setActiveMatchup(matchup);
+    setTranscriptPath(null);
+    setConsensusPath(null);
     setTopic('');
     setError(null);
     setDiagnostics([]);
+    setCurrentTurnProgress(null);
     setTurnStartedAtMs(null);
     setLastOutputAtMs(null);
+    setTokenUsage(createEmptyTokenUsage());
+    setIsStopping(false);
     pendingTurnRef.current = null;
   }, [matchup]);
 
@@ -327,6 +431,16 @@ export function CouncilPanel() {
 
   const copyTurn = useCallback((content: string) => {
     navigator.clipboard.writeText(content);
+  }, []);
+
+  const copyArtifact = useCallback(async (filePath: string | null) => {
+    if (!filePath || !window.commandsAPI?.getHandoffContent) {
+      return;
+    }
+    const artifact = await window.commandsAPI.getHandoffContent(filePath);
+    if (artifact?.content) {
+      await navigator.clipboard.writeText(artifact.content);
+    }
   }, []);
 
   const latestErrorForCurrentTurn = currentTurn
@@ -343,11 +457,21 @@ export function CouncilPanel() {
         lastOutputAtMs,
         hasOutput: currentTurn.content.trim().length > 0,
         latestError: latestErrorForCurrentTurn,
+        latestProgress: currentTurnProgress
+          && currentTurnProgress.speaker === currentTurn.speaker
+          && currentTurnProgress.round === currentTurn.round
+          ? {
+              phase: currentTurnProgress.phase,
+              detail: currentTurnProgress.detail,
+              updatedAtMs: currentTurnProgress.atMs,
+            }
+          : null,
         nowMs,
       })
     : null;
 
   const recentDiagnostics = diagnostics.slice(-3).reverse();
+  const debateTokenSummary = formatTokenSummary(tokenUsage.inputTokens, tokenUsage.outputTokens, tokenUsage.totalTokens);
 
   // Colors
   const bg = isDark ? '#1a1a1a' : '#fafafa';
@@ -390,10 +514,22 @@ export function CouncilPanel() {
                     fontSize: 11,
                     padding: '2px 6px',
                     borderRadius: 4,
-                    background: debateState === 'done' ? '#166534' : debateState === 'finalizing' ? '#854d0e' : '#1e40af',
+                    background: debateState === 'done'
+                      ? '#166534'
+                      : debateState === 'finalizing'
+                        ? '#854d0e'
+                        : debateState === 'paused'
+                          ? '#6b7280'
+                          : '#1e40af',
                     color: '#fff',
                   }}>
-                    {debateState === 'done' ? 'Complete' : debateState === 'finalizing' ? 'Finalizing' : `Round ${currentRound}`}
+                    {debateState === 'done'
+                      ? 'Complete'
+                      : debateState === 'finalizing'
+                        ? 'Finalizing'
+                        : debateState === 'paused'
+                          ? 'Paused'
+                          : `Round ${currentRound}`}
                   </span>
                   <span style={{ fontSize: 11, color: mutedColor }}>
                     {formatCouncilMatchup(activeMatchup)}
@@ -401,11 +537,17 @@ export function CouncilPanel() {
                   <span style={{ fontSize: 11, color: mutedColor }}>
                     {allTurns.length} turns
                   </span>
+                  {debateTokenSummary && (
+                    <span style={{ fontSize: 11, color: mutedColor }}>
+                      {debateTokenSummary}
+                    </span>
+                  )}
                 </div>
               </div>
-              {debateState !== 'done' && (
+              {debateState !== 'done' && debateState !== 'paused' && (
                 <button
                   onClick={handleStop}
+                  disabled={isStopping}
                   style={{
                     padding: '6px 14px',
                     borderRadius: 6,
@@ -414,28 +556,65 @@ export function CouncilPanel() {
                     color: '#fff',
                     fontSize: 12,
                     fontWeight: 500,
-                    cursor: 'pointer',
+                    cursor: isStopping ? 'default' : 'pointer',
+                    opacity: isStopping ? 0.7 : 1,
                   }}
                 >
-                  Stop
+                  {isStopping ? 'Stopping…' : 'Stop'}
                 </button>
               )}
               {debateState === 'done' && (
-                <button
-                  onClick={handleNewDebate}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: 6,
-                    border: `1px solid ${borderColor}`,
-                    background: 'transparent',
-                    color: textColor,
-                    fontSize: 12,
-                    fontWeight: 500,
-                    cursor: 'pointer',
-                  }}
-                >
-                  New Debate
-                </button>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  {consensusPath && (
+                    <button
+                      onClick={() => void copyArtifact(consensusPath)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: 6,
+                        border: `1px solid ${borderColor}`,
+                        background: 'transparent',
+                        color: textColor,
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Copy Conclusion
+                    </button>
+                  )}
+                  {transcriptPath && (
+                    <button
+                      onClick={() => void copyArtifact(transcriptPath)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: 6,
+                        border: `1px solid ${borderColor}`,
+                        background: 'transparent',
+                        color: textColor,
+                        fontSize: 12,
+                        fontWeight: 500,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Copy Transcript
+                    </button>
+                  )}
+                  <button
+                    onClick={handleNewDebate}
+                    style={{
+                      padding: '6px 14px',
+                      borderRadius: 6,
+                      border: `1px solid ${borderColor}`,
+                      background: 'transparent',
+                      color: textColor,
+                      fontSize: 12,
+                      fontWeight: 500,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    New Debate
+                  </button>
+                </div>
               )}
             </div>
 
@@ -628,6 +807,7 @@ export function CouncilPanel() {
           const isCurrentTurn = !turn.complete && currentTurn?.speaker === turn.speaker && currentTurn?.round === turn.round;
           const turnActivity = isCurrentTurn ? currentTurnActivity : null;
           const showWaitingState = !turn.complete && !turn.content.trim();
+          const turnTokenSummary = formatTokenSummary(turn.inputTokens, turn.outputTokens, turn.totalTokens);
           return (
             <div
               key={i}
@@ -667,6 +847,11 @@ export function CouncilPanel() {
                       color: '#fff',
                     }}>
                       {turn.convergence}
+                    </span>
+                  )}
+                  {turnTokenSummary && (
+                    <span style={{ fontSize: 10, color: mutedColor }}>
+                      {turnTokenSummary}
                     </span>
                   )}
                 </div>

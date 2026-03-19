@@ -22,10 +22,15 @@ export type VisibleTranscriptionEngineOption = {
   recommended?: boolean;
 };
 
+/** Parakeet rows only (excludes whisper) so engine pickers type-check against Parakeet helpers. */
+export type ParakeetVisibleEngineOption = Omit<VisibleTranscriptionEngineOption, 'id'> & {
+  id: VisibleParakeetEngine;
+};
+
 export const DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE: VisibleTranscriptionEngine = 'parakeet';
 export const DEFAULT_VISIBLE_PARAKEET_ENGINE: VisibleParakeetEngine = 'parakeet';
 
-export const PARAKEET_VISIBLE_ENGINE_OPTIONS: VisibleTranscriptionEngineOption[] = [
+export const PARAKEET_VISIBLE_ENGINE_OPTIONS: ParakeetVisibleEngineOption[] = [
   {
     id: 'parakeet',
     label: 'Parakeet English',

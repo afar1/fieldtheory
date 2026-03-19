@@ -2104,8 +2104,8 @@ export default function SettingsPanel({
 
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Paste consensus back</span>
-            <span style={styles.rowHint}>Copy and paste the finished council consensus into the app that launched the debate.</span>
+            <span style={styles.rowLabel}>Auto-paste consensus back</span>
+            <span style={styles.rowHint}>When disabled, Field Theory will notify you that the result is ready instead of pasting it automatically.</span>
           </div>
           <div style={styles.rowControls}>
             <button

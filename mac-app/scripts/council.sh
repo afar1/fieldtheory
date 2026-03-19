@@ -31,6 +31,15 @@ SUPERVISED=false
 CALL_TIMEOUT=300  # seconds per model call
 JSON_EVENTS=false
 OPUS_VS_OPUS=false
+TURN_HEARTBEAT_INTERVAL="${COUNCIL_TURN_HEARTBEAT_INTERVAL:-8}"
+TURN_EMPTY_RETRY_LIMIT="${COUNCIL_TURN_EMPTY_RETRY_LIMIT:-1}"
+STATE_FILE_PATH=""
+RESUME_STATE_PATH=""
+HUMAN_INPUT=""
+HUMAN_INPUT_FILE=""
+RESUMING=false
+PAUSE_EXIT_CODE=42
+START_SIDE="a"
 
 # ── Colors ──────────────────────────────────────────────────────────────────
 BOLD='\033[1m'
@@ -81,6 +90,11 @@ while [[ $# -gt 0 ]]; do
         --timeout)       CALL_TIMEOUT="$2"; shift 2 ;;
         --json-events)   JSON_EVENTS=true; shift ;;
         --transcript-dir) TRANSCRIPT_DIR="$2"; shift 2 ;;
+        --state-file)    STATE_FILE_PATH="$2"; shift 2 ;;
+        --resume-state)  RESUME_STATE_PATH="$2"; RESUMING=true; shift 2 ;;
+        --human-input)   HUMAN_INPUT="$2"; shift 2 ;;
+        --human-input-file) HUMAN_INPUT_FILE="$2"; shift 2 ;;
+        --start-side)    START_SIDE="$2"; shift 2 ;;
         --opus-vs-opus)  OPUS_VS_OPUS=true; shift ;;
         --help|-h)
             echo "Usage: council.sh [OPTIONS] \"Your topic or question\""
@@ -97,6 +111,11 @@ while [[ $# -gt 0 ]]; do
             echo "  --rounds N        Deprecated alias for --max-turns"
             echo "  --json-events     Emit NDJSON events to stdout (for programmatic use)"
             echo "  --transcript-dir  Override transcript output directory"
+            echo "  --state-file P    Write resumable debate state to this file when pausing"
+            echo "  --resume-state P  Resume a paused debate from a saved state file"
+            echo "  --human-input T   Inject this human guidance before resuming"
+            echo "  --human-input-file P Read human guidance from a file before resuming"
+            echo "  --start-side a|b Choose which side opens a fresh run (default: a)"
             echo "  --opus-vs-opus    Use Claude for both sides (no codex CLI needed)"
             exit 0
             ;;
@@ -109,15 +128,18 @@ if [[ "$OPUS_VS_OPUS" == "true" && "$MATCHUP" == "opus-vs-codex" ]]; then
     MATCHUP="opus-vs-opus"
 fi
 
-if [[ -z "$TOPIC" ]]; then
-    if [[ "$JSON_EVENTS" == "true" ]]; then
-        die "No topic provided (required in --json-events mode)."
-    fi
-    echo -e "${YELLOW}No topic provided. What should the council debate?${RESET}"
-    read -r TOPIC
+if [[ -n "$HUMAN_INPUT" && -n "$HUMAN_INPUT_FILE" ]]; then
+    die "Use only one of --human-input or --human-input-file."
 fi
 
-[[ -z "$TOPIC" ]] && die "No topic provided."
+if [[ -n "$HUMAN_INPUT_FILE" ]]; then
+    [[ -f "$HUMAN_INPUT_FILE" ]] || die "Human input file does not exist: $HUMAN_INPUT_FILE"
+    HUMAN_INPUT=$(cat "$HUMAN_INPUT_FILE")
+fi
+
+if [[ "$START_SIDE" != "a" && "$START_SIDE" != "b" ]]; then
+    die "--start-side must be either 'a' or 'b'."
+fi
 
 matchup_needs_claude() {
     local matchup="$1"
@@ -237,7 +259,162 @@ You are ${speaker} (${model_label}), debating with ${opponent} (${opponent_label
 EOF
 }
 
+# Sanitize user input to prevent signal injection
+sanitize_input() {
+    printf '%s\n' "$1" | sed 's/<<<COUNCIL_/<<< COUNCIL_/g' | sed 's/<<<END_SIGNAL/<<< END_SIGNAL/g'
+}
+
+ensure_state_file_path() {
+    if [[ -n "$STATE_FILE_PATH" ]]; then
+        return
+    fi
+    if [[ -z "$TRANSCRIPT" ]]; then
+        die "Cannot determine state file path without an existing transcript path."
+    fi
+    STATE_FILE_PATH="${TRANSCRIPT%.md}.state.json"
+}
+
+write_resume_state() {
+    local pause_reason="$1"
+    ensure_state_file_path
+    mkdir -p "$(dirname "$STATE_FILE_PATH")"
+
+    local history_path
+    history_path=$(mktemp "${TMPDIR:-/tmp}/council-history.XXXXXX")
+    printf '%s' "$HISTORY" > "$history_path"
+
+    STATE_FILE_PATH_ENV="$STATE_FILE_PATH" \
+    PAUSE_REASON="$pause_reason" \
+    TOPIC="$TOPIC" \
+    MATCHUP="$MATCHUP" \
+    REPO_PATH="$REPO_PATH" \
+    MAX_TURNS="$MAX_TURNS" \
+    CLAUDE_MODEL="$CLAUDE_MODEL" \
+    CODEX_MODEL="$CODEX_MODEL" \
+    TRANSCRIPT="$TRANSCRIPT" \
+    CONSENSUS_FILE="$CONSENSUS_FILE" \
+    ROUND="$ROUND" \
+    FAIL_COUNT_CLAUDE="$FAIL_COUNT_CLAUDE" \
+    FAIL_COUNT_CODEX="$FAIL_COUNT_CODEX" \
+    CONSECUTIVE_FAIL_CLAUDE="$CONSECUTIVE_FAIL_CLAUDE" \
+    CONSECUTIVE_FAIL_CODEX="$CONSECUTIVE_FAIL_CODEX" \
+    LOW_CONVERGENCE_STREAK="$LOW_CONVERGENCE_STREAK" \
+    TOTAL_INPUT_TOKENS="$TOTAL_INPUT_TOKENS" \
+    TOTAL_OUTPUT_TOKENS="$TOTAL_OUTPUT_TOKENS" \
+    TOTAL_TOKENS="$TOTAL_TOKENS" \
+    TOKEN_USAGE_TURNS="$TOKEN_USAGE_TURNS" \
+    python3 - "$history_path" <<'PY'
+import json
+import os
+import pathlib
+import sys
+from datetime import datetime, timezone
+
+history = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="ignore")
+
+def int_or_zero(name: str) -> int:
+    raw = os.environ.get(name, "").strip()
+    return int(raw) if raw else 0
+
+data = {
+    "schema_version": 1,
+    "saved_at": datetime.now(timezone.utc).isoformat(),
+    "state": "PAUSED",
+    "pause_reason": os.environ.get("PAUSE_REASON", ""),
+    "topic": os.environ.get("TOPIC", ""),
+    "matchup": os.environ.get("MATCHUP", ""),
+    "repo_path": os.environ.get("REPO_PATH", ""),
+    "max_turns": int_or_zero("MAX_TURNS"),
+    "claude_model": os.environ.get("CLAUDE_MODEL", ""),
+    "codex_model": os.environ.get("CODEX_MODEL", ""),
+    "transcript": os.environ.get("TRANSCRIPT", ""),
+    "consensus_file": os.environ.get("CONSENSUS_FILE", ""),
+    "state_file_path": os.environ.get("STATE_FILE_PATH_ENV", ""),
+    "round": int_or_zero("ROUND"),
+    "history": history,
+    "fail_count_claude": int_or_zero("FAIL_COUNT_CLAUDE"),
+    "fail_count_codex": int_or_zero("FAIL_COUNT_CODEX"),
+    "consecutive_fail_claude": int_or_zero("CONSECUTIVE_FAIL_CLAUDE"),
+    "consecutive_fail_codex": int_or_zero("CONSECUTIVE_FAIL_CODEX"),
+    "low_convergence_streak": int_or_zero("LOW_CONVERGENCE_STREAK"),
+    "total_input_tokens": int_or_zero("TOTAL_INPUT_TOKENS"),
+    "total_output_tokens": int_or_zero("TOTAL_OUTPUT_TOKENS"),
+    "total_tokens": int_or_zero("TOTAL_TOKENS"),
+    "token_usage_turns": int_or_zero("TOKEN_USAGE_TURNS"),
+}
+
+path = pathlib.Path(os.environ["STATE_FILE_PATH_ENV"])
+path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+PY
+
+    rm -f "$history_path"
+}
+
+load_resume_state() {
+    local state_path="$1"
+    [[ -f "$state_path" ]] || die "Resume state file does not exist: $state_path"
+
+    eval "$(
+        python3 - "$state_path" <<'PY'
+import json
+import shlex
+import sys
+
+data = json.load(open(sys.argv[1], encoding="utf-8"))
+mapping = {
+    "TOPIC": data.get("topic", ""),
+    "MATCHUP": data.get("matchup", ""),
+    "REPO_PATH": data.get("repo_path", ""),
+    "MAX_TURNS": data.get("max_turns", 0),
+    "CLAUDE_MODEL": data.get("claude_model", ""),
+    "CODEX_MODEL": data.get("codex_model", ""),
+    "TRANSCRIPT": data.get("transcript", ""),
+    "CONSENSUS_FILE": data.get("consensus_file", ""),
+    "STATE_FILE_PATH": data.get("state_file_path", "") or sys.argv[1],
+    "ROUND": data.get("round", 0),
+    "HISTORY": data.get("history", ""),
+    "FAIL_COUNT_CLAUDE": data.get("fail_count_claude", 0),
+    "FAIL_COUNT_CODEX": data.get("fail_count_codex", 0),
+    "CONSECUTIVE_FAIL_CLAUDE": data.get("consecutive_fail_claude", 0),
+    "CONSECUTIVE_FAIL_CODEX": data.get("consecutive_fail_codex", 0),
+    "LOW_CONVERGENCE_STREAK": data.get("low_convergence_streak", 0),
+    "TOTAL_INPUT_TOKENS": data.get("total_input_tokens", 0),
+    "TOTAL_OUTPUT_TOKENS": data.get("total_output_tokens", 0),
+    "TOTAL_TOKENS": data.get("total_tokens", 0),
+    "TOKEN_USAGE_TURNS": data.get("token_usage_turns", 0),
+}
+
+for key, value in mapping.items():
+    print(f"{key}={shlex.quote(str(value))}")
+PY
+    )"
+
+    [[ -n "$TRANSCRIPT" ]] || die "Resume state file is missing transcript path."
+    if [[ -z "$CONSENSUS_FILE" ]]; then
+        CONSENSUS_FILE="${TRANSCRIPT%.md}_consensus.md"
+    fi
+
+    RESUME_STATE_PATH="$state_path"
+    RESUMING=true
+}
+
 # ── Preflight checks ───────────────────────────────────────────────────────
+if [[ "$RESUMING" == "true" ]]; then
+    load_resume_state "$RESUME_STATE_PATH"
+fi
+
+if [[ -z "$TOPIC" ]]; then
+    if [[ "$JSON_EVENTS" == "true" ]]; then
+        die "No topic provided (required in --json-events mode unless --resume-state is used)."
+    fi
+    echo -e "${YELLOW}No topic provided. What should the council debate?${RESET}"
+    read -r TOPIC
+fi
+
+[[ -z "$TOPIC" ]] && die "No topic provided."
+
+SAFE_TOPIC=$(sanitize_input "$TOPIC")
+
 resolve_matchup
 if matchup_needs_claude "$MATCHUP"; then
     command -v claude >/dev/null 2>&1 || die "claude CLI not found. Install it and authenticate first."
@@ -254,18 +431,24 @@ elif command -v timeout >/dev/null 2>&1; then
     TIMEOUT_CMD="timeout"
 fi
 
-# ── Setup ───────────────────────────────────────────────────────────────────
-mkdir -p "$TRANSCRIPT_DIR"
-TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
-SLUG=$(printf '%s' "$TOPIC" | tr '\n' ' ' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40 | sed 's/-$//')
-TRANSCRIPT="$TRANSCRIPT_DIR/${TIMESTAMP}_${SLUG}.md"
-CONSENSUS_FILE="$TRANSCRIPT_DIR/${TIMESTAMP}_${SLUG}_consensus.md"
-
 # Resolve repo path
 if [[ -n "$REPO_PATH" ]]; then
     [[ -d "$REPO_PATH" ]] || die "Repo path does not exist: $REPO_PATH"
     REPO_PATH=$(cd "$REPO_PATH" && pwd)
 fi
+
+# ── Setup ───────────────────────────────────────────────────────────────────
+if [[ "$RESUMING" == "true" ]]; then
+    TRANSCRIPT_DIR=$(dirname "$TRANSCRIPT")
+    mkdir -p "$TRANSCRIPT_DIR"
+else
+    mkdir -p "$TRANSCRIPT_DIR"
+    TIMESTAMP=$(date +"%Y-%m-%d_%H-%M-%S")
+    SLUG=$(printf '%s' "$TOPIC" | tr '\n' ' ' | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | cut -c1-40 | sed 's/-$//')
+    TRANSCRIPT="$TRANSCRIPT_DIR/${TIMESTAMP}_${SLUG}.md"
+    CONSENSUS_FILE="$TRANSCRIPT_DIR/${TIMESTAMP}_${SLUG}_consensus.md"
+fi
+ensure_state_file_path
 
 # ── Turn delimiter ──────────────────────────────────────────────────────────
 TURN_DELIM="<<<COUNCIL_TURN>>>"
@@ -273,13 +456,6 @@ TURN_DELIM="<<<COUNCIL_TURN>>>"
 # ── Signal sentinels ────────────────────────────────────────────────────────
 SIGNAL_BEGIN="<<<COUNCIL_SIGNAL>>>"
 SIGNAL_END="<<<END_SIGNAL>>>"
-
-# Sanitize user input to prevent signal injection
-sanitize_input() {
-    printf '%s\n' "$1" | sed 's/<<<COUNCIL_/<<< COUNCIL_/g' | sed 's/<<<END_SIGNAL/<<< END_SIGNAL/g'
-}
-
-SAFE_TOPIC=$(sanitize_input "$TOPIC")
 
 # ── State ───────────────────────────────────────────────────────────────────
 STATE="DEBATING"       # DEBATING | PAUSED | FINALIZING | DONE
@@ -292,6 +468,10 @@ CONSECUTIVE_FAIL_CODEX=0
 LOW_CONVERGENCE_STREAK=0
 NO_PROGRESS_THRESHOLD=5
 FAIL_STREAK_THRESHOLD=3
+TOTAL_INPUT_TOKENS=0
+TOTAL_OUTPUT_TOKENS=0
+TOTAL_TOKENS=0
+TOKEN_USAGE_TURNS=0
 
 # Last parsed signals
 CLAUDE_CONVERGENCE=""
@@ -300,6 +480,9 @@ CODEX_CONVERGENCE=""
 CODEX_ACTION=""
 LAST_OUTPUT_A=""
 LAST_OUTPUT_B=""
+PARSED_INPUT_TOKENS=""
+PARSED_OUTPUT_TOKENS=""
+PARSED_TOTAL_TOKENS=""
 
 # ── System prompts ──────────────────────────────────────────────────────────
 SIGNAL_INSTRUCTIONS="
@@ -363,6 +546,7 @@ Requirements:
 Write it as something that can be pasted directly back into the original AI session."
 
 # ── Transcript header ───────────────────────────────────────────────────────
+if [[ "$RESUMING" != "true" ]]; then
 cat > "$TRANSCRIPT" << EOF
 # Council Debate
 **Topic**: $TOPIC
@@ -375,6 +559,7 @@ $(if [[ -n "$REPO_PATH" ]]; then echo "**Repo**: $REPO_PATH"; fi)
 ---
 
 EOF
+fi
 
 # ── Interrupt handling ──────────────────────────────────────────────────────
 handle_interrupt() {
@@ -443,7 +628,7 @@ stream_and_capture() {
     if [[ "$JSON_EVENTS" == "true" ]]; then
         # JSON mode: emit turn_chunk events instead of terminal output
         > "$capture_file"
-        local stderr_reader_pid stderr_path
+        local stderr_reader_pid stderr_path heartbeat_pid
         stderr_path=$(mktemp "${TMPDIR:-/tmp}/council-stderr.XXXXXX")
         rm -f "$stderr_path"
         mkfifo "$stderr_path"
@@ -451,11 +636,39 @@ stream_and_capture() {
             [[ -n "$line" ]] && emit_event "stderr" "speaker" "$CURRENT_SPEAKER" "content" "$line"
         done < "$stderr_path" &
         stderr_reader_pid=$!
-        ${timeout_prefix[@]+"${timeout_prefix[@]}"} "$@" 2> >(tee "$stderr_path" >/dev/null) | while IFS= read -r line; do
+        (
+            local elapsed=0
+            while true; do
+                sleep 1 || exit 0
+                elapsed=$((elapsed + 1))
+                if (( elapsed % TURN_HEARTBEAT_INTERVAL != 0 )); then
+                    continue
+                fi
+                if [[ -s "$capture_file" ]]; then
+                    emit_turn_status "streaming" "Process is still active. Visible output started ${elapsed}s into this attempt."
+                else
+                    emit_turn_status "waiting" "Process is still active and working, but has not produced visible output yet (${elapsed}s)."
+                fi
+            done
+        ) &
+        heartbeat_pid=$!
+        local in_signal_block=0
+        ${timeout_prefix[@]+"${timeout_prefix[@]}"} "$@" 2> "$stderr_path" | while IFS= read -r line; do
             printf '%s\n' "$line" >> "$capture_file"
+            if [[ "$line" == "$SIGNAL_BEGIN" ]]; then
+                in_signal_block=1
+                continue
+            fi
+            if [[ "$in_signal_block" -eq 1 ]]; then
+                if [[ "$line" == "$SIGNAL_END" ]]; then
+                    in_signal_block=0
+                fi
+                continue
+            fi
             emit_event "turn_chunk" "speaker" "$CURRENT_SPEAKER" "content" "$line"
         done
         local exit_code=${PIPESTATUS[0]}
+        kill "$heartbeat_pid" 2>/dev/null || true
         wait "$stderr_reader_pid" 2>/dev/null || true
         rm -f "$stderr_path"
         if [[ "$exit_code" -ne 0 ]]; then
@@ -471,8 +684,12 @@ stream_and_capture() {
     else
         # Terminal mode: full output via tee with filtered display
         # Stderr goes to terminal (via fd 3) but stays out of capture.
-        if ! { ${timeout_prefix[@]+"${timeout_prefix[@]}"} "$@" 2>&3 | tee "$capture_file" | filter_terminal_output; } 3>&2; then
-            local exit_code=$?
+        local exit_code=0
+        set +e
+        { ${timeout_prefix[@]+"${timeout_prefix[@]}"} "$@" 2>&3 | tee "$capture_file" | filter_terminal_output; } 3>&2
+        exit_code=${PIPESTATUS[0]}
+        set -e
+        if [[ "$exit_code" -ne 0 ]]; then
             if [[ "$exit_code" -eq 124 ]]; then
                 echo -e "${RED}  Call timed out after ${CALL_TIMEOUT}s${RESET}" >&2
                 echo "[Timed out after ${CALL_TIMEOUT}s]" > "$capture_file"
@@ -546,8 +763,13 @@ log_to_transcript() {
     local speaker="$1"
     local round="$2"
     local content="$3"
+    local usage_summary="${4:-}"
 
-    printf '%s\n\n%s\n\n' "## $speaker — Turn $round" "$content" >> "$TRANSCRIPT"
+    printf '%s\n\n' "## $speaker — Turn $round" >> "$TRANSCRIPT"
+    if [[ -n "$usage_summary" ]]; then
+        printf '%s\n\n' "*Tokens*: $usage_summary" >> "$TRANSCRIPT"
+    fi
+    printf '%s\n\n' "$content" >> "$TRANSCRIPT"
 }
 
 # ── Helper: append a turn to history with safe delimiter ──────────────────
@@ -650,6 +872,114 @@ parse_signal() {
     return 0
 }
 
+parse_usage_metrics() {
+    local provider="$1"
+    local content="$2"
+    local parsed
+    local content_path
+    content_path=$(mktemp "${TMPDIR:-/tmp}/council-usage.XXXXXX")
+    printf '%s' "$content" > "$content_path"
+
+    parsed=$(python3 - "$provider" "$content_path" <<'PY'
+import json
+import pathlib
+import re
+import sys
+
+provider = sys.argv[1]
+text = pathlib.Path(sys.argv[2]).read_text(encoding="utf-8", errors="ignore")
+
+def find_metric(text: str, names: list[str]) -> int | None:
+    for name in names:
+        patterns = [
+            rf"^\s*([0-9][0-9,]*)\s+{name}(?:\s+tokens?)?\s*$",
+            rf"^\s*{name}(?:\s+tokens?)?\s*[:=-]?\s*([0-9][0-9,]*)\s*$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+            if match:
+                return int(match.group(1).replace(",", ""))
+    return None
+
+search_text = text
+if provider == "codex":
+    match = re.search(r"(?ims)^tokens used\s*(.*)$", text)
+    if match:
+        search_text = match.group(1)
+
+input_tokens = find_metric(search_text, ["input", "prompt"])
+output_tokens = find_metric(search_text, ["output", "completion"])
+total_tokens = find_metric(search_text, ["total"])
+
+if total_tokens is None and input_tokens is not None and output_tokens is not None:
+    total_tokens = input_tokens + output_tokens
+
+print(json.dumps({
+    "input": input_tokens,
+    "output": output_tokens,
+    "total": total_tokens,
+}))
+PY
+)
+    rm -f "$content_path"
+
+    PARSED_INPUT_TOKENS=$(printf '%s' "$parsed" | python3 -c 'import json,sys; data=json.load(sys.stdin); print("" if data["input"] is None else data["input"])')
+    PARSED_OUTPUT_TOKENS=$(printf '%s' "$parsed" | python3 -c 'import json,sys; data=json.load(sys.stdin); print("" if data["output"] is None else data["output"])')
+    PARSED_TOTAL_TOKENS=$(printf '%s' "$parsed" | python3 -c 'import json,sys; data=json.load(sys.stdin); print("" if data["total"] is None else data["total"])')
+}
+
+record_usage_totals() {
+    local input_tokens="$1"
+    local output_tokens="$2"
+    local total_tokens="$3"
+
+    if [[ -n "$input_tokens" ]]; then
+        TOTAL_INPUT_TOKENS=$((TOTAL_INPUT_TOKENS + input_tokens))
+    fi
+    if [[ -n "$output_tokens" ]]; then
+        TOTAL_OUTPUT_TOKENS=$((TOTAL_OUTPUT_TOKENS + output_tokens))
+    fi
+    if [[ -n "$total_tokens" ]]; then
+        TOTAL_TOKENS=$((TOTAL_TOKENS + total_tokens))
+    fi
+    if [[ -n "$input_tokens" || -n "$output_tokens" || -n "$total_tokens" ]]; then
+        TOKEN_USAGE_TURNS=$((TOKEN_USAGE_TURNS + 1))
+    fi
+}
+
+format_usage_summary() {
+    local input_tokens="$1"
+    local output_tokens="$2"
+    local total_tokens="$3"
+    local parts=()
+
+    if [[ -n "$input_tokens" ]]; then
+        parts+=("input $input_tokens")
+    fi
+    if [[ -n "$output_tokens" ]]; then
+        parts+=("output $output_tokens")
+    fi
+    if [[ -n "$total_tokens" ]]; then
+        parts+=("total $total_tokens")
+    fi
+
+    if [[ ${#parts[@]} -eq 0 ]]; then
+        printf ''
+        return
+    fi
+
+    local joined=""
+    local part
+    for part in "${parts[@]}"; do
+        if [[ -n "$joined" ]]; then
+            joined="$joined · "
+        fi
+        joined="$joined$part"
+    done
+
+    printf '%s' "$joined"
+}
+
 # ── Helper: strip signal block from content for transcript ────────────────
 strip_signal() {
     local content="$1"
@@ -668,6 +998,15 @@ has_meaningful_output() {
     [[ -n "$trimmed" ]] || return 1
     [[ "$trimmed" != \[* ]] || return 1
     [[ ${#trimmed} -ge 80 ]]
+}
+
+has_substantive_turn_output() {
+    local content="$1"
+    local trimmed
+    trimmed=$(printf '%s' "$content" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')
+    [[ -n "$trimmed" ]] || return 1
+    [[ "$trimmed" != \[* ]] || return 1
+    return 0
 }
 
 build_consensus_fallback() {
@@ -734,23 +1073,114 @@ $CONSENSUS_PROMPT"
 # Sets: ${SPEAKER}_CONVERGENCE, ${SPEAKER}_ACTION (via PARSED_*)
 # Updates: fail counters, HISTORY, transcript
 CURRENT_SPEAKER=""
+CURRENT_EVENT_ROUND=""
+CURRENT_TURN_ATTEMPT=1
+
+emit_turn_status() {
+    local phase="$1"
+    local detail="$2"
+    [[ "$JSON_EVENTS" == "true" ]] || return 0
+
+    local round_label="${CURRENT_EVENT_ROUND:-$ROUND}"
+    emit_event \
+        "turn_status" \
+        "speaker" "$CURRENT_SPEAKER" \
+        "round" "$round_label" \
+        "phase" "$phase" \
+        "attempt" "$CURRENT_TURN_ATTEMPT" \
+        "detail" "$detail"
+}
 
 run_model_turn() {
     local speaker="$1"
     local prompt="$2"
     CURRENT_SPEAKER="$speaker"
+    CURRENT_EVENT_ROUND="$ROUND"
+    CURRENT_TURN_ATTEMPT=1
 
-    emit_event "turn_start" "speaker" "$speaker" "round" "$ROUND"
+    emit_event "turn_start" "speaker" "$speaker" "round" "$CURRENT_EVENT_ROUND"
     print_header "$speaker" "$ROUND"
 
+    local attempt=1
+    local max_attempts=$((TURN_EMPTY_RETRY_LIMIT + 1))
+    local attempt_prompt="$prompt"
     local call_ok=true
-    if [[ "$speaker" == "$SPEAKER_A" ]]; then
-        call_speaker_a "$prompt" "$TMPFILE" || call_ok=false
-    else
-        call_speaker_b "$prompt" "$TMPFILE" || call_ok=false
+    local raw_output=""
+    local clean_output=""
+    local usage_summary=""
+    local turn_input_tokens=""
+    local turn_output_tokens=""
+    local turn_total_tokens=""
+
+    while [[ "$attempt" -le "$max_attempts" ]]; do
+        CURRENT_TURN_ATTEMPT="$attempt"
+        emit_turn_status "attempt_start" "Starting attempt $attempt for ${speaker}."
+
+        call_ok=true
+        if [[ "$speaker" == "$SPEAKER_A" ]]; then
+            call_speaker_a "$attempt_prompt" "$TMPFILE" || call_ok=false
+        else
+            call_speaker_b "$attempt_prompt" "$TMPFILE" || call_ok=false
+        fi
+
+        raw_output=$(cat "$TMPFILE")
+        clean_output=$(strip_signal "$raw_output")
+
+        if [[ "$speaker" == "$SPEAKER_A" ]]; then
+            parse_usage_metrics "$PROVIDER_A" "$raw_output"
+        else
+            parse_usage_metrics "$PROVIDER_B" "$raw_output"
+        fi
+
+        if [[ -n "$PARSED_INPUT_TOKENS" ]]; then
+            turn_input_tokens=$(( ${turn_input_tokens:-0} + PARSED_INPUT_TOKENS ))
+        fi
+        if [[ -n "$PARSED_OUTPUT_TOKENS" ]]; then
+            turn_output_tokens=$(( ${turn_output_tokens:-0} + PARSED_OUTPUT_TOKENS ))
+        fi
+        if [[ -n "$PARSED_TOTAL_TOKENS" ]]; then
+            turn_total_tokens=$(( ${turn_total_tokens:-0} + PARSED_TOTAL_TOKENS ))
+        fi
+
+        if parse_signal "$raw_output"; then
+            true
+        else
+            echo -e "${DIM}  (no valid signal from $speaker — defaulting to continue)${RESET}"
+        fi
+
+        if [[ "$call_ok" == "true" ]] && has_substantive_turn_output "$clean_output"; then
+            break
+        fi
+
+        if [[ "$call_ok" != "true" ]]; then
+            emit_event "error" "speaker" "$speaker" "message" "${speaker} failed to respond on attempt $attempt."
+            PARSED_CONVERGENCE="low"
+            PARSED_ACTION="continue"
+            break
+        fi
+
+        emit_event "error" "speaker" "$speaker" "message" "${speaker} returned no substantive debate content on attempt $attempt."
+
+        if [[ "$attempt" -lt "$max_attempts" ]]; then
+            emit_turn_status "retrying" "${speaker} returned only control markers or empty content. Retrying with a stricter prompt."
+            attempt_prompt="Your previous response did not contain any substantive debate content. You must produce a real response that directly addresses the other model's arguments before the required signal block.
+
+$prompt"
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        call_ok=false
+        clean_output="[Failed to produce a substantive response.]"
+        PARSED_CONVERGENCE="low"
+        PARSED_ACTION="continue"
+        break
+    done
+
+    if [[ -n "$turn_input_tokens" || -n "$turn_output_tokens" || -n "$turn_total_tokens" ]]; then
+        record_usage_totals "${turn_input_tokens:-}" "${turn_output_tokens:-}" "${turn_total_tokens:-}"
     fi
 
-    # Update fail counters
     if [[ "$call_ok" == "true" ]]; then
         if [[ "$speaker" == "$SPEAKER_A" ]]; then
             CONSECUTIVE_FAIL_CLAUDE=0
@@ -767,17 +1197,6 @@ run_model_turn() {
         fi
     fi
 
-    local raw_output
-    raw_output=$(cat "$TMPFILE")
-
-    # Parse signal
-    if parse_signal "$raw_output"; then
-        true  # PARSED_CONVERGENCE and PARSED_ACTION are set
-    else
-        echo -e "${DIM}  (no valid signal from $speaker — defaulting to continue)${RESET}"
-    fi
-
-    # Store per-model signals
     if [[ "$speaker" == "$SPEAKER_A" ]]; then
         CLAUDE_CONVERGENCE="$PARSED_CONVERGENCE"
         CLAUDE_ACTION="$PARSED_ACTION"
@@ -786,10 +1205,8 @@ run_model_turn() {
         CODEX_ACTION="$PARSED_ACTION"
     fi
 
-    # Strip signal, log, and append to history
-    local clean_output
-    clean_output=$(strip_signal "$raw_output")
-    log_to_transcript "$speaker" "$ROUND" "$clean_output"
+    usage_summary=$(format_usage_summary "${turn_input_tokens:-}" "${turn_output_tokens:-}" "${turn_total_tokens:-}")
+    log_to_transcript "$speaker" "$ROUND" "$clean_output" "$usage_summary"
     append_history "$speaker" "$ROUND" "$clean_output"
 
     if [[ "$speaker" == "$SPEAKER_A" ]]; then
@@ -798,7 +1215,7 @@ run_model_turn() {
         LAST_OUTPUT_B="$clean_output"
     fi
 
-    emit_event "turn_end" "speaker" "$speaker" "round" "$ROUND" "convergence" "$PARSED_CONVERGENCE" "action" "$PARSED_ACTION"
+    emit_event "turn_end" "speaker" "$speaker" "round" "$ROUND" "convergence" "$PARSED_CONVERGENCE" "action" "$PARSED_ACTION" "inputTokens" "${turn_input_tokens:-}" "outputTokens" "${turn_output_tokens:-}" "totalTokens" "${turn_total_tokens:-}"
 
     # Export clean output for use in building the next prompt
     LAST_CLEAN_OUTPUT="$clean_output"
@@ -885,6 +1302,42 @@ pause_menu() {
     esac
 }
 
+resume_debate_context() {
+    [[ "$RESUMING" == "true" ]] || return 0
+
+    if [[ -n "$HUMAN_INPUT" ]]; then
+        local safe_input
+        safe_input=$(sanitize_input "$HUMAN_INPUT")
+        append_history "Human" "$ROUND" "$safe_input"
+        log_to_transcript "Human guidance" "$ROUND" "$HUMAN_INPUT"
+        printf '\n%s\n\n' "*[Human guidance received while resuming after turn $ROUND]*" >> "$TRANSCRIPT"
+    else
+        printf '\n%s\n\n' "*[Debate resumed after pause at turn $ROUND]*" >> "$TRANSCRIPT"
+    fi
+
+    CLAUDE_CONVERGENCE=""
+    CLAUDE_ACTION=""
+    CODEX_CONVERGENCE=""
+    CODEX_ACTION=""
+    INTERRUPTED=0
+    STATE="DEBATING"
+
+    emit_event "resume_started" "round" "$ROUND" "stateFilePath" "$STATE_FILE_PATH" "hasHumanInput" "$([[ -n "$HUMAN_INPUT" ]] && printf 'true' || printf 'false')"
+    emit_event "state_change" "from" "PAUSED" "to" "DEBATING" "reason" "Resuming debate from saved state"
+}
+
+pause_and_exit_json_mode() {
+    local reason="$1"
+
+    STATE="PAUSED"
+    printf '\n%s\n\n' "*[$reason at turn $ROUND — awaiting resume]*" >> "$TRANSCRIPT"
+    write_resume_state "$reason"
+    emit_event "state_change" "from" "DEBATING" "to" "PAUSED" "reason" "$reason"
+    emit_event "pause_requested" "reason" "$reason" "round" "$ROUND" "stateFilePath" "$STATE_FILE_PATH"
+    emit_event "transcript_written" "path" "$TRANSCRIPT"
+    exit "$PAUSE_EXIT_CODE"
+}
+
 # ── Start ───────────────────────────────────────────────────────────────────
 term_echo "\n${MAGENTA}${BOLD}╔══════════════════════════════════════════════════════════════╗${RESET}"
 term_echo "${MAGENTA}${BOLD}║                     MODEL COUNCIL                           ║${RESET}"
@@ -896,12 +1349,18 @@ if [[ "$SUPERVISED" == "true" ]]; then
 fi
 term_echo ""
 
-HISTORY=""
+if [[ "$RESUMING" != "true" ]]; then
+    HISTORY=""
+fi
 TMPFILE=$(mktemp)
 LAST_CLEAN_OUTPUT=""
 trap 'rm -f "$TMPFILE"; trap - INT' EXIT
 
-emit_event "debate_start" "topic" "$TOPIC" "maxTurns" "$MAX_TURNS" "matchup" "$MATCHUP"
+if [[ "$RESUMING" == "true" ]]; then
+    resume_debate_context
+else
+    emit_event "debate_start" "topic" "$TOPIC" "maxTurns" "$MAX_TURNS" "matchup" "$MATCHUP"
+fi
 
 # ── Main debate loop ────────────────────────────────────────────────────────
 while [[ "$STATE" == "DEBATING" || "$STATE" == "PAUSED" ]]; do
@@ -933,53 +1392,78 @@ while [[ "$STATE" == "DEBATING" || "$STATE" == "PAUSED" ]]; do
 
     term_echo "\n${CYAN}${BOLD}▶ Turn $ROUND${RESET}"
 
-    # ── Claude's turn ────────────────────────────────────────────────────
-    if [[ "$ROUND" -eq 1 ]]; then
-        CLAUDE_PROMPT="Topic for debate: $SAFE_TOPIC
+    if [[ "$ROUND" -eq 1 && "$START_SIDE" == "b" ]]; then
+        CODEX_PROMPT="Topic for debate: $SAFE_TOPIC
 
 Present your opening position. Be specific and concrete."
+        run_model_turn "$SPEAKER_B" "$CODEX_PROMPT"
+
+        if [[ "$INTERRUPTED" -eq 1 ]]; then
+            STATE="PAUSED"
+            printf '\n%s\n\n' "*[Human interrupted at turn $ROUND]*" >> "$TRANSCRIPT"
+            pause_menu "Human interrupted"
+            if [[ "$STATE" != "DEBATING" ]]; then
+                break
+            fi
+        fi
+
+        CLAUDE_PROMPT="Topic for debate: $SAFE_TOPIC
+
+Another AI ($SPEAKER_B) has presented this opening argument:
+
+$LAST_CLEAN_OUTPUT
+
+Now present your response. Engage directly with their points — agree where they're right, challenge where they're wrong, and add what they missed."
+        run_model_turn "$SPEAKER_A" "$CLAUDE_PROMPT"
     else
-        RECENT=$(trim_history "$HISTORY")
-        CLAUDE_PROMPT="Here is the debate so far:
+        # ── Claude's turn ────────────────────────────────────────────────
+        if [[ "$ROUND" -eq 1 ]]; then
+            CLAUDE_PROMPT="Topic for debate: $SAFE_TOPIC
+
+Present your opening position. Be specific and concrete."
+        else
+            RECENT=$(trim_history "$HISTORY")
+            CLAUDE_PROMPT="Here is the debate so far:
 
 $RECENT
 
 Continue the debate. Respond directly to ${SPEAKER_B}'s latest points. Where do you agree? Where do you push back? What new considerations should be raised?"
-        CLAUDE_PROMPT="${CLAUDE_PROMPT}$(signal_context_note "$SPEAKER_B" "$CODEX_ACTION")"
-    fi
-
-    run_model_turn "$SPEAKER_A" "$CLAUDE_PROMPT"
-
-    # ── Check interrupt between model calls ──────────────────────────────
-    if [[ "$INTERRUPTED" -eq 1 ]]; then
-        STATE="PAUSED"
-        printf '\n%s\n\n' "*[Human interrupted at turn $ROUND]*" >> "$TRANSCRIPT"
-        pause_menu "Human interrupted"
-        if [[ "$STATE" != "DEBATING" ]]; then
-            break
+            CLAUDE_PROMPT="${CLAUDE_PROMPT}$(signal_context_note "$SPEAKER_B" "$CODEX_ACTION")"
         fi
-    fi
 
-    # ── Codex's turn ─────────────────────────────────────────────────────
-    if [[ "$ROUND" -eq 1 ]]; then
-        CODEX_PROMPT="Topic for debate: $SAFE_TOPIC
+        run_model_turn "$SPEAKER_A" "$CLAUDE_PROMPT"
+
+        # ── Check interrupt between model calls ──────────────────────────
+        if [[ "$INTERRUPTED" -eq 1 ]]; then
+            STATE="PAUSED"
+            printf '\n%s\n\n' "*[Human interrupted at turn $ROUND]*" >> "$TRANSCRIPT"
+            pause_menu "Human interrupted"
+            if [[ "$STATE" != "DEBATING" ]]; then
+                break
+            fi
+        fi
+
+        # ── Codex's turn ─────────────────────────────────────────────────
+        if [[ "$ROUND" -eq 1 ]]; then
+            CODEX_PROMPT="Topic for debate: $SAFE_TOPIC
 
 Another AI ($SPEAKER_A) has presented this opening argument:
 
 $LAST_CLEAN_OUTPUT
 
 Now present your response. Engage directly with their points — agree where they're right, challenge where they're wrong, and add what they missed."
-    else
-        RECENT=$(trim_history "$HISTORY")
-        CODEX_PROMPT="Here is the debate so far:
+        else
+            RECENT=$(trim_history "$HISTORY")
+            CODEX_PROMPT="Here is the debate so far:
 
 $RECENT
 
 Continue the debate. Respond directly to ${SPEAKER_A}'s latest points. Where do you agree? Where do you push back? What new considerations should be raised?"
-        CODEX_PROMPT="${CODEX_PROMPT}$(signal_context_note "$SPEAKER_A" "$CLAUDE_ACTION")"
-    fi
+            CODEX_PROMPT="${CODEX_PROMPT}$(signal_context_note "$SPEAKER_A" "$CLAUDE_ACTION")"
+        fi
 
-    run_model_turn "$SPEAKER_B" "$CODEX_PROMPT"
+        run_model_turn "$SPEAKER_B" "$CODEX_PROMPT"
+    fi
 
     # ── Log signals ──────────────────────────────────────────────────────
     term_echo "${DIM}  Signals — ${SPEAKER_A}: ${CLAUDE_CONVERGENCE}/${CLAUDE_ACTION} | ${SPEAKER_B}: ${CODEX_CONVERGENCE}/${CODEX_ACTION}${RESET}"
@@ -1023,10 +1507,7 @@ Continue the debate. Respond directly to ${SPEAKER_A}'s latest points. Where do 
 
     if [[ "$CLAUDE_ACTION" == "pause" && "$CODEX_ACTION" == "pause" ]]; then
         if [[ "$JSON_EVENTS" == "true" ]]; then
-            emit_event "state_change" "from" "DEBATING" "to" "FINALIZING" "reason" "Both models requested pause — auto-finalizing in JSON mode"
-            printf '\n%s\n\n' "*[Both models requested pause — auto-finalizing (JSON mode)]*" >> "$TRANSCRIPT"
-            STATE="FINALIZING"
-            break
+            pause_and_exit_json_mode "Both models requested human input"
         fi
         echo -e "\n${YELLOW}${BOLD}Both models request human input.${RESET}"
         STATE="PAUSED"
@@ -1126,6 +1607,23 @@ $PLAN_PROMPT"
     fi
 fi
 
+if [[ "$TOKEN_USAGE_TURNS" -gt 0 ]]; then
+    {
+        printf '%s\n\n' '## Token Summary'
+        printf '%s\n' "- Turns with usage data: $TOKEN_USAGE_TURNS"
+        if [[ "$TOTAL_INPUT_TOKENS" -gt 0 ]]; then
+            printf '%s\n' "- Total input tokens: $TOTAL_INPUT_TOKENS"
+        fi
+        if [[ "$TOTAL_OUTPUT_TOKENS" -gt 0 ]]; then
+            printf '%s\n' "- Total output tokens: $TOTAL_OUTPUT_TOKENS"
+        fi
+        if [[ "$TOTAL_TOKENS" -gt 0 ]]; then
+            printf '%s\n' "- Total tokens: $TOTAL_TOKENS"
+        fi
+        printf '\n'
+    } >> "$TRANSCRIPT"
+fi
+
 # ── Done ────────────────────────────────────────────────────────────────────
 emit_event "transcript_written" "path" "$TRANSCRIPT"
 emit_event "debate_complete" "totalRounds" "$ROUND" "outcome" "$STATE"
@@ -1138,5 +1636,9 @@ if [[ "$TOTAL_FAILS" -gt 0 ]]; then
     term_echo "${YELLOW}  (${SPEAKER_A}: $FAIL_COUNT_CLAUDE failed | ${SPEAKER_B}: $FAIL_COUNT_CODEX failed)${RESET}"
 fi
 term_echo "${DIM}  Turns: $ROUND | State: $STATE${RESET}"
+if [[ "$TOKEN_USAGE_TURNS" -gt 0 ]]; then
+    local_usage_summary=$(format_usage_summary "$TOTAL_INPUT_TOKENS" "$TOTAL_OUTPUT_TOKENS" "$TOTAL_TOKENS")
+    term_echo "${DIM}  Token usage: $local_usage_summary${RESET}"
+fi
 term_echo "\n${DIM}Full transcript saved to:${RESET}"
 term_echo "${BOLD}$TRANSCRIPT${RESET}\n"

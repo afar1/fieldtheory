@@ -3813,6 +3813,17 @@ const CouncilIPCChannels = {
   STATUS_CHANGED: 'council:statusChanged',
 } as const;
 
+const EmailDebateIPCChannels = {
+  GET_CONFIG: 'emailDebate:getConfig',
+  SAVE_CONFIG: 'emailDebate:saveConfig',
+  TEST_CONNECTION: 'emailDebate:testConnection',
+  GET_THREADS: 'emailDebate:getThreads',
+  GET_THREAD: 'emailDebate:getThread',
+  CLOSE_THREAD: 'emailDebate:closeThread',
+  REOPEN_THREAD: 'emailDebate:reopenThread',
+  EVENT: 'emailDebate:event',
+} as const;
+
 const councilAPI = {
   start: async (config: {
     topic: string;
@@ -3836,10 +3847,16 @@ const councilAPI = {
     state: string;
     currentRound: number;
     topic: string | null;
+    repoPath: string | null;
     error: string | null;
     matchup: string;
     transcriptPath: string | null;
     consensusPath: string | null;
+    tokenUsage: {
+      inputTokens: number | null;
+      outputTokens: number | null;
+      totalTokens: number | null;
+    };
   }> => {
     return ipcRenderer.invoke(CouncilIPCChannels.GET_STATUS);
   },
@@ -3884,6 +3901,48 @@ const councilAPI = {
 };
 
 contextBridge.exposeInMainWorld('councilAPI', councilAPI);
+
+const emailDebateAPI = {
+  getConfig: async (): Promise<any> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.GET_CONFIG);
+  },
+
+  saveConfig: async (config: any): Promise<any> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.SAVE_CONFIG, config);
+  },
+
+  testConnection: async (): Promise<any> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.TEST_CONNECTION);
+  },
+
+  getThreads: async (): Promise<any[]> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.GET_THREADS);
+  },
+
+  getThread: async (threadId: string): Promise<any | null> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.GET_THREAD, threadId);
+  },
+
+  closeThread: async (threadId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.CLOSE_THREAD, threadId);
+  },
+
+  reopenThread: async (threadId: string): Promise<boolean> => {
+    return ipcRenderer.invoke(EmailDebateIPCChannels.REOPEN_THREAD, threadId);
+  },
+
+  onEvent: (callback: (event: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, emailEvent: any) => {
+      callback(emailEvent);
+    };
+    ipcRenderer.on(EmailDebateIPCChannels.EVENT, handler);
+    return () => {
+      ipcRenderer.removeListener(EmailDebateIPCChannels.EVENT, handler);
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld('emailDebateAPI', emailDebateAPI);
 
 // =============================================================================
 // Auto-subscribe to auth debug events for DevTools visibility
@@ -3949,6 +4008,7 @@ declare global {
     librarianAPI: LibrarianAPI;
     metricsAPI: MetricsAPI;
     squaresAPI: SquaresAPIType;
+    emailDebateAPI: typeof emailDebateAPI;
     scenarioAPI: ScenarioAPI;
     stripeConfig: {
       paymentLink: string;

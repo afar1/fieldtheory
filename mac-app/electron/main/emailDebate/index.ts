@@ -39,14 +39,17 @@ export type {
 } from './coordinator';
 export type {
   CreateThreadOptions,
+  DeferredTurnDelivery,
+  HandleCouncilEventResult,
 } from './manager';
 export type {
   EmailDebateConfig,
   EmailDebateConnectionStatus,
   EmailDebateEvent,
   EmailDebateInboxKey,
+  EmailDebateInboundTransport,
+  EmailDebateOutboundTransport,
   EmailDebateThreadStatus,
-  EmailDebateTransport,
   EmailThread,
   EmailThreadMessage,
   ImapConfig,

@@ -95,11 +95,11 @@ export async function testSmtpConnection(smtp: SmtpConfig): Promise<boolean> {
 
 export async function pollForReplies(
   imap: ImapConfig,
-  threadRootMessageIds: string[],
+  trackedMessageIds: string[],
   knownMessageIds: Set<string>,
   sinceDaysAgo = 7
 ): Promise<IncomingReply[]> {
-  if (threadRootMessageIds.length === 0) {
+  if (trackedMessageIds.length === 0) {
     return [];
   }
 
@@ -150,9 +150,9 @@ export async function pollForReplies(
         }
 
         const isOurThread =
-          references.some((ref) => threadRootMessageIds.includes(ref)) ||
+          references.some((ref) => trackedMessageIds.includes(ref)) ||
           (inReplyTo != null &&
-            threadRootMessageIds.some((rootMessageId) => inReplyTo.includes(rootMessageId)));
+            trackedMessageIds.some((trackedMessageId) => inReplyTo.includes(trackedMessageId)));
 
         if (!isOurThread) {
           continue;

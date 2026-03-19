@@ -8,10 +8,16 @@
 
 import { EventEmitter } from 'events';
 import fs from 'fs';
+import path from 'path';
 import { spawn as defaultSpawn, type ChildProcess } from 'child_process';
 import type { CouncilEvent } from '../types/council';
 import { createLogger } from '../logger';
-import { EmailDebateManager, type CreateThreadOptions } from './manager';
+import {
+  EmailDebateManager,
+  type CreateThreadOptions,
+  type DeferredTurnDelivery,
+} from './manager';
+import type { EmailThread, EmailThreadMessage } from './types';
 
 const log = createLogger('EmailDebateCoordinator');
 
@@ -32,6 +38,11 @@ export class EmailDebateCoordinator extends EventEmitter {
   private readonly spawnFn: typeof defaultSpawn;
   private readonly existsSyncFn: typeof fs.existsSync;
   private readonly processes = new Map<string, ChildProcess>();
+  private readonly stoppingThreadIds = new Set<string>();
+  private readonly deferredRestarts = new Map<
+    string,
+    { body: string; messageId: string; preferredStarterSpeaker: string }
+  >();
 
   constructor(options: EmailDebateCoordinatorOptions) {
     super();
@@ -72,14 +83,72 @@ export class EmailDebateCoordinator extends EventEmitter {
     return { threadId: thread.id };
   }
 
+  startThread(threadId: string): { success: boolean; error?: string } {
+    if (this.processes.has(threadId) || this.stoppingThreadIds.has(threadId) || this.deferredRestarts.has(threadId)) {
+      return { success: false, error: `Debate already running for thread ${threadId}` };
+    }
+
+    const thread = this.emailManager.getThread(threadId);
+    if (!thread) {
+      return { success: false, error: `Unknown email debate thread: ${threadId}` };
+    }
+
+    const args = ['--json-events', '--matchup', thread.matchup];
+    if (thread.maxTurns != null) {
+      args.push('--max-turns', String(thread.maxTurns));
+    }
+    if (thread.repoPath) {
+      args.push('--repo', thread.repoPath);
+    }
+    if (thread.transcriptPath) {
+      args.push('--transcript-dir', path.dirname(thread.transcriptPath));
+    }
+    if (thread.preferredStartSide) {
+      args.push('--start-side', thread.preferredStartSide);
+    }
+    args.push(thread.topic);
+
+    this.launchThreadProcess(threadId, args);
+    this.emit('debate_started', { threadId, args: [this.councilPath, ...args] });
+    return { success: true };
+  }
+
+  handleHumanReply(
+    threadId: string,
+    humanInput: string,
+    options?: { preferredStarterSpeaker?: string },
+  ): { success: boolean; mode?: 'resume' | 'follow_up'; error?: string } {
+    if (this.processes.has(threadId) || this.stoppingThreadIds.has(threadId) || this.deferredRestarts.has(threadId)) {
+      return { success: false, error: `Debate already running for thread ${threadId}` };
+    }
+
+    const thread = this.emailManager.getThread(threadId);
+    if (!thread) {
+      return { success: false, error: `Unknown email debate thread: ${threadId}` };
+    }
+
+    if (thread.resumeStatePath) {
+      this.launchThreadProcess(threadId, this.buildResumeArgs(thread, humanInput));
+      this.emit('debate_resumed', { threadId, resumeStatePath: thread.resumeStatePath });
+      return { success: true, mode: 'resume' };
+    }
+
+    this.launchThreadProcess(
+      threadId,
+      this.buildFollowUpArgs(thread, humanInput, options?.preferredStarterSpeaker)
+    );
+    this.emit('debate_follow_up_started', { threadId });
+    return { success: true, mode: 'follow_up' };
+  }
+
   stopDebate(threadId: string): boolean {
     const child = this.processes.get(threadId);
     if (!child) {
       return false;
     }
 
+    this.stoppingThreadIds.add(threadId);
     child.kill('SIGTERM');
-    this.processes.delete(threadId);
     this.emit('debate_stopped', { threadId });
     return true;
   }
@@ -90,10 +159,13 @@ export class EmailDebateCoordinator extends EventEmitter {
 
   destroy(): void {
     for (const [threadId, child] of this.processes) {
+      this.stoppingThreadIds.add(threadId);
       child.kill('SIGTERM');
       this.emit('debate_stopped', { threadId });
     }
     this.processes.clear();
+    this.stoppingThreadIds.clear();
+    this.deferredRestarts.clear();
     this.removeAllListeners();
   }
 
@@ -130,6 +202,7 @@ export class EmailDebateCoordinator extends EventEmitter {
 
     child.on('error', (error) => {
       this.processes.delete(threadId);
+      this.stoppingThreadIds.delete(threadId);
       log.error('Debate process error for %s: %s', threadId, error);
       this.emit('debate_error', {
         threadId,
@@ -138,25 +211,18 @@ export class EmailDebateCoordinator extends EventEmitter {
     });
 
     child.on('close', (code) => {
-      this.processes.delete(threadId);
-
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer.trim()) as CouncilEvent;
-          void this.forwardCouncilEvent(threadId, event);
-        } catch {
-          // Ignore trailing non-JSON content.
-        }
-      }
-
-      this.emit('debate_exited', { threadId, code: code ?? null });
+      void this.handleProcessClose(threadId, code, buffer);
     });
   }
 
   private async forwardCouncilEvent(threadId: string, event: CouncilEvent): Promise<void> {
     try {
-      await this.emailManager.handleCouncilEvent(threadId, event);
+      const result = await this.emailManager.handleCouncilEvent(threadId, event);
       this.emit('council_event', { threadId, event });
+
+      if (result.deferredTurn) {
+        this.deferThreadForHumanReply(threadId, result.deferredTurn);
+      }
     } catch (error) {
       log.error('Failed handling council event for %s: %s', threadId, error);
       this.emit('debate_error', {
@@ -164,5 +230,181 @@ export class EmailDebateCoordinator extends EventEmitter {
         message: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  private async handleProcessClose(
+    threadId: string,
+    code: number | null,
+    trailingBuffer: string,
+  ): Promise<void> {
+    this.processes.delete(threadId);
+    this.stoppingThreadIds.delete(threadId);
+
+    if (trailingBuffer.trim()) {
+      try {
+        const event = JSON.parse(trailingBuffer.trim()) as CouncilEvent;
+        await this.forwardCouncilEvent(threadId, event);
+      } catch {
+        // Ignore trailing non-JSON content.
+      }
+    }
+
+    const deferredRestart = this.deferredRestarts.get(threadId);
+    if (deferredRestart) {
+      this.deferredRestarts.delete(threadId);
+      const result = this.handleHumanReply(threadId, deferredRestart.body, {
+        preferredStarterSpeaker: deferredRestart.preferredStarterSpeaker,
+      });
+      if (result.success) {
+        this.emailManager.markHumanReplyInjected(threadId, deferredRestart.messageId);
+      } else {
+        this.emit('debate_error', {
+          threadId,
+          message: result.error ?? 'Failed restarting deferred debate thread',
+        });
+      }
+    }
+
+    if (code === 42) {
+      const pendingReply = this.emailManager.getPendingHumanReply(threadId);
+      if (pendingReply) {
+        const result = this.handleHumanReply(threadId, pendingReply.body);
+        if (result.success) {
+          this.emailManager.markHumanReplyInjected(threadId, pendingReply.messageId);
+        }
+      }
+    }
+
+    this.emit('debate_exited', { threadId, code: code ?? null });
+  }
+
+  private launchThreadProcess(threadId: string, args: string[]): void {
+    if (!this.existsSyncFn(this.councilPath)) {
+      throw new Error(`council.sh not found at ${this.councilPath}`);
+    }
+
+    const child = this.spawnFn('bash', [this.councilPath, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+      detached: process.platform !== 'win32',
+    });
+
+    this.processes.set(threadId, child);
+    this.attachProcess(threadId, child);
+  }
+
+  private buildResumeArgs(thread: EmailThread, humanInput: string): string[] {
+    const args = ['--json-events', '--resume-state', thread.resumeStatePath ?? ''];
+    const trimmedInput = humanInput.trim();
+    if (trimmedInput) {
+      args.push('--human-input', trimmedInput);
+    }
+    return args;
+  }
+
+  private buildFollowUpArgs(
+    thread: EmailThread,
+    humanInput: string,
+    preferredStarterSpeaker?: string,
+  ): string[] {
+    const args = ['--json-events', '--matchup', thread.matchup];
+
+    if (thread.maxTurns != null) {
+      args.push('--max-turns', String(thread.maxTurns));
+    }
+    if (thread.repoPath) {
+      args.push('--repo', thread.repoPath);
+    }
+    if (thread.transcriptPath) {
+      args.push('--transcript-dir', path.dirname(thread.transcriptPath));
+    }
+    const preferredStartSide = this.resolvePreferredStartSide(thread, preferredStarterSpeaker);
+    if (preferredStartSide) {
+      args.push('--start-side', preferredStartSide);
+    }
+
+    args.push(this.buildFollowUpTopic(thread, humanInput));
+    return args;
+  }
+
+  private buildFollowUpTopic(thread: EmailThread, humanInput: string): string {
+    const recentMessages = thread.messages.slice(-8).map((message) => this.formatThreadMessage(message));
+    const sections = [
+      'Continue this existing email debate as a fresh round on the same thread.',
+      'Carry forward the prior discussion unless the human explicitly redirects it.',
+      '',
+      `Original topic:\n${thread.topic}`,
+      '',
+      `Matchup: ${thread.matchup}`,
+      thread.maxTurns != null ? `Max turns: ${thread.maxTurns}` : null,
+      thread.repoPath ? `Repo: ${thread.repoPath}` : null,
+      recentMessages.length > 0 ? `Recent thread context:\n${recentMessages.join('\n\n---\n\n')}` : null,
+      '',
+      `New human reply:\n${humanInput.trim() || '[No additional guidance provided]'}`,
+    ].filter(Boolean);
+
+    return sections.join('\n');
+  }
+
+  private formatThreadMessage(message: EmailThreadMessage): string {
+    const body = message.body.trim();
+    const trimmedBody =
+      body.length > 2_000
+        ? `${body.slice(0, 2_000).trimEnd()}\n[Message truncated for follow-up context]`
+        : body;
+
+    return `[${message.fromName} | ${message.sentAt}]\n${trimmedBody}`;
+  }
+
+  private deferThreadForHumanReply(threadId: string, deferredTurn: DeferredTurnDelivery): void {
+    if (!this.processes.has(threadId) || this.deferredRestarts.has(threadId)) {
+      return;
+    }
+
+    this.deferredRestarts.set(threadId, {
+      body: deferredTurn.humanBody,
+      messageId: deferredTurn.humanMessageId,
+      preferredStarterSpeaker: deferredTurn.speaker,
+    });
+    this.stopDebate(threadId);
+  }
+
+  private resolvePreferredStartSide(
+    thread: EmailThread,
+    preferredStarterSpeaker?: string,
+  ): 'a' | 'b' | null {
+    if (!preferredStarterSpeaker) {
+      return null;
+    }
+
+    const normalizedSpeaker = preferredStarterSpeaker.trim().toLowerCase();
+    if (normalizedSpeaker.endsWith(' a')) {
+      return 'a';
+    }
+    if (normalizedSpeaker.endsWith(' b')) {
+      return 'b';
+    }
+
+    const [leftModel, rightModel] = thread.matchup.split('-vs-');
+    const normalizedModel =
+      normalizedSpeaker.includes('codex')
+        ? 'codex'
+        : normalizedSpeaker.includes('sonnet')
+          ? 'sonnet'
+          : normalizedSpeaker.includes('opus')
+            ? 'opus'
+            : null;
+
+    if (!normalizedModel) {
+      return null;
+    }
+    if (normalizedModel === leftModel && normalizedModel !== rightModel) {
+      return 'a';
+    }
+    if (normalizedModel === rightModel && normalizedModel !== leftModel) {
+      return 'b';
+    }
+
+    return null;
   }
 }

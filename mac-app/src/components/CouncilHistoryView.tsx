@@ -22,7 +22,7 @@ interface LoadedCouncilDetail {
 }
 
 interface CouncilStatusSnapshot {
-  state: 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
+  state: 'idle' | 'starting' | 'debating' | 'paused' | 'finalizing' | 'done' | 'error';
   currentRound: number;
   topic: string | null;
   error: string | null;
@@ -423,6 +423,46 @@ export default function CouncilHistoryView() {
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              {detail?.consensusContent && (
+                <button
+                  onClick={() => {
+                    const text = detail?.consensusContent;
+                    if (text) void navigator.clipboard.writeText(text);
+                  }}
+                  style={{
+                    padding: '7px 10px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '7px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Copy Conclusion
+                </button>
+              )}
+              {detail?.transcriptContent && (
+                <button
+                  onClick={() => {
+                    const text = detail?.transcriptContent;
+                    if (text) void navigator.clipboard.writeText(text);
+                  }}
+                  style={{
+                    padding: '7px 10px',
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '7px',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Copy Transcript
+                </button>
+              )}
               {window.councilAPI && (
                 <button
                   onClick={() => void window.councilAPI?.showWindow()}

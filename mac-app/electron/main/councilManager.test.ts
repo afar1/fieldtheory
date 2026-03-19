@@ -67,7 +67,7 @@ describe('CouncilManager', () => {
     expect(mockSpawn).toHaveBeenCalledWith(
       'bash',
       expect.arrayContaining(['--json-events', '--matchup', 'opus-vs-opus', 'Test topic']),
-      expect.any(Object)
+      expect.objectContaining({ detached: true })
     );
   });
 
@@ -228,6 +228,48 @@ describe('CouncilManager', () => {
     expect(manager.getStatus().currentRound).toBe(3);
   });
 
+  it('moves into paused state when council requests human input', async () => {
+    await manager.start({ topic: 'Test', opusVsOpus: true });
+    emitLine(proc, {
+      type: 'pause_requested',
+      reason: 'Need human input',
+      round: '1',
+      stateFilePath: '/tmp/paused.state.json',
+    });
+
+    expect(manager.getStatus().state).toBe('paused');
+  });
+
+  it('accumulates token usage from turn_end events', async () => {
+    await manager.start({ topic: 'Test', opusVsOpus: true });
+    emitLine(proc, {
+      type: 'turn_end',
+      speaker: 'Claude A',
+      round: '1',
+      convergence: 'medium',
+      action: 'continue',
+      inputTokens: '1200',
+      outputTokens: '300',
+      totalTokens: '1500',
+    });
+    emitLine(proc, {
+      type: 'turn_end',
+      speaker: 'Claude B',
+      round: '1',
+      convergence: 'medium',
+      action: 'continue',
+      inputTokens: '900',
+      outputTokens: '200',
+      totalTokens: '1100',
+    });
+
+    expect(manager.getStatus().tokenUsage).toEqual({
+      inputTokens: 2100,
+      outputTokens: 500,
+      totalTokens: 2600,
+    });
+  });
+
   it('sets error state on non-zero exit', async () => {
     await manager.start({ topic: 'Test', opusVsOpus: true });
     proc.emit('close', 1);
@@ -240,6 +282,20 @@ describe('CouncilManager', () => {
     emitLine(proc, { type: 'debate_start', topic: 'Test', maxTurns: '20' });
     proc.emit('close', 0);
     expect(manager.getStatus().state).toBe('done');
+  });
+
+  it('does not mark a paused debate as errored when council exits with the pause code', async () => {
+    await manager.start({ topic: 'Test', opusVsOpus: true });
+    emitLine(proc, {
+      type: 'pause_requested',
+      reason: 'Need human input',
+      round: '1',
+      stateFilePath: '/tmp/paused.state.json',
+    });
+
+    proc.emit('close', 42);
+    expect(manager.getStatus().state).toBe('paused');
+    expect(manager.getStatus().error).toBeNull();
   });
 
   it('does not override done state on zero exit after debate_complete', async () => {
@@ -265,6 +321,26 @@ describe('CouncilManager', () => {
     expect(proc.kill).toHaveBeenCalledWith('SIGTERM');
   });
 
+  it('kills the full process group when the council pid is available', async () => {
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    proc.pid = 4242;
+
+    await manager.start({ topic: 'Test', opusVsOpus: true });
+    manager.stop();
+
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+    killSpy.mockRestore();
+  });
+
+  it('marks the debate as stopped by user after stop closes the process', async () => {
+    await manager.start({ topic: 'Test', opusVsOpus: true });
+    manager.stop();
+    proc.emit('close', null);
+
+    expect(manager.getStatus().state).toBe('error');
+    expect(manager.getStatus().error).toBe('Debate stopped by user');
+  });
+
   // -- getStatus() --
 
   it('returns idle status initially', () => {
@@ -272,9 +348,15 @@ describe('CouncilManager', () => {
     expect(status.state).toBe('idle');
     expect(status.currentRound).toBe(0);
     expect(status.topic).toBeNull();
+    expect(status.repoPath).toBeNull();
     expect(status.matchup).toBe('opus-vs-codex');
     expect(status.transcriptPath).toBeNull();
     expect(status.consensusPath).toBeNull();
+    expect(status.tokenUsage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+    });
   });
 
   // -- lifecycle --
@@ -290,6 +372,32 @@ describe('CouncilManager', () => {
     const result = await manager.start({ topic: 'Second', opusVsOpus: true });
     expect(result.success).toBe(true);
     expect(manager.getStatus().topic).toBe('Second');
+  });
+
+  it('resets accumulated token usage when a new debate starts', async () => {
+    await manager.start({ topic: 'First', opusVsOpus: true });
+    emitLine(proc, {
+      type: 'turn_end',
+      speaker: 'Claude A',
+      round: '1',
+      convergence: 'medium',
+      action: 'continue',
+      inputTokens: '1200',
+      outputTokens: '300',
+      totalTokens: '1500',
+    });
+    proc.emit('close', 0);
+
+    const proc2 = createFakeProcess();
+    mockSpawn.mockReturnValue(proc2);
+
+    const result = await manager.start({ topic: 'Second', opusVsOpus: true });
+    expect(result.success).toBe(true);
+    expect(manager.getStatus().tokenUsage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+    });
   });
 
   it('does not skip codex check when opusVsOpus is true', async () => {
