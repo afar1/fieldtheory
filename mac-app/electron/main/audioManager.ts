@@ -4,6 +4,8 @@ import { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 
 const log = createLogger('Audio');
+const DEFAULT_INPUT_SWITCH_TIMEOUT_MS = 1500;
+const DEFAULT_INPUT_SETTLE_GRACE_MS = 250;
 
 /**
  * AudioManager handles all audio device state and implements the priority policy.
@@ -427,7 +429,7 @@ export class AudioManager extends EventEmitter {
     this.isSettingDefaultInput = true;
 
     try {
-      this.helper.setDefaultInput(this.priorityDeviceId);
+      await this.applyDefaultInputAndWaitForSettle(this.priorityDeviceId);
       this.defaultInputId = this.priorityDeviceId;
       this.emit('deviceEnforced');
     } finally {
@@ -444,6 +446,53 @@ export class AudioManager extends EventEmitter {
    */
   async ensurePriorityEnforced(): Promise<void> {
     await this.enforcePriority();
+  }
+
+  private async applyDefaultInputAndWaitForSettle(deviceId: string): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.helper.removeListener('defaultInputChanged', onDefaultInputChanged);
+      };
+
+      const settleAfterGrace = () => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        setTimeout(resolve, DEFAULT_INPUT_SETTLE_GRACE_MS);
+      };
+
+      const onDefaultInputChanged = (changedDeviceId: string | null) => {
+        if (changedDeviceId !== deviceId) {
+          return;
+        }
+        log.info('Default input switch observed for %s; waiting %dms to settle', deviceId, DEFAULT_INPUT_SETTLE_GRACE_MS);
+        settleAfterGrace();
+      };
+
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        log.warn(
+          'Timed out waiting for default input switch to %s after %dms; continuing',
+          deviceId,
+          DEFAULT_INPUT_SWITCH_TIMEOUT_MS,
+        );
+        resolve();
+      }, DEFAULT_INPUT_SWITCH_TIMEOUT_MS);
+
+      this.helper.on('defaultInputChanged', onDefaultInputChanged);
+
+      try {
+        this.helper.setDefaultInput(deviceId);
+      } catch (error) {
+        cleanup();
+        reject(error);
+      }
+    });
   }
 
   /**

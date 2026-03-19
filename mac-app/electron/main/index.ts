@@ -69,6 +69,13 @@ import { CouncilManager } from './councilManager';
 import { CouncilWindow } from './councilWindow';
 import { CouncilIPCChannels, DEFAULT_COUNCIL_MATCHUP, DEFAULT_COUNCIL_MAX_TURNS } from './types/council';
 import type { CouncilConfig, CouncilPreferences } from './types/council';
+import {
+  DEFAULT_EMAIL_DEBATE_CONFIG,
+  EmailDebateCoordinator,
+  EmailDebateIPCChannels,
+  EmailDebateManager,
+} from './emailDebate';
+import type { EmailDebateConfig, EmailDebateEvent } from './emailDebate';
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
 import { GazeDebugOverlayManager } from './gaze/gazeDebugOverlayManager';
@@ -124,13 +131,117 @@ function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
   return lower.includes('fieldtheory') || lower.includes('electron');
 }
 
+function parseEnvContent(content: string): Record<string, string> {
+  const env: Record<string, string> = {};
+
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) {
+      continue;
+    }
+
+    const [key, ...valueParts] = trimmed.split('=');
+    if (!key || valueParts.length === 0) {
+      continue;
+    }
+
+    env[key.trim()] = valueParts.join('=').trim();
+  }
+
+  return env;
+}
+
+function getLocalEnvPaths(): string[] {
+  return [
+    '/Users/afar/dev/fieldtheory/.env.local',
+    path.join(__dirname, '../../../.env.local'),
+    path.join(__dirname, '../../.env.local'),
+    path.join(process.cwd(), '.env.local'),
+    path.join(process.cwd(), '../.env.local'),
+    path.join(process.cwd(), 'mac-app/.env.local'),
+    path.join(app.getAppPath(), '.env.local'),
+    path.join(app.getAppPath(), '../.env.local'),
+  ];
+}
+
+let cachedLocalEnv: Record<string, string> | null = null;
+
+function getOptionalEnvValue(key: string): string | undefined {
+  if (process.env[key]) {
+    return process.env[key];
+  }
+
+  if (cachedLocalEnv) {
+    return cachedLocalEnv[key];
+  }
+
+  for (const envPath of getLocalEnvPaths()) {
+    try {
+      if (fs.existsSync(envPath)) {
+        cachedLocalEnv = parseEnvContent(fs.readFileSync(envPath, 'utf-8'));
+        return cachedLocalEnv[key];
+      }
+    } catch {
+      // Ignore errors and continue searching.
+    }
+  }
+
+  cachedLocalEnv = {};
+  return undefined;
+}
+
+function parseOptionalBoolean(value: string | undefined): boolean | undefined {
+  if (value == null) {
+    return undefined;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+    return true;
+  }
+  if (['0', 'false', 'no', 'off'].includes(normalized)) {
+    return false;
+  }
+
+  return undefined;
+}
+
+function parseOptionalNumber(value: string | undefined): number | undefined {
+  if (value == null || value.trim() === '') {
+    return undefined;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function parseCsvEnv(value: string | undefined): string[] {
+  if (!value) {
+    return [];
+  }
+
+  return [...new Set(value.split(',').map((item) => item.trim()).filter(Boolean))];
+}
+
 function getCouncilPreferences(): CouncilPreferences {
   return {
     defaultMatchup: preferencesManager?.getPreference('councilDefaultMatchup') ?? DEFAULT_COUNCIL_MATCHUP,
     defaultMaxTurns: preferencesManager?.getPreference('councilDefaultMaxTurns') ?? DEFAULT_COUNCIL_MAX_TURNS,
     autoOpenWindow: preferencesManager?.getPreference('councilAutoOpenWindow') ?? true,
-    autoPasteConsensus: preferencesManager?.getPreference('councilAutoPasteConsensus') ?? true,
+    autoPasteConsensus: preferencesManager?.getPreference('councilAutoPasteConsensus') ?? false,
   };
+}
+
+function promptToReviewCouncilResult(): void {
+  const notification = new Notification({
+    title: 'Council Result Ready',
+    body: 'A debate has finished. Click to open the Council window and review it.',
+    silent: false,
+  });
+  notification.on('click', () => {
+    councilWindow?.show();
+  });
+  notification.show();
 }
 
 async function pasteCouncilConsensusBack(consensusPath: string): Promise<void> {
@@ -170,55 +281,14 @@ async function pasteCouncilConsensusBack(consensusPath: string): Promise<void> {
 // In development, the file is in the mac-app directory.
 // In production, we use the bundled values or fall back to hardcoded ones.
 function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
-  // First check if already set (e.g., via Vite define or process.env)
-  if (process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY) {
-    return {
-      supabaseUrl: process.env.VITE_SUPABASE_URL,
-      supabaseAnonKey: process.env.VITE_SUPABASE_ANON_KEY,
-    };
-  }
+  const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL');
+  const supabaseAnonKey = getOptionalEnvValue('VITE_SUPABASE_ANON_KEY');
 
-  // Try to load from .env.local file
-  // In development: __dirname is electron-dist/main, so ../../ goes to mac-app/
-  // In production: app.getAppPath() points to the app bundle
-  const envPaths = [
-    '/Users/afar/dev/fieldtheory/.env.local',    // Dev: hardcoded repo root for reliability
-    path.join(__dirname, '../../../.env.local'), // Dev: electron-dist/main -> repo root/.env.local
-    path.join(__dirname, '../../.env.local'),    // Dev: electron-dist/main -> mac-app/.env.local
-    path.join(process.cwd(), '.env.local'),      // Dev: current working directory
-    path.join(process.cwd(), '../.env.local'),   // Dev: if cwd is mac-app, go to repo root
-    path.join(process.cwd(), 'mac-app/.env.local'), // Dev: if running from repo root
-    path.join(app.getAppPath(), '.env.local'),   // Production: inside app bundle
-    path.join(app.getAppPath(), '../.env.local'), // Production: next to app bundle
-  ];
-  
-  for (const envPath of envPaths) {
-    try {
-      if (fs.existsSync(envPath)) {
-        const content = fs.readFileSync(envPath, 'utf-8');
-        const lines = content.split('\n');
-        const env: Record<string, string> = {};
-        
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed && !trimmed.startsWith('#')) {
-            const [key, ...valueParts] = trimmed.split('=');
-            if (key && valueParts.length > 0) {
-              env[key.trim()] = valueParts.join('=').trim();
-            }
-          }
-        }
-        
-        if (env.VITE_SUPABASE_URL && env.VITE_SUPABASE_ANON_KEY) {
-          return {
-            supabaseUrl: env.VITE_SUPABASE_URL,
-            supabaseAnonKey: env.VITE_SUPABASE_ANON_KEY,
-          };
-        }
-      }
-    } catch (err) {
-      // Ignore errors, try next path
-    }
+  if (supabaseUrl && supabaseAnonKey) {
+    return {
+      supabaseUrl,
+      supabaseAnonKey,
+    };
   }
 
   // Production fallback - anon key is public by design, protected by RLS.
@@ -226,6 +296,64 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
     supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
     supabaseAnonKey: 'FIELD_THEORY_SUPABASE_ANON_KEY',
   };
+}
+
+function resolveCouncilScriptPath(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'council.sh');
+  }
+
+  return path.join(app.getAppPath(), 'scripts', 'council.sh');
+}
+
+function resolveEmailDebateConfigFromEnv(): Partial<EmailDebateConfig> {
+  const legacyTransport = getOptionalEnvValue('EMAIL_DEBATE_TRANSPORT');
+  const outboundTransport = getOptionalEnvValue('EMAIL_DEBATE_OUTBOUND_TRANSPORT') ?? legacyTransport;
+  const inboundTransport = getOptionalEnvValue('EMAIL_DEBATE_INBOUND_TRANSPORT')
+    ?? (legacyTransport === 'agentmail' ? 'agentmail' : legacyTransport === 'smtp' ? 'imap' : undefined);
+  const smtpPort = parseOptionalNumber(getOptionalEnvValue('EMAIL_DEBATE_SMTP_PORT'));
+  const imapPort = parseOptionalNumber(getOptionalEnvValue('EMAIL_DEBATE_IMAP_PORT'));
+  const pollIntervalMs = parseOptionalNumber(getOptionalEnvValue('EMAIL_DEBATE_POLL_INTERVAL_MS'));
+
+  return {
+    enabled: parseOptionalBoolean(getOptionalEnvValue('EMAIL_DEBATE_ENABLED')) ?? DEFAULT_EMAIL_DEBATE_CONFIG.enabled,
+    outboundTransport: outboundTransport === 'smtp' ? 'smtp' : DEFAULT_EMAIL_DEBATE_CONFIG.outboundTransport,
+    inboundTransport: inboundTransport === 'agentmail' ? 'agentmail' : DEFAULT_EMAIL_DEBATE_CONFIG.inboundTransport,
+    fromAddress: getOptionalEnvValue('EMAIL_DEBATE_FROM_ADDRESS') ?? DEFAULT_EMAIL_DEBATE_CONFIG.fromAddress,
+    fromName: getOptionalEnvValue('EMAIL_DEBATE_FROM_NAME') ?? DEFAULT_EMAIL_DEBATE_CONFIG.fromName,
+    defaultRecipients: parseCsvEnv(getOptionalEnvValue('EMAIL_DEBATE_DEFAULT_RECIPIENTS')),
+    pollIntervalMs: pollIntervalMs ?? DEFAULT_EMAIL_DEBATE_CONFIG.pollIntervalMs,
+    agentMailApiKey: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_API_KEY') ?? DEFAULT_EMAIL_DEBATE_CONFIG.agentMailApiKey,
+    agentMailDomain: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_DOMAIN') ?? DEFAULT_EMAIL_DEBATE_CONFIG.agentMailDomain,
+    agentMailInboxIds: {
+      opus: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_INBOX_OPUS'),
+      sonnet: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_INBOX_SONNET'),
+      codex: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_INBOX_CODEX'),
+      council: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_INBOX_COUNCIL'),
+    },
+    smtp: {
+      host: getOptionalEnvValue('EMAIL_DEBATE_SMTP_HOST') ?? DEFAULT_EMAIL_DEBATE_CONFIG.smtp.host,
+      port: smtpPort ?? DEFAULT_EMAIL_DEBATE_CONFIG.smtp.port,
+      secure: parseOptionalBoolean(getOptionalEnvValue('EMAIL_DEBATE_SMTP_SECURE')) ?? DEFAULT_EMAIL_DEBATE_CONFIG.smtp.secure,
+      user: getOptionalEnvValue('EMAIL_DEBATE_SMTP_USER') ?? DEFAULT_EMAIL_DEBATE_CONFIG.smtp.user,
+      pass: getOptionalEnvValue('EMAIL_DEBATE_SMTP_PASS') ?? DEFAULT_EMAIL_DEBATE_CONFIG.smtp.pass,
+    },
+    imap: {
+      host: getOptionalEnvValue('EMAIL_DEBATE_IMAP_HOST') ?? DEFAULT_EMAIL_DEBATE_CONFIG.imap.host,
+      port: imapPort ?? DEFAULT_EMAIL_DEBATE_CONFIG.imap.port,
+      secure: parseOptionalBoolean(getOptionalEnvValue('EMAIL_DEBATE_IMAP_SECURE')) ?? DEFAULT_EMAIL_DEBATE_CONFIG.imap.secure,
+      user: getOptionalEnvValue('EMAIL_DEBATE_IMAP_USER') ?? DEFAULT_EMAIL_DEBATE_CONFIG.imap.user,
+      pass: getOptionalEnvValue('EMAIL_DEBATE_IMAP_PASS') ?? DEFAULT_EMAIL_DEBATE_CONFIG.imap.pass,
+    },
+  };
+}
+
+function broadcastEmailDebateEvent(event: EmailDebateEvent): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(EmailDebateIPCChannels.EVENT, event);
+    }
+  });
 }
 
 // Pin userData paths explicitly so auth/session storage is stable across package-name changes.
@@ -324,6 +452,17 @@ function routeCapturedItemToActiveSession(itemId: number): void {
 let squaresManager: SquaresManager | null = null;
 let councilManager: CouncilManager | null = null;
 let councilWindow: CouncilWindow | null = null;
+let emailDebateManager: EmailDebateManager | null = null;
+let emailDebateCoordinator: EmailDebateCoordinator | null = null;
+let activeCouncilEmailThreadId: string | null = null;
+let pendingCouncilEmailThreadRestart:
+  | {
+      threadId: string;
+      body: string;
+      messageId: string;
+      preferredStarterSpeaker: string;
+    }
+  | null = null;
 let gazeTrackingManager: GazeTrackingManager | null = null;
 let gazeDebugOverlayManager: GazeDebugOverlayManager | null = null;
 let gazeScreenOverlayManager: GazeScreenOverlayManager | null = null;
@@ -3694,6 +3833,8 @@ function setupClipboardIPCHandlers(): void {
     // Clean up Council (kill debate process)
     councilManager?.destroy();
     councilWindow?.destroy();
+    emailDebateCoordinator?.destroy();
+    emailDebateManager?.destroy();
 
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {
@@ -5032,10 +5173,16 @@ function setupClipboardIPCHandlers(): void {
       state: 'idle',
       currentRound: 0,
       topic: null,
+      repoPath: null,
       error: null,
       matchup: DEFAULT_COUNCIL_MATCHUP,
       transcriptPath: null,
       consensusPath: null,
+      tokenUsage: {
+        inputTokens: null,
+        outputTokens: null,
+        totalTokens: null,
+      },
     };
   });
 
@@ -5067,6 +5214,50 @@ function setupClipboardIPCHandlers(): void {
     }
     await preferencesManager.save(nextPrefs);
     return true;
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.GET_CONFIG, async () => {
+    return emailDebateManager?.getConfig() ?? { ...DEFAULT_EMAIL_DEBATE_CONFIG };
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.SAVE_CONFIG, async (_event, config: Partial<EmailDebateConfig>) => {
+    if (!emailDebateManager) {
+      return { ...DEFAULT_EMAIL_DEBATE_CONFIG };
+    }
+
+    emailDebateManager.updateConfig(config);
+    if (emailDebateManager.isEnabled()) {
+      emailDebateManager.startPolling();
+    } else {
+      emailDebateManager.stopPolling();
+    }
+
+    return emailDebateManager.getConfig();
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.TEST_CONNECTION, async () => {
+    return emailDebateManager?.testConnection() ?? {
+      smtp: false,
+      imap: false,
+      agentMail: false,
+      errors: ['Email debate manager not initialized'],
+    };
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.GET_THREADS, async () => {
+    return emailDebateManager?.getThreads() ?? [];
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.GET_THREAD, async (_event, threadId: string) => {
+    return emailDebateManager?.getThread(threadId) ?? null;
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.CLOSE_THREAD, async (_event, threadId: string) => {
+    return emailDebateManager?.closeThread(threadId) ?? false;
+  });
+
+  ipcMain.handle(EmailDebateIPCChannels.REOPEN_THREAD, async (_event, threadId: string) => {
+    return emailDebateManager?.reopenThread(threadId) ?? false;
   });
 
   // =========================================================================
@@ -6374,6 +6565,46 @@ async function initTranscriberSystem(): Promise<void> {
   councilWindow = new CouncilWindow({
     getShowInDock: () => preferencesManager?.getPreference('showInDock') ?? false,
   });
+  emailDebateManager = new EmailDebateManager(resolveEmailDebateConfigFromEnv());
+  emailDebateCoordinator = new EmailDebateCoordinator({
+    councilPath: resolveCouncilScriptPath(),
+    emailManager: emailDebateManager,
+  });
+
+  if (emailDebateManager.isEnabled()) {
+    emailDebateManager.startPolling();
+    log.info('Email debate polling enabled');
+  }
+
+  emailDebateManager.on('event', (event) => {
+    if (event.type === 'inbound_thread_ready') {
+      const kickoffResult = emailDebateCoordinator?.startThread(event.threadId);
+      if (kickoffResult && !kickoffResult.success) {
+        log.warn('Failed starting inbound email debate thread %s: %s', event.threadId, kickoffResult.error ?? 'unknown error');
+      }
+    }
+
+    if (event.type === 'reply_received') {
+      const coordinatorIsRunning = emailDebateCoordinator?.getActiveThreadIds().includes(event.threadId) ?? false;
+      if (activeCouncilEmailThreadId === event.threadId || coordinatorIsRunning) {
+        log.info('Stored human reply for running debate thread %s; waiting for a resumable boundary', event.threadId);
+      } else {
+        const result = emailDebateCoordinator?.handleHumanReply(event.threadId, event.body);
+        if (result && !result.success) {
+          log.warn('Failed to continue email debate thread %s: %s', event.threadId, result.error ?? 'unknown error');
+        } else if (result?.success) {
+          emailDebateManager?.markHumanReplyInjected(event.threadId, event.messageId);
+        }
+      }
+    }
+
+    broadcastEmailDebateEvent(event);
+  });
+
+  emailDebateCoordinator.on('debate_error', ({ threadId, message }) => {
+    log.error('Email debate coordinator error for %s: %s', threadId, message);
+    broadcastEmailDebateEvent({ type: 'error', threadId, message });
+  });
 
   // Wire handoffs directory so transcripts land there automatically.
   if (commandsManager) {
@@ -6392,14 +6623,100 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Forward council events to the council window.
   councilManager.on('event', (event) => {
-    if (event.type === 'consensus_written' && getCouncilPreferences().autoPasteConsensus) {
-      void pasteCouncilConsensusBack(event.path);
+    if (emailDebateManager?.isEnabled()) {
+      if (!activeCouncilEmailThreadId && event.type === 'debate_start') {
+        const status = councilManager?.getStatus();
+        const maxTurns = parseOptionalNumber(event.maxTurns);
+        const thread = emailDebateManager.createThread({
+          topic: event.topic,
+          matchup: event.matchup ?? status?.matchup ?? DEFAULT_COUNCIL_MATCHUP,
+          maxTurns,
+          repoPath: status?.repoPath ?? undefined,
+        });
+        activeCouncilEmailThreadId = thread.id;
+      }
+
+      if (activeCouncilEmailThreadId) {
+        const mirroredThreadId = activeCouncilEmailThreadId;
+        void emailDebateManager
+          .handleCouncilEvent(mirroredThreadId, event)
+          .then((result) => {
+            if (result.deferredTurn) {
+              pendingCouncilEmailThreadRestart = {
+                threadId: mirroredThreadId,
+                body: result.deferredTurn.humanBody,
+                messageId: result.deferredTurn.humanMessageId,
+                preferredStarterSpeaker: result.deferredTurn.speaker,
+              };
+              councilManager?.stop();
+              activeCouncilEmailThreadId = null;
+              return;
+            }
+
+            if (event.type !== 'pause_requested') {
+              return;
+            }
+
+            const pendingReply = emailDebateManager?.getPendingHumanReply(mirroredThreadId);
+            if (!pendingReply) {
+              return;
+            }
+
+            const resumeResult = emailDebateCoordinator?.handleHumanReply(mirroredThreadId, pendingReply.body);
+            if (resumeResult && !resumeResult.success) {
+              log.warn('Failed to resume paused email debate thread %s: %s', mirroredThreadId, resumeResult.error ?? 'unknown error');
+              return;
+            }
+
+            if (resumeResult?.success) {
+              emailDebateManager?.markHumanReplyInjected(mirroredThreadId, pendingReply.messageId);
+            }
+          })
+          .catch((error) => {
+            log.error('Failed mirroring council event into email thread %s: %s', mirroredThreadId, error);
+          });
+
+        if (event.type === 'pause_requested' || event.type === 'debate_complete') {
+          activeCouncilEmailThreadId = null;
+        }
+      }
+    }
+
+    if (event.type === 'consensus_written') {
+      if (getCouncilPreferences().autoPasteConsensus) {
+        void pasteCouncilConsensusBack(event.path);
+      } else {
+        promptToReviewCouncilResult();
+      }
     }
     councilWindow?.getWindow()?.webContents.send(CouncilIPCChannels.EVENT, event);
   });
 
   // Broadcast status changes to all windows (so command launcher can show state).
   councilManager.on('statusChanged', (status) => {
+    if (
+      pendingCouncilEmailThreadRestart &&
+      (status.state === 'idle' || status.state === 'done' || status.state === 'error')
+    ) {
+      const pendingRestart = pendingCouncilEmailThreadRestart;
+      pendingCouncilEmailThreadRestart = null;
+      const result = emailDebateCoordinator?.handleHumanReply(pendingRestart.threadId, pendingRestart.body, {
+        preferredStarterSpeaker: pendingRestart.preferredStarterSpeaker,
+      });
+      if (result?.success) {
+        emailDebateManager?.markHumanReplyInjected(pendingRestart.threadId, pendingRestart.messageId);
+      } else if (result) {
+        log.warn(
+          'Failed restarting mirrored email debate thread %s after stale turn suppression: %s',
+          pendingRestart.threadId,
+          result.error ?? 'unknown error',
+        );
+      }
+    }
+
+    if (status.state === 'done' || status.state === 'error' || status.state === 'idle') {
+      activeCouncilEmailThreadId = null;
+    }
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(CouncilIPCChannels.STATUS_CHANGED, status);

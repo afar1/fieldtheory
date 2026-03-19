@@ -48,6 +48,8 @@ export const DEFAULT_LAUNCHER_HOTKEYS = {
   superPaste: 'Shift+Command+V',
 } as const;
 
+export type LauncherHotkeyMap = { [K in keyof typeof DEFAULT_LAUNCHER_HOTKEYS]: string };
+
 export interface BuiltInLauncherAction {
   id: string;
   type: 'action';
@@ -60,7 +62,7 @@ export interface BuiltInLauncherAction {
 }
 
 export function buildBuiltInLauncherActions(
-  hotkeys: typeof DEFAULT_LAUNCHER_HOTKEYS,
+  hotkeys: LauncherHotkeyMap,
   isDarkMode: boolean,
   squaresHotkeys: Record<string, string> = DEFAULT_SQUARES_HOTKEYS,
   showSquaresInCommandLauncher = true
