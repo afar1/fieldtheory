@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import type { ParakeetStatus } from '../types/window';
 import {
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
   PARAKEET_VISIBLE_ENGINE_OPTIONS,
@@ -774,7 +775,8 @@ export default function TranscriptionSettings() {
               }}
             >
               <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                {selectedParakeetEngineStatus.label} needs to be reinstalled
+                {PARAKEET_VISIBLE_ENGINE_OPTIONS.find((o) => o.id === selectedEngine)?.label ?? 'Parakeet'}{' '}
+                needs to be reinstalled
               </div>
               <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
                 {selectedParakeetEngineStatus.lastError}

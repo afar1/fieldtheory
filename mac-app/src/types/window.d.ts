@@ -229,7 +229,7 @@ interface SoundOption {
   category: string;
 }
 
-interface ParakeetEngineStatus {
+export interface ParakeetEngineStatus {
   engine: 'parakeet' | 'parakeet-multilingual';
   label: string;
   verified: boolean;
@@ -238,7 +238,7 @@ interface ParakeetEngineStatus {
   lastErrorAt: string | null;
 }
 
-interface ParakeetStatus {
+export interface ParakeetStatus {
   runtimeInstalled: boolean;
   pythonPath: string;
   scriptPath: string;
@@ -1787,7 +1787,7 @@ declare global {
     onConfigChanged: (callback: (config: SquaresConfig) => void) => () => void;
   }
 
-  type CouncilState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
+  type CouncilState = 'idle' | 'starting' | 'debating' | 'paused' | 'finalizing' | 'done' | 'error';
   type CouncilMatchup =
     | 'opus-vs-opus'
     | 'opus-vs-sonnet'
@@ -1803,10 +1803,16 @@ declare global {
     state: CouncilState;
     currentRound: number;
     topic: string | null;
+    repoPath: string | null;
     error: string | null;
     matchup: CouncilMatchup;
     transcriptPath: string | null;
     consensusPath: string | null;
+    tokenUsage: {
+      inputTokens: number | null;
+      outputTokens: number | null;
+      totalTokens: number | null;
+    };
   }
 
   interface CouncilConfig {
@@ -1840,6 +1846,17 @@ declare global {
     onStatusChanged: (callback: (status: CouncilStatus) => void) => () => void;
   }
 
+  interface EmailDebateAPI {
+    getConfig: () => Promise<any>;
+    saveConfig: (config: any) => Promise<any>;
+    testConnection: () => Promise<any>;
+    getThreads: () => Promise<any[]>;
+    getThread: (threadId: string) => Promise<any | null>;
+    closeThread: (threadId: string) => Promise<boolean>;
+    reopenThread: (threadId: string) => Promise<boolean>;
+    onEvent: (callback: (event: any) => void) => () => void;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
@@ -1869,6 +1886,7 @@ declare global {
     hotMicAPI?: HotMicAPI;
     squaresAPI?: SquaresAPI;
     councilAPI?: CouncilAPI;
+    emailDebateAPI?: EmailDebateAPI;
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }

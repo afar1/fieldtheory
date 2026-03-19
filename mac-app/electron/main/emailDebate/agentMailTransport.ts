@@ -19,8 +19,10 @@ export interface AgentMailConfig {
 export interface AgentMailSendOptions {
   fromModel: EmailDebateInboxKey;
   to: string[];
+  cc?: string[];
   subject: string;
   body: string;
+  headers?: Record<string, string>;
 }
 
 export interface AgentMailReplyOptions {
@@ -31,12 +33,19 @@ export interface AgentMailReplyOptions {
 
 export interface AgentMailIncomingMessage {
   messageId: string;
+  providerMessageId: string;
   threadId: string;
   from: string;
   fromName: string;
+  to: string[];
+  cc: string[];
   subject: string;
   body: string;
+  inReplyTo: string | null;
+  references: string[];
+  headers: Record<string, string>;
   date: string;
+  receivingInbox: EmailDebateInboxKey;
 }
 
 type AgentMailClientLike = {
@@ -162,8 +171,10 @@ export async function sendNewDebateEmail(
   const client = getClient(config.apiKey);
   const response = await client.inboxes.messages.send(inboxId, {
     to: options.to,
+    cc: options.cc,
     subject: options.subject,
     text: options.body,
+    headers: options.headers,
   });
 
   return {
@@ -203,19 +214,8 @@ export async function checkForReplies(
     : ((response.messages as Record<string, unknown>[] | undefined) ?? []);
 
   return messages
-    .filter((message) => {
-      const messageId = String(message.messageId ?? '');
-      return Boolean(messageId) && !knownMessageIds.has(messageId);
-    })
-    .map((message) => ({
-      messageId: String(message.messageId ?? ''),
-      threadId: String(message.threadId ?? message.thread_id ?? ''),
-      from: String((message.from_ as { address?: string } | undefined)?.address ?? message.from ?? ''),
-      fromName: String((message.from_ as { name?: string } | undefined)?.name ?? message.from ?? 'Unknown'),
-      subject: String(message.subject ?? ''),
-      body: String(message.extractedText ?? message.text ?? ''),
-      date: String(message.createdAt ?? new Date().toISOString()),
-    }));
+    .map((message) => toIncomingMessage(message, modelKey))
+    .filter((message) => Boolean(message.messageId) && !knownMessageIds.has(message.messageId));
 }
 
 export async function listThreads(
@@ -244,4 +244,105 @@ export async function testConnection(apiKey: string): Promise<{ ok: true; inboxC
     : ((response.inboxes as unknown[] | undefined) ?? []);
 
   return { ok: true, inboxCount: inboxes.length };
+}
+
+function normalizeHeaders(headers: Record<string, unknown>): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  for (const [key, value] of Object.entries(headers)) {
+    if (value == null) {
+      continue;
+    }
+    normalized[key.toLowerCase()] = String(value);
+  }
+  return normalized;
+}
+
+function getCanonicalMessageId(message: Record<string, unknown>): string {
+  const headers = normalizeHeaders((message.headers as Record<string, unknown> | undefined) ?? {});
+  return headers['message-id'] ?? String(message.messageId ?? '');
+}
+
+function extractReferences(rawReferences: unknown, headerReferences?: string): string[] {
+  if (Array.isArray(rawReferences)) {
+    return rawReferences.map(String).map((value) => value.trim()).filter(Boolean);
+  }
+  if (typeof rawReferences === 'string') {
+    return rawReferences.split(/\s+/).map((value) => value.trim()).filter(Boolean);
+  }
+  if (!headerReferences) {
+    return [];
+  }
+  return headerReferences.split(/\s+/).map((value) => value.trim()).filter(Boolean);
+}
+
+function parseAddressList(raw: string | string[]): string[] {
+  const values = Array.isArray(raw) ? raw : raw.split(',');
+  const addresses = values
+    .map((value) => parseMailboxAddress(value).address)
+    .filter(Boolean);
+  return [...new Set(addresses)];
+}
+
+function getRecipientAddresses(
+  message: Record<string, unknown>,
+  field: 'to' | 'cc',
+  headerNames: string[],
+): string[] {
+  const headers = normalizeHeaders((message.headers as Record<string, unknown> | undefined) ?? {});
+  const rawApiValue = field === 'to' ? message.to : message.cc;
+  const apiValues = Array.isArray(rawApiValue) ? rawApiValue.map(String) : [];
+  const headerValues = headerNames
+    .map((name) => headers[name])
+    .filter((value): value is string => Boolean(value));
+
+  return parseAddressList([...apiValues, ...headerValues]);
+}
+
+function toIncomingMessage(
+  message: Record<string, unknown>,
+  receivingInbox: EmailDebateInboxKey,
+): AgentMailIncomingMessage {
+  const headers = normalizeHeaders((message.headers as Record<string, unknown> | undefined) ?? {});
+  const fromMailbox = parseMailboxAddress(String(message.from ?? ''));
+
+  return {
+    messageId: headers['message-id'] ?? String(message.messageId ?? ''),
+    providerMessageId: String(message.messageId ?? ''),
+    threadId: String(message.threadId ?? message.thread_id ?? ''),
+    from: fromMailbox.address,
+    fromName: fromMailbox.name,
+    to: getRecipientAddresses(message, 'to', ['to', 'x-gm-original-to', 'x-original-to', 'delivered-to']),
+    cc: getRecipientAddresses(message, 'cc', ['cc']),
+    subject: String(message.subject ?? ''),
+    body: String(message.extractedText ?? message.text ?? ''),
+    inReplyTo: String(message.inReplyTo ?? headers['in-reply-to'] ?? '') || null,
+    references: extractReferences(message.references, headers['references']),
+    headers,
+    date: String(message.createdAt ?? new Date().toISOString()),
+    receivingInbox,
+  };
+}
+
+function parseMailboxAddress(raw: string): { address: string; name: string } {
+  const trimmed = raw.trim();
+  const angleMatch = trimmed.match(/^(.*)<([^>]+)>$/);
+  if (angleMatch) {
+    const name = angleMatch[1]?.trim().replace(/^"+|"+$/g, '') || 'Unknown';
+    return {
+      address: angleMatch[2]?.trim().toLowerCase() ?? '',
+      name,
+    };
+  }
+
+  const addressMatch = trimmed.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? '';
+  if (!addressMatch) {
+    return { address: '', name: 'Unknown' };
+  }
+
+  const localPart = addressMatch.split('@')[0] ?? 'Unknown';
+  const displayName = localPart ? localPart.charAt(0).toUpperCase() + localPart.slice(1) : 'Unknown';
+  return {
+    address: addressMatch.toLowerCase(),
+    name: displayName,
+  };
 }

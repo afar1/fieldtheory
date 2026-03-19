@@ -17,6 +17,8 @@ const log = createLogger('Native');
 
 const DEBOUNCE_DELAY_MS = 200;
 const GAZE_STATUS_TIMEOUT_MS = 30000;
+const RECORDING_TRANSITION_GRACE_MS = 175;
+const START_RECORDING_RETRY_DELAYS_MS = [120, 260];
 
 /**
  * NativeHelper manages the Swift CLI helper process that interfaces with CoreAudio.
@@ -48,6 +50,8 @@ export class NativeHelper extends EventEmitter {
   private isRunning = false;
   private isReady = false;
   private recordingActive = false;
+  private recordingCommandChain: Promise<void> = Promise.resolve();
+  private lastRecordingReleaseAt = 0;
   private pendingDevicesResolve: ((devices: AudioDevice[]) => void) | null = null;
   private pendingDefaultInputResolve: ((deviceId: string | null) => void) | null = null;
   private devicesDebounceTimer: NodeJS.Timeout | null = null;
@@ -298,34 +302,31 @@ export class NativeHelper extends EventEmitter {
    * Returns a promise that resolves when recording starts.
    */
   async startRecording(): Promise<void> {
-    await this.waitForReady();
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('startRecording timed out'));
-      }, 5000);
+    return this.enqueueRecordingCommand('startRecording', async () => {
+      let lastError: Error | null = null;
 
-      const handler = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'recordingStarted') {
-          this.recordingActive = true;
-          cleanup();
-          resolve();
-        } else if (msg.type === 'error' && /start recording|already in progress/i.test(msg.message)) {
-          if (/already in progress/i.test(msg.message)) {
-            this.recordingActive = true;
+      for (let attempt = 0; attempt <= START_RECORDING_RETRY_DELAYS_MS.length; attempt += 1) {
+        try {
+          await this.waitForRecordingTransitionGraceWindow();
+          await this.startRecordingOnce();
+          return;
+        } catch (error) {
+          lastError = error instanceof Error ? error : new Error(String(error));
+          const retryDelay = START_RECORDING_RETRY_DELAYS_MS[attempt];
+          if (!this.isTransientStartRecordingError(lastError) || retryDelay == null) {
+            throw lastError;
           }
-          cleanup();
-          reject(new Error(msg.message));
+          log.warn(
+            'Retrying helper startRecording after transient failure (attempt %d/%d): %s',
+            attempt + 1,
+            START_RECORDING_RETRY_DELAYS_MS.length + 1,
+            lastError.message,
+          );
+          await this.delay(retryDelay);
         }
-      };
+      }
 
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.removeListener('message', handler);
-      };
-
-      this.on('message', handler);
-      this.send({ type: 'startRecording' });
+      throw lastError ?? new Error('Failed to start recording');
     });
   }
 
@@ -333,35 +334,38 @@ export class NativeHelper extends EventEmitter {
    * Stop recording and get the path to the recorded WAV file.
    */
   async stopRecording(): Promise<string> {
-    await this.waitForReady();
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        log.error('stopRecording timeout - no response received');
-        reject(new Error('stopRecording timed out'));
-      }, 10000); // Increased timeout to 10 seconds
-
-      const handler = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'recordingStopped') {
-          this.recordingActive = false;
+    return this.enqueueRecordingCommand('stopRecording', async () => {
+      await this.waitForReady();
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
           cleanup();
-          resolve(msg.filePath);
-        } else if (msg.type === 'error' && /stop recording|no recording in progress/i.test(msg.message)) {
-          if (/no recording in progress/i.test(msg.message)) {
+          log.error('stopRecording timeout - no response received');
+          reject(new Error('stopRecording timed out'));
+        }, 10000); // Increased timeout to 10 seconds
+
+        const handler = (msg: HelperOutgoingMessage) => {
+          if (msg.type === 'recordingStopped') {
             this.recordingActive = false;
+            cleanup();
+            resolve(msg.filePath);
+          } else if (msg.type === 'error' && /stop recording|no recording in progress/i.test(msg.message)) {
+            if (/no recording in progress/i.test(msg.message)) {
+              this.recordingActive = false;
+              this.markRecordingReleased();
+            }
+            cleanup();
+            reject(new Error(msg.message));
           }
-          cleanup();
-          reject(new Error(msg.message));
-        }
-      };
+        };
 
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.removeListener('message', handler);
-      };
+        const cleanup = () => {
+          clearTimeout(timeout);
+          this.removeListener('message', handler);
+        };
 
-      this.on('message', handler);
-      this.send({ type: 'stopRecording' });
+        this.on('message', handler);
+        this.send({ type: 'stopRecording' });
+      });
     });
   }
 
@@ -370,30 +374,32 @@ export class NativeHelper extends EventEmitter {
    * Returns the path to the completed WAV file. The engine keeps recording into a new file.
    */
   async snapshotRecording(): Promise<string> {
-    await this.waitForReady();
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('snapshotRecording timed out'));
-      }, 2000);
-
-      const onMessage = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'recordingSnapshot') {
+    return this.enqueueRecordingCommand('snapshotRecording', async () => {
+      await this.waitForReady();
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
           cleanup();
-          resolve(msg.filePath);
-        } else if (msg.type === 'error') {
-          cleanup();
-          reject(new Error(msg.message));
-        }
-      };
+          reject(new Error('snapshotRecording timed out'));
+        }, 2000);
 
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.removeListener('message', onMessage);
-      };
+        const onMessage = (msg: HelperOutgoingMessage) => {
+          if (msg.type === 'recordingSnapshot') {
+            cleanup();
+            resolve(msg.filePath);
+          } else if (msg.type === 'error') {
+            cleanup();
+            reject(new Error(msg.message));
+          }
+        };
 
-      this.on('message', onMessage);
-      this.send({ type: 'snapshotRecording' });
+        const cleanup = () => {
+          clearTimeout(timeout);
+          this.removeListener('message', onMessage);
+        };
+
+        this.on('message', onMessage);
+        this.send({ type: 'snapshotRecording' });
+      });
     });
   }
 
@@ -401,34 +407,37 @@ export class NativeHelper extends EventEmitter {
    * Cancel the current recording without saving.
    */
   async cancelRecording(): Promise<void> {
-    await this.waitForReady();
-    return new Promise((resolve, reject) => {
-      const timeout = setTimeout(() => {
-        cleanup();
-        reject(new Error('cancelRecording timed out'));
-      }, 5000);
-
-      const onMessage = (msg: HelperOutgoingMessage) => {
-        if (msg.type === 'recordingCancelled') {
-          this.recordingActive = false;
+    return this.enqueueRecordingCommand('cancelRecording', async () => {
+      await this.waitForReady();
+      return new Promise((resolve, reject) => {
+        const timeout = setTimeout(() => {
           cleanup();
-          resolve();
-        } else if (msg.type === 'error' && /cancel recording/i.test(msg.message)) {
-          if (/no recording in progress/i.test(msg.message)) {
+          reject(new Error('cancelRecording timed out'));
+        }, 5000);
+
+        const onMessage = (msg: HelperOutgoingMessage) => {
+          if (msg.type === 'recordingCancelled') {
             this.recordingActive = false;
+            cleanup();
+            resolve();
+          } else if (msg.type === 'error' && /cancel recording/i.test(msg.message)) {
+            if (/no recording in progress/i.test(msg.message)) {
+              this.recordingActive = false;
+              this.markRecordingReleased();
+            }
+            cleanup();
+            reject(new Error(msg.message));
           }
-          cleanup();
-          reject(new Error(msg.message));
-        }
-      };
+        };
 
-      const cleanup = () => {
-        clearTimeout(timeout);
-        this.removeListener('message', onMessage);
-      };
+        const cleanup = () => {
+          clearTimeout(timeout);
+          this.removeListener('message', onMessage);
+        };
 
-      this.on('message', onMessage);
-      this.send({ type: 'cancelRecording' });
+        this.on('message', onMessage);
+        this.send({ type: 'cancelRecording' });
+      });
     });
   }
 
@@ -869,6 +878,7 @@ export class NativeHelper extends EventEmitter {
 
       case 'recordingStopped':
         this.recordingActive = false;
+        this.markRecordingReleased();
         this.emit('message', msg);
         break;
 
@@ -879,6 +889,7 @@ export class NativeHelper extends EventEmitter {
 
       case 'recordingCancelled':
         this.recordingActive = false;
+        this.markRecordingReleased();
         this.emit('message', msg);
         break;
 
@@ -1026,5 +1037,78 @@ export class NativeHelper extends EventEmitter {
         log.error('Error sending command:', error, 'Command was:', command);
       }
     }
+  }
+
+  private async startRecordingOnce(): Promise<void> {
+    await this.waitForReady();
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        cleanup();
+        reject(new Error('startRecording timed out'));
+      }, 5000);
+
+      const handler = (msg: HelperOutgoingMessage) => {
+        if (msg.type === 'recordingStarted') {
+          this.recordingActive = true;
+          cleanup();
+          resolve();
+        } else if (msg.type === 'error' && /start recording|already in progress/i.test(msg.message)) {
+          if (/already in progress/i.test(msg.message)) {
+            this.recordingActive = true;
+          }
+          cleanup();
+          reject(new Error(msg.message));
+        }
+      };
+
+      const cleanup = () => {
+        clearTimeout(timeout);
+        this.removeListener('message', handler);
+      };
+
+      this.on('message', handler);
+      this.send({ type: 'startRecording' });
+    });
+  }
+
+  private enqueueRecordingCommand<T>(label: string, operation: () => Promise<T>): Promise<T> {
+    const run = this.recordingCommandChain
+      .catch(() => undefined)
+      .then(async () => {
+        log.info('Recording command start: %s', label);
+        try {
+          return await operation();
+        } finally {
+          log.info('Recording command end: %s', label);
+        }
+      });
+
+    this.recordingCommandChain = run.then(() => undefined, () => undefined);
+    return run;
+  }
+
+  private async waitForRecordingTransitionGraceWindow(): Promise<void> {
+    if (this.lastRecordingReleaseAt === 0) {
+      return;
+    }
+    const elapsedMs = Date.now() - this.lastRecordingReleaseAt;
+    if (elapsedMs >= RECORDING_TRANSITION_GRACE_MS) {
+      return;
+    }
+    const waitMs = RECORDING_TRANSITION_GRACE_MS - elapsedMs;
+    log.info('Waiting %dms for audio engine teardown before restarting recording', waitMs);
+    await this.delay(waitMs);
+  }
+
+  private markRecordingReleased(): void {
+    this.lastRecordingReleaseAt = Date.now();
+  }
+
+  private isTransientStartRecordingError(error: Error): boolean {
+    return /Failed to start recording|startRecording timed out/i.test(error.message);
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

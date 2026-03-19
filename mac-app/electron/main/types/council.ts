@@ -51,16 +51,24 @@ export interface CouncilConfig {
   opusVsOpus?: boolean;
 }
 
-export type CouncilState = 'idle' | 'starting' | 'debating' | 'finalizing' | 'done' | 'error';
+export interface CouncilTokenUsage {
+  inputTokens: number | null;
+  outputTokens: number | null;
+  totalTokens: number | null;
+}
+
+export type CouncilState = 'idle' | 'starting' | 'debating' | 'paused' | 'finalizing' | 'done' | 'error';
 
 export interface CouncilStatus {
   state: CouncilState;
   currentRound: number;
   topic: string | null;
+  repoPath: string | null;
   error: string | null;
   matchup: CouncilMatchup;
   transcriptPath: string | null;
   consensusPath: string | null;
+  tokenUsage: CouncilTokenUsage;
 }
 
 export interface CouncilPreferences {
@@ -74,7 +82,26 @@ export type CouncilEvent =
   | { type: 'debate_start'; topic: string; maxTurns: string; matchup?: CouncilMatchup }
   | { type: 'turn_start'; speaker: string; round: string }
   | { type: 'turn_chunk'; speaker: string; content: string }
-  | { type: 'turn_end'; speaker: string; round: string; convergence: string; action: string }
+  | {
+      type: 'turn_status';
+      speaker: string;
+      round: string;
+      phase: 'attempt_start' | 'waiting' | 'streaming' | 'retrying';
+      attempt?: string;
+      detail: string;
+    }
+  | {
+      type: 'turn_end';
+      speaker: string;
+      round: string;
+      convergence: string;
+      action: string;
+      inputTokens?: string;
+      outputTokens?: string;
+      totalTokens?: string;
+    }
+  | { type: 'pause_requested'; reason: string; round: string; stateFilePath: string }
+  | { type: 'resume_started'; round: string; stateFilePath: string; hasHumanInput: string }
   | { type: 'state_change'; from: string; to: string; reason: string }
   | { type: 'error'; speaker: string; message: string }
   | { type: 'stderr'; speaker: string; content: string }

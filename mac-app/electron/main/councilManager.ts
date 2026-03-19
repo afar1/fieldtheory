@@ -16,7 +16,14 @@ import {
   DEFAULT_COUNCIL_MATCHUP,
   isCouncilMatchup,
 } from './types/council';
-import type { CouncilConfig, CouncilEvent, CouncilMatchup, CouncilState, CouncilStatus } from './types/council';
+import type {
+  CouncilConfig,
+  CouncilEvent,
+  CouncilMatchup,
+  CouncilState,
+  CouncilStatus,
+  CouncilTokenUsage,
+} from './types/council';
 
 const log = createLogger('Council');
 
@@ -42,6 +49,7 @@ export class CouncilManager extends EventEmitter {
   private state: CouncilState = 'idle';
   private currentRound = 0;
   private topic: string | null = null;
+  private repoPath: string | null = null;
   private error: string | null = null;
   private matchup: CouncilMatchup = DEFAULT_COUNCIL_MATCHUP;
   private transcriptPath: string | null = null;
@@ -51,6 +59,8 @@ export class CouncilManager extends EventEmitter {
   private handoffsDir: string | null = null;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private kickoffWatcher: chokidar.FSWatcher | null = null;
+  private stopRequested = false;
+  private tokenUsage: CouncilTokenUsage = this.createEmptyTokenUsage();
   private spawnFn: typeof defaultSpawn;
   private execSyncFn: typeof defaultExecSync;
   private existsSyncFn: typeof fs.existsSync;
@@ -137,6 +147,7 @@ export class CouncilManager extends EventEmitter {
     }
 
     this.topic = config.topic;
+    this.repoPath = config.repoPath ?? null;
     this.currentRound = 0;
     this.error = null;
     this.matchup = matchup;
@@ -144,6 +155,8 @@ export class CouncilManager extends EventEmitter {
     this.consensusPath = null;
     this.source = config.source ?? 'manual';
     this.returnTargetApp = config.returnTargetApp ?? null;
+    this.stopRequested = false;
+    this.tokenUsage = this.createEmptyTokenUsage();
     this.setState('starting');
 
     // Build args
@@ -167,6 +180,7 @@ export class CouncilManager extends EventEmitter {
     this.process = this.spawnFn('bash', [councilPath, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
+      detached: process.platform !== 'win32',
     });
 
     // NDJSON parsing on stdout (buffer-split pattern)
@@ -194,6 +208,10 @@ export class CouncilManager extends EventEmitter {
 
     this.process.on('close', (code) => {
       log.info('Council process exited with code %d', code);
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = null;
+      }
       this.process = null;
 
       // Process any remaining buffer
@@ -204,6 +222,17 @@ export class CouncilManager extends EventEmitter {
         } catch {
           // ignore
         }
+      }
+
+      if (this.stopRequested) {
+        this.stopRequested = false;
+        this.error = 'Debate stopped by user';
+        this.setState('error');
+        return;
+      }
+
+      if (code === 42 && this.state === 'paused') {
+        return;
       }
 
       if (this.state !== 'done' && this.state !== 'error') {
@@ -236,12 +265,13 @@ export class CouncilManager extends EventEmitter {
     }
     if (this.process) {
       log.info('Stopping council debate');
-      this.process.kill('SIGTERM');
+      this.stopRequested = true;
+      this.killProcessTree('SIGTERM');
       // Give it a moment, then force kill
       this.killTimer = setTimeout(() => {
         this.killTimer = null;
         if (this.process) {
-          this.process.kill('SIGKILL');
+          this.killProcessTree('SIGKILL');
           this.process = null;
         }
       }, 3000);
@@ -256,10 +286,12 @@ export class CouncilManager extends EventEmitter {
       state: this.state,
       currentRound: this.currentRound,
       topic: this.topic,
+      repoPath: this.repoPath,
       error: this.error,
       matchup: this.matchup,
       transcriptPath: this.transcriptPath,
       consensusPath: this.consensusPath,
+      tokenUsage: { ...this.tokenUsage },
     };
   }
 
@@ -281,10 +313,23 @@ export class CouncilManager extends EventEmitter {
         }
         break;
 
+      case 'turn_end':
+        this.accumulateTokenUsage(event);
+        this.emit('statusChanged', this.getStatus());
+        break;
+
       case 'state_change':
         if (event.to === 'FINALIZING') {
           this.setState('finalizing');
         }
+        break;
+
+      case 'pause_requested':
+        this.setState('paused');
+        break;
+
+      case 'resume_started':
+        this.setState('debating');
         break;
 
       case 'error':
@@ -471,9 +516,66 @@ export class CouncilManager extends EventEmitter {
       this.kickoffWatcher = null;
     }
     if (this.process) {
-      this.process.kill('SIGKILL');
+      this.killProcessTree('SIGKILL');
       this.process = null;
     }
     this.removeAllListeners();
+  }
+
+  private killProcessTree(signal: NodeJS.Signals): void {
+    if (!this.process) {
+      return;
+    }
+
+    const pid = this.process.pid;
+    if (pid && process.platform !== 'win32') {
+      try {
+        process.kill(-pid, signal);
+        return;
+      } catch (err) {
+        log.warn('Failed to signal council process group %d with %s: %s', pid, signal, err);
+      }
+    }
+
+    try {
+      this.process.kill(signal);
+    } catch (err) {
+      log.warn('Failed to signal council process with %s: %s', signal, err);
+    }
+  }
+
+  private createEmptyTokenUsage(): CouncilTokenUsage {
+    return {
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+    };
+  }
+
+  private accumulateTokenUsage(event: Extract<CouncilEvent, { type: 'turn_end' }>): void {
+    const inputTokens = this.parseTokenCount(event.inputTokens);
+    const outputTokens = this.parseTokenCount(event.outputTokens);
+    const totalTokens = this.parseTokenCount(event.totalTokens);
+
+    this.tokenUsage = {
+      inputTokens: this.sumTokenCounts(this.tokenUsage.inputTokens, inputTokens),
+      outputTokens: this.sumTokenCounts(this.tokenUsage.outputTokens, outputTokens),
+      totalTokens: this.sumTokenCounts(this.tokenUsage.totalTokens, totalTokens),
+    };
+  }
+
+  private parseTokenCount(value: string | undefined): number | null {
+    if (!value) {
+      return null;
+    }
+    const parsed = parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
+  private sumTokenCounts(current: number | null, next: number | null): number | null {
+    if (next == null) {
+      return current;
+    }
+    return (current ?? 0) + next;
   }
 }

@@ -8,14 +8,14 @@
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import crypto from 'crypto';
-import type { CouncilEvent } from '../types/council';
+import { DEFAULT_COUNCIL_MAX_TURNS, type CouncilEvent } from '../types/council';
 import { createLogger } from '../logger';
 import { ThreadStore } from './threadStore';
 import {
   MODEL_INBOXES,
+  type AgentMailIncomingMessage,
   checkForReplies,
   provisionAllInboxes,
-  replyToDebateEmail,
   sendNewDebateEmail,
   testConnection as testAgentMailConnection,
 } from './agentMailTransport';
@@ -45,6 +45,18 @@ interface EmailDebateSession {
   turnCounter: number;
   turnContentBuffer: string;
   lastMessageId: string | null;
+  turnStartHumanMessageId: string | null;
+}
+
+export interface DeferredTurnDelivery {
+  speaker: string;
+  round: number;
+  humanMessageId: string;
+  humanBody: string;
+}
+
+export interface HandleCouncilEventResult {
+  deferredTurn?: DeferredTurnDelivery;
 }
 
 export interface CreateThreadOptions {
@@ -55,6 +67,11 @@ export interface CreateThreadOptions {
   recipients?: string[];
   owner?: string;
   subject?: string;
+  source?: 'local' | 'email';
+  inboundMessageId?: string | null;
+  addressedModels?: EmailDebateInboxKey[];
+  preferredStartSide?: 'a' | 'b' | null;
+  providerThreadId?: string | null;
 }
 
 export class EmailDebateManager extends EventEmitter {
@@ -86,7 +103,7 @@ export class EmailDebateManager extends EventEmitter {
       return false;
     }
 
-    if (this.useAgentMail()) {
+    if (this.wantsAgentMailOutbound()) {
       return Boolean(this.config.agentMailApiKey);
     }
 
@@ -95,37 +112,40 @@ export class EmailDebateManager extends EventEmitter {
 
   async testConnection(): Promise<EmailDebateConnectionStatus> {
     const errors: string[] = [];
+    let smtp = false;
+    let imap = false;
+    let agentMail = false;
 
-    if (this.useAgentMail()) {
+    if (this.wantsAgentMailOutbound() || this.wantsAgentMailInbound()) {
       try {
         const result = await testAgentMailConnection(this.config.agentMailApiKey);
-        return { smtp: false, imap: false, agentMail: result.ok, errors: [] };
+        agentMail = result.ok;
       } catch (error) {
         errors.push(`AgentMail: ${error instanceof Error ? error.message : String(error)}`);
-        return { smtp: false, imap: false, agentMail: false, errors };
       }
     }
 
-    let smtp = false;
-    let imap = false;
-
-    try {
-      smtp = await testSmtpConnection(this.config.smtp);
-    } catch (error) {
-      errors.push(`SMTP: ${error instanceof Error ? error.message : String(error)}`);
+    if (this.usesSmtpOutbound()) {
+      try {
+        smtp = await testSmtpConnection(this.config.smtp);
+      } catch (error) {
+        errors.push(`SMTP: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
-    try {
-      imap = await testImapConnection(this.config.imap);
-    } catch (error) {
-      errors.push(`IMAP: ${error instanceof Error ? error.message : String(error)}`);
+    if (this.usesImapInbound()) {
+      try {
+        imap = await testImapConnection(this.config.imap);
+      } catch (error) {
+        errors.push(`IMAP: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
 
-    return { smtp, imap, agentMail: false, errors };
+    return { smtp, imap, agentMail, errors };
   }
 
   async provisionInboxes(): Promise<void> {
-    if (!this.useAgentMail()) {
+    if (!this.wantsAgentMailOutbound() && !this.wantsAgentMailInbound()) {
       return;
     }
 
@@ -146,7 +166,7 @@ export class EmailDebateManager extends EventEmitter {
       matchup: options.matchup,
       repoPath: options.repoPath ?? null,
       status: 'active',
-      providerThreadId: null,
+      providerThreadId: options.providerThreadId ?? null,
       participants: [...new Set([...recipients, owner].filter(Boolean))],
       owner,
       messages: [],
@@ -157,6 +177,12 @@ export class EmailDebateManager extends EventEmitter {
       updatedAt: new Date().toISOString(),
       transcriptPath: null,
       consensusPath: null,
+      resumeStatePath: null,
+      lastInjectedHumanMessageId: null,
+      source: options.source ?? 'local',
+      inboundMessageId: options.inboundMessageId ?? null,
+      addressedModels: options.addressedModels ?? [],
+      preferredStartSide: options.preferredStartSide ?? null,
     };
 
     this.store.save(thread);
@@ -166,6 +192,7 @@ export class EmailDebateManager extends EventEmitter {
       turnCounter: 0,
       turnContentBuffer: '',
       lastMessageId: null,
+      turnStartHumanMessageId: null,
     });
 
     this.emitEvent({ type: 'thread_created', threadId, subject });
@@ -215,45 +242,57 @@ export class EmailDebateManager extends EventEmitter {
     session.turnContentBuffer += `${content}\n`;
   }
 
-  async handleCouncilEvent(threadId: string, event: CouncilEvent): Promise<void> {
+  async handleCouncilEvent(threadId: string, event: CouncilEvent): Promise<HandleCouncilEventResult> {
     if (!this.isEnabled()) {
-      return;
+      return {};
     }
 
-    this.ensureSession(threadId);
+    const session = this.ensureSession(threadId);
 
     switch (event.type) {
       case 'debate_start':
-        await this.sendTopicEmail(threadId);
-        break;
+        if (this.requireThread(threadId).messages.length === 0) {
+          await this.sendTopicEmail(threadId);
+        }
+        return {};
       case 'turn_start':
         this.resetTurnBuffer(threadId);
-        break;
+        session.turnStartHumanMessageId = this.getLatestHumanReplyMessageId(threadId);
+        return {};
       case 'turn_chunk':
         this.bufferTurnChunk(threadId, event.content);
-        break;
+        return {};
       case 'turn_end':
-        await this.sendTurnEmail(threadId, event.speaker, Number(event.round));
-        break;
+        return {
+          deferredTurn: await this.sendTurnEmail(threadId, event.speaker, Number(event.round)) ?? undefined,
+        };
+      case 'pause_requested':
+        this.store.setResumeStatePath(threadId, event.stateFilePath);
+        return {};
+      case 'resume_started':
+        this.store.setStatus(threadId, 'active');
+        this.store.setResumeStatePath(threadId, event.stateFilePath);
+        return {};
       case 'transcript_written':
         this.store.setTranscriptPath(threadId, event.path);
-        break;
+        return {};
       case 'consensus_written':
         this.store.setConsensusPath(threadId, event.path);
         await this.sendConclusionEmail(threadId, event.path);
-        break;
+        return {};
       case 'debate_complete':
         this.store.setStatus(threadId, 'concluded');
+        this.store.setResumeStatePath(threadId, null);
         this.sessions.delete(threadId);
         this.emitEvent({ type: 'thread_concluded', threadId });
-        break;
+        return {};
       default:
-        break;
+        return {};
     }
   }
 
   startPolling(): void {
-    if (this.pollTimer || !this.isEnabled()) {
+    if (this.pollTimer || !this.canPollReplies()) {
       return;
     }
 
@@ -271,22 +310,44 @@ export class EmailDebateManager extends EventEmitter {
   }
 
   async pollOnce(): Promise<void> {
+    if (!this.canPollReplies()) {
+      return;
+    }
+
     const knownIds = this.store.getAllKnownMessageIds();
+    const seenMessageIds = new Set(knownIds);
 
     try {
-      if (this.useAgentMail()) {
+      if (this.useAgentMailInbound()) {
         for (const inboxKey of this.getPollingInboxKeys()) {
           const incomingMessages = await checkForReplies(this.getAgentMailConfig(), inboxKey, knownIds);
           for (const incoming of incomingMessages) {
-            const thread = this.store.findThreadByProviderThreadId(incoming.threadId);
+            if (!incoming.messageId || seenMessageIds.has(incoming.messageId)) {
+              continue;
+            }
+            seenMessageIds.add(incoming.messageId);
+
+            const thread =
+              this.store.findThreadByProviderThreadId(incoming.threadId) ??
+              this.store.findThreadByReference([
+                incoming.messageId,
+                ...(incoming.references ?? []),
+                ...(incoming.inReplyTo ? [incoming.inReplyTo] : []),
+              ]);
+
             if (!thread) {
+              const kickoffThread = this.createInboundThreadFromMessage(incoming);
+              if (kickoffThread) {
+                this.emitEvent({ type: 'inbound_thread_ready', threadId: kickoffThread.id });
+              }
               continue;
             }
 
             this.recordHumanReply(thread.id, {
               messageId: incoming.messageId,
-              inReplyTo: null,
-              references: [],
+              providerMessageId: incoming.providerMessageId,
+              inReplyTo: incoming.inReplyTo,
+              references: incoming.references,
               from: incoming.from,
               fromName: incoming.fromName,
               to: thread.participants,
@@ -301,12 +362,12 @@ export class EmailDebateManager extends EventEmitter {
         return;
       }
 
-      const rootMessageIds = this.store.getReplyableRootMessageIds();
-      if (rootMessageIds.length === 0) {
+      const trackedMessageIds = this.store.getReplyableTrackedMessageIds();
+      if (trackedMessageIds.length === 0) {
         return;
       }
 
-      const replies = await pollForReplies(this.config.imap, rootMessageIds, knownIds);
+      const replies = await pollForReplies(this.config.imap, trackedMessageIds, knownIds);
       for (const reply of replies) {
         const thread = this.store.findThreadByReference(reply.references);
         if (!thread || reply.from === this.config.fromAddress) {
@@ -348,14 +409,70 @@ export class EmailDebateManager extends EventEmitter {
       .join('\n\n---\n\n');
   }
 
+  getPendingHumanReply(threadId: string): { messageId: string; body: string } | null {
+    const thread = this.store.load(threadId);
+    if (!thread) {
+      return null;
+    }
+
+    const latestHumanReply = [...thread.messages]
+      .reverse()
+      .find((message) => message.author.startsWith('human:'));
+
+    if (!latestHumanReply || latestHumanReply.messageId === thread.lastInjectedHumanMessageId) {
+      return null;
+    }
+
+    return {
+      messageId: latestHumanReply.messageId,
+      body: latestHumanReply.body,
+    };
+  }
+
+  markHumanReplyInjected(threadId: string, messageId: string): void {
+    this.store.setLastInjectedHumanMessageId(threadId, messageId);
+  }
+
   destroy(): void {
     this.stopPolling();
     this.removeAllListeners();
     this.sessions.clear();
   }
 
-  private useAgentMail(): boolean {
-    return this.config.transport === 'agentmail' && Boolean(this.config.agentMailApiKey);
+  private wantsAgentMailOutbound(): boolean {
+    return this.config.outboundTransport === 'agentmail';
+  }
+
+  private useAgentMailOutbound(): boolean {
+    return this.wantsAgentMailOutbound() && Boolean(this.config.agentMailApiKey);
+  }
+
+  private usesSmtpOutbound(): boolean {
+    return this.config.outboundTransport === 'smtp';
+  }
+
+  private wantsAgentMailInbound(): boolean {
+    return this.config.inboundTransport === 'agentmail';
+  }
+
+  private useAgentMailInbound(): boolean {
+    return this.wantsAgentMailInbound() && Boolean(this.config.agentMailApiKey);
+  }
+
+  private usesImapInbound(): boolean {
+    return this.config.inboundTransport === 'imap';
+  }
+
+  private canPollReplies(): boolean {
+    if (!this.config.enabled) {
+      return false;
+    }
+
+    if (this.useAgentMailInbound()) {
+      return true;
+    }
+
+    return Boolean(this.config.imap.host) && Boolean(this.config.imap.user);
   }
 
   private getAgentMailConfig() {
@@ -385,14 +502,15 @@ export class EmailDebateManager extends EventEmitter {
       (max, message) => Math.max(max, message.turnNumber ?? 0),
       0
     );
-    const lastMessageId = thread.messages.at(-1)?.messageId ?? null;
+    const lastReplyTargetId = thread.messages.at(-1)?.messageId ?? null;
 
     const session: EmailDebateSession = {
       threadId,
       recipients: thread.participants.filter((participant) => participant !== thread.owner),
       turnCounter: modelTurnCount,
       turnContentBuffer: '',
-      lastMessageId,
+      lastMessageId: lastReplyTargetId,
+      turnStartHumanMessageId: this.getLatestHumanReplyMessageId(threadId),
     };
 
     this.sessions.set(threadId, session);
@@ -418,19 +536,35 @@ export class EmailDebateManager extends EventEmitter {
 
     try {
       let messageId = thread.rootMessageId;
-      if (this.useAgentMail()) {
+      if (this.useAgentMailOutbound()) {
         const result = await sendNewDebateEmail(this.getAgentMailConfig(), {
           fromModel: 'council',
           to: session.recipients,
           subject: thread.subject,
           body: formatDebatePlainText(body, this.config.fromName),
+          headers: {
+            'Message-ID': messageId,
+          },
         });
-        messageId = result.messageId || messageId;
-        session.lastMessageId = result.messageId || messageId;
+        session.lastMessageId = messageId;
         this.store.setProviderThreadId(threadId, result.threadId);
+        this.store.addMessage(threadId, {
+          messageId,
+          providerMessageId: result.messageId || null,
+          inReplyTo: null,
+          references: [],
+          from: this.config.fromAddress,
+          fromName: this.config.fromName,
+          to: session.recipients,
+          subject: thread.subject,
+          body: formatDebatePlainText(body, this.config.fromName),
+          sentAt: new Date().toISOString(),
+          author: 'system',
+          turnNumber: null,
+        });
       } else {
         await sendDebateEmail(this.config.smtp, {
-          from: this.config.fromAddress,
+          from: this.getSystemFromAddress(),
           fromName: this.config.fromName,
           to: session.recipients,
           subject: thread.subject,
@@ -440,21 +574,20 @@ export class EmailDebateManager extends EventEmitter {
           references: [],
         });
         session.lastMessageId = messageId;
+        this.store.addMessage(threadId, {
+          messageId,
+          inReplyTo: null,
+          references: [],
+          from: this.config.fromAddress,
+          fromName: this.config.fromName,
+          to: session.recipients,
+          subject: thread.subject,
+          body: formatDebatePlainText(body, this.config.fromName),
+          sentAt: new Date().toISOString(),
+          author: 'system',
+          turnNumber: null,
+        });
       }
-
-      this.store.addMessage(threadId, {
-        messageId,
-        inReplyTo: null,
-        references: [],
-        from: this.config.fromAddress,
-        fromName: this.config.fromName,
-        to: session.recipients,
-        subject: thread.subject,
-        body: formatDebatePlainText(body, this.config.fromName),
-        sentAt: new Date().toISOString(),
-        author: 'system',
-        turnNumber: null,
-      });
       this.emitEvent({ type: 'email_sent', threadId, messageId, author: 'system', turnNumber: null });
     } catch (error) {
       this.emitEvent({
@@ -465,60 +598,91 @@ export class EmailDebateManager extends EventEmitter {
     }
   }
 
-  private async sendTurnEmail(threadId: string, speaker: string, round: number): Promise<void> {
+  private async sendTurnEmail(threadId: string, speaker: string, round: number): Promise<DeferredTurnDelivery | null> {
     const session = this.ensureSession(threadId);
     const thread = this.requireThread(threadId);
-    session.turnCounter += 1;
-    const turnNumber = session.turnCounter;
     const rawBody = session.turnContentBuffer.trim() || `[Turn ${round} by ${speaker}]`;
     session.turnContentBuffer = '';
+    const pendingReply = this.getPendingHumanReply(threadId);
+    if (pendingReply && pendingReply.messageId !== session.turnStartHumanMessageId) {
+      this.emitEvent({
+        type: 'turn_delivery_deferred',
+        threadId,
+        speaker,
+        round,
+        humanMessageId: pendingReply.messageId,
+      });
+      return {
+        speaker,
+        round,
+        humanMessageId: pendingReply.messageId,
+        humanBody: pendingReply.body,
+      };
+    }
+
+    session.turnCounter += 1;
+    const turnNumber = session.turnCounter;
     const body = formatDebatePlainText(rawBody, speaker);
 
     try {
       let messageId = generateMessageId(threadId, turnNumber);
-      const inReplyTo = session.lastMessageId;
-      if (this.useAgentMail() && session.lastMessageId) {
-        const result = await replyToDebateEmail(this.getAgentMailConfig(), {
+      const inReplyTo = session.lastMessageId ?? this.getLastVisibleMessageId(thread);
+      const references = this.buildThreadReferences(thread);
+      if (this.useAgentMailOutbound()) {
+        const result = await sendNewDebateEmail(this.getAgentMailConfig(), {
           fromModel: this.speakerToModelKey(speaker),
-          inReplyToMessageId: session.lastMessageId,
+          to: session.recipients,
+          subject: `Re: ${thread.subject}`,
           body,
+          headers: {
+            'Message-ID': messageId,
+            ...(inReplyTo ? { 'In-Reply-To': inReplyTo } : {}),
+            ...(references.length > 0 ? { References: references.join(' ') } : {}),
+          },
         });
-        messageId = result.messageId || messageId;
-        session.lastMessageId = result.messageId || messageId;
-      } else {
-        const previousMessageId =
-          turnNumber === 1 ? thread.rootMessageId : generateMessageId(threadId, turnNumber - 1);
-        const references = [thread.rootMessageId];
-        for (let index = 1; index < turnNumber; index += 1) {
-          references.push(generateMessageId(threadId, index));
-        }
-
-        await sendDebateEmail(this.config.smtp, {
+        session.lastMessageId = messageId;
+        this.store.setProviderThreadId(threadId, result.threadId);
+        this.store.addMessage(threadId, {
+          messageId,
+          providerMessageId: result.messageId || null,
+          inReplyTo,
+          references,
           from: this.config.fromAddress,
           fromName: speaker,
           to: session.recipients,
           subject: `Re: ${thread.subject}`,
           body,
+          sentAt: new Date().toISOString(),
+          author: speaker,
+          turnNumber,
+        });
+      } else {
+        await sendDebateEmail(this.config.smtp, {
+          from: this.getSpeakerFromAddress(speaker),
+          fromName: speaker,
+          to: session.recipients,
+          subject: `Re: ${thread.subject}`,
+          body,
           messageId,
-          inReplyTo: previousMessageId,
+          inReplyTo,
           references,
         });
         session.lastMessageId = messageId;
+        this.store.addMessage(threadId, {
+          messageId,
+          providerMessageId: null,
+          inReplyTo,
+          references,
+          from: this.config.fromAddress,
+          fromName: speaker,
+          to: session.recipients,
+          subject: `Re: ${thread.subject}`,
+          body,
+          sentAt: new Date().toISOString(),
+          author: speaker,
+          turnNumber,
+        });
       }
-
-      this.store.addMessage(threadId, {
-        messageId,
-        inReplyTo,
-        references: [],
-        from: this.config.fromAddress,
-        fromName: speaker,
-        to: session.recipients,
-        subject: `Re: ${thread.subject}`,
-        body,
-        sentAt: new Date().toISOString(),
-        author: speaker,
-        turnNumber,
-      });
       this.emitEvent({ type: 'email_sent', threadId, messageId, author: speaker, turnNumber });
     } catch (error) {
       this.emitEvent({
@@ -527,6 +691,8 @@ export class EmailDebateManager extends EventEmitter {
         message: `Failed to send turn email: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
+
+    return null;
   }
 
   private async sendConclusionEmail(threadId: string, consensusPath: string): Promise<void> {
@@ -549,49 +715,63 @@ export class EmailDebateManager extends EventEmitter {
 
     try {
       let messageId = generateMessageId(threadId, turnNumber);
-      const inReplyTo = session.lastMessageId;
-      if (this.useAgentMail() && session.lastMessageId) {
-        const result = await replyToDebateEmail(this.getAgentMailConfig(), {
+      const inReplyTo = session.lastMessageId ?? this.getLastVisibleMessageId(thread);
+      const references = this.buildThreadReferences(thread);
+      if (this.useAgentMailOutbound()) {
+        const result = await sendNewDebateEmail(this.getAgentMailConfig(), {
           fromModel: 'council',
-          inReplyToMessageId: session.lastMessageId,
+          to: session.recipients,
+          subject: `Re: ${thread.subject}`,
           body,
+          headers: {
+            'Message-ID': messageId,
+            ...(inReplyTo ? { 'In-Reply-To': inReplyTo } : {}),
+            ...(references.length > 0 ? { References: references.join(' ') } : {}),
+          },
         });
-        messageId = result.messageId || messageId;
-        session.lastMessageId = result.messageId || messageId;
-      } else {
-        const previousMessageId =
-          turnNumber === 1 ? thread.rootMessageId : generateMessageId(threadId, turnNumber - 1);
-        const references = [thread.rootMessageId];
-        for (let index = 1; index < turnNumber; index += 1) {
-          references.push(generateMessageId(threadId, index));
-        }
-
-        await sendDebateEmail(this.config.smtp, {
+        session.lastMessageId = messageId;
+        this.store.setProviderThreadId(threadId, result.threadId);
+        this.store.addMessage(threadId, {
+          messageId,
+          providerMessageId: result.messageId || null,
+          inReplyTo,
+          references,
           from: this.config.fromAddress,
           fromName: 'Council',
           to: session.recipients,
           subject: `Re: ${thread.subject}`,
           body,
+          sentAt: new Date().toISOString(),
+          author: 'conclusion',
+          turnNumber,
+        });
+      } else {
+        await sendDebateEmail(this.config.smtp, {
+          from: this.getSystemFromAddress(),
+          fromName: 'Council',
+          to: session.recipients,
+          subject: `Re: ${thread.subject}`,
+          body,
           messageId,
-          inReplyTo: previousMessageId,
+          inReplyTo,
           references,
         });
         session.lastMessageId = messageId;
+        this.store.addMessage(threadId, {
+          messageId,
+          providerMessageId: null,
+          inReplyTo,
+          references,
+          from: this.config.fromAddress,
+          fromName: 'Council',
+          to: session.recipients,
+          subject: `Re: ${thread.subject}`,
+          body,
+          sentAt: new Date().toISOString(),
+          author: 'conclusion',
+          turnNumber,
+        });
       }
-
-      this.store.addMessage(threadId, {
-        messageId,
-        inReplyTo,
-        references: [],
-        from: this.config.fromAddress,
-        fromName: 'Council',
-        to: session.recipients,
-        subject: `Re: ${thread.subject}`,
-        body,
-        sentAt: new Date().toISOString(),
-        author: 'conclusion',
-        turnNumber,
-      });
     } catch (error) {
       log.error('Failed to send conclusion email for %s: %s', threadId, error);
     }
@@ -635,6 +815,213 @@ export class EmailDebateManager extends EventEmitter {
 
   private normalizeRecipients(recipients: string[]): string[] {
     return [...new Set(recipients.map((recipient) => recipient.trim()).filter(Boolean))];
+  }
+
+  private getSystemFromAddress(): string {
+    return this.config.fromAddress;
+  }
+
+  private getSpeakerFromAddress(speaker: string): string {
+    const domain = this.config.fromAddress.split('@')[1];
+    if (!domain) {
+      return this.config.fromAddress;
+    }
+
+    return `${this.speakerToModelKey(speaker)}@${domain}`;
+  }
+
+  private getLastVisibleMessageId(thread: EmailThread): string | null {
+    return thread.messages.at(-1)?.messageId ?? null;
+  }
+
+  private buildThreadReferences(thread: EmailThread): string[] {
+    return [...new Set(thread.messages.map((message) => message.messageId).filter(Boolean))];
+  }
+
+  private createInboundThreadFromMessage(incoming: AgentMailIncomingMessage): EmailThread | null {
+    const routing = this.resolveInboundRouting(incoming);
+    if (!routing) {
+      return null;
+    }
+
+    const thread = this.createThread({
+      topic: this.buildInboundTopic(incoming, routing.addressedModels),
+      matchup: routing.matchup,
+      maxTurns: DEFAULT_COUNCIL_MAX_TURNS,
+      recipients: routing.humanRecipients,
+      subject: incoming.subject || '[Council] Email debate',
+      source: 'email',
+      inboundMessageId: incoming.messageId,
+      addressedModels: routing.addressedModels,
+      preferredStartSide: routing.preferredStartSide,
+      providerThreadId: incoming.threadId,
+    });
+
+    this.store.setLastInjectedHumanMessageId(thread.id, incoming.messageId);
+    this.store.addMessage(thread.id, {
+      messageId: incoming.messageId,
+      providerMessageId: incoming.providerMessageId,
+      inReplyTo: incoming.inReplyTo,
+      references: incoming.references,
+      from: incoming.from,
+      fromName: incoming.fromName,
+      to: routing.humanRecipients,
+      subject: incoming.subject || '[Council] Email debate',
+      body: incoming.body,
+      sentAt: incoming.date,
+      author: `human:${incoming.from}`,
+      turnNumber: null,
+    });
+    this.sessions.delete(thread.id);
+
+    return this.requireThread(thread.id);
+  }
+
+  private resolveInboundRouting(
+    incoming: AgentMailIncomingMessage,
+  ): { matchup: string; addressedModels: EmailDebateInboxKey[]; humanRecipients: string[]; preferredStartSide: 'a' | 'b' } | null {
+    const toModels = this.extractAddressedModels(incoming.to);
+    const ccModels = this.extractAddressedModels(incoming.cc);
+    const headerModels = this.extractAddressedModels(this.getInboundHeaderAddresses(incoming));
+    let addressedModels = [...new Set([...toModels, ...ccModels, ...headerModels])];
+
+    if (addressedModels.includes('council') && addressedModels.length > 1) {
+      addressedModels = addressedModels.filter((model) => model !== 'council');
+    }
+
+    if (addressedModels.length === 0) {
+      if (incoming.receivingInbox === 'council') {
+        addressedModels = ['opus', 'codex'];
+      } else {
+        addressedModels = [incoming.receivingInbox];
+      }
+    }
+
+    if (addressedModels.length === 1 && addressedModels[0] === 'council') {
+      addressedModels = ['opus', 'codex'];
+    }
+
+    if (addressedModels.length === 0) {
+      return null;
+    }
+
+    const firstToModel = toModels[0];
+    if (addressedModels.length === 1) {
+      const model = addressedModels[0];
+      return {
+        matchup: `${model}-vs-${model}`,
+        addressedModels,
+        humanRecipients: this.resolveHumanRecipients(incoming),
+        preferredStartSide: 'a',
+      };
+    }
+
+    let pair = addressedModels.slice(0, 2);
+    if (firstToModel) {
+      const firstOpponent = addressedModels.find((model) => model !== firstToModel);
+      pair = [firstToModel, firstOpponent ?? addressedModels[1]];
+    } else if (addressedModels.length >= 2 && this.shouldFlipCcOrder(incoming.messageId)) {
+      pair = [addressedModels[1], addressedModels[0]];
+    }
+
+    return {
+      matchup: `${pair[0]}-vs-${pair[1]}`,
+      addressedModels: pair,
+      humanRecipients: this.resolveHumanRecipients(incoming),
+      preferredStartSide: 'a',
+    };
+  }
+
+  private resolveHumanRecipients(incoming: AgentMailIncomingMessage): string[] {
+    const humanRecipients = [
+      incoming.from,
+      ...incoming.to.filter((address) => !this.isAgentAlias(address)),
+      ...incoming.cc.filter((address) => !this.isAgentAlias(address)),
+      ...this.getInboundHeaderAddresses(incoming).filter((address) => !this.isAgentAlias(address)),
+    ];
+    return this.normalizeRecipients(humanRecipients);
+  }
+
+  private extractAddressedModels(addresses: string[]): EmailDebateInboxKey[] {
+    const models: EmailDebateInboxKey[] = [];
+    for (const address of addresses) {
+      const model = this.addressToModelKey(address);
+      if (model && !models.includes(model)) {
+        models.push(model);
+      }
+    }
+    return models;
+  }
+
+  private addressToModelKey(address: string): EmailDebateInboxKey | null {
+    const localPart = address.trim().toLowerCase().split('@')[0] ?? '';
+    if (localPart in MODEL_INBOXES) {
+      return localPart as EmailDebateInboxKey;
+    }
+    return null;
+  }
+
+  private isAgentAlias(address: string): boolean {
+    return this.addressToModelKey(address) !== null;
+  }
+
+  private shouldFlipCcOrder(messageId: string): boolean {
+    const digest = crypto.createHash('sha256').update(messageId).digest('hex');
+    const nibble = Number.parseInt(digest[0] ?? '0', 16);
+    return Number.isFinite(nibble) && nibble % 2 === 1;
+  }
+
+  private getInboundHeaderAddresses(incoming: AgentMailIncomingMessage): string[] {
+    return this.normalizeRecipients([
+      ...this.parseHeaderAddressList(incoming.headers.to),
+      ...this.parseHeaderAddressList(incoming.headers.cc),
+      ...this.parseHeaderAddressList(incoming.headers['x-gm-original-to']),
+      ...this.parseHeaderAddressList(incoming.headers['x-original-to']),
+      ...this.parseHeaderAddressList(incoming.headers['delivered-to']),
+    ]);
+  }
+
+  private parseHeaderAddressList(value: string | undefined): string[] {
+    if (!value) {
+      return [];
+    }
+
+    return value
+      .split(',')
+      .map((entry) => entry.trim())
+      .map((entry) => entry.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0]?.toLowerCase() ?? '')
+      .filter(Boolean);
+  }
+
+  private buildInboundTopic(incoming: AgentMailIncomingMessage, addressedModels: EmailDebateInboxKey[]): string {
+    const sections = [
+      'A human started this debate by email.',
+      'If the request is underspecified, use your first reply to ask concise clarifying questions before continuing.',
+      '',
+      `From: ${incoming.fromName} <${incoming.from}>`,
+      incoming.subject ? `Subject: ${incoming.subject}` : null,
+      incoming.to.length > 0 ? `To: ${incoming.to.join(', ')}` : null,
+      incoming.cc.length > 0 ? `Cc: ${incoming.cc.join(', ')}` : null,
+      addressedModels.length > 0 ? `Addressed agents: ${addressedModels.join(', ')}` : null,
+      '',
+      'Human message:',
+      incoming.body.trim() || '[No body provided]',
+    ].filter(Boolean);
+
+    return sections.join('\n');
+  }
+
+  private getLatestHumanReplyMessageId(threadId: string): string | null {
+    const thread = this.store.load(threadId);
+    if (!thread) {
+      return null;
+    }
+
+    const latestHumanReply = [...thread.messages]
+      .reverse()
+      .find((message) => message.author.startsWith('human:'));
+
+    return latestHumanReply?.messageId ?? null;
   }
 
   private requireThread(threadId: string): EmailThread {

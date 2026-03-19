@@ -21,7 +21,9 @@ export interface ImapConfig {
   pass: string;
 }
 
-export type EmailDebateTransport = 'agentmail' | 'smtp';
+export type EmailDebateOutboundTransport = 'agentmail' | 'smtp';
+export type EmailDebateInboundTransport = 'agentmail' | 'imap';
+export type EmailDebateThreadSource = 'local' | 'email';
 
 export type EmailDebateThreadStatus = 'active' | 'concluded' | 'closed';
 
@@ -35,7 +37,8 @@ export interface EmailDebateConfig {
   defaultRecipients: string[];
   pollIntervalMs: number;
   enabled: boolean;
-  transport: EmailDebateTransport;
+  outboundTransport: EmailDebateOutboundTransport;
+  inboundTransport: EmailDebateInboundTransport;
   agentMailApiKey: string;
   agentMailDomain: string;
   agentMailInboxIds: Partial<Record<EmailDebateInboxKey, string>>;
@@ -43,6 +46,7 @@ export interface EmailDebateConfig {
 
 export interface EmailThreadMessage {
   messageId: string;
+  providerMessageId?: string | null;
   inReplyTo: string | null;
   references: string[];
   from: string;
@@ -74,14 +78,28 @@ export interface EmailThread {
   updatedAt: string;
   transcriptPath: string | null;
   consensusPath: string | null;
+  resumeStatePath: string | null;
+  lastInjectedHumanMessageId: string | null;
+  source: EmailDebateThreadSource;
+  inboundMessageId: string | null;
+  addressedModels: EmailDebateInboxKey[];
+  preferredStartSide: 'a' | 'b' | null;
 }
 
 export type EmailDebateEvent =
   | { type: 'thread_created'; threadId: string; subject: string }
+  | { type: 'inbound_thread_ready'; threadId: string }
   | { type: 'thread_concluded'; threadId: string }
   | { type: 'thread_closed'; threadId: string }
   | { type: 'thread_reopened'; threadId: string }
   | { type: 'email_sent'; threadId: string; messageId: string; author: string; turnNumber: number | null }
+  | {
+      type: 'turn_delivery_deferred';
+      threadId: string;
+      speaker: string;
+      round: number;
+      humanMessageId: string;
+    }
   | { type: 'reply_received'; threadId: string; from: string; body: string; messageId: string }
   | { type: 'error'; threadId: string; message: string };
 
@@ -100,7 +118,8 @@ export const DEFAULT_EMAIL_DEBATE_CONFIG: EmailDebateConfig = {
   defaultRecipients: [],
   pollIntervalMs: 15_000,
   enabled: false,
-  transport: 'agentmail',
+  outboundTransport: 'agentmail',
+  inboundTransport: 'imap',
   agentMailApiKey: '',
   agentMailDomain: 'agentmail.to',
   agentMailInboxIds: {},

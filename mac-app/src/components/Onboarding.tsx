@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import type { ParakeetStatus } from '../types/window';
 import { buildHotkeyString, formatHotkeyDisplay } from '../utils/hotkeys';
 import {
   DEFAULT_VISIBLE_PARAKEET_ENGINE,
