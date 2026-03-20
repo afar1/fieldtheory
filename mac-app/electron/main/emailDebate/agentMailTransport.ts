@@ -53,6 +53,7 @@ type AgentMailClientLike = {
     create: (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
     list: () => Promise<Record<string, unknown> | Record<string, unknown>[]>;
     messages: {
+      get: (inboxId: string, messageId: string) => Promise<Record<string, unknown>>;
       send: (inboxId: string, input: Record<string, unknown>) => Promise<Record<string, unknown>>;
       reply: (
         inboxId: string,
@@ -89,6 +90,10 @@ function getClient(apiKey: string): AgentMailClientLike {
 
 export function resetClient(): void {
   clientInstance = null;
+}
+
+export function setClientForTesting(client: AgentMailClientLike | null): void {
+  clientInstance = client;
 }
 
 export async function ensureModelInbox(
@@ -213,9 +218,28 @@ export async function checkForReplies(
     ? response
     : ((response.messages as Record<string, unknown>[] | undefined) ?? []);
 
-  return messages
-    .map((message) => toIncomingMessage(message, modelKey))
-    .filter((message) => Boolean(message.messageId) && !knownMessageIds.has(message.messageId));
+  const incomingMessages: AgentMailIncomingMessage[] = [];
+
+  for (const messageItem of messages) {
+    const messageId = getCanonicalMessageId(messageItem);
+    if (!messageId || knownMessageIds.has(messageId)) {
+      continue;
+    }
+
+    let fullMessage = messageItem;
+    try {
+      fullMessage = await client.inboxes.messages.get(inboxId, String(messageItem.messageId ?? messageId));
+    } catch (error) {
+      log.warn('Falling back to AgentMail list payload for %s: %s', messageId, error);
+    }
+
+    const incoming = toIncomingMessage(fullMessage, modelKey);
+    if (incoming.messageId && !knownMessageIds.has(incoming.messageId)) {
+      incomingMessages.push(incoming);
+    }
+  }
+
+  return incomingMessages;
 }
 
 export async function listThreads(
@@ -314,13 +338,24 @@ function toIncomingMessage(
     to: getRecipientAddresses(message, 'to', ['to', 'x-gm-original-to', 'x-original-to', 'delivered-to']),
     cc: getRecipientAddresses(message, 'cc', ['cc']),
     subject: String(message.subject ?? ''),
-    body: String(message.extractedText ?? message.text ?? ''),
+    body: extractMessageBody(message),
     inReplyTo: String(message.inReplyTo ?? headers['in-reply-to'] ?? '') || null,
     references: extractReferences(message.references, headers['references']),
     headers,
     date: String(message.createdAt ?? new Date().toISOString()),
     receivingInbox,
   };
+}
+
+export function extractMessageBody(message: Record<string, unknown>): string {
+  return String(
+    message.extractedText ??
+    message.text ??
+    message.extractedHtml ??
+    message.html ??
+    message.preview ??
+    ''
+  );
 }
 
 function parseMailboxAddress(raw: string): { address: string; name: string } {

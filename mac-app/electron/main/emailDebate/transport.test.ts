@@ -45,9 +45,20 @@ describe('transport helpers', () => {
   describe('formatDebatePlainText', () => {
     it('formats a simple plain-text debate email body', () => {
       const body = formatDebatePlainText('Point one.\n\nPoint two.', 'Codex (GPT-5.3)');
-      expect(body).toContain('Codex (GPT-5.3)');
+      expect(body.startsWith('Point one.')).toBe(true);
       expect(body).toContain('Point one.');
-      expect(body).toContain('Reply to this email to join the debate.');
+      expect(body).toContain('--\nCodex (GPT-5.3)');
+      expect(body).toContain('Reply to this email to continue the debate.');
+    });
+
+    it('softens markdown formatting for plain-text email output', () => {
+      const body = formatDebatePlainText('## Heading\nUse [council.sh](/tmp/council.sh) and **be specific**.', 'Codex');
+
+      expect(body).toContain('Heading');
+      expect(body).toContain('council.sh (/tmp/council.sh)');
+      expect(body).toContain('be specific');
+      expect(body).not.toContain('##');
+      expect(body).not.toContain('**');
     });
   });
 });

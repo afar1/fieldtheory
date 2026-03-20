@@ -484,6 +484,13 @@ export class EmailDebateManager extends EventEmitter {
   }
 
   private getPollingInboxKeys(): EmailDebateInboxKey[] {
+    const configuredKeys = (Object.keys(this.config.agentMailInboxIds) as EmailDebateInboxKey[])
+      .filter((key) => Boolean(this.config.agentMailInboxIds[key]));
+
+    if (configuredKeys.length > 0) {
+      return configuredKeys;
+    }
+
     return Object.keys(MODEL_INBOXES) as EmailDebateInboxKey[];
   }
 
@@ -563,10 +570,13 @@ export class EmailDebateManager extends EventEmitter {
           turnNumber: null,
         });
       } else {
+        const visibleCc = this.getVisibleCc(thread);
         await sendDebateEmail(this.config.smtp, {
           from: this.getSystemFromAddress(),
           fromName: this.config.fromName,
           to: session.recipients,
+          cc: visibleCc,
+          envelopeTo: session.recipients,
           subject: thread.subject,
           body: formatDebatePlainText(body, this.config.fromName),
           messageId,
@@ -590,6 +600,7 @@ export class EmailDebateManager extends EventEmitter {
       }
       this.emitEvent({ type: 'email_sent', threadId, messageId, author: 'system', turnNumber: null });
     } catch (error) {
+      log.error('Failed to send topic email for %s: %s', threadId, error);
       this.emitEvent({
         type: 'error',
         threadId,
@@ -657,10 +668,13 @@ export class EmailDebateManager extends EventEmitter {
           turnNumber,
         });
       } else {
+        const visibleCc = this.getVisibleCc(thread, speaker);
         await sendDebateEmail(this.config.smtp, {
           from: this.getSpeakerFromAddress(speaker),
           fromName: speaker,
           to: session.recipients,
+          cc: visibleCc,
+          envelopeTo: session.recipients,
           subject: `Re: ${thread.subject}`,
           body,
           messageId,
@@ -685,6 +699,7 @@ export class EmailDebateManager extends EventEmitter {
       }
       this.emitEvent({ type: 'email_sent', threadId, messageId, author: speaker, turnNumber });
     } catch (error) {
+      log.error('Failed to send turn email for %s: %s', threadId, error);
       this.emitEvent({
         type: 'error',
         threadId,
@@ -746,10 +761,13 @@ export class EmailDebateManager extends EventEmitter {
           turnNumber,
         });
       } else {
+        const visibleCc = this.getVisibleCc(thread);
         await sendDebateEmail(this.config.smtp, {
           from: this.getSystemFromAddress(),
           fromName: 'Council',
           to: session.recipients,
+          cc: visibleCc,
+          envelopeTo: session.recipients,
           subject: `Re: ${thread.subject}`,
           body,
           messageId,
@@ -828,6 +846,19 @@ export class EmailDebateManager extends EventEmitter {
     }
 
     return `${this.speakerToModelKey(speaker)}@${domain}`;
+  }
+
+  private getVisibleCc(thread: EmailThread, senderSpeaker?: string): string[] {
+    const domain = this.config.fromAddress.split('@')[1];
+    if (!domain) {
+      return [];
+    }
+
+    const senderModel = senderSpeaker ? this.speakerToModelKey(senderSpeaker) : null;
+    return thread.addressedModels
+      .filter((model) => model !== 'council')
+      .filter((model) => model !== senderModel)
+      .map((model) => `${model}@${domain}`);
   }
 
   private getLastVisibleMessageId(thread: EmailThread): string | null {

@@ -186,6 +186,31 @@ describe('EmailDebateManager', () => {
     expect(String(call?.[1].body)).toContain('tabs');
   });
 
+  it('adds the other addressed model as visible cc without delivering to it', async () => {
+    const thread = manager.createThread({
+      topic: 'Test',
+      matchup: 'codex-vs-opus',
+      maxTurns: 4,
+      recipients: ['user@test.com'],
+      addressedModels: ['codex', 'opus'],
+    });
+
+    manager.bufferTurnChunk(thread.id, 'Cloud-first for control plane; local-first for execution.');
+
+    await manager.handleCouncilEvent(thread.id, {
+      type: 'turn_end',
+      speaker: 'Codex',
+      round: '1',
+      convergence: 'low',
+      action: 'continue',
+    });
+
+    const call = vi.mocked(sendDebateEmail).mock.calls[0];
+    expect(call?.[1].to).toEqual(['user@test.com']);
+    expect(call?.[1].cc).toEqual(['opus@test.com']);
+    expect(call?.[1].envelopeTo).toEqual(['user@test.com']);
+  });
+
   it('suppresses a stale turn email when a newer human reply arrives before delivery', async () => {
     const thread = manager.createThread({ topic: 'Test', matchup: 'opus-vs-opus', maxTurns: 4 });
     manager.reopenThread(thread.id);
@@ -473,6 +498,51 @@ describe('EmailDebateManager', () => {
     const createdThread = agentMailManager.getThreads()[0];
     expect(createdThread?.matchup).toBe('codex-vs-codex');
     expect(createdThread?.addressedModels).toEqual(['codex']);
+    agentMailManager.destroy();
+  });
+
+  it('polls only configured AgentMail inbox keys for inbound routing', async () => {
+    const agentMailManager = new EmailDebateManager(
+      {
+        ...TEST_CONFIG,
+        outboundTransport: 'smtp',
+        inboundTransport: 'agentmail',
+        agentMailApiKey: 'test-key',
+        agentMailInboxIds: {
+          council: 'debateintake@agentmail.to',
+        },
+      },
+      tmpDir
+    );
+
+    vi.mocked(checkForReplies).mockResolvedValueOnce([
+      {
+        messageId: '<orig-hidden@fieldtheory.dev>',
+        providerMessageId: 'provider-msg-hidden',
+        threadId: 'provider-thread-hidden',
+        from: 'human@example.com',
+        fromName: 'Human',
+        to: ['council@agentmail.to'],
+        cc: [],
+        subject: 'Just Codex please',
+        body: 'Debate this with yourself.',
+        inReplyTo: null,
+        references: [],
+        headers: {
+          'message-id': '<orig-hidden@fieldtheory.dev>',
+          to: 'codex@fieldtheory.dev',
+          'x-gm-original-to': 'codex@fieldtheory.dev',
+        },
+        date: '2026-03-18T12:05:00Z',
+        receivingInbox: 'council' as const,
+      },
+    ]);
+
+    await agentMailManager.pollOnce();
+
+    expect(checkForReplies).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(checkForReplies).mock.calls[0]?.[1]).toBe('council');
+    expect(agentMailManager.getThreads()[0]?.matchup).toBe('codex-vs-codex');
     agentMailManager.destroy();
   });
 
