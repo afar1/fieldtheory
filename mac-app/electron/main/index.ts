@@ -240,6 +240,10 @@ function promptToReviewCouncilResult(): void {
   });
   notification.on('click', () => {
     councilWindow?.show();
+    // Council window toggles dock visibility which triggers compositor recomposition
+    // that can corrupt transparent overlay backing on dynamic island windows.
+    cursorStatusManager?.refreshWindowProperties();
+    dynamicIslandManager?.refreshWindowProperties('council:notification-click');
   });
   notification.show();
 }
@@ -322,6 +326,9 @@ function resolveEmailDebateConfigFromEnv(): Partial<EmailDebateConfig> {
     fromAddress: getOptionalEnvValue('EMAIL_DEBATE_FROM_ADDRESS') ?? DEFAULT_EMAIL_DEBATE_CONFIG.fromAddress,
     fromName: getOptionalEnvValue('EMAIL_DEBATE_FROM_NAME') ?? DEFAULT_EMAIL_DEBATE_CONFIG.fromName,
     defaultRecipients: parseCsvEnv(getOptionalEnvValue('EMAIL_DEBATE_DEFAULT_RECIPIENTS')),
+    autoSendConclusionEmail:
+      parseOptionalBoolean(getOptionalEnvValue('EMAIL_DEBATE_AUTO_SEND_CONCLUSION_EMAIL'))
+      ?? DEFAULT_EMAIL_DEBATE_CONFIG.autoSendConclusionEmail,
     pollIntervalMs: pollIntervalMs ?? DEFAULT_EMAIL_DEBATE_CONFIG.pollIntervalMs,
     agentMailApiKey: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_API_KEY') ?? DEFAULT_EMAIL_DEBATE_CONFIG.agentMailApiKey,
     agentMailDomain: getOptionalEnvValue('EMAIL_DEBATE_AGENTMAIL_DOMAIN') ?? DEFAULT_EMAIL_DEBATE_CONFIG.agentMailDomain,
@@ -5156,12 +5163,16 @@ function setupClipboardIPCHandlers(): void {
     const result = await councilManager.start(config);
     if (result.success && getCouncilPreferences().autoOpenWindow) {
       councilWindow?.show();
+      cursorStatusManager?.refreshWindowProperties();
+      dynamicIslandManager?.refreshWindowProperties('council:debate-start');
     }
     return result;
   });
 
   ipcMain.handle(CouncilIPCChannels.SHOW_WINDOW, async () => {
     councilWindow?.show();
+    cursorStatusManager?.refreshWindowProperties();
+    dynamicIslandManager?.refreshWindowProperties('council:show-window');
   });
 
   ipcMain.handle(CouncilIPCChannels.STOP, async () => {
@@ -6174,6 +6185,10 @@ async function initTranscriberSystem(): Promise<void> {
         suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
         clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
       }
+      // Showing/focusing clipboard history can corrupt transparent overlay backing
+      // on some macOS compositor paths — reinforce window properties.
+      cursorStatusManager?.refreshWindowProperties();
+      dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-auto-artifact');
 
       // Only bounce dock if the icon is visible (showInDock mode).
       // Bouncing when hidden can cause the dock icon to reappear.
@@ -6622,6 +6637,8 @@ async function initTranscriberSystem(): Promise<void> {
   councilManager.on('kickoffDetected', () => {
     if (getCouncilPreferences().autoOpenWindow) {
       councilWindow?.show();
+      cursorStatusManager?.refreshWindowProperties();
+      dynamicIslandManager?.refreshWindowProperties('council:kickoff-detected');
     }
   });
 

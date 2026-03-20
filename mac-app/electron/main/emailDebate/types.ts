@@ -35,6 +35,7 @@ export interface EmailDebateConfig {
   fromAddress: string;
   fromName: string;
   defaultRecipients: string[];
+  autoSendConclusionEmail: boolean;
   pollIntervalMs: number;
   enabled: boolean;
   outboundTransport: EmailDebateOutboundTransport;
@@ -116,6 +117,7 @@ export const DEFAULT_EMAIL_DEBATE_CONFIG: EmailDebateConfig = {
   fromAddress: '',
   fromName: 'Field Theory Council',
   defaultRecipients: [],
+  autoSendConclusionEmail: false,
   pollIntervalMs: 15_000,
   enabled: false,
   outboundTransport: 'agentmail',

@@ -50,6 +50,7 @@ const TEST_CONFIG = {
   fromAddress: 'council@test.com',
   fromName: 'Test Council',
   defaultRecipients: ['user@test.com'],
+  autoSendConclusionEmail: false,
   pollIntervalMs: 60_000,
   enabled: true,
   outboundTransport: 'smtp' as const,
@@ -229,6 +230,8 @@ describe('EmailDebateManager', () => {
         references: [thread.rootMessageId],
         from: 'alice@example.com',
         fromName: 'Alice',
+        to: ['council@test.com'],
+        cc: [],
         subject: `Re: ${thread.subject}`,
         body: 'Please reframe this around rollout risk.',
         date: new Date('2026-03-18T12:03:00Z'),
@@ -276,6 +279,38 @@ describe('EmailDebateManager', () => {
     expect(events.some((event) => event.type === 'thread_concluded')).toBe(true);
   });
 
+  it('does not auto-send the conclusion email by default', async () => {
+    const thread = manager.createThread({ topic: 'Conclusion', matchup: 'opus-vs-opus', maxTurns: 4 });
+    const consensusPath = path.join(tmpDir, 'consensus.md');
+    fs.writeFileSync(consensusPath, 'Consensus text', 'utf-8');
+
+    await manager.handleCouncilEvent(thread.id, {
+      type: 'consensus_written',
+      path: consensusPath,
+    });
+
+    expect(sendDebateEmail).not.toHaveBeenCalled();
+    expect(manager.getThread(thread.id)?.consensusPath).toBe(consensusPath);
+  });
+
+  it('can auto-send the conclusion email when explicitly enabled', async () => {
+    const conclusionManager = new EmailDebateManager(
+      { ...TEST_CONFIG, autoSendConclusionEmail: true },
+      tmpDir,
+    );
+    const thread = conclusionManager.createThread({ topic: 'Conclusion', matchup: 'opus-vs-opus', maxTurns: 4 });
+    const consensusPath = path.join(tmpDir, 'consensus-explicit.md');
+    fs.writeFileSync(consensusPath, 'Consensus text', 'utf-8');
+
+    await conclusionManager.handleCouncilEvent(thread.id, {
+      type: 'consensus_written',
+      path: consensusPath,
+    });
+
+    expect(sendDebateEmail).toHaveBeenCalledTimes(1);
+    conclusionManager.destroy();
+  });
+
   it('stores a pause resume-state path and clears it on completion', async () => {
     const thread = manager.createThread({ topic: 'Test', matchup: 'opus-vs-opus', maxTurns: 4 });
 
@@ -306,6 +341,8 @@ describe('EmailDebateManager', () => {
         references: [thread.rootMessageId],
         from: 'alice@example.com',
         fromName: 'Alice',
+        to: ['council@test.com'],
+        cc: [],
         subject: `Re: ${thread.subject}`,
         body: 'Please consider the performance implications.',
         date: new Date('2026-03-18T12:00:00Z'),
@@ -318,7 +355,7 @@ describe('EmailDebateManager', () => {
     expect(manager.buildReplyContext(thread.id)).toContain('performance implications');
   });
 
-  it('tracks the latest uninjected human reply separately from older injected replies', async () => {
+  it('bundles uninjected human replies together and clears them once injected', async () => {
     const thread = manager.createThread({ topic: 'Pending reply', matchup: 'opus-vs-opus', maxTurns: 4 });
     manager.reopenThread(thread.id);
 
@@ -329,28 +366,20 @@ describe('EmailDebateManager', () => {
         references: [thread.rootMessageId],
         from: 'alice@example.com',
         fromName: 'Alice',
+        to: ['council@test.com'],
+        cc: [],
         subject: `Re: ${thread.subject}`,
         body: 'First reply',
         date: new Date('2026-03-18T12:00:00Z'),
       },
-    ]);
-    await manager.pollOnce();
-
-    expect(manager.getPendingHumanReply(thread.id)).toEqual({
-      messageId: '<reply-a@example.com>',
-      body: 'First reply',
-    });
-
-    manager.markHumanReplyInjected(thread.id, '<reply-a@example.com>');
-    expect(manager.getPendingHumanReply(thread.id)).toBeNull();
-
-    vi.mocked(pollForReplies).mockResolvedValueOnce([
       {
         messageId: '<reply-b@example.com>',
         inReplyTo: thread.rootMessageId,
         references: [thread.rootMessageId],
-        from: 'alice@example.com',
-        fromName: 'Alice',
+        from: 'bob@example.com',
+        fromName: 'Bob',
+        to: ['council@test.com'],
+        cc: [],
         subject: `Re: ${thread.subject}`,
         body: 'Second reply',
         date: new Date('2026-03-18T12:05:00Z'),
@@ -360,8 +389,19 @@ describe('EmailDebateManager', () => {
 
     expect(manager.getPendingHumanReply(thread.id)).toEqual({
       messageId: '<reply-b@example.com>',
-      body: 'Second reply',
+      body: [
+        '[Alice (alice@example.com) replied]',
+        'First reply',
+        '',
+        '---',
+        '',
+        '[Bob (bob@example.com) replied]',
+        'Second reply',
+      ].join('\n'),
     });
+
+    manager.markHumanReplyInjected(thread.id, '<reply-b@example.com>');
+    expect(manager.getPendingHumanReply(thread.id)).toBeNull();
   });
 
   it('matches AgentMail replies by provider thread id and reopens concluded threads', async () => {
@@ -603,6 +643,8 @@ describe('EmailDebateManager', () => {
         references: [thread.rootMessageId],
         from: 'human@example.com',
         fromName: 'Human',
+        to: ['council@test.com'],
+        cc: [],
         subject: `Re: ${thread.subject}`,
         body: 'Reply via IMAP',
         date: new Date('2026-03-18T12:10:00Z'),
@@ -618,6 +660,60 @@ describe('EmailDebateManager', () => {
       body: 'Reply via IMAP',
     });
     mixedManager.destroy();
+  });
+
+  it('keeps newly added human recipients on future turns in the same thread', async () => {
+    const agentMailManager = new EmailDebateManager(
+      { ...TEST_CONFIG, inboundTransport: 'agentmail', agentMailApiKey: 'test-key' },
+      tmpDir
+    );
+    const thread = agentMailManager.createThread({
+      topic: 'Shared thread',
+      matchup: 'codex-vs-opus',
+      recipients: ['human@example.com'],
+      addressedModels: ['codex', 'opus'],
+    });
+
+    vi.mocked(checkForReplies).mockResolvedValueOnce([
+      {
+        messageId: 'incoming-added-human',
+        providerMessageId: 'provider-msg-added-human',
+        threadId: 'provider-thread-1',
+        from: 'human@example.com',
+        fromName: 'Human',
+        to: ['codex@fieldtheory.dev'],
+        cc: ['ally@example.com'],
+        subject: `Re: ${thread.subject}`,
+        body: 'Loop Ally in too.',
+        inReplyTo: thread.rootMessageId,
+        references: [thread.rootMessageId],
+        headers: {
+          'message-id': 'incoming-added-human',
+          to: 'codex@fieldtheory.dev',
+          cc: 'ally@example.com',
+        },
+        date: '2026-03-18T12:00:00Z',
+        receivingInbox: 'codex' as const,
+      },
+    ]);
+
+    await agentMailManager.pollOnce();
+    expect(agentMailManager.getThread(thread.id)?.participants).toContain('ally@example.com');
+    agentMailManager.markHumanReplyInjected(thread.id, 'incoming-added-human');
+    agentMailManager.bufferTurnChunk(thread.id, 'Acknowledged.');
+
+    await agentMailManager.handleCouncilEvent(thread.id, {
+      type: 'turn_end',
+      speaker: 'Codex',
+      round: '1',
+      convergence: 'low',
+      action: 'continue',
+    });
+
+    const sent = vi.mocked(sendDebateEmail).mock.calls.at(-1);
+    expect(sent?.[1].to).toEqual(['human@example.com', 'ally@example.com']);
+    expect(sent?.[1].envelopeTo).toEqual(['human@example.com', 'ally@example.com']);
+    agentMailManager.destroy();
   });
 
   it('tests both AgentMail and IMAP in mixed mode', async () => {
