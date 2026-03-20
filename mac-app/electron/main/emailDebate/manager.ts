@@ -633,7 +633,7 @@ export class EmailDebateManager extends EventEmitter {
 
     session.turnCounter += 1;
     const turnNumber = session.turnCounter;
-    const body = formatDebatePlainText(rawBody, speaker);
+    const body = formatDebatePlainText(rawBody, speaker, this.getSpeakerSignatureDetail(speaker));
 
     try {
       let messageId = generateMessageId(threadId, turnNumber);
@@ -846,6 +846,19 @@ export class EmailDebateManager extends EventEmitter {
     }
 
     return `${this.speakerToModelKey(speaker)}@${domain}`;
+  }
+
+  private getSpeakerSignatureDetail(speaker: string): string | null {
+    switch (this.speakerToModelKey(speaker)) {
+      case 'opus':
+        return 'Claude Opus 4.6';
+      case 'sonnet':
+        return 'Claude Sonnet';
+      case 'codex':
+        return 'GPT-5.3';
+      default:
+        return null;
+    }
   }
 
   private getVisibleCc(thread: EmailThread, senderSpeaker?: string): string[] {
