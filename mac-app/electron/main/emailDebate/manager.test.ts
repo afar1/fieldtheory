@@ -42,7 +42,7 @@ import {
   sendNewDebateEmail,
   testConnection as testAgentMailConnection,
 } from './agentMailTransport';
-import { pollForReplies, sendDebateEmail, testImapConnection } from './transport';
+import { formatDebatePlainText, pollForReplies, sendDebateEmail, testImapConnection } from './transport';
 
 const TEST_CONFIG = {
   smtp: { host: 'smtp.test.com', port: 587, secure: false, user: 'test', pass: 'pass' },
@@ -184,6 +184,7 @@ describe('EmailDebateManager', () => {
     expect(call?.[1].from).toBe('opus@test.com');
     expect(call?.[1].fromName).toContain('Opus');
     expect(String(call?.[1].body)).toContain('tabs');
+    expect(vi.mocked(formatDebatePlainText).mock.calls[0]?.[2]).toBe('Claude Opus 4.6');
   });
 
   it('adds the other addressed model as visible cc without delivering to it', async () => {

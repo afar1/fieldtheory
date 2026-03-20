@@ -44,20 +44,27 @@ describe('transport helpers', () => {
 
   describe('formatDebatePlainText', () => {
     it('formats a simple plain-text debate email body', () => {
-      const body = formatDebatePlainText('Point one.\n\nPoint two.', 'Codex (GPT-5.3)');
+      const body = formatDebatePlainText('Point one.\n\nPoint two.', 'Codex', 'GPT-5.3');
       expect(body.startsWith('Point one.')).toBe(true);
       expect(body).toContain('Point one.');
-      expect(body).toContain('--\nCodex (GPT-5.3)');
+      expect(body).toContain('--\nCodex\nGPT-5.3');
       expect(body).toContain('Reply to this email to continue the debate.');
     });
 
     it('softens markdown formatting for plain-text email output', () => {
-      const body = formatDebatePlainText('## Heading\nUse [council.sh](/tmp/council.sh) and **be specific**.', 'Codex');
+      const body = formatDebatePlainText(
+        '## Hidden product behavior\n'
+        + 'Use [CouncilPanel.tsx](/Users/afar/dev/fieldtheory/mac-app/src/components/CouncilPanel.tsx#L18) and **be specific**.\n\n'
+        + 'Raw ref: /Users/afar/dev/fieldtheory/mac-app/electron/main/types/council.ts#L82',
+        'Codex',
+        'GPT-5.3',
+      );
 
-      expect(body).toContain('Heading');
-      expect(body).toContain('council.sh (/tmp/council.sh)');
+      expect(body).toContain('Hidden product behavior:');
+      expect(body).toContain('CouncilPanel.tsx');
+      expect(body).toContain('mac-app/electron/main/types/council.ts#L82');
       expect(body).toContain('be specific');
-      expect(body).not.toContain('##');
+      expect(body).not.toContain('/Users/afar/dev/fieldtheory/');
       expect(body).not.toContain('**');
     });
   });

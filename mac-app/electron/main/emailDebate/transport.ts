@@ -5,6 +5,7 @@
  * read like normal email, not like generated HTML reports.
  */
 
+import path from 'path';
 import { ImapFlow } from 'imapflow';
 import { createLogger } from '../logger';
 import type { ImapConfig, SmtpConfig } from './types';
@@ -254,15 +255,20 @@ export function stripQuotedReply(body: string): string {
   return cleanBody.trim();
 }
 
-export function formatDebatePlainText(markdown: string, speakerName: string): string {
+export function formatDebatePlainText(
+  markdown: string,
+  speakerName: string,
+  signatureDetail?: string | null,
+): string {
   const cleaned = sanitizeMarkdownForEmail(markdown);
   const lines = [
     cleaned,
     '',
     '--',
     speakerName,
+    signatureDetail?.trim() ? signatureDetail.trim() : null,
     'Reply to this email to continue the debate.',
-  ];
+  ].filter((line): line is string => Boolean(line));
 
   return lines.join('\n');
 }
@@ -270,10 +276,53 @@ export function formatDebatePlainText(markdown: string, speakerName: string): st
 function sanitizeMarkdownForEmail(markdown: string): string {
   return markdown
     .replace(/\r\n/g, '\n')
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/^\(em\)\s*(.+?)\s*\(em\)\s*$/gim, (_match, content: string) => formatSectionLabel(content))
+    .replace(/^#{1,6}\s+(.+)$/gm, (_match, title: string) => formatSectionLabel(title))
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, label: string, target: string) => formatEmailLink(label, target))
     .replace(/\*\*([^*]+)\*\*/g, '$1')
-    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/(^|[^\*])\*([^*\n]+)\*(?!\*)/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\/Users\/[^\s)]+/g, (rawPath) => shortenLocalPath(rawPath))
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function formatSectionLabel(content: string): string {
+  const normalized = content.trim().replace(/[:\s]+$/, '');
+  return normalized ? `${normalized}:` : '';
+}
+
+function formatEmailLink(label: string, target: string): string {
+  const trimmedLabel = label.trim();
+  const trimmedTarget = target.trim();
+  if (isLikelyLocalPath(trimmedTarget)) {
+    return trimmedLabel || shortenLocalPath(trimmedTarget);
+  }
+  return `${trimmedLabel} (${trimmedTarget})`;
+}
+
+function isLikelyLocalPath(value: string): boolean {
+  return value.startsWith('/') || value.startsWith('file://');
+}
+
+function shortenLocalPath(rawPath: string): string {
+  const normalized = rawPath.replace(/^file:\/\//, '');
+  const anchorMatch = normalized.match(/(#L\d+(?:C\d+)?)$/);
+  const anchor = anchorMatch?.[1] ?? '';
+  const withoutAnchor = anchor ? normalized.slice(0, -anchor.length) : normalized;
+  const fieldTheoryMarker = '/fieldtheory/';
+  const fieldTheoryIndex = withoutAnchor.indexOf(fieldTheoryMarker);
+  if (fieldTheoryIndex >= 0) {
+    return `${withoutAnchor.slice(fieldTheoryIndex + fieldTheoryMarker.length)}${anchor}`;
+  }
+
+  const basename = path.basename(withoutAnchor);
+  if (basename) {
+    const segments = withoutAnchor.split('/').filter(Boolean);
+    return `${segments.slice(-3).join('/')}${anchor}`;
+  }
+
+  return rawPath;
 }
 
 export function generateMessageId(threadId: string, turnNumber: number): string {
