@@ -24,6 +24,8 @@ export interface DebateEmailMessage {
   from: string;
   fromName: string;
   to: string[];
+  cc?: string[];
+  envelopeTo?: string[];
   subject: string;
   body: string;
   messageId: string;
@@ -57,11 +59,16 @@ export async function sendDebateEmail(
     const info = await transport.sendMail({
       from: `"${message.fromName}" <${message.from}>`,
       to: message.to.join(', '),
+      cc: message.cc?.length ? message.cc.join(', ') : undefined,
       subject: message.subject,
       messageId: message.messageId,
       inReplyTo: message.inReplyTo ?? undefined,
       references: message.references.length > 0 ? message.references.join(' ') : undefined,
       text: message.body,
+      envelope: {
+        from: message.from,
+        to: message.envelopeTo ?? message.to,
+      },
     });
 
     log.info(
@@ -248,17 +255,25 @@ export function stripQuotedReply(body: string): string {
 }
 
 export function formatDebatePlainText(markdown: string, speakerName: string): string {
-  const cleaned = markdown.trim();
+  const cleaned = sanitizeMarkdownForEmail(markdown);
   const lines = [
-    `${speakerName}`,
-    '',
     cleaned,
     '',
     '--',
-    'Reply to this email to join the debate.',
+    speakerName,
+    'Reply to this email to continue the debate.',
   ];
 
   return lines.join('\n');
+}
+
+function sanitizeMarkdownForEmail(markdown: string): string {
+  return markdown
+    .replace(/\r\n/g, '\n')
+    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1 ($2)')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .trim();
 }
 
 export function generateMessageId(threadId: string, turnNumber: number): string {

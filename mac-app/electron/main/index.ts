@@ -5,6 +5,7 @@ import os from 'os';
 import fs from 'fs';
 import { createLogger } from './logger';
 import crypto from 'crypto';
+import { parseEnvContent } from './envUtils';
 import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
@@ -131,26 +132,6 @@ function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
   return lower.includes('fieldtheory') || lower.includes('electron');
 }
 
-function parseEnvContent(content: string): Record<string, string> {
-  const env: Record<string, string> = {};
-
-  for (const line of content.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-
-    const [key, ...valueParts] = trimmed.split('=');
-    if (!key || valueParts.length === 0) {
-      continue;
-    }
-
-    env[key.trim()] = valueParts.join('=').trim();
-  }
-
-  return env;
-}
-
 function getLocalEnvPaths(): string[] {
   return [
     '/Users/afar/dev/fieldtheory/.env.local',
@@ -164,29 +145,48 @@ function getLocalEnvPaths(): string[] {
   ];
 }
 
-let cachedLocalEnv: Record<string, string> | null = null;
+let cachedLocalEnvByPath: Record<string, Record<string, string>> | null = null;
+
+function loadLocalEnvMaps(): Record<string, Record<string, string>> {
+  if (cachedLocalEnvByPath) {
+    return cachedLocalEnvByPath;
+  }
+
+  const loaded: Record<string, Record<string, string>> = {};
+
+  for (const envPath of getLocalEnvPaths()) {
+    try {
+      if (!fs.existsSync(envPath)) {
+        continue;
+      }
+
+      loaded[envPath] = parseEnvContent(fs.readFileSync(envPath, 'utf-8'));
+    } catch {
+      // Ignore errors and continue searching other env files.
+    }
+  }
+
+  cachedLocalEnvByPath = loaded;
+  return loaded;
+}
 
 function getOptionalEnvValue(key: string): string | undefined {
   if (process.env[key]) {
     return process.env[key];
   }
 
-  if (cachedLocalEnv) {
-    return cachedLocalEnv[key];
-  }
-
+  const envMaps = loadLocalEnvMaps();
   for (const envPath of getLocalEnvPaths()) {
-    try {
-      if (fs.existsSync(envPath)) {
-        cachedLocalEnv = parseEnvContent(fs.readFileSync(envPath, 'utf-8'));
-        return cachedLocalEnv[key];
-      }
-    } catch {
-      // Ignore errors and continue searching.
+    const envMap = envMaps[envPath];
+    if (!envMap) {
+      continue;
+    }
+
+    if (key in envMap) {
+      return envMap[key];
     }
   }
 
-  cachedLocalEnv = {};
   return undefined;
 }
 
@@ -6571,12 +6571,11 @@ async function initTranscriberSystem(): Promise<void> {
     emailManager: emailDebateManager,
   });
 
-  if (emailDebateManager.isEnabled()) {
-    emailDebateManager.startPolling();
-    log.info('Email debate polling enabled');
-  }
-
   emailDebateManager.on('event', (event) => {
+    if (event.type === 'error') {
+      log.error('Email debate manager error for %s: %s', event.threadId, event.message);
+    }
+
     if (event.type === 'inbound_thread_ready') {
       const kickoffResult = emailDebateCoordinator?.startThread(event.threadId);
       if (kickoffResult && !kickoffResult.success) {
@@ -6600,6 +6599,11 @@ async function initTranscriberSystem(): Promise<void> {
 
     broadcastEmailDebateEvent(event);
   });
+
+  if (emailDebateManager.isEnabled()) {
+    emailDebateManager.startPolling();
+    log.info('Email debate polling enabled');
+  }
 
   emailDebateCoordinator.on('debate_error', ({ threadId, message }) => {
     log.error('Email debate coordinator error for %s: %s', threadId, message);
