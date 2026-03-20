@@ -278,7 +278,9 @@ export class EmailDebateManager extends EventEmitter {
         return {};
       case 'consensus_written':
         this.store.setConsensusPath(threadId, event.path);
-        await this.sendConclusionEmail(threadId, event.path);
+        if (this.config.autoSendConclusionEmail) {
+          await this.sendConclusionEmail(threadId, event.path);
+        }
         return {};
       case 'debate_complete':
         this.store.setStatus(threadId, 'concluded');
@@ -350,7 +352,7 @@ export class EmailDebateManager extends EventEmitter {
               references: incoming.references,
               from: incoming.from,
               fromName: incoming.fromName,
-              to: thread.participants,
+              to: this.resolveThreadHumanRecipients(thread, incoming.from, incoming.to, incoming.cc),
               subject: incoming.subject,
               body: incoming.body,
               sentAt: incoming.date,
@@ -380,7 +382,7 @@ export class EmailDebateManager extends EventEmitter {
           references: reply.references,
           from: reply.from,
           fromName: reply.fromName,
-          to: thread.participants,
+          to: this.resolveThreadHumanRecipients(thread, reply.from, reply.to, reply.cc),
           subject: reply.subject,
           body: reply.body,
           sentAt: reply.date.toISOString(),
@@ -415,17 +417,14 @@ export class EmailDebateManager extends EventEmitter {
       return null;
     }
 
-    const latestHumanReply = [...thread.messages]
-      .reverse()
-      .find((message) => message.author.startsWith('human:'));
-
-    if (!latestHumanReply || latestHumanReply.messageId === thread.lastInjectedHumanMessageId) {
+    const pendingReplies = this.getUninjectedHumanReplies(thread);
+    if (pendingReplies.length === 0) {
       return null;
     }
 
     return {
-      messageId: latestHumanReply.messageId,
-      body: latestHumanReply.body,
+      messageId: pendingReplies.at(-1)?.messageId ?? '',
+      body: this.formatHumanReplyBundle(pendingReplies),
     };
   }
 
@@ -513,7 +512,7 @@ export class EmailDebateManager extends EventEmitter {
 
     const session: EmailDebateSession = {
       threadId,
-      recipients: thread.participants.filter((participant) => participant !== thread.owner),
+      recipients: this.getHumanParticipants(thread),
       turnCounter: modelTurnCount,
       turnContentBuffer: '',
       lastMessageId: lastReplyTargetId,
@@ -799,8 +798,9 @@ export class EmailDebateManager extends EventEmitter {
     threadId: string,
     message: EmailThread['messages'][number]
   ): void {
-    const thread = this.requireThread(threadId);
     this.store.addMessage(threadId, message);
+    const thread = this.requireThread(threadId);
+    this.refreshSessionRecipients(threadId, thread);
 
     if (thread.status === 'concluded') {
       this.store.setStatus(threadId, 'active');
@@ -833,6 +833,21 @@ export class EmailDebateManager extends EventEmitter {
 
   private normalizeRecipients(recipients: string[]): string[] {
     return [...new Set(recipients.map((recipient) => recipient.trim()).filter(Boolean))];
+  }
+
+  private getHumanParticipants(thread: EmailThread): string[] {
+    return thread.participants.filter(
+      (participant) => participant !== thread.owner && !this.isAgentAlias(participant)
+    );
+  }
+
+  private refreshSessionRecipients(threadId: string, thread: EmailThread): void {
+    const session = this.sessions.get(threadId);
+    if (!session) {
+      return;
+    }
+
+    session.recipients = this.getHumanParticipants(thread);
   }
 
   private getSystemFromAddress(): string {
@@ -880,6 +895,32 @@ export class EmailDebateManager extends EventEmitter {
 
   private buildThreadReferences(thread: EmailThread): string[] {
     return [...new Set(thread.messages.map((message) => message.messageId).filter(Boolean))];
+  }
+
+  private getUninjectedHumanReplies(thread: EmailThread): EmailThread['messages'] {
+    const humanReplies = thread.messages.filter((message) => message.author.startsWith('human:'));
+    if (!thread.lastInjectedHumanMessageId) {
+      return humanReplies;
+    }
+
+    const lastInjectedIndex = humanReplies.findIndex(
+      (message) => message.messageId === thread.lastInjectedHumanMessageId
+    );
+    if (lastInjectedIndex < 0) {
+      return humanReplies;
+    }
+
+    return humanReplies.slice(lastInjectedIndex + 1);
+  }
+
+  private formatHumanReplyBundle(replies: EmailThread['messages']): string {
+    if (replies.length === 1) {
+      return replies[0]?.body ?? '';
+    }
+
+    return replies
+      .map((reply) => `[${reply.fromName} (${reply.from}) replied]\n${reply.body}`)
+      .join('\n\n---\n\n');
   }
 
   private createInboundThreadFromMessage(incoming: AgentMailIncomingMessage): EmailThread | null {
@@ -984,6 +1025,20 @@ export class EmailDebateManager extends EventEmitter {
       ...this.getInboundHeaderAddresses(incoming).filter((address) => !this.isAgentAlias(address)),
     ];
     return this.normalizeRecipients(humanRecipients);
+  }
+
+  private resolveThreadHumanRecipients(
+    thread: EmailThread,
+    from: string,
+    to: string[],
+    cc: string[],
+  ): string[] {
+    return this.normalizeRecipients([
+      ...this.getHumanParticipants(thread),
+      from,
+      ...to.filter((address) => !this.isAgentAlias(address)),
+      ...cc.filter((address) => !this.isAgentAlias(address)),
+    ]);
   }
 
   private extractAddressedModels(addresses: string[]): EmailDebateInboxKey[] {

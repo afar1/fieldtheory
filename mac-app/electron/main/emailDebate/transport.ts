@@ -40,6 +40,8 @@ export interface IncomingReply {
   references: string[];
   from: string;
   fromName: string;
+  to: string[];
+  cc: string[];
   subject: string;
   body: string;
   date: Date;
@@ -174,6 +176,8 @@ export async function pollForReplies(
           references,
           from: fromAddress?.address ?? 'unknown',
           fromName: fromAddress?.name ?? 'Unknown',
+          to: (envelope.to ?? []).map((entry) => entry.address ?? '').filter(Boolean),
+          cc: (envelope.cc ?? []).map((entry) => entry.address ?? '').filter(Boolean),
           subject: envelope.subject ?? '',
           body: stripQuotedReply(bodyText),
           date: envelope.date ?? new Date(),
