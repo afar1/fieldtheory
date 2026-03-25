@@ -21,11 +21,13 @@ import {
 } from './agentMailTransport';
 import {
   DEFAULT_EMAIL_DEBATE_CONFIG,
+  createEmptyEmailThreadTokenUsage,
   type EmailDebateConfig,
   type EmailDebateConnectionStatus,
   type EmailDebateEvent,
   type EmailDebateInboxKey,
   type EmailThread,
+  type EmailThreadTurnTokenUsage,
 } from './types';
 import {
   formatDebatePlainText,
@@ -38,6 +40,7 @@ import {
 } from './transport';
 
 const log = createLogger('EmailDebate');
+const THEORY_SUBJECT_PREFIX = 'Theory: ';
 
 interface EmailDebateSession {
   threadId: string;
@@ -72,6 +75,14 @@ export interface CreateThreadOptions {
   addressedModels?: EmailDebateInboxKey[];
   preferredStartSide?: 'a' | 'b' | null;
   providerThreadId?: string | null;
+}
+
+function normalizeTheorySubject(subject: string): string {
+  const trimmed = subject.trim().replace(/\s+/g, ' ');
+  const withoutReplyPrefixes = trimmed.replace(/^(?:(?:re|fw|fwd)\s*:\s*)+/i, '').trim();
+  const withoutTheoryPrefix = withoutReplyPrefixes.replace(/^theory\s*:\s*/i, '').trim();
+  const base = withoutTheoryPrefix || 'Email debate';
+  return `${THEORY_SUBJECT_PREFIX}${base}`;
 }
 
 export class EmailDebateManager extends EventEmitter {
@@ -156,7 +167,7 @@ export class EmailDebateManager extends EventEmitter {
     const threadId = crypto.randomUUID().substring(0, 12);
     const recipients = this.normalizeRecipients(options.recipients ?? this.config.defaultRecipients);
     const owner = options.owner ?? this.config.fromAddress;
-    const subject = options.subject ?? `[Council] ${options.topic.substring(0, 100)}`;
+    const subject = normalizeTheorySubject(options.subject ?? options.topic.substring(0, 100));
 
     const thread: EmailThread = {
       id: threadId,
@@ -170,6 +181,7 @@ export class EmailDebateManager extends EventEmitter {
       participants: [...new Set([...recipients, owner].filter(Boolean))],
       owner,
       messages: [],
+      tokenUsage: createEmptyEmailThreadTokenUsage(),
       modelTurnCount: 0,
       maxTurns: options.maxTurns ?? null,
       extensionTurns: 0,
@@ -262,10 +274,19 @@ export class EmailDebateManager extends EventEmitter {
       case 'turn_chunk':
         this.bufferTurnChunk(threadId, event.content);
         return {};
-      case 'turn_end':
+      case 'turn_end': {
+        const turnTokenUsage = this.parseTurnTokenUsage(event);
+        this.store.recordTokenUsage(threadId, turnTokenUsage);
         return {
-          deferredTurn: await this.sendTurnEmail(threadId, event.speaker, Number(event.round)) ?? undefined,
+          deferredTurn:
+            (await this.sendTurnEmail(
+              threadId,
+              event.speaker,
+              Number(event.round),
+              turnTokenUsage,
+            )) ?? undefined,
         };
+      }
       case 'pause_requested':
         this.store.setResumeStatePath(threadId, event.stateFilePath);
         return {};
@@ -608,7 +629,12 @@ export class EmailDebateManager extends EventEmitter {
     }
   }
 
-  private async sendTurnEmail(threadId: string, speaker: string, round: number): Promise<DeferredTurnDelivery | null> {
+  private async sendTurnEmail(
+    threadId: string,
+    speaker: string,
+    round: number,
+    tokenUsage: EmailThreadTurnTokenUsage | null,
+  ): Promise<DeferredTurnDelivery | null> {
     const session = this.ensureSession(threadId);
     const thread = this.requireThread(threadId);
     const rawBody = session.turnContentBuffer.trim() || `[Turn ${round} by ${speaker}]`;
@@ -665,6 +691,7 @@ export class EmailDebateManager extends EventEmitter {
           sentAt: new Date().toISOString(),
           author: speaker,
           turnNumber,
+          tokenUsage,
         });
       } else {
         const visibleCc = this.getVisibleCc(thread, speaker);
@@ -694,7 +721,11 @@ export class EmailDebateManager extends EventEmitter {
           sentAt: new Date().toISOString(),
           author: speaker,
           turnNumber,
+          tokenUsage,
         });
+      }
+      if (session.turnStartHumanMessageId) {
+        this.store.setLastInjectedHumanMessageId(threadId, session.turnStartHumanMessageId);
       }
       this.emitEvent({ type: 'email_sent', threadId, messageId, author: speaker, turnNumber });
     } catch (error) {
@@ -934,7 +965,7 @@ export class EmailDebateManager extends EventEmitter {
       matchup: routing.matchup,
       maxTurns: DEFAULT_COUNCIL_MAX_TURNS,
       recipients: routing.humanRecipients,
-      subject: incoming.subject || '[Council] Email debate',
+      subject: incoming.subject || 'Email debate',
       source: 'email',
       inboundMessageId: incoming.messageId,
       addressedModels: routing.addressedModels,
@@ -951,7 +982,7 @@ export class EmailDebateManager extends EventEmitter {
       from: incoming.from,
       fromName: incoming.fromName,
       to: routing.humanRecipients,
-      subject: incoming.subject || '[Council] Email debate',
+      subject: incoming.subject || normalizeTheorySubject('Email debate'),
       body: incoming.body,
       sentAt: incoming.date,
       author: `human:${incoming.from}`,
@@ -1121,6 +1152,31 @@ export class EmailDebateManager extends EventEmitter {
       .find((message) => message.author.startsWith('human:'));
 
     return latestHumanReply?.messageId ?? null;
+  }
+
+  private parseTurnTokenUsage(
+    event: Extract<CouncilEvent, { type: 'turn_end' }>
+  ): EmailThreadTurnTokenUsage | null {
+    const tokenUsage: EmailThreadTurnTokenUsage = {
+      inputTokens: this.parseTokenCount(event.inputTokens),
+      outputTokens: this.parseTokenCount(event.outputTokens),
+      totalTokens: this.parseTokenCount(event.totalTokens),
+    };
+
+    return tokenUsage.inputTokens != null ||
+      tokenUsage.outputTokens != null ||
+      tokenUsage.totalTokens != null
+      ? tokenUsage
+      : null;
+  }
+
+  private parseTokenCount(value: string | undefined): number | null {
+    if (!value) {
+      return null;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : null;
   }
 
   private requireThread(threadId: string): EmailThread {

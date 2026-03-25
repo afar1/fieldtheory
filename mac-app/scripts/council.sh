@@ -248,15 +248,49 @@ build_side_prompt() {
     local opponent="$4"
     local opponent_label="$5"
     local toolchain="Codex"
+    local voice_guidance=""
     if [[ "$provider" == "claude" ]]; then
         toolchain="Claude Code"
     fi
+    voice_guidance=$(build_voice_guidance "$speaker")
 
     cat <<EOF
 ${DEBATE_CONTEXT}
 
-You are ${speaker} (${model_label}), debating with ${opponent} (${opponent_label}). You have your full ${toolchain} toolchain available — use it. Read files, search the codebase, and run commands if it helps you make better arguments.
+${EMAIL_VOICE_CONTEXT}
+
+You are ${speaker} (${model_label}), replying to ${opponent} (${opponent_label}) in this thread.
+${voice_guidance}
+You have your full ${toolchain} toolchain available — use it. Read files, search the codebase, and run commands if it helps you make better arguments.
 EOF
+}
+
+build_voice_guidance() {
+    local speaker="$1"
+
+    case "$speaker" in
+        Opus*)
+            cat <<'EOF'
+Voice for this side:
+- Be inventive, vivid, and a little cheeky when it helps the point land.
+- Offer creative reframings or pointed questions that open the problem up instead of just summarizing it.
+EOF
+            ;;
+        Codex*)
+            cat <<'EOF'
+Voice for this side:
+- Be crisp, skeptical, grounded in specifics, and a little cheeky when it helps the point land.
+- Avoid needless jargon or overly technical framing when a plain-English explanation would do the job better.
+- Use dry humor sparingly if it sharpens the point, but keep the substance doing the work.
+EOF
+            ;;
+        *)
+            cat <<'EOF'
+Voice for this side:
+- Sound like a sharp collaborator in a real email thread.
+EOF
+            ;;
+    esac
 }
 
 # Sanitize user input to prevent signal injection
@@ -504,24 +538,56 @@ ${SIGNAL_END}
   - pause: we need human input to proceed (only if you genuinely believe the debate cannot progress without it, AND the other model has also indicated this)
   - finalize: we've converged, produce the final plan"
 
-DEBATE_CONTEXT="You are participating in a structured council debate with another state-of-the-art AI model. Your goal is intellectual honesty and reaching the best possible answer together.
+DEBATE_CONTEXT="You are in a working email thread with another state-of-the-art AI model. Your goal is intellectual honesty, sharper thinking, and reaching the best possible answer together.
 
-Rules:
-- Present clear, well-reasoned arguments
-- Directly engage with the other model's points — don't just present your own in isolation
-- Concede when the other model makes a stronger argument
-- Challenge weak reasoning respectfully but firmly
-- Build on good ideas from either side
-- Be specific and concrete, not vague
+Reasoning contract:
+- Present clear, well-reasoned arguments.
+- Directly engage with the other model's actual points instead of talking past them.
+- Focus on the crux. You do not need to answer every point if some are peripheral; make it clear what you are setting aside and why.
+- Concede cleanly when the other model makes a stronger argument.
+- Challenge weak reasoning respectfully but firmly.
+- Point out inconsistencies, missing assumptions, and hand-wavy leaps.
+- Ask follow-up questions when they would sharpen the discussion.
+- Build on good ideas from either side.
+- Be specific and concrete, not vague.
 - If discussing code or architecture, USE YOUR TOOLS — read files, grep the codebase, explore the repo. Ground your arguments in the actual code, not hypotheticals.
-- Keep responses focused — aim for 3-5 paragraphs per turn. Do not be sycophantic.
+- Don't smooth over real disagreement just to be agreeable, especially if the other side has signaled finalize.
 - When you believe you and the other model have genuinely converged, signal finalize. Don't keep debating for the sake of it.
 - If you need human input on something fundamental, note it in your response and consider signaling pause — but only if you've genuinely exhausted what you can debate without it.${SIGNAL_INSTRUCTIONS}"
+
+EMAIL_VOICE_CONTEXT="Email voice contract:
+- Write like a sharp collaborator in a real email thread, not a moderator, stage narrator, or essayist.
+- Keep it scannable at both the paragraph level and the whole-email level.
+- Let the moment decide whether you should be brief or expansive. Do not pad to hit a target length.
+- Use the shortest turn that materially advances the debate.
+- Some turns should be just a few sentences. Only go long when there is real complexity or multiple decisions to untangle.
+- Brevity is not the same as clipped language. Write full sentences even when the turn is short.
+- Communicate more with fewer words. Compress the idea, not the grammar.
+- Don't make the thoughts too technical when a simpler explanation would serve the reader better.
+- Give the plain-English form of the debate. Assume the human is trying to understand the tactics and strategy well enough to act on them.
+- Translate technical points into practical implications quickly instead of lingering in implementation jargon.
+- It is fine to ignore side issues if they are not central; make the focus shift legible instead of pretending to answer everything in one block.
+- For follow-up turns, prefer pushing on one or two cruxes rather than writing a comprehensive memo.
+- Avoid boilerplate throat-clearing or staged narration unless it adds something real.
+- Aim for natural cadence, not symmetry.
+
+Email structure contract:
+- For substantive emails, give the message a visible spine. Default to bold section headers rather than one continuous block of prose.
+- Section headers should be short mini-headlines: specific, concrete, and occasionally vivid. They should frame the point of the section, not label it generically.
+- Each section should make one narrative move: what happened, why it matters, evidence, implication, or ask.
+- Open with the highest-signal fact, update, or conclusion before background.
+- Sections do not need equal length. Some can be 2 sentences; some can be longer if the material earns it.
+- Write in prose paragraphs, not bullets, for ordinary debate turns.
+- Use lists only when they are truly unavoidable and materially clearer than prose.
+- Ground claims in specifics: numbers, names, examples, dates, and contrasts.
+- End sections before they sprawl."
 
 SYSTEM_PROMPT_A=$(build_side_prompt "$SPEAKER_A" "$MODEL_A_LABEL" "$PROVIDER_A" "$SPEAKER_B" "$MODEL_B_LABEL")
 SYSTEM_PROMPT_B=$(build_side_prompt "$SPEAKER_B" "$MODEL_B_LABEL" "$PROVIDER_B" "$SPEAKER_A" "$MODEL_A_LABEL")
 
-PLAN_PROMPT="The debate is complete and both sides have converged. Produce a FINAL PLAN as a self-contained, copy-pasteable prompt that a human can give to another AI coding assistant to execute the work.
+PLAN_PROMPT="The thread has converged. Produce a FINAL PLAN as a self-contained, copy-pasteable prompt that a human can hand to another AI coding assistant to execute the work.
+
+Write it like a clean handoff from sharp collaborators: direct, specific, and immediately actionable.
 
 The plan must include:
 1. **Context summary**: What was debated and why
@@ -1163,7 +1229,7 @@ run_model_turn() {
 
         if [[ "$attempt" -lt "$max_attempts" ]]; then
             emit_turn_status "retrying" "${speaker} returned only control markers or empty content. Retrying with a stricter prompt."
-            attempt_prompt="Your previous response did not contain any substantive debate content. You must produce a real response that directly addresses the other model's arguments before the required signal block.
+            attempt_prompt="Your previous response only contained control markers or empty filler. Reply with your actual thinking before the required signal block. Pick the most important point from the other model, push on it concretely, and feel free to set aside side issues.
 
 $prompt"
             attempt=$((attempt + 1))

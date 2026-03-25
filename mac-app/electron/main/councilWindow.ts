@@ -33,17 +33,21 @@ export class CouncilWindow {
       this.window = null;
     }
 
-    if (!this.window) {
+    const isNew = !this.window;
+    if (isNew) {
       this.createWindow();
     }
 
     // Temporarily show in dock so user can switch back to this window
-    if (process.platform === 'darwin' && !this.getShowInDock()) {
+    const willToggleDock = process.platform === 'darwin' && !this.getShowInDock();
+    if (willToggleDock) {
+      log.info('[DI-Trace] council:show dock.show() BEFORE (newWindow=%s)', isNew);
       app.dock.show();
     }
 
     this.window!.show();
     this.window!.focus();
+    log.info('[DI-Trace] council:show complete (newWindow=%s dockToggled=%s)', isNew, willToggleDock);
   }
 
   /**
@@ -123,6 +127,7 @@ export class CouncilWindow {
    */
   private restoreDockState(): void {
     if (process.platform === 'darwin' && !this.getShowInDock()) {
+      log.info('[DI-Trace] council:restoreDockState dock.hide()');
       app.dock.hide();
     }
   }

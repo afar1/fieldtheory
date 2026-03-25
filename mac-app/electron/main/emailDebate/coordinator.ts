@@ -41,7 +41,7 @@ export class EmailDebateCoordinator extends EventEmitter {
   private readonly stoppingThreadIds = new Set<string>();
   private readonly deferredRestarts = new Map<
     string,
-    { body: string; messageId: string; preferredStarterSpeaker: string }
+    { body: string; preferredStarterSpeaker: string }
   >();
 
   constructor(options: EmailDebateCoordinatorOptions) {
@@ -255,9 +255,7 @@ export class EmailDebateCoordinator extends EventEmitter {
       const result = this.handleHumanReply(threadId, deferredRestart.body, {
         preferredStarterSpeaker: deferredRestart.preferredStarterSpeaker,
       });
-      if (result.success) {
-        this.emailManager.markHumanReplyInjected(threadId, deferredRestart.messageId);
-      } else {
+      if (!result.success) {
         this.emit('debate_error', {
           threadId,
           message: result.error ?? 'Failed restarting deferred debate thread',
@@ -265,13 +263,18 @@ export class EmailDebateCoordinator extends EventEmitter {
       }
     }
 
-    if (code === 42) {
-      const pendingReply = this.emailManager.getPendingHumanReply(threadId);
-      if (pendingReply) {
-        const result = this.handleHumanReply(threadId, pendingReply.body);
-        if (result.success) {
-          this.emailManager.markHumanReplyInjected(threadId, pendingReply.messageId);
-        }
+    const pendingReply = this.emailManager.getPendingHumanReply(threadId);
+    const thread = this.emailManager.getThread(threadId);
+    const shouldResumePendingReply =
+      Boolean(pendingReply) && (code === 42 || thread?.status === 'concluded');
+
+    if (pendingReply && shouldResumePendingReply) {
+      const result = this.handleHumanReply(threadId, pendingReply.body);
+      if (!result.success) {
+        this.emit('debate_error', {
+          threadId,
+          message: result.error ?? 'Failed restarting debate thread with pending human reply',
+        });
       }
     }
 
@@ -330,8 +333,9 @@ export class EmailDebateCoordinator extends EventEmitter {
   private buildFollowUpTopic(thread: EmailThread, humanInput: string): string {
     const recentMessages = thread.messages.slice(-8).map((message) => this.formatThreadMessage(message));
     const sections = [
-      'Continue this existing email debate as a fresh round on the same thread.',
+      'Continue this email thread between the same collaborators.',
       'Carry forward the prior discussion unless the human explicitly redirects it.',
+      'Pick the conversation back up naturally instead of restarting from scratch.',
       '',
       `Original topic:\n${thread.topic}`,
       '',
@@ -347,13 +351,19 @@ export class EmailDebateCoordinator extends EventEmitter {
   }
 
   private formatThreadMessage(message: EmailThreadMessage): string {
-    const body = message.body.trim();
+    const body = this.stripTransportSignature(message.body.replace(/\r\n/g, '\n').trim());
     const trimmedBody =
       body.length > 2_000
         ? `${body.slice(0, 2_000).trimEnd()}\n[Message truncated for follow-up context]`
         : body;
 
     return `[${message.fromName} | ${message.sentAt}]\n${trimmedBody}`;
+  }
+
+  private stripTransportSignature(body: string): string {
+    return body
+      .replace(/\n--\n[\s\S]*?\nReply to this email to continue the debate\.\s*$/u, '')
+      .trim();
   }
 
   private deferThreadForHumanReply(threadId: string, deferredTurn: DeferredTurnDelivery): void {
@@ -363,7 +373,6 @@ export class EmailDebateCoordinator extends EventEmitter {
 
     this.deferredRestarts.set(threadId, {
       body: deferredTurn.humanBody,
-      messageId: deferredTurn.humanMessageId,
       preferredStarterSpeaker: deferredTurn.speaker,
     });
     this.stopDebate(threadId);

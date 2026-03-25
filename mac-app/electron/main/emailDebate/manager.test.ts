@@ -87,7 +87,14 @@ describe('EmailDebateManager', () => {
 
     expect(thread.topic).toBe('Test topic');
     expect(thread.providerThreadId).toBeNull();
+    expect(thread.subject).toBe('Theory: Test topic');
     expect(thread.participants).toContain('user@test.com');
+    expect(thread.tokenUsage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      turnsWithUsage: 0,
+    });
     expect(manager.getActiveThreadIds()).toContain(thread.id);
   });
 
@@ -99,6 +106,16 @@ describe('EmailDebateManager', () => {
     });
 
     expect(thread.participants.filter((participant) => participant === 'user@test.com')).toHaveLength(1);
+  });
+
+  it('normalizes custom subjects into Theory thread titles', () => {
+    const thread = manager.createThread({
+      topic: 'Fallback topic',
+      matchup: 'opus-vs-codex',
+      subject: 'Re:  theory:   What breaks when auth drifts?  ',
+    });
+
+    expect(thread.subject).toBe('Theory: What breaks when auth drifts?');
   });
 
   it('handles simultaneous sessions independently', async () => {
@@ -178,6 +195,9 @@ describe('EmailDebateManager', () => {
       round: '1',
       convergence: 'low',
       action: 'continue',
+      inputTokens: '120',
+      outputTokens: '45',
+      totalTokens: '165',
     });
 
     expect(sendDebateEmail).toHaveBeenCalledTimes(1);
@@ -186,6 +206,17 @@ describe('EmailDebateManager', () => {
     expect(call?.[1].fromName).toContain('Opus');
     expect(String(call?.[1].body)).toContain('tabs');
     expect(vi.mocked(formatDebatePlainText).mock.calls[0]?.[2]).toBe('Claude Opus 4.6');
+    expect(manager.getThread(thread.id)?.tokenUsage).toEqual({
+      inputTokens: 120,
+      outputTokens: 45,
+      totalTokens: 165,
+      turnsWithUsage: 1,
+    });
+    expect(manager.getThread(thread.id)?.messages[0]?.tokenUsage).toEqual({
+      inputTokens: 120,
+      outputTokens: 45,
+      totalTokens: 165,
+    });
   });
 
   it('adds the other addressed model as visible cc without delivering to it', async () => {
@@ -246,6 +277,9 @@ describe('EmailDebateManager', () => {
       round: '1',
       convergence: 'low',
       action: 'continue',
+      inputTokens: '90',
+      outputTokens: '10',
+      totalTokens: '100',
     });
 
     expect(sendDebateEmail).not.toHaveBeenCalled();
@@ -263,6 +297,13 @@ describe('EmailDebateManager', () => {
           event.humanMessageId === '<reply-during-turn@example.com>',
       ),
     ).toBe(true);
+    expect(manager.getThread(thread.id)?.tokenUsage).toEqual({
+      inputTokens: 90,
+      outputTokens: 10,
+      totalTokens: 100,
+      turnsWithUsage: 1,
+    });
+    expect(manager.getThread(thread.id)?.messages).toHaveLength(1);
   });
 
   it('marks threads concluded and removes the active session', async () => {
@@ -404,6 +445,57 @@ describe('EmailDebateManager', () => {
     expect(manager.getPendingHumanReply(thread.id)).toBeNull();
   });
 
+  it('marks the latest pending human reply injected only after a model turn is delivered', async () => {
+    const thread = manager.createThread({ topic: 'Delivered reply', matchup: 'opus-vs-opus', maxTurns: 4 });
+    manager.reopenThread(thread.id);
+
+    vi.mocked(pollForReplies).mockResolvedValueOnce([
+      {
+        messageId: '<reply-a@example.com>',
+        inReplyTo: thread.rootMessageId,
+        references: [thread.rootMessageId],
+        from: 'alice@example.com',
+        fromName: 'Alice',
+        to: ['council@test.com'],
+        cc: [],
+        subject: `Re: ${thread.subject}`,
+        body: 'First reply',
+        date: new Date('2026-03-18T12:00:00Z'),
+      },
+      {
+        messageId: '<reply-b@example.com>',
+        inReplyTo: thread.rootMessageId,
+        references: [thread.rootMessageId],
+        from: 'bob@example.com',
+        fromName: 'Bob',
+        to: ['council@test.com'],
+        cc: [],
+        subject: `Re: ${thread.subject}`,
+        body: 'Second reply',
+        date: new Date('2026-03-18T12:05:00Z'),
+      },
+    ]);
+    await manager.pollOnce();
+
+    await manager.handleCouncilEvent(thread.id, {
+      type: 'turn_start',
+      speaker: 'Opus',
+      round: '1',
+    });
+    manager.bufferTurnChunk(thread.id, 'Here is the response.');
+
+    await manager.handleCouncilEvent(thread.id, {
+      type: 'turn_end',
+      speaker: 'Opus',
+      round: '1',
+      convergence: 'low',
+      action: 'continue',
+    });
+
+    expect(manager.getPendingHumanReply(thread.id)).toBeNull();
+    expect(manager.getThread(thread.id)?.lastInjectedHumanMessageId).toBe('<reply-b@example.com>');
+  });
+
   it('matches AgentMail replies by provider thread id and reopens concluded threads', async () => {
     const agentMailManager = new EmailDebateManager(
       { ...TEST_CONFIG, outboundTransport: 'agentmail', inboundTransport: 'agentmail', agentMailApiKey: 'test-key' },
@@ -496,6 +588,7 @@ describe('EmailDebateManager', () => {
     expect(createdThread?.source).toBe('email');
     expect(createdThread?.matchup).toBe('codex-vs-opus');
     expect(createdThread?.providerThreadId).toBe('provider-thread-kickoff');
+    expect(createdThread?.subject).toBe('Theory: Debate this architecture');
     expect(createdThread?.participants).toContain('human@example.com');
     expect(createdThread?.participants).toContain('ally@example.com');
     expect(createdThread?.participants).not.toContain('codex@fieldtheory.dev');
@@ -537,6 +630,7 @@ describe('EmailDebateManager', () => {
     await agentMailManager.pollOnce();
 
     const createdThread = agentMailManager.getThreads()[0];
+    expect(createdThread?.subject).toBe('Theory: Just Codex please');
     expect(createdThread?.matchup).toBe('codex-vs-codex');
     expect(createdThread?.addressedModels).toEqual(['codex']);
     agentMailManager.destroy();

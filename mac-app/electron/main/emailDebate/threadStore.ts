@@ -8,7 +8,14 @@
 import fs from 'fs';
 import path from 'path';
 import { createLogger } from '../logger';
-import type { EmailDebateThreadStatus, EmailThread, EmailThreadMessage } from './types';
+import {
+  createEmptyEmailThreadTokenUsage,
+  type EmailDebateThreadStatus,
+  type EmailThread,
+  type EmailThreadMessage,
+  type EmailThreadTokenUsage,
+  type EmailThreadTurnTokenUsage,
+} from './types';
 
 const log = createLogger('ThreadStore');
 
@@ -35,7 +42,7 @@ export class ThreadStore {
 
   save(thread: EmailThread): void {
     const persisted: EmailThread = {
-      ...thread,
+      ...this.normalizeThread(thread),
       updatedAt: new Date().toISOString(),
     };
 
@@ -49,7 +56,7 @@ export class ThreadStore {
   load(threadId: string): EmailThread | null {
     try {
       const raw = fs.readFileSync(this.threadPath(threadId), 'utf-8');
-      return JSON.parse(raw) as EmailThread;
+      return this.normalizeThread(JSON.parse(raw) as EmailThread);
     } catch {
       return null;
     }
@@ -63,7 +70,7 @@ export class ThreadStore {
         .map((file) => {
           try {
             const raw = fs.readFileSync(path.join(this.threadsDir, file), 'utf-8');
-            return JSON.parse(raw) as EmailThread;
+            return this.normalizeThread(JSON.parse(raw) as EmailThread);
           } catch {
             return null;
           }
@@ -106,6 +113,27 @@ export class ThreadStore {
     if (message.turnNumber != null) {
       thread.modelTurnCount = Math.max(thread.modelTurnCount, message.turnNumber);
     }
+
+    this.save(thread);
+    return thread;
+  }
+
+  recordTokenUsage(threadId: string, tokenUsage: EmailThreadTurnTokenUsage | null): EmailThread | null {
+    const thread = this.load(threadId);
+    if (!thread) {
+      return null;
+    }
+
+    if (!tokenUsage || !this.hasAnyTokenCounts(tokenUsage)) {
+      return thread;
+    }
+
+    thread.tokenUsage = {
+      inputTokens: this.sumTokenCounts(thread.tokenUsage.inputTokens, tokenUsage.inputTokens),
+      outputTokens: this.sumTokenCounts(thread.tokenUsage.outputTokens, tokenUsage.outputTokens),
+      totalTokens: this.sumTokenCounts(thread.tokenUsage.totalTokens, tokenUsage.totalTokens),
+      turnsWithUsage: thread.tokenUsage.turnsWithUsage + 1,
+    };
 
     this.save(thread);
     return thread;
@@ -219,5 +247,70 @@ export class ThreadStore {
 
   findThreadByProviderThreadId(providerThreadId: string): EmailThread | null {
     return this.listReplyable().find((thread) => thread.providerThreadId === providerThreadId) ?? null;
+  }
+
+  private normalizeThread(thread: EmailThread): EmailThread {
+    return {
+      ...thread,
+      messages: (thread.messages ?? []).map((message) => this.normalizeMessage(message)),
+      tokenUsage: this.normalizeThreadTokenUsage(thread.tokenUsage),
+    };
+  }
+
+  private normalizeMessage(message: EmailThreadMessage): EmailThreadMessage {
+    return {
+      ...message,
+      tokenUsage: this.normalizeTurnTokenUsage(message.tokenUsage),
+    };
+  }
+
+  private normalizeThreadTokenUsage(
+    tokenUsage: Partial<EmailThreadTokenUsage> | null | undefined
+  ): EmailThreadTokenUsage {
+    const empty = createEmptyEmailThreadTokenUsage();
+    return {
+      inputTokens: this.normalizeTokenCount(tokenUsage?.inputTokens),
+      outputTokens: this.normalizeTokenCount(tokenUsage?.outputTokens),
+      totalTokens: this.normalizeTokenCount(tokenUsage?.totalTokens),
+      turnsWithUsage:
+        typeof tokenUsage?.turnsWithUsage === 'number' && Number.isFinite(tokenUsage.turnsWithUsage)
+          ? tokenUsage.turnsWithUsage
+          : empty.turnsWithUsage,
+    };
+  }
+
+  private normalizeTurnTokenUsage(
+    tokenUsage: Partial<EmailThreadTurnTokenUsage> | null | undefined
+  ): EmailThreadTurnTokenUsage | null {
+    if (!tokenUsage) {
+      return null;
+    }
+
+    const normalized: EmailThreadTurnTokenUsage = {
+      inputTokens: this.normalizeTokenCount(tokenUsage.inputTokens),
+      outputTokens: this.normalizeTokenCount(tokenUsage.outputTokens),
+      totalTokens: this.normalizeTokenCount(tokenUsage.totalTokens),
+    };
+
+    return this.hasAnyTokenCounts(normalized) ? normalized : null;
+  }
+
+  private normalizeTokenCount(value: number | null | undefined): number | null {
+    return typeof value === 'number' && Number.isFinite(value) ? value : null;
+  }
+
+  private hasAnyTokenCounts(tokenUsage: EmailThreadTurnTokenUsage): boolean {
+    return (
+      tokenUsage.inputTokens != null ||
+      tokenUsage.outputTokens != null ||
+      tokenUsage.totalTokens != null
+    );
+  }
+
+  private sumTokenCounts(current: number | null, next: number | null | undefined): number | null {
+    if (next == null) {
+      return current;
+    }
+    return (current ?? 0) + next;
   }
 }
