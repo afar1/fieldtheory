@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { ThreadStore } from './threadStore';
-import type { EmailThread, EmailThreadMessage } from './types';
+import { createEmptyEmailThreadTokenUsage, type EmailThread, type EmailThreadMessage } from './types';
 
 vi.mock('../logger', () => ({
   createLogger: () => ({
@@ -18,7 +18,7 @@ function makeThread(overrides: Partial<EmailThread> = {}): EmailThread {
   return {
     id: 'test-thread-1',
     rootMessageId: '<council-test-thread-1-root@fieldtheory.app>',
-    subject: '[Council] Test debate',
+    subject: 'Theory: Test debate',
     topic: 'Should we use tabs or spaces?',
     matchup: 'opus-vs-codex',
     repoPath: null,
@@ -27,6 +27,7 @@ function makeThread(overrides: Partial<EmailThread> = {}): EmailThread {
     participants: ['user@example.com'],
     owner: 'council@example.com',
     messages: [],
+    tokenUsage: createEmptyEmailThreadTokenUsage(),
     modelTurnCount: 0,
     maxTurns: 6,
     extensionTurns: 0,
@@ -52,7 +53,7 @@ function makeMessage(overrides: Partial<EmailThreadMessage> = {}): EmailThreadMe
     from: 'speaker@example.com',
     fromName: 'Opus',
     to: ['user@example.com'],
-    subject: 'Re: [Council] Test debate',
+    subject: 'Re: Theory: Test debate',
     body: 'This is my argument.',
     sentAt: new Date().toISOString(),
     author: 'Opus',
@@ -129,6 +130,29 @@ describe('ThreadStore', () => {
     expect(loaded?.modelTurnCount).toBe(3);
   });
 
+  it('records cumulative token usage for a thread', () => {
+    store.save(makeThread());
+
+    store.recordTokenUsage('test-thread-1', {
+      inputTokens: 120,
+      outputTokens: 30,
+      totalTokens: 150,
+    });
+    store.recordTokenUsage('test-thread-1', {
+      inputTokens: 80,
+      outputTokens: 20,
+      totalTokens: 100,
+    });
+
+    const loaded = store.load('test-thread-1');
+    expect(loaded?.tokenUsage).toEqual({
+      inputTokens: 200,
+      outputTokens: 50,
+      totalTokens: 250,
+      turnsWithUsage: 2,
+    });
+  });
+
   it('updates thread status', () => {
     store.save(makeThread({ status: 'active' }));
     store.setStatus('test-thread-1', 'closed');
@@ -161,6 +185,21 @@ describe('ThreadStore', () => {
 
     const loaded = store.load('test-thread-1');
     expect(loaded?.lastInjectedHumanMessageId).toBe('<reply-1@ft>');
+  });
+
+  it('backfills missing token usage fields when loading older threads', () => {
+    const legacyThread = makeThread({ id: 'legacy-thread' });
+    const legacyPath = path.join(tmpDir, 'legacy-thread.json');
+    const { tokenUsage: _tokenUsage, ...threadWithoutUsage } = legacyThread;
+    fs.writeFileSync(legacyPath, JSON.stringify(threadWithoutUsage, null, 2), 'utf-8');
+
+    const loaded = store.load('legacy-thread');
+    expect(loaded?.tokenUsage).toEqual({
+      inputTokens: null,
+      outputTokens: null,
+      totalTokens: null,
+      turnsWithUsage: 0,
+    });
   });
 
   it('persists inbound routing metadata for email-started threads', () => {

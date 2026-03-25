@@ -155,6 +155,7 @@ export class DynamicIslandManager extends EventEmitter {
   private clipboardManager: any = null;
 
   private dismissTimer: NodeJS.Timeout | null = null;
+  private backingHealthTimer: NodeJS.Timeout | null = null;
   private readonly TRANSCRIPT_DISPLAY_MS = 4000;
 
   // Stack count for screenshots captured during standard recording.
@@ -194,6 +195,11 @@ export class DynamicIslandManager extends EventEmitter {
     screen.on('display-added', this.handleDisplayConfigurationChanged);
     screen.on('display-removed', this.handleDisplayConfigurationChanged);
     screen.on('display-metrics-changed', this.handleDisplayConfigurationChanged);
+
+    // Periodic backing health check — detects corruption between refresh calls
+    this.backingHealthTimer = setInterval(() => {
+      this.checkBackingHealth();
+    }, 2000);
 
     ipcMain.on('dynamic-island-request-history', () => {
       this.sendHistory();
@@ -1015,10 +1021,57 @@ export class DynamicIslandManager extends EventEmitter {
    */
   refreshWindowProperties(reason = 'unspecified'): void {
     this.activateDebugCornerBacking(reason);
+    const snapshot = this.snapshotBackingState();
     this.refreshSingleWindowProperties(this.window, 2, 'left');
     this.refreshSingleWindowProperties(this.rightWindow, 2, 'right');
     this.refreshSingleWindowProperties(this.gapFillWindow, 1, 'filler');
     this.refreshSingleWindowProperties(this.drawerWindow, 1, 'drawer');
+    const after = this.snapshotBackingState();
+    const corrupted = snapshot.some(s => s.reportedBg !== '#00000000' && s.reportedBg !== '#000000');
+    log.info(
+      '[DI-Trace] refreshWindowProperties reason=%s corrupted=%s before=[%s] after=[%s]',
+      reason,
+      corrupted,
+      snapshot.map(s => `${s.label}:${s.reportedBg}`).join(' '),
+      after.map(s => `${s.label}:${s.reportedBg}`).join(' '),
+    );
+  }
+
+  private snapshotBackingState(): Array<{ label: string; reportedBg: string; visible: boolean; opacity: number }> {
+    const results: Array<{ label: string; reportedBg: string; visible: boolean; opacity: number }> = [];
+    const windows: Array<[BrowserWindow | null, string]> = [
+      [this.window, 'left'],
+      [this.rightWindow, 'right'],
+      [this.gapFillWindow, 'filler'],
+      [this.drawerWindow, 'drawer'],
+    ];
+    for (const [win, label] of windows) {
+      if (!win || win.isDestroyed()) continue;
+      results.push({
+        label,
+        reportedBg: win.getBackgroundColor?.() ?? '(unknown)',
+        visible: win.isVisible(),
+        opacity: win.getOpacity(),
+      });
+    }
+    return results;
+  }
+
+  private checkBackingHealth(): void {
+    const snapshot = this.snapshotBackingState();
+    if (snapshot.length === 0) return;
+    const corrupted = snapshot.filter(s => {
+      if (!s.visible) return false;
+      // Transparent windows should report #00000000, opaque ones #000000
+      return s.reportedBg !== '#00000000' && s.reportedBg !== '#000000';
+    });
+    if (corrupted.length > 0) {
+      log.warn(
+        '[DI-Trace] BACKING CORRUPTED detected by health check: [%s] — auto-refreshing',
+        corrupted.map(c => `${c.label}:bg=${c.reportedBg} vis=${c.visible} op=${c.opacity.toFixed(2)}`).join(', '),
+      );
+      this.refreshWindowProperties('auto-health-check');
+    }
   }
 
   private refreshSingleWindowProperties(win: BrowserWindow | null, zLevel: number, label: IslandWindowLabel): void {
@@ -1519,6 +1572,10 @@ export class DynamicIslandManager extends EventEmitter {
   // -------------------------------------------------------------------------
 
   destroy(): void {
+    if (this.backingHealthTimer) {
+      clearInterval(this.backingHealthTimer);
+      this.backingHealthTimer = null;
+    }
     if (this.dismissTimer) {
       clearTimeout(this.dismissTimer);
       this.dismissTimer = null;

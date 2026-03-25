@@ -32,6 +32,7 @@ export {
 export {
   DEFAULT_EMAIL_DEBATE_CONFIG,
   EmailDebateIPCChannels,
+  createEmptyEmailThreadTokenUsage,
 } from './types';
 export type {
   EmailDebateCoordinatorOptions,
@@ -52,6 +53,8 @@ export type {
   EmailDebateThreadStatus,
   EmailThread,
   EmailThreadMessage,
+  EmailThreadTokenUsage,
+  EmailThreadTurnTokenUsage,
   ImapConfig,
   SmtpConfig,
 } from './types';

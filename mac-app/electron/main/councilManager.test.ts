@@ -119,6 +119,30 @@ describe('CouncilManager', () => {
     expect(result.error).toContain('already running');
   });
 
+  it('stops a specific kickoff session without affecting the manual debate slot', async () => {
+    const kickoffProc = createFakeProcess();
+    mockSpawn.mockReturnValueOnce(kickoffProc);
+    const kickoffManager = new CouncilManager({
+      spawnFn: mockSpawn as any,
+      execSyncFn: mockExecSync as any,
+      existsSyncFn: mockExistsSync as any,
+      readFileSyncFn: vi.fn().mockReturnValue('Kickoff topic') as any,
+    });
+
+    const kickoffDetectedPromise = new Promise<any>((resolve) => {
+      kickoffManager.on('kickoffDetected', resolve);
+    });
+    await kickoffManager.handleKickoff('/tmp/kickoff.md');
+    const kickoffDetected = await kickoffDetectedPromise;
+
+    expect(kickoffManager.stopKickoffSession('missing-session')).toBe(false);
+    expect(kickoffDetected.sessionId).toBeTruthy();
+    expect(kickoffManager.stopKickoffSession(kickoffDetected.sessionId)).toBe(true);
+    expect(kickoffProc.kill).toHaveBeenCalledWith('SIGTERM');
+
+    kickoffManager.destroy();
+  });
+
   // -- NDJSON parsing --
 
   it('parses NDJSON events from stdout', async () => {
@@ -499,14 +523,14 @@ describe('CouncilManager', () => {
       const proc2 = createFakeProcess();
       mockSpawn.mockReturnValue(proc2);
 
+      const events: any[] = [];
+      kickoffManager.on('kickoffDetected', (e: any) => events.push(e));
       await kickoffManager.handleKickoff('/tmp/kickoff.md');
 
       // The full content is passed as the topic arg to council.sh
       const spawnArgs = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1];
       expect(spawnArgs[spawnArgs.length - 1]).toBe(content);
-
-      // Display topic is the first line
-      expect(kickoffManager.getStatus().topic).toBe('Should we use SQLite or Postgres?');
+      expect(events[0]?.displayTopic).toBe('Should we use SQLite or Postgres?');
     });
 
     it('passes full file content as topic to start()', async () => {
@@ -530,20 +554,23 @@ describe('CouncilManager', () => {
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
-    it('skips when debate already running', async () => {
+    it('starts a kickoff in the background even when a manual debate is already running', async () => {
       mockReadFileSync.mockReturnValue('Some topic');
 
       const proc2 = createFakeProcess();
-      mockSpawn.mockReturnValue(proc2);
+      const proc3 = createFakeProcess();
+      mockSpawn
+        .mockReturnValueOnce(proc2)
+        .mockReturnValueOnce(proc3);
 
       // Start a debate first
       await kickoffManager.start({ topic: 'Already running', opusVsOpus: true });
       const callCount = mockSpawn.mock.calls.length;
 
-      // Now try a kickoff — should be skipped
+      // Now try a kickoff — should spawn a separate background session
       await kickoffManager.handleKickoff('/tmp/kickoff.md');
-      expect(mockSpawn.mock.calls.length).toBe(callCount);
-      expect(mockReadFileSync).not.toHaveBeenCalled();
+      expect(mockSpawn.mock.calls.length).toBe(callCount + 1);
+      expect(mockReadFileSync).toHaveBeenCalledWith('/tmp/kickoff.md', 'utf-8');
     });
 
     it('emits kickoffDetected on successful start', async () => {
@@ -578,9 +605,11 @@ describe('CouncilManager', () => {
       const proc2 = createFakeProcess();
       mockSpawn.mockReturnValue(proc2);
 
+      const events: any[] = [];
+      kickoffManager.on('kickoffDetected', (e: any) => events.push(e));
       await kickoffManager.handleKickoff('/tmp/kickoff.md');
 
-      expect(kickoffManager.getStatus().topic).toBe('Actual topic here');
+      expect(events[0]?.displayTopic).toBe('Actual topic here');
     });
 
     it('parses kickoff frontmatter for matchup and max turns', async () => {
@@ -606,6 +635,27 @@ Context body`);
       expect(args).toContain('--repo');
       expect(args).toContain('/tmp/repo');
       expect(args[args.length - 1]).toContain('# Debate title');
+    });
+
+    it('allows multiple kickoff debates to run concurrently', async () => {
+      mockReadFileSync
+        .mockReturnValueOnce('First kickoff')
+        .mockReturnValueOnce('Second kickoff');
+
+      const proc2 = createFakeProcess();
+      const proc3 = createFakeProcess();
+      mockSpawn
+        .mockReturnValueOnce(proc2)
+        .mockReturnValueOnce(proc3);
+
+      await kickoffManager.handleKickoff('/tmp/one.md');
+      await kickoffManager.handleKickoff('/tmp/two.md');
+
+      expect(mockSpawn).toHaveBeenCalledTimes(2);
+      const firstArgs = mockSpawn.mock.calls[0]?.[1];
+      const secondArgs = mockSpawn.mock.calls[1]?.[1];
+      expect(firstArgs[firstArgs.length - 1]).toBe('First kickoff');
+      expect(secondArgs[secondArgs.length - 1]).toBe('Second kickoff');
     });
   });
 });

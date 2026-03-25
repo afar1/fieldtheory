@@ -52,6 +52,11 @@ import {
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
+import {
+  buildClipboardListRows,
+  getStackHydrationIds,
+  getStackItemsSignature,
+} from '../utils/clipboardStacks';
 import { smartTruncateText, detectColor } from '../utils/textUtils';
 import {
   FIELD_THEORY_VIEW_STORAGE_KEY,
@@ -249,6 +254,7 @@ export default function ClipboardHistory() {
   const [sketchAssociatedTranscripts, setSketchAssociatedTranscripts] = useState<ClipboardItem[]>([]);
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [stacks, setStacks] = useState<StackInfo[]>([]);
+  const [hydratedStackItemsById, setHydratedStackItemsById] = useState<Record<string, ClipboardItem[]>>({});
   const [expandedStacks, setExpandedStacks] = useState<Set<string>>(new Set());
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const [overflowingTexts, setOverflowingTexts] = useState<Set<string>>(new Set());
@@ -1093,6 +1099,34 @@ export default function ClipboardHistory() {
     stacksRef.current = stacks;
   }, [stacks]);
 
+  const fetchStackItemsById = useCallback(async (stackIds: string[]): Promise<Record<string, ClipboardItem[]>> => {
+    const queryItemsByStackId = window.clipboardAPI?.queryItemsByStackId;
+    if (!queryItemsByStackId || stackIds.length === 0) {
+      return {};
+    }
+
+    const entries = await Promise.all(
+      stackIds.map(async (stackId) => [stackId, await queryItemsByStackId(stackId)] as const)
+    );
+    const fetchedStacks = Object.fromEntries(entries) as Record<string, ClipboardItem[]>;
+
+    setHydratedStackItemsById((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      for (const [stackId, stackItems] of Object.entries(fetchedStacks)) {
+        if (getStackItemsSignature(prev[stackId] ?? []) !== getStackItemsSignature(stackItems)) {
+          next[stackId] = stackItems;
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+
+    return fetchedStacks;
+  }, []);
+
   const loadItems = useCallback(async (reset: boolean = false) => {
     if (!isMacOS || !window.clipboardAPI) {
       return;
@@ -1132,6 +1166,7 @@ export default function ClipboardHistory() {
 
       const stateUpdateStartTime = performance.now();
       if (reset) {
+        setHydratedStackItemsById({});
         setItems(newItems as ClipboardItem[]);
         setStacks(stacksData || []);
         setOffset(newItems.length);
@@ -1151,6 +1186,17 @@ export default function ClipboardHistory() {
       console.log(`[Performance] Total loadItems duration: ${(loadEndTime - loadStartTime).toFixed(2)}ms`);
     }
   }, [isMacOS, debouncedSearchQuery, sourceFilter, filter]);
+
+  useEffect(() => {
+    if (!isVisible) return;
+
+    const stackIdsToHydrate = getStackHydrationIds(items, stacks, hydratedStackItemsById);
+    if (stackIdsToHydrate.length === 0) return;
+
+    void fetchStackItemsById(stackIdsToHydrate).catch((error) => {
+      console.error('Failed to hydrate stack items:', error);
+    });
+  }, [isVisible, items, stacks, hydratedStackItemsById, fetchStackItemsById]);
 
   // Check if sharing is enabled.
   // Feature is disabled by default, unlocked via Cmd+Shift+S secret toggle.
@@ -1764,43 +1810,8 @@ export default function ClipboardHistory() {
   // Stacked items are grouped together, non-stacked items appear individually.
   // Memoized to avoid recreating on every render.
   const listRows = useMemo((): ListRow[] => {
-    const rows: ListRow[] = [];
-    const seenStackIds = new Set<string>();
-
-    // Process all items (no filtering)
-    for (const item of items) {
-      if (item.stackId) {
-        // This item belongs to a stack
-        if (!seenStackIds.has(item.stackId)) {
-          seenStackIds.add(item.stackId);
-
-          // Find the stack info
-          const stackInfo = stacks.find(s => s.stackId === item.stackId);
-          if (stackInfo) {
-            // Get all items in this stack
-            const stackItems = items.filter((i: ClipboardItem) => i.stackId === item.stackId);
-            const isExpanded = expandedStacks.has(item.stackId);
-
-            rows.push({
-              type: 'stack',
-              stack: stackInfo,
-              items: stackItems,
-              expanded: isExpanded,
-            });
-          } else {
-            // Stack info not loaded, show as individual item
-            rows.push({ type: 'item', item });
-          }
-        }
-        // If we've already seen this stack, don't add another row
-      } else {
-        // Individual item (not in a stack)
-        rows.push({ type: 'item', item });
-      }
-    }
-
-    return rows;
-  }, [items, stacks, expandedStacks]);
+    return buildClipboardListRows(items, stacks, expandedStacks, hydratedStackItemsById);
+  }, [items, stacks, expandedStacks, hydratedStackItemsById]);
 
   // Stack all items above the "context collected" separator.
   const stackItemsAboveSeparator = useCallback(async (separatorIndex: number) => {
@@ -4438,6 +4449,7 @@ export default function ClipboardHistory() {
               const showImproved = hasImprovedContent && !viewOriginalIds.has(stack.stackId);
               const combinedText = combineStackText(stackItems, showImproved);
               const hasText = combinedText.length > 0;
+              const hasPartialStackItems = stack.itemCount > stackItems.length;
               // Show previousApp by default, targetApp when Option is held.
               // Fall back to previousApp name if targetApp isn't set.
               const displayAppName = optionHeld
@@ -4472,7 +4484,7 @@ export default function ClipboardHistory() {
                       }
                     }}
                     onMouseLeave={() => setHoveredRowIndex(null)}
-                    onClick={(e) => {
+                    onClick={async (e) => {
                       const hasShift = e.shiftKey;
                       const hasMeta = e.metaKey || e.ctrlKey; // Cmd on Mac, Ctrl on Windows
                       
@@ -4553,7 +4565,10 @@ export default function ClipboardHistory() {
                         : targetAppInfo.previousApp?.bundleId;
                       
                       // Paste all items in the stack
-                      const itemIds = stackItems.map(i => i.id);
+                      const resolvedStackItems = hasPartialStackItems
+                        ? (await fetchStackItemsById([stack.stackId]))[stack.stackId] ?? stackItems
+                        : stackItems;
+                      const itemIds = resolvedStackItems.map(i => i.id);
                       window.clipboardAPI?.pasteStack(itemIds, pasteBundleId);
                     }}
                     style={{
@@ -4611,7 +4626,7 @@ export default function ClipboardHistory() {
                       {/* Order: transcript (top-left), image (top-right), path/URL (bottom-left), text (bottom-right) */}
                       {(() => {
                         const hasTranscripts = stackItems.some(i => i.type === 'transcript');
-                        const hasImages = stackItems.some(i => i.type === 'image' || i.type === 'screenshot');
+                        const hasImages = stack.imageCount > 0 || stackItems.some(i => i.type === 'image' || i.type === 'screenshot');
                         const hasPathsOrUrls = stackItems.some(i => (i.type === 'text') && i.content && (
                           i.content.startsWith('/') || i.content.startsWith('~') || i.content.startsWith('file://') ||
                           i.content.startsWith('http://') || i.content.startsWith('https://')
@@ -4832,7 +4847,7 @@ export default function ClipboardHistory() {
                       {/* Metadata - left side */}
                       <div style={{ fontSize: '10px', color: theme.textSecondary, display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <span>
-                          {stackItems.length} items stacked {formatTimeAgo(stack.createdAt)}
+                          {stack.itemCount} items stacked {formatTimeAgo(stack.createdAt)}
                         </span>
                         {/* Improved/Original toggle for stacks with improved content */}
                         {hasImprovedContent && (

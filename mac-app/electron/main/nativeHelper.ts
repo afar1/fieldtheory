@@ -178,7 +178,28 @@ export class NativeHelper extends EventEmitter {
       this.child.kill('SIGTERM');
       this.child = null;
       this.isRunning = false;
+      this.isReady = false;
       this.recordingActive = false;
+    }
+  }
+
+  /**
+   * Restart the helper process to recover from broken AVAudioEngine state.
+   * Kills the existing process and spawns a fresh one.
+   */
+  async restart(reason: string): Promise<void> {
+    log.warn('[AudioRecovery] Restarting native helper: %s', reason);
+    this.stop();
+    // Brief pause to let the OS release audio resources
+    await this.delay(300);
+    this.start();
+    // Wait for the helper to become ready
+    try {
+      await this.waitForReady();
+      log.info('[AudioRecovery] Helper restarted successfully');
+    } catch (error) {
+      log.error('[AudioRecovery] Helper failed to become ready after restart:', error);
+      throw error;
     }
   }
 
@@ -323,6 +344,21 @@ export class NativeHelper extends EventEmitter {
             lastError.message,
           );
           await this.delay(retryDelay);
+        }
+      }
+
+      // All retries exhausted — if this looks like a broken audio engine
+      // (inputNode null), restart the helper process and try once more.
+      if (lastError && this.isAudioEngineCorruptionError(lastError)) {
+        log.warn('[AudioRecovery] All retries failed with audio engine error — restarting helper');
+        try {
+          await this.restart('startRecording: audio engine inputNode null after all retries');
+          await this.startRecordingOnce();
+          log.info('[AudioRecovery] Recording started successfully after helper restart');
+          return;
+        } catch (restartError) {
+          log.error('[AudioRecovery] Recording still failed after helper restart:', restartError);
+          throw restartError instanceof Error ? restartError : new Error(String(restartError));
         }
       }
 
@@ -1041,6 +1077,8 @@ export class NativeHelper extends EventEmitter {
 
   private async startRecordingOnce(): Promise<void> {
     await this.waitForReady();
+    log.info('[AudioRecovery] startRecordingOnce: helperRunning=%s helperReady=%s recordingActive=%s',
+      this.isRunning, this.isReady, this.recordingActive);
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         cleanup();
@@ -1106,6 +1144,10 @@ export class NativeHelper extends EventEmitter {
 
   private isTransientStartRecordingError(error: Error): boolean {
     return /Failed to start recording|startRecording timed out/i.test(error.message);
+  }
+
+  private isAudioEngineCorruptionError(error: Error): boolean {
+    return /inputNode|outputNode|nullptr|AVAudioEngine|Failed to start recording/i.test(error.message);
   }
 
   private delay(ms: number): Promise<void> {

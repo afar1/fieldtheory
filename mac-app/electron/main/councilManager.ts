@@ -9,6 +9,7 @@ import { EventEmitter } from 'events';
 import { spawn as defaultSpawn, execSync as defaultExecSync, type ChildProcess } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import crypto from 'crypto';
 import { app } from 'electron';
 import chokidar from 'chokidar';
 import { createLogger } from './logger';
@@ -44,6 +45,16 @@ export interface CouncilManagerOptions {
   getFrontmostApp?: () => CouncilTargetApp | null;
 }
 
+interface KickoffSession {
+  id: string;
+  filePath: string;
+  displayTopic: string;
+  returnTargetApp: CouncilTargetApp | null;
+  process: ChildProcess;
+  transcriptPath: string | null;
+  consensusPath: string | null;
+}
+
 export class CouncilManager extends EventEmitter {
   private process: ChildProcess | null = null;
   private state: CouncilState = 'idle';
@@ -59,6 +70,7 @@ export class CouncilManager extends EventEmitter {
   private handoffsDir: string | null = null;
   private killTimer: ReturnType<typeof setTimeout> | null = null;
   private kickoffWatcher: chokidar.FSWatcher | null = null;
+  private readonly kickoffSessions = new Map<string, KickoffSession>();
   private stopRequested = false;
   private tokenUsage: CouncilTokenUsage = this.createEmptyTokenUsage();
   private spawnFn: typeof defaultSpawn;
@@ -122,28 +134,11 @@ export class CouncilManager extends EventEmitter {
       return { success: false, error: 'A debate is already running' };
     }
 
-    // Check that council.sh exists
     const councilPath = this.getCouncilPath();
-    if (!this.existsSyncFn(councilPath)) {
-      return { success: false, error: `council.sh not found at ${councilPath}` };
-    }
-
     const matchup = this.resolveMatchup(config);
-
-    if (this.matchupNeedsClaude(matchup)) {
-      try {
-        this.execSyncFn('which claude', { stdio: 'ignore' });
-      } catch {
-        return { success: false, error: 'claude CLI not found on PATH' };
-      }
-    }
-
-    if (this.matchupNeedsCodex(matchup)) {
-      try {
-        this.execSyncFn('which codex', { stdio: 'ignore' });
-      } catch {
-        return { success: false, error: 'codex CLI not found on PATH for the selected matchup.' };
-      }
+    const readinessError = this.getLaunchReadinessError(councilPath, matchup);
+    if (readinessError) {
+      return { success: false, error: readinessError };
     }
 
     this.topic = config.topic;
@@ -159,98 +154,23 @@ export class CouncilManager extends EventEmitter {
     this.tokenUsage = this.createEmptyTokenUsage();
     this.setState('starting');
 
-    // Build args
-    const args = ['--json-events'];
-    args.push('--matchup', matchup);
-    if (config.maxTurns != null) {
-      args.push('--max-turns', String(config.maxTurns));
-    }
-    if (config.repoPath) {
-      args.push('--repo', config.repoPath);
-    }
-    if (this.handoffsDir) {
-      args.push('--transcript-dir', this.handoffsDir);
-    }
-    args.push(config.topic);
+    const args = this.buildCouncilArgs({
+      topic: config.topic,
+      matchup,
+      maxTurns: config.maxTurns,
+      repoPath: config.repoPath ?? null,
+    });
 
     log.info('Starting council debate: %s', config.topic);
     log.info('Args: %s %s', councilPath, args.join(' '));
 
-    // Spawn with user's shell PATH
     this.process = this.spawnFn('bash', [councilPath, ...args], {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: { ...process.env },
       detached: process.platform !== 'win32',
     });
 
-    // NDJSON parsing on stdout (buffer-split pattern)
-    let buffer = '';
-    this.process.stdout?.on('data', (data: Buffer) => {
-      buffer += data.toString();
-      const lines = buffer.split('\n');
-      buffer = lines.pop() || '';
-
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        try {
-          const event = JSON.parse(line) as CouncilEvent;
-          this.handleEvent(event);
-        } catch {
-          log.warn('Non-JSON stdout: %s', line.substring(0, 200));
-        }
-      }
-    });
-
-    // Log stderr
-    this.process.stderr?.on('data', (data: Buffer) => {
-      log.warn('council stderr: %s', data.toString().trim());
-    });
-
-    this.process.on('close', (code) => {
-      log.info('Council process exited with code %d', code);
-      if (this.killTimer) {
-        clearTimeout(this.killTimer);
-        this.killTimer = null;
-      }
-      this.process = null;
-
-      // Process any remaining buffer
-      if (buffer.trim()) {
-        try {
-          const event = JSON.parse(buffer.trim()) as CouncilEvent;
-          this.handleEvent(event);
-        } catch {
-          // ignore
-        }
-      }
-
-      if (this.stopRequested) {
-        this.stopRequested = false;
-        this.error = 'Debate stopped by user';
-        this.setState('error');
-        return;
-      }
-
-      if (code === 42 && this.state === 'paused') {
-        return;
-      }
-
-      if (this.state !== 'done' && this.state !== 'error') {
-        if (code === 0) {
-          this.setState('done');
-        } else {
-          this.error = `Process exited with code ${code}`;
-          this.setState('error');
-        }
-      }
-    });
-
-    this.process.on('error', (err) => {
-      log.error('Council process error:', err);
-      this.process = null;
-      this.error = err.message;
-      this.setState('error');
-    });
+    this.attachManualProcess(this.process);
 
     return { success: true };
   }
@@ -266,16 +186,27 @@ export class CouncilManager extends EventEmitter {
     if (this.process) {
       log.info('Stopping council debate');
       this.stopRequested = true;
-      this.killProcessTree('SIGTERM');
+      this.killProcessTreeForProcess(this.process, 'SIGTERM');
       // Give it a moment, then force kill
       this.killTimer = setTimeout(() => {
         this.killTimer = null;
         if (this.process) {
-          this.killProcessTree('SIGKILL');
+          this.killProcessTreeForProcess(this.process, 'SIGKILL');
           this.process = null;
         }
       }, 3000);
     }
+  }
+
+  stopKickoffSession(sessionId: string): boolean {
+    const session = this.kickoffSessions.get(sessionId);
+    if (!session) {
+      return false;
+    }
+
+    log.info('Stopping kickoff council debate: %s', session.displayTopic);
+    this.killProcessTreeForProcess(session.process, 'SIGTERM');
+    return true;
   }
 
   /**
@@ -387,11 +318,6 @@ export class CouncilManager extends EventEmitter {
    * Handle a kickoff file: read it, extract topic, start debate.
    */
   async handleKickoff(filePath: string): Promise<void> {
-    if (this.process) {
-      log.info('Skipping kickoff %s — debate already running', filePath);
-      return;
-    }
-
     let content: string;
     try {
       content = this.readFileSyncFn(filePath, 'utf-8');
@@ -410,19 +336,22 @@ export class CouncilManager extends EventEmitter {
     log.info('Kickoff detected: %s (topic: %s)', filePath, kickoff.displayTopic);
 
     const defaultConfig = this.getKickoffDefaults();
-    const result = await this.start({
+    const result = await this.startKickoffSession({
+      filePath,
+      displayTopic: kickoff.displayTopic,
       topic: kickoff.topic,
       matchup: kickoff.config.matchup ?? defaultConfig.matchup,
       maxTurns: kickoff.config.maxTurns ?? defaultConfig.maxTurns,
-      repoPath: kickoff.config.repoPath ?? defaultConfig.repoPath,
-      source: 'kickoff',
+      repoPath: kickoff.config.repoPath ?? defaultConfig.repoPath ?? null,
       returnTargetApp: this.getFrontmostApp(),
     });
 
     if (result.success) {
-      // Override topic with display-friendly first line (start() sets it to full content)
-      this.topic = kickoff.displayTopic;
-      this.emit('kickoffDetected', { filePath, displayTopic: kickoff.displayTopic });
+      this.emit('kickoffDetected', {
+        filePath,
+        displayTopic: kickoff.displayTopic,
+        sessionId: result.sessionId,
+      });
     } else {
       log.error('Failed to start debate from kickoff: %s', result.error);
     }
@@ -516,18 +445,278 @@ export class CouncilManager extends EventEmitter {
       this.kickoffWatcher = null;
     }
     if (this.process) {
-      this.killProcessTree('SIGKILL');
+      this.killProcessTreeForProcess(this.process, 'SIGKILL');
       this.process = null;
     }
+    for (const session of this.kickoffSessions.values()) {
+      this.killProcessTreeForProcess(session.process, 'SIGKILL');
+    }
+    this.kickoffSessions.clear();
     this.removeAllListeners();
   }
 
-  private killProcessTree(signal: NodeJS.Signals): void {
-    if (!this.process) {
+  private getLaunchReadinessError(councilPath: string, matchup: CouncilMatchup): string | null {
+    if (!this.existsSyncFn(councilPath)) {
+      return `council.sh not found at ${councilPath}`;
+    }
+
+    if (this.matchupNeedsClaude(matchup)) {
+      try {
+        this.execSyncFn('which claude', { stdio: 'ignore' });
+      } catch {
+        return 'claude CLI not found on PATH';
+      }
+    }
+
+    if (this.matchupNeedsCodex(matchup)) {
+      try {
+        this.execSyncFn('which codex', { stdio: 'ignore' });
+      } catch {
+        return 'codex CLI not found on PATH for the selected matchup.';
+      }
+    }
+
+    return null;
+  }
+
+  private buildCouncilArgs(config: {
+    topic: string;
+    matchup: CouncilMatchup;
+    maxTurns?: number;
+    repoPath?: string | null;
+  }): string[] {
+    const args = ['--json-events', '--matchup', config.matchup];
+    if (config.maxTurns != null) {
+      args.push('--max-turns', String(config.maxTurns));
+    }
+    if (config.repoPath) {
+      args.push('--repo', config.repoPath);
+    }
+    if (this.handoffsDir) {
+      args.push('--transcript-dir', this.handoffsDir);
+    }
+    args.push(config.topic);
+    return args;
+  }
+
+  private attachManualProcess(process: ChildProcess): void {
+    let buffer = '';
+
+    process.stdout?.on('data', (data: Buffer) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line) as CouncilEvent;
+          this.handleEvent(event);
+        } catch {
+          log.warn('Non-JSON stdout: %s', line.substring(0, 200));
+        }
+      }
+    });
+
+    process.stderr?.on('data', (data: Buffer) => {
+      log.warn('council stderr: %s', data.toString().trim());
+    });
+
+    process.on('close', (code) => {
+      log.info('Council process exited with code %d', code);
+      if (this.killTimer) {
+        clearTimeout(this.killTimer);
+        this.killTimer = null;
+      }
+      this.process = null;
+
+      if (buffer.trim()) {
+        try {
+          const event = JSON.parse(buffer.trim()) as CouncilEvent;
+          this.handleEvent(event);
+        } catch {
+          // ignore
+        }
+      }
+
+      if (this.stopRequested) {
+        this.stopRequested = false;
+        this.error = 'Debate stopped by user';
+        this.setState('error');
+        return;
+      }
+
+      if (code === 42 && this.state === 'paused') {
+        return;
+      }
+
+      if (this.state !== 'done' && this.state !== 'error') {
+        if (code === 0) {
+          this.setState('done');
+        } else {
+          this.error = `Process exited with code ${code}`;
+          this.setState('error');
+        }
+      }
+    });
+
+    process.on('error', (err) => {
+      log.error('Council process error:', err);
+      this.process = null;
+      this.error = err.message;
+      this.setState('error');
+    });
+  }
+
+  private async startKickoffSession(config: {
+    filePath: string;
+    displayTopic: string;
+    topic: string;
+    matchup?: CouncilMatchup;
+    maxTurns?: number;
+    repoPath?: string | null;
+    returnTargetApp: CouncilTargetApp | null;
+  }): Promise<{ success: boolean; sessionId?: string; error?: string }> {
+    const councilPath = this.getCouncilPath();
+    const matchup = config.matchup ?? DEFAULT_COUNCIL_MATCHUP;
+    const readinessError = this.getLaunchReadinessError(councilPath, matchup);
+    if (readinessError) {
+      return { success: false, error: readinessError };
+    }
+
+    const args = this.buildCouncilArgs({
+      topic: config.topic,
+      matchup,
+      maxTurns: config.maxTurns,
+      repoPath: config.repoPath,
+    });
+
+    log.info('Starting kickoff council debate: %s', config.displayTopic);
+    log.info('Kickoff args: %s %s', councilPath, args.join(' '));
+
+    const child = this.spawnFn('bash', [councilPath, ...args], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+      detached: process.platform !== 'win32',
+    });
+    const sessionId = crypto.randomUUID().substring(0, 12);
+    const session: KickoffSession = {
+      id: sessionId,
+      filePath: config.filePath,
+      displayTopic: config.displayTopic,
+      returnTargetApp: config.returnTargetApp,
+      process: child,
+      transcriptPath: null,
+      consensusPath: null,
+    };
+    this.kickoffSessions.set(sessionId, session);
+    this.attachKickoffProcess(session, matchup);
+
+    return { success: true, sessionId };
+  }
+
+  private attachKickoffProcess(session: KickoffSession, matchup: CouncilMatchup): void {
+    let buffer = '';
+
+    session.process.stdout?.on('data', (data: Buffer) => {
+      buffer += data.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line) as CouncilEvent;
+          this.handleKickoffSessionEvent(session, matchup, event);
+        } catch {
+          log.warn('Non-JSON kickoff stdout (%s): %s', session.id, line.substring(0, 200));
+        }
+      }
+    });
+
+    session.process.stderr?.on('data', (data: Buffer) => {
+      log.warn('kickoff council stderr (%s): %s', session.id, data.toString().trim());
+    });
+
+    session.process.on('close', (code) => {
+      this.kickoffSessions.delete(session.id);
+
+      if (buffer.trim()) {
+        try {
+          const event = JSON.parse(buffer.trim()) as CouncilEvent;
+          this.handleKickoffSessionEvent(session, matchup, event);
+        } catch {
+          // ignore
+        }
+      }
+
+      this.emit('kickoffSessionExited', {
+        sessionId: session.id,
+        filePath: session.filePath,
+        displayTopic: session.displayTopic,
+        code: code ?? null,
+        transcriptPath: session.transcriptPath,
+        consensusPath: session.consensusPath,
+      });
+    });
+
+    session.process.on('error', (error) => {
+      this.kickoffSessions.delete(session.id);
+      log.error('Kickoff council process error (%s): %s', session.id, error);
+      this.emit('kickoffSessionError', {
+        sessionId: session.id,
+        filePath: session.filePath,
+        displayTopic: session.displayTopic,
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }
+
+  private handleKickoffSessionEvent(
+    session: KickoffSession,
+    matchup: CouncilMatchup,
+    event: CouncilEvent,
+  ): void {
+    switch (event.type) {
+      case 'transcript_written':
+        session.transcriptPath = event.path;
+        break;
+      case 'consensus_written':
+        session.consensusPath = event.path;
+        this.emit('kickoffConsensusWritten', {
+          sessionId: session.id,
+          filePath: session.filePath,
+          displayTopic: session.displayTopic,
+          path: event.path,
+          returnTargetApp: session.returnTargetApp,
+        });
+        break;
+      case 'debate_complete':
+        this.emit('kickoffDebateComplete', {
+          sessionId: session.id,
+          filePath: session.filePath,
+          displayTopic: session.displayTopic,
+          transcriptPath: session.transcriptPath,
+          consensusPath: session.consensusPath,
+        });
+        break;
+    }
+
+    this.emit('kickoffEvent', {
+      sessionId: session.id,
+      filePath: session.filePath,
+      displayTopic: session.displayTopic,
+      matchup,
+      event,
+    });
+  }
+
+  private killProcessTreeForProcess(child: ChildProcess, signal: NodeJS.Signals): void {
+    if (!child) {
       return;
     }
 
-    const pid = this.process.pid;
+    const pid = child.pid;
     if (pid && process.platform !== 'win32') {
       try {
         process.kill(-pid, signal);
@@ -538,7 +727,7 @@ export class CouncilManager extends EventEmitter {
     }
 
     try {
-      this.process.kill(signal);
+      child.kill(signal);
     } catch (err) {
       log.warn('Failed to signal council process with %s: %s', signal, err);
     }

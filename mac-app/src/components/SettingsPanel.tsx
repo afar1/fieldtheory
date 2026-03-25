@@ -36,6 +36,7 @@ type SettingsSection =
   | 'account'
   | 'appearance'
   | 'audio'
+  | 'council'
   | 'keyboard'
   | 'librarian'
   | 'commands'
@@ -65,6 +66,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'account': 'Account',
   'appearance': 'Appearance & System',
   'audio': 'Audio & Transcription',
+  'council': 'Council',
   'keyboard': 'Keyboard Shortcuts',
   'librarian': 'Librarian',
   'commands': 'Portable Commands',
@@ -81,6 +83,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'terminal-commands', // Allowlist
   'appearance',
   'audio',
+  'council',
   'hot-mic', // Hot Mic
   'keyboard',
   'librarian',
@@ -418,7 +421,7 @@ export default function SettingsPanel({
   // Council defaults - used by background debate kickoff flow.
   const [councilDefaultMatchup, setCouncilDefaultMatchup] = useState<CouncilMatchup>(DEFAULT_COUNCIL_MATCHUP);
   const [councilDefaultMaxTurns, setCouncilDefaultMaxTurns] = useState(DEFAULT_COUNCIL_MAX_TURNS);
-  const [councilAutoOpenWindow, setCouncilAutoOpenWindow] = useState(true);
+  const [councilAutoOpenWindow, setCouncilAutoOpenWindow] = useState(false);
   const [councilAutoPasteConsensus, setCouncilAutoPasteConsensus] = useState(true);
 
   // Show fieldtheory.dev link in footer.

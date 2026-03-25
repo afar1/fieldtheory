@@ -5,6 +5,8 @@
  * sent as a real email. Human replies can later resume the same thread.
  */
 
+import type { CouncilTokenUsage } from '../types/council';
+
 export interface SmtpConfig {
   host: string;
   port: number;
@@ -28,6 +30,21 @@ export type EmailDebateThreadSource = 'local' | 'email';
 export type EmailDebateThreadStatus = 'active' | 'concluded' | 'closed';
 
 export type EmailDebateInboxKey = 'opus' | 'sonnet' | 'codex' | 'council';
+
+export interface EmailThreadTurnTokenUsage extends CouncilTokenUsage {}
+
+export interface EmailThreadTokenUsage extends CouncilTokenUsage {
+  turnsWithUsage: number;
+}
+
+export function createEmptyEmailThreadTokenUsage(): EmailThreadTokenUsage {
+  return {
+    inputTokens: null,
+    outputTokens: null,
+    totalTokens: null,
+    turnsWithUsage: 0,
+  };
+}
 
 export interface EmailDebateConfig {
   smtp: SmtpConfig;
@@ -58,6 +75,7 @@ export interface EmailThreadMessage {
   sentAt: string;
   author: string;
   turnNumber: number | null;
+  tokenUsage?: EmailThreadTurnTokenUsage | null;
 }
 
 export interface EmailThread {
@@ -72,6 +90,7 @@ export interface EmailThread {
   participants: string[];
   owner: string;
   messages: EmailThreadMessage[];
+  tokenUsage: EmailThreadTokenUsage;
   modelTurnCount: number;
   maxTurns: number | null;
   extensionTurns: number;

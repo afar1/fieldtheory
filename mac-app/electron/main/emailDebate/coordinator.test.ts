@@ -40,7 +40,7 @@ vi.mock('./agentMailTransport', () => ({
 
 import { EmailDebateManager } from './manager';
 import { EmailDebateCoordinator } from './coordinator';
-import { pollForReplies, sendDebateEmail } from './transport';
+import { formatDebatePlainText, pollForReplies, sendDebateEmail } from './transport';
 
 class FakeChildProcess extends EventEmitter {
   stdout = new EventEmitter();
@@ -262,6 +262,56 @@ describe('EmailDebateCoordinator', () => {
     coordinator.destroy();
   });
 
+  it('strips the transport footer from replayed follow-up context and uses the softer follow-up framing', async () => {
+    const child = new FakeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(child);
+    const coordinator = new EmailDebateCoordinator({
+      councilPath,
+      emailManager,
+      spawnFn: spawnFn as never,
+    });
+
+    const thread = emailManager.createThread({
+      topic: 'Email voice improvements',
+      matchup: 'opus-vs-codex',
+      maxTurns: 4,
+    });
+
+    vi.mocked(formatDebatePlainText).mockImplementationOnce((body: string, speaker: string) =>
+      [
+        body,
+        '',
+        '--',
+        speaker,
+        'Claude Opus 4.6',
+        'Reply to this email to continue the debate.',
+      ].join('\n')
+    );
+    emailManager.bufferTurnChunk(
+      thread.id,
+      ['This is the actual argument.', '', 'Here is the sharper follow-up.'].join('\n')
+    );
+    await emailManager.handleCouncilEvent(thread.id, {
+      type: 'turn_end',
+      speaker: 'Opus',
+      round: '1',
+      convergence: 'low',
+      action: 'continue',
+    });
+
+    const result = coordinator.handleHumanReply(thread.id, 'Keep pushing on scanability.');
+    const prompt = String(spawnFn.mock.calls[0]?.[1].at(-1));
+
+    expect(result).toEqual({ success: true, mode: 'follow_up' });
+    expect(prompt).toContain('Continue this email thread between the same collaborators.');
+    expect(prompt).toContain('Pick the conversation back up naturally instead of restarting from scratch.');
+    expect(prompt).toContain('This is the actual argument.');
+    expect(prompt).toContain('Here is the sharper follow-up.');
+    expect(prompt).not.toContain('Reply to this email to continue the debate.');
+    expect(prompt).not.toContain('\n--\nOpus\nClaude Opus 4.6');
+    coordinator.destroy();
+  });
+
   it('flushes a trailing buffered JSON event on process close', async () => {
     const child = new FakeChildProcess();
     const spawnFn = vi.fn().mockReturnValue(child);
@@ -369,7 +419,181 @@ describe('EmailDebateCoordinator', () => {
     expect(spawnFn.mock.calls[1]?.[1]).toContain('--start-side');
     expect(spawnFn.mock.calls[1]?.[1]).toContain('b');
     expect(String(spawnFn.mock.calls[1]?.[1].at(-1))).toContain('rollout risk');
+
+    expect(emailManager.getPendingHumanReply(threadId)?.messageId).toBe('<reply-during-turn@example.com>');
+
+    childB.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({ type: 'turn_start', speaker: 'Codex', round: '1' })}\n${JSON.stringify({
+          type: 'turn_chunk',
+          speaker: 'Codex',
+          content: 'Fresh response after restart.',
+        })}\n${JSON.stringify({
+          type: 'turn_end',
+          speaker: 'Codex',
+          round: '1',
+          convergence: 'low',
+          action: 'continue',
+        })}\n`,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
     expect(emailManager.getPendingHumanReply(threadId)).toBeNull();
+    coordinator.destroy();
+  });
+
+  it('restarts a concluded thread when a human reply arrives before process close', async () => {
+    const childA = new FakeChildProcess();
+    const childB = new FakeChildProcess();
+    const spawnFn = vi
+      .fn()
+      .mockReturnValueOnce(childA)
+      .mockReturnValueOnce(childB);
+    const coordinator = new EmailDebateCoordinator({
+      councilPath,
+      emailManager,
+      spawnFn: spawnFn as never,
+    });
+
+    const { threadId } = coordinator.startDebate({
+      topic: 'Debate topic',
+      matchup: 'opus-vs-codex',
+    });
+    const thread = emailManager.getThread(threadId)!;
+
+    childA.stdout.emit(
+      'data',
+      Buffer.from(`${JSON.stringify({ type: 'debate_start', topic: 'Debate topic', maxTurns: '6' })}\n`),
+    );
+    childA.stdout.emit(
+      'data',
+      Buffer.from(`${JSON.stringify({ type: 'turn_start', speaker: 'Codex', round: '1' })}\n`),
+    );
+    childA.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'turn_chunk',
+          speaker: 'Codex',
+          content: 'Final answer before the human follow-up.',
+        })}\n${JSON.stringify({
+          type: 'turn_end',
+          speaker: 'Codex',
+          round: '1',
+          convergence: 'high',
+          action: 'finalize',
+        })}\n`,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    vi.mocked(pollForReplies).mockResolvedValueOnce([
+      {
+        messageId: '<reply-after-final-turn@example.com>',
+        inReplyTo: '<council-thread-turn-1@example.com>',
+        references: [thread.rootMessageId],
+        from: 'alice@example.com',
+        fromName: 'Alice',
+        to: ['council@test.com'],
+        cc: [],
+        subject: `Re: ${thread.subject}`,
+        body: 'Please expand the pricing framing.',
+        date: new Date('2026-03-18T12:05:00Z'),
+      },
+    ]);
+    await emailManager.pollOnce();
+
+    childA.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({
+          type: 'debate_complete',
+          totalRounds: '1',
+          outcome: 'FINALIZING',
+        })}\n`,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(emailManager.getThread(threadId)?.status).toBe('concluded');
+    expect(emailManager.getPendingHumanReply(threadId)?.messageId).toBe('<reply-after-final-turn@example.com>');
+
+    childA.emit('close', 0);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(String(spawnFn.mock.calls[1]?.[1].at(-1))).toContain('pricing framing');
+
+    expect(emailManager.getPendingHumanReply(threadId)?.messageId).toBe('<reply-after-final-turn@example.com>');
+
+    childB.stdout.emit(
+      'data',
+      Buffer.from(
+        `${JSON.stringify({ type: 'turn_start', speaker: 'Codex', round: '1' })}\n${JSON.stringify({
+          type: 'turn_chunk',
+          speaker: 'Codex',
+          content: 'Follow-up response after conclusion.',
+        })}\n${JSON.stringify({
+          type: 'turn_end',
+          speaker: 'Codex',
+          round: '1',
+          convergence: 'low',
+          action: 'continue',
+        })}\n`,
+      ),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(emailManager.getPendingHumanReply(threadId)).toBeNull();
+    coordinator.destroy();
+  });
+
+  it('keeps a human reply pending if a restarted follow-up dies before the first mirrored turn', async () => {
+    const child = new FakeChildProcess();
+    const spawnFn = vi.fn().mockReturnValue(child);
+    const coordinator = new EmailDebateCoordinator({
+      councilPath,
+      emailManager,
+      spawnFn: spawnFn as never,
+    });
+
+    const thread = emailManager.createThread({
+      topic: 'Crashy follow-up',
+      matchup: 'opus-vs-codex',
+      maxTurns: 4,
+    });
+
+    await emailManager.handleCouncilEvent(thread.id, {
+      type: 'debate_complete',
+      totalRounds: '1',
+      outcome: 'FINALIZING',
+    });
+
+    vi.mocked(pollForReplies).mockResolvedValueOnce([
+      {
+        messageId: '<reply-before-crash@example.com>',
+        inReplyTo: thread.rootMessageId,
+        references: [thread.rootMessageId],
+        from: 'alice@example.com',
+        fromName: 'Alice',
+        to: ['council@test.com'],
+        cc: [],
+        subject: `Re: ${thread.subject}`,
+        body: 'Please keep going.',
+        date: new Date('2026-03-18T12:05:00Z'),
+      },
+    ]);
+    await emailManager.pollOnce();
+
+    const result = coordinator.handleHumanReply(thread.id, 'Please keep going.');
+    expect(result).toEqual({ success: true, mode: 'follow_up' });
+
+    child.emit('close', 1);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(emailManager.getPendingHumanReply(thread.id)?.messageId).toBe('<reply-before-crash@example.com>');
     coordinator.destroy();
   });
 });

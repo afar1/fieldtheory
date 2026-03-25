@@ -164,6 +164,7 @@ describe('council.sh', () => {
     const transcriptDir = makeTempDir('council-transcript-');
     const scriptPath = path.resolve(process.cwd(), 'scripts', 'council.sh');
     const codexCountPath = path.join(fakeBinDir, 'codex-count.txt');
+    const codexPromptPath = path.join(fakeBinDir, 'codex-prompts.txt');
 
     writeStubCommand(fakeBinDir, 'claude', [
       'Opus stub response.',
@@ -180,6 +181,7 @@ if [[ -f "${codexCountPath}" ]]; then
 fi
 count=$((count + 1))
 printf '%s' "$count" > "${codexCountPath}"
+printf '%s\n<<<PROMPT_DELIM>>>\n' "\${@: -1}" >> "${codexPromptPath}"
 if [[ "$count" -eq 1 ]]; then
   cat <<'OUT'
 <<<COUNCIL_SIGNAL>>>
@@ -233,8 +235,81 @@ fi
     );
     expect(transcriptFile).toBeTruthy();
     const transcript = fs.readFileSync(path.join(transcriptDir, transcriptFile!), 'utf8');
+    const prompts = fs
+      .readFileSync(codexPromptPath, 'utf8')
+      .split('<<<PROMPT_DELIM>>>')
+      .map((prompt) => prompt.trim())
+      .filter(Boolean);
+
     expect(transcript).toContain('Codex retry produced real content.');
     expect(transcript).not.toContain('[Failed to produce a substantive response.]');
+    const retryPrompt = prompts.find((prompt) =>
+      prompt.includes('Reply with your actual thinking before the required signal block.')
+    );
+
+    expect(retryPrompt).toBeTruthy();
+    expect(retryPrompt).toContain(
+      'Pick the most important point from the other model, push on it concretely, and feel free to set aside side issues.'
+    );
+    expect(retryPrompt).not.toContain('did not contain any substantive debate content');
+  });
+
+  it('passes the email voice contract through to model prompts', () => {
+    const fakeBinDir = makeTempDir('council-fake-bin-');
+    const transcriptDir = makeTempDir('council-transcript-');
+    const promptCapturePath = path.join(fakeBinDir, 'codex-prompts.txt');
+
+    writeStubScript(fakeBinDir, 'codex', `
+printf '%s\n<<<PROMPT_DELIM>>>\n' "\${@: -1}" >> "${promptCapturePath}"
+cat <<'OUT'
+Codex stub response.
+<<<COUNCIL_SIGNAL>>>
+convergence: high
+action: finalize
+<<<END_SIGNAL>>>
+OUT
+`);
+
+    const result = runCouncil(
+      [
+        '--json-events',
+        '--max-turns',
+        '1',
+        '--matchup',
+        'codex-vs-codex',
+        '--transcript-dir',
+        transcriptDir,
+        'stub debate',
+      ],
+      fakeBinDir
+    );
+
+    cleanupDirs.push(fakeBinDir, transcriptDir);
+
+    expect(result.status).toBe(0);
+
+    const prompts = fs.readFileSync(promptCapturePath, 'utf8');
+    expect(prompts).toContain('Email voice contract:');
+    expect(prompts).toContain('Keep it scannable at both the paragraph level and the whole-email level.');
+    expect(prompts).toContain('Use the shortest turn that materially advances the debate.');
+    expect(prompts).toContain('Some turns should be just a few sentences. Only go long when there is real complexity or multiple decisions to untangle.');
+    expect(prompts).toContain('Brevity is not the same as clipped language. Write full sentences even when the turn is short.');
+    expect(prompts).toContain('Communicate more with fewer words. Compress the idea, not the grammar.');
+    expect(prompts).toContain("Don't make the thoughts too technical when a simpler explanation would serve the reader better.");
+    expect(prompts).toContain('Give the plain-English form of the debate. Assume the human is trying to understand the tactics and strategy well enough to act on them.');
+    expect(prompts).toContain('For follow-up turns, prefer pushing on one or two cruxes rather than writing a comprehensive memo.');
+    expect(prompts).toContain('Email structure contract:');
+    expect(prompts).toContain('Default to bold section headers rather than one continuous block of prose.');
+    expect(prompts).toContain('Write in prose paragraphs, not bullets, for ordinary debate turns.');
+    expect(prompts).toContain('Use lists only when they are truly unavoidable and materially clearer than prose.');
+    expect(prompts).toContain(
+      'It is fine to ignore side issues if they are not central; make the focus shift legible instead of pretending to answer everything in one block.'
+    );
+    expect(prompts).toContain('Some can be 2 sentences; some can be longer if the material earns it.');
+    expect(prompts).toContain("Don't smooth over real disagreement just to be agreeable");
+    expect(prompts).toContain('Be crisp, skeptical, grounded in specifics, and a little cheeky when it helps the point land.');
+    expect(prompts).not.toContain('aim for 3-5 paragraphs per turn');
+    expect(prompts).not.toContain('Do not be sycophantic');
   });
 
   it('emits heartbeat status events while waiting for first output', { timeout: 10_000 }, () => {

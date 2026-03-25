@@ -929,13 +929,18 @@ export class CursorStatusManager extends EventEmitter {
       return;
     }
 
+    const bgBefore = this.window.getBackgroundColor?.() ?? '(unknown)';
+
     // Re-apply background color - can get corrupted when app.show() is called
     this.window.setBackgroundColor('#00000000');
 
     // Re-assert z-level to ensure cursor status stays above clipboard history
     this.window.setAlwaysOnTop(true, 'screen-saver', 2);
 
-    log.debug('[CursorStatus] Refreshed window properties');
+    const bgAfter = this.window.getBackgroundColor?.() ?? '(unknown)';
+    const corrupted = bgBefore !== '#00000000';
+    log.info('[DI-Trace] cursorStatus refresh corrupted=%s bg=%s->%s visible=%s opacity=%s',
+      corrupted, bgBefore, bgAfter, this.window.isVisible(), this.window.getOpacity().toFixed(2));
   }
 
   /**

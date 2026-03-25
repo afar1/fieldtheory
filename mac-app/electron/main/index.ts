@@ -69,7 +69,8 @@ import { SquaresManager } from './squaresManager';
 import { CouncilManager } from './councilManager';
 import { CouncilWindow } from './councilWindow';
 import { CouncilIPCChannels, DEFAULT_COUNCIL_MATCHUP, DEFAULT_COUNCIL_MAX_TURNS } from './types/council';
-import type { CouncilConfig, CouncilPreferences } from './types/council';
+import type { CouncilConfig, CouncilPreferences, CouncilStatus } from './types/council';
+import { applyCouncilEventToStatus, createCouncilStatusSnapshot } from './councilStatusSnapshot';
 import {
   DEFAULT_EMAIL_DEBATE_CONFIG,
   EmailDebateCoordinator,
@@ -248,12 +249,10 @@ function promptToReviewCouncilResult(): void {
   notification.show();
 }
 
-async function pasteCouncilConsensusBack(consensusPath: string): Promise<void> {
-  const info = councilManager?.getPasteBackInfo();
-  if (!info || info.source !== 'kickoff') {
-    return;
-  }
-
+async function pasteCouncilConsensusToTarget(
+  consensusPath: string,
+  returnTargetApp: { bundleId: string; name: string } | null,
+): Promise<void> {
   let content = '';
   try {
     content = fs.readFileSync(consensusPath, 'utf-8').trim();
@@ -269,16 +268,25 @@ async function pasteCouncilConsensusBack(consensusPath: string): Promise<void> {
   clipboard.writeText(content);
   clipboardManager?.syncClipboardHash();
 
-  if (!info.returnTargetApp || isFieldTheoryBundleId(info.returnTargetApp.bundleId)) {
+  if (!returnTargetApp || isFieldTheoryBundleId(returnTargetApp.bundleId)) {
     log.warn('Council consensus copied to clipboard but no safe return target was captured');
     return;
   }
 
   try {
-    await activateAndPaste(info.returnTargetApp);
+    await activateAndPaste(returnTargetApp);
   } catch (error) {
-    log.error('Failed to paste council consensus back into %s: %s', info.returnTargetApp.bundleId, error);
+    log.error('Failed to paste council consensus back into %s: %s', returnTargetApp.bundleId, error);
   }
+}
+
+async function pasteCouncilConsensusBack(consensusPath: string): Promise<void> {
+  const info = councilManager?.getPasteBackInfo();
+  if (!info || info.source !== 'kickoff') {
+    return;
+  }
+
+  await pasteCouncilConsensusToTarget(consensusPath, info.returnTargetApp);
 }
 
 // Load environment variables from .env.local for Supabase credentials.
@@ -466,10 +474,11 @@ let pendingCouncilEmailThreadRestart:
   | {
       threadId: string;
       body: string;
-      messageId: string;
       preferredStarterSpeaker: string;
     }
   | null = null;
+let activeCouncilKickoffWindowSessionId: string | null = null;
+let activeCouncilKickoffWindowStatus: CouncilStatus | null = null;
 let gazeTrackingManager: GazeTrackingManager | null = null;
 let gazeDebugOverlayManager: GazeDebugOverlayManager | null = null;
 let gazeScreenOverlayManager: GazeScreenOverlayManager | null = null;
@@ -477,6 +486,32 @@ let clipboardHistoryLastHideAt = 0;
 let clipboardHistoryLastHideReason: string | null = null;
 const DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS = 450;
 let clipboardHistoryDynamicIslandFocusRestoreTimer: ReturnType<typeof setTimeout> | null = null;
+
+function isManualCouncilActive(state: CouncilStatus['state'] | null | undefined): boolean {
+  return state === 'starting' || state === 'debating' || state === 'paused' || state === 'finalizing';
+}
+
+function getDisplayedCouncilStatus(): CouncilStatus {
+  const status = councilManager?.getStatus();
+  if (status && isManualCouncilActive(status.state)) {
+    return status;
+  }
+  if (activeCouncilKickoffWindowStatus) {
+    return activeCouncilKickoffWindowStatus;
+  }
+  if (status) {
+    return status;
+  }
+  return createCouncilStatusSnapshot();
+}
+
+function broadcastCouncilStatus(status: CouncilStatus): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(CouncilIPCChannels.STATUS_CHANGED, status);
+    }
+  });
+}
 
 const HOT_MIC_ISLAND_GEOMETRY_LIMITS = {
   notchWidthOverride: { min: 0, max: 320 },
@@ -5180,21 +5215,7 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CouncilIPCChannels.GET_STATUS, async () => {
-    return councilManager?.getStatus() ?? {
-      state: 'idle',
-      currentRound: 0,
-      topic: null,
-      repoPath: null,
-      error: null,
-      matchup: DEFAULT_COUNCIL_MATCHUP,
-      transcriptPath: null,
-      consensusPath: null,
-      tokenUsage: {
-        inputTokens: null,
-        outputTokens: null,
-        totalTokens: null,
-      },
-    };
+    return getDisplayedCouncilStatus();
   });
 
   ipcMain.handle(CouncilIPCChannels.GET_PREFERENCES, async () => {
@@ -6585,6 +6606,70 @@ async function initTranscriberSystem(): Promise<void> {
     councilPath: resolveCouncilScriptPath(),
     emailManager: emailDebateManager,
   });
+  const kickoffCouncilEmailThreadIds = new Map<string, string>();
+  const kickoffCouncilSessionIdsByThreadId = new Map<string, string>();
+  const pendingKickoffCouncilEmailRestarts = new Map<
+    string,
+    {
+      threadId: string;
+      body: string;
+      preferredStarterSpeaker: string;
+    }
+  >();
+
+  const resumeMirroredEmailThread = (
+    threadId: string,
+    body: string,
+    preferredStarterSpeaker: string | undefined,
+    contextLabel: string,
+  ) => {
+    const result = emailDebateCoordinator?.handleHumanReply(threadId, body, {
+      preferredStarterSpeaker,
+    });
+    if (result && !result.success) {
+      log.warn(
+        'Failed continuing mirrored email debate thread %s after %s: %s',
+        threadId,
+        contextLabel,
+        result.error ?? 'unknown error',
+      );
+    }
+  };
+
+  const settleKickoffMirroredEmailThread = (
+    sessionId: string,
+    contextLabel: string,
+    preferredStarterSpeaker?: string,
+  ) => {
+    const threadId = kickoffCouncilEmailThreadIds.get(sessionId) ?? null;
+    if (threadId) {
+      kickoffCouncilEmailThreadIds.delete(sessionId);
+      kickoffCouncilSessionIdsByThreadId.delete(threadId);
+    }
+
+    const pendingRestart = pendingKickoffCouncilEmailRestarts.get(sessionId);
+    if (pendingRestart) {
+      pendingKickoffCouncilEmailRestarts.delete(sessionId);
+      resumeMirroredEmailThread(
+        pendingRestart.threadId,
+        pendingRestart.body,
+        pendingRestart.preferredStarterSpeaker,
+        contextLabel,
+      );
+      return;
+    }
+
+    if (!threadId) {
+      return;
+    }
+
+    const pendingReply = emailDebateManager?.getPendingHumanReply(threadId);
+    if (!pendingReply) {
+      return;
+    }
+
+    resumeMirroredEmailThread(threadId, pendingReply.body, preferredStarterSpeaker, contextLabel);
+  };
 
   emailDebateManager.on('event', (event) => {
     if (event.type === 'error') {
@@ -6600,14 +6685,13 @@ async function initTranscriberSystem(): Promise<void> {
 
     if (event.type === 'reply_received') {
       const coordinatorIsRunning = emailDebateCoordinator?.getActiveThreadIds().includes(event.threadId) ?? false;
-      if (activeCouncilEmailThreadId === event.threadId || coordinatorIsRunning) {
+      const kickoffSessionId = kickoffCouncilSessionIdsByThreadId.get(event.threadId);
+      if (activeCouncilEmailThreadId === event.threadId || coordinatorIsRunning || kickoffSessionId) {
         log.info('Stored human reply for running debate thread %s; waiting for a resumable boundary', event.threadId);
       } else {
         const result = emailDebateCoordinator?.handleHumanReply(event.threadId, event.body);
         if (result && !result.success) {
           log.warn('Failed to continue email debate thread %s: %s', event.threadId, result.error ?? 'unknown error');
-        } else if (result?.success) {
-          emailDebateManager?.markHumanReplyInjected(event.threadId, event.messageId);
         }
       }
     }
@@ -6634,12 +6718,136 @@ async function initTranscriberSystem(): Promise<void> {
   const kickoffsDir = path.join(process.env.HOME || '~', '.fieldtheory', 'council', 'kickoffs');
   councilManager.watchKickoffs(kickoffsDir);
 
-  councilManager.on('kickoffDetected', () => {
+  councilManager.on('kickoffDetected', ({ sessionId, displayTopic }) => {
+    activeCouncilKickoffWindowSessionId = sessionId;
+    activeCouncilKickoffWindowStatus = createCouncilStatusSnapshot({
+      state: 'starting',
+      topic: displayTopic,
+      matchup: getCouncilPreferences().defaultMatchup,
+    });
+
+    if (!isManualCouncilActive(councilManager?.getStatus().state)) {
+      broadcastCouncilStatus(activeCouncilKickoffWindowStatus);
+    }
+
     if (getCouncilPreferences().autoOpenWindow) {
       councilWindow?.show();
       cursorStatusManager?.refreshWindowProperties();
       dynamicIslandManager?.refreshWindowProperties('council:kickoff-detected');
     }
+  });
+
+  councilManager.on('kickoffConsensusWritten', ({ path, returnTargetApp }) => {
+    if (getCouncilPreferences().autoPasteConsensus) {
+      void pasteCouncilConsensusToTarget(path, returnTargetApp ?? null);
+    } else {
+      promptToReviewCouncilResult();
+    }
+  });
+
+  councilManager.on('kickoffEvent', ({ sessionId, matchup, event }) => {
+    if (activeCouncilKickoffWindowSessionId === sessionId || activeCouncilKickoffWindowSessionId == null) {
+      activeCouncilKickoffWindowSessionId = sessionId;
+      activeCouncilKickoffWindowStatus = applyCouncilEventToStatus(
+        activeCouncilKickoffWindowStatus
+          ?? createCouncilStatusSnapshot({
+              state: 'starting',
+              matchup,
+            }),
+        event,
+        matchup,
+      );
+
+      if (!isManualCouncilActive(councilManager?.getStatus().state)) {
+        broadcastCouncilStatus(activeCouncilKickoffWindowStatus);
+        councilWindow?.getWindow()?.webContents.send(CouncilIPCChannels.EVENT, event);
+      }
+    }
+
+    if (!emailDebateManager?.isEnabled()) {
+      return;
+    }
+
+    let threadId = kickoffCouncilEmailThreadIds.get(sessionId);
+    if (!threadId && event.type === 'debate_start') {
+      const maxTurns = parseOptionalNumber(event.maxTurns);
+      const thread = emailDebateManager.createThread({
+        topic: event.topic,
+        matchup,
+        maxTurns,
+      });
+      threadId = thread.id;
+      kickoffCouncilEmailThreadIds.set(sessionId, threadId);
+      kickoffCouncilSessionIdsByThreadId.set(threadId, sessionId);
+    }
+
+    if (!threadId) {
+      return;
+    }
+
+    void emailDebateManager
+      .handleCouncilEvent(threadId, event)
+      .then((result) => {
+        if (!result.deferredTurn) {
+          return;
+        }
+
+        pendingKickoffCouncilEmailRestarts.set(sessionId, {
+          threadId,
+          body: result.deferredTurn.humanBody,
+          preferredStarterSpeaker: result.deferredTurn.speaker,
+        });
+        const stopped = councilManager?.stopKickoffSession(sessionId) ?? false;
+        if (!stopped) {
+          log.warn(
+            'Failed stopping mirrored kickoff council session %s for email thread %s after deferred turn delivery',
+            sessionId,
+            threadId,
+          );
+        }
+      })
+      .catch((error) => {
+        log.error('Failed mirroring kickoff council event into email thread %s: %s', threadId, error);
+      });
+  });
+
+  councilManager.on('kickoffSessionExited', ({ sessionId }) => {
+    if (activeCouncilKickoffWindowSessionId === sessionId && activeCouncilKickoffWindowStatus) {
+      if (
+        activeCouncilKickoffWindowStatus.state !== 'done'
+        && activeCouncilKickoffWindowStatus.state !== 'paused'
+        && activeCouncilKickoffWindowStatus.state !== 'error'
+      ) {
+        activeCouncilKickoffWindowStatus = createCouncilStatusSnapshot({
+          ...activeCouncilKickoffWindowStatus,
+          state: 'error',
+          error: 'Kickoff debate exited before completing.',
+        });
+      }
+
+      if (!isManualCouncilActive(councilManager?.getStatus().state)) {
+        broadcastCouncilStatus(activeCouncilKickoffWindowStatus);
+      }
+    }
+
+    settleKickoffMirroredEmailThread(sessionId, 'kickoff session exit');
+  });
+
+  councilManager.on('kickoffSessionError', ({ sessionId, displayTopic, message }) => {
+    if (activeCouncilKickoffWindowSessionId === sessionId) {
+      activeCouncilKickoffWindowStatus = createCouncilStatusSnapshot({
+        ...(activeCouncilKickoffWindowStatus ?? {}),
+        state: 'error',
+        topic: activeCouncilKickoffWindowStatus?.topic ?? displayTopic,
+        error: message,
+      });
+
+      if (!isManualCouncilActive(councilManager?.getStatus().state)) {
+        broadcastCouncilStatus(activeCouncilKickoffWindowStatus);
+      }
+    }
+
+    settleKickoffMirroredEmailThread(sessionId, 'kickoff session error');
   });
 
   // Forward council events to the council window.
@@ -6666,7 +6874,6 @@ async function initTranscriberSystem(): Promise<void> {
               pendingCouncilEmailThreadRestart = {
                 threadId: mirroredThreadId,
                 body: result.deferredTurn.humanBody,
-                messageId: result.deferredTurn.humanMessageId,
                 preferredStarterSpeaker: result.deferredTurn.speaker,
               };
               councilManager?.stop();
@@ -6687,10 +6894,6 @@ async function initTranscriberSystem(): Promise<void> {
             if (resumeResult && !resumeResult.success) {
               log.warn('Failed to resume paused email debate thread %s: %s', mirroredThreadId, resumeResult.error ?? 'unknown error');
               return;
-            }
-
-            if (resumeResult?.success) {
-              emailDebateManager?.markHumanReplyInjected(mirroredThreadId, pendingReply.messageId);
             }
           })
           .catch((error) => {
@@ -6724,9 +6927,7 @@ async function initTranscriberSystem(): Promise<void> {
       const result = emailDebateCoordinator?.handleHumanReply(pendingRestart.threadId, pendingRestart.body, {
         preferredStarterSpeaker: pendingRestart.preferredStarterSpeaker,
       });
-      if (result?.success) {
-        emailDebateManager?.markHumanReplyInjected(pendingRestart.threadId, pendingRestart.messageId);
-      } else if (result) {
+      if (result && !result.success) {
         log.warn(
           'Failed restarting mirrored email debate thread %s after stale turn suppression: %s',
           pendingRestart.threadId,
@@ -6738,11 +6939,7 @@ async function initTranscriberSystem(): Promise<void> {
     if (status.state === 'done' || status.state === 'error' || status.state === 'idle') {
       activeCouncilEmailThreadId = null;
     }
-    BrowserWindow.getAllWindows().forEach((window) => {
-      if (!window.isDestroyed()) {
-        window.webContents.send(CouncilIPCChannels.STATUS_CHANGED, status);
-      }
-    });
+    broadcastCouncilStatus(getDisplayedCouncilStatus());
   });
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
