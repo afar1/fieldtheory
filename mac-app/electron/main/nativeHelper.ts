@@ -334,8 +334,11 @@ export class NativeHelper extends EventEmitter {
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
           const retryDelay = START_RECORDING_RETRY_DELAYS_MS[attempt];
-          if (!this.isTransientStartRecordingError(lastError) || retryDelay == null) {
+          if (!this.isTransientStartRecordingError(lastError)) {
             throw lastError;
+          }
+          if (retryDelay == null) {
+            break; // All retries exhausted — fall through to recovery
           }
           log.warn(
             'Retrying helper startRecording after transient failure (attempt %d/%d): %s',
