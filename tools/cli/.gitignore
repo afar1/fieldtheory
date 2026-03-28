@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.env.local
+.DS_Store
+automation/sources/
+automation/dataset-state/
