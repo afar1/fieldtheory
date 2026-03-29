@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import { Command } from 'commander';
 import { createDatasetManifest, loadDatasetManifest } from './manifest.js';
-import { listFiles, pathExists } from './fs.js';
+import { listFiles } from './fs.js';
 import { datasetLatestPath, datasetManifestPath, datasetsDir, twitterBookmarksCachePath } from './paths.js';
 import type { DatasetManifest } from './types.js';
 import { enableDatasetJob, getDatasetJobStatus, listDatasetJobs, runDatasetJob } from './jobs.js';
-import { debugTwitterBookmarkPagination, getTwitterBookmarksStatus, probeTwitterBookmarksApi, probeTwitterBookmarksOAuth, syncTwitterBookmarks } from './bookmarks.js';
+import { syncTwitterBookmarks } from './bookmarks.js';
+import { getBookmarkStatusView, buildBookmarksDatasetManifest, enableBookmarks, formatBookmarkStatus, formatBookmarkSummary } from './bookmarks-service.js';
 import { loadTwitterOAuthToken, runTwitterOAuthFlow } from './xauth.js';
+import { syncBookmarksGraphQL, formatSyncResult } from './graphql-bookmarks.js';
+import { fetchBookmarkMediaBatch } from './bookmark-media.js';
 
 export function buildCli() {
   const program = new Command();
@@ -15,6 +18,8 @@ export function buildCli() {
     .name('ft')
     .description('Field Theory CLI for recurring dataset review and improvement, powered by OpenClaw.')
     .showHelpAfterError();
+
+  // ── dataset commands ────────────────────────────────────────────────────
 
   const dataset = program.command('dataset').description('Manage dataset manifests');
 
@@ -60,39 +65,22 @@ export function buildCli() {
     .command('add-bookmarks')
     .description('Create an X bookmarks dataset backed by local cache')
     .requiredOption('--id <id>', 'Dataset id')
-    .option('--twitter', 'Use the X/Twitter bookmark cache source', true)
-    .action(async (options) => {
-      const cachePath = twitterBookmarksCachePath();
-      const manifest: DatasetManifest = {
-        id: String(options.id),
-        kind: 'bookmarks',
-        source: { provider: 'twitter', path: cachePath },
-        initiative: 'suggest',
-        budget: { effort: 'medium' },
-        delivery: { onlyWhenWorthwhile: true, channel: 'email' },
-        context:
-          'Review the full bookmark corpus. Consider recency, but also surface older items when they become newly relevant, reveal durable themes, or connect strongly to active work.',
-      };
+    .action(async () => {
+      const manifest = buildBookmarksDatasetManifest();
       const out = await createDatasetManifest(manifest);
       console.log(`Created ${out}`);
-      if (!(await pathExists(cachePath))) {
-        console.log(`Note: bookmark cache not found yet at ${cachePath}`);
-        console.log('Next step: ft bookmarks sync --full');
-      }
+      console.log('Next step: ft bookmarks sync');
     });
 
   dataset.command('list').description('List datasets').action(async () => {
     const files = (await listFiles(datasetsDir())).filter((name) => name.endsWith('.yaml'));
-    if (files.length === 0) {
-      console.log('No datasets found.');
-      return;
-    }
+    if (files.length === 0) { console.log('No datasets found.'); return; }
     for (const file of files) console.log(file.replace(/\.yaml$/, ''));
   });
 
   dataset
     .command('show')
-    .description('Show a dataset manifest path and parsed summary')
+    .description('Show a dataset manifest')
     .requiredOption('--id <id>', 'Dataset id')
     .action(async (options) => {
       const id = String(options.id);
@@ -101,7 +89,10 @@ export function buildCli() {
       console.log(JSON.stringify(manifest, null, 2));
     });
 
+  // ── job commands ────────────────────────────────────────────────────────
+
   const job = program.command('job').description('Manage recurring OpenClaw-backed dataset jobs');
+
   job
     .command('enable')
     .description('Create or update an OpenClaw cron job for a dataset')
@@ -123,23 +114,17 @@ export function buildCli() {
       console.log(JSON.stringify(status, null, 2));
     });
 
-  job
-    .command('list')
-    .description('List installed ft-managed OpenClaw cron jobs')
-    .action(async () => {
-      const jobs = await listDatasetJobs();
-      if (jobs.length === 0) {
-        console.log('No ft-managed jobs found.');
-        return;
-      }
-      for (const job of jobs) {
-        console.log(`${job.datasetId}\t${job.enabled ? 'enabled' : 'disabled'}\t${job.cronJobId ?? ''}`);
-      }
-    });
+  job.command('list').description('List installed ft-managed OpenClaw cron jobs').action(async () => {
+    const jobs = await listDatasetJobs();
+    if (jobs.length === 0) { console.log('No ft-managed jobs found.'); return; }
+    for (const j of jobs) {
+      console.log(`${j.datasetId}\t${j.enabled ? 'enabled' : 'disabled'}\t${j.cronJobId ?? ''}`);
+    }
+  });
 
   job
     .command('run')
-    .description('Run a dataset job manually via its installed OpenClaw cron job')
+    .description('Run a dataset job manually')
     .requiredOption('--id <id>', 'Dataset id')
     .action(async (options) => {
       const result = await runDatasetJob(String(options.id));
@@ -147,42 +132,80 @@ export function buildCli() {
       if (result.stderr.trim()) console.error(result.stderr.trim());
     });
 
+  // ── artifacts commands ──────────────────────────────────────────────────
+
   const artifacts = program.command('artifacts').description('Inspect dataset artifacts');
   artifacts
     .command('latest')
     .description('Show latest artifact summary path')
     .requiredOption('--id <id>', 'Dataset id')
-    .action(async (options) => {
-      console.log(datasetLatestPath(String(options.id)));
-    });
+    .action(async (options) => { console.log(datasetLatestPath(String(options.id))); });
 
-  const source = program.command('source').description('Manage external sources');
-  source
-    .command('sync-twitter-bookmarks')
-    .description('Compatibility alias for bookmark sync')
-    .action(async () => {
-      const result = await syncTwitterBookmarks('incremental');
-      console.log(`Synced ${result.totalBookmarks} bookmarks (added ${result.added})`);
-      console.log(result.cachePath);
-    });
+  // ── bookmarks commands ─────────────────────────────────────────────────
+  //
+  //   ft bookmarks enable           → one-step: full sync + dataset init
+  //   ft bookmarks sync             → full sync via GraphQL (Chrome session)
+  //   ft bookmarks sync --incremental → incremental via OAuth v2 API (for cron)
+  //   ft bookmarks auth             → OAuth setup (needed for --incremental)
+  //   ft bookmarks status / summary → cache info
+  //   ft bookmarks path             → print cache path
 
   const bookmarks = program.command('bookmarks').description('Manage local X bookmark cache');
+
+  bookmarks
+    .command('enable')
+    .description('One-step setup: full sync + dataset initialization')
+    .action(async () => {
+      const result = await enableBookmarks();
+      for (const line of result.messageLines) console.log(line);
+    });
+
+  bookmarks
+    .command('sync')
+    .description('Sync bookmarks into the local cache')
+    .option('--incremental', 'Use OAuth v2 API for lightweight incremental sync (requires: ft bookmarks auth)', false)
+    .option('--max-pages <n>', 'Max pages to fetch', (v) => Number(v), 500)
+    .option('--target-adds <n>', 'Stop after this many new bookmarks', (v) => Number(v))
+    .option('--delay-ms <n>', 'Delay between requests in ms', (v) => Number(v), 600)
+    .option('--max-minutes <n>', 'Max runtime in minutes', (v) => Number(v), 30)
+    .option('--chrome-user-data-dir <path>', 'Chrome user-data directory')
+    .option('--chrome-profile-directory <name>', 'Chrome profile name (e.g. Default)')
+    .action(async (options) => {
+      if (options.incremental) {
+        // Incremental via official OAuth v2 API — no browser needed, great for cron
+        const result = await syncTwitterBookmarks('incremental', process.cwd(), {
+          targetAdds: typeof options.targetAdds === 'number' && !Number.isNaN(options.targetAdds) ? options.targetAdds : undefined,
+        });
+        console.log(`Synced ${result.totalBookmarks} bookmarks (${result.added} new)`);
+        console.log(`Cache: ${result.cachePath}`);
+      } else {
+        // Full sync via GraphQL — needs Chrome with active X session
+        const result = await syncBookmarksGraphQL(process.cwd(), {
+          maxPages: Number(options.maxPages) || 500,
+          targetAdds: typeof options.targetAdds === 'number' && !Number.isNaN(options.targetAdds) ? options.targetAdds : undefined,
+          delayMs: Number(options.delayMs) || 600,
+          maxMinutes: Number(options.maxMinutes) || 30,
+          chromeUserDataDir: options.chromeUserDataDir ? String(options.chromeUserDataDir) : undefined,
+          chromeProfileDirectory: options.chromeProfileDirectory ? String(options.chromeProfileDirectory) : undefined,
+          onProgress: (status) => {
+            if (status.page % 10 === 0 || status.done) {
+              process.stderr.write(
+                `\r[sync] page ${status.page} | fetched ${status.totalFetched} | new ${status.newAdded}${status.done ? ` | ${status.stopReason}\n` : ''}`
+              );
+            }
+          },
+        });
+        console.log(formatSyncResult(result));
+      }
+    });
+
   bookmarks
     .command('auth')
-    .description('Run OAuth 2.0 user-context auth flow for bookmark access')
+    .description('Run OAuth 2.0 flow for incremental API sync (requires X API keys in .env.local)')
     .action(async () => {
       const result = await runTwitterOAuthFlow();
       console.log(`Saved token to ${result.tokenPath}`);
       if (result.scope) console.log(`Scope: ${result.scope}`);
-    });
-
-  bookmarks
-    .command('probe')
-    .description('Probe whether the current X API configuration can read bookmarks')
-    .option('--oauth', 'Probe using saved OAuth user token instead of app bearer token', false)
-    .action(async (options) => {
-      const result = options.oauth ? await probeTwitterBookmarksOAuth() : await probeTwitterBookmarksApi();
-      console.log(JSON.stringify(result, null, 2));
     });
 
   bookmarks
@@ -198,42 +221,38 @@ export function buildCli() {
     });
 
   bookmarks
-    .command('sync')
-    .description('Sync bookmarks into the local cache')
-    .option('--full', 'Run a full sync instead of incremental', false)
-    .option('--target-adds <n>', 'Stop once this many new bookmarks have been added', (value) => Number(value))
-    .action(async (options) => {
-      const result = await syncTwitterBookmarks(options.full ? 'full' : 'incremental', process.cwd(), {
-        targetAdds: typeof options.targetAdds === 'number' && !Number.isNaN(options.targetAdds) ? options.targetAdds : undefined,
-      });
-      console.log(`Synced ${result.totalBookmarks} bookmarks (added ${result.added})`);
-      console.log(`Cache: ${result.cachePath}`);
-      console.log(`Meta: ${result.metaPath}`);
-    });
-
-  bookmarks
     .command('status')
     .description('Show bookmark cache status')
     .action(async () => {
-      const status = await getTwitterBookmarksStatus();
-      console.log(JSON.stringify(status, null, 2));
+      const view = await getBookmarkStatusView();
+      console.log(formatBookmarkStatus(view));
     });
 
   bookmarks
-    .command('debug-pagination')
-    .description('Inspect bookmark pagination behavior for a few pages')
-    .option('--pages <n>', 'How many pages to inspect', (value) => Number(value), 5)
+    .command('summary')
+    .description('Show a concise bookmarks summary')
+    .action(async () => {
+      const view = await getBookmarkStatusView();
+      console.log(formatBookmarkSummary(view));
+    });
+
+  bookmarks
+    .command('fetch-media')
+    .description('Download and store media for the first N bookmarks with media')
+    .option('--limit <n>', 'How many media-bearing bookmarks to process', (v) => Number(v), 100)
+    .option('--max-bytes <n>', 'Per-asset byte limit', (v) => Number(v), 50 * 1024 * 1024)
     .action(async (options) => {
-      const result = await debugTwitterBookmarkPagination(process.cwd(), Number(options.pages) || 5);
+      const result = await fetchBookmarkMediaBatch(process.cwd(), {
+        limit: Number(options.limit) || 100,
+        maxBytes: Number(options.maxBytes) || 50 * 1024 * 1024,
+      });
       console.log(JSON.stringify(result, null, 2));
     });
 
   bookmarks
     .command('path')
-    .description('Show bookmark cache path')
-    .action(async () => {
-      console.log(twitterBookmarksCachePath());
-    });
+    .description('Show bookmark cache file path')
+    .action(async () => { console.log(twitterBookmarksCachePath()); });
 
   return program;
 }

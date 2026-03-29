@@ -1,7 +1,8 @@
 import { config as loadDotenv } from 'dotenv';
 import path from 'node:path';
+import os from 'node:os';
 
-export interface XConfig {
+export interface XApiConfig {
   apiKey: string;
   apiSecret: string;
   clientId: string;
@@ -10,12 +11,41 @@ export interface XConfig {
   callbackUrl?: string;
 }
 
+export interface ChromeSessionConfig {
+  chromeUserDataDir: string;
+  chromeProfileDirectory?: string;
+}
+
 export function loadEnv(cwd = process.cwd()): void {
   loadDotenv({ path: path.join(cwd, '.env.local') });
   loadDotenv();
 }
 
-export function loadXConfig(cwd = process.cwd()): XConfig {
+function detectChromeUserDataDir(): string | undefined {
+  const platform = os.platform();
+  const home = os.homedir();
+  if (platform === 'darwin') return path.join(home, 'Library', 'Application Support', 'Google', 'Chrome');
+  if (platform === 'linux') return path.join(home, '.config', 'google-chrome');
+  if (platform === 'win32') return path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data');
+  return undefined;
+}
+
+export function loadChromeSessionConfig(cwd = process.cwd()): ChromeSessionConfig {
+  loadEnv(cwd);
+  const dir = process.env.FT_CHROME_USER_DATA_DIR ?? detectChromeUserDataDir();
+  if (!dir) {
+    throw new Error(
+      'Could not detect Chrome user-data directory.\n' +
+      'Set FT_CHROME_USER_DATA_DIR in .env.local or pass --chrome-user-data-dir.'
+    );
+  }
+  return {
+    chromeUserDataDir: dir,
+    chromeProfileDirectory: process.env.FT_CHROME_PROFILE_DIRECTORY ?? 'Default',
+  };
+}
+
+export function loadXApiConfig(cwd = process.cwd()): XApiConfig {
   loadEnv(cwd);
 
   const apiKey = process.env.X_API_KEY ?? process.env.X_CONSUMER_KEY;
@@ -26,15 +56,13 @@ export function loadXConfig(cwd = process.cwd()): XConfig {
   const callbackUrl = process.env.X_CALLBACK_URL ?? 'http://127.0.0.1:3000/callback';
 
   if (!apiKey || !apiSecret || !clientId || !clientSecret) {
-    throw new Error('Missing X configuration. Expected X_API_KEY/X_CONSUMER_KEY, X_API_SECRET/X_SECRET_KEY, X_CLIENT_ID, and X_CLIENT_SECRET in .env.local');
+    throw new Error(
+      'Missing X API credentials for incremental sync.\n' +
+      'Set X_API_KEY, X_API_SECRET, X_CLIENT_ID, and X_CLIENT_SECRET in .env.local.\n' +
+      'These are only needed for --incremental mode (cron). For a full sync, use: ft bookmarks sync'
+    );
   }
 
-  return {
-    apiKey,
-    apiSecret,
-    clientId,
-    clientSecret,
-    bearerToken,
-    callbackUrl,
-  };
+  return { apiKey, apiSecret, clientId, clientSecret, bearerToken, callbackUrl };
 }
+

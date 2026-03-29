@@ -3,5 +3,6 @@ dist/
 .env
 .env.local
 .DS_Store
+.local/
 automation/sources/
 automation/dataset-state/

@@ -1,7 +1,7 @@
 import { ensureDir, pathExists, readJson, readJsonLines, writeJson, writeJsonLines } from './fs.js';
 import { sourcesDir, twitterBookmarksCachePath, twitterBookmarksMetaPath } from './paths.js';
 import type { BookmarkCacheMeta, BookmarkRecord } from './types.js';
-import { loadXConfig } from './config.js';
+import { loadXApiConfig } from './config.js';
 import { loadTwitterOAuthToken } from './xauth.js';
 
 export interface BookmarkSyncResult {
@@ -71,7 +71,7 @@ function makeBookmark(record: Partial<BookmarkRecord> & Pick<BookmarkRecord, 'id
 }
 
 export async function probeTwitterBookmarksApi(cwd = process.cwd()): Promise<BookmarkProbeResult> {
-  const config = loadXConfig(cwd);
+  const config = loadXApiConfig(cwd);
   if (!config.bearerToken) {
     return {
       ok: false,

@@ -212,3 +212,11 @@ This keeps it useful without forcing it to become a universal database or monoli
 `ft` is best thought of as:
 
 > a CLI-native intelligence and orchestration layer that points at important data sources, stores locally only where it adds real value, and can be invoked both on a schedule and in real time from the user’s preferred interface.
+
+## Backfill product note
+
+When exploratory or one-off bookmark backfills prove useful (for example richer media metadata, author images, or moving-media recovery), those improvements should be folded back into the primary `ft` bookmark tool rather than left as ad hoc local scripts. Prioritize getting the archival data first, then promote durable pieces into the shared tool.
+
+## Rich metadata backfill blocker
+
+The GraphQL bookmark parser/schema now preserves richer fields (author profile image URL, author snapshot, postedAt, engagement, mediaObjects, rawTweet/rawUser). The remaining blocker is not schema or parsing; it is obtaining reusable authenticated GraphQL access without depending on launching Chrome against a live profile. Next step: supply known-good `ct0` + session cookie header (or equivalent direct auth material) into `graphql-bookmarks.ts` via the new injected-auth path, then rerun a small enriched sync and fetch author images.

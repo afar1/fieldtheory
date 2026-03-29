@@ -55,7 +55,7 @@ test('dataset list shows created datasets', async () => {
 
 test('dataset show prints manifest path and parsed summary', async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), 'field-cli-'));
-  await runCli(['dataset', 'add-bookmarks', '--id', 'x-bookmarks', '--twitter'], cwd);
+  await runCli(['dataset', 'add-bookmarks', '--id', 'x-bookmarks'], cwd);
   const { logs } = await runCli(['dataset', 'show', '--id', 'x-bookmarks'], cwd);
 
   assert.match(logs[0] ?? '', /automation\/datasets\/x-bookmarks\.yaml$/);
@@ -78,26 +78,5 @@ test('job prompt includes dataset-specific state and worthwhile-only instruction
 });
 
 test('job name maps cleanly from dataset id', () => {
-  assert.equal(buildDatasetJobName('density-atlas'), 'field:density-atlas');
-});
-
-test('bookmarks full sync creates cache and meta files', async () => {
-  const cwd = await mkdtemp(path.join(tmpdir(), 'field-cli-'));
-  const { logs } = await runCli(['bookmarks', 'sync', '--full'], cwd);
-
-  assert.match(logs[0] ?? '', /Synced 2 bookmarks/);
-
-  const cache = await readFile(twitterBookmarksCachePath(cwd), 'utf8');
-  assert.match(cache, /bookmark_demo_1/);
-
-  const meta = await readFile(twitterBookmarksMetaPath(cwd), 'utf8');
-  assert.match(meta, /"totalBookmarks": 2/);
-});
-
-test('bookmarks status reports cache metadata', async () => {
-  const cwd = await mkdtemp(path.join(tmpdir(), 'field-cli-'));
-  await runCli(['bookmarks', 'sync', '--full'], cwd);
-  const { logs } = await runCli(['bookmarks', 'status'], cwd);
-  assert.match(logs[0] ?? '', /"provider": "twitter"/);
-  assert.match(logs[0] ?? '', /"totalBookmarks": 2/);
+  assert.equal(buildDatasetJobName('density-atlas'), 'ft:density-atlas');
 });

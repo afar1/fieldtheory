@@ -3,7 +3,7 @@ import http from 'node:http';
 import { URL } from 'node:url';
 import { ensureDir, pathExists, readJson, writeJson } from './fs.js';
 import { sourcesDir, twitterOauthTokenPath } from './paths.js';
-import { loadXConfig } from './config.js';
+import { loadXApiConfig } from './config.js';
 import type { XOAuthTokenSet } from './types.js';
 
 function base64Url(input: Buffer): string {
@@ -18,7 +18,7 @@ function createPkce() {
 }
 
 export function buildTwitterOAuthUrl(cwd = process.cwd()): { url: string; state: string; verifier: string } {
-  const cfg = loadXConfig(cwd);
+  const cfg = loadXApiConfig(cwd);
   if (!cfg.callbackUrl) {
     throw new Error('Missing X_CALLBACK_URL in .env.local');
   }
@@ -37,7 +37,7 @@ export function buildTwitterOAuthUrl(cwd = process.cwd()): { url: string; state:
 }
 
 async function exchangeCodeForToken(code: string, verifier: string, cwd = process.cwd()): Promise<XOAuthTokenSet> {
-  const cfg = loadXConfig(cwd);
+  const cfg = loadXApiConfig(cwd);
   if (!cfg.callbackUrl) {
     throw new Error('Missing X_CALLBACK_URL in .env.local');
   }
@@ -90,7 +90,7 @@ export async function loadTwitterOAuthToken(cwd = process.cwd()): Promise<XOAuth
 }
 
 export async function runTwitterOAuthFlow(cwd = process.cwd()): Promise<{ tokenPath: string; scope?: string }> {
-  const cfg = loadXConfig(cwd);
+  const cfg = loadXApiConfig(cwd);
   if (!cfg.callbackUrl) {
     throw new Error('Missing X_CALLBACK_URL in .env.local');
   }
