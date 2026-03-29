@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "description": "",
   "main": "index.js",
+  "bin": {
+    "ft": "./bin/ft.mjs"
+  },
   "scripts": {
     "test": "tsx --test tests/**/*.test.ts",
     "build": "tsc -p tsconfig.json",

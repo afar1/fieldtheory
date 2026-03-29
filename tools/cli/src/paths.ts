@@ -1,6 +1,33 @@
 import path from 'node:path';
+import fs from 'node:fs';
+
+function findCliRoot(start: string): string | null {
+  // Look for the tools/cli directory that contains automation/sources
+  let dir = start;
+  while (true) {
+    // Direct match: we're inside tools/cli
+    if (fs.existsSync(path.join(dir, 'automation', 'sources')) &&
+        fs.existsSync(path.join(dir, 'package.json'))) {
+      return dir;
+    }
+    // Repo root: tools/cli is a subdirectory
+    const cliDir = path.join(dir, 'tools', 'cli');
+    if (fs.existsSync(path.join(cliDir, 'automation', 'sources'))) {
+      return cliDir;
+    }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
 
 export function workspaceRoot(cwd = process.cwd()): string {
+  const found = findCliRoot(cwd);
+  if (found) return found;
+  // Fall back: resolve from the script's own location (handles npm link)
+  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
+  const fromScript = findCliRoot(scriptDir);
+  if (fromScript) return fromScript;
   return cwd;
 }
 

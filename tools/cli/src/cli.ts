@@ -11,6 +11,7 @@ import { loadTwitterOAuthToken, runTwitterOAuthFlow } from './xauth.js';
 import { syncBookmarksGraphQL, formatSyncResult } from './graphql-bookmarks.js';
 import { fetchBookmarkMediaBatch } from './bookmark-media.js';
 import { buildIndex, searchBookmarks, formatSearchResults, getStats } from './bookmarks-db.js';
+import { renderViz } from './bookmarks-viz.js';
 
 export function buildCli() {
   const program = new Command();
@@ -300,6 +301,13 @@ export function buildCli() {
       for (const a of stats.topAuthors) console.log(`  @${a.handle}: ${a.count}`);
       console.log(`\nLanguages:`);
       for (const l of stats.languageBreakdown) console.log(`  ${l.language}: ${l.count}`);
+    });
+
+  bookmarks
+    .command('viz')
+    .description('Visual dashboard of your bookmarking patterns')
+    .action(async () => {
+      console.log(await renderViz());
     });
 
   bookmarks
