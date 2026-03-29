@@ -16,12 +16,16 @@
   "dependencies": {
     "commander": "^14.0.3",
     "dotenv": "^17.3.1",
+    "sql.js": "^1.14.1",
+    "sql.js-fts5": "^1.4.0",
     "yaml": "^2.8.3",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@esbuild/linux-arm64": "^0.27.4",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.5.0",
+    "@types/sql.js": "^1.4.11",
     "tsx": "^4.21.0",
     "typescript": "^6.0.2"
   }

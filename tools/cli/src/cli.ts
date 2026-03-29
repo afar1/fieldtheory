@@ -10,6 +10,7 @@ import { getBookmarkStatusView, buildBookmarksDatasetManifest, enableBookmarks, 
 import { loadTwitterOAuthToken, runTwitterOAuthFlow } from './xauth.js';
 import { syncBookmarksGraphQL, formatSyncResult } from './graphql-bookmarks.js';
 import { fetchBookmarkMediaBatch } from './bookmark-media.js';
+import { buildIndex, searchBookmarks, formatSearchResults, getStats } from './bookmarks-db.js';
 
 export function buildCli() {
   const program = new Command();
@@ -178,6 +179,11 @@ export function buildCli() {
         });
         console.log(`Synced ${result.totalBookmarks} bookmarks (${result.added} new)`);
         console.log(`Cache: ${result.cachePath}`);
+        if (result.added > 0) {
+          process.stderr.write('Rebuilding search index...\n');
+          const idx = await buildIndex();
+          console.log(`Index: ${idx.dbPath} (${idx.recordCount} records)`);
+        }
       } else {
         // Full sync via GraphQL — needs Chrome with active X session
         const result = await syncBookmarksGraphQL(process.cwd(), {
@@ -196,6 +202,11 @@ export function buildCli() {
           },
         });
         console.log(formatSyncResult(result));
+        if (result.added > 0) {
+          process.stderr.write('Rebuilding search index...\n');
+          const idx = await buildIndex();
+          console.log(`Index: ${idx.dbPath} (${idx.recordCount} records)`);
+        }
       }
     });
 
@@ -247,6 +258,48 @@ export function buildCli() {
         maxBytes: Number(options.maxBytes) || 50 * 1024 * 1024,
       });
       console.log(JSON.stringify(result, null, 2));
+    });
+
+  bookmarks
+    .command('index')
+    .description('Build or rebuild the SQLite search index from the JSONL cache')
+    .action(async () => {
+      process.stderr.write('Building search index...\n');
+      const result = await buildIndex();
+      console.log(`Indexed ${result.recordCount} bookmarks → ${result.dbPath}`);
+    });
+
+  bookmarks
+    .command('search')
+    .description('Full-text search across bookmarks')
+    .argument('<query>', 'Search query (supports FTS5 syntax: AND, OR, NOT, "exact phrase")')
+    .option('--author <handle>', 'Filter by author handle')
+    .option('--after <date>', 'Only bookmarks posted after this date (YYYY-MM-DD)')
+    .option('--before <date>', 'Only bookmarks posted before this date (YYYY-MM-DD)')
+    .option('--limit <n>', 'Max results', (v) => Number(v), 20)
+    .action(async (query, options) => {
+      const results = await searchBookmarks({
+        query,
+        author: options.author ? String(options.author) : undefined,
+        after: options.after ? String(options.after) : undefined,
+        before: options.before ? String(options.before) : undefined,
+        limit: Number(options.limit) || 20,
+      });
+      console.log(formatSearchResults(results));
+    });
+
+  bookmarks
+    .command('stats')
+    .description('Show aggregate statistics from the search index')
+    .action(async () => {
+      const stats = await getStats();
+      console.log(`Bookmarks: ${stats.totalBookmarks}`);
+      console.log(`Unique authors: ${stats.uniqueAuthors}`);
+      console.log(`Date range: ${stats.dateRange.earliest?.slice(0, 10) ?? '?'} to ${stats.dateRange.latest?.slice(0, 10) ?? '?'}`);
+      console.log(`\nTop authors:`);
+      for (const a of stats.topAuthors) console.log(`  @${a.handle}: ${a.count}`);
+      console.log(`\nLanguages:`);
+      for (const l of stats.languageBreakdown) console.log(`  ${l.language}: ${l.count}`);
     });
 
   bookmarks

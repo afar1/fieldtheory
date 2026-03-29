@@ -60,6 +60,10 @@ export function bookmarkMediaManifestPath(cwd = process.cwd()): string {
   return path.join(sourcesDir(cwd), 'x-bookmarks-media-manifest.json');
 }
 
+export function twitterBookmarksIndexPath(cwd = process.cwd()): string {
+  return path.join(sourcesDir(cwd), 'x-bookmarks.db');
+}
+
 export function localStateDir(cwd = process.cwd()): string {
   return path.join(workspaceRoot(cwd), '.local');
 }
