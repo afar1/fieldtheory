@@ -4692,10 +4692,13 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ dataRetentionDays: days });
-    
-    // Trigger immediate cleanup with new retention setting.
-    if (clipboardManager && days !== -1) {
-      clipboardManager.applyDataRetention(days);
+
+    if (clipboardManager) {
+      clipboardManager.setRetentionDays(days);
+      // Trigger immediate cleanup with new retention setting.
+      if (days !== -1) {
+        clipboardManager.applyDataRetention(days);
+      }
     }
     return true;
   });
@@ -6095,8 +6098,10 @@ async function initTranscriberSystem(): Promise<void> {
     }
   }
 
-  // Initialize clipboard manager with hotkeys from preferences
-  clipboardManager = new ClipboardManager();
+  // Initialize clipboard manager with hotkeys and retention from preferences
+  clipboardManager = new ClipboardManager({
+    retentionDays: preferencesManager.get().dataRetentionDays ?? -1,
+  });
   
   // Broadcast ITEM_ADDED when clipboard polling detects new items
   clipboardManager.setOnItemAdded((id) => {
