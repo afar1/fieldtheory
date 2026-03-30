@@ -1,6 +1,6 @@
 import { app } from 'electron';
 import path from 'path';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { PreferencesManager } from './preferences';
 import { NativeHelper } from './nativeHelper';
 
@@ -78,7 +78,7 @@ export class SoundManager {
       this.nativeHelper.playSound(soundPath);
     } else {
       // Fallback: exec afplay (slower, ~50-100ms)
-      exec(`afplay "${soundPath}"`, () => {
+      execFile('afplay', [soundPath], () => {
         // Ignore errors - sound playback is non-critical
       });
     }
