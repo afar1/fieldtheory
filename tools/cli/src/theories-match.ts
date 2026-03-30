@@ -1,16 +1,3 @@
-/**
- * theories-match.ts — Smart bookmark-to-repo matching for theories sessions.
- *
- * Replaces random sampling with category-aware selection.
- * Called by theories.sh as: npx tsx src/theories-match.ts <repos-json> [--budget <n>]
- *
- * Outputs a JSON array of analysis jobs, each with:
- *   - type: the analysis type (scan, adopt, pattern, explore)
- *   - bookmarks: selected bookmarks for this job
- *   - repo: target repo info
- *   - prompt_hint: context for the session prompt
- */
-
 import { readFileSync } from 'node:fs';
 import { openDb } from './db.js';
 import { twitterBookmarksIndexPath } from './paths.js';
@@ -65,7 +52,9 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
   const SELECT = `SELECT id, url, text, author_handle, categories, github_urls, links_json FROM bookmarks`;
 
   try {
-    // 1. SCAN: Security bookmarks → most active repo
+    const pick = (limit = repos.length) => repos[Math.floor(Math.random() * Math.min(repos.length, limit))];
+
+    // 1. SCAN: Security bookmarks → random top-3 repo
     const securityBookmarks = queryBookmarks(db,
       `${SELECT} WHERE categories LIKE '%security%' ORDER BY RANDOM() LIMIT 15`
     );
@@ -73,7 +62,7 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
       jobs.push({
         type: 'scan',
         title: 'Security & dependency scan',
-        repo: repos[0],
+        repo: pick(3),
         bookmarks: securityBookmarks,
         prompt_hint: `These bookmarks mention security issues, vulnerabilities, or supply chain risks. Check if any of the mentioned tools, libraries, or vulnerability patterns affect this repo. Be specific: name the dependency, version, file. If nothing applies, say so — don't force a connection.`,
       });
@@ -84,12 +73,10 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
       `${SELECT} WHERE categories LIKE '%tool%' AND github_urls IS NOT NULL ORDER BY RANDOM() LIMIT 20`
     );
     if (toolBookmarks.length > 0 && repos.length > 0) {
-      // Spread across top repos
-      const targetRepo = repos[Math.floor(Math.random() * Math.min(repos.length, 3))];
       jobs.push({
         type: 'adopt',
         title: 'Tool & library adoption',
-        repo: targetRepo,
+        repo: pick(repos.length),
         bookmarks: toolBookmarks,
         prompt_hint: `These bookmarks reference open-source tools and repositories. For each one, check: (1) is the developer already using this? (2) does it solve a problem this repo currently has? (3) what would adopting it look like — which files change, what's the migration path? Skip anything that doesn't clearly apply.`,
       });
@@ -99,12 +86,11 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
     const techniqueBookmarks = queryBookmarks(db,
       `${SELECT} WHERE categories LIKE '%technique%' ORDER BY RANDOM() LIMIT 20`
     );
-    if (techniqueBookmarks.length > 0 && repos.length > 1) {
-      const targetRepo = repos[Math.min(1, repos.length - 1)];
+    if (techniqueBookmarks.length > 0 && repos.length > 0) {
       jobs.push({
         type: 'pattern',
         title: 'Pattern & technique transfer',
-        repo: targetRepo,
+        repo: pick(repos.length),
         bookmarks: techniqueBookmarks,
         prompt_hint: `These bookmarks describe techniques, architecture patterns, or "how I built X" approaches. Read the repo's code and identify where any of these patterns could concretely improve it. Name the specific file and function. If the repo already does something similar, note that too — sometimes the bookmark version is better, sometimes the repo's approach is fine.`,
       });
@@ -116,12 +102,10 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
        ORDER BY RANDOM() LIMIT 30`
     );
     if (exploreBookmarks.length > 0 && repos.length > 0) {
-      // Pick a different repo for variety
-      const targetRepo = repos[Math.min(2, repos.length - 1)];
       jobs.push({
         type: 'explore',
         title: 'Open exploration',
-        repo: targetRepo,
+        repo: pick(repos.length),
         bookmarks: exploreBookmarks,
         prompt_hint: `These are bookmarks that caught the developer's eye — product launches, research papers, interesting takes. Look for the adjacent possible: what does this repo gain access to because these ideas exist? What's one step away that nobody's noticed? This is the open-ended session — follow what's interesting, not what's obviously practical.`,
       });

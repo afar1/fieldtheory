@@ -24,10 +24,6 @@ function findCliRoot(start: string): string | null {
 export function workspaceRoot(cwd = process.cwd()): string {
   const found = findCliRoot(cwd);
   if (found) return found;
-  // Fall back: resolve from the script's own location (handles npm link)
-  const scriptDir = path.dirname(new URL(import.meta.url).pathname);
-  const fromScript = findCliRoot(scriptDir);
-  if (fromScript) return fromScript;
   return cwd;
 }
 
@@ -94,4 +90,3 @@ export function twitterBookmarksIndexPath(cwd = process.cwd()): string {
 export function localStateDir(cwd = process.cwd()): string {
   return path.join(workspaceRoot(cwd), '.local');
 }
-

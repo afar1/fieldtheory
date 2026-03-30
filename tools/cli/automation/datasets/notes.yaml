@@ -1,0 +1,10 @@
+id: notes
+kind: files
+source:
+  path: /tmp/notes
+initiative: suggest
+budget:
+  effort: low
+delivery:
+  onlyWhenWorthwhile: true
+  channel: email

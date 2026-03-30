@@ -5,4 +5,5 @@ dist/
 .DS_Store
 .local/
 automation/sources/
+automation/sources
 automation/dataset-state/

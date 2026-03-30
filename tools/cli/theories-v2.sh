@@ -1,25 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-# theories-v2.sh — Overnight Analysis Engine
-#
-# Runs targeted analyses against your bookmarks and active repos:
-#   1. Security scan    — check bookmarked advisories against your deps
-#   2. Tool adoption    — bookmarked repos/tools that could help your projects
-#   3. Pattern transfer — techniques from bookmarks applicable to your code
-#   4. Open exploration — adjacent-possible ideas from the wider corpus
-#
-# Usage:
-#   ./theories-v2.sh                              # full run (all types)
-#   ./theories-v2.sh --type scan                  # single analysis type
-#   ./theories-v2.sh --turns 4                    # override turn count
-#   ./theories-v2.sh --skip-sync                  # skip bookmark freshness check
-#   ./theories-v2.sh --dry-run                    # show matching, skip sessions
-#   ./theories-v2.sh --budget 2                   # max number of analyses to run
-#
-# Designed for overnight cron:
-#   openclaw cron add --name "ft:theories" \
-#     --cron "0 2 * * *" --session isolated \
-#     --message "Run ~/field-theory/tools/cli/theories-v2.sh"
+# theories-v2.sh — Overnight analysis engine
 # ============================================================================
 
 set -euo pipefail
@@ -43,6 +24,7 @@ DRY_RUN=false
 SKIP_SYNC=false
 SINGLE_TYPE=""
 BUDGET=4
+ENGINE="${FT_THEORIES_ENGINE:-auto}"
 
 # ── Temp files ────────────────────────────────────────────────────────────
 TMPDIR_THEORIES=$(mktemp -d "${TMPDIR:-/tmp}/theories.XXXXXX")
@@ -62,6 +44,9 @@ warn() { echo -e "${YELLOW}[theories]${RESET} $*"; }
 err()  { echo -e "${RED}[theories]${RESET} $*" >&2; }
 ok()   { echo -e "${GREEN}[theories]${RESET} $*"; }
 
+HAS_CODEX=false
+HAS_CLAUDE=false
+
 # ── Parse args ────────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -70,6 +55,7 @@ while [[ $# -gt 0 ]]; do
         --turns)       TURN_COUNT="$2"; shift 2 ;;
         --type)        SINGLE_TYPE="$2"; shift 2 ;;
         --budget)      BUDGET="$2"; shift 2 ;;
+        --engine)      ENGINE="$2"; FT_THEORIES_ENGINE="$2"; export FT_THEORIES_ENGINE; shift 2 ;;
         --email)       EMAIL_TO="$2"; shift 2 ;;
         --help|-h)
             cat <<USAGE
@@ -92,10 +78,17 @@ done
 # ── Preflight ─────────────────────────────────────────────────────────────
 preflight_check() {
     local missing=()
-    command -v codex >/dev/null 2>&1 || missing+=("codex")
     command -v jq    >/dev/null 2>&1 || missing+=("jq")
     command -v node  >/dev/null 2>&1 || missing+=("node")
     if [[ ${#missing[@]} -gt 0 ]]; then err "Missing: ${missing[*]}"; exit 1; fi
+
+    command -v codex >/dev/null 2>&1 && HAS_CODEX=true
+    command -v claude >/dev/null 2>&1 && HAS_CLAUDE=true
+
+    if ! $HAS_CODEX && ! $HAS_CLAUDE; then
+        err "Missing: codex or claude"
+        exit 1
+    fi
 }
 preflight_check
 
@@ -104,21 +97,102 @@ mkdir -p "$TRANSCRIPT_DIR" "$DIGEST_DIR" "$LOG_DIR"
 RUN_LOG="$LOG_DIR/${DATE_STAMP}-v2.log"
 log "Run started at $(date)"
 
-# ── Helper: codex with retry ─────────────────────────────────────────────
-run_codex() {
+# ── Engine selection ──────────────────────────────────────────────────────
+# ENGINE can be "codex", "claude", or "auto" (alternates to spread load).
+ENGINE_CALL_COUNT=0
+
+# Invoke a single engine. Returns 0 on success, 1 on failure.
+_invoke() {
+    local engine="$1" cwd="$2" prompt="$3"
+    if [[ "$engine" == "claude" ]]; then
+        if [[ -n "$cwd" ]]; then
+            (cd "$cwd" && claude -p --permission-mode auto "$prompt" 2>/dev/null)
+        else
+            claude -p --permission-mode auto "$prompt" 2>/dev/null
+        fi
+    else
+        if [[ -n "$cwd" ]]; then
+            (cd "$cwd" && codex exec --full-auto --skip-git-repo-check "$prompt" 2>/dev/null)
+        else
+            codex exec --full-auto --skip-git-repo-check "$prompt" 2>/dev/null
+        fi
+    fi
+}
+
+pick_engine() {
+    case "$ENGINE" in
+        auto)
+            if $HAS_CODEX && $HAS_CLAUDE; then
+                if (( ENGINE_CALL_COUNT % 2 == 1 )); then
+                    echo "codex"
+                else
+                    echo "claude"
+                fi
+            elif $HAS_CODEX; then
+                echo "codex"
+            else
+                echo "claude"
+            fi
+            ;;
+        codex)
+            if $HAS_CODEX; then
+                echo "codex"
+            elif $HAS_CLAUDE; then
+                echo "claude"
+            fi
+            ;;
+        claude)
+            if $HAS_CLAUDE; then
+                echo "claude"
+            elif $HAS_CODEX; then
+                echo "codex"
+            fi
+            ;;
+    esac
+}
+
+fallback_engine() {
+    local primary="$1"
+    case "$primary" in
+        codex)
+            $HAS_CLAUDE && echo "claude"
+            ;;
+        claude)
+            $HAS_CODEX && echo "codex"
+            ;;
+    esac
+}
+
+run_engine() {
     local cwd=""
     if [[ "${1:-}" == "--cwd" ]]; then cwd="$2"; shift 2; fi
     local prompt="$1" attempt=0 response=""
+    ENGINE_CALL_COUNT=$((ENGINE_CALL_COUNT + 1))
+
+    local use_engine fallback
+    use_engine=$(pick_engine)
+    fallback=$(fallback_engine "$use_engine")
+
+    # Try primary engine with retries
     while [[ "$attempt" -le "$CODEX_RETRY_COUNT" ]]; do
-        if [[ -n "$cwd" && -d "$cwd" ]]; then
-            response=$(cd "$cwd" && codex exec --full-auto --skip-git-repo-check "$prompt" 2>/dev/null) && break
-        else
-            response=$(codex exec --full-auto --skip-git-repo-check "$prompt" 2>/dev/null) && break
-        fi
+        response=$(_invoke "$use_engine" "$cwd" "$prompt") && break
+        response=""
         attempt=$((attempt + 1))
-        [[ "$attempt" -le "$CODEX_RETRY_COUNT" ]] && sleep "$CODEX_RETRY_DELAY"
+        if [[ "$attempt" -le "$CODEX_RETRY_COUNT" ]]; then
+            warn "    ${use_engine} failed (attempt $attempt), retrying in ${CODEX_RETRY_DELAY}s..."
+            sleep "$CODEX_RETRY_DELAY"
+        fi
     done
-    [[ -z "$response" ]] && { echo "[Failed after $((CODEX_RETRY_COUNT + 1)) attempts]"; return 1; }
+
+    if [[ -z "$response" && -n "$fallback" ]]; then
+        warn "    ${use_engine} exhausted — falling back to ${fallback}"
+        response=$(_invoke "$fallback" "$cwd" "$prompt") || true
+    fi
+
+    if [[ -z "$response" ]]; then
+        echo "[Both engines failed after retries]"
+        return 1
+    fi
     echo "$response"
 }
 
@@ -191,15 +265,27 @@ discover_active_repos() {
     : > "$results_file"
     local seen_file="$TMPDIR_THEORIES/seen_repos"
     : > "$seen_file"
+    # Dedup by remote URL — worktrees of the same repo share a remote.
+    # Keep the one whose directory name matches the repo name (main checkout).
+    local seen_remotes="$TMPDIR_THEORIES/seen_remotes"
+    : > "$seen_remotes"
 
     for search_dir in "${search_dirs[@]}"; do
         [[ -d "$search_dir" ]] || continue
-        for dir in "$search_dir"/*/; do
-            [[ -d "$dir/.git" ]] || continue
+        while IFS= read -r dir; do
+            [[ -e "$dir/.git" ]] || continue
             local repo_name
             repo_name=$(basename "$dir")
             grep -qx "$repo_name" "$seen_file" && continue
             echo "$repo_name" >> "$seen_file"
+
+            # Dedup worktrees: skip if we've already seen this remote
+            local remote_url
+            remote_url=$(cd "$dir" && git remote get-url origin 2>/dev/null || echo "local:$dir")
+            if grep -qx "$remote_url" "$seen_remotes" 2>/dev/null; then
+                continue
+            fi
+            echo "$remote_url" >> "$seen_remotes"
 
             local commit_count
             commit_count=$(cd "$dir" && git log --oneline --after="$cutoff_date" --all 2>/dev/null | wc -l | tr -d ' ')
@@ -218,7 +304,7 @@ discover_active_repos() {
                 --arg desc "$description" \
                 '{name: $name, path: $path, lastMessage: $last_msg, recentCommits: $commits, description: $desc}' \
                 >> "$results_file"
-        done
+        done < <(printf '%s\n' "$search_dir"/*/ "$search_dir"/*/*/ | awk '{print length, $0}' | sort -n | cut -d' ' -f2-)
     done
 
     jq -s 'sort_by(-.recentCommits)' "$results_file"
@@ -267,7 +353,8 @@ Rules:
 - If nothing applies, say so. An honest 'nothing here' is more useful than a forced connection.
 - Write like a colleague, not a consultant. No jargon inflation, no 'synergies', no 'leveraging'.
 - When you find something real, explain what to do about it. Not 'consider adopting X' — rather 'X solves the problem in src/foo.ts:142 where you currently do Y. Here is what the change looks like.'
-- Distinguish between things you're confident about and things you're speculating on. Mark speculation clearly."
+- Distinguish between things you're confident about and things you're speculating on. Mark speculation clearly.
+- IMPORTANT: You are on the main branch. Do NOT commit to main. If you want to make code changes, create a feature branch first (git checkout -b theories/<descriptive-name>) and commit there."
 
 SYSTEM_PROMPT_EXPLORER_V2="You are exploring connections between bookmarked ideas and a codebase. Your job is to find the interesting thing — the door that's one step away but nobody's noticed.
 
@@ -277,7 +364,8 @@ Rules:
 - If a bookmark reminds you of something in the code, chase that thread. Be concrete about what you find.
 - You're looking for the adjacent possible: what becomes buildable because this idea exists AND this codebase exists?
 - Name what you find honestly. If it's a stretch, say so. If it's obvious in hindsight, that's actually the best kind.
-- Don't narrate your process. Just share what you found."
+- Don't narrate your process. Just share what you found.
+- IMPORTANT: You are on the main branch. Do NOT commit to main. If you want to make code changes, create a feature branch first (git checkout -b theories/<descriptive-name>) and commit there."
 
 FINDINGS=()
 TRANSCRIPT_PATHS=()
@@ -321,6 +409,18 @@ run_analysis() {
 
 HEADER
 
+    # Ensure repo is on its default branch (main/master) for analysis
+    if [[ -d "$repo_path" ]]; then
+        local default_branch
+        default_branch=$(cd "$repo_path" && git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's|refs/remotes/origin/||' || echo "")
+        if [[ -z "$default_branch" ]]; then
+            default_branch=$(cd "$repo_path" && git branch -l main master 2>/dev/null | head -1 | tr -d '* ' || echo "main")
+        fi
+        if [[ -n "$default_branch" ]]; then
+            (cd "$repo_path" && git checkout "$default_branch" 2>/dev/null) || true
+        fi
+    fi
+
     local history=""
     local codex_cwd_flag=()
     [[ -d "$repo_path" ]] && codex_cwd_flag=(--cwd "$repo_path")
@@ -360,7 +460,7 @@ Continue the analysis. Go deeper on what you've found. If you've covered enough 
 
         log "    Turn $turn..."
         local response
-        response=$(run_codex "${codex_cwd_flag[@]}" "$turn_prompt") || {
+        response=$(run_engine "${codex_cwd_flag[@]}" "$turn_prompt") || {
             warn "    Turn $turn failed"
             response="[Failed this turn]"
         }
@@ -404,7 +504,7 @@ Rules:
 - Write like a sharp colleague leaving a note, not like an AI generating a report."
 
     local finding
-    finding=$(run_codex "$synthesis_prompt") || finding="FINDING: Synthesis failed — see full transcript at ${transcript_path}"
+    finding=$(run_engine "$synthesis_prompt") || finding="FINDING: Synthesis failed — see full transcript at ${transcript_path}"
 
     printf '\n---\n\n## Summary\n\n%s\n' "$finding" >> "$transcript_path"
 

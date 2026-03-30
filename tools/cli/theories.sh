@@ -322,8 +322,8 @@ discover_active_repos() {
 
     for search_dir in "${search_dirs[@]}"; do
         [[ -d "$search_dir" ]] || continue
-        for dir in "$search_dir"/*/; do
-            [[ -d "$dir/.git" ]] || continue
+        for dir in "$search_dir"/*/ "$search_dir"/*/*/; do
+            [[ -e "$dir/.git" ]] || continue
             local repo_name
             repo_name=$(basename "$dir")
             grep -qx "$repo_name" "$seen_file" && continue
