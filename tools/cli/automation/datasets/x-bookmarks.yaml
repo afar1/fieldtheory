@@ -1,0 +1,14 @@
+id: x-bookmarks
+kind: bookmarks
+source:
+  provider: twitter
+  path: /Users/afar/dev/fieldtheory/tools/cli/automation/sources/x-bookmarks.jsonl
+initiative: suggest
+budget:
+  effort: medium
+delivery:
+  onlyWhenWorthwhile: true
+  channel: email
+context: Review the full bookmark corpus. Consider recency, but also surface
+  older items when they become newly relevant, reveal durable themes, or connect
+  strongly to active work.

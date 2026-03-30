@@ -717,7 +717,7 @@ export class ClipboardHistoryWindow {
             // Use macOS dictionary lookup
             this.window?.webContents.executeJavaScript(`window.getSelection()?.toString()`).then((text) => {
               if (text) {
-                require('child_process').exec(`open dict://${encodeURIComponent(text)}`);
+                require('child_process').execFile('open', [`dict://${encodeURIComponent(text)}`]);
               }
             });
           }},

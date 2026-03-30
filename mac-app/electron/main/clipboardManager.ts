@@ -223,6 +223,7 @@ export interface ClipboardQueryOptions {
  */
 interface ClipboardConfig {
   maxItems?: number;
+  retentionDays?: number; // -1 = keep forever (disables maxItems cap)
   ignoreApps?: string[]; // Bundle IDs to ignore
   screenshotHotkey?: string;
   fullScreenHotkey?: string;
@@ -2007,9 +2008,12 @@ export class ClipboardManager extends EventEmitter {
    * Time-based retention is handled by applyDataRetention() using user preferences.
    */
   private cleanupOldItems(): void {
-    const { maxItems } = this.config;
+    const { maxItems, retentionDays } = this.config;
 
-    // Delete oldest items if over max count.
+    // When retention is "keep forever", time-based retention handles cleanup
+    // and the row cap should not silently override the user's choice.
+    if (retentionDays === -1) return;
+
     if (maxItems && this._db) {
       const count = this.db.prepare('SELECT COUNT(*) as count FROM clipboard_items').get() as { count: number };
       if (count.count > maxItems) {
@@ -2024,6 +2028,10 @@ export class ClipboardManager extends EventEmitter {
         `).run(toDelete);
       }
     }
+  }
+
+  setRetentionDays(days: number): void {
+    this.config.retentionDays = days;
   }
 
   /**

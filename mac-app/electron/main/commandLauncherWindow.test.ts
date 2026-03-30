@@ -48,6 +48,13 @@ vi.mock('./logger', () => ({
   }),
 }));
 
+const mockExecFile = vi.hoisted(() => vi.fn((_cmd: string, _args: string[], cb: Function) => cb(null, '', '')));
+
+vi.mock('child_process', () => ({
+  default: { execFile: mockExecFile },
+  execFile: mockExecFile,
+}));
+
 import { CommandLauncherWindow } from './commandLauncherWindow';
 
 describe('CommandLauncherWindow.hide()', () => {

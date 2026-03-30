@@ -1,6 +1,6 @@
 import { EventEmitter } from 'events';
 import { app, globalShortcut } from 'electron';
-import { spawn, ChildProcess, exec } from 'child_process';
+import { spawn, ChildProcess, exec, execFile } from 'child_process';
 import http from 'http';
 import path from 'path';
 import os from 'os';
@@ -2931,9 +2931,8 @@ export class HotMicManager extends EventEmitter {
         await this.appSwitcher.activateApp(match.bundleId);
       } else {
         // Fallback: open by name (launches if not running, fails silently if app doesn't exist)
-        const safeName = match.appName.replace(/"/g, '\\"');
         await new Promise<void>((resolve) => {
-          exec(`open -a "${safeName}"`, () => resolve());
+          execFile('open', ['-a', match.appName], () => resolve());
         });
       }
     } catch {
@@ -2947,9 +2946,10 @@ export class HotMicManager extends EventEmitter {
    */
   private async quitAppByName(match: { bundleId: string | null; appName: string }): Promise<void> {
     try {
-      const safeName = match.appName.replace(/'/g, "'\\''");
+      const safeName = match.appName.replace(/"/g, '');
+      const script = `tell application "${safeName}" to quit`;
       await new Promise<void>((resolve) => {
-        exec(`osascript -e 'tell application "${safeName}" to quit'`, () => resolve());
+        execFile('osascript', ['-e', script], () => resolve());
       });
       log.info('Hot Mic: quit app "%s"', match.appName);
     } catch {
@@ -2963,20 +2963,16 @@ export class HotMicManager extends EventEmitter {
   private async hideAppByName(match: { bundleId: string | null; appName: string }): Promise<void> {
     try {
       if (match.bundleId) {
-        const safeBundleId = match.bundleId.replace(/"/g, '\\"');
+        const safeBundleId = match.bundleId.replace(/"/g, '');
+        const script = `tell application "System Events" to set visible of (first process whose bundle identifier is "${safeBundleId}") to false`;
         await new Promise<void>((resolve) => {
-          exec(
-            `osascript -e 'tell application "System Events" to set visible of (first process whose bundle identifier is "${safeBundleId}") to false'`,
-            () => resolve()
-          );
+          execFile('osascript', ['-e', script], () => resolve());
         });
       } else {
-        const safeName = match.appName.replace(/"/g, '\\"');
+        const safeName = match.appName.replace(/"/g, '');
+        const script = `tell application "System Events" to set visible of process "${safeName}" to false`;
         await new Promise<void>((resolve) => {
-          exec(
-            `osascript -e 'tell application "System Events" to set visible of process "${safeName}" to false'`,
-            () => resolve()
-          );
+          execFile('osascript', ['-e', script], () => resolve());
         });
       }
       log.info('Hot Mic: hide app "%s"', match.appName);

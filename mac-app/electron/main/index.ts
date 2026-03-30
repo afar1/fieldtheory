@@ -1937,9 +1937,26 @@ function setupLibrarianIPCHandlers(): void {
     };
   });
 
+  // Allowed path prefixes for librarian file operations (defense-in-depth)
+  const librarianAllowedPrefixes = [
+    path.join(os.homedir(), '.fieldtheory'),
+    path.join(os.homedir(), '.librarian'),
+    path.join(os.homedir(), '.claude'),
+    app.getPath('userData'),
+  ];
+
+  function isLibrarianPathAllowed(filePath: string): boolean {
+    const resolved = path.resolve(filePath);
+    return librarianAllowedPrefixes.some(prefix => resolved.startsWith(prefix + path.sep) || resolved === prefix);
+  }
+
   // Open a file in the default editor
   ipcMain.handle('librarian:openInEditor', async (_event, filePath: string): Promise<boolean> => {
     try {
+      if (!isLibrarianPathAllowed(filePath)) {
+        log.error('Librarian: path not allowed:', filePath);
+        return false;
+      }
       await shell.openPath(filePath);
       return true;
     } catch (error) {
@@ -1951,6 +1968,10 @@ function setupLibrarianIPCHandlers(): void {
   // Read a config file's contents
   ipcMain.handle('librarian:readConfigFile', (_event, filePath: string): string | null => {
     try {
+      if (!isLibrarianPathAllowed(filePath)) {
+        log.error('Librarian: path not allowed:', filePath);
+        return null;
+      }
       if (fs.existsSync(filePath)) {
         return fs.readFileSync(filePath, 'utf-8');
       }
@@ -1964,6 +1985,10 @@ function setupLibrarianIPCHandlers(): void {
   // Write a config file's contents
   ipcMain.handle('librarian:writeConfigFile', (_event, filePath: string, content: string): boolean => {
     try {
+      if (!isLibrarianPathAllowed(filePath)) {
+        log.error('Librarian: path not allowed:', filePath);
+        return false;
+      }
       // Ensure directory exists
       const dir = path.dirname(filePath);
       if (!fs.existsSync(dir)) {
@@ -4141,6 +4166,11 @@ function setupClipboardIPCHandlers(): void {
 
   // Open external URL in default browser (for Stripe checkout, etc).
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+    const allowed = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
+    if (!allowed.test(url)) {
+      log.warn('shell:openExternal blocked non-http URL: %s', url);
+      return;
+    }
     await shell.openExternal(url);
   });
 
@@ -4692,10 +4722,13 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     await preferencesManager.save({ dataRetentionDays: days });
-    
-    // Trigger immediate cleanup with new retention setting.
-    if (clipboardManager && days !== -1) {
-      clipboardManager.applyDataRetention(days);
+
+    if (clipboardManager) {
+      clipboardManager.setRetentionDays(days);
+      // Trigger immediate cleanup with new retention setting.
+      if (days !== -1) {
+        clipboardManager.applyDataRetention(days);
+      }
     }
     return true;
   });
@@ -6095,8 +6128,10 @@ async function initTranscriberSystem(): Promise<void> {
     }
   }
 
-  // Initialize clipboard manager with hotkeys from preferences
-  clipboardManager = new ClipboardManager();
+  // Initialize clipboard manager with hotkeys and retention from preferences
+  clipboardManager = new ClipboardManager({
+    retentionDays: preferencesManager.get().dataRetentionDays ?? -1,
+  });
   
   // Broadcast ITEM_ADDED when clipboard polling detects new items
   clipboardManager.setOnItemAdded((id) => {

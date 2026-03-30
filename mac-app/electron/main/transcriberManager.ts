@@ -7,7 +7,7 @@ import fs from 'fs';
 import os from 'os';
 import http from 'http';
 import net from 'net';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 import crypto from 'crypto';
 import { NativeHelper } from './nativeHelper';
@@ -46,6 +46,7 @@ const log = createLogger('Transcriber');
 const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
 
 interface PersistedParakeetEngineState {
@@ -2775,11 +2776,12 @@ export class TranscriberManager extends EventEmitter {
     try {
       if (targetBundleId) {
         const safeBundleId = targetBundleId.replace(/"/g, '');
-        await execAsync(`osascript -e 'tell application id "${safeBundleId}" to activate'`);
+        const activateScript = `tell application id "${safeBundleId}" to activate`;
+        await execFileAsync('osascript', ['-e', activateScript]);
         await new Promise((resolve) => setTimeout(resolve, 80));
       }
       // Use AppleScript to send Command+V
-      await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
+      await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down']);
     } catch (error) {
       // If paste fails (e.g., no input field selected), text is still in clipboard.
       this.emit('paste-failed', 'No active input field found - copied to clipboard', this.lastTranscription);

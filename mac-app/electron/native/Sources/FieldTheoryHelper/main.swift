@@ -1616,17 +1616,38 @@ final class RecordingHelper {
             sendLog(level: "error", message: "Recording already in progress")
             return false
         }
-        
+
+        // Query the default input device from the HAL before creating the engine.
+        // If coreaudiod crashed or no mic is connected, fail fast with a clear message.
+        var propertyAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var deviceID: AudioDeviceID = kAudioObjectUnknown
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject),
+            &propertyAddress,
+            0, nil,
+            &size, &deviceID
+        )
+        if status != noErr || deviceID == kAudioObjectUnknown {
+            sendLog(level: "error", message: "No audio input device available (CoreAudio status=\(status), deviceID=\(deviceID)) — is a microphone connected?")
+            sendJSON(["type": "error", "message": "Failed to start recording"])
+            return false
+        }
+
         // Create temporary file path
         let tempDir = FileManager.default.temporaryDirectory
         let fileName = "littleone-recording-\(UUID().uuidString).wav"
         recordingURL = tempDir.appendingPathComponent(fileName)
-        
+
         guard let url = recordingURL else {
             sendLog(level: "error", message: "Failed to create recording URL")
             return false
         }
-        
+
         // Set up audio engine
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
