@@ -6,7 +6,7 @@ import type { BookmarkRecord } from './types.js';
 import { classifyBookmark, classifyCorpus, formatClassificationSummary } from './bookmark-classify.js';
 import type { ClassificationSummary } from './bookmark-classify.js';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface SearchResult {
   id: string;
@@ -57,13 +57,16 @@ function initSchema(db: Database): void {
     ingested_via TEXT,
     categories TEXT,
     primary_category TEXT,
-    github_urls TEXT
+    github_urls TEXT,
+    domains TEXT,
+    primary_domain TEXT
   )`);
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_author ON bookmarks(author_handle)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_posted ON bookmarks(posted_at)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_language ON bookmarks(language)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_category ON bookmarks(primary_category)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_domain ON bookmarks(primary_domain)`);
 
   db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
     text,
@@ -77,10 +80,21 @@ function initSchema(db: Database): void {
   db.run(`REPLACE INTO meta VALUES ('schema_version', '${SCHEMA_VERSION}')`);
 }
 
+function ensureMigrations(db: Database): void {
+  const rows = db.exec("SELECT value FROM meta WHERE key = 'schema_version'");
+  const version = rows.length ? Number(rows[0].values[0]?.[0] ?? 0) : 0;
+  if (version < 3) {
+    try { db.run('ALTER TABLE bookmarks ADD COLUMN domains TEXT'); } catch { /* already exists */ }
+    try { db.run('ALTER TABLE bookmarks ADD COLUMN primary_domain TEXT'); } catch { /* already exists */ }
+    db.run('CREATE INDEX IF NOT EXISTS idx_bookmarks_domain ON bookmarks(primary_domain)');
+    db.run("REPLACE INTO meta VALUES ('schema_version', '3')");
+  }
+}
+
 function insertRecord(db: Database, r: BookmarkRecord): void {
   const classification = classifyBookmark(r);
   db.run(
-    `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       r.id,
       r.tweetId,
@@ -110,6 +124,8 @@ function insertRecord(db: Database, r: BookmarkRecord): void {
       classification.categories.length ? classification.categories.join(',') : null,
       classification.primary,
       classification.githubUrls.length ? JSON.stringify(classification.githubUrls) : null,
+      null, // domains — populated by classify-domains pass
+      null, // primary_domain
     ]
   );
 }
@@ -146,6 +162,7 @@ export async function buildIndex(cwd = process.cwd()): Promise<{ dbPath: string;
 export async function searchBookmarks(options: SearchOptions, cwd = process.cwd()): Promise<SearchResult[]> {
   const dbPath = twitterBookmarksIndexPath(cwd);
   const db = await openDb(dbPath);
+  ensureMigrations(db);
   const limit = options.limit ?? 20;
 
   try {
@@ -324,6 +341,7 @@ export async function sampleByCategory(
 export async function getCategoryCounts(cwd = process.cwd()): Promise<Record<string, number>> {
   const dbPath = twitterBookmarksIndexPath(cwd);
   const db = await openDb(dbPath);
+  ensureMigrations(db);
   try {
     const rows = db.exec(
       `SELECT primary_category, COUNT(*) as c FROM bookmarks
@@ -335,6 +353,58 @@ export async function getCategoryCounts(cwd = process.cwd()): Promise<Record<str
       counts[row[0] as string] = row[1] as number;
     }
     return counts;
+  } finally {
+    db.close();
+  }
+}
+
+export async function getDomainCounts(cwd = process.cwd()): Promise<Record<string, number>> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+  try {
+    const rows = db.exec(
+      `SELECT primary_domain, COUNT(*) as c FROM bookmarks
+       WHERE primary_domain IS NOT NULL
+       GROUP BY primary_domain ORDER BY c DESC`
+    );
+    const counts: Record<string, number> = {};
+    for (const row of rows[0]?.values ?? []) {
+      counts[row[0] as string] = row[1] as number;
+    }
+    return counts;
+  } finally {
+    db.close();
+  }
+}
+
+export async function sampleByDomain(
+  domain: string,
+  limit: number,
+  cwd = process.cwd()
+): Promise<CategorySample[]> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+  try {
+    const rows = db.exec(
+      `SELECT id, url, text, author_handle, categories, github_urls, links_json
+       FROM bookmarks
+       WHERE domains LIKE ?
+       ORDER BY RANDOM()
+       LIMIT ?`,
+      [`%${domain}%`, limit]
+    );
+    if (!rows.length) return [];
+    return rows[0].values.map((r) => ({
+      id: r[0] as string,
+      url: r[1] as string,
+      text: r[2] as string,
+      authorHandle: (r[3] as string) ?? undefined,
+      categories: (r[4] as string) ?? '',
+      githubUrls: (r[5] as string) ?? undefined,
+      links: (r[6] as string) ?? undefined,
+    }));
   } finally {
     db.close();
   }

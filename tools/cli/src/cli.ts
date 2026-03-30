@@ -10,9 +10,9 @@ import { getBookmarkStatusView, buildBookmarksDatasetManifest, enableBookmarks, 
 import { loadTwitterOAuthToken, runTwitterOAuthFlow } from './xauth.js';
 import { syncBookmarksGraphQL, formatSyncResult } from './graphql-bookmarks.js';
 import { fetchBookmarkMediaBatch } from './bookmark-media.js';
-import { buildIndex, searchBookmarks, formatSearchResults, getStats, classifyAndRebuild, getCategoryCounts, sampleByCategory } from './bookmarks-db.js';
+import { buildIndex, searchBookmarks, formatSearchResults, getStats, classifyAndRebuild, getCategoryCounts, sampleByCategory, getDomainCounts } from './bookmarks-db.js';
 import { formatClassificationSummary } from './bookmark-classify.js';
-import { classifyWithLlm } from './bookmark-classify-llm.js';
+import { classifyWithLlm, classifyDomainsWithLlm } from './bookmark-classify-llm.js';
 import { renderViz } from './bookmarks-viz.js';
 
 export function buildCli() {
@@ -327,6 +327,38 @@ export function buildCli() {
       for (const [cat, count] of Object.entries(counts).sort((a, b) => b[1] - a[1])) {
         const pct = ((count / total) * 100).toFixed(1);
         console.log(`  ${cat.padEnd(14)} ${String(count).padStart(5)}  (${pct}%)`);
+      }
+    });
+
+  bookmarks
+    .command('classify-domains')
+    .description('Classify bookmarks by subject domain (ai, finance, devops, etc.) using LLM')
+    .option('--all', 'Re-classify all bookmarks, not just ones missing domains')
+    .action(async (options) => {
+      process.stderr.write('Classifying bookmark domains with LLM...\n');
+      const result = await classifyDomainsWithLlm(process.cwd(), {
+        all: options.all ?? false,
+        onBatch: (done, total) => {
+          process.stderr.write(`  Processing ${done}/${total} bookmarks...\n`);
+        },
+      });
+      console.log(`Engine: ${result.engine}`);
+      console.log(`Classified ${result.classified}/${result.totalUnclassified} bookmarks (${result.batches} batches, ${result.failed} failed)`);
+    });
+
+  bookmarks
+    .command('domains')
+    .description('Show bookmark domain distribution')
+    .action(async () => {
+      const counts = await getDomainCounts();
+      if (Object.keys(counts).length === 0) {
+        console.log('No domains found. Run: ft bookmarks classify-domains');
+        return;
+      }
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      for (const [dom, count] of Object.entries(counts).sort((a, b) => b[1] - a[1])) {
+        const pct = ((count / total) * 100).toFixed(1);
+        console.log(`  ${dom.padEnd(20)} ${String(count).padStart(5)}  (${pct}%)`);
       }
     });
 

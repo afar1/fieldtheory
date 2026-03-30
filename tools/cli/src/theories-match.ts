@@ -18,6 +18,7 @@ interface SelectedBookmark {
   categories: string;
   github_urls?: string;
   links?: string;
+  domains?: string;
 }
 
 type AnalysisType = 'scan' | 'adopt' | 'pattern' | 'explore';
@@ -41,7 +42,26 @@ function queryBookmarks(db: any, sql: string, params: any[] = []): SelectedBookm
     categories: (r[4] as string) ?? '',
     github_urls: (r[5] as string) ?? undefined,
     links: (r[6] as string) ?? undefined,
+    domains: (r[7] as string) ?? undefined,
   }));
+}
+
+function inferRepoDomains(repo: RepoInfo): string[] {
+  const text = `${repo.name} ${repo.description} ${repo.lastMessage}`.toLowerCase();
+  const DOMAIN_KEYWORDS: Record<string, string[]> = {
+    'ai': ['ai', 'machine learning', 'llm', 'neural', 'model', 'transformer', 'gpt', 'claude', 'openai', 'anthropic', 'whisper', 'transcri'],
+    'web-dev': ['react', 'vue', 'next.js', 'frontend', 'css', 'html', 'webpack', 'vite', 'electron'],
+    'devops': ['docker', 'kubernetes', 'ci/cd', 'deploy', 'terraform', 'helm'],
+    'crypto': ['blockchain', 'ethereum', 'solana', 'defi', 'web3'],
+    'finance': ['trading', 'market', 'stock', 'fintech', 'payment', 'stripe'],
+    'audio': ['audio', 'sound', 'microphone', 'recording', 'whisper', 'transcri'],
+    'productivity': ['clipboard', 'automation', 'workflow', 'hotkey'],
+  };
+  const domains: string[] = [];
+  for (const [domain, keywords] of Object.entries(DOMAIN_KEYWORDS)) {
+    if (keywords.some(kw => text.includes(kw))) domains.push(domain);
+  }
+  return domains;
 }
 
 async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob[]> {
@@ -49,7 +69,7 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
   const db = await openDb(dbPath);
   const jobs: AnalysisJob[] = [];
 
-  const SELECT = `SELECT id, url, text, author_handle, categories, github_urls, links_json FROM bookmarks`;
+  const SELECT = `SELECT id, url, text, author_handle, categories, github_urls, links_json, domains FROM bookmarks`;
 
   try {
     const pick = (limit = repos.length) => repos[Math.floor(Math.random() * Math.min(repos.length, limit))];
@@ -68,29 +88,41 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
       });
     }
 
+    // Domain-aware query: prefer bookmarks matching the repo's domains, fallback to unfiltered
+    const domainQuery = (baseWhere: string, repo: RepoInfo, limit: number): SelectedBookmark[] => {
+      const domains = inferRepoDomains(repo);
+      if (domains.length > 0) {
+        const domainWhere = domains.map(() => `domains LIKE ?`).join(' OR ');
+        const filtered = queryBookmarks(db,
+          `${SELECT} WHERE ${baseWhere} AND (${domainWhere}) ORDER BY RANDOM() LIMIT ${limit}`,
+          domains.map(d => `%${d}%`)
+        );
+        if (filtered.length >= 5) return filtered;
+      }
+      return queryBookmarks(db, `${SELECT} WHERE ${baseWhere} ORDER BY RANDOM() LIMIT ${limit}`);
+    };
+
     // 2. ADOPT: Tool bookmarks with GitHub URLs → repos that could use them
-    const toolBookmarks = queryBookmarks(db,
-      `${SELECT} WHERE categories LIKE '%tool%' AND github_urls IS NOT NULL ORDER BY RANDOM() LIMIT 20`
-    );
+    const adoptRepo = pick(repos.length);
+    const toolBookmarks = domainQuery("categories LIKE '%tool%' AND github_urls IS NOT NULL", adoptRepo, 20);
     if (toolBookmarks.length > 0 && repos.length > 0) {
       jobs.push({
         type: 'adopt',
         title: 'Tool & library adoption',
-        repo: pick(repos.length),
+        repo: adoptRepo,
         bookmarks: toolBookmarks,
         prompt_hint: `These bookmarks reference open-source tools and repositories. For each one, check: (1) is the developer already using this? (2) does it solve a problem this repo currently has? (3) what would adopting it look like — which files change, what's the migration path? Skip anything that doesn't clearly apply.`,
       });
     }
 
     // 3. PATTERN: Technique bookmarks → active repos
-    const techniqueBookmarks = queryBookmarks(db,
-      `${SELECT} WHERE categories LIKE '%technique%' ORDER BY RANDOM() LIMIT 20`
-    );
+    const patternRepo = pick(repos.length);
+    const techniqueBookmarks = domainQuery("categories LIKE '%technique%'", patternRepo, 20);
     if (techniqueBookmarks.length > 0 && repos.length > 0) {
       jobs.push({
         type: 'pattern',
         title: 'Pattern & technique transfer',
-        repo: pick(repos.length),
+        repo: patternRepo,
         bookmarks: techniqueBookmarks,
         prompt_hint: `These bookmarks describe techniques, architecture patterns, or "how I built X" approaches. Read the repo's code and identify where any of these patterns could concretely improve it. Name the specific file and function. If the repo already does something similar, note that too — sometimes the bookmark version is better, sometimes the repo's approach is fine.`,
       });
@@ -124,12 +156,18 @@ const args = process.argv.slice(2);
 const reposJsonPath = args[0];
 const budgetIdx = args.indexOf('--budget');
 const budget = budgetIdx >= 0 ? Number(args[budgetIdx + 1]) : 4;
+const typeIdx = args.indexOf('--type');
+const typeFilter = typeIdx >= 0 ? args[typeIdx + 1] as AnalysisType : undefined;
 
 if (!reposJsonPath) {
-  console.error('Usage: theories-match.ts <repos.json> [--budget <n>]');
+  console.error('Usage: theories-match.ts <repos.json> [--budget <n>] [--type scan|adopt|pattern|explore]');
   process.exit(1);
 }
 
 const repos: RepoInfo[] = JSON.parse(readFileSync(reposJsonPath, 'utf-8'));
-const jobs = await buildJobs(repos, budget);
+let jobs = await buildJobs(repos, budget + 3);
+if (typeFilter) {
+  jobs = jobs.filter(j => j.type === typeFilter);
+}
+jobs = jobs.slice(0, budget);
 console.log(JSON.stringify(jobs, null, 2));
