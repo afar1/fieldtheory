@@ -92,7 +92,12 @@ function ensureMigrations(db: Database): void {
 }
 
 function insertRecord(db: Database, r: BookmarkRecord): void {
-  const classification = classifyBookmark(r);
+  // Extract GitHub URLs (kept inline — no LLM needed for URL parsing)
+  const text = r.text ?? '';
+  const githubMatches = text.match(/github\.com\/[\w.-]+\/[\w.-]+/gi) ?? [];
+  const githubFromLinks = (r.links ?? []).filter((l) => /github\.com/i.test(l));
+  const githubUrls = [...new Set([...githubMatches.map((m) => `https://${m}`), ...githubFromLinks])];
+
   db.run(
     `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
@@ -121,9 +126,9 @@ function insertRecord(db: Database, r: BookmarkRecord): void {
       r.links?.length ? JSON.stringify(r.links) : null,
       r.tags?.length ? JSON.stringify(r.tags) : null,
       r.ingestedVia ?? null,
-      classification.categories.length ? classification.categories.join(',') : null,
-      classification.primary,
-      classification.githubUrls.length ? JSON.stringify(classification.githubUrls) : null,
+      null, // categories — populated by classify pass
+      'unclassified', // primary_category
+      githubUrls.length ? JSON.stringify(githubUrls) : null,
       null, // domains — populated by classify-domains pass
       null, // primary_domain
     ]
@@ -289,12 +294,27 @@ export async function classifyAndRebuild(cwd = process.cwd()): Promise<{
   summary: ClassificationSummary;
 }> {
   const cachePath = twitterBookmarksCachePath(cwd);
+  const dbPath = twitterBookmarksIndexPath(cwd);
   const records = await readJsonLines<BookmarkRecord>(cachePath);
-  const { summary } = classifyCorpus(records);
+  const { results, summary } = classifyCorpus(records);
 
-  // Rebuild includes classification now (insertRecord calls classifyBookmark)
-  const result = await buildIndex(cwd);
-  return { ...result, summary };
+  // Rebuild index then apply regex classifications
+  const buildResult = await buildIndex(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+  try {
+    const stmt = db.prepare(`UPDATE bookmarks SET categories = ?, primary_category = ?, github_urls = ? WHERE id = ?`);
+    for (const [id, r] of results) {
+      if (r.categories.length > 0) {
+        stmt.run([r.categories.join(','), r.primary, r.githubUrls.length ? JSON.stringify(r.githubUrls) : null, id]);
+      }
+    }
+    stmt.free();
+    saveDb(db, dbPath);
+  } finally {
+    db.close();
+  }
+  return { ...buildResult, summary };
 }
 
 export interface CategorySample {

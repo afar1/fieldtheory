@@ -263,9 +263,10 @@ except: print(-1)
     fi
 fi
 
-# Ensure index has classifications
-log "Ensuring bookmark index with classifications..."
-(cd "$FT_ROOT" && npx tsx src/cli.ts bookmarks classify 2>/dev/null) || warn "Classification failed"
+# Ensure index has classifications (LLM for categories, then domains)
+log "Classifying new bookmarks..."
+(cd "$FT_ROOT" && npx tsx src/cli.ts bookmarks classify 2>/dev/null) || warn "Category classification failed"
+(cd "$FT_ROOT" && npx tsx src/cli.ts bookmarks classify-domains 2>/dev/null) || warn "Domain classification failed"
 
 # ============================================================================
 # PHASE 2: Discover active repos

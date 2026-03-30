@@ -275,10 +275,15 @@ export function buildCli() {
 
   bookmarks
     .command('classify')
-    .description('Classify bookmarks by type (tool, security, technique, etc.) and rebuild index')
-    .option('--llm', 'Use Claude/Codex to classify bookmarks that regex missed (requires Max/Pro login)')
+    .description('Classify bookmarks by type using Claude/Codex (requires Max/Pro login)')
+    .option('--fast', 'Use regex-only classification (no LLM, <1s but misses ~85%)')
     .action(async (options) => {
-      if (options.llm) {
+      if (options.fast) {
+        process.stderr.write('Classifying bookmarks with regex and rebuilding index...\n');
+        const result = await classifyAndRebuild();
+        console.log(`Indexed ${result.recordCount} bookmarks → ${result.dbPath}`);
+        console.log(formatClassificationSummary(result.summary));
+      } else {
         process.stderr.write('Classifying unclassified bookmarks with LLM...\n');
         const result = await classifyWithLlm(process.cwd(), {
           onBatch: (done, total) => {
@@ -287,11 +292,6 @@ export function buildCli() {
         });
         console.log(`Engine: ${result.engine}`);
         console.log(`Classified ${result.classified}/${result.totalUnclassified} bookmarks (${result.batches} batches, ${result.failed} failed)`);
-      } else {
-        process.stderr.write('Classifying bookmarks and rebuilding index...\n');
-        const result = await classifyAndRebuild();
-        console.log(`Indexed ${result.recordCount} bookmarks → ${result.dbPath}`);
-        console.log(formatClassificationSummary(result.summary));
       }
     });
 
