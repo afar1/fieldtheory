@@ -13,6 +13,7 @@ import { fetchBookmarkMediaBatch } from './bookmark-media.js';
 import { buildIndex, searchBookmarks, formatSearchResults, getStats, classifyAndRebuild, getCategoryCounts, sampleByCategory, getDomainCounts } from './bookmarks-db.js';
 import { formatClassificationSummary } from './bookmark-classify.js';
 import { classifyWithLlm, classifyDomainsWithLlm } from './bookmark-classify-llm.js';
+import { loadTheoriesConfig, saveTheoriesConfig, setTheoriesConfigValue, theoriesConfigPath, DEFAULTS as THEORIES_DEFAULTS } from './theories-config.js';
 import { renderViz } from './bookmarks-viz.js';
 
 export function buildCli() {
@@ -406,6 +407,37 @@ export function buildCli() {
     .command('path')
     .description('Show bookmark cache file path')
     .action(async () => { console.log(twitterBookmarksCachePath()); });
+
+  // ── theories commands ────────────────────────────────────────────────
+  const theories = program.command('theories').description('Configure theories overnight analysis');
+
+  theories
+    .command('config')
+    .description('Show or edit theories configuration')
+    .option('--show', 'Display current configuration')
+    .option('--set <key=value>', 'Set a config value (e.g. runtime.email=me@x.com)')
+    .option('--reset', 'Reset to defaults')
+    .action(async (options) => {
+      if (options.set) {
+        const eqIdx = options.set.indexOf('=');
+        if (eqIdx < 0) { console.error('Usage: ft theories config --set key=value'); process.exitCode = 1; return; }
+        const key = options.set.slice(0, eqIdx);
+        const val = options.set.slice(eqIdx + 1);
+        const config = await setTheoriesConfigValue(key, val);
+        console.log(`Set ${key}`);
+        console.log(JSON.stringify(config, null, 2));
+        return;
+      }
+      if (options.reset) {
+        const configPath = await saveTheoriesConfig(structuredClone(THEORIES_DEFAULTS));
+        console.log(`Reset to defaults: ${configPath}`);
+        return;
+      }
+      // Default: show
+      const config = await loadTheoriesConfig();
+      console.log(`Config: ${theoriesConfigPath()}`);
+      console.log(JSON.stringify(config, null, 2));
+    });
 
   return program;
 }

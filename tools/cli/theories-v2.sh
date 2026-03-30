@@ -75,6 +75,26 @@ USAGE
     esac
 done
 
+# ── Read config file ──────────────────────────────────────────────────────
+THEORIES_CONFIG="$HOME/.fieldtheory/theories.json"
+CUSTOM_INSTRUCTIONS=""
+INCLUDE_TWEET_URLS="true"
+SYSTEM_PROMPT_APPEND=""
+
+if [[ -f "$THEORIES_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+    [[ -z "$EMAIL_TO" ]] && EMAIL_TO=$(jq -r '.runtime.email // ""' "$THEORIES_CONFIG")
+    [[ "$ENGINE" == "auto" && -z "${FT_THEORIES_ENGINE:-}" ]] && \
+        ENGINE=$(jq -r '.runtime.engine // "auto"' "$THEORIES_CONFIG")
+    [[ "$TURN_COUNT" -eq 4 ]] && \
+        TURN_COUNT=$(jq -r '.runtime.turns // 4' "$THEORIES_CONFIG")
+    [[ "$BUDGET" -eq 4 ]] && \
+        BUDGET=$(jq -r '.runtime.budget // 4' "$THEORIES_CONFIG")
+
+    CUSTOM_INSTRUCTIONS=$(jq -r '(.prompts.custom_instructions // []) | join("\n- ")' "$THEORIES_CONFIG")
+    INCLUDE_TWEET_URLS=$(jq -r '.prompts.include_tweet_urls // true' "$THEORIES_CONFIG")
+    SYSTEM_PROMPT_APPEND=$(jq -r '.prompts.system_prompt_append // ""' "$THEORIES_CONFIG")
+fi
+
 # ── Preflight ─────────────────────────────────────────────────────────────
 preflight_check() {
     local missing=()
@@ -367,6 +387,11 @@ Rules:
 - Don't narrate your process. Just share what you found.
 - IMPORTANT: You are on the main branch. Do NOT commit to main. If you want to make code changes, create a feature branch first (git checkout -b theories/<descriptive-name>) and commit there."
 
+if [[ -n "$SYSTEM_PROMPT_APPEND" ]]; then
+    SYSTEM_PROMPT_ANALYST="${SYSTEM_PROMPT_ANALYST}"$'\n\n'"${SYSTEM_PROMPT_APPEND}"
+    SYSTEM_PROMPT_EXPLORER_V2="${SYSTEM_PROMPT_EXPLORER_V2}"$'\n\n'"${SYSTEM_PROMPT_APPEND}"
+fi
+
 FINDINGS=()
 TRANSCRIPT_PATHS=()
 
@@ -474,6 +499,21 @@ ${response}"
     done
 
     # ── Synthesize ────────────────────────────────────────────────────────
+    # Build finding template from config
+    local bookmark_line
+    if [[ "$INCLUDE_TWEET_URLS" == "true" ]]; then
+        bookmark_line="BOOKMARKS: [The 1-3 bookmark URLs that led to this finding]"
+    else
+        bookmark_line="BOOKMARKS: [The 1-3 bookmark topics that led to this finding]"
+    fi
+
+    local custom_rules=""
+    if [[ -n "$CUSTOM_INSTRUCTIONS" ]]; then
+        custom_rules="
+Additional instructions from the user:
+- ${CUSTOM_INSTRUCTIONS}"
+    fi
+
     local synthesis_prompt="You just did an analysis of a developer's bookmarks against their ${repo_name} codebase. Here's the full session:
 
 $(trim_history "$history")
@@ -484,7 +524,7 @@ Now write the summary for their morning email. Include ALL findings, not just th
 
 **[Plain English: one sentence explaining what this means and why someone should care, written for a human who just woke up]**
 
-BOOKMARKS: [The 1-3 bookmark URLs that led to this finding]
+${bookmark_line}
 
 WHAT WE FOUND: [2-4 sentences. Be specific — name the file, the dependency, the line. What's the actual situation?]
 
@@ -501,7 +541,7 @@ Rules:
 - The bold sentence at the top of each finding is the most important line — it should make sense to someone scanning their inbox at 7am.
 - No self-congratulation. No 'This is a fascinating discovery'. Just state what you found.
 - If nothing useful was found, write: **Nothing actionable in this batch.** and stop.
-- Write like a sharp colleague leaving a note, not like an AI generating a report."
+- Write like a sharp colleague leaving a note, not like an AI generating a report.${custom_rules}"
 
     local finding
     finding=$(run_engine "$synthesis_prompt") || finding="FINDING: Synthesis failed — see full transcript at ${transcript_path}"
