@@ -4141,6 +4141,11 @@ function setupClipboardIPCHandlers(): void {
 
   // Open external URL in default browser (for Stripe checkout, etc).
   ipcMain.handle('shell:openExternal', async (_event, url: string) => {
+    const allowed = /^https?:|^mailto:|^x-apple\.systempreferences:/i;
+    if (!allowed.test(url)) {
+      log.warn('shell:openExternal blocked non-http URL: %s', url);
+      return;
+    }
     await shell.openExternal(url);
   });
 

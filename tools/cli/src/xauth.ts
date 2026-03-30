@@ -80,6 +80,9 @@ export async function saveTwitterOAuthToken(token: XOAuthTokenSet, cwd = process
   await ensureDir(sourcesDir(cwd));
   const tokenPath = twitterOauthTokenPath(cwd);
   await writeJson(tokenPath, token);
+  // Restrict permissions — OAuth tokens should only be readable by the owner
+  const { chmod } = await import('node:fs/promises');
+  await chmod(tokenPath, 0o600);
   return tokenPath;
 }
 

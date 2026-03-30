@@ -3,8 +3,10 @@ import { openDb, saveDb } from './db.js';
 import { readJsonLines } from './fs.js';
 import { twitterBookmarksCachePath, twitterBookmarksIndexPath } from './paths.js';
 import type { BookmarkRecord } from './types.js';
+import { classifyBookmark, classifyCorpus, formatClassificationSummary } from './bookmark-classify.js';
+import type { ClassificationSummary } from './bookmark-classify.js';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export interface SearchResult {
   id: string;
@@ -52,12 +54,16 @@ function initSchema(db: Database): void {
     link_count INTEGER DEFAULT 0,
     links_json TEXT,
     tags_json TEXT,
-    ingested_via TEXT
+    ingested_via TEXT,
+    categories TEXT,
+    primary_category TEXT,
+    github_urls TEXT
   )`);
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_author ON bookmarks(author_handle)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_posted ON bookmarks(posted_at)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_language ON bookmarks(language)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_bookmarks_category ON bookmarks(primary_category)`);
 
   db.run(`CREATE VIRTUAL TABLE IF NOT EXISTS bookmarks_fts USING fts5(
     text,
@@ -72,8 +78,9 @@ function initSchema(db: Database): void {
 }
 
 function insertRecord(db: Database, r: BookmarkRecord): void {
+  const classification = classifyBookmark(r);
   db.run(
-    `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    `INSERT OR REPLACE INTO bookmarks VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     [
       r.id,
       r.tweetId,
@@ -100,6 +107,9 @@ function insertRecord(db: Database, r: BookmarkRecord): void {
       r.links?.length ? JSON.stringify(r.links) : null,
       r.tags?.length ? JSON.stringify(r.tags) : null,
       r.ingestedVia ?? null,
+      classification.categories.length ? classification.categories.join(',') : null,
+      classification.primary,
+      classification.githubUrls.length ? JSON.stringify(classification.githubUrls) : null,
     ]
   );
 }
@@ -249,6 +259,82 @@ export async function getStats(cwd = process.cwd()): Promise<{
       topAuthors,
       languageBreakdown,
     };
+  } finally {
+    db.close();
+  }
+}
+
+// ── Classification ───────────────────────────────────────────────────────
+
+export async function classifyAndRebuild(cwd = process.cwd()): Promise<{
+  dbPath: string;
+  recordCount: number;
+  summary: ClassificationSummary;
+}> {
+  const cachePath = twitterBookmarksCachePath(cwd);
+  const records = await readJsonLines<BookmarkRecord>(cachePath);
+  const { summary } = classifyCorpus(records);
+
+  // Rebuild includes classification now (insertRecord calls classifyBookmark)
+  const result = await buildIndex(cwd);
+  return { ...result, summary };
+}
+
+export interface CategorySample {
+  id: string;
+  url: string;
+  text: string;
+  authorHandle?: string;
+  categories: string;
+  githubUrls?: string;
+  links?: string;
+}
+
+export async function sampleByCategory(
+  category: string,
+  limit: number,
+  cwd = process.cwd()
+): Promise<CategorySample[]> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  try {
+    const rows = db.exec(
+      `SELECT id, url, text, author_handle, categories, github_urls, links_json
+       FROM bookmarks
+       WHERE categories LIKE ?
+       ORDER BY RANDOM()
+       LIMIT ?`,
+      [`%${category}%`, limit]
+    );
+    if (!rows.length) return [];
+    return rows[0].values.map((r) => ({
+      id: r[0] as string,
+      url: r[1] as string,
+      text: r[2] as string,
+      authorHandle: (r[3] as string) ?? undefined,
+      categories: (r[4] as string) ?? '',
+      githubUrls: (r[5] as string) ?? undefined,
+      links: (r[6] as string) ?? undefined,
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+export async function getCategoryCounts(cwd = process.cwd()): Promise<Record<string, number>> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  try {
+    const rows = db.exec(
+      `SELECT primary_category, COUNT(*) as c FROM bookmarks
+       WHERE primary_category IS NOT NULL
+       GROUP BY primary_category ORDER BY c DESC`
+    );
+    const counts: Record<string, number> = {};
+    for (const row of rows[0]?.values ?? []) {
+      counts[row[0] as string] = row[1] as number;
+    }
+    return counts;
   } finally {
     db.close();
   }

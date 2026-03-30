@@ -42,7 +42,10 @@ export default async function handler(req, res) {
     .eq('is_public', true);
 
   const showRandom = count > 10;
-  const html = await marked(reading.content);
+  // Escape raw HTML in markdown to prevent stored XSS on public pages.
+  // marked v15 renders raw HTML by default — override the html renderer to escape it.
+  const renderer = { html: ({ text }) => text.replace(/</g, '&lt;').replace(/>/g, '&gt;') };
+  const html = await marked(reading.content, { renderer });
   const shareUrl = `https://librarian.fieldtheory.dev/${slug}`;
 
   // Format author as "First L."

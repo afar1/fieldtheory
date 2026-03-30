@@ -10,7 +10,8 @@ import { getBookmarkStatusView, buildBookmarksDatasetManifest, enableBookmarks, 
 import { loadTwitterOAuthToken, runTwitterOAuthFlow } from './xauth.js';
 import { syncBookmarksGraphQL, formatSyncResult } from './graphql-bookmarks.js';
 import { fetchBookmarkMediaBatch } from './bookmark-media.js';
-import { buildIndex, searchBookmarks, formatSearchResults, getStats } from './bookmarks-db.js';
+import { buildIndex, searchBookmarks, formatSearchResults, getStats, classifyAndRebuild, getCategoryCounts, sampleByCategory } from './bookmarks-db.js';
+import { formatClassificationSummary } from './bookmark-classify.js';
 import { renderViz } from './bookmarks-viz.js';
 
 export function buildCli() {
@@ -268,6 +269,52 @@ export function buildCli() {
       process.stderr.write('Building search index...\n');
       const result = await buildIndex();
       console.log(`Indexed ${result.recordCount} bookmarks → ${result.dbPath}`);
+    });
+
+  bookmarks
+    .command('classify')
+    .description('Classify bookmarks by type (tool, security, technique, etc.) and rebuild index')
+    .action(async () => {
+      process.stderr.write('Classifying bookmarks and rebuilding index...\n');
+      const result = await classifyAndRebuild();
+      console.log(`Indexed ${result.recordCount} bookmarks → ${result.dbPath}`);
+      console.log(formatClassificationSummary(result.summary));
+    });
+
+  bookmarks
+    .command('sample')
+    .description('Sample bookmarks by category (for debugging/previewing classification)')
+    .argument('<category>', 'Category: tool, security, technique, launch, research, opinion, commerce')
+    .option('--limit <n>', 'Max results', (v) => Number(v), 10)
+    .action(async (category, options) => {
+      const results = await sampleByCategory(category, Number(options.limit) || 10);
+      if (results.length === 0) {
+        console.log(`No bookmarks found with category "${category}". Run: ft bookmarks classify`);
+        return;
+      }
+      for (const r of results) {
+        const text = r.text.length > 120 ? r.text.slice(0, 120) + '...' : r.text;
+        console.log(`[@${r.authorHandle ?? '?'}] ${text}`);
+        console.log(`  ${r.url}  [${r.categories}]`);
+        if (r.githubUrls) console.log(`  github: ${r.githubUrls}`);
+        console.log();
+      }
+    });
+
+  bookmarks
+    .command('categories')
+    .description('Show bookmark category distribution')
+    .action(async () => {
+      const counts = await getCategoryCounts();
+      if (Object.keys(counts).length === 0) {
+        console.log('No categories found. Run: ft bookmarks classify');
+        return;
+      }
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      for (const [cat, count] of Object.entries(counts).sort((a, b) => b[1] - a[1])) {
+        const pct = ((count / total) * 100).toFixed(1);
+        console.log(`  ${cat.padEnd(14)} ${String(count).padStart(5)}  (${pct}%)`);
+      }
     });
 
   bookmarks

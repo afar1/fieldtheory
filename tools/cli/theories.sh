@@ -317,7 +317,8 @@ discover_active_repos() {
 
     local results_file="$TMPDIR_THEORIES/repos.jsonl"
     : > "$results_file"
-    local -A seen=()
+    local seen_file="$TMPDIR_THEORIES/seen_repos"
+    : > "$seen_file"
 
     for search_dir in "${search_dirs[@]}"; do
         [[ -d "$search_dir" ]] || continue
@@ -325,8 +326,8 @@ discover_active_repos() {
             [[ -d "$dir/.git" ]] || continue
             local repo_name
             repo_name=$(basename "$dir")
-            [[ -n "${seen[$repo_name]+x}" ]] && continue
-            seen[$repo_name]=1
+            grep -qx "$repo_name" "$seen_file" && continue
+            echo "$repo_name" >> "$seen_file"
 
             local commit_count
             commit_count=$(cd "$dir" && git log --oneline --after="$cutoff_date" --all 2>/dev/null | wc -l | tr -d ' ')
@@ -593,7 +594,7 @@ run_theory_session() {
     cat > "$transcript_path" <<HEADER
 # Theory: ${t_type} — ${t_repo}
 **Date**: $(date "+%B %d, %Y")
-**Type**: ${t_type^} (Steven Johnson framework)
+**Type**: $(echo "$t_type" | awk '{print toupper(substr($0,1,1)) substr($0,2)}') (Steven Johnson framework)
 **Repo**: ${t_repo}
 **Initial Hunch**: ${t_hunch}
 **Bookmarks**: ${t_bookmarks_urls}
