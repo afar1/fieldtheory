@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { spawn, ChildProcessWithoutNullStreams } from 'child_process';
+import { spawn, exec, ChildProcessWithoutNullStreams } from 'child_process';
 import path from 'path';
 import { app } from 'electron';
 import {
@@ -353,15 +353,27 @@ export class NativeHelper extends EventEmitter {
       // All retries exhausted — if this looks like a broken audio engine
       // (inputNode null), restart the helper process and try once more.
       if (lastError && this.isAudioEngineCorruptionError(lastError)) {
+        // Level 1: restart the helper process (fresh AVAudioEngine)
         log.warn('[AudioRecovery] All retries failed with audio engine error — restarting helper');
         try {
           await this.restart('startRecording: audio engine inputNode null after all retries');
           await this.startRecordingOnce();
           log.info('[AudioRecovery] Recording started successfully after helper restart');
           return;
-        } catch (restartError) {
-          log.error('[AudioRecovery] Recording still failed after helper restart:', restartError);
-          throw restartError instanceof Error ? restartError : new Error(String(restartError));
+        } catch {
+          log.warn('[AudioRecovery] Helper restart insufficient — escalating to coreaudiod restart');
+        }
+
+        // Level 2: restart coreaudiod (launchd auto-restarts it)
+        try {
+          await this.restartCoreAudioDaemon();
+          await this.restart('startRecording: post-coreaudiod restart');
+          await this.startRecordingOnce();
+          log.info('[AudioRecovery] Recording started successfully after coreaudiod restart');
+          return;
+        } catch (daemonError) {
+          log.error('[AudioRecovery] Recording still failed after coreaudiod restart:', daemonError);
+          throw daemonError instanceof Error ? daemonError : new Error(String(daemonError));
         }
       }
 
@@ -1150,7 +1162,26 @@ export class NativeHelper extends EventEmitter {
   }
 
   private isAudioEngineCorruptionError(error: Error): boolean {
+    // Match engine-level failures but NOT "No audio input device" which means
+    // hardware is genuinely missing — restarts won't help there.
+    if (/No audio input device/i.test(error.message)) return false;
     return /inputNode|outputNode|nullptr|AVAudioEngine|Failed to start recording/i.test(error.message);
+  }
+
+  private restartCoreAudioDaemon(): Promise<void> {
+    return new Promise((resolve) => {
+      log.warn('[AudioRecovery] Restarting coreaudiod — launchd will auto-restart it');
+      exec('killall coreaudiod', (error) => {
+        if (error) {
+          log.warn('[AudioRecovery] killall coreaudiod failed (may need elevated privileges): %s', error.message);
+          // Not fatal — the helper restart alone might still work on next attempt
+        } else {
+          log.info('[AudioRecovery] coreaudiod killed, waiting for launchd restart');
+        }
+        // Wait for launchd to restart the daemon and devices to re-enumerate
+        setTimeout(resolve, 1500);
+      });
+    });
   }
 
   private delay(ms: number): Promise<void> {
