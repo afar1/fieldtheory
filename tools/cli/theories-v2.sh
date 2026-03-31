@@ -347,7 +347,9 @@ echo "$ACTIVE_REPOS" > "$REPOS_FILE"
 # ============================================================================
 log "Phase 3: Building analysis jobs..."
 
-JOBS=$(cd "$FT_ROOT" && npx tsx src/theories-match.ts "$REPOS_FILE" --budget "$BUDGET" 2>/dev/null)
+MATCH_ARGS=("$REPOS_FILE" --budget "$BUDGET")
+[[ -n "$SINGLE_TYPE" ]] && MATCH_ARGS+=(--type "$SINGLE_TYPE")
+JOBS=$(cd "$FT_ROOT" && npx tsx src/theories-match.ts "${MATCH_ARGS[@]}" 2>/dev/null)
 JOB_COUNT=$(echo "$JOBS" | jq 'length')
 log "Created $JOB_COUNT analysis jobs"
 
@@ -513,9 +515,9 @@ ${response}"
     # Build finding template from config
     local bookmark_line
     if [[ "$INCLUDE_TWEET_URLS" == "true" ]]; then
-        bookmark_line="BOOKMARKS: [The 1-3 bookmark URLs that led to this finding]"
+        bookmark_line="BOOKMARKS: @author (short context) ([post](https://x.com/...)) — list 1-3 bookmarks that led to this finding. Always include the actual tweet URL as a markdown link labeled 'post' so the reader can click through."
     else
-        bookmark_line="BOOKMARKS: [The 1-3 bookmark topics that led to this finding]"
+        bookmark_line="BOOKMARKS: @author (short context) — list 1-3 bookmarks that led to this finding by author and topic."
     fi
 
     local custom_rules=""
@@ -597,6 +599,12 @@ done
 # ============================================================================
 # PHASE 5: Build digest
 # ============================================================================
+if [[ ${#FINDINGS[@]} -eq 0 ]]; then
+    warn "No findings produced — skipping digest"
+    log "Run finished at $(date)"
+    exit 0
+fi
+
 log "Phase 5: Building digest..."
 
 DIGEST_PATH="$DIGEST_DIR/${DATE_STAMP}-theories.md"
@@ -662,9 +670,11 @@ if [[ ${#FINDINGS[@]} -gt 0 ]]; then
             [[ "$r" == "$s_repo" ]] && already=true
         done
         $already || local_repos+=("$s_repo")
-        # Extract bold lines (the plain-English summaries), skip FT-NNN headers
-        topic=$(echo "$s_finding" | sed -n 's/^\*\*\([^*]*\)\*\*.*/\1/p' | head -1 | cut -c1-60)
-        [[ -z "$topic" ]] && topic=$(echo "$s_finding" | grep -v '### FT-' | head -1 | cut -c1-60)
+        # Extract bold lines, trim to short phrases for subject
+        topic=$(echo "$s_finding" | sed -n 's/^\*\*\([^*]*\)\*\*.*/\1/p' | head -1)
+        [[ -z "$topic" ]] && topic=$(echo "$s_finding" | grep -v '### FT-' | head -1)
+        # Trim to first clause (before — , or .) and cap at 30 chars
+        topic=$(echo "$topic" | sed 's/ — .*//' | sed 's/,.*//' | cut -c1-30)
         [[ -n "$topic" ]] && local_topics+=("$topic")
     done
     repo_part=$(IFS=', '; echo "${local_repos[*]}")
@@ -672,7 +682,7 @@ if [[ ${#FINDINGS[@]} -gt 0 ]]; then
     for t in "${local_topics[@]+"${local_topics[@]}"}"; do
         if [[ -z "$topics_part" ]]; then
             topics_part="$t"
-        elif [[ ${#topics_part} -lt 120 ]]; then
+        elif [[ ${#topics_part} -lt 70 ]]; then
             topics_part="${topics_part}, ${t}"
         fi
     done
