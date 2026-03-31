@@ -1,6 +1,10 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, existsSync } from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
 import { openDb } from './db.js';
 import { twitterBookmarksIndexPath } from './paths.js';
+import { BUILT_IN_LENSES } from './theories-config.js';
+import type { Lens } from './theories-config.js';
 
 interface RepoInfo {
   name: string;
@@ -21,14 +25,13 @@ interface SelectedBookmark {
   domains?: string;
 }
 
-type AnalysisType = 'scan' | 'adopt' | 'pattern' | 'explore';
-
 interface AnalysisJob {
-  type: AnalysisType;
+  type: string;
   title: string;
   repo: RepoInfo;
   bookmarks: SelectedBookmark[];
   prompt_hint: string;
+  system_prompt: 'analyst' | 'explorer';
 }
 
 function queryBookmarks(db: any, sql: string, params: any[] = []): SelectedBookmark[] {
@@ -64,31 +67,30 @@ function inferRepoDomains(repo: RepoInfo): string[] {
   return domains;
 }
 
+function loadAllLenses(): Lens[] {
+  // Read custom lenses from config file
+  const configPath = path.join(os.homedir(), '.fieldtheory', 'theories.json');
+  let custom: Lens[] = [];
+  try {
+    if (existsSync(configPath)) {
+      const raw = JSON.parse(readFileSync(configPath, 'utf-8'));
+      if (Array.isArray(raw.lenses)) custom = raw.lenses;
+    }
+  } catch { /* use built-ins only */ }
+  return [...BUILT_IN_LENSES, ...custom];
+}
+
 async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob[]> {
   const dbPath = twitterBookmarksIndexPath();
   const db = await openDb(dbPath);
   const jobs: AnalysisJob[] = [];
+  const lenses = loadAllLenses();
 
   const SELECT = `SELECT id, url, text, author_handle, categories, github_urls, links_json, domains FROM bookmarks`;
 
   try {
     const pick = (limit = repos.length) => repos[Math.floor(Math.random() * Math.min(repos.length, limit))];
 
-    // 1. SCAN: Security bookmarks → random top-3 repo
-    const securityBookmarks = queryBookmarks(db,
-      `${SELECT} WHERE categories LIKE '%security%' ORDER BY RANDOM() LIMIT 15`
-    );
-    if (securityBookmarks.length > 0 && repos.length > 0) {
-      jobs.push({
-        type: 'scan',
-        title: 'Security & dependency scan',
-        repo: pick(3),
-        bookmarks: securityBookmarks,
-        prompt_hint: `These bookmarks mention security issues, vulnerabilities, or supply chain risks. Check if any of the mentioned tools, libraries, or vulnerability patterns affect this repo. Be specific: name the dependency, version, file. If nothing applies, say so — don't force a connection.`,
-      });
-    }
-
-    // Domain-aware query: prefer bookmarks matching the repo's domains, fallback to unfiltered
     const domainQuery = (baseWhere: string, repo: RepoInfo, limit: number): SelectedBookmark[] => {
       const domains = inferRepoDomains(repo);
       if (domains.length > 0) {
@@ -102,48 +104,34 @@ async function buildJobs(repos: RepoInfo[], budget: number): Promise<AnalysisJob
       return queryBookmarks(db, `${SELECT} WHERE ${baseWhere} ORDER BY RANDOM() LIMIT ${limit}`);
     };
 
-    // 2. ADOPT: Tool bookmarks with GitHub URLs → repos that could use them
-    const adoptRepo = pick(repos.length);
-    const toolBookmarks = domainQuery("categories LIKE '%tool%' AND github_urls IS NOT NULL", adoptRepo, 20);
-    if (toolBookmarks.length > 0 && repos.length > 0) {
-      jobs.push({
-        type: 'adopt',
-        title: 'Tool & library adoption',
-        repo: adoptRepo,
-        bookmarks: toolBookmarks,
-        prompt_hint: `These bookmarks reference open-source tools and repositories. For each one, check: (1) is the developer already using this? (2) does it solve a problem this repo currently has? (3) what would adopting it look like — which files change, what's the migration path? Skip anything that doesn't clearly apply.`,
-      });
+    for (const lens of lenses) {
+      if (repos.length === 0) break;
+
+      const repo = lens.repo_pick === 'top3' ? pick(3) : pick(repos.length);
+
+      // Build WHERE clause from category filter
+      const categories = lens.category_filter.split(',').map(c => c.trim());
+      const catWhere = categories.map(c => `categories LIKE '%${c}%'`).join(' OR ');
+      // adopt lens requires github_urls
+      const extraWhere = lens.name === 'adopt' ? ' AND github_urls IS NOT NULL' : '';
+      const baseWhere = `(${catWhere})${extraWhere}`;
+
+      const bookmarks = lens.domain_filter
+        ? domainQuery(baseWhere, repo, lens.limit)
+        : queryBookmarks(db, `${SELECT} WHERE ${baseWhere} ORDER BY RANDOM() LIMIT ${lens.limit}`);
+
+      if (bookmarks.length > 0) {
+        jobs.push({
+          type: lens.name,
+          title: lens.title,
+          repo,
+          bookmarks,
+          prompt_hint: lens.prompt_hint,
+          system_prompt: lens.system_prompt,
+        });
+      }
     }
 
-    // 3. PATTERN: Technique bookmarks → active repos
-    const patternRepo = pick(repos.length);
-    const techniqueBookmarks = domainQuery("categories LIKE '%technique%'", patternRepo, 20);
-    if (techniqueBookmarks.length > 0 && repos.length > 0) {
-      jobs.push({
-        type: 'pattern',
-        title: 'Pattern & technique transfer',
-        repo: patternRepo,
-        bookmarks: techniqueBookmarks,
-        prompt_hint: `These bookmarks describe techniques, architecture patterns, or "how I built X" approaches. Read the repo's code and identify where any of these patterns could concretely improve it. Name the specific file and function. If the repo already does something similar, note that too — sometimes the bookmark version is better, sometimes the repo's approach is fine.`,
-      });
-    }
-
-    // 4. EXPLORE: Mix of unclassified + launch + research → open-ended
-    const exploreBookmarks = queryBookmarks(db,
-      `${SELECT} WHERE primary_category IN ('unclassified', 'launch', 'research', 'opinion')
-       ORDER BY RANDOM() LIMIT 30`
-    );
-    if (exploreBookmarks.length > 0 && repos.length > 0) {
-      jobs.push({
-        type: 'explore',
-        title: 'Open exploration',
-        repo: pick(repos.length),
-        bookmarks: exploreBookmarks,
-        prompt_hint: `These are bookmarks that caught the developer's eye — product launches, research papers, interesting takes. Look for the adjacent possible: what does this repo gain access to because these ideas exist? What's one step away that nobody's noticed? This is the open-ended session — follow what's interesting, not what's obviously practical.`,
-      });
-    }
-
-    // Trim to budget
     return jobs.slice(0, budget);
   } finally {
     db.close();
@@ -157,10 +145,10 @@ const reposJsonPath = args[0];
 const budgetIdx = args.indexOf('--budget');
 const budget = budgetIdx >= 0 ? Number(args[budgetIdx + 1]) : 4;
 const typeIdx = args.indexOf('--type');
-const typeFilter = typeIdx >= 0 ? args[typeIdx + 1] as AnalysisType : undefined;
+const typeFilter = typeIdx >= 0 ? args[typeIdx + 1] : undefined;
 
 if (!reposJsonPath) {
-  console.error('Usage: theories-match.ts <repos.json> [--budget <n>] [--type scan|adopt|pattern|explore]');
+  console.error('Usage: theories-match.ts <repos.json> [--budget <n>] [--type <lens-name>]');
   process.exit(1);
 }
 

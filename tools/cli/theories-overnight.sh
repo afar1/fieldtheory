@@ -18,6 +18,7 @@ MAX_CONSECUTIVE_FAILURES=3
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --hours)      MAX_HOURS="$2"; shift 2 ;;
+        --minutes)    MAX_HOURS="$2m"; shift 2 ;;  # stored as "Nm", handled below
         --turns)      TURNS="$2"; shift 2 ;;
         --email)      EMAIL="$2"; shift 2 ;;
         --engine)     ENGINE="$2"; shift 2 ;;
@@ -45,7 +46,13 @@ if [[ -z "$EMAIL" ]]; then
 fi
 
 START_EPOCH=$(date +%s)
-MAX_SECONDS=$((MAX_HOURS * 3600))
+if [[ "$MAX_HOURS" == *m ]]; then
+    MAX_SECONDS=$(( ${MAX_HOURS%m} * 60 ))
+    MAX_HOURS_DISPLAY="${MAX_HOURS%m}m"
+else
+    MAX_SECONDS=$((MAX_HOURS * 3600))
+    MAX_HOURS_DISPLAY="${MAX_HOURS}h"
+fi
 LOG_DIR="$HOME/theories/logs"
 mkdir -p "$LOG_DIR"
 DATE_STAMP=$(date +%Y-%m-%d)
@@ -67,7 +74,17 @@ log "  Email: ${EMAIL}"
 log "  Rate limit wait: $((RATE_LIMIT_WAIT / 60))m between retries"
 log "═══════════════════════════════════════════════════════════"
 
-TYPES=("scan" "adopt" "pattern" "explore")
+# Build lens list from config (custom lenses appended after built-ins)
+THEORIES_CONFIG="$HOME/.fieldtheory/theories.json"
+TYPES=("adopt" "pattern" "explore" "scan")
+if [[ -f "$THEORIES_CONFIG" ]] && command -v jq >/dev/null 2>&1; then
+    CUSTOM_LENS_NAMES=$(jq -r '(.lenses // [])[] | .name' "$THEORIES_CONFIG" 2>/dev/null)
+    if [[ -n "$CUSTOM_LENS_NAMES" ]]; then
+        while IFS= read -r name; do
+            TYPES+=("$name")
+        done <<< "$CUSTOM_LENS_NAMES"
+    fi
+fi
 pass=0
 consecutive_failures=0
 total_successes=0

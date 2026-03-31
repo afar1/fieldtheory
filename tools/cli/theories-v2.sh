@@ -415,9 +415,11 @@ run_analysis() {
     local transcript_path="$TRANSCRIPT_DIR/${DATE_STAMP}_${TIME_STAMP}_${job_type}.md"
     log "  Running [$job_type] $job_title → $repo_name..."
 
-    # Choose system prompt based on type
+    # Choose system prompt based on job's system_prompt field
+    local system_prompt_type
+    system_prompt_type=$(echo "$job_json" | jq -r '.system_prompt // "analyst"')
     local system_prompt
-    if [[ "$job_type" == "explore" ]]; then
+    if [[ "$system_prompt_type" == "explorer" ]]; then
         system_prompt="$SYSTEM_PROMPT_EXPLORER_V2"
     else
         system_prompt="$SYSTEM_PROMPT_ANALYST"
@@ -499,6 +501,14 @@ ${response}"
         printf '\n## Turn %d\n\n%s\n' "$turn" "$response" >> "$transcript_path"
     done
 
+    # ── Assign finding ID ─────────────────────────────────────────────────
+    STATE_FILE="$THEORIES_DIR/state.json"
+    if [[ ! -f "$STATE_FILE" ]]; then
+        echo '{"next_id":1}' > "$STATE_FILE"
+    fi
+    local next_id
+    next_id=$(jq -r '.next_id // 1' "$STATE_FILE")
+
     # ── Synthesize ────────────────────────────────────────────────────────
     # Build finding template from config
     local bookmark_line
@@ -519,9 +529,17 @@ Additional instructions from the user:
 
 $(trim_history "$history")
 
-Now write the summary for their morning email. Include ALL findings, not just the most important one. Use this format for EACH finding:
+Now write the summary for their morning email. Include ALL findings, not just the most important one.
+
+FINDING IDs: Number each finding sequentially starting from FT-${next_id}. These IDs are permanent and never reuse.
+
+\$100 BUDGET: You have a hypothetical \$100 to allocate across ALL findings in this email. Assign each finding a dollar amount reflecting its relative importance — a critical security issue might get \$35, a nice-to-have suggestion \$5. The amounts must sum to \$100. Show the amount next to each finding's ID.
+
+Use this format for EACH finding:
 
 ---
+
+### FT-[N] — \$[amount]
 
 **[Plain English: one sentence explaining what this means and why someone should care, written for a human who just woke up]**
 
@@ -546,6 +564,14 @@ Rules:
 
     local finding
     finding=$(run_engine "$synthesis_prompt") || finding="FINDING: Synthesis failed — see full transcript at ${transcript_path}"
+
+    # Count how many FT-NNN IDs were used and update the counter
+    local ids_used
+    ids_used=$(echo "$finding" | grep -c '### FT-' || true)
+    if [[ "$ids_used" -gt 0 ]]; then
+        local new_next_id=$((next_id + ids_used))
+        jq --argjson n "$new_next_id" '.next_id = $n' "$STATE_FILE" > "${STATE_FILE}.tmp" && mv "${STATE_FILE}.tmp" "$STATE_FILE"
+    fi
 
     printf '\n---\n\n## Summary\n\n%s\n' "$finding" >> "$transcript_path"
 
@@ -623,10 +649,44 @@ FOOTER
 build_digest > "$DIGEST_PATH"
 ok "Digest saved to $DIGEST_PATH"
 
+# ── Build subject line ────────────────────────────────────────────────────
+EMAIL_SUBJECT="Theories"
+if [[ ${#FINDINGS[@]} -gt 0 ]]; then
+    local_repos=()
+    local_topics=()
+    for finding_json in "${FINDINGS[@]}"; do
+        s_repo=$(echo "$finding_json" | jq -r '.repo')
+        s_finding=$(echo "$finding_json" | jq -r '.finding')
+        already=false
+        for r in "${local_repos[@]+"${local_repos[@]}"}"; do
+            [[ "$r" == "$s_repo" ]] && already=true
+        done
+        $already || local_repos+=("$s_repo")
+        # Extract bold lines (the plain-English summaries), skip FT-NNN headers
+        topic=$(echo "$s_finding" | sed -n 's/^\*\*\([^*]*\)\*\*.*/\1/p' | head -1 | cut -c1-60)
+        [[ -z "$topic" ]] && topic=$(echo "$s_finding" | grep -v '### FT-' | head -1 | cut -c1-60)
+        [[ -n "$topic" ]] && local_topics+=("$topic")
+    done
+    repo_part=$(IFS=', '; echo "${local_repos[*]}")
+    topics_part=""
+    for t in "${local_topics[@]+"${local_topics[@]}"}"; do
+        if [[ -z "$topics_part" ]]; then
+            topics_part="$t"
+        elif [[ ${#topics_part} -lt 120 ]]; then
+            topics_part="${topics_part}, ${t}"
+        fi
+    done
+    if [[ -n "$topics_part" ]]; then
+        EMAIL_SUBJECT="Theories (${repo_part}) — ${topics_part}"
+    else
+        EMAIL_SUBJECT="Theories (${repo_part})"
+    fi
+fi
+
 # ── Send email ────────────────────────────────────────────────────────────
 SEND_SCRIPT="$SCRIPT_DIR/theories-send-email.js"
 if [[ -n "$EMAIL_TO" && -f "$SEND_SCRIPT" ]]; then
-    node "$SEND_SCRIPT" "Theories — ${DATE_STAMP}" "$EMAIL_TO" "$DIGEST_PATH" 2>&1 || {
+    node "$SEND_SCRIPT" "$EMAIL_SUBJECT" "$EMAIL_TO" "$DIGEST_PATH" 2>&1 || {
         warn "Email send failed — digest saved at $DIGEST_PATH"
     }
 elif [[ -z "$EMAIL_TO" ]]; then

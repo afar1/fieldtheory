@@ -13,7 +13,8 @@ import { fetchBookmarkMediaBatch } from './bookmark-media.js';
 import { buildIndex, searchBookmarks, formatSearchResults, getStats, classifyAndRebuild, getCategoryCounts, sampleByCategory, getDomainCounts } from './bookmarks-db.js';
 import { formatClassificationSummary } from './bookmark-classify.js';
 import { classifyWithLlm, classifyDomainsWithLlm } from './bookmark-classify-llm.js';
-import { loadTheoriesConfig, saveTheoriesConfig, setTheoriesConfigValue, theoriesConfigPath, DEFAULTS as THEORIES_DEFAULTS } from './theories-config.js';
+import { loadTheoriesConfig, saveTheoriesConfig, setTheoriesConfigValue, theoriesConfigPath, DEFAULTS as THEORIES_DEFAULTS, loadLenses, addLens, removeLens, BUILT_IN_LENSES } from './theories-config.js';
+import type { Lens } from './theories-config.js';
 import { renderViz } from './bookmarks-viz.js';
 
 export function buildCli() {
@@ -437,6 +438,76 @@ export function buildCli() {
       const config = await loadTheoriesConfig();
       console.log(`Config: ${theoriesConfigPath()}`);
       console.log(JSON.stringify(config, null, 2));
+    });
+
+  // ── lens commands ──────────────────────────────────────────────────────
+  const lens = theories.command('lens').description('Manage analysis lenses (how bookmarks are matched to repos)');
+
+  lens
+    .command('ls')
+    .description('List all lenses')
+    .action(async () => {
+      const all = await loadLenses();
+      const builtInNames = new Set(BUILT_IN_LENSES.map(l => l.name));
+      for (const l of all) {
+        const tag = builtInNames.has(l.name) ? '[built-in]' : '[custom]';
+        const domain = l.domain_filter ? '(domain-matched)' : '';
+        console.log(`  ${l.name.padEnd(12)} ${l.title.padEnd(35)} ${domain.padEnd(18)} ${tag}`);
+      }
+    });
+
+  lens
+    .command('add')
+    .description('Add a custom lens')
+    .requiredOption('--name <name>', 'Short slug (e.g. audit, accessibility)')
+    .requiredOption('--title <title>', 'Display title (e.g. "Compliance & legal audit")')
+    .requiredOption('--categories <cats>', 'Comma-separated bookmark categories to match (e.g. legal,opinion)')
+    .requiredOption('--hint <hint>', 'Analysis prompt — what to do with these bookmarks against the repo')
+    .option('--domain-filter', 'Prefer bookmarks matching the repo\'s domain', false)
+    .option('--system-prompt <type>', 'analyst or explorer', 'analyst')
+    .option('--limit <n>', 'Max bookmarks per job', '20')
+    .action(async (options) => {
+      const newLens: Lens = {
+        name: options.name,
+        title: options.title,
+        category_filter: options.categories,
+        domain_filter: options.domainFilter ?? false,
+        prompt_hint: options.hint,
+        system_prompt: options.systemPrompt === 'explorer' ? 'explorer' : 'analyst',
+        repo_pick: 'any',
+        limit: Number(options.limit) || 20,
+      };
+      await addLens(newLens);
+      console.log(`Added lens "${newLens.name}" — ${newLens.title}`);
+    });
+
+  lens
+    .command('remove')
+    .description('Remove a custom lens')
+    .argument('<name>', 'Lens name to remove')
+    .action(async (name) => {
+      try {
+        const removed = await removeLens(name);
+        if (removed) {
+          console.log(`Removed lens "${name}"`);
+        } else {
+          console.log(`No custom lens named "${name}" found`);
+        }
+      } catch (err) {
+        console.error((err as Error).message);
+        process.exitCode = 1;
+      }
+    });
+
+  lens
+    .command('show')
+    .description('Show details of a specific lens')
+    .argument('<name>', 'Lens name')
+    .action(async (name) => {
+      const all = await loadLenses();
+      const l = all.find(x => x.name === name);
+      if (!l) { console.log(`No lens named "${name}"`); return; }
+      console.log(JSON.stringify(l, null, 2));
     });
 
   return program;
