@@ -1,6 +1,7 @@
 import { config as loadDotenv } from 'dotenv';
 import path from 'node:path';
 import os from 'node:os';
+import { workspaceRoot } from './paths.js';
 
 export interface XApiConfig {
   apiKey: string;
@@ -17,8 +18,22 @@ export interface ChromeSessionConfig {
 }
 
 export function loadEnv(cwd = process.cwd()): void {
-  loadDotenv({ path: path.join(cwd, '.env.local') });
-  loadDotenv();
+  const cliRoot = workspaceRoot(cwd);
+  const repoRoot = path.resolve(cliRoot, '..', '..');
+  const candidatePaths = [
+    path.join(cwd, '.env.local'),
+    path.join(cwd, '.env'),
+    path.join(cliRoot, '.env.local'),
+    path.join(cliRoot, '.env'),
+    path.join(repoRoot, '.env.local'),
+    path.join(repoRoot, '.env'),
+    path.join(repoRoot, 'mac-app', '.env.local'),
+    path.join(repoRoot, 'mac-app', '.env'),
+  ];
+
+  for (const envPath of candidatePaths) {
+    loadDotenv({ path: envPath, quiet: true });
+  }
 }
 
 function detectChromeUserDataDir(): string | undefined {
@@ -57,12 +72,11 @@ export function loadXApiConfig(cwd = process.cwd()): XApiConfig {
 
   if (!apiKey || !apiSecret || !clientId || !clientSecret) {
     throw new Error(
-      'Missing X API credentials for incremental sync.\n' +
+      'Missing X API credentials for API sync.\n' +
       'Set X_API_KEY, X_API_SECRET, X_CLIENT_ID, and X_CLIENT_SECRET in .env.local.\n' +
-      'These are only needed for --incremental mode (cron). For a full sync, use: ft bookmarks sync'
+      'These are only needed for --api mode. Default bookmark sync already pulls the latest bookmarks incrementally.'
     );
   }
 
   return { apiKey, apiSecret, clientId, clientSecret, bearerToken, callbackUrl };
 }
-

@@ -4,6 +4,23 @@ import os from 'node:os';
 import { readJson, writeJson, ensureDir, pathExists } from './fs.js';
 
 const FINDING_SECTIONS = ['BOOKMARKS', 'WHAT WE FOUND', 'WHAT TO DO', 'CONFIDENCE'] as const;
+const DEFAULT_RUNTIME: { email: string; engine: 'auto' | 'codex' | 'claude'; turns: number; budget: number } = {
+  email: '',
+  engine: 'auto',
+  turns: 4,
+  budget: 4,
+};
+const DEFAULT_PROMPTS: {
+  custom_instructions: string[];
+  include_tweet_urls: boolean;
+  finding_sections: string[];
+  system_prompt_append: string;
+} = {
+  custom_instructions: [],
+  include_tweet_urls: true,
+  finding_sections: [...FINDING_SECTIONS],
+  system_prompt_append: '',
+};
 
 export const theoriesConfigSchema = z.object({
   runtime: z.object({
@@ -11,13 +28,13 @@ export const theoriesConfigSchema = z.object({
     engine: z.enum(['auto', 'codex', 'claude']).default('auto'),
     turns: z.number().int().min(1).max(20).default(4),
     budget: z.number().int().min(1).max(20).default(4),
-  }).default({}),
+  }).default(DEFAULT_RUNTIME),
   prompts: z.object({
     custom_instructions: z.array(z.string()).default([]),
     include_tweet_urls: z.boolean().default(true),
     finding_sections: z.array(z.string()).default([...FINDING_SECTIONS]),
     system_prompt_append: z.string().default(''),
-  }).default({}),
+  }).default(DEFAULT_PROMPTS),
 });
 
 export type TheoriesConfig = z.infer<typeof theoriesConfigSchema>;
@@ -81,13 +98,8 @@ export const BUILT_IN_LENSES: Lens[] = [
 ];
 
 export const DEFAULTS: TheoriesConfig = {
-  runtime: { email: '', engine: 'auto', turns: 4, budget: 4 },
-  prompts: {
-    custom_instructions: [],
-    include_tweet_urls: true,
-    finding_sections: ['BOOKMARKS', 'WHAT WE FOUND', 'WHAT TO DO', 'CONFIDENCE'],
-    system_prompt_append: '',
-  },
+  runtime: { ...DEFAULT_RUNTIME },
+  prompts: { ...DEFAULT_PROMPTS },
 };
 
 // ── Lens management ─────────────────────────────────────────────────────

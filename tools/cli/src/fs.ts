@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import YAML from 'yaml';
 
 export async function ensureDir(dirPath: string): Promise<void> {
@@ -16,7 +16,7 @@ export async function readYaml<T>(filePath: string): Promise<T> {
 
 export async function pathExists(filePath: string): Promise<boolean> {
   try {
-    await readFile(filePath, 'utf8');
+    await access(filePath);
     return true;
   } catch {
     return false;

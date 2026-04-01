@@ -10,21 +10,51 @@ export interface ChromeCookieResult {
 }
 
 function getMacOSChromeKey(): Buffer {
-  let password: string;
-  try {
-    password = execSync(
-      'security find-generic-password -w -s "Chrome Safe Storage" -a "Chrome"',
-      { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
-    ).trim();
-  } catch {
+  const candidates = [
+    { service: 'Chrome Safe Storage', account: 'Chrome' },
+    { service: 'Chrome Safe Storage', account: 'Google Chrome' },
+    { service: 'Google Chrome Safe Storage', account: 'Chrome' },
+    { service: 'Google Chrome Safe Storage', account: 'Google Chrome' },
+    { service: 'Chromium Safe Storage', account: 'Chromium' },
+    { service: 'Brave Safe Storage', account: 'Brave' },
+    { service: 'Brave Browser Safe Storage', account: 'Brave Browser' },
+  ];
+
+  for (const candidate of candidates) {
+    try {
+      const password = execSync(
+        `security find-generic-password -w -s "${candidate.service}" -a "${candidate.account}"`,
+        { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }
+      ).trim();
+      if (password) {
+        return pbkdf2Sync(password, 'saltysalt', 1003, 16, 'sha1');
+      }
+    } catch {
+      // Try the next known browser/keychain naming pair.
+    }
+  }
+
+  throw new Error(
+    'Could not read a browser Safe Storage password from the macOS Keychain.\n' +
+    'This is needed to decrypt Chrome-family cookies.\n' +
+    'Fix: open the browser profile that is logged into X, then retry.\n' +
+    'If you already use the API flow, prefer: ft bookmarks sync --api'
+  );
+}
+
+function sanitizeCookieValue(name: string, value: string): string {
+  const cleaned = value.replace(/\0+$/g, '').trim();
+  if (!cleaned) {
+    throw new Error(`Cookie ${name} was empty after decryption.`);
+  }
+  if (!/^[\x21-\x7E]+$/.test(cleaned)) {
     throw new Error(
-      'Could not read Chrome Safe Storage password from macOS Keychain.\n' +
-      'This is needed to decrypt Chrome cookies.\n' +
-      'Fix: Make sure Google Chrome is installed and has been opened at least once.'
+      `Could not decrypt the ${name} cookie into a valid ASCII header value.\n` +
+      'This usually means the wrong browser profile was selected or the cookie format changed.\n' +
+      'Try a different Chrome profile, or use: ft bookmarks sync --api'
     );
   }
-  // Chrome on macOS uses PBKDF2 with 1003 iterations, 16-byte key
-  return pbkdf2Sync(password, 'saltysalt', 1003, 16, 'sha1');
+  return cleaned;
 }
 
 export function decryptCookieValue(encryptedValue: Buffer, key: Buffer): string {
@@ -146,9 +176,9 @@ export function extractChromeXCookies(
     );
   }
 
-  const cookieParts = [`ct0=${ct0}`];
-  if (authToken) cookieParts.push(`auth_token=${authToken}`);
+  const cookieParts = [`ct0=${sanitizeCookieValue('ct0', ct0)}`];
+  if (authToken) cookieParts.push(`auth_token=${sanitizeCookieValue('auth_token', authToken)}`);
   const cookieHeader = cookieParts.join('; ');
 
-  return { csrfToken: ct0, cookieHeader };
+  return { csrfToken: sanitizeCookieValue('ct0', ct0), cookieHeader };
 }

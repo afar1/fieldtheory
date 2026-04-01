@@ -65,10 +65,11 @@ export async function enableBookmarks(cwd = process.cwd()): Promise<BookmarkEnab
       `- dataset initialized: ${datasetCreated ? 'yes' : 'already present'}`,
       `- cache: ${syncResult.cachePath}`,
       '',
-      'For incremental cron sync via the v2 API:',
+      'For API-based sync via the v2 API:',
       '  1. Set X_API_KEY, X_API_SECRET, X_CLIENT_ID, X_CLIENT_SECRET in .env.local',
       '  2. Run: ft bookmarks auth',
-      '  3. Run: ft job enable --id x-bookmarks --cron "0 7 * * *"',
+      '  3. Run: ft bookmarks sync --api',
+      '  4. Run: ft job enable --id x-bookmarks --cron "0 7 * * *"',
     ],
   };
 }
@@ -80,7 +81,7 @@ export async function getBookmarkStatusView(cwd = process.cwd()): Promise<Bookma
     connected: Boolean(token?.access_token),
     bookmarkCount: status.totalBookmarks,
     lastUpdated: status.lastIncrementalSyncAt ?? status.lastFullSyncAt ?? null,
-    mode: token?.access_token ? 'GraphQL full + API incremental' : 'GraphQL full only',
+    mode: token?.access_token ? 'Incremental by default (GraphQL + API available)' : 'Incremental by default (GraphQL)',
     cachePath: status.cachePath,
     datasetInitialized: await pathExists(datasetManifestPath('x-bookmarks', cwd)),
   };

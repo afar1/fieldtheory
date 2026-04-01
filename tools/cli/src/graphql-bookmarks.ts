@@ -3,6 +3,7 @@ import { sourcesDir, twitterBookmarksCachePath, twitterBackfillStatePath } from 
 import { loadChromeSessionConfig } from './config.js';
 import { extractChromeXCookies } from './chrome-cookies.js';
 import type { BookmarkBackfillState, BookmarkRecord } from './types.js';
+import { exportBookmarksForSyncSeed } from './bookmarks-db.js';
 
 const X_PUBLIC_BEARER =
   'AAAAAAAAAAAAAAAAAAAAANRILgAAAAAAnNwIzUejRCOuH5E6I8xnZz4puTs%3D1Zv7ttfk8LF81IUq16cHjhLTvJu4FA33AGWWjCpTnA';
@@ -35,6 +36,8 @@ const GRAPHQL_FEATURES = {
 };
 
 export interface SyncOptions {
+  /** Default true. Stop once we reach the newest already-stored bookmark. */
+  incremental?: boolean;
   /** Max pages to fetch (20 bookmarks per page). Default: 500 */
   maxPages?: number;
   /** Stop once this many *new* bookmarks have been added. Default: unlimited */
@@ -75,6 +78,50 @@ export interface SyncResult {
   stopReason: string;
   cachePath: string;
   statePath: string;
+}
+
+function parseSnowflake(value?: string | null): bigint | null {
+  if (!value || !/^\d+$/.test(value)) return null;
+  try {
+    return BigInt(value);
+  } catch {
+    return null;
+  }
+}
+
+function parseBookmarkTimestamp(record: BookmarkRecord): number | null {
+  const candidates = [record.bookmarkedAt, record.postedAt, record.syncedAt];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    const parsed = Date.parse(candidate);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function compareBookmarkChronology(a: BookmarkRecord, b: BookmarkRecord): number {
+  const aTimestamp = parseBookmarkTimestamp(a);
+  const bTimestamp = parseBookmarkTimestamp(b);
+  if (aTimestamp != null && bTimestamp != null && aTimestamp !== bTimestamp) {
+    return aTimestamp > bTimestamp ? 1 : -1;
+  }
+
+  const aId = parseSnowflake(a.tweetId ?? a.id);
+  const bId = parseSnowflake(b.tweetId ?? b.id);
+  if (aId != null && bId != null && aId !== bId) {
+    return aId > bId ? 1 : -1;
+  }
+
+  const aStamp = String(a.bookmarkedAt ?? a.postedAt ?? a.syncedAt ?? '');
+  const bStamp = String(b.bookmarkedAt ?? b.postedAt ?? b.syncedAt ?? '');
+  return aStamp.localeCompare(bStamp);
+}
+
+async function loadExistingBookmarks(cwd: string): Promise<BookmarkRecord[]> {
+  const cachePath = twitterBookmarksCachePath(cwd);
+  const existing = await readJsonLines<BookmarkRecord>(cachePath);
+  if (existing.length > 0) return existing;
+  return exportBookmarksForSyncSeed(cwd);
 }
 
 function buildUrl(cursor?: string): string {
@@ -291,12 +338,7 @@ export function mergeRecords(
     byId.set(record.id, mergeBookmarkRecord(prev, record));
   }
   const merged = Array.from(byId.values());
-  merged.sort(
-    (a, b) =>
-      String(b.postedAt ?? b.bookmarkedAt ?? b.syncedAt).localeCompare(
-        String(a.postedAt ?? a.bookmarkedAt ?? a.syncedAt)
-      )
-  );
+  merged.sort((a, b) => compareBookmarkChronology(b, a));
   return { merged, added };
 }
 
@@ -331,6 +373,7 @@ export async function syncBookmarksGraphQL(
   cwd = process.cwd(),
   options: SyncOptions = {}
 ): Promise<SyncResult> {
+  const incremental = options.incremental ?? true;
   const maxPages = options.maxPages ?? 500;
   const delayMs = options.delayMs ?? 600;
   const maxMinutes = options.maxMinutes ?? 30;
@@ -355,7 +398,10 @@ export async function syncBookmarksGraphQL(
   await ensureDir(sourcesDir(cwd));
   const cachePath = twitterBookmarksCachePath(cwd);
   const statePath = twitterBackfillStatePath(cwd);
-  let existing = await readJsonLines<BookmarkRecord>(cachePath);
+  let existing = await loadExistingBookmarks(cwd);
+  const newestKnownId = incremental
+    ? existing.slice().sort((a, b) => compareBookmarkChronology(b, a))[0]?.id
+    : undefined;
   const prevState: BookmarkBackfillState = (await pathExists(statePath))
     ? await readJson<BookmarkBackfillState>(statePath)
     : { provider: 'twitter', totalRuns: 0, totalAdded: 0, lastAdded: 0, lastSeenIds: [] };
@@ -386,6 +432,7 @@ export async function syncBookmarksGraphQL(
     existing = merged;
     totalAdded += added;
     result.records.forEach((r) => allSeenIds.push(r.id));
+    const reachedLatestStored = Boolean(newestKnownId) && result.records.some((record) => record.id === newestKnownId);
 
     stalePages = added === 0 ? stalePages + 1 : 0;
 
@@ -401,7 +448,11 @@ export async function syncBookmarksGraphQL(
       stopReason = 'target additions reached';
       break;
     }
-    if (stalePages >= stalePageLimit) {
+    if (incremental && reachedLatestStored) {
+      stopReason = 'caught up to newest stored bookmark';
+      break;
+    }
+    if (incremental && stalePages >= stalePageLimit) {
       stopReason = 'no new bookmarks (stale)';
       break;
     }

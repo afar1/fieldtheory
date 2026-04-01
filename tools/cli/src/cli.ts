@@ -10,15 +10,38 @@ import { getBookmarkStatusView, buildBookmarksDatasetManifest, enableBookmarks, 
 import { loadTwitterOAuthToken, runTwitterOAuthFlow } from './xauth.js';
 import { syncBookmarksGraphQL, formatSyncResult } from './graphql-bookmarks.js';
 import { fetchBookmarkMediaBatch } from './bookmark-media.js';
-import { buildIndex, searchBookmarks, formatSearchResults, getStats, classifyAndRebuild, getCategoryCounts, sampleByCategory, getDomainCounts } from './bookmarks-db.js';
+import {
+  buildIndex,
+  searchBookmarks,
+  formatSearchResults,
+  getStats,
+  classifyAndRebuild,
+  getCategoryCounts,
+  sampleByCategory,
+  getDomainCounts,
+  listBookmarks,
+  getBookmarkById,
+} from './bookmarks-db.js';
 import { formatClassificationSummary } from './bookmark-classify.js';
 import { classifyWithLlm, classifyDomainsWithLlm } from './bookmark-classify-llm.js';
 import { loadTheoriesConfig, saveTheoriesConfig, setTheoriesConfigValue, theoriesConfigPath, DEFAULTS as THEORIES_DEFAULTS, loadLenses, addLens, removeLens, BUILT_IN_LENSES } from './theories-config.js';
 import type { Lens } from './theories-config.js';
 import { renderViz } from './bookmarks-viz.js';
+import { createBookmarkIssue, createTheoryIssue, debateBookmark, debateTheory } from './timeline-actions.js';
+import { loadTimelineState } from './timeline-state.js';
+import { getTheoryItem, listTheoryItems, syncTheoryInbox } from './theories.js';
+import { startTimelineWebServer } from './web.js';
+import { refreshTheoryGitHubState, refreshTheoryGitHubStates } from './github-theory-state.js';
 
 export function buildCli() {
   const program = new Command();
+
+  async function rebuildBookmarkIndexIfNeeded(added: number): Promise<void> {
+    if (added <= 0) return;
+    process.stderr.write('Rebuilding search index...\n');
+    const idx = await buildIndex();
+    console.log(`Index: ${idx.dbPath} (${idx.recordCount} records)`);
+  }
 
   program
     .name('ft')
@@ -149,10 +172,11 @@ export function buildCli() {
 
   // ── bookmarks commands ─────────────────────────────────────────────────
   //
-  //   ft bookmarks enable           → one-step: full sync + dataset init
-  //   ft bookmarks sync             → full sync via GraphQL (Chrome session)
-  //   ft bookmarks sync --incremental → incremental via OAuth v2 API (for cron)
-  //   ft bookmarks auth             → OAuth setup (needed for --incremental)
+  //   ft bookmarks enable           → one-step: latest-only sync + dataset init
+  //   ft bookmarks sync             → latest-only sync via GraphQL (Chrome session)
+  //   ft bookmarks sync --api       → latest-only sync via OAuth v2 API
+  //   ft bookmarks sync --full      → explicit backfill crawl
+  //   ft bookmarks auth             → OAuth setup (needed for --api)
   //   ft bookmarks status / summary → cache info
   //   ft bookmarks path             → print cache path
 
@@ -160,7 +184,7 @@ export function buildCli() {
 
   bookmarks
     .command('enable')
-    .description('One-step setup: full sync + dataset initialization')
+    .description('One-step setup: bookmark sync + dataset initialization')
     .action(async () => {
       const result = await enableBookmarks();
       for (const line of result.messageLines) console.log(line);
@@ -168,8 +192,10 @@ export function buildCli() {
 
   bookmarks
     .command('sync')
-    .description('Sync bookmarks into the local cache')
-    .option('--incremental', 'Use OAuth v2 API for lightweight incremental sync (requires: ft bookmarks auth)', false)
+    .description('Sync newest bookmarks into the local cache')
+    .option('--api', 'Use the OAuth v2 API instead of the default Chrome-session sync', false)
+    .option('--incremental', 'Deprecated alias for --api', false)
+    .option('--full', 'Force a backfill crawl instead of the default latest-only sync', false)
     .option('--max-pages <n>', 'Max pages to fetch', (v) => Number(v), 500)
     .option('--target-adds <n>', 'Stop after this many new bookmarks', (v) => Number(v))
     .option('--delay-ms <n>', 'Delay between requests in ms', (v) => Number(v), 600)
@@ -177,21 +203,18 @@ export function buildCli() {
     .option('--chrome-user-data-dir <path>', 'Chrome user-data directory')
     .option('--chrome-profile-directory <name>', 'Chrome profile name (e.g. Default)')
     .action(async (options) => {
-      if (options.incremental) {
-        // Incremental via official OAuth v2 API — no browser needed, great for cron
-        const result = await syncTwitterBookmarks('incremental', process.cwd(), {
+      const useApi = Boolean(options.api || options.incremental);
+      const mode = Boolean(options.full) ? 'full' : 'incremental';
+      if (useApi) {
+        const result = await syncTwitterBookmarks(mode, process.cwd(), {
           targetAdds: typeof options.targetAdds === 'number' && !Number.isNaN(options.targetAdds) ? options.targetAdds : undefined,
         });
         console.log(`Synced ${result.totalBookmarks} bookmarks (${result.added} new)`);
         console.log(`Cache: ${result.cachePath}`);
-        if (result.added > 0) {
-          process.stderr.write('Rebuilding search index...\n');
-          const idx = await buildIndex();
-          console.log(`Index: ${idx.dbPath} (${idx.recordCount} records)`);
-        }
+        await rebuildBookmarkIndexIfNeeded(result.added);
       } else {
-        // Full sync via GraphQL — needs Chrome with active X session
         const result = await syncBookmarksGraphQL(process.cwd(), {
+          incremental: !Boolean(options.full),
           maxPages: Number(options.maxPages) || 500,
           targetAdds: typeof options.targetAdds === 'number' && !Number.isNaN(options.targetAdds) ? options.targetAdds : undefined,
           delayMs: Number(options.delayMs) || 600,
@@ -207,17 +230,13 @@ export function buildCli() {
           },
         });
         console.log(formatSyncResult(result));
-        if (result.added > 0) {
-          process.stderr.write('Rebuilding search index...\n');
-          const idx = await buildIndex();
-          console.log(`Index: ${idx.dbPath} (${idx.recordCount} records)`);
-        }
+        await rebuildBookmarkIndexIfNeeded(result.added);
       }
     });
 
   bookmarks
     .command('auth')
-    .description('Run OAuth 2.0 flow for incremental API sync (requires X API keys in .env.local)')
+    .description('Run OAuth 2.0 flow for API sync (requires X API keys in .env.local)')
     .action(async () => {
       const result = await runTwitterOAuthFlow();
       console.log(`Saved token to ${result.tokenPath}`);
@@ -365,6 +384,73 @@ export function buildCli() {
     });
 
   bookmarks
+    .command('list')
+    .description('List bookmarks for timeline views or automation')
+    .option('--query <query>', 'Optional text query (FTS5 syntax)')
+    .option('--author <handle>', 'Filter by author handle')
+    .option('--after <date>', 'Only bookmarks posted after this date (YYYY-MM-DD)')
+    .option('--before <date>', 'Only bookmarks posted before this date (YYYY-MM-DD)')
+    .option('--category <category>', 'Filter by category')
+    .option('--domain <domain>', 'Filter by domain')
+    .option('--limit <n>', 'Max results', (v) => Number(v), 30)
+    .option('--offset <n>', 'Offset into result set', (v) => Number(v), 0)
+    .option('--json', 'Emit JSON output')
+    .action(async (options) => {
+      const items = await listBookmarks({
+        query: options.query ? String(options.query) : undefined,
+        author: options.author ? String(options.author) : undefined,
+        after: options.after ? String(options.after) : undefined,
+        before: options.before ? String(options.before) : undefined,
+        category: options.category ? String(options.category) : undefined,
+        domain: options.domain ? String(options.domain) : undefined,
+        limit: Number(options.limit) || 30,
+        offset: Number(options.offset) || 0,
+      });
+      const state = (await loadTimelineState()).bookmarks;
+      const payload = items.map((item) => ({ ...item, state: state[item.id] ?? {} }));
+      if (options.json) {
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+      }
+      for (const item of payload) {
+        const tags = [item.primaryCategory, item.primaryDomain].filter(Boolean).join(' · ');
+        const summary = item.text.length > 120 ? `${item.text.slice(0, 117)}...` : item.text;
+        console.log(`${item.id}  ${item.authorHandle ? `@${item.authorHandle}` : '@?'}  ${item.postedAt?.slice(0, 10) ?? '?'}${tags ? `  ${tags}` : ''}`);
+        console.log(`  ${summary}`);
+        console.log(`  ${item.url}`);
+        if (item.state.issueUrl) console.log(`  issue: ${item.state.issueUrl}`);
+        if (item.state.debateTranscriptPath) console.log(`  debate: ${item.state.debateTranscriptPath}`);
+        console.log();
+      }
+    });
+
+  bookmarks
+    .command('show')
+    .description('Show one bookmark with its saved action state')
+    .argument('<id>', 'Bookmark id')
+    .option('--json', 'Emit JSON output')
+    .action(async (id, options) => {
+      const item = await getBookmarkById(String(id));
+      if (!item) {
+        console.error(`Unknown bookmark: ${String(id)}`);
+        process.exitCode = 1;
+        return;
+      }
+      const state = (await loadTimelineState()).bookmarks[item.id] ?? {};
+      const payload = { ...item, state };
+      if (options.json) {
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+      }
+      console.log(`${item.id} · ${item.authorHandle ? `@${item.authorHandle}` : '@?'}`);
+      console.log(item.url);
+      console.log(item.text);
+      if (item.links.length) console.log(`links: ${item.links.join(', ')}`);
+      if (state.issueUrl) console.log(`issue: ${state.issueUrl}`);
+      if (state.debateTranscriptPath) console.log(`debate: ${state.debateTranscriptPath}`);
+    });
+
+  bookmarks
     .command('search')
     .description('Full-text search across bookmarks')
     .argument('<query>', 'Search query (supports FTS5 syntax: AND, OR, NOT, "exact phrase")')
@@ -409,6 +495,58 @@ export function buildCli() {
     .description('Show bookmark cache file path')
     .action(async () => { console.log(twitterBookmarksCachePath()); });
 
+  bookmarks
+    .command('issue')
+    .description('Create a GitHub issue from one bookmark')
+    .argument('<id>', 'Bookmark id')
+    .option('--repo <owner/name>', 'Override GitHub repo (otherwise infer from bookmark links)')
+    .option('--dry-run', 'Print the generated issue instead of creating it')
+    .option('--json', 'Emit JSON output')
+    .action(async (id, options) => {
+      try {
+        const result = await createBookmarkIssue(String(id), {
+          repo: options.repo ? String(options.repo) : undefined,
+          dryRun: Boolean(options.dryRun),
+        });
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log(result.command);
+        if (result.url) console.log(`Issue: ${result.url}`);
+        if (result.dryRun) console.log('Dry run only. No issue created.');
+      } catch (error) {
+        console.error((error as Error).message);
+        process.exitCode = 1;
+      }
+    });
+
+  bookmarks
+    .command('debate')
+    .description('Launch a council debate from one bookmark')
+    .argument('<id>', 'Bookmark id')
+    .option('--max-turns <n>', 'Override council max turns', (v) => Number(v))
+    .option('--json', 'Emit JSON output')
+    .action(async (id, options) => {
+      try {
+        const result = await debateBookmark(String(id), {
+          maxTurns: typeof options.maxTurns === 'number' && !Number.isNaN(options.maxTurns)
+            ? options.maxTurns
+            : undefined,
+        });
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log(result.command);
+        if (result.transcriptPath) console.log(`Transcript: ${result.transcriptPath}`);
+        if (result.consensusPath) console.log(`Conclusion: ${result.consensusPath}`);
+      } catch (error) {
+        console.error((error as Error).message);
+        process.exitCode = 1;
+      }
+    });
+
   // ── theories commands ────────────────────────────────────────────────
   const theories = program.command('theories').description('Configure theories overnight analysis');
 
@@ -438,6 +576,155 @@ export function buildCli() {
       const config = await loadTheoriesConfig();
       console.log(`Config: ${theoriesConfigPath()}`);
       console.log(JSON.stringify(config, null, 2));
+    });
+
+  theories
+    .command('sync')
+    .description('Sync emailed FT findings into the local theory cache')
+    .option('--json', 'Emit JSON output')
+    .action(async (options) => {
+      try {
+        const result = await syncTheoryInbox(process.cwd());
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log(`Synced theory mail into ${result.dbPath}`);
+        console.log(`Findings: ${result.findingCount}`);
+        console.log(`New messages: ${result.newMessages}`);
+        console.log(`Added findings: ${result.addedFindings}`);
+        console.log(`Stop: ${result.stopReason}`);
+      } catch (error) {
+        console.error((error as Error).message);
+        process.exitCode = 1;
+      }
+    });
+
+  theories
+    .command('list')
+    .description('List FT findings from the local theory cache')
+    .option('--query <query>', 'Search FT id, title, repo, or finding text')
+    .option('--repo <repo>', 'Filter by repo name or path')
+    .option('--confidence <confidence>', 'Filter by confidence')
+    .option('--type <type>', 'Filter by theory type')
+    .option('--limit <n>', 'Max results', (v) => Number(v), 30)
+    .option('--offset <n>', 'Offset into result set', (v) => Number(v), 0)
+    .option('--json', 'Emit JSON output')
+    .action(async (options) => {
+      const items = await listTheoryItems({
+        query: options.query ? String(options.query) : undefined,
+        repo: options.repo ? String(options.repo) : undefined,
+        confidence: options.confidence ? String(options.confidence) : undefined,
+        type: options.type ? String(options.type) : undefined,
+        limit: Number(options.limit) || 30,
+        offset: Number(options.offset) || 0,
+      });
+      try {
+        await refreshTheoryGitHubStates(items);
+      } catch {
+        // Keep list usable even if GitHub status refresh fails.
+      }
+      const state = (await loadTimelineState()).theories;
+      const payload = items.map((item) => ({ ...item, state: state[item.id] ?? {} }));
+      if (options.json) {
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+      }
+      for (const item of payload) {
+        console.log(`${item.displayId}  ${item.date}  ${item.transcriptMeta.repoName ?? item.sectionTitle ?? ''}`.trim());
+        console.log(`  ${item.title}`);
+        if (item.confidence) console.log(`  confidence: ${item.confidence}`);
+        if (item.state.issueUrl) console.log(`  issue: ${item.state.issueUrl}`);
+        if (item.state.prUrl) console.log(`  pr: ${item.state.prUrl}${item.state.prState === 'merged' ? ' (merged)' : ''}`);
+        if (item.state.debateTranscriptPath) console.log(`  debate: ${item.state.debateTranscriptPath}`);
+        console.log();
+      }
+    });
+
+  theories
+    .command('show')
+    .description('Show one FT finding with its saved action state')
+    .argument('<id>', 'FT id (accepts FT-1 or FT-001)')
+    .option('--json', 'Emit JSON output')
+    .action(async (id, options) => {
+      const item = await getTheoryItem(String(id));
+      if (!item) {
+        console.error(`Unknown theory: ${String(id)}`);
+        process.exitCode = 1;
+        return;
+      }
+      try {
+        await refreshTheoryGitHubState(item);
+      } catch {
+        // Keep show usable even if GitHub status refresh fails.
+      }
+      const state = (await loadTimelineState()).theories[item.id] ?? {};
+      const payload = { ...item, state };
+      if (options.json) {
+        console.log(JSON.stringify(payload, null, 2));
+        return;
+      }
+      console.log(`${item.displayId} · ${item.title}`);
+      if (item.transcriptMeta.githubRepo) console.log(`github repo: ${item.transcriptMeta.githubRepo}`);
+      if (item.transcriptMeta.repoName) console.log(`repo: ${item.transcriptMeta.repoName}`);
+      if (item.transcriptMeta.repoPath) console.log(`repo path: ${item.transcriptMeta.repoPath}`);
+      console.log(`found: ${item.whatWeFound}`);
+      console.log(`do: ${item.whatToDo}`);
+      if (state.issueUrl) console.log(`issue: ${state.issueUrl}`);
+      if (state.prUrl) console.log(`pr: ${state.prUrl}${state.prState === 'merged' ? ' (merged)' : ''}`);
+      if (state.debateTranscriptPath) console.log(`debate: ${state.debateTranscriptPath}`);
+    });
+
+  theories
+    .command('issue')
+    .description('Create a GitHub issue from one FT finding')
+    .argument('<id>', 'FT id (accepts FT-1 or FT-001)')
+    .option('--repo <owner/name>', 'Override GitHub repo (otherwise infer from the theory repo)')
+    .option('--dry-run', 'Print the generated issue instead of creating it')
+    .option('--json', 'Emit JSON output')
+    .action(async (id, options) => {
+      try {
+        const result = await createTheoryIssue(String(id), {
+          repo: options.repo ? String(options.repo) : undefined,
+          dryRun: Boolean(options.dryRun),
+        });
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log(result.command);
+        if (result.url) console.log(`Issue: ${result.url}`);
+        if (result.dryRun) console.log('Dry run only. No issue created.');
+      } catch (error) {
+        console.error((error as Error).message);
+        process.exitCode = 1;
+      }
+    });
+
+  theories
+    .command('debate')
+    .description('Launch a council debate from one FT finding')
+    .argument('<id>', 'FT id (accepts FT-1 or FT-001)')
+    .option('--max-turns <n>', 'Override council max turns', (v) => Number(v))
+    .option('--json', 'Emit JSON output')
+    .action(async (id, options) => {
+      try {
+        const result = await debateTheory(String(id), {
+          maxTurns: typeof options.maxTurns === 'number' && !Number.isNaN(options.maxTurns)
+            ? options.maxTurns
+            : undefined,
+        });
+        if (options.json) {
+          console.log(JSON.stringify(result, null, 2));
+          return;
+        }
+        console.log(result.command);
+        if (result.transcriptPath) console.log(`Transcript: ${result.transcriptPath}`);
+        if (result.consensusPath) console.log(`Conclusion: ${result.consensusPath}`);
+      } catch (error) {
+        console.error((error as Error).message);
+        process.exitCode = 1;
+      }
     });
 
   // ── lens commands ──────────────────────────────────────────────────────
@@ -508,6 +795,26 @@ export function buildCli() {
       const l = all.find(x => x.name === name);
       if (!l) { console.log(`No lens named "${name}"`); return; }
       console.log(JSON.stringify(l, null, 2));
+    });
+
+  program
+    .command('web')
+    .description('Launch the local mobile-first bookmarks + theories control plane')
+    .option('--host <host>', 'Host to bind', '127.0.0.1')
+    .option('--port <n>', 'Port to bind', (v) => Number(v), 4310)
+    .action(async (options) => {
+      const host = String(options.host || '127.0.0.1');
+      const port = Number(options.port) || 4310;
+      const server = await startTimelineWebServer({ cwd: process.cwd(), host, port });
+      const url = `http://${host}:${port}`;
+      console.log(`Field Theory timelines running at ${url}`);
+      console.log('Press Ctrl+C to stop.');
+      const stop = async () => {
+        await new Promise<void>((resolve) => server.close(() => resolve()));
+        process.exit(0);
+      };
+      process.once('SIGINT', stop);
+      process.once('SIGTERM', stop);
     });
 
   return program;

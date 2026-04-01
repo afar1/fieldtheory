@@ -26,6 +26,141 @@ export interface SearchOptions {
   after?: string;
 }
 
+export interface BookmarkTimelineItem {
+  id: string;
+  tweetId: string;
+  url: string;
+  text: string;
+  authorHandle?: string;
+  authorName?: string;
+  authorProfileImageUrl?: string;
+  postedAt?: string | null;
+  bookmarkedAt?: string | null;
+  categories: string[];
+  primaryCategory?: string | null;
+  domains: string[];
+  primaryDomain?: string | null;
+  githubUrls: string[];
+  links: string[];
+  mediaCount: number;
+  linkCount: number;
+  likeCount?: number | null;
+  repostCount?: number | null;
+  replyCount?: number | null;
+  quoteCount?: number | null;
+  bookmarkCount?: number | null;
+  viewCount?: number | null;
+}
+
+export interface BookmarkTimelineFilters {
+  query?: string;
+  author?: string;
+  after?: string;
+  before?: string;
+  category?: string;
+  domain?: string;
+  sort?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
+function parseJsonArray(value: unknown): string[] {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((entry): entry is string => typeof entry === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+function parseCsv(value: unknown): string[] {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  return value
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function mapTimelineRow(row: unknown[]): BookmarkTimelineItem {
+  return {
+    id: row[0] as string,
+    tweetId: row[1] as string,
+    url: row[2] as string,
+    text: row[3] as string,
+    authorHandle: (row[4] as string) ?? undefined,
+    authorName: (row[5] as string) ?? undefined,
+    authorProfileImageUrl: (row[6] as string) ?? undefined,
+    postedAt: (row[7] as string) ?? null,
+    bookmarkedAt: (row[8] as string) ?? null,
+    categories: parseCsv(row[9]),
+    primaryCategory: (row[10] as string) ?? null,
+    domains: parseCsv(row[11]),
+    primaryDomain: (row[12] as string) ?? null,
+    githubUrls: parseJsonArray(row[13]),
+    links: parseJsonArray(row[14]),
+    mediaCount: Number(row[15] ?? 0),
+    linkCount: Number(row[16] ?? 0),
+    likeCount: row[17] as number | null,
+    repostCount: row[18] as number | null,
+    replyCount: row[19] as number | null,
+    quoteCount: row[20] as number | null,
+    bookmarkCount: row[21] as number | null,
+    viewCount: row[22] as number | null,
+  };
+}
+
+function buildBookmarkWhereClause(filters: BookmarkTimelineFilters): {
+  where: string;
+  params: Array<string | number>;
+} {
+  const conditions: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (filters.query) {
+    conditions.push(`b.rowid IN (SELECT rowid FROM bookmarks_fts WHERE bookmarks_fts MATCH ?)`);
+    params.push(filters.query);
+  }
+  if (filters.author) {
+    conditions.push(`b.author_handle = ? COLLATE NOCASE`);
+    params.push(filters.author);
+  }
+  if (filters.after) {
+    conditions.push(`COALESCE(b.posted_at, b.bookmarked_at) >= ?`);
+    params.push(filters.after);
+  }
+  if (filters.before) {
+    conditions.push(`COALESCE(b.posted_at, b.bookmarked_at) <= ?`);
+    params.push(filters.before);
+  }
+  if (filters.category) {
+    conditions.push(`b.categories LIKE ?`);
+    params.push(`%${filters.category}%`);
+  }
+  if (filters.domain) {
+    conditions.push(`b.domains LIKE ?`);
+    params.push(`%${filters.domain}%`);
+  }
+
+  return {
+    where: conditions.length ? `WHERE ${conditions.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function bookmarkSortClause(direction: 'asc' | 'desc' = 'desc'): string {
+  const normalized = direction === 'asc' ? 'ASC' : 'DESC';
+  return `
+    ORDER BY
+      CASE
+        WHEN b.bookmarked_at GLOB '____-__-__*' THEN b.bookmarked_at
+        WHEN b.posted_at GLOB '____-__-__*' THEN b.posted_at
+        ELSE ''
+      END ${normalized},
+      CAST(b.tweet_id AS INTEGER) ${normalized}
+  `;
+}
+
 function initSchema(db: Database): void {
   db.run(`CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)`);
 
@@ -234,6 +369,191 @@ export async function searchBookmarks(options: SearchOptions, cwd = process.cwd(
       postedAt: row[5] as string | null,
       score: row[6] as number,
     }));
+  } finally {
+    db.close();
+  }
+}
+
+export async function listBookmarks(
+  filters: BookmarkTimelineFilters = {},
+  cwd = process.cwd()
+): Promise<BookmarkTimelineItem[]> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+  const limit = filters.limit ?? 30;
+  const offset = filters.offset ?? 0;
+
+  try {
+    const { where, params } = buildBookmarkWhereClause(filters);
+    const sql = `
+      SELECT
+        b.id,
+        b.tweet_id,
+        b.url,
+        b.text,
+        b.author_handle,
+        b.author_name,
+        b.author_profile_image_url,
+        b.posted_at,
+        b.bookmarked_at,
+        b.categories,
+        b.primary_category,
+        b.domains,
+        b.primary_domain,
+        b.github_urls,
+        b.links_json,
+        b.media_count,
+        b.link_count,
+        b.like_count,
+        b.repost_count,
+        b.reply_count,
+        b.quote_count,
+        b.bookmark_count,
+        b.view_count
+      FROM bookmarks b
+      ${where}
+      ${bookmarkSortClause(filters.sort)}
+      LIMIT ?
+      OFFSET ?
+    `;
+    params.push(limit, offset);
+
+    const rows = db.exec(sql, params);
+    if (!rows.length) return [];
+    return rows[0].values.map((row) => mapTimelineRow(row));
+  } finally {
+    db.close();
+  }
+}
+
+export async function countBookmarks(
+  filters: BookmarkTimelineFilters = {},
+  cwd = process.cwd()
+): Promise<number> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+
+  try {
+    const { where, params } = buildBookmarkWhereClause(filters);
+    const sql = `
+      SELECT COUNT(*)
+      FROM bookmarks b
+      ${where}
+    `;
+    const rows = db.exec(sql, params);
+    return Number(rows[0]?.values?.[0]?.[0] ?? 0);
+  } finally {
+    db.close();
+  }
+}
+
+export async function exportBookmarksForSyncSeed(cwd = process.cwd()): Promise<BookmarkRecord[]> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+
+  try {
+    const sql = `
+      SELECT
+        b.id,
+        b.tweet_id,
+        b.url,
+        b.text,
+        b.author_handle,
+        b.author_name,
+        b.author_profile_image_url,
+        b.posted_at,
+        b.bookmarked_at,
+        b.synced_at,
+        b.conversation_id,
+        b.in_reply_to_status_id,
+        b.quoted_status_id,
+        b.language,
+        b.like_count,
+        b.repost_count,
+        b.reply_count,
+        b.quote_count,
+        b.bookmark_count,
+        b.view_count,
+        b.links_json
+      FROM bookmarks b
+      ${bookmarkSortClause('desc')}
+    `;
+    const rows = db.exec(sql);
+    if (!rows.length) return [];
+
+    return rows[0].values.map((row) => ({
+      id: String(row[0]),
+      tweetId: String(row[1]),
+      url: String(row[2]),
+      text: String(row[3] ?? ''),
+      authorHandle: (row[4] as string) ?? undefined,
+      authorName: (row[5] as string) ?? undefined,
+      authorProfileImageUrl: (row[6] as string) ?? undefined,
+      postedAt: (row[7] as string) ?? null,
+      bookmarkedAt: (row[8] as string) ?? null,
+      syncedAt: String(row[9] ?? row[8] ?? row[7] ?? new Date(0).toISOString()),
+      conversationId: (row[10] as string) ?? undefined,
+      inReplyToStatusId: (row[11] as string) ?? undefined,
+      quotedStatusId: (row[12] as string) ?? undefined,
+      language: (row[13] as string) ?? undefined,
+      engagement: {
+        likeCount: row[14] as number | undefined,
+        repostCount: row[15] as number | undefined,
+        replyCount: row[16] as number | undefined,
+        quoteCount: row[17] as number | undefined,
+        bookmarkCount: row[18] as number | undefined,
+        viewCount: row[19] as number | undefined,
+      },
+      links: parseJsonArray(row[20]),
+      tags: [],
+      ingestedVia: 'graphql',
+    }));
+  } finally {
+    db.close();
+  }
+}
+
+export async function getBookmarkById(id: string, cwd = process.cwd()): Promise<BookmarkTimelineItem | null> {
+  const dbPath = twitterBookmarksIndexPath(cwd);
+  const db = await openDb(dbPath);
+  ensureMigrations(db);
+
+  try {
+    const rows = db.exec(
+      `SELECT
+        b.id,
+        b.tweet_id,
+        b.url,
+        b.text,
+        b.author_handle,
+        b.author_name,
+        b.author_profile_image_url,
+        b.posted_at,
+        b.bookmarked_at,
+        b.categories,
+        b.primary_category,
+        b.domains,
+        b.primary_domain,
+        b.github_urls,
+        b.links_json,
+        b.media_count,
+        b.link_count,
+        b.like_count,
+        b.repost_count,
+        b.reply_count,
+        b.quote_count,
+        b.bookmark_count,
+        b.view_count
+      FROM bookmarks b
+      WHERE b.id = ?
+      LIMIT 1`,
+      [id]
+    );
+    const row = rows[0]?.values?.[0];
+    return row ? mapTimelineRow(row) : null;
   } finally {
     db.close();
   }

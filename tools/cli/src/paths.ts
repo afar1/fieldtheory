@@ -90,3 +90,15 @@ export function twitterBookmarksIndexPath(cwd = process.cwd()): string {
 export function localStateDir(cwd = process.cwd()): string {
   return path.join(workspaceRoot(cwd), '.local');
 }
+
+export function timelineStatePath(cwd = process.cwd()): string {
+  return path.join(localStateDir(cwd), 'timeline-state.json');
+}
+
+export function theoryIndexPath(cwd = process.cwd()): string {
+  return path.join(localStateDir(cwd), 'theories.db');
+}
+
+export function theoryMailCacheDir(cwd = process.cwd()): string {
+  return path.join(localStateDir(cwd), 'theory-mail-cache');
+}
