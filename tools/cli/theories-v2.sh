@@ -332,6 +332,7 @@ discover_active_repos() {
 }
 
 ACTIVE_REPOS=$(discover_active_repos)
+ACTIVE_REPOS=$(echo "$ACTIVE_REPOS" | jq '[.[] | select(.name == "routines" or .name == "hatchery" or .name == "fieldtheory")]')
 REPO_COUNT=$(echo "$ACTIVE_REPOS" | jq 'length')
 log "Found $REPO_COUNT active repos"
 
@@ -400,7 +401,7 @@ TRANSCRIPT_PATHS=()
 
 run_analysis() {
     local job_json="$1"
-    local job_type job_title repo_name repo_path prompt_hint bookmark_text
+    local job_type job_title repo_name repo_path prompt_hint bookmark_text bookmark_blocks
     job_type=$(echo "$job_json" | jq -r '.type')
     job_title=$(echo "$job_json" | jq -r '.title')
     repo_name=$(echo "$job_json" | jq -r '.repo.name')
@@ -411,6 +412,7 @@ run_analysis() {
 
     # Format bookmarks for the prompt
     bookmark_text=$(echo "$job_json" | jq -r '.bookmarks[] | "- @\(.author): \(.text[0:250]) [\(.url)]\(if .github_urls then " (github: " + .github_urls + ")" else "" end)"')
+    bookmark_blocks=$(echo "$job_json" | jq -r '[.bookmarks[] | "### @\(.author)\n\n> \(.text // "")\n\npost: \(.url)\n" ] | join("\n")')
     local bookmark_urls
     bookmark_urls=$(echo "$job_json" | jq -r '[.bookmarks[].url] | join("\n")')
 
@@ -584,7 +586,8 @@ Rules:
         --arg finding "$finding" \
         --arg transcript "$transcript_path" \
         --arg bookmark_urls "$bookmark_urls" \
-        '{type: $type, title: $title, repo: $repo, finding: $finding, transcript: $transcript, bookmarkUrls: $bookmark_urls}'
+        --arg bookmark_blocks "$bookmark_blocks" \
+        '{type: $type, title: $title, repo: $repo, finding: $finding, transcript: $transcript, bookmarkUrls: $bookmark_urls, bookmarkBlocks: $bookmark_blocks}'
     )")
     TRANSCRIPT_PATHS+=("$transcript_path")
 
@@ -616,13 +619,14 @@ build_digest() {
     local idx=0
     for finding_json in "${FINDINGS[@]}"; do
         idx=$((idx + 1))
-        local f_type f_title f_repo f_finding f_transcript f_urls
+        local f_type f_title f_repo f_finding f_transcript f_urls f_bookmark_blocks
         f_type=$(echo "$finding_json" | jq -r '.type')
         f_title=$(echo "$finding_json" | jq -r '.title')
         f_repo=$(echo "$finding_json" | jq -r '.repo')
         f_finding=$(echo "$finding_json" | jq -r '.finding')
         f_transcript=$(echo "$finding_json" | jq -r '.transcript')
         f_urls=$(echo "$finding_json" | jq -r '.bookmarkUrls')
+        f_bookmark_blocks=$(echo "$finding_json" | jq -r '.bookmarkBlocks // ""')
 
         local icon
         case "$f_type" in
@@ -638,6 +642,12 @@ build_digest() {
 ---
 
 ## ${icon} ${f_title} — ${f_repo}
+
+### Original posts
+
+${f_bookmark_blocks}
+
+### Theory
 
 ${f_finding}
 

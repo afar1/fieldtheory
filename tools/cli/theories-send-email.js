@@ -52,7 +52,8 @@ if (!apiKey) {
 }
 
 const domain = process.env.AGENTMAIL_DOMAIN || process.env.EMAIL_DEBATE_AGENTMAIL_DOMAIN || 'agentmail.to';
-const fromInbox = `theories@${domain}`;
+const fromInbox = process.env.THEORIES_FROM_INBOX || process.env.EMAIL_DEBATE_AGENTMAIL_INBOX_COUNCIL || `debateintake@${domain}`;
+const fromName = process.env.EMAIL_DEBATE_FROM_NAME || 'Field Theory Council';
 
 const textBody = fs.readFileSync(bodyPath, 'utf-8');
 const htmlBody = wrapHtml(markdownToHtml(textBody));
@@ -67,7 +68,7 @@ const resp = await fetch(`https://api.agentmail.to/v0/inboxes/${fromInbox}/messa
   body: JSON.stringify({
     to: [to],
     subject,
-    from_name: 'Field Theory',
+    from_name: fromName,
     text: textBody,
     html: htmlBody,
   }),
