@@ -188,6 +188,7 @@ export class DynamicIslandManager extends EventEmitter {
   };
   private inputMode: DynamicIslandInputMode = 'standard';
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
+  private stayOnLaptop: boolean = false;
 
   constructor() {
     super();
@@ -343,7 +344,7 @@ export class DynamicIslandManager extends EventEmitter {
     _detected?: { modeWidth: number; scaleFactor: number; menuBarHeight: number; isInternal: boolean };
   } {
     const profile = this.getActiveNotchProfile();
-    const primaryDisplay = screen.getPrimaryDisplay();
+    const display = this.getTargetDisplay();
     return {
       notchWidthOverride: profile?.notchWidth ?? this.NOTCH_WIDTH,
       pillWidth: this.ISLAND_WIDTH_IDLE,
@@ -352,8 +353,8 @@ export class DynamicIslandManager extends EventEmitter {
       offsetY: 0,
       _detected: {
         modeWidth: this.getPrimaryDisplayModeWidth(),
-        scaleFactor: primaryDisplay.scaleFactor,
-        menuBarHeight: primaryDisplay.workArea.y - primaryDisplay.bounds.y,
+        scaleFactor: display.scaleFactor,
+        menuBarHeight: display.workArea.y - display.bounds.y,
         isInternal: this.isPrimaryInternalDisplay(),
       },
     };
@@ -1282,39 +1283,54 @@ export class DynamicIslandManager extends EventEmitter {
     return Math.max(min, Math.min(max, rounded));
   }
 
+  setStayOnLaptop(value: boolean): void {
+    if (this.stayOnLaptop === value) return;
+    this.stayOnLaptop = value;
+    this.updateWindowSize();
+    this.refreshWindowProperties('stay-on-laptop-changed');
+  }
+
+  private getTargetDisplay(): Electron.Display {
+    if (this.stayOnLaptop) {
+      const internal = screen.getAllDisplays().find(d => d.internal === true);
+      if (internal) return internal;
+    }
+    return screen.getPrimaryDisplay();
+  }
+
   private getPrimaryDisplayGeometry(): { x: number; y: number; width: number } {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const widthFromBounds = primaryDisplay.bounds?.width;
+    const display = this.getTargetDisplay();
+    const widthFromBounds = display.bounds?.width;
     const width =
       typeof widthFromBounds === 'number' && Number.isFinite(widthFromBounds) && widthFromBounds > 0
         ? widthFromBounds
-        : primaryDisplay.workAreaSize.width;
+        : display.workAreaSize.width;
     return {
-      x: primaryDisplay.bounds.x,
-      y: primaryDisplay.bounds.y,
+      x: display.bounds.x,
+      y: display.bounds.y,
       width,
     };
   }
 
   private getMenuBarHeight(): number {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const menuBarHeight = primaryDisplay.workArea.y - primaryDisplay.bounds.y;
+    const display = this.getTargetDisplay();
+    const menuBarHeight = display.workArea.y - display.bounds.y;
     if (menuBarHeight <= 0 || menuBarHeight >= 80) return this.ISLAND_HEIGHT_IDLE;
     return Math.max(menuBarHeight, 32);
   }
 
   private isPrimaryInternalDisplay(): boolean {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    return primaryDisplay.internal !== false;
+    const display = this.getTargetDisplay();
+    return display.internal !== false;
   }
 
   private getPrimaryDisplayModeWidth(): number {
-    const primaryDisplay = screen.getPrimaryDisplay();
-    const modeWidth = primaryDisplay.bounds?.width;
+    const display = this.getTargetDisplay();
+    const modeWidth = display.bounds?.width;
     if (typeof modeWidth === 'number' && Number.isFinite(modeWidth) && modeWidth > 0) {
       return modeWidth;
     }
-    return primaryDisplay.workAreaSize.width;
+    return display.workAreaSize.width;
   }
 
   private getActiveNotchProfile(): NotchDisplayProfile | null {
