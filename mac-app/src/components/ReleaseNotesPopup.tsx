@@ -60,6 +60,20 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.99': [
+    '__SECTION__:Fixes',
+    'Image stacks now paste correctly to terminals — all images, not just the last one',
+    'Dynamic island white corners on notch displays',
+    'Audio recording self-heal when mic input goes null',
+    'CoreAudio recovery — restarts audio daemon when no input device detected',
+    'Native helper restart was broken on final retry',
+    'Clipboard "keep forever" retention setting was being ignored',
+    'Drag-and-drop items no longer extend the window horizontally',
+    'XSS fix in public Librarian markdown renderer',
+    '__SECTION__:Features',
+    'Stay on laptop display option for dynamic island with external monitors',
+    'Security hardening across main process',
+  ],
   '0.1.98': RELEASE_NOTES_0_1_98,
   '0.1.97': RELEASE_NOTES_0_1_97,
   '0.1.96': RELEASE_NOTES_0_1_96,
@@ -310,6 +324,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.99': 'Apr 7 2026',
   '0.1.98': 'Mar 16 2026',
   '0.1.97': 'Mar 16 2026',
   '0.1.96': 'Mar 16 2026',
