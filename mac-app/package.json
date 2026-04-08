@@ -125,10 +125,6 @@
           "to": "whisper-server"
         },
         {
-          "from": "scripts/council.sh",
-          "to": "council.sh"
-        },
-        {
           "from": "public/sounds",
           "to": "sounds"
         },
