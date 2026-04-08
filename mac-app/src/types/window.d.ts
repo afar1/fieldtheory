@@ -1246,6 +1246,8 @@ interface HotMicAPI {
     offsetX: number;
     offsetY: number;
   } | null>;
+  getIslandStayOnLaptop: () => Promise<boolean>;
+  setIslandStayOnLaptop: (value: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
@@ -1787,76 +1789,6 @@ declare global {
     onConfigChanged: (callback: (config: SquaresConfig) => void) => () => void;
   }
 
-  type CouncilState = 'idle' | 'starting' | 'debating' | 'paused' | 'finalizing' | 'done' | 'error';
-  type CouncilMatchup =
-    | 'opus-vs-opus'
-    | 'opus-vs-sonnet'
-    | 'opus-vs-codex'
-    | 'sonnet-vs-opus'
-    | 'sonnet-vs-sonnet'
-    | 'sonnet-vs-codex'
-    | 'codex-vs-opus'
-    | 'codex-vs-sonnet'
-    | 'codex-vs-codex';
-
-  interface CouncilStatus {
-    state: CouncilState;
-    currentRound: number;
-    topic: string | null;
-    repoPath: string | null;
-    error: string | null;
-    matchup: CouncilMatchup;
-    transcriptPath: string | null;
-    consensusPath: string | null;
-    tokenUsage: {
-      inputTokens: number | null;
-      outputTokens: number | null;
-      totalTokens: number | null;
-    };
-  }
-
-  interface CouncilConfig {
-    topic: string;
-    maxTurns?: number;
-    repoPath?: string;
-    matchup?: CouncilMatchup;
-    opusVsOpus?: boolean;
-  }
-
-  interface CouncilPreferences {
-    defaultMatchup: CouncilMatchup;
-    defaultMaxTurns: number;
-    autoOpenWindow: boolean;
-    autoPasteConsensus: boolean;
-  }
-
-  interface CouncilEvent {
-    type: string;
-    [key: string]: any;
-  }
-
-  interface CouncilAPI {
-    start: (config: CouncilConfig) => Promise<{ success: boolean; error?: string }>;
-    stop: () => Promise<void>;
-    showWindow: () => Promise<void>;
-    getStatus: () => Promise<CouncilStatus>;
-    getPreferences: () => Promise<CouncilPreferences>;
-    savePreferences: (prefs: Partial<CouncilPreferences>) => Promise<boolean>;
-    onEvent: (callback: (event: CouncilEvent) => void) => () => void;
-    onStatusChanged: (callback: (status: CouncilStatus) => void) => () => void;
-  }
-
-  interface EmailDebateAPI {
-    getConfig: () => Promise<any>;
-    saveConfig: (config: any) => Promise<any>;
-    testConnection: () => Promise<any>;
-    getThreads: () => Promise<any[]>;
-    getThread: (threadId: string) => Promise<any | null>;
-    closeThread: (threadId: string) => Promise<boolean>;
-    reopenThread: (threadId: string) => Promise<boolean>;
-    onEvent: (callback: (event: any) => void) => () => void;
-  }
-
   interface Window {
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
@@ -1885,8 +1817,7 @@ declare global {
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
     hotMicAPI?: HotMicAPI;
     squaresAPI?: SquaresAPI;
-    councilAPI?: CouncilAPI;
-    emailDebateAPI?: EmailDebateAPI;
+
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }

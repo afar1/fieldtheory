@@ -10,8 +10,6 @@ import {
   type GazePersonalOffsets,
   type GazeWindowFocusConfig,
 } from './types/gaze';
-import { DEFAULT_COUNCIL_MATCHUP, DEFAULT_COUNCIL_MAX_TURNS } from './types/council';
-import type { CouncilMatchup } from './types/council';
 
 const log = createLogger('Preferences');
 import { UserDataManager, getUserDataManager } from './userDataManager';
@@ -117,12 +115,6 @@ interface Preferences {
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
 
-  // Council defaults for debate kickoff flow.
-  councilDefaultMatchup?: CouncilMatchup;
-  councilDefaultMaxTurns?: number;
-  councilAutoOpenWindow?: boolean;
-  councilAutoPasteConsensus?: boolean;
-
   // Show fieldtheory.dev link in footer - toggleable per user preference.
   showFieldTheoryLink?: boolean;
 
@@ -203,6 +195,10 @@ interface Preferences {
   hotMicSleepPhrases?: string;
   hotMicLockPhrases?: string;
 
+  // Dynamic Island display preference.
+  // When true, the island stays on the built-in laptop display even when an external monitor is primary.
+  hotMicIslandStayOnLaptop?: boolean;
+
   // Dynamic Island geometry tuning (Hot Mic settings).
   // notchWidthOverride: 0 means automatic profile-based notch width.
   hotMicIslandNotchWidthOverride?: number;
@@ -256,12 +252,6 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Show in Dock - disabled by default (panel mode). WIP feature.
   showInDock: false,
 
-  // Council defaults favor a short mixed-model debate and immediate return.
-  councilDefaultMatchup: DEFAULT_COUNCIL_MATCHUP,
-  councilDefaultMaxTurns: DEFAULT_COUNCIL_MAX_TURNS,
-  councilAutoOpenWindow: true,
-  councilAutoPasteConsensus: true,
-
   // Dark mode - disabled by default (light mode).
   darkMode: false,
 
@@ -282,6 +272,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicBackgroundFilterEnabled: false,
   hotMicBackgroundFilterStrength: 4,
   hotMicDrawerTextSize: 14,
+  hotMicIslandStayOnLaptop: false,
   hotMicIslandNotchWidthOverride: 0,
   hotMicIslandPillWidth: 72,
   hotMicIslandPillHeight: 38,

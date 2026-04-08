@@ -9,7 +9,6 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
-import CouncilHistoryView from './CouncilHistoryView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView from './LibrarianView';
 import DebugConsole from './DebugConsole';
@@ -3221,7 +3220,7 @@ export default function ClipboardHistory() {
           }}
         />
         {/* Header title based on current view - Fields (clipboard) is the only view without a title */}
-        {(showSettings || viewMode === 'commands' || viewMode === 'council' || viewMode === 'feedback' || viewMode === 'sketch' || viewMode === 'librarian') && (
+        {(showSettings || viewMode === 'commands' || viewMode === 'feedback' || viewMode === 'sketch' || viewMode === 'librarian') && (
           <span style={{
             marginLeft: '8px',
             fontSize: '14px',
@@ -3229,10 +3228,10 @@ export default function ClipboardHistory() {
             color: theme.textSecondary,
             marginRight: 'auto',
           }}>
-            {showSettings ? 'Settings' : viewMode === 'commands' ? 'Commands' : viewMode === 'council' ? 'Council' : viewMode === 'feedback' ? 'Feedback' : viewMode === 'sketch' ? 'Draw' : viewMode === 'librarian' ? 'Librarian' : ''}
+            {showSettings ? 'Settings' : viewMode === 'commands' ? 'Commands' : viewMode === 'feedback' ? 'Feedback' : viewMode === 'sketch' ? 'Draw' : viewMode === 'librarian' ? 'Librarian' : ''}
           </span>
         )}
-        {!showSettings && viewMode !== 'commands' && viewMode !== 'council' && viewMode !== 'feedback' && viewMode !== 'sketch' && viewMode !== 'librarian' && <div style={{ marginRight: 'auto' }} />}
+        {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'sketch' && viewMode !== 'librarian' && <div style={{ marginRight: 'auto' }} />}
 
         {/* Priority Mic label - visible in all views */}
         {audioDevices.length > 0 && (
@@ -3642,47 +3641,6 @@ export default function ClipboardHistory() {
             Commands
           </button>
 
-          <button
-            onClick={() => {
-              setViewMode('council');
-              setShowSettings(false);
-            }}
-            tabIndex={0}
-            style={{
-              padding: '5px 6px',
-              fontSize: '9px',
-              fontWeight: 500,
-              backgroundColor: viewMode === 'council' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'council' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'council' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'council' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Council debate history"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M8 10h8" />
-              <path d="M8 14h5" />
-              <path d="M6 4h12a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-4l-4 3v-3H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" />
-            </svg>
-            Council
-          </button>
-
           {/* Librarian button */}
           {librarianEnabled && (
             <button
@@ -4085,8 +4043,6 @@ export default function ClipboardHistory() {
             setShowSettings(true);
           }}
         />
-      ) : viewMode === 'council' ? (
-        <CouncilHistoryView />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
           <SketchView
@@ -6016,19 +5972,13 @@ export default function ClipboardHistory() {
         <DragOverlay 
           dropAnimation={null}
           modifiers={[
-            // Snap ghost center to cursor, ignoring where user clicked on the row
+            // Lock drag to vertical axis and center ghost on cursor Y
             ({ activatorEvent, draggingNodeRect, transform }) => {
               if (!activatorEvent || !draggingNodeRect) return transform;
-              
-              // Get the click position within the dragged element
-              const event = activatorEvent as PointerEvent;
-              const offsetX = event.offsetX ?? draggingNodeRect.width / 2;
-              const offsetY = event.offsetY ?? draggingNodeRect.height / 2;
-              
-              // Adjust transform to center the ghost on cursor
+              const offsetY = (activatorEvent as PointerEvent).offsetY ?? draggingNodeRect.height / 2;
               return {
                 ...transform,
-                x: transform.x + offsetX - draggingNodeRect.width / 2,
+                x: 0,
                 y: transform.y + offsetY - draggingNodeRect.height / 2,
               };
             },
