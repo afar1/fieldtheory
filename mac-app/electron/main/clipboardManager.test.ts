@@ -143,6 +143,27 @@ describe('ClipboardManager.checkClipboard', () => {
     expect(onItemAdded).toHaveBeenCalledWith(42);
   });
 
+  it('bumps created_at for duplicate text so it appears at the top', async () => {
+    testState.readText.mockReturnValue('existing text');
+    const runFn = vi.fn();
+    testState.dbPrepare.mockReturnValue({
+      get: vi.fn(() => ({ id: 42 })),
+      run: runFn,
+      all: vi.fn(() => []),
+    });
+
+    const before = Date.now();
+    await manager.checkClipboard();
+    const after = Date.now();
+
+    // Should have called UPDATE to bump created_at
+    expect(runFn).toHaveBeenCalled();
+    const [timestamp, , , id] = runFn.mock.calls[0];
+    expect(id).toBe(42);
+    expect(timestamp).toBeGreaterThanOrEqual(before);
+    expect(timestamp).toBeLessThanOrEqual(after);
+  });
+
   it('fires clipboard change callback on new content', async () => {
     testState.readText.mockReturnValue('new text');
     const onChange = vi.fn();

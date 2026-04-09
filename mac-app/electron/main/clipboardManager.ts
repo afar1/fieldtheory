@@ -661,7 +661,14 @@ export class ClipboardManager extends EventEmitter {
     if (!existing) {
       await store();
     } else {
-      // Item already exists - still notify so it can be added to stack during recording/silentStacking
+      // Item already exists — bump it to the top by updating created_at,
+      // and refresh source app metadata since the user may be copying
+      // the same content from a different app this time.
+      const sourceApp = await this.getFrontmostApp();
+      const sourceAppName = sourceApp ? await this.getAppName(sourceApp) : null;
+      this.db.prepare(
+        'UPDATE clipboard_items SET created_at = ?, source_app = COALESCE(?, source_app), source_app_name = COALESCE(?, source_app_name) WHERE id = ?'
+      ).run(Date.now(), sourceApp || null, sourceAppName, existing.id);
       this.onItemAddedCallback?.(existing.id);
     }
   }
