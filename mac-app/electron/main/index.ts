@@ -37,7 +37,14 @@ import {
   ClipboardQueryOptions,
   ContinuousContextState,
 } from './types/clipboard';
-import { ClipboardItem, isTerminalApp, isIDEWithTerminal, isFinder, obscureHomePath } from './clipboardManager';
+import {
+  ClipboardItem,
+  isTerminalApp,
+  isIDEWithTerminal,
+  isFinder,
+  obscureHomePath,
+  orderStackItemsForPaste,
+} from './clipboardManager';
 import { getHotkeyManager, KNOWN_CONFLICT_APPS } from './hotkeyManager';
 import {
   setSupabaseUrl as setEngineerSupabaseUrl,
@@ -819,11 +826,13 @@ function registerHotkeysAfterOnboarding(): void {
           }
         }
 
-        const { isTerminalApp } = require('./clipboardManager');
         isTerminal = isTerminalApp(bundleId);
       } catch (e) {
         log.error('Super Paste: failed to get frontmost app:', e);
       }
+
+      const pasteImagesAsPaths = isTerminal;
+      const orderedItemsToPaste = orderStackItemsForPaste(itemsToPaste, bundleId);
 
       let sshTarget: SSHTarget | null = null;
       if (isTerminal && frontmostPid) {
@@ -847,8 +856,8 @@ function registerHotkeysAfterOnboarding(): void {
           // Wait for macOS to restore focus to the previous window
           await new Promise(resolve => setTimeout(resolve, 100));
         }
-        // For terminals with stacks, combine text with image paths
-        if (isTerminal && itemsToPaste.length > 1) {
+        // For terminal targets with stacks, combine text with image paths.
+        if (pasteImagesAsPaths && itemsToPaste.length > 1) {
           // Find text/transcript items and image items
           const textItems = itemsToPaste.filter(i => i.type === 'text' || i.type === 'transcript');
           const imageItems = itemsToPaste.filter(i => i.imageData);
@@ -879,14 +888,14 @@ function registerHotkeysAfterOnboarding(): void {
 
         } else {
           // Paste items sequentially
-          for (const item of itemsToPaste) {
+          for (const item of orderedItemsToPaste) {
             if (item.content && (item.type === 'text' || item.type === 'transcript' || !item.imageData)) {
               // Paste as text: text/transcript types, or any item with content but no image
               clipboard.writeText(item.content);
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
             } else if (item.imageData) {
-              // Paste as image: items with image data
-              if (isTerminal) {
+              // Paste as file paths for terminal targets, or raw images elsewhere.
+              if (pasteImagesAsPaths) {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
                   const resolvedPath = await resolveImagePath(imagePath);
@@ -3215,11 +3224,13 @@ function setupClipboardIPCHandlers(): void {
       
       const { nativeImage } = require('electron');
 
-      // Detect target app to check for terminal or Finder.
+      // Detect target app to check for terminal path pastes or Finder.
       let frontmostBundleId: string | null = effectiveBundleId;
       let isTerminal = false;
+      let pasteImagesAsPaths = false;
       if (frontmostBundleId) {
         isTerminal = isTerminalApp(frontmostBundleId);
+        pasteImagesAsPaths = isTerminal;
       } else {
         try {
           const { stdout } = await execWithTimeout(
@@ -3228,10 +3239,13 @@ function setupClipboardIPCHandlers(): void {
           );
           frontmostBundleId = stdout.trim();
           isTerminal = isTerminalApp(frontmostBundleId);
+          pasteImagesAsPaths = isTerminal;
         } catch {
           // Default to non-terminal if detection fails or times out
         }
       }
+
+      const orderedItems = orderStackItemsForPaste(items, frontmostBundleId);
 
       if (frontmostBundleId && clipboardHistoryWindow && !isFinder(frontmostBundleId)) {
         await clipboardHistoryWindow.activateApp(frontmostBundleId);
@@ -3252,7 +3266,7 @@ function setupClipboardIPCHandlers(): void {
         imageItems.length > 0;
       
       // Count images we'll actually paste (for non-terminals).
-      const imagesToPaste = isTerminal 
+      const imagesToPaste = pasteImagesAsPaths
         ? 0 
         : items.filter(i => i.imageData).length;
       
@@ -3285,7 +3299,7 @@ function setupClipboardIPCHandlers(): void {
       const imagePasteDelay = getImagePasteDelay(imagesToPaste);
 
       // Paste each item sequentially with delays.
-      for (const item of items) {
+      for (const item of orderedItems) {
         try {
           if (item.type === 'text' || item.type === 'transcript') {
             // Use improved content if available and toggle is set.
@@ -3293,8 +3307,8 @@ function setupClipboardIPCHandlers(): void {
               ? item.improvedContent
               : (item.content || '');
             
-            // Only add figure paths for terminals (non-terminals get actual images).
-            if (items.length > 1 && isTerminal) {
+            // Terminal targets get text file references instead of raw image pastes.
+            if (items.length > 1 && pasteImagesAsPaths) {
               textContent += await buildFigurePaths();
             }
             
@@ -3307,12 +3321,12 @@ function setupClipboardIPCHandlers(): void {
           } else if (item.imageData) {
             // For terminals with transcript+figures, skip individual image paste.
             // Terminal users will use the file paths from the Figures section.
-            if (isTerminal && hasTranscriptWithFigures) {
+            if (pasteImagesAsPaths && hasTranscriptWithFigures) {
               continue;
             }
             
-            if (isTerminal) {
-              // Terminal without transcript: paste file path instead of image.
+            if (pasteImagesAsPaths) {
+              // Terminal target without transcript: paste file path instead of image.
               const imagePath = await clipboardManager!.exportImageToCache(item);
               if (imagePath) {
                 // Use real path for terminal compatibility
@@ -5444,6 +5458,14 @@ function broadcastTranscribeEvents(): void {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(TranscribeIPCChannels.ERROR, error.message);
+      }
+    });
+  });
+
+  transcriberManager.on('parakeetSetupProgress', (progress) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(TranscribeIPCChannels.PARAKEET_SETUP_PROGRESS, progress);
       }
     });
   });

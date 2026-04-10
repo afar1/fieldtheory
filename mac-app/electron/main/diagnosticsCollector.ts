@@ -221,14 +221,19 @@ export class DiagnosticsCollector {
       lines.push(`- Parakeet Cache Present: ${formatBoolean(report.transcription.parakeet.cacheExists)}`);
       for (const engine of report.transcription.parakeet.engines) {
         const detail = engine.lastError ? ` - last error: ${engine.lastError}` : '';
-        const status = engine.needsReinstall
-          ? 'needs reinstall'
+        const status = engine.lastError && !engine.verified
+          ? 'latest verification failed'
           : engine.verified
             ? 'verified'
             : report.transcription.parakeet.runtimeInstalled
               ? 'runtime installed, model not yet verified'
               : 'not installed';
         lines.push(`- ${engine.label}: ${status}${detail}`);
+        if (engine.lastErrorDetail) {
+          lines.push('```text');
+          lines.push(engine.lastErrorDetail);
+          lines.push('```');
+        }
       }
     } else {
       lines.push('- Parakeet: unavailable');
@@ -514,8 +519,8 @@ export class DiagnosticsCollector {
 
     if (report.transcription.parakeet) {
       for (const engine of report.transcription.parakeet.engines) {
-        if (engine.needsReinstall && engine.lastError) {
-          issues.push(`${engine.label} needs reinstall: ${engine.lastError}`);
+        if (engine.lastError && !engine.verified) {
+          issues.push(`${engine.label} failed its latest verification: ${engine.lastError}`);
         }
       }
     }
