@@ -235,7 +235,25 @@ export interface ParakeetEngineStatus {
   verified: boolean;
   needsReinstall: boolean;
   lastError: string | null;
+  lastErrorDetail?: string | null;
   lastErrorAt: string | null;
+}
+
+export type ParakeetSetupStage =
+  | 'installing-runtime'
+  | 'verifying-model'
+  | 'downloading-model'
+  | 'loading-model'
+  | 'starting-server'
+  | 'completed'
+  | 'failed';
+
+export interface ParakeetSetupProgress {
+  engine: 'parakeet' | 'parakeet-multilingual';
+  stage: ParakeetSetupStage;
+  message: string;
+  percent: number | null;
+  detail: string | null;
 }
 
 export interface ParakeetStatus {
@@ -298,6 +316,7 @@ interface TranscribeAPI {
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
+  onParakeetSetupProgress?: (callback: (progress: ParakeetSetupProgress) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
 }

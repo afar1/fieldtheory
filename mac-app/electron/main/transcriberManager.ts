@@ -19,7 +19,14 @@ import {
 } from './modelManager';
 import { PreferencesManager } from './preferences';
 import { RecordingOverlay } from './recordingOverlay';
-import { ClipboardManager, ClipboardItem, isTerminalApp, isIDEWithTerminal } from './clipboardManager';
+import {
+  ClipboardManager,
+  ClipboardItem,
+  isTerminalApp,
+  isIDEWithTerminal,
+  orderStackItemsForPaste,
+  shouldPasteMixedStackImagesFirst,
+} from './clipboardManager';
 import { SoundManager } from './soundManager';
 import { QuotaManager } from './quotaManager';
 import { AudioManager } from './audioManager';
@@ -32,6 +39,8 @@ import {
   PARAKEET_ENGINE_MODEL_IDS,
   isParakeetEngine,
   isTranscriptionEngine,
+  type ParakeetSetupProgress,
+  type ParakeetSetupStage,
   type ParakeetStatus,
   type TranscriptionEngine,
   type HotMicEngine,
@@ -52,12 +61,23 @@ const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
 interface PersistedParakeetEngineState {
   verifiedAt?: string;
   lastError?: string | null;
+  lastErrorDetail?: string | null;
   lastErrorAt?: string | null;
 }
 
 interface PersistedParakeetState {
   engines?: Partial<Record<ParakeetEngine, PersistedParakeetEngineState>>;
 }
+
+const PARAKEET_MODEL_VERIFY_TIMEOUT_MS = 15 * 60_000;
+
+type ParakeetSetupReporter = (progress: Omit<ParakeetSetupProgress, 'engine'>) => void;
+type ParakeetProcessError = Error & {
+  stdout?: string;
+  stderr?: string;
+  detail?: string | null;
+  killed?: boolean;
+};
 
 /**
  * Transcription status states.
@@ -78,6 +98,7 @@ export interface TranscriberEvents {
   statusChanged: (status: TranscriptionStatus) => void;
   result: (text: string) => void;
   error: (error: Error) => void;
+  parakeetSetupProgress: (progress: ParakeetSetupProgress) => void;
   stackChanged: (count: number) => void;
   stackingDisabled: (data: { itemId: number; message: string }) => void;
 }
@@ -1107,8 +1128,11 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
+    const mixedMultimodalPaste = shouldPasteMixedStackImagesFirst(frontmostBundleId, items);
+    const orderedItems = orderStackItemsForPaste(items, frontmostBundleId);
+
+    for (let i = 0; i < orderedItems.length; i++) {
+      const item = orderedItems[i];
       log.info('[SilentStack] Pasting item %d/%d: id=%d', i + 1, items.length, item.id);
 
       if (item.imageData) {
@@ -1140,7 +1164,7 @@ export class TranscriberManager extends EventEmitter {
       }
 
       // Blank line between items for all apps.
-      if (i < items.length - 1) {
+      if (!mixedMultimodalPaste && i < orderedItems.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 100));
         clipboard.writeText('\n');
         this.clipboardManager?.syncClipboardHash();
@@ -2416,9 +2440,75 @@ export class TranscriberManager extends EventEmitter {
     fs.writeFileSync(this.getParakeetStatusPath(), JSON.stringify(state, null, 2), 'utf-8');
   }
 
+  private hasParakeetFailureSinceLastVerification(state: PersistedParakeetEngineState | undefined): boolean {
+    if (!state?.lastError) return false;
+    if (!state.lastErrorAt) return !state.verifiedAt;
+    if (!state.verifiedAt) return true;
+    return Date.parse(state.lastErrorAt) >= Date.parse(state.verifiedAt);
+  }
+
   private normalizeParakeetErrorMessage(error: unknown): string {
     const raw = error instanceof Error ? error.message : String(error);
     return raw.replace(/\s+/g, ' ').trim().slice(0, 400);
+  }
+
+  private normalizeParakeetErrorDetail(error: unknown): string | null {
+    const detail = (error as ParakeetProcessError | null | undefined)?.detail;
+    if (typeof detail === 'string' && detail.trim()) {
+      return detail.trim().slice(0, 8000);
+    }
+
+    const stderr = typeof (error as ParakeetProcessError | null | undefined)?.stderr === 'string'
+      ? (error as ParakeetProcessError).stderr!.trim()
+      : '';
+    const stdout = typeof (error as ParakeetProcessError | null | undefined)?.stdout === 'string'
+      ? (error as ParakeetProcessError).stdout!.trim()
+      : '';
+    const message = error instanceof Error ? error.message.trim() : String(error).trim();
+    const combined = [stderr, stdout, message].filter(Boolean).join('\n\n').trim();
+    return combined ? combined.slice(0, 8000) : null;
+  }
+
+  private emitParakeetSetupProgress(
+    engine: ParakeetEngine,
+    progress: Omit<ParakeetSetupProgress, 'engine'>
+  ): void {
+    this.emit('parakeetSetupProgress', {
+      engine,
+      ...progress,
+    });
+  }
+
+  private getParakeetLatestProcessDetail(chunk: string): string | null {
+    const lines = chunk
+      .replace(/\r/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    return lines.at(-1) ?? null;
+  }
+
+  private getParakeetDownloadPercent(detail: string | null): number | null {
+    if (!detail) return null;
+    const matches = [...detail.matchAll(/(\d{1,3})%/g)];
+    if (matches.length === 0) return null;
+    const percent = Number.parseInt(matches.at(-1)?.[1] ?? '', 10);
+    if (!Number.isFinite(percent)) return null;
+    return Math.max(0, Math.min(100, percent));
+  }
+
+  private buildParakeetProcessError(
+    message: string,
+    stdout: string,
+    stderr: string,
+    killed: boolean = false
+  ): ParakeetProcessError {
+    const error = new Error(message) as ParakeetProcessError;
+    error.stdout = stdout;
+    error.stderr = stderr;
+    error.killed = killed;
+    error.detail = [stderr.trim(), stdout.trim(), message.trim()].filter(Boolean).join('\n\n').trim();
+    return error;
   }
 
   private updatePersistedParakeetEngineState(
@@ -2440,14 +2530,17 @@ export class TranscriberManager extends EventEmitter {
     this.updatePersistedParakeetEngineState(engine, {
       verifiedAt: new Date().toISOString(),
       lastError: null,
+      lastErrorDetail: null,
       lastErrorAt: null,
     });
   }
 
   private markParakeetEngineFailure(engine: ParakeetEngine, error: unknown): string {
     const message = this.normalizeParakeetErrorMessage(error);
+    const detail = this.normalizeParakeetErrorDetail(error);
     this.updatePersistedParakeetEngineState(engine, {
       lastError: message,
+      lastErrorDetail: detail,
       lastErrorAt: new Date().toISOString(),
     });
     return message;
@@ -2470,6 +2563,225 @@ export class TranscriberManager extends EventEmitter {
     return path.join(macAppRoot, 'scripts', 'setup-parakeet.sh');
   }
 
+  private async installParakeetRuntime(
+    venvDir: string,
+    reportProgress?: ParakeetSetupReporter
+  ): Promise<void> {
+    const setupScript = this.getParakeetSetupScriptPath();
+    if (!fs.existsSync(setupScript)) {
+      throw new Error(`Setup script not found: ${setupScript}`);
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn('bash', [setupScript, venvDir], {
+        env: {
+          ...process.env,
+          ...this.getParakeetProcessEnv(),
+        },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        child.kill('SIGKILL');
+        reject(this.buildParakeetProcessError('Parakeet runtime installation timed out after 5m', stdout, stderr, true));
+      }, 300_000);
+
+      const handleChunk = (chunk: Buffer, source: 'stdout' | 'stderr') => {
+        const text = chunk.toString();
+        if (source === 'stdout') {
+          stdout += text;
+        } else {
+          stderr += text;
+        }
+
+        const detail = this.getParakeetLatestProcessDetail(text);
+        if (detail) {
+          reportProgress?.({
+            stage: 'installing-runtime',
+            message: 'Installing the Parakeet runtime…',
+            percent: null,
+            detail,
+          });
+        }
+      };
+
+      child.stdout?.on('data', (chunk: Buffer) => handleChunk(chunk, 'stdout'));
+      child.stderr?.on('data', (chunk: Buffer) => handleChunk(chunk, 'stderr'));
+
+      child.on('error', (error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        const processError = error as ParakeetProcessError;
+        processError.stdout = stdout;
+        processError.stderr = stderr;
+        processError.detail = [stderr.trim(), stdout.trim(), error.message.trim()].filter(Boolean).join('\n\n').trim();
+        reject(processError);
+      });
+
+      child.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        log.info('Parakeet setup stdout: %s', stdout);
+        if (stderr) log.info('Parakeet setup stderr: %s', stderr);
+
+        if (code === 0) {
+          resolve();
+          return;
+        }
+
+        reject(this.buildParakeetProcessError(`Parakeet runtime installation exited with code ${code ?? 'unknown'}`, stdout, stderr));
+      });
+    });
+  }
+
+  private buildParakeetCommandError(
+    engine: ParakeetEngine,
+    stage: string,
+    error: any,
+    timeoutMs?: number
+  ): ParakeetProcessError {
+    const label = PARAKEET_ENGINE_LABELS[engine];
+    const stderr = typeof error?.stderr === 'string' ? error.stderr.trim() : '';
+    const stdout = typeof error?.stdout === 'string' ? error.stdout.trim() : '';
+    const detail = [stderr, stdout, error?.message || String(error)]
+      .filter((value): value is string => Boolean(value && value.trim()))
+      .join('\n\n')
+      .trim();
+
+    if (error?.killed && timeoutMs) {
+      const timeoutError = new Error(
+        `${label} ${stage} timed out (${Math.round(timeoutMs / 60_000)}m) while downloading or loading the model`
+      ) as ParakeetProcessError;
+      timeoutError.stdout = stdout;
+      timeoutError.stderr = stderr;
+      timeoutError.killed = true;
+      timeoutError.detail = detail || timeoutError.message;
+      return timeoutError;
+    }
+
+    const message = detail
+      ? detail.replace(/\s+/g, ' ').trim()
+      : `${label} ${stage} failed`;
+    const commandError = new Error(message) as ParakeetProcessError;
+    commandError.stdout = stdout;
+    commandError.stderr = stderr;
+    commandError.detail = detail || message;
+    return commandError;
+  }
+
+  private async prefetchParakeetModel(
+    engine: ParakeetEngine,
+    timeoutMs: number = PARAKEET_MODEL_VERIFY_TIMEOUT_MS,
+    reportProgress?: ParakeetSetupReporter
+  ): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(
+        this.getParakeetPythonPath(),
+        [this.getParakeetScriptPath(), '--server', '--model', PARAKEET_ENGINE_MODEL_IDS[engine]],
+        {
+          env: {
+            ...process.env,
+            ...this.getParakeetProcessEnv(),
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }
+      );
+
+      child.stdin?.end();
+
+      let stdout = '';
+      let stderr = '';
+      let settled = false;
+
+      const finish = (error?: ParakeetProcessError) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        if (error) {
+          reject(this.buildParakeetCommandError(engine, 'model verification', error, timeoutMs));
+          return;
+        }
+        resolve();
+      };
+
+      const updateProgress = (stage: ParakeetSetupStage, message: string, percent: number | null, detail: string | null) => {
+        reportProgress?.({ stage, message, percent, detail });
+      };
+
+      const timeout = setTimeout(() => {
+        child.kill('SIGKILL');
+        finish(this.buildParakeetProcessError(
+          `${PARAKEET_ENGINE_LABELS[engine]} model verification timed out`,
+          stdout,
+          stderr,
+          true
+        ));
+      }, timeoutMs);
+
+      child.stdout?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stdout += text;
+      });
+
+      child.stderr?.on('data', (chunk: Buffer) => {
+        const text = chunk.toString();
+        stderr += text;
+        const detail = this.getParakeetLatestProcessDetail(text);
+        if (!detail) return;
+
+        const normalized = detail.toLowerCase();
+        const percent = this.getParakeetDownloadPercent(detail);
+        if (percent !== null && percent < 100) {
+          updateProgress('downloading-model', 'Downloading the Parakeet model…', percent, detail);
+          return;
+        }
+        if (normalized.includes('model loaded')) {
+          updateProgress('loading-model', 'Loading the model into memory…', 100, detail);
+          return;
+        }
+        if (normalized.includes('loading')) {
+          updateProgress('loading-model', 'Loading the model into memory…', percent, detail);
+          return;
+        }
+
+        updateProgress('verifying-model', 'Preparing the Parakeet model…', percent, detail);
+      });
+
+      child.on('error', (error) => {
+        const processError = error as ParakeetProcessError;
+        processError.stdout = stdout;
+        processError.stderr = stderr;
+        processError.detail = [stderr.trim(), stdout.trim(), error.message.trim()].filter(Boolean).join('\n\n').trim();
+        finish(processError);
+      });
+
+      child.on('close', (code) => {
+        if (stderr) log.info('%s verify stderr: %s', PARAKEET_ENGINE_LABELS[engine], stderr);
+        if (stdout) log.info('%s verify stdout: %s', PARAKEET_ENGINE_LABELS[engine], stdout);
+
+        if (code === 0 && stdout.includes('"ready": true')) {
+          finish();
+          return;
+        }
+
+        finish(this.buildParakeetProcessError(
+          code === 0
+            ? `${PARAKEET_ENGINE_LABELS[engine]} verification exited without a ready signal`
+            : `${PARAKEET_ENGINE_LABELS[engine]} verification exited with code ${code ?? 'unknown'}`,
+          stdout,
+          stderr
+        ));
+      });
+    });
+  }
+
   getParakeetStatus(): ParakeetStatus {
     const persisted = this.readPersistedParakeetState();
     const runtimeInstalled = this.isParakeetInstalled();
@@ -2489,14 +2801,15 @@ export class TranscriberManager extends EventEmitter {
       activeEngine: this.parakeetServerEngine,
       engines: (Object.keys(PARAKEET_ENGINE_LABELS) as ParakeetEngine[]).map((engine) => {
         const state = persisted.engines?.[engine];
-        const verified = Boolean(state?.verifiedAt);
+        const verified = runtimeInstalled && Boolean(state?.verifiedAt) && !this.hasParakeetFailureSinceLastVerification(state);
         const lastError = state?.lastError ?? null;
         return {
           engine,
           label: PARAKEET_ENGINE_LABELS[engine],
           verified,
-          needsReinstall: runtimeInstalled && Boolean(lastError) && !verified,
+          needsReinstall: runtimeInstalled && this.hasParakeetFailureSinceLastVerification(state),
           lastError,
+          lastErrorDetail: state?.lastErrorDetail ?? null,
           lastErrorAt: state?.lastErrorAt ?? null,
         };
       }),
@@ -2504,29 +2817,50 @@ export class TranscriberManager extends EventEmitter {
   }
 
   async setupParakeet(engine: ParakeetEngine = 'parakeet'): Promise<{ success: boolean; error?: string }> {
-    const setupScript = this.getParakeetSetupScriptPath();
-    if (!fs.existsSync(setupScript)) {
-      return { success: false, error: `Setup script not found: ${setupScript}` };
-    }
-
     const venvDir = path.join(this.getParakeetBasePath(), 'venv');
+    const reportProgress: ParakeetSetupReporter = (progress) => {
+      this.emitParakeetSetupProgress(engine, progress);
+    };
 
     try {
-      const { stdout, stderr } = await execAsync(`bash "${setupScript}" "${venvDir}"`, {
-        timeout: 300_000,
-        env: {
-          ...process.env,
-          ...this.getParakeetProcessEnv(),
-        },
+      reportProgress({
+        stage: 'installing-runtime',
+        message: 'Installing the Parakeet runtime…',
+        percent: null,
+        detail: `venv: ${venvDir}`,
       });
-      log.info('Parakeet setup stdout: %s', stdout);
-      if (stderr) log.info('Parakeet setup stderr: %s', stderr);
+      await this.installParakeetRuntime(venvDir, reportProgress);
+      reportProgress({
+        stage: 'verifying-model',
+        message: 'Preparing the Parakeet model…',
+        percent: null,
+        detail: null,
+      });
+      await this.prefetchParakeetModel(engine, PARAKEET_MODEL_VERIFY_TIMEOUT_MS, reportProgress);
+      reportProgress({
+        stage: 'starting-server',
+        message: 'Starting the Parakeet server…',
+        percent: 100,
+        detail: null,
+      });
       await this.startParakeetServer(engine);
+      reportProgress({
+        stage: 'completed',
+        message: `${PARAKEET_ENGINE_LABELS[engine]} is ready.`,
+        percent: 100,
+        detail: null,
+      });
       this.stopParakeetServer();
       return { success: true };
     } catch (error: any) {
       this.stopParakeetServer();
       const message = this.markParakeetEngineFailure(engine, error);
+      reportProgress({
+        stage: 'failed',
+        message,
+        percent: null,
+        detail: this.normalizeParakeetErrorDetail(error),
+      });
       log.error('Parakeet setup failed: %s', message);
       return { success: false, error: message };
     }
@@ -3723,6 +4057,9 @@ export class TranscriberManager extends EventEmitter {
     const effectiveTargetBundleId = forcedTargetBundleId ?? frontmostBundleId;
     const isTerminal = isTerminalApp(effectiveTargetBundleId);
     const isIDE = isIDEWithTerminal(effectiveTargetBundleId);
+    const pasteImagesAsPaths = isTerminal;
+    const mixedMultimodalPaste = shouldPasteMixedStackImagesFirst(effectiveTargetBundleId, items);
+    const orderedItems = orderStackItemsForPaste(items, effectiveTargetBundleId);
 
     // Check if we have a transcript with figures
     const hasTranscriptWithFigures =
@@ -3733,10 +4070,10 @@ export class TranscriberManager extends EventEmitter {
     const lastTextItemIndex = items.reduce((lastIdx, item, idx) =>
       (item.type === 'text' || item.type === 'transcript') ? idx : lastIdx, -1);
 
-    // Paste in chronological order: oldest first (top), newest last (bottom).
-    // This preserves the natural flow of conversation/context building.
-    for (let itemIdx = 0; itemIdx < items.length; itemIdx++) {
-      const item = items[itemIdx];
+    // For mixed multimodal stacks, paste images before text so composer-style
+    // apps keep the attachments instead of dropping them after draft text exists.
+    for (let itemIdx = 0; itemIdx < orderedItems.length; itemIdx++) {
+      const item = orderedItems[itemIdx];
       if (item.type === 'text' || item.type === 'transcript') {
         // Use improved content if available and toggle is set.
         let textContent = (item.useImprovedVersion && item.improvedContent)
@@ -3745,7 +4082,7 @@ export class TranscriberManager extends EventEmitter {
 
         // Append figure paths at the end for terminals, but only on the LAST text item.
         // Non-terminals get inline [Figure X] refs without the file path list.
-        if (this.currentStack.length > 1 && isTerminal && itemIdx === lastTextItemIndex) {
+        if (this.currentStack.length > 1 && pasteImagesAsPaths && itemIdx === lastTextItemIndex) {
           textContent = await this.addImagePathsToText(textContent, items);
         }
 
@@ -3790,12 +4127,13 @@ export class TranscriberManager extends EventEmitter {
           await this.pasteText(forcedTargetBundleId);
         }
       } else if (item.imageData) {
-        if (isTerminal) {
-          // For terminals, skip individual images if they're in the transcript's figure list.
+        if (pasteImagesAsPaths) {
+          // For terminal targets, skip individual images if they're already
+          // represented in the transcript's figure list.
           if (hasTranscriptWithFigures) {
             continue;
           }
-          // For terminals without transcript, export image to file and paste path
+          // For terminal targets without transcript, export image to file and paste path.
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
@@ -3817,7 +4155,7 @@ export class TranscriberManager extends EventEmitter {
       }
 
       // Blank line between items for all apps.
-      if (itemIdx < items.length - 1) {
+      if (!mixedMultimodalPaste && itemIdx < orderedItems.length - 1) {
         await new Promise(resolve => setTimeout(resolve, 100));
         if (!(await this.pasteTextIntoResolvedTarget('\n', forcedTargetBundleId, clearAfter))) {
           return;

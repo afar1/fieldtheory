@@ -79,6 +79,7 @@ const TranscribeIPCChannels = {
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
   MODEL_DOWNLOAD_PROGRESS: 'transcribe:modelDownloadProgress',
+  PARAKEET_SETUP_PROGRESS: 'transcribe:parakeetSetupProgress',
   HOTKEY_CHANGED: 'transcribe:hotkeyChanged',
   ADD_TO_STACK: 'transcribe:addToStack',
   GET_TRANSCRIPTION_ENGINE: 'transcribe:getTranscriptionEngine',
@@ -756,6 +757,7 @@ export interface TranscribeAPI {
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
+  onParakeetSetupProgress: (callback: (progress: import('./main/types/transcribe').ParakeetSetupProgress) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
   onStackChanged: (callback: (count: number) => void) => () => void;
 }
@@ -1321,6 +1323,18 @@ const transcribeAPI: TranscribeAPI = {
 
     return () => {
       ipcRenderer.removeListener(TranscribeIPCChannels.MODEL_DOWNLOAD_PROGRESS, handler);
+    };
+  },
+
+  onParakeetSetupProgress: (callback: (progress: import('./main/types/transcribe').ParakeetSetupProgress) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: import('./main/types/transcribe').ParakeetSetupProgress) => {
+      callback(progress);
+    };
+
+    ipcRenderer.on(TranscribeIPCChannels.PARAKEET_SETUP_PROGRESS, handler);
+
+    return () => {
+      ipcRenderer.removeListener(TranscribeIPCChannels.PARAKEET_SETUP_PROGRESS, handler);
     };
   },
 

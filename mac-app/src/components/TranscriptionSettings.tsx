@@ -1,10 +1,15 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import type { ParakeetStatus } from '../types/window';
+import type { ParakeetSetupProgress, ParakeetStatus } from '../types/window';
+import ParakeetSupportPanel from './ParakeetSupportPanel';
 import {
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
+  PARAKEET_ONE_TIME_SETUP_NOTE,
   PARAKEET_VISIBLE_ENGINE_OPTIONS,
+  getVisibleParakeetActionLabel,
   getVisibleParakeetEngineStatus,
+  getVisibleParakeetPendingActionLabel,
+  getVisibleParakeetRecoveryMessage,
   hasVisibleParakeetRuntime,
   isVisibleParakeetEngineVerified,
   normalizeVisibleTranscriptionEngine,
@@ -36,22 +41,6 @@ function withDefaultWhisperModels(models: Record<string, ModelInfo>): Record<str
     ...DEFAULT_WHISPER_MODELS,
     ...models,
   };
-}
-
-function getParakeetActionLabel(
-  needsReinstall: boolean,
-  runtimeInstalled: boolean
-): 'Install' | 'Verify' | 'Reinstall' {
-  if (needsReinstall) return 'Reinstall';
-  return runtimeInstalled ? 'Verify' : 'Install';
-}
-
-function getParakeetPendingActionLabel(
-  actionLabel: 'Install' | 'Verify' | 'Reinstall'
-): 'Installing...' | 'Verifying...' | 'Reinstalling...' {
-  if (actionLabel === 'Verify') return 'Verifying...';
-  if (actionLabel === 'Reinstall') return 'Reinstalling...';
-  return 'Installing...';
 }
 
 function getParakeetVerifiedBadge(isSelected: boolean): {
@@ -92,6 +81,7 @@ export default function TranscriptionSettings() {
   const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
   const [settingUpParakeetEngine, setSettingUpParakeetEngine] = useState<VisibleParakeetEngine | null>(null);
+  const [parakeetSetupProgress, setParakeetSetupProgress] = useState<ParakeetSetupProgress | null>(null);
   const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
   const [uninstallingParakeet, setUninstallingParakeet] = useState(false);
 
@@ -198,6 +188,10 @@ export default function TranscriptionSettings() {
       });
     });
 
+    const unsubscribeParakeetProgress = window.transcribeAPI!.onParakeetSetupProgress?.((progress) => {
+      setParakeetSetupProgress(progress);
+    }) ?? (() => {});
+
     const unsubscribeHotkey = window.transcribeAPI!.onHotkeyChanged((newHotkey) => {
       setHotkey(newHotkey);
     });
@@ -207,6 +201,7 @@ export default function TranscriptionSettings() {
       unsubscribeResult();
       unsubscribeError();
       unsubscribeProgress();
+      unsubscribeParakeetProgress();
       unsubscribeHotkey();
     };
   }, [isMacOS, downloadingModel, mockMode, refreshParakeetStatus]);
@@ -272,8 +267,16 @@ export default function TranscriptionSettings() {
 
   const handleSetupParakeet = useCallback(async (engine: VisibleParakeetEngine) => {
     if (!window.transcribeAPI || settingUpParakeet) return;
+    setSelectedEngine(engine);
     setSettingUpParakeet(true);
     setSettingUpParakeetEngine(engine);
+    setParakeetSetupProgress({
+      engine,
+      stage: 'installing-runtime',
+      message: 'Installing the Parakeet runtime…',
+      percent: null,
+      detail: null,
+    });
     setParakeetSetupError(null);
     try {
       const result = await window.transcribeAPI.setupParakeet?.(engine);
@@ -285,9 +288,11 @@ export default function TranscriptionSettings() {
       }
     } catch (err) {
       setParakeetSetupError(err instanceof Error ? err.message : 'Setup failed');
+      await refreshParakeetStatus();
     } finally {
       setSettingUpParakeet(false);
       setSettingUpParakeetEngine(null);
+      setParakeetSetupProgress(null);
     }
   }, [refreshParakeetStatus, settingUpParakeet]);
 
@@ -319,6 +324,14 @@ export default function TranscriptionSettings() {
   const selectedParakeetEngineStatus = selectedEngine === 'whisper'
     ? null
     : getParakeetEngineStatus(selectedEngine);
+  const selectedParakeetSupportSummary = selectedParakeetEngineStatus?.lastError ?? parakeetSetupError;
+  const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
+  const selectedParakeetErrorDetail = selectedParakeetEngineStatus?.lastErrorDetail ?? null;
+  const selectedParakeetProgress = selectedEngine === 'whisper'
+    ? null
+    : parakeetSetupProgress?.engine === selectedEngine
+      ? parakeetSetupProgress
+      : null;
 
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
@@ -698,11 +711,8 @@ export default function TranscriptionSettings() {
             const engineStatus = getParakeetEngineStatus(engineOption.id);
             const engineVerified = isVisibleParakeetEngineVerified(parakeetStatus, engineOption.id);
             const engineNeedsReinstall = engineStatus?.needsReinstall ?? false;
-            const actionLabel = getParakeetActionLabel(
-              engineNeedsReinstall,
-              hasVisibleParakeetRuntime(parakeetStatus)
-            );
-            const pendingActionLabel = getParakeetPendingActionLabel(actionLabel);
+            const actionLabel = getVisibleParakeetActionLabel(engineStatus, hasVisibleParakeetRuntime(parakeetStatus));
+            const pendingActionLabel = getVisibleParakeetPendingActionLabel(actionLabel);
             const isPendingAction = settingUpParakeet && settingUpParakeetEngine === engineOption.id;
             const verifiedBadge = getParakeetVerifiedBadge(isActive);
             return (
@@ -764,30 +774,22 @@ export default function TranscriptionSettings() {
               </div>
             );
           })}
-          {selectedParakeetEngineStatus?.needsReinstall && selectedParakeetEngineStatus.lastError && (
-            <div
-              style={{
-                padding: '10px 12px',
-                borderRadius: '6px',
-                border: `1px solid ${theme.isDark ? 'rgba(239, 68, 68, 0.35)' : '#fecaca'}`,
-                backgroundColor: theme.isDark ? 'rgba(239, 68, 68, 0.08)' : '#fef2f2',
-                marginBottom: '4px',
-              }}
-            >
-              <div style={{ fontSize: '12px', fontWeight: 500, color: theme.text, marginBottom: '4px' }}>
-                {PARAKEET_VISIBLE_ENGINE_OPTIONS.find((o) => o.id === selectedEngine)?.label ?? 'Parakeet'}{' '}
-                needs to be reinstalled
-              </div>
-              <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
-                {selectedParakeetEngineStatus.lastError}
-                {' '}Remove Parakeet and downloaded models below, then install it again.
-              </div>
-            </div>
-          )}
-          {parakeetSetupError && (
-            <div style={{ fontSize: '11px', color: theme.error, marginTop: '4px', padding: '0 4px' }}>
-              {parakeetSetupError}
-            </div>
+          {(selectedParakeetProgress || selectedParakeetSupportSummary) && selectedEngine !== 'whisper' && (
+            <ParakeetSupportPanel
+              theme={theme}
+              title={
+                selectedParakeetSupportSummary
+                  ? `${PARAKEET_VISIBLE_ENGINE_OPTIONS.find((o) => o.id === selectedEngine)?.label ?? 'Parakeet'} needs attention`
+                  : `Setting up ${PARAKEET_VISIBLE_ENGINE_OPTIONS.find((o) => o.id === selectedEngine)?.label ?? 'Parakeet'}`
+              }
+              summary={selectedParakeetSupportSummary}
+              recoveryMessage={
+                selectedParakeetRecoveryMessage
+                ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
+              }
+              detail={selectedParakeetErrorDetail}
+              progress={selectedParakeetProgress}
+            />
           )}
 
           {/* Upgrade nudge - shown when whisper is active and parakeet is not installed */}
@@ -806,7 +808,7 @@ export default function TranscriptionSettings() {
               </div>
               <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
                 Parakeet is faster, more reliable, and produces higher quality transcriptions than Whisper.
-                Install above to switch — your Whisper setup will remain as a fallback.
+                Install above to switch — {PARAKEET_ONE_TIME_SETUP_NOTE.toLowerCase()} Your Whisper setup will remain as a fallback.
               </div>
             </div>
           )}

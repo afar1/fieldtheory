@@ -101,6 +101,34 @@ export function isIDEWithTerminal(bundleId: string | null): boolean {
 }
 
 /**
+ * Many chat-style composers accept multiple pasted images, but reject image
+ * attachments once text already exists in the draft. For mixed stacks, put
+ * attachments first unless the target is a terminal that needs file paths.
+ */
+export function shouldPasteMixedStackImagesFirst(
+  bundleId: string | null,
+  items: readonly Pick<ClipboardItem, 'type' | 'content' | 'imageData'>[],
+): boolean {
+  if (isTerminalApp(bundleId)) return false;
+  const hasText = items.some((item) => item.type === 'text' || item.type === 'transcript' || (!!item.content && !item.imageData));
+  const hasImages = items.some((item) => Boolean(item.imageData));
+  return hasText && hasImages;
+}
+
+export function orderStackItemsForPaste<T extends Pick<ClipboardItem, 'type' | 'content' | 'imageData'>>(
+  items: readonly T[],
+  bundleId: string | null,
+): T[] {
+  if (!shouldPasteMixedStackImagesFirst(bundleId, items)) {
+    return [...items];
+  }
+
+  const imageItems = items.filter((item) => Boolean(item.imageData));
+  const nonImageItems = items.filter((item) => !item.imageData);
+  return [...imageItems, ...nonImageItems];
+}
+
+/**
  * Check if a bundle ID is Finder.
  * Finder doesn't handle Cmd+V paste well and can cause app stalls.
  */
@@ -661,7 +689,14 @@ export class ClipboardManager extends EventEmitter {
     if (!existing) {
       await store();
     } else {
-      // Item already exists - still notify so it can be added to stack during recording/silentStacking
+      // Item already exists — bump it to the top by updating created_at,
+      // and refresh source app metadata since the user may be copying
+      // the same content from a different app this time.
+      const sourceApp = await this.getFrontmostApp();
+      const sourceAppName = sourceApp ? await this.getAppName(sourceApp) : null;
+      this.db.prepare(
+        'UPDATE clipboard_items SET created_at = ?, source_app = COALESCE(?, source_app), source_app_name = COALESCE(?, source_app_name) WHERE id = ?'
+      ).run(Date.now(), sourceApp || null, sourceAppName, existing.id);
       this.onItemAddedCallback?.(existing.id);
     }
   }
