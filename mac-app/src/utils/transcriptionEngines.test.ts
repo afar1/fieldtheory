@@ -3,9 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
   PARAKEET_VISIBLE_ENGINE_OPTIONS,
+  getVisibleParakeetActionLabel,
   getVisibleParakeetEngineStatus,
+  getVisibleParakeetPendingActionLabel,
+  getVisibleParakeetRecoveryMessage,
   hasVisibleParakeetRuntime,
   isVisibleParakeetEngineVerified,
+  isVisibleParakeetTimeoutError,
   normalizeVisibleTranscriptionEngine,
 } from './transcriptionEngines';
 
@@ -59,6 +63,34 @@ describe('transcriptionEngines utils', () => {
         needsReinstall: true,
         lastError: 'startup timed out',
       })
+    );
+  });
+
+  it('recommends retry for timeout failures and reinstall for hard failures', () => {
+    expect(getVisibleParakeetActionLabel({
+      engine: 'parakeet',
+      verified: false,
+      needsReinstall: true,
+      lastError: 'server startup timed out (60s)',
+    }, true)).toBe('Retry');
+
+    expect(getVisibleParakeetActionLabel({
+      engine: 'parakeet',
+      verified: false,
+      needsReinstall: true,
+      lastError: 'onnx-asr is not installed',
+    }, true)).toBe('Reinstall');
+
+    expect(getVisibleParakeetPendingActionLabel('Retry')).toBe('Retrying...');
+  });
+
+  it('classifies timeout failures and produces actionable recovery guidance', () => {
+    expect(isVisibleParakeetTimeoutError('Parakeet Multilingual server startup timed out (60s)')).toBe(true);
+    expect(getVisibleParakeetRecoveryMessage('Parakeet Multilingual server startup timed out (60s)')).toContain(
+      'model did not finish downloading or loading in time'
+    );
+    expect(getVisibleParakeetRecoveryMessage('onnx-asr is not installed')).toContain(
+      'Remove Parakeet and install it again'
     );
   });
 });

@@ -79,7 +79,13 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { buildScreencaptureCommand, ClipboardManager, isIDEWithTerminal } from './clipboardManager';
+import {
+  buildScreencaptureCommand,
+  ClipboardManager,
+  isIDEWithTerminal,
+  orderStackItemsForPaste,
+  shouldPasteMixedStackImagesFirst,
+} from './clipboardManager';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private members in tests
 function createManager(): any {
@@ -141,6 +147,27 @@ describe('ClipboardManager.checkClipboard', () => {
 
     expect(manager.storeText).not.toHaveBeenCalled();
     expect(onItemAdded).toHaveBeenCalledWith(42);
+  });
+
+  it('bumps created_at for duplicate text so it appears at the top', async () => {
+    testState.readText.mockReturnValue('existing text');
+    const runFn = vi.fn();
+    testState.dbPrepare.mockReturnValue({
+      get: vi.fn(() => ({ id: 42 })),
+      run: runFn,
+      all: vi.fn(() => []),
+    });
+
+    const before = Date.now();
+    await manager.checkClipboard();
+    const after = Date.now();
+
+    // Should have called UPDATE to bump created_at
+    expect(runFn).toHaveBeenCalled();
+    const [timestamp, , , id] = runFn.mock.calls[0];
+    expect(id).toBe(42);
+    expect(timestamp).toBeGreaterThanOrEqual(before);
+    expect(timestamp).toBeLessThanOrEqual(after);
   });
 
   it('fires clipboard change callback on new content', async () => {
@@ -298,5 +325,26 @@ describe('isIDEWithTerminal', () => {
     expect(isIDEWithTerminal('com.anthropic.claudefordesktop')).toBe(true);
     expect(isIDEWithTerminal('com.todesktop.230313mzl4w4u92')).toBe(true);
     expect(isIDEWithTerminal('com.openai.codex')).toBe(true);
+  });
+});
+
+describe('mixed multimodal stack ordering', () => {
+  const textItem = { id: 1, type: 'text', content: 'summarize this', imageData: null } as const;
+  const transcriptItem = { id: 2, type: 'transcript', content: 'and compare it', imageData: null } as const;
+  const imageItem = { id: 3, type: 'screenshot', content: null, imageData: Buffer.from([1, 2, 3]) } as const;
+
+  it('pastes attachments before text for mixed non-terminal stacks', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.anthropic.claudefordesktop', [textItem, imageItem])).toBe(true);
+    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.anthropic.claudefordesktop').map(item => item.id)).toEqual([3, 1, 2]);
+  });
+
+  it('keeps terminal stacks in their original order', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.mitchellh.ghostty', [textItem, imageItem])).toBe(false);
+    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.mitchellh.ghostty').map(item => item.id)).toEqual([1, 3, 2]);
+  });
+
+  it('leaves image-only stacks untouched', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.anthropic.claudefordesktop', [imageItem])).toBe(false);
+    expect(orderStackItemsForPaste([imageItem], 'com.anthropic.claudefordesktop').map(item => item.id)).toEqual([3]);
   });
 });
