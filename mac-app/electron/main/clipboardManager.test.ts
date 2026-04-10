@@ -79,7 +79,13 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { buildScreencaptureCommand, ClipboardManager, isIDEWithTerminal } from './clipboardManager';
+import {
+  buildScreencaptureCommand,
+  ClipboardManager,
+  isIDEWithTerminal,
+  orderStackItemsForPaste,
+  shouldPasteMixedStackImagesFirst,
+} from './clipboardManager';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- accessing private members in tests
 function createManager(): any {
@@ -319,5 +325,26 @@ describe('isIDEWithTerminal', () => {
     expect(isIDEWithTerminal('com.anthropic.claudefordesktop')).toBe(true);
     expect(isIDEWithTerminal('com.todesktop.230313mzl4w4u92')).toBe(true);
     expect(isIDEWithTerminal('com.openai.codex')).toBe(true);
+  });
+});
+
+describe('mixed multimodal stack ordering', () => {
+  const textItem = { id: 1, type: 'text', content: 'summarize this', imageData: null } as const;
+  const transcriptItem = { id: 2, type: 'transcript', content: 'and compare it', imageData: null } as const;
+  const imageItem = { id: 3, type: 'screenshot', content: null, imageData: Buffer.from([1, 2, 3]) } as const;
+
+  it('pastes attachments before text for mixed non-terminal stacks', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.anthropic.claudefordesktop', [textItem, imageItem])).toBe(true);
+    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.anthropic.claudefordesktop').map(item => item.id)).toEqual([3, 1, 2]);
+  });
+
+  it('keeps terminal stacks in their original order', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.mitchellh.ghostty', [textItem, imageItem])).toBe(false);
+    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.mitchellh.ghostty').map(item => item.id)).toEqual([1, 3, 2]);
+  });
+
+  it('leaves image-only stacks untouched', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.anthropic.claudefordesktop', [imageItem])).toBe(false);
+    expect(orderStackItemsForPaste([imageItem], 'com.anthropic.claudefordesktop').map(item => item.id)).toEqual([3]);
   });
 });

@@ -677,7 +677,7 @@ describe('TranscriberManager standard paste target fallback', () => {
 
     await manager.pasteStack(false);
 
-    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world', false);
+    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world ', false);
     expect(manager.emit).not.toHaveBeenCalledWith(
       'paste-failed',
       'Field Theory has focus - press Cmd+V in your target app',
@@ -772,10 +772,49 @@ describe('TranscriberManager standard paste target fallback', () => {
 
     await manager.pasteStack(false);
 
-    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world', false);
-    expect(clipboard.writeText).toHaveBeenCalledWith('hello world');
+    expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world ', false);
+    expect(clipboard.writeText).toHaveBeenCalledWith('hello world ');
     expect(pasteText).toHaveBeenCalledWith('com.mitchellh.ghostty');
     expect(clearStack).not.toHaveBeenCalled();
+  });
+
+  it('pastes mixed multimodal stacks as images first and text last for composer targets', async () => {
+    const pasteText = vi.fn(async () => undefined);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn((id: number) => {
+          if (id === 1) return { id: 1, type: 'text', content: 'compare these screenshots', imageData: null };
+          if (id === 2) return { id: 2, type: 'screenshot', content: null, imageData: Buffer.from([1, 2, 3]) };
+          return null;
+        }),
+        setClipboardHashFromBuffer: vi.fn(),
+        syncClipboardHash: vi.fn(),
+      },
+      currentStack: [1, 2],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.anthropic.claudefordesktop'),
+      pasteText,
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(clipboard.writeImage).toHaveBeenCalledTimes(1);
+    expect(clipboard.writeText).toHaveBeenCalledWith('compare these screenshots ');
+    expect(clipboard.writeText).not.toHaveBeenCalledWith('\n');
+
+    const imagePasteOrder = vi.mocked(clipboard.writeImage).mock.invocationCallOrder[0];
+    const textPasteOrder = vi
+      .mocked(clipboard.writeText)
+      .mock.invocationCallOrder[
+        vi.mocked(clipboard.writeText).mock.calls.findIndex(([value]) => value === 'compare these screenshots ')
+      ];
+
+    expect(imagePasteOrder).toBeLessThan(textPasteOrder);
+    expect(pasteText).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -1623,7 +1662,93 @@ describe('TranscriberManager parakeet uninstall', () => {
       needsReinstall: true,
     }));
     expect(english?.lastError).toContain('server exited during startup');
+    expect(english?.lastErrorDetail).toContain('server exited during startup');
 
     rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('treats a newer Parakeet failure as overriding an older verification', () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-status-'));
+    const manager: any = {
+      getParakeetBasePath: () => tempDir,
+      getParakeetPythonPath: () => path.join(tempDir, 'venv', 'bin', 'python'),
+      getParakeetScriptPath: () => path.join(tempDir, 'parakeet-transcribe.py'),
+      isParakeetInstalled: () => true,
+      parakeetServer: null,
+      parakeetServerEngine: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.updatePersistedParakeetEngineState('parakeet', {
+      verifiedAt: '2026-04-08T00:00:00.000Z',
+      lastError: 'server startup timed out (60s)',
+      lastErrorAt: '2026-04-09T00:00:00.000Z',
+    });
+
+    const status = manager.getParakeetStatus();
+    const english = status.engines.find((engine: any) => engine.engine === 'parakeet');
+
+    expect(english).toEqual(expect.objectContaining({
+      verified: false,
+      needsReinstall: true,
+      lastError: 'server startup timed out (60s)',
+    }));
+
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('persists detailed Parakeet failure output for diagnostics and UI copy actions', () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-status-'));
+    const manager: any = {
+      getParakeetBasePath: () => tempDir,
+      getParakeetPythonPath: () => path.join(tempDir, 'venv', 'bin', 'python'),
+      getParakeetScriptPath: () => path.join(tempDir, 'parakeet-transcribe.py'),
+      isParakeetInstalled: () => true,
+      parakeetServer: null,
+      parakeetServerEngine: null,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const error: any = new Error('Parakeet English server startup timed out (60s)');
+    error.stderr = 'Loading nemo-parakeet-tdt-0.6b-v2...\nFetching 4 files: 42%';
+    error.stdout = '{"ok": false}';
+    error.detail = 'Loading nemo-parakeet-tdt-0.6b-v2...\nFetching 4 files: 42%\n{"ok": false}';
+
+    manager.markParakeetEngineFailure('parakeet', error);
+
+    const status = manager.getParakeetStatus();
+    const english = status.engines.find((engine: any) => engine.engine === 'parakeet');
+
+    expect(english?.lastErrorDetail).toContain('Fetching 4 files: 42%');
+    expect(english?.lastErrorDetail).toContain('{"ok": false}');
+
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('prefetches the selected Parakeet model before starting the server during setup', async () => {
+    const manager: any = {
+      getParakeetBasePath: () => '/tmp/build-parakeet',
+      installParakeetRuntime: vi.fn(async () => {}),
+      prefetchParakeetModel: vi.fn(async () => {}),
+      startParakeetServer: vi.fn(async () => {}),
+      stopParakeetServer: vi.fn(),
+      markParakeetEngineFailure: TranscriberManager.prototype['markParakeetEngineFailure'],
+      normalizeParakeetErrorMessage: TranscriberManager.prototype['normalizeParakeetErrorMessage'],
+      readPersistedParakeetState: () => ({}),
+      writePersistedParakeetState: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.setupParakeet('parakeet-multilingual');
+
+    expect(result).toEqual({ success: true });
+    expect(manager.installParakeetRuntime).toHaveBeenCalledWith('/tmp/build-parakeet/venv', expect.any(Function));
+    expect(manager.prefetchParakeetModel).toHaveBeenCalledWith(
+      'parakeet-multilingual',
+      900000,
+      expect.any(Function)
+    );
+    expect(manager.startParakeetServer).toHaveBeenCalledWith('parakeet-multilingual');
+    expect(manager.stopParakeetServer).toHaveBeenCalledTimes(1);
   });
 });

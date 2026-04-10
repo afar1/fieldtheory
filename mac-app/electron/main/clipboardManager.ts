@@ -101,6 +101,34 @@ export function isIDEWithTerminal(bundleId: string | null): boolean {
 }
 
 /**
+ * Many chat-style composers accept multiple pasted images, but reject image
+ * attachments once text already exists in the draft. For mixed stacks, put
+ * attachments first unless the target is a terminal that needs file paths.
+ */
+export function shouldPasteMixedStackImagesFirst(
+  bundleId: string | null,
+  items: readonly Pick<ClipboardItem, 'type' | 'content' | 'imageData'>[],
+): boolean {
+  if (isTerminalApp(bundleId)) return false;
+  const hasText = items.some((item) => item.type === 'text' || item.type === 'transcript' || (!!item.content && !item.imageData));
+  const hasImages = items.some((item) => Boolean(item.imageData));
+  return hasText && hasImages;
+}
+
+export function orderStackItemsForPaste<T extends Pick<ClipboardItem, 'type' | 'content' | 'imageData'>>(
+  items: readonly T[],
+  bundleId: string | null,
+): T[] {
+  if (!shouldPasteMixedStackImagesFirst(bundleId, items)) {
+    return [...items];
+  }
+
+  const imageItems = items.filter((item) => Boolean(item.imageData));
+  const nonImageItems = items.filter((item) => !item.imageData);
+  return [...imageItems, ...nonImageItems];
+}
+
+/**
  * Check if a bundle ID is Finder.
  * Finder doesn't handle Cmd+V paste well and can cause app stalls.
  */

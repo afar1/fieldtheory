@@ -18,6 +18,7 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
   const [copied, setCopied] = useState(false);
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
+  const [sendError, setSendError] = useState<string | null>(null);
 
   // Load diagnostics when modal opens.
   useEffect(() => {
@@ -26,6 +27,8 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
     const loadDiagnostics = async () => {
       setIsLoading(true);
       setCopied(false);
+      setSendError(null);
+      setSent(false);
       try {
         const markdown = await window.diagnosticsAPI?.getDiagnosticsMarkdown();
         setDiagnosticsText(markdown || 'Failed to load diagnostics');
@@ -54,6 +57,7 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
     if (!window.socialAPI?.submitTextFeedback) return;
     
     setSending(true);
+    setSendError(null);
     try {
       const result = await window.socialAPI.submitTextFeedback(diagnosticsText);
       if (result) {
@@ -63,9 +67,12 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
           onClose();
           onSendAsFeedback?.();
         }, 500);
+      } else {
+        setSendError('Could not send diagnostics. Sign in first, or copy the report instead.');
       }
     } catch (error) {
       console.error('Failed to send feedback:', error);
+      setSendError('Could not send diagnostics. Copy the report instead.');
     } finally {
       setSending(false);
     }
@@ -93,6 +100,11 @@ export default function DiagnosticsModal({ isOpen, onClose, onSendAsFeedback }: 
           <p style={{ ...styles.description, color: theme.textSecondary }}>
             Copy this information and share it when reporting an issue.
           </p>
+          {sendError && (
+            <p style={{ ...styles.description, color: theme.error, marginBottom: '12px' }}>
+              {sendError}
+            </p>
+          )}
           
           <pre style={{ ...styles.diagnosticsBox, backgroundColor: theme.bgSecondary, borderColor: theme.border, color: theme.text }}>
             {isLoading ? 'Loading...' : diagnosticsText}
