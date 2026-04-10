@@ -1,18 +1,23 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import type { ParakeetStatus } from '../types/window';
+import type { ParakeetSetupProgress, ParakeetStatus } from '../types/window';
 import { buildHotkeyString, formatHotkeyDisplay } from '../utils/hotkeys';
 import {
   DEFAULT_VISIBLE_PARAKEET_ENGINE,
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
+  PARAKEET_ONE_TIME_SETUP_NOTE,
   PARAKEET_VISIBLE_ENGINE_OPTIONS,
-  hasVisibleParakeetRuntime,
+  getVisibleParakeetActionLabel,
+  getVisibleParakeetEngineStatus,
+  getVisibleParakeetPendingActionLabel,
+  getVisibleParakeetRecoveryMessage,
   isVisibleParakeetEngineVerified,
   normalizeVisibleTranscriptionEngine,
   type VisibleParakeetEngine,
   type VisibleTranscriptionEngine,
 } from '../utils/transcriptionEngines';
+import ParakeetSupportPanel from './ParakeetSupportPanel';
 
 // =============================================================================
 // Onboarding - 4-phase onboarding flow for Field Theory
@@ -227,10 +232,12 @@ interface ModelPhaseProps {
   onFinish: () => void;
   selectedEngine: VisibleTranscriptionEngine;
   onSelectEngine: (engine: VisibleTranscriptionEngine) => void;
-  parakeetInstalled: boolean;
+  parakeetStatus: ParakeetStatus | null;
   settingUpParakeet: boolean;
+  settingUpParakeetEngine: VisibleParakeetEngine | null;
+  parakeetSetupProgress: ParakeetSetupProgress | null;
   parakeetSetupError: string | null;
-  onSetupParakeet: () => void;
+  onSetupParakeet: (engine: VisibleParakeetEngine) => void;
   theme: Theme;
   styles: Record<string, React.CSSProperties>;
 }
@@ -245,8 +252,10 @@ function ModelPhase({
   onFinish,
   selectedEngine,
   onSelectEngine,
-  parakeetInstalled,
+  parakeetStatus,
   settingUpParakeet,
+  settingUpParakeetEngine,
+  parakeetSetupProgress,
   parakeetSetupError,
   onSetupParakeet,
   theme,
@@ -255,7 +264,20 @@ function ModelPhase({
   const isWhisperReady = modelDownloadStatus[selectedModel] || false;
 
   // Can finish if the chosen engine is ready.
-  const canFinish = selectedEngine === 'whisper' ? isWhisperReady : parakeetInstalled;
+  const canFinish = selectedEngine === 'whisper'
+    ? isWhisperReady
+    : isVisibleParakeetEngineVerified(parakeetStatus, selectedEngine);
+  const selectedParakeetEngineStatus = selectedEngine === 'whisper'
+    ? null
+    : getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
+  const selectedParakeetSupportSummary = selectedParakeetEngineStatus?.lastError ?? parakeetSetupError;
+  const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
+  const selectedParakeetErrorDetail = selectedParakeetEngineStatus?.lastErrorDetail ?? null;
+  const selectedParakeetProgress = selectedEngine === 'whisper'
+    ? null
+    : parakeetSetupProgress?.engine === selectedEngine
+      ? parakeetSetupProgress
+      : null;
 
   // AI integration state - shown when either engine is ready
   const [aiStatus, setAiStatus] = useState<AIIntegrationStatus | null>(null);
@@ -309,12 +331,17 @@ function ModelPhase({
     <div style={styles.phase}>
       <h1 style={styles.title}>Choose Your Transcription Engine</h1>
       <p style={styles.subtitle}>
-        Runs locally on your Mac for private, offline transcription.
+        Runs locally on your Mac after setup. {PARAKEET_ONE_TIME_SETUP_NOTE}
       </p>
 
       <div style={styles.modelList}>
         {PARAKEET_VISIBLE_ENGINE_OPTIONS.map((engineOption) => {
           const isSelected = selectedEngine === engineOption.id;
+          const engineStatus = getVisibleParakeetEngineStatus(parakeetStatus, engineOption.id);
+          const engineVerified = isVisibleParakeetEngineVerified(parakeetStatus, engineOption.id);
+          const actionLabel = getVisibleParakeetActionLabel(engineStatus, Boolean(parakeetStatus?.runtimeInstalled));
+          const pendingActionLabel = getVisibleParakeetPendingActionLabel(actionLabel);
+          const isPendingAction = settingUpParakeet && settingUpParakeetEngine === engineOption.id;
           return (
             <div
               key={engineOption.id}
@@ -357,26 +384,38 @@ function ModelPhase({
                 </div>
               </div>
               <div style={styles.modelCardRight}>
-                {parakeetInstalled ? (
+                {engineVerified ? (
                   <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Installed</span>
-                ) : settingUpParakeet ? (
-                  <span style={{ fontSize: '11px', color: theme.warning, fontWeight: 500 }}>Installing...</span>
+                ) : isPendingAction ? (
+                  <span style={{ fontSize: '11px', color: theme.warning, fontWeight: 500 }}>{pendingActionLabel}</span>
                 ) : (
                   <button
-                    onClick={(e) => { e.stopPropagation(); onSetupParakeet(); }}
+                    onClick={(e) => { e.stopPropagation(); onSetupParakeet(engineOption.id); }}
                     style={styles.downloadButton}
                   >
-                    Install
+                    {actionLabel}
                   </button>
                 )}
               </div>
             </div>
           );
         })}
-        {parakeetSetupError && (
-          <div style={{ fontSize: '11px', color: theme.error, marginTop: '2px', padding: '0 12px' }}>
-            {parakeetSetupError}
-          </div>
+        {(selectedParakeetProgress || selectedParakeetSupportSummary) && selectedEngine !== 'whisper' && (
+          <ParakeetSupportPanel
+            theme={theme}
+            title={
+              selectedParakeetSupportSummary
+                ? `${PARAKEET_VISIBLE_ENGINE_OPTIONS.find((option) => option.id === selectedEngine)?.label ?? 'Parakeet'} needs attention`
+                : `Setting up ${PARAKEET_VISIBLE_ENGINE_OPTIONS.find((option) => option.id === selectedEngine)?.label ?? 'Parakeet'}`
+            }
+            summary={selectedParakeetSupportSummary}
+            recoveryMessage={
+              selectedParakeetRecoveryMessage
+              ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
+            }
+            detail={selectedParakeetErrorDetail}
+            progress={selectedParakeetProgress}
+          />
         )}
 
         {/* Whisper fallback - de-emphasized */}
@@ -1502,9 +1541,10 @@ export default function Onboarding() {
 
   // Engine selection state.
   const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_PARAKEET_ENGINE);
-  const [parakeetInstalled, setParakeetInstalled] = useState(false);
   const [parakeetStatus, setParakeetStatus] = useState<ParakeetStatus | null>(null);
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
+  const [settingUpParakeetEngine, setSettingUpParakeetEngine] = useState<VisibleParakeetEngine | null>(null);
+  const [parakeetSetupProgress, setParakeetSetupProgress] = useState<ParakeetSetupProgress | null>(null);
   const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
 
   // Load initial state from Electron.
@@ -1572,11 +1612,6 @@ export default function Onboarding() {
 
           const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
           setParakeetStatus(status);
-          setParakeetInstalled(
-            normalizedEngine === 'whisper'
-              ? hasVisibleParakeetRuntime(status)
-              : isVisibleParakeetEngineVerified(status, normalizedEngine)
-          );
         }
       } catch (err) {
         console.error('[Onboarding] Failed to load state:', err);
@@ -1605,6 +1640,13 @@ export default function Onboarding() {
 
     return () => unsubscribe();
   }, [downloadingModel]);
+
+  useEffect(() => {
+    if (!window.transcribeAPI?.onParakeetSetupProgress) return;
+    return window.transcribeAPI.onParakeetSetupProgress((progress) => {
+      setParakeetSetupProgress(progress);
+    });
+  }, []);
 
   // Permission handlers.
   const refreshPermissions = useCallback(async () => {
@@ -1666,33 +1708,39 @@ export default function Onboarding() {
     setSelectedEngine(engine);
   }, []);
 
-  const handleSetupParakeet = useCallback(async () => {
+  const handleSetupParakeet = useCallback(async (engine: VisibleParakeetEngine) => {
     if (!window.transcribeAPI || settingUpParakeet) return;
+    setSelectedEngine(engine);
     setSettingUpParakeet(true);
+    setSettingUpParakeetEngine(engine);
+    setParakeetSetupProgress({
+      engine,
+      stage: 'installing-runtime',
+      message: 'Installing the Parakeet runtime…',
+      percent: null,
+      detail: null,
+    });
     setParakeetSetupError(null);
     try {
-      const result = await window.transcribeAPI.setupParakeet?.(
-        selectedEngine === 'whisper' ? 'parakeet' : selectedEngine
-      );
+      const result = await window.transcribeAPI.setupParakeet?.(engine);
       if (result?.success) {
         const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
         setParakeetStatus(status);
-        const targetEngine: VisibleParakeetEngine = selectedEngine === 'whisper' ? 'parakeet' : selectedEngine;
-        setParakeetInstalled(isVisibleParakeetEngineVerified(status, targetEngine));
       } else {
         setParakeetSetupError(result?.error ?? 'Setup failed');
+        const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
+        setParakeetStatus(status);
       }
     } catch (err) {
       setParakeetSetupError(err instanceof Error ? err.message : 'Setup failed');
+      const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
+      setParakeetStatus(status);
     } finally {
       setSettingUpParakeet(false);
+      setSettingUpParakeetEngine(null);
+      setParakeetSetupProgress(null);
     }
-  }, [selectedEngine, settingUpParakeet]);
-
-  useEffect(() => {
-    if (selectedEngine === 'whisper') return;
-    setParakeetInstalled(isVisibleParakeetEngineVerified(parakeetStatus, selectedEngine));
-  }, [parakeetStatus, selectedEngine]);
+  }, [settingUpParakeet]);
 
   // Phase navigation - saves step to preferences for resume on restart.
   const goToModel = useCallback(async () => {
@@ -1760,8 +1808,10 @@ export default function Onboarding() {
             onFinish={goToAccount}
             selectedEngine={selectedEngine}
             onSelectEngine={handleEngineChange}
-            parakeetInstalled={parakeetInstalled}
+            parakeetStatus={parakeetStatus}
             settingUpParakeet={settingUpParakeet}
+            settingUpParakeetEngine={settingUpParakeetEngine}
+            parakeetSetupProgress={parakeetSetupProgress}
             parakeetSetupError={parakeetSetupError}
             onSetupParakeet={handleSetupParakeet}
             theme={theme}

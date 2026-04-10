@@ -113,6 +113,7 @@ describe('DiagnosticsCollector audio diagnostics', () => {
               verified: false,
               needsReinstall: true,
               lastError: 'startup timed out',
+              lastErrorDetail: 'Loading model...\nFetching 4 files: 42%',
               lastErrorAt: '2026-03-16T00:00:00.000Z',
             },
             {
@@ -121,6 +122,7 @@ describe('DiagnosticsCollector audio diagnostics', () => {
               verified: false,
               needsReinstall: false,
               lastError: null,
+              lastErrorDetail: null,
               lastErrorAt: null,
             },
           ],
@@ -183,7 +185,8 @@ describe('DiagnosticsCollector audio diagnostics', () => {
 
     expect(markdown).toContain('### Detected Issues');
     expect(markdown).toContain('### Transcription');
-    expect(markdown).toContain('Parakeet English: needs reinstall');
+    expect(markdown).toContain('Parakeet English: latest verification failed');
+    expect(markdown).toContain('Fetching 4 files: 42%');
     expect(markdown).toContain('### Hot Mic');
     expect(markdown).toContain('### Window Management');
     expect(markdown).toContain('### Portable Commands');

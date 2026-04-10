@@ -29,7 +29,25 @@ export interface ParakeetEngineStatus {
   verified: boolean;
   needsReinstall: boolean;
   lastError: string | null;
+  lastErrorDetail?: string | null;
   lastErrorAt: string | null;
+}
+
+export type ParakeetSetupStage =
+  | 'installing-runtime'
+  | 'verifying-model'
+  | 'downloading-model'
+  | 'loading-model'
+  | 'starting-server'
+  | 'completed'
+  | 'failed';
+
+export interface ParakeetSetupProgress {
+  engine: ParakeetEngine;
+  stage: ParakeetSetupStage;
+  message: string;
+  percent: number | null;
+  detail: string | null;
 }
 
 export interface ParakeetStatus {
@@ -110,6 +128,7 @@ export const TranscribeIPCChannels = {
   RESULT: 'transcribe:result',
   ERROR: 'transcribe:error',
   MODEL_DOWNLOAD_PROGRESS: 'transcribe:modelDownloadProgress',
+  PARAKEET_SETUP_PROGRESS: 'transcribe:parakeetSetupProgress',
   HOTKEY_CHANGED: 'transcribe:hotkeyChanged',
 } as const;
 
@@ -214,5 +233,6 @@ export interface TranscribeAPI {
   onResult: (callback: (text: string) => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
   onModelDownloadProgress: (callback: (downloaded: number, total: number) => void) => () => void;
+  onParakeetSetupProgress: (callback: (progress: ParakeetSetupProgress) => void) => () => void;
   onHotkeyChanged: (callback: (hotkey: string) => void) => () => void;
 }
