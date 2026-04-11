@@ -60,6 +60,12 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.101': [
+    'Re-copied text now reliably returns to the top of clipboard history',
+    'Parakeet setup now shows clearer progress, failure details, and support actions',
+    'Mixed screenshot and text stacks now paste more reliably into multimodal apps',
+    'Diagnostics now make Parakeet verification failures easier to inspect and send',
+  ],
   '0.1.99': [
     '__SECTION__:Fixes',
     'Image stacks now paste correctly to terminals — all images, not just the last one',
@@ -324,6 +330,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.101': 'Apr 10 2026',
   '0.1.99': 'Apr 7 2026',
   '0.1.98': 'Mar 16 2026',
   '0.1.97': 'Mar 16 2026',
