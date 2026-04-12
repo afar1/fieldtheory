@@ -717,6 +717,7 @@ interface AuthAPI {
   verifyOtp: (email: string, token: string) => Promise<{ error: string | null; session: any | null }>;
   signOut: () => Promise<{ error: string | null }>;
   getSession: () => Promise<any | null>;
+  onSessionChanged?: (callback: (session: any | null) => void) => () => void;
   // Password authentication methods
   signUp?: (email: string, password: string) => Promise<{ error: string | null }>;
   signInWithPassword?: (email: string, password: string) => Promise<{ error: string | null; session: any | null }>;

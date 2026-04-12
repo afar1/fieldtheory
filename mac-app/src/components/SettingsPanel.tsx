@@ -16,12 +16,12 @@ import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
-import type { Session } from '@supabase/supabase-js';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
 import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
+import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 
 // Settings sections in alphabetical order
 type SettingsSection =
@@ -390,12 +390,19 @@ export default function SettingsPanel({
   // Hot Mic hotkey
   const [hotMicHotkey, setHotMicHotkey] = useState<string | null>(null);
 
-  // Mobile sync state - sign-in is handled via TeamView, we just listen for session.
-  const [session, setSession] = useState<Session | null>(null);
   const [initialAuthLoading, setInitialAuthLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
   const [syncStatus, setSyncStatus] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+
+  const {
+    session,
+    setSession,
+    initialized: authSessionInitialized,
+  } = useAuthSessionBridge({
+    supabase,
+    syncRendererSessionToMain: true,
+  });
   
   // Delete account state.
   const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -763,67 +770,11 @@ export default function SettingsPanel({
     }
   };
 
-  // Check auth state on mount and listen for changes.
-  // Auth is managed by main process AuthManager - get session from there first,
-  // then sync to client-side Supabase (needed for realtime subscriptions).
   useEffect(() => {
-    // If supabase client is not available, skip auth. This can happen if
-    // environment variables are missing during development.
-    if (!supabase) {
-      console.warn('[SettingsPanel] Supabase client not available');
-      return;
+    if (authSessionInitialized) {
+      setInitialAuthLoading(false);
     }
-
-    // Get initial session from main process (source of truth).
-    // This handles the case where user signed in via Onboarding window.
-    const client = supabase; // Capture non-null reference for async closure
-    const initSession = async () => {
-      try {
-        // First check main process AuthManager
-        const mainSession = await window.authAPI?.getSession();
-        if (mainSession) {
-          setSession(mainSession);
-          // No need to sync to client-side Supabase - renderer doesn't use it for auth.
-          // Main process is the single source of truth for authentication.
-          return;
-        }
-
-        // Fallback: check client-side Supabase (handles TeamView sign-in in same window)
-        const { data: { session } } = await client.auth.getSession();
-        if (session) {
-          setSession(session);
-          // Pass to main process for sync
-          window.clipboardAPI?.setSyncSession?.(
-            session.access_token,
-            session.refresh_token
-          );
-        }
-      } finally {
-        setInitialAuthLoading(false);
-      }
-    };
-    initSession();
-
-    // Listen for auth changes (triggered by TeamView sign-in).
-    // Note: We only update React state if there's a valid session or explicit sign out.
-    // INITIAL_SESSION with null is ignored - we already have session from main process.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log(`[SettingsPanel] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
-      if (session) {
-        setSession(session);
-        window.clipboardAPI?.setSyncSession?.(
-          session.access_token,
-          session.refresh_token
-        );
-      } else if (event === 'SIGNED_OUT') {
-        setSession(null);
-        console.log(`[SettingsPanel] User signed out`);
-      }
-      // Ignore INITIAL_SESSION with null - main process session is authoritative
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
+  }, [authSessionInitialized]);
 
   // Fetch callsign when session changes
   useEffect(() => {

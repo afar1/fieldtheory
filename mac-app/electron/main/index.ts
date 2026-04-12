@@ -3858,10 +3858,9 @@ function setupClipboardIPCHandlers(): void {
         trayManager.refreshMenu();
       }
 
-      // Notify all windows that session has ended.
+      // Reset renderer tier state on sign-out.
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
-          window.webContents.send('session-changed', null);
           window.webContents.send('tier:changed', 'free');
         }
       });
@@ -3934,7 +3933,6 @@ function setupClipboardIPCHandlers(): void {
 
       BrowserWindow.getAllWindows().forEach((window) => {
         if (!window.isDestroyed()) {
-          window.webContents.send('session-changed', null);
           window.webContents.send('tier:changed', 'free');
         }
       });
@@ -6477,6 +6475,12 @@ async function initTranscriberSystem(): Promise<void> {
   // Listen for session changes (login/logout, token refresh)
   authManager.on('sessionChanged', async (session) => {
     logUserState(session ? 'login' : 'logout');
+
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('session-changed', session);
+      }
+    });
 
     // Sync quota data when session is restored
     if (session && quotaManager) {
