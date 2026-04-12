@@ -205,6 +205,44 @@ describe('TranscriptionSettings Parakeet labels', () => {
     });
   });
 
+  it('offers a model repair action for broken Parakeet cache downloads', async () => {
+    (window as any).transcribeAPI = makeTranscribeApi({
+      getParakeetStatus: vi.fn(async () =>
+        makeParakeetStatus({
+          engines: [
+            {
+              engine: 'parakeet',
+              label: 'Parakeet English',
+              verified: false,
+              needsReinstall: true,
+              lastError: 'filesystem error: in file_size: No such file or directory ["/tmp/models--istupakov--parakeet-tdt-0.6b-v2-onnx/snapshots/abc/encoder-model.onnx.data"]',
+              lastErrorDetail: 'Failed to load Parakeet because encoder-model.onnx.data is missing',
+              lastErrorAt: '2026-04-09T00:00:00.000Z',
+            },
+            {
+              engine: 'parakeet-multilingual',
+              label: 'Parakeet Multilingual',
+              verified: false,
+              needsReinstall: false,
+              lastError: null,
+              lastErrorDetail: null,
+              lastErrorAt: null,
+            },
+          ],
+        })
+      ),
+      getTranscriptionEngine: vi.fn(async (): Promise<'parakeet'> => 'parakeet'),
+    });
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    render(<TranscriptionSettings />);
+
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Repair model' })).toBeTruthy();
+      expect(screen.getByText(/broken Parakeet model download/i)).toBeTruthy();
+    });
+  });
+
   it('shows Parakeet setup progress updates from the backend', async () => {
     let onParakeetSetupProgress: ((progress: ParakeetSetupProgress) => void) | null = null;
 
