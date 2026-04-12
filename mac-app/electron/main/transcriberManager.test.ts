@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
@@ -1725,6 +1725,44 @@ describe('TranscriberManager parakeet uninstall', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it('classifies missing Parakeet model shards as repairable cache errors', () => {
+    const manager: any = {};
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.isParakeetRepairableCacheError(
+      new Error('filesystem error: in file_size: No such file or directory ["/tmp/models--istupakov--parakeet-tdt-0.6b-v2-onnx/snapshots/abc/encoder-model.onnx.data"]')
+    )).toBe(true);
+    expect(manager.isParakeetRepairableCacheError(
+      new Error('Parakeet English server startup timed out (60s)')
+    )).toBe(false);
+  });
+
+  it('repairs only the affected Parakeet model cache', () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-cache-'));
+    const hubDir = path.join(tempDir, 'cache', 'huggingface', 'hub');
+    const englishRepo = path.join(hubDir, 'models--istupakov--parakeet-tdt-0.6b-v2-onnx');
+    const multilingualRepo = path.join(hubDir, 'models--istupakov--parakeet-tdt-0.6b-v3-onnx');
+    mkdirSync(path.join(englishRepo, 'snapshots', 'abc'), { recursive: true });
+    mkdirSync(path.join(multilingualRepo, 'snapshots', 'def'), { recursive: true });
+
+    const manager: any = {
+      getParakeetBasePath: () => tempDir,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const missingShard = path.join(englishRepo, 'snapshots', 'abc', 'encoder-model.onnx.data');
+    const error: any = new Error(`No such file or directory ["${missingShard}"]`);
+    error.detail = `Loading nemo-parakeet-tdt-0.6b-v2...\nFailed to load nemo-parakeet-tdt-0.6b-v2: No such file or directory ["${missingShard}"]`;
+
+    const repairedRepos = manager.repairParakeetModelCache('parakeet', error);
+
+    expect(repairedRepos).toEqual([englishRepo]);
+    expect(existsSync(englishRepo)).toBe(false);
+    expect(existsSync(multilingualRepo)).toBe(true);
+
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it('prefetches the selected Parakeet model before starting the server during setup', async () => {
     const manager: any = {
       getParakeetBasePath: () => '/tmp/build-parakeet',
@@ -1750,5 +1788,52 @@ describe('TranscriberManager parakeet uninstall', () => {
     );
     expect(manager.startParakeetServer).toHaveBeenCalledWith('parakeet-multilingual');
     expect(manager.stopParakeetServer).toHaveBeenCalledTimes(1);
+  });
+
+  it('repairs a broken Parakeet model cache once during setup and retries verification', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-setup-'));
+    const englishRepo = path.join(
+      tempDir,
+      'cache',
+      'huggingface',
+      'hub',
+      'models--istupakov--parakeet-tdt-0.6b-v2-onnx'
+    );
+    mkdirSync(path.join(englishRepo, 'snapshots', 'abc'), { recursive: true });
+
+    const missingShard = path.join(englishRepo, 'snapshots', 'abc', 'encoder-model.onnx.data');
+    const repairError: any = new Error(`No such file or directory ["${missingShard}"]`);
+    repairError.detail = `Loading nemo-parakeet-tdt-0.6b-v2...\nFailed to load nemo-parakeet-tdt-0.6b-v2: No such file or directory ["${missingShard}"]`;
+
+    let attempts = 0;
+    const manager: any = {
+      getParakeetBasePath: () => tempDir,
+      installParakeetRuntime: vi.fn(async () => {}),
+      prefetchParakeetModel: vi.fn(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw repairError;
+        }
+      }),
+      startParakeetServer: vi.fn(async () => {}),
+      stopParakeetServer: vi.fn(),
+      markParakeetEngineFailure: TranscriberManager.prototype['markParakeetEngineFailure'],
+      normalizeParakeetErrorMessage: TranscriberManager.prototype['normalizeParakeetErrorMessage'],
+      normalizeParakeetErrorDetail: TranscriberManager.prototype['normalizeParakeetErrorDetail'],
+      readPersistedParakeetState: () => ({}),
+      writePersistedParakeetState: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const result = await manager.setupParakeet('parakeet');
+
+    expect(result).toEqual({ success: true });
+    expect(manager.installParakeetRuntime).toHaveBeenCalledTimes(1);
+    expect(manager.prefetchParakeetModel).toHaveBeenCalledTimes(2);
+    expect(manager.startParakeetServer).toHaveBeenCalledTimes(1);
+    expect(manager.stopParakeetServer).toHaveBeenCalledTimes(2);
+    expect(existsSync(englishRepo)).toBe(false);
+
+    rmSync(tempDir, { recursive: true, force: true });
   });
 });
