@@ -1905,9 +1905,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   content: {
     flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
     padding: '12px',
   },
   phase: {
@@ -1917,6 +1919,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     textAlign: 'center',
     maxWidth: '400px',
     width: '100%',
+    margin: 'auto 0',
   },
   title: {
     fontSize: '18px',
