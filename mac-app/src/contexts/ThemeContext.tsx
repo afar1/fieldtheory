@@ -229,6 +229,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } as Theme;
   }, [isDark, glassEnabled, accentPreset, darkModeIntensity]);
 
+  // Sync theme to :root/body so overflow spill can't fall through to the prefers-color-scheme fallback in styles.css.
+  useEffect(() => {
+    document.documentElement.style.backgroundColor = theme.background;
+    document.body.style.backgroundColor = theme.background;
+  }, [theme.background]);
+
   return (
     <ThemeContext.Provider value={{
       theme,
