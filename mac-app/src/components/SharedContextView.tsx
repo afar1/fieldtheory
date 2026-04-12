@@ -6,8 +6,8 @@
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
-import { Session } from '@supabase/supabase-js';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
+import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
   DndContext,
   DragOverlay,
@@ -483,12 +483,24 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
   // Prevent double fetch on mount.
   const hasLoadedRef = useRef(false);
 
-  // Auth state.
-  const [session, setSession] = useState<Session | null>(null);
+  const handleSignedOut = useCallback(() => {
+    hasLoadedRef.current = false;
+  }, []);
+
+  const {
+    session,
+    setSession,
+    initialized: authInitialized,
+  } = useAuthSessionBridge({
+    supabase,
+    syncRendererSessionToMain: true,
+    onSignedOut: handleSignedOut,
+  });
+
+  const checkingAuth = !authInitialized;
   const [authError, setAuthError] = useState<string | null>(null);
   const [authEmail, setAuthEmail] = useState('');
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [checkingAuth, setCheckingAuth] = useState(true);
   
   // OTP auth state.
   const [otpCode, setOtpCode] = useState('');
@@ -657,43 +669,6 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
   // ---------------------------------------------------------------------------
   // Auth
   // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    if (!supabase) {
-      setCheckingAuth(false);
-      return;
-    }
-
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      // IMPORTANT: Must set sync session BEFORE updating React state.
-      // Otherwise, the useEffect that calls loadTeamItems() fires before
-      // the main process has the session, causing queryItems to return empty.
-      if (session) {
-        await window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      }
-      setSession(session);
-      setCheckingAuth(false);
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-      console.log(`[SharedContextView] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
-      // IMPORTANT: Must set sync session BEFORE updating React state.
-      // Otherwise, the useEffect that calls loadTeamItems() fires before
-      // the main process has the session, causing queryItems to return empty.
-      if (session) {
-        await window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      } else if (event === 'SIGNED_OUT') {
-        // Auth is managed by main process (AuthManager) - no need to call clearSyncSession.
-        console.log(`[SharedContextView] User signed out`);
-      } else {
-        console.log(`[SharedContextView] Session became null after ${event} event`);
-      }
-      setSession(session);
-      setCheckingAuth(false);
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   const handleRequestOtp = async (e: React.FormEvent) => {
     e.preventDefault();
