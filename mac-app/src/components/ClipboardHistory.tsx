@@ -21,7 +21,6 @@ import { rendererSoundManager } from '../utils/rendererSoundManager';
 const SketchView = React.lazy(() => import('./SketchView'));
 import { useTheme } from '../contexts/ThemeContext';
 import { supabase } from '../supabaseClient';
-import type { Session } from '@supabase/supabase-js';
 import {
   DndContext,
   DragOverlay,
@@ -65,6 +64,7 @@ import {
 } from '../utils/clipboardHistoryRestore';
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
+import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 
 /**
  * Check if any items in a stack have improved content.
@@ -315,10 +315,21 @@ export default function ClipboardHistory() {
     }
   });
   
-  // Auth session state for showing "Signed in as..." in header.
-  const [authSession, setAuthSession] = useState<Session | null>(null);
-  // Track when session initialization is complete to avoid UI flicker.
-  const [sessionInitialized, setSessionInitialized] = useState(false);
+  const handleRendererSignedOut = useCallback(() => {
+    setHasUnreadFeedback(false);
+    setSharingUnlocked(false);
+    setViewMode('clipboard');
+  }, []);
+
+  const {
+    session: authSession,
+    initialized: sessionInitialized,
+  } = useAuthSessionBridge({
+    supabase,
+    syncRendererSessionToMain: true,
+    onSignedOut: handleRendererSignedOut,
+  });
+
   // User's callsign from profile
   const [userCallsign, setUserCallsign] = useState<string | null>(null);
   
@@ -855,20 +866,29 @@ export default function ClipboardHistory() {
   
   // Check for unread feedback and listen for incoming messages.
   useEffect(() => {
-    if (!window.socialAPI) return;
+    if (!window.socialAPI || !authSession?.user?.id) {
+      setHasUnreadFeedback(false);
+      return;
+    }
+
+    let cancelled = false;
 
     // Check current view to avoid race condition where async query overwrites cleared state.
     window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
+      if (cancelled) return;
       const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
       console.log('[FeedbackDot] hasUnreadFeedback API returned:', hasUnread, 'currentView:', currentView);
       if (hasUnread && currentView !== 'feedback') {
         console.log('[FeedbackDot] Setting hasUnreadFeedback to TRUE');
         setHasUnreadFeedback(true);
+      } else {
+        setHasUnreadFeedback(false);
       }
     });
 
     // Listen for incoming feedback messages.
     const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
+      if (cancelled) return;
       const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
       if (message.type === 'feedback') {
         if (currentView !== 'feedback') {
@@ -878,8 +898,11 @@ export default function ClipboardHistory() {
       }
     });
 
-    return unsubscribe;
-  }, []);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [authSession?.user?.id]);
 
   // Close mic dropdown when clicking outside.
   useEffect(() => {
@@ -1389,48 +1412,6 @@ export default function ClipboardHistory() {
       setViewMode('clipboard');
     }
   }, [librarianEnabled, viewMode]);
-
-  useEffect(() => {
-    if (!supabase) {
-      // If supabase is not configured, still mark session as initialized (with no auth).
-      setSessionInitialized(true);
-      return;
-    }
-
-    // Initialize auth session from main process (single source of truth).
-    // Renderer doesn't need to sync to Supabase client - main process owns auth.
-    const initializeSession = async () => {
-      const mainProcessSession = await window.authAPI?.getSession?.();
-      if (mainProcessSession) {
-        setAuthSession(mainProcessSession);
-      }
-      // Mark session initialization as complete to prevent UI flicker.
-      setSessionInitialized(true);
-    };
-
-    initializeSession();
-
-    // Listen for auth state changes.
-    // Note: We only update React state if there's a valid session or explicit sign out.
-    // INITIAL_SESSION with null is ignored - main process session is authoritative.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log(`[ClipboardHistory] Auth event: ${event}, session: ${session ? 'present' : 'null'}`);
-
-      if (session) {
-        setAuthSession(session);
-        window.clipboardAPI?.setSyncSession?.(session.access_token, session.refresh_token);
-      } else if (event === 'SIGNED_OUT') {
-        setAuthSession(null);
-        console.log('[ClipboardHistory] User signed out');
-        setHasUnreadFeedback(false);
-        setSharingUnlocked(false);
-        setViewMode('clipboard');
-      }
-      // Ignore INITIAL_SESSION with null - main process session is authoritative
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
 
   // Fetch user's callsign when auth session changes
   useEffect(() => {

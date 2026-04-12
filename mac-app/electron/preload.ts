@@ -2225,6 +2225,13 @@ const authAPI = {
   // Get current session.
   getSession: () => ipcRenderer.invoke('auth:getSession'),
 
+  // Listen for main-process auth session changes.
+  onSessionChanged: (callback: (session: unknown | null) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, session: unknown | null) => callback(session);
+    ipcRenderer.on('session-changed', handler);
+    return () => ipcRenderer.removeListener('session-changed', handler);
+  },
+
   // Check if user is super admin.
   isSuperAdmin: (): Promise<boolean> => ipcRenderer.invoke('auth:isSuperAdmin'),
 
