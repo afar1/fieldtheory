@@ -9,6 +9,7 @@ import {
   getVisibleParakeetRecoveryMessage,
   hasVisibleParakeetRuntime,
   isVisibleParakeetEngineVerified,
+  isVisibleParakeetRepairableCacheError,
   isVisibleParakeetTimeoutError,
   normalizeVisibleTranscriptionEngine,
 } from './transcriptionEngines';
@@ -66,7 +67,7 @@ describe('transcriptionEngines utils', () => {
     );
   });
 
-  it('recommends retry for timeout failures and reinstall for hard failures', () => {
+  it('recommends retry for timeout failures, repair for broken model caches, and reinstall for runtime failures', () => {
     expect(getVisibleParakeetActionLabel({
       engine: 'parakeet',
       verified: false,
@@ -78,10 +79,18 @@ describe('transcriptionEngines utils', () => {
       engine: 'parakeet',
       verified: false,
       needsReinstall: true,
+      lastError: 'filesystem error: in file_size: No such file or directory ["/tmp/models--istupakov--parakeet-tdt-0.6b-v2-onnx/snapshots/abc/encoder-model.onnx.data"]',
+    }, true)).toBe('Repair model');
+
+    expect(getVisibleParakeetActionLabel({
+      engine: 'parakeet',
+      verified: false,
+      needsReinstall: true,
       lastError: 'onnx-asr is not installed',
     }, true)).toBe('Reinstall');
 
     expect(getVisibleParakeetPendingActionLabel('Retry')).toBe('Retrying...');
+    expect(getVisibleParakeetPendingActionLabel('Repair model')).toBe('Repairing model...');
   });
 
   it('classifies timeout failures and produces actionable recovery guidance', () => {
@@ -89,6 +98,12 @@ describe('transcriptionEngines utils', () => {
     expect(getVisibleParakeetRecoveryMessage('Parakeet Multilingual server startup timed out (60s)')).toContain(
       'model did not finish downloading or loading in time'
     );
+    expect(isVisibleParakeetRepairableCacheError(
+      'filesystem error: in file_size: No such file or directory ["/tmp/models--istupakov--parakeet-tdt-0.6b-v2-onnx/snapshots/abc/encoder-model.onnx.data"]'
+    )).toBe(true);
+    expect(getVisibleParakeetRecoveryMessage(
+      'filesystem error: in file_size: No such file or directory ["/tmp/models--istupakov--parakeet-tdt-0.6b-v2-onnx/snapshots/abc/encoder-model.onnx.data"]'
+    )).toContain('Repair the model');
     expect(getVisibleParakeetRecoveryMessage('onnx-asr is not installed')).toContain(
       'Remove Parakeet and install it again'
     );

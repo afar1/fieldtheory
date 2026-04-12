@@ -2469,6 +2469,90 @@ export class TranscriberManager extends EventEmitter {
     return combined ? combined.slice(0, 8000) : null;
   }
 
+  private getParakeetHubCacheDir(): string {
+    return path.join(this.getParakeetCacheDir(), 'huggingface', 'hub');
+  }
+
+  private isParakeetRepairableCacheError(error: unknown): boolean {
+    const detail = (this.normalizeParakeetErrorDetail(error) ?? this.normalizeParakeetErrorMessage(error)).toLowerCase();
+    const missingFile =
+      detail.includes('no such file or directory') ||
+      detail.includes('filesystem error: in file_size');
+    if (!missingFile) return false;
+
+    return detail.includes('.onnx.data') ||
+      detail.includes('huggingface') ||
+      detail.includes('/snapshots/') ||
+      detail.includes('models--');
+  }
+
+  private extractParakeetCachePathCandidates(detail: string): string[] {
+    const candidates = new Set<string>();
+    for (const match of detail.matchAll(/["'](\/[^"']+)["']/g)) {
+      const candidate = match[1]?.trim();
+      if (candidate) {
+        candidates.add(candidate);
+      }
+    }
+    for (const match of detail.matchAll(/\[(\/[^\]]+)\]/g)) {
+      const candidate = match[1]?.trim();
+      if (candidate) {
+        candidates.add(candidate);
+      }
+    }
+    return [...candidates];
+  }
+
+  private isParakeetHubCachePath(candidate: string): boolean {
+    const relative = path.relative(this.getParakeetHubCacheDir(), candidate);
+    return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+  }
+
+  private findParakeetModelCacheRepos(engine: ParakeetEngine, error: unknown): string[] {
+    const detail = this.normalizeParakeetErrorDetail(error) ?? this.normalizeParakeetErrorMessage(error);
+    const repoDirs = new Set<string>();
+
+    for (const candidate of this.extractParakeetCachePathCandidates(detail)) {
+      let current = path.normalize(candidate);
+      while (current !== path.dirname(current)) {
+        if (path.basename(current).startsWith('models--')) {
+          if (this.isParakeetHubCachePath(current)) {
+            repoDirs.add(current);
+          }
+          break;
+        }
+        current = path.dirname(current);
+      }
+    }
+
+    if (repoDirs.size > 0) {
+      return [...repoDirs];
+    }
+
+    const hubCacheDir = this.getParakeetHubCacheDir();
+    if (!fs.existsSync(hubCacheDir)) {
+      return [];
+    }
+
+    const engineToken = PARAKEET_ENGINE_MODEL_IDS[engine].replace(/^nemo-/, '').toLowerCase();
+    for (const entry of fs.readdirSync(hubCacheDir, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      if (!entry.name.startsWith('models--')) continue;
+      if (!entry.name.toLowerCase().includes(engineToken)) continue;
+      repoDirs.add(path.join(hubCacheDir, entry.name));
+    }
+
+    return [...repoDirs];
+  }
+
+  private repairParakeetModelCache(engine: ParakeetEngine, error: unknown): string[] {
+    const repoDirs = this.findParakeetModelCacheRepos(engine, error);
+    for (const repoDir of repoDirs) {
+      fs.rmSync(repoDir, { recursive: true, force: true });
+    }
+    return repoDirs;
+  }
+
   private emitParakeetSetupProgress(
     engine: ParakeetEngine,
     progress: Omit<ParakeetSetupProgress, 'engine'>
@@ -2821,15 +2905,7 @@ export class TranscriberManager extends EventEmitter {
     const reportProgress: ParakeetSetupReporter = (progress) => {
       this.emitParakeetSetupProgress(engine, progress);
     };
-
-    try {
-      reportProgress({
-        stage: 'installing-runtime',
-        message: 'Installing the Parakeet runtime…',
-        percent: null,
-        detail: `venv: ${venvDir}`,
-      });
-      await this.installParakeetRuntime(venvDir, reportProgress);
+    const verifyAndStart = async () => {
       reportProgress({
         stage: 'verifying-model',
         message: 'Preparing the Parakeet model…',
@@ -2844,6 +2920,43 @@ export class TranscriberManager extends EventEmitter {
         detail: null,
       });
       await this.startParakeetServer(engine);
+    };
+
+    try {
+      reportProgress({
+        stage: 'installing-runtime',
+        message: 'Installing the Parakeet runtime…',
+        percent: null,
+        detail: `venv: ${venvDir}`,
+      });
+      await this.installParakeetRuntime(venvDir, reportProgress);
+
+      let repairedCorruptCache = false;
+      while (true) {
+        try {
+          await verifyAndStart();
+          break;
+        } catch (error) {
+          if (repairedCorruptCache || !this.isParakeetRepairableCacheError(error)) {
+            throw error;
+          }
+
+          const repairedRepos = this.repairParakeetModelCache(engine, error);
+          if (repairedRepos.length === 0) {
+            throw error;
+          }
+
+          repairedCorruptCache = true;
+          this.stopParakeetServer();
+          reportProgress({
+            stage: 'verifying-model',
+            message: 'Repairing the Parakeet model cache…',
+            percent: null,
+            detail: 'Cleared the cached model snapshot and retrying download…',
+          });
+        }
+      }
+
       reportProgress({
         stage: 'completed',
         message: `${PARAKEET_ENGINE_LABELS[engine]} is ready.`,
@@ -2863,6 +2976,15 @@ export class TranscriberManager extends EventEmitter {
       });
       log.error('Parakeet setup failed: %s', message);
       return { success: false, error: message };
+    }
+  }
+
+  private async warmupParakeetServer(engine: ParakeetEngine): Promise<void> {
+    try {
+      await this.startParakeetServer(engine);
+    } catch (error) {
+      log.warn('%s warmup failed: %s', PARAKEET_ENGINE_LABELS[engine], (error as Error).message);
+      this.stopParakeetServer();
     }
   }
 
@@ -3189,7 +3311,7 @@ export class TranscriberManager extends EventEmitter {
     }
     const parakeetEngine = engines.find(isParakeetEngine);
     if (parakeetEngine && this.isParakeetInstalled()) {
-      await this.startParakeetServer(parakeetEngine);
+      await this.warmupParakeetServer(parakeetEngine);
     }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       await this.startWhisperServer();
@@ -3213,7 +3335,7 @@ export class TranscriberManager extends EventEmitter {
     }
     const parakeetEngine = engines.find(isParakeetEngine);
     if (parakeetEngine && this.isParakeetInstalled()) {
-      await this.startParakeetServer(parakeetEngine);
+      await this.warmupParakeetServer(parakeetEngine);
     }
     if (engines.includes('whisper') && this.isWhisperServerAvailable()) {
       await this.startWhisperServer();
@@ -3456,7 +3578,7 @@ export class TranscriberManager extends EventEmitter {
       if (!this.isParakeetInstalled()) {
         return;
       }
-      await this.startParakeetServer(engine);
+      await this.warmupParakeetServer(engine);
       return;
     }
 
