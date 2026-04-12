@@ -679,20 +679,27 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
 
   // Check if user is already logged in on mount, and fetch their call sign.
   useEffect(() => {
-    if (!supabase) {
-      setIsCheckingSession(false);
-      return;
-    }
-    const client = supabase;
     const checkSession = async () => {
       try {
-        const { data: { session } } = await client.auth.getSession();
+        const mainProcessSession = await window.authAPI?.getSession?.();
+        const rendererSession = mainProcessSession
+          ? null
+          : supabase
+            ? (await supabase.auth.getSession()).data.session
+            : null;
+        const session = mainProcessSession ?? rendererSession;
+
         if (session?.user?.email) {
           setExistingEmail(session.user.email);
+          const callsignFromSession = (session.user.user_metadata as { callsign?: string } | undefined)?.callsign;
+          if (callsignFromSession) {
+            setCallsign(callsignFromSession);
+          }
+
           // Also fetch call sign for already-logged-in users
-          if (session.user.id) {
+          if (!callsignFromSession && session.user.id && supabase) {
             try {
-              const { data } = await client
+              const { data } = await supabase
                 .from('profiles')
                 .select('callsign')
                 .eq('id', session.user.id)
@@ -1905,9 +1912,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   },
   content: {
     flex: 1,
+    minHeight: 0,
+    overflowY: 'auto',
     display: 'flex',
+    flexDirection: 'column',
     alignItems: 'center',
-    justifyContent: 'center',
     padding: '12px',
   },
   phase: {
@@ -1917,6 +1926,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     textAlign: 'center',
     maxWidth: '400px',
     width: '100%',
+    margin: 'auto 0',
   },
   title: {
     fontSize: '18px',
