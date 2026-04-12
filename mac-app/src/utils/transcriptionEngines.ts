@@ -10,7 +10,7 @@ export type VisibleParakeetEngineStatus = {
   lastErrorAt?: string | null;
 };
 
-export type VisibleParakeetActionLabel = 'Install' | 'Verify' | 'Retry' | 'Reinstall';
+export type VisibleParakeetActionLabel = 'Install' | 'Verify' | 'Retry' | 'Repair model' | 'Reinstall';
 
 export type VisibleParakeetStatus = {
   runtimeInstalled: boolean;
@@ -85,12 +85,32 @@ export function isVisibleParakeetTimeoutError(error: string | null | undefined):
   return normalized.includes('startup timed out') || normalized.includes('model verification timed out');
 }
 
+export function isVisibleParakeetRepairableCacheError(error: string | null | undefined): boolean {
+  if (!error) return false;
+  const normalized = error.toLowerCase();
+  const missingFile =
+    normalized.includes('no such file or directory') ||
+    normalized.includes('filesystem error: in file_size');
+  if (!missingFile) return false;
+
+  return normalized.includes('.onnx.data') ||
+    normalized.includes('huggingface') ||
+    normalized.includes('/snapshots/') ||
+    normalized.includes('models--');
+}
+
 export function getVisibleParakeetActionLabel(
   status: VisibleParakeetEngineStatus | null,
   runtimeInstalled: boolean
 ): VisibleParakeetActionLabel {
   if (status?.needsReinstall) {
-    return isVisibleParakeetTimeoutError(status.lastError) ? 'Retry' : 'Reinstall';
+    if (isVisibleParakeetTimeoutError(status.lastError)) {
+      return 'Retry';
+    }
+    if (isVisibleParakeetRepairableCacheError(status.lastError)) {
+      return 'Repair model';
+    }
+    return 'Reinstall';
   }
 
   return runtimeInstalled ? 'Verify' : 'Install';
@@ -98,9 +118,10 @@ export function getVisibleParakeetActionLabel(
 
 export function getVisibleParakeetPendingActionLabel(
   actionLabel: VisibleParakeetActionLabel
-): 'Installing...' | 'Verifying...' | 'Retrying...' | 'Reinstalling...' {
+): 'Installing...' | 'Verifying...' | 'Retrying...' | 'Repairing model...' | 'Reinstalling...' {
   if (actionLabel === 'Verify') return 'Verifying...';
   if (actionLabel === 'Retry') return 'Retrying...';
+  if (actionLabel === 'Repair model') return 'Repairing model...';
   if (actionLabel === 'Reinstall') return 'Reinstalling...';
   return 'Installing...';
 }
@@ -110,6 +131,10 @@ export function getVisibleParakeetRecoveryMessage(error: string | null | undefin
 
   if (isVisibleParakeetTimeoutError(error)) {
     return 'The runtime installed, but the model did not finish downloading or loading in time. Retry on a stable internet connection. If it repeats, open Settings > Diagnostics and send it to support.';
+  }
+
+  if (isVisibleParakeetRepairableCacheError(error)) {
+    return 'Field Theory found a broken Parakeet model download. Repair the model to clear the cached snapshot and download it again. If it repeats, open Settings > Diagnostics and send it to support.';
   }
 
   const normalized = error.toLowerCase();

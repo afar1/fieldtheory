@@ -60,6 +60,11 @@ const RELEASE_NOTES_0_1_98 = RELEASE_NOTES_0_1_97.flatMap((note) => (
 ));
 
 const RELEASE_NOTES: Record<string, string[]> = {
+  '0.1.103': [
+    'Signed-in state now properly propagates after auto-updates — no need to relaunch to see your session',
+    'Onboarding no longer shows a dark strip at the bottom when running in light mode on a dark-mode Mac',
+    'Fixed a Parakeet setup bug where a broken cached model download could force a reinstall instead of a repair',
+  ],
   '0.1.102': [
     'Signed-in state now properly propagates after auto-updates — no need to relaunch to see your session',
     'Onboarding no longer shows a dark strip at the bottom when running in light mode on a dark-mode Mac',
@@ -334,6 +339,7 @@ const RELEASE_NOTES: Record<string, string[]> = {
 
 // Release dates for each version (format: 'Jan 10 2026')
 const RELEASE_DATES: Record<string, string> = {
+  '0.1.103': 'Apr 12 2026',
   '0.1.102': 'Apr 12 2026',
   '0.1.101': 'Apr 10 2026',
   '0.1.99': 'Apr 7 2026',
