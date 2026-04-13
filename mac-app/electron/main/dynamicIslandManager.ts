@@ -195,9 +195,13 @@ export class DynamicIslandManager extends EventEmitter {
   private autoHideEnabled: boolean = false;
   private autoHideConcealed: boolean = false;
   private autoHidePollTimer: NodeJS.Timeout | null = null;
+  private autoHideFadeTimer: NodeJS.Timeout | null = null;
   private readonly AUTO_HIDE_POLL_INTERVAL_MS = 100;
   private readonly AUTO_HIDE_REVEAL_HALO_PX = 60;
   private readonly AUTO_HIDE_CONCEAL_HALO_PX = 100;
+  private readonly AUTO_HIDE_ANIMATION_DURATION_MS = 200;
+  private readonly AUTO_HIDE_ANIMATION_STEP_MS = 16;
+  private readonly AUTO_HIDE_SLIDE_MARGIN_PX = 4;
 
   constructor() {
     super();
@@ -1391,28 +1395,168 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private concealAutoHiddenWindows(): void {
-    if (this.window && !this.window.isDestroyed()) {
-      this.window.hide();
-    }
-    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-      this.rightWindow.hide();
-    }
-    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
-      this.gapFillWindow.hide();
-    }
+    this.animateAutoHideWindows(0);
   }
 
   private revealAutoHiddenWindows(): void {
     if (!this.enabled) return;
-    // Let setEnabled's show flow recompute the correct visibility and backing
-    // for the current state. Calling show() on each window individually would
-    // skip the gap-fill + state-dependent choreography.
-    this.show();
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.setOpacity(1);
-      this.rightWindow.showInactive();
+    this.animateAutoHideWindows(1);
+  }
+
+  private animateAutoHideWindows(target: 0 | 1): void {
+    if (this.autoHideFadeTimer) {
+      clearInterval(this.autoHideFadeTimer);
+      this.autoHideFadeTimer = null;
     }
-    this.syncGapFillWindow();
+
+    interface AutoHideWindowState {
+      win: BrowserWindow;
+      baseX: number;
+      baseY: number;
+      width: number;
+      height: number;
+      slideDistance: number;
+      startOpacity: number;
+      startOffsetY: number;
+    }
+
+    const collect = (): AutoHideWindowState[] => {
+      const out: AutoHideWindowState[] = [];
+      const topY = this.getTopWindowY();
+
+      if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+        const [w, h] = this.window.getSize();
+        const baseX = this.getLeftWindowX(
+          this.historyVisible ? this.ISLAND_WIDTH : this.getIdlePillWidth(),
+          !this.historyVisible,
+        );
+        out.push({
+          win: this.window,
+          baseX,
+          baseY: topY,
+          width: w,
+          height: h,
+          slideDistance: h + this.AUTO_HIDE_SLIDE_MARGIN_PX,
+          startOpacity: 0,
+          startOffsetY: 0,
+        });
+      }
+
+      if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+        const [w, h] = this.rightWindow.getSize();
+        out.push({
+          win: this.rightWindow,
+          baseX: this.getRightWindowX(),
+          baseY: topY,
+          width: w,
+          height: h,
+          slideDistance: h + this.AUTO_HIDE_SLIDE_MARGIN_PX,
+          startOpacity: 0,
+          startOffsetY: 0,
+        });
+      }
+
+      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillRendererReady) {
+        const [w, h] = this.gapFillWindow.getSize();
+        out.push({
+          win: this.gapFillWindow,
+          baseX: this.getGapFillX(),
+          baseY: topY,
+          width: w,
+          height: h,
+          slideDistance: h + this.AUTO_HIDE_SLIDE_MARGIN_PX,
+          startOpacity: 0,
+          startOffsetY: 0,
+        });
+      }
+
+      return out;
+    };
+
+    const states = collect();
+    if (states.length === 0) return;
+
+    // Populate start values from each window's actual current state so that
+    // reversing mid-animation is smooth.
+    for (const s of states) {
+      if (!s.win.isVisible()) {
+        if (target === 0) {
+          // Already hidden, nothing to animate.
+          s.startOpacity = 0;
+          s.startOffsetY = -s.slideDistance;
+          continue;
+        }
+        // Reveal from hidden: position above the baseline at 0 opacity, then show.
+        s.win.setOpacity(0);
+        s.win.setBounds({
+          x: s.baseX,
+          y: s.baseY - s.slideDistance,
+          width: s.width,
+          height: s.height,
+        });
+        s.win.showInactive();
+        s.startOpacity = 0;
+        s.startOffsetY = -s.slideDistance;
+      } else {
+        s.startOpacity = s.win.getOpacity();
+        s.startOffsetY = s.win.getPosition()[1] - s.baseY;
+      }
+    }
+
+    const totalSteps = Math.max(
+      1,
+      Math.round(this.AUTO_HIDE_ANIMATION_DURATION_MS / this.AUTO_HIDE_ANIMATION_STEP_MS),
+    );
+    let step = 0;
+    const targetOpacity = target;
+    // Slide target: 0 offset when revealing, -slideDistance when concealing.
+    // (per-window slideDistance captured in state)
+
+    this.autoHideFadeTimer = setInterval(() => {
+      step += 1;
+      const t = Math.min(1, step / totalSteps);
+      const eased = target === 1
+        ? 1 - Math.pow(1 - t, 3)   // ease-out cubic (reveal)
+        : Math.pow(t, 3);           // ease-in cubic (conceal)
+
+      for (const s of states) {
+        if (s.win.isDestroyed()) continue;
+        const endOffsetY = target === 1 ? 0 : -s.slideDistance;
+        const opacity = s.startOpacity + (targetOpacity - s.startOpacity) * eased;
+        const offsetY = s.startOffsetY + (endOffsetY - s.startOffsetY) * eased;
+        s.win.setOpacity(Math.max(0, Math.min(1, opacity)));
+        s.win.setBounds({
+          x: s.baseX,
+          y: Math.round(s.baseY + offsetY),
+          width: s.width,
+          height: s.height,
+        });
+      }
+
+      if (step >= totalSteps) {
+        if (this.autoHideFadeTimer) {
+          clearInterval(this.autoHideFadeTimer);
+          this.autoHideFadeTimer = null;
+        }
+        for (const s of states) {
+          if (s.win.isDestroyed()) continue;
+          // Snap to exact final values and, when concealing, hide + reset so
+          // the next reveal starts from the correct natural position.
+          s.win.setBounds({
+            x: s.baseX,
+            y: s.baseY,
+            width: s.width,
+            height: s.height,
+          });
+          if (target === 0) {
+            s.win.setOpacity(1);
+            s.win.hide();
+          } else {
+            s.win.setOpacity(1);
+          }
+        }
+      }
+    }, this.AUTO_HIDE_ANIMATION_STEP_MS);
   }
 
   private getTargetDisplay(): Electron.Display {
@@ -1722,6 +1866,10 @@ export class DynamicIslandManager extends EventEmitter {
       this.dismissTimer = null;
     }
     this.stopAutoHidePolling();
+    if (this.autoHideFadeTimer) {
+      clearInterval(this.autoHideFadeTimer);
+      this.autoHideFadeTimer = null;
+    }
     if (this.window && !this.window.isDestroyed()) {
       this.window.close();
     }
