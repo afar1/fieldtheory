@@ -6049,6 +6049,7 @@ async function initTranscriberSystem(): Promise<void> {
   dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
   dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
   dynamicIslandManager.setStayOnLaptop(preferencesManager.getPreference('hotMicIslandStayOnLaptop') ?? false);
+  dynamicIslandManager.setAutoHide(preferencesManager.getPreference('hotMicIslandAutoHide') ?? false);
 
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
@@ -6413,6 +6414,7 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
       dynamicIslandManager?.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
       dynamicIslandManager?.setStayOnLaptop(prefs.hotMicIslandStayOnLaptop ?? false);
+      dynamicIslandManager?.setAutoHide(prefs.hotMicIslandAutoHide ?? false);
       dynamicIslandManager?.setEnabled(true);
       dynamicIslandManager?.setInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
       broadcastInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
@@ -6916,6 +6918,19 @@ if (!gotTheLock) {
       }
       dynamicIslandManager?.setStayOnLaptop(value);
       return value;
+    });
+
+    ipcMain.handle('hotmic:getIslandAutoHide', () => {
+      return preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false;
+    });
+
+    ipcMain.handle('hotmic:setIslandAutoHide', async (_event, value: boolean) => {
+      const next = !!value;
+      if (preferencesManager) {
+        await preferencesManager.save({ hotMicIslandAutoHide: next });
+      }
+      dynamicIslandManager?.setAutoHide(next);
+      return next;
     });
 
     ipcMain.handle('hotmic:getSubmitWord', () => {
