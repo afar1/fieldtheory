@@ -199,9 +199,8 @@ export class DynamicIslandManager extends EventEmitter {
   private readonly AUTO_HIDE_POLL_INTERVAL_MS = 100;
   private readonly AUTO_HIDE_REVEAL_HALO_PX = 60;
   private readonly AUTO_HIDE_CONCEAL_HALO_PX = 100;
-  private readonly AUTO_HIDE_ANIMATION_DURATION_MS = 200;
+  private readonly AUTO_HIDE_ANIMATION_DURATION_MS = 220;
   private readonly AUTO_HIDE_ANIMATION_STEP_MS = 16;
-  private readonly AUTO_HIDE_SLIDE_MARGIN_PX = 4;
 
   constructor() {
     super();
@@ -1409,15 +1408,18 @@ export class DynamicIslandManager extends EventEmitter {
       this.autoHideFadeTimer = null;
     }
 
+    // Each pill slides horizontally toward the notch on conceal and
+    // emerges out from behind it on reveal. The gap filler sits behind the
+    // notch so it just fades.
     interface AutoHideWindowState {
       win: BrowserWindow;
       baseX: number;
       baseY: number;
       width: number;
       height: number;
-      slideDistance: number;
+      slideDx: number; // horizontal offset at fully-concealed (px, signed)
       startOpacity: number;
-      startOffsetY: number;
+      startOffsetX: number;
     }
 
     const collect = (): AutoHideWindowState[] => {
@@ -1436,9 +1438,10 @@ export class DynamicIslandManager extends EventEmitter {
           baseY: topY,
           width: w,
           height: h,
-          slideDistance: h + this.AUTO_HIDE_SLIDE_MARGIN_PX,
+          // Left pill retreats to the right (into the notch's left edge).
+          slideDx: w,
           startOpacity: 0,
-          startOffsetY: 0,
+          startOffsetX: 0,
         });
       }
 
@@ -1450,9 +1453,10 @@ export class DynamicIslandManager extends EventEmitter {
           baseY: topY,
           width: w,
           height: h,
-          slideDistance: h + this.AUTO_HIDE_SLIDE_MARGIN_PX,
+          // Right pill retreats to the left (into the notch's right edge).
+          slideDx: -w,
           startOpacity: 0,
-          startOffsetY: 0,
+          startOffsetX: 0,
         });
       }
 
@@ -1464,9 +1468,10 @@ export class DynamicIslandManager extends EventEmitter {
           baseY: topY,
           width: w,
           height: h,
-          slideDistance: h + this.AUTO_HIDE_SLIDE_MARGIN_PX,
+          // Gap filler sits behind the notch — no slide, just opacity.
+          slideDx: 0,
           startOpacity: 0,
-          startOffsetY: 0,
+          startOffsetX: 0,
         });
       }
 
@@ -1476,30 +1481,28 @@ export class DynamicIslandManager extends EventEmitter {
     const states = collect();
     if (states.length === 0) return;
 
-    // Populate start values from each window's actual current state so that
-    // reversing mid-animation is smooth.
     for (const s of states) {
       if (!s.win.isVisible()) {
         if (target === 0) {
-          // Already hidden, nothing to animate.
+          // Already hidden, nothing to animate for this window.
           s.startOpacity = 0;
-          s.startOffsetY = -s.slideDistance;
+          s.startOffsetX = s.slideDx;
           continue;
         }
-        // Reveal from hidden: position above the baseline at 0 opacity, then show.
+        // Reveal from hidden: place at the concealed position at 0 opacity, then show.
         s.win.setOpacity(0);
         s.win.setBounds({
-          x: s.baseX,
-          y: s.baseY - s.slideDistance,
+          x: s.baseX + s.slideDx,
+          y: s.baseY,
           width: s.width,
           height: s.height,
         });
         s.win.showInactive();
         s.startOpacity = 0;
-        s.startOffsetY = -s.slideDistance;
+        s.startOffsetX = s.slideDx;
       } else {
         s.startOpacity = s.win.getOpacity();
-        s.startOffsetY = s.win.getPosition()[1] - s.baseY;
+        s.startOffsetX = s.win.getPosition()[0] - s.baseX;
       }
     }
 
@@ -1509,8 +1512,6 @@ export class DynamicIslandManager extends EventEmitter {
     );
     let step = 0;
     const targetOpacity = target;
-    // Slide target: 0 offset when revealing, -slideDistance when concealing.
-    // (per-window slideDistance captured in state)
 
     this.autoHideFadeTimer = setInterval(() => {
       step += 1;
@@ -1521,13 +1522,13 @@ export class DynamicIslandManager extends EventEmitter {
 
       for (const s of states) {
         if (s.win.isDestroyed()) continue;
-        const endOffsetY = target === 1 ? 0 : -s.slideDistance;
+        const endOffsetX = target === 1 ? 0 : s.slideDx;
         const opacity = s.startOpacity + (targetOpacity - s.startOpacity) * eased;
-        const offsetY = s.startOffsetY + (endOffsetY - s.startOffsetY) * eased;
+        const offsetX = s.startOffsetX + (endOffsetX - s.startOffsetX) * eased;
         s.win.setOpacity(Math.max(0, Math.min(1, opacity)));
         s.win.setBounds({
-          x: s.baseX,
-          y: Math.round(s.baseY + offsetY),
+          x: Math.round(s.baseX + offsetX),
+          y: s.baseY,
           width: s.width,
           height: s.height,
         });
@@ -1540,19 +1541,17 @@ export class DynamicIslandManager extends EventEmitter {
         }
         for (const s of states) {
           if (s.win.isDestroyed()) continue;
-          // Snap to exact final values and, when concealing, hide + reset so
-          // the next reveal starts from the correct natural position.
+          // Reset to the natural position. On conceal, hide and restore
+          // opacity so the next reveal starts clean.
           s.win.setBounds({
             x: s.baseX,
             y: s.baseY,
             width: s.width,
             height: s.height,
           });
+          s.win.setOpacity(1);
           if (target === 0) {
-            s.win.setOpacity(1);
             s.win.hide();
-          } else {
-            s.win.setOpacity(1);
           }
         }
       }
