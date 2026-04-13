@@ -442,6 +442,9 @@ export default function SettingsPanel({
   // In-app performance HUD toggle.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
 
+  // Dynamic Island auto-hide toggle.
+  const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState(false);
+
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
 
@@ -548,6 +551,11 @@ export default function SettingsPanel({
       window.clipboardAPI.getPerformanceHudEnabled?.().then(enabled => {
         setPerformanceHudEnabled(enabled);
       });
+
+      // Load Dynamic Island auto-hide setting.
+      window.hotMicAPI?.getIslandAutoHide?.().then(enabled => {
+        setDynamicIslandAutoHide(enabled);
+      }).catch(() => {});
 
       // Load launch at login setting
       window.clipboardAPI.getLaunchAtLogin?.().then(enabled => {
@@ -1452,10 +1460,35 @@ export default function SettingsPanel({
         </div>
       </div>
 
-      {/* Dynamic Island Geometry */}
+      {/* Dynamic Island */}
       <div style={styles.section}>
-        <SectionHeader title="Dynamic Island Geometry" />
-        <p style={{ fontSize: '11px', color: theme.textSecondary, marginBottom: '8px' }}>
+        <SectionHeader title="Dynamic Island" />
+
+        <div style={styles.row}>
+          <div>
+            <span style={styles.rowLabel}>Auto-hide until active or hovered</span>
+            <span style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
+              Pills stay hidden until you move your cursor near the notch, or until a recording / hot-mic is active.
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              const next = !dynamicIslandAutoHide;
+              setDynamicIslandAutoHide(next);
+              try {
+                await window.hotMicAPI?.setIslandAutoHide?.(next);
+              } catch (err) {
+                console.error('Failed to toggle Dynamic Island auto-hide:', err);
+                setDynamicIslandAutoHide(!next);
+              }
+            }}
+            style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        <p style={{ fontSize: '11px', color: theme.textSecondary, margin: '12px 0 8px 0' }}>
           Tune notch alignment. Changes apply immediately.
         </p>
         <IslandGeometrySliders theme={theme} />
