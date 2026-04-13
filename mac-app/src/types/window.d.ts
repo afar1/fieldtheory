@@ -1268,6 +1268,8 @@ interface HotMicAPI {
   } | null>;
   getIslandStayOnLaptop: () => Promise<boolean>;
   setIslandStayOnLaptop: (value: boolean) => Promise<boolean>;
+  getIslandAutoHide: () => Promise<boolean>;
+  setIslandAutoHide: (value: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
   setSubmitWord: (word: string) => Promise<string>;
   getHotkey: () => Promise<string | null>;
