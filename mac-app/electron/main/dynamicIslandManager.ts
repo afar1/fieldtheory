@@ -190,6 +190,15 @@ export class DynamicIslandManager extends EventEmitter {
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
   private stayOnLaptop: boolean = false;
 
+  // Auto-hide: when enabled, pills conceal themselves until the cursor is near
+  // the notch area OR a non-idle state / hot-mic activity forces a reveal.
+  private autoHideEnabled: boolean = false;
+  private autoHideConcealed: boolean = false;
+  private autoHidePollTimer: NodeJS.Timeout | null = null;
+  private readonly AUTO_HIDE_POLL_INTERVAL_MS = 100;
+  private readonly AUTO_HIDE_REVEAL_HALO_PX = 60;
+  private readonly AUTO_HIDE_CONCEAL_HALO_PX = 100;
+
   constructor() {
     super();
 
@@ -278,6 +287,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.createRightWindow();
     this.syncGapFillWindow();
     this.createDrawerWindow();
+    this.evaluateAutoHideVisibility();
   }
 
   setEnabled(enabled: boolean): void {
@@ -306,6 +316,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.sendHotMicToRight();
     this.sendInputModeToRenderers();
     this.sendHotMicRuntimeStatusToLeft();
+    this.evaluateAutoHideVisibility();
   }
 
   setGeometryTuning(tuning: Partial<DynamicIslandGeometryTuning>): DynamicIslandGeometryTuning {
@@ -382,6 +393,7 @@ export class DynamicIslandManager extends EventEmitter {
       this.sendStateToRenderer(state);
       this.updateWindowSize();
       this.showRightPill();
+      this.evaluateAutoHideVisibility();
       return;
     }
 
@@ -391,6 +403,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.show();
     this.sendStateToRenderer(state);
     this.updateWindowSize();
+    this.evaluateAutoHideVisibility();
   }
 
   getState(): DynamicIslandState {
@@ -422,6 +435,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicLastWord = active ? lastWord : '';
     if (!this.enabled) return;
     this.sendHotMicToRight();
+    this.evaluateAutoHideVisibility();
   }
 
   blinkThenHideHotMic(): void {
@@ -1290,6 +1304,117 @@ export class DynamicIslandManager extends EventEmitter {
     this.refreshWindowProperties('stay-on-laptop-changed');
   }
 
+  setAutoHide(enabled: boolean): void {
+    const next = !!enabled;
+    if (this.autoHideEnabled === next) return;
+    this.autoHideEnabled = next;
+    if (this.autoHideEnabled) {
+      this.startAutoHidePolling();
+      this.evaluateAutoHideVisibility();
+    } else {
+      this.stopAutoHidePolling();
+      if (this.autoHideConcealed) {
+        this.autoHideConcealed = false;
+        this.revealAutoHiddenWindows();
+      }
+    }
+  }
+
+  getAutoHide(): boolean {
+    return this.autoHideEnabled;
+  }
+
+  private startAutoHidePolling(): void {
+    if (this.autoHidePollTimer) return;
+    this.autoHidePollTimer = setInterval(() => {
+      this.evaluateAutoHideVisibility();
+    }, this.AUTO_HIDE_POLL_INTERVAL_MS);
+  }
+
+  private stopAutoHidePolling(): void {
+    if (this.autoHidePollTimer) {
+      clearInterval(this.autoHidePollTimer);
+      this.autoHidePollTimer = null;
+    }
+  }
+
+  private isAutoHideActiveState(): boolean {
+    return this.state !== 'idle' || this.hotMicActive;
+  }
+
+  private isCursorInAutoHideRevealZone(): boolean {
+    const display = this.getTargetDisplay();
+    if (!display) return false;
+    const cursor = screen.getCursorScreenPoint();
+    // Only reveal when the cursor is on the same display as the island.
+    const bounds = display.bounds;
+    if (
+      cursor.x < bounds.x ||
+      cursor.x > bounds.x + bounds.width ||
+      cursor.y < bounds.y ||
+      cursor.y > bounds.y + bounds.height
+    ) {
+      return false;
+    }
+
+    const idleWidth = this.getIdlePillWidth();
+    const idleHeight = this.getIdlePillHeight();
+    const leftX = this.getLeftWindowX(idleWidth, true);
+    const rightX = this.getRightWindowX() + this.getRightPillWidth();
+    const topY = this.getTopWindowY();
+    const bottomY = topY + Math.max(idleHeight, this.getRightPillHeight());
+
+    const halo = this.autoHideConcealed
+      ? this.AUTO_HIDE_REVEAL_HALO_PX
+      : this.AUTO_HIDE_CONCEAL_HALO_PX;
+
+    return (
+      cursor.x >= leftX - halo &&
+      cursor.x <= rightX + halo &&
+      cursor.y >= topY - halo &&
+      cursor.y <= bottomY + halo
+    );
+  }
+
+  private evaluateAutoHideVisibility(): void {
+    if (!this.autoHideEnabled || !this.enabled) return;
+
+    const shouldReveal = this.isAutoHideActiveState() || this.isCursorInAutoHideRevealZone();
+
+    if (shouldReveal && this.autoHideConcealed) {
+      this.autoHideConcealed = false;
+      this.revealAutoHiddenWindows();
+    } else if (!shouldReveal && !this.autoHideConcealed) {
+      this.autoHideConcealed = true;
+      this.concealAutoHiddenWindows();
+    }
+  }
+
+  private concealAutoHiddenWindows(): void {
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.hide();
+    }
+    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
+      this.rightWindow.hide();
+    }
+    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
+      this.gapFillWindow.hide();
+    }
+  }
+
+  private revealAutoHiddenWindows(): void {
+    if (!this.enabled) return;
+    // Let setEnabled's show flow recompute the correct visibility and backing
+    // for the current state. Calling show() on each window individually would
+    // skip the gap-fill + state-dependent choreography.
+    this.show();
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      this.rightWindow.setOpacity(1);
+      this.rightWindow.showInactive();
+    }
+    this.syncGapFillWindow();
+  }
+
   private getTargetDisplay(): Electron.Display {
     if (this.stayOnLaptop) {
       const internal = screen.getAllDisplays().find(d => d.internal === true);
@@ -1596,6 +1721,7 @@ export class DynamicIslandManager extends EventEmitter {
       clearTimeout(this.dismissTimer);
       this.dismissTimer = null;
     }
+    this.stopAutoHidePolling();
     if (this.window && !this.window.isDestroyed()) {
       this.window.close();
     }

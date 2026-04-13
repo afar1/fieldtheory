@@ -3624,6 +3624,12 @@ const hotMicAPI = {
   setIslandStayOnLaptop: async (value: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setIslandStayOnLaptop', value);
   },
+  getIslandAutoHide: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:getIslandAutoHide');
+  },
+  setIslandAutoHide: async (value: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('hotmic:setIslandAutoHide', value);
+  },
   getSubmitWord: async (): Promise<string> => {
     return ipcRenderer.invoke('hotmic:getSubmitWord');
   },
