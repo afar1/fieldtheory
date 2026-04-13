@@ -1318,13 +1318,9 @@ export class DynamicIslandManager extends EventEmitter {
       this.stopAutoHidePolling();
       if (this.autoHideConcealed) {
         this.autoHideConcealed = false;
-        this.revealAutoHiddenWindows();
+        this.animateAutoHideWindows(1);
       }
     }
-  }
-
-  getAutoHide(): boolean {
-    return this.autoHideEnabled;
   }
 
   private startAutoHidePolling(): void {
@@ -1386,23 +1382,19 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (shouldReveal && this.autoHideConcealed) {
       this.autoHideConcealed = false;
-      this.revealAutoHiddenWindows();
+      this.animateAutoHideWindows(1);
     } else if (!shouldReveal && !this.autoHideConcealed) {
       this.autoHideConcealed = true;
-      this.concealAutoHiddenWindows();
+      this.animateAutoHideWindows(0);
     }
   }
 
-  private concealAutoHiddenWindows(): void {
-    this.animateAutoHideWindows(0);
-  }
-
-  private revealAutoHiddenWindows(): void {
-    if (!this.enabled) return;
-    this.animateAutoHideWindows(1);
-  }
-
   private animateAutoHideWindows(target: 0 | 1): void {
+    // Don't show anything when the whole Dynamic Island feature is off —
+    // setEnabled(false) has already called hideAllWindows() and the pills
+    // should stay hidden regardless of auto-hide state.
+    if (target === 1 && !this.enabled) return;
+
     if (this.autoHideFadeTimer) {
       clearInterval(this.autoHideFadeTimer);
       this.autoHideFadeTimer = null;
