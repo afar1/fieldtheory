@@ -199,6 +199,10 @@ interface Preferences {
   // When true, the island stays on the built-in laptop display even when an external monitor is primary.
   hotMicIslandStayOnLaptop?: boolean;
 
+  // Auto-hide the Dynamic Island pills (left + right + gap filler) until
+  // the cursor approaches the notch or a non-idle state / hot-mic becomes active.
+  hotMicIslandAutoHide?: boolean;
+
   // Dynamic Island geometry tuning (Hot Mic settings).
   // notchWidthOverride: 0 means automatic profile-based notch width.
   hotMicIslandNotchWidthOverride?: number;
@@ -273,6 +277,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicBackgroundFilterStrength: 4,
   hotMicDrawerTextSize: 14,
   hotMicIslandStayOnLaptop: false,
+  hotMicIslandAutoHide: false,
   hotMicIslandNotchWidthOverride: 0,
   hotMicIslandPillWidth: 72,
   hotMicIslandPillHeight: 38,
