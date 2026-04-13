@@ -190,6 +190,18 @@ export class DynamicIslandManager extends EventEmitter {
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
   private stayOnLaptop: boolean = false;
 
+  // Auto-hide: when enabled, pills conceal themselves until the cursor is near
+  // the notch area OR a non-idle state / hot-mic activity forces a reveal.
+  private autoHideEnabled: boolean = false;
+  private autoHideConcealed: boolean = false;
+  private autoHidePollTimer: NodeJS.Timeout | null = null;
+  private autoHideFadeTimer: NodeJS.Timeout | null = null;
+  private readonly AUTO_HIDE_POLL_INTERVAL_MS = 100;
+  private readonly AUTO_HIDE_REVEAL_HALO_PX = 60;
+  private readonly AUTO_HIDE_CONCEAL_HALO_PX = 100;
+  private readonly AUTO_HIDE_ANIMATION_DURATION_MS = 220;
+  private readonly AUTO_HIDE_ANIMATION_STEP_MS = 16;
+
   constructor() {
     super();
 
@@ -278,6 +290,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.createRightWindow();
     this.syncGapFillWindow();
     this.createDrawerWindow();
+    this.evaluateAutoHideVisibility();
   }
 
   setEnabled(enabled: boolean): void {
@@ -306,6 +319,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.sendHotMicToRight();
     this.sendInputModeToRenderers();
     this.sendHotMicRuntimeStatusToLeft();
+    this.evaluateAutoHideVisibility();
   }
 
   setGeometryTuning(tuning: Partial<DynamicIslandGeometryTuning>): DynamicIslandGeometryTuning {
@@ -382,6 +396,7 @@ export class DynamicIslandManager extends EventEmitter {
       this.sendStateToRenderer(state);
       this.updateWindowSize();
       this.showRightPill();
+      this.evaluateAutoHideVisibility();
       return;
     }
 
@@ -391,6 +406,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.show();
     this.sendStateToRenderer(state);
     this.updateWindowSize();
+    this.evaluateAutoHideVisibility();
   }
 
   getState(): DynamicIslandState {
@@ -422,6 +438,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicLastWord = active ? lastWord : '';
     if (!this.enabled) return;
     this.sendHotMicToRight();
+    this.evaluateAutoHideVisibility();
   }
 
   blinkThenHideHotMic(): void {
@@ -1290,6 +1307,249 @@ export class DynamicIslandManager extends EventEmitter {
     this.refreshWindowProperties('stay-on-laptop-changed');
   }
 
+  setAutoHide(enabled: boolean): void {
+    const next = !!enabled;
+    if (this.autoHideEnabled === next) return;
+    this.autoHideEnabled = next;
+    if (this.autoHideEnabled) {
+      this.startAutoHidePolling();
+      this.evaluateAutoHideVisibility();
+    } else {
+      this.stopAutoHidePolling();
+      if (this.autoHideConcealed) {
+        this.autoHideConcealed = false;
+        this.animateAutoHideWindows(1);
+      }
+    }
+  }
+
+  private startAutoHidePolling(): void {
+    if (this.autoHidePollTimer) return;
+    this.autoHidePollTimer = setInterval(() => {
+      this.evaluateAutoHideVisibility();
+    }, this.AUTO_HIDE_POLL_INTERVAL_MS);
+  }
+
+  private stopAutoHidePolling(): void {
+    if (this.autoHidePollTimer) {
+      clearInterval(this.autoHidePollTimer);
+      this.autoHidePollTimer = null;
+    }
+  }
+
+  private isAutoHideActiveState(): boolean {
+    return this.state !== 'idle' || this.hotMicActive;
+  }
+
+  private isCursorInAutoHideRevealZone(): boolean {
+    const display = this.getTargetDisplay();
+    if (!display) return false;
+    const cursor = screen.getCursorScreenPoint();
+    // Only reveal when the cursor is on the same display as the island.
+    const bounds = display.bounds;
+    if (
+      cursor.x < bounds.x ||
+      cursor.x > bounds.x + bounds.width ||
+      cursor.y < bounds.y ||
+      cursor.y > bounds.y + bounds.height
+    ) {
+      return false;
+    }
+
+    const idleWidth = this.getIdlePillWidth();
+    const idleHeight = this.getIdlePillHeight();
+    const leftX = this.getLeftWindowX(idleWidth, true);
+    const rightX = this.getRightWindowX() + this.getRightPillWidth();
+    const topY = this.getTopWindowY();
+    const bottomY = topY + Math.max(idleHeight, this.getRightPillHeight());
+
+    const halo = this.autoHideConcealed
+      ? this.AUTO_HIDE_REVEAL_HALO_PX
+      : this.AUTO_HIDE_CONCEAL_HALO_PX;
+
+    return (
+      cursor.x >= leftX - halo &&
+      cursor.x <= rightX + halo &&
+      cursor.y >= topY - halo &&
+      cursor.y <= bottomY + halo
+    );
+  }
+
+  private evaluateAutoHideVisibility(): void {
+    if (!this.autoHideEnabled || !this.enabled) return;
+
+    const shouldReveal = this.isAutoHideActiveState() || this.isCursorInAutoHideRevealZone();
+
+    if (shouldReveal && this.autoHideConcealed) {
+      this.autoHideConcealed = false;
+      this.animateAutoHideWindows(1);
+    } else if (!shouldReveal && !this.autoHideConcealed) {
+      this.autoHideConcealed = true;
+      this.animateAutoHideWindows(0);
+    }
+  }
+
+  private animateAutoHideWindows(target: 0 | 1): void {
+    // Don't show anything when the whole Dynamic Island feature is off —
+    // setEnabled(false) has already called hideAllWindows() and the pills
+    // should stay hidden regardless of auto-hide state.
+    if (target === 1 && !this.enabled) return;
+
+    if (this.autoHideFadeTimer) {
+      clearInterval(this.autoHideFadeTimer);
+      this.autoHideFadeTimer = null;
+    }
+
+    // Each pill slides horizontally toward the notch on conceal and
+    // emerges out from behind it on reveal. The gap filler sits behind the
+    // notch so it just fades.
+    interface AutoHideWindowState {
+      win: BrowserWindow;
+      baseX: number;
+      baseY: number;
+      width: number;
+      height: number;
+      slideDx: number; // horizontal offset at fully-concealed (px, signed)
+      startOpacity: number;
+      startOffsetX: number;
+    }
+
+    const collect = (): AutoHideWindowState[] => {
+      const out: AutoHideWindowState[] = [];
+      const topY = this.getTopWindowY();
+
+      if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+        const [w, h] = this.window.getSize();
+        const baseX = this.getLeftWindowX(
+          this.historyVisible ? this.ISLAND_WIDTH : this.getIdlePillWidth(),
+          !this.historyVisible,
+        );
+        out.push({
+          win: this.window,
+          baseX,
+          baseY: topY,
+          width: w,
+          height: h,
+          // Left pill retreats to the right (into the notch's left edge).
+          slideDx: w,
+          startOpacity: 0,
+          startOffsetX: 0,
+        });
+      }
+
+      if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+        const [w, h] = this.rightWindow.getSize();
+        out.push({
+          win: this.rightWindow,
+          baseX: this.getRightWindowX(),
+          baseY: topY,
+          width: w,
+          height: h,
+          // Right pill retreats to the left (into the notch's right edge).
+          slideDx: -w,
+          startOpacity: 0,
+          startOffsetX: 0,
+        });
+      }
+
+      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillRendererReady) {
+        const [w, h] = this.gapFillWindow.getSize();
+        out.push({
+          win: this.gapFillWindow,
+          baseX: this.getGapFillX(),
+          baseY: topY,
+          width: w,
+          height: h,
+          // Gap filler sits behind the notch — no slide, just opacity.
+          slideDx: 0,
+          startOpacity: 0,
+          startOffsetX: 0,
+        });
+      }
+
+      return out;
+    };
+
+    const states = collect();
+    if (states.length === 0) return;
+
+    for (const s of states) {
+      if (!s.win.isVisible()) {
+        if (target === 0) {
+          // Already hidden, nothing to animate for this window.
+          s.startOpacity = 0;
+          s.startOffsetX = s.slideDx;
+          continue;
+        }
+        // Reveal from hidden: place at the concealed position at 0 opacity, then show.
+        s.win.setOpacity(0);
+        s.win.setBounds({
+          x: s.baseX + s.slideDx,
+          y: s.baseY,
+          width: s.width,
+          height: s.height,
+        });
+        s.win.showInactive();
+        s.startOpacity = 0;
+        s.startOffsetX = s.slideDx;
+      } else {
+        s.startOpacity = s.win.getOpacity();
+        s.startOffsetX = s.win.getPosition()[0] - s.baseX;
+      }
+    }
+
+    const totalSteps = Math.max(
+      1,
+      Math.round(this.AUTO_HIDE_ANIMATION_DURATION_MS / this.AUTO_HIDE_ANIMATION_STEP_MS),
+    );
+    let step = 0;
+    const targetOpacity = target;
+
+    this.autoHideFadeTimer = setInterval(() => {
+      step += 1;
+      const t = Math.min(1, step / totalSteps);
+      const eased = target === 1
+        ? 1 - Math.pow(1 - t, 3)   // ease-out cubic (reveal)
+        : Math.pow(t, 3);           // ease-in cubic (conceal)
+
+      for (const s of states) {
+        if (s.win.isDestroyed()) continue;
+        const endOffsetX = target === 1 ? 0 : s.slideDx;
+        const opacity = s.startOpacity + (targetOpacity - s.startOpacity) * eased;
+        const offsetX = s.startOffsetX + (endOffsetX - s.startOffsetX) * eased;
+        s.win.setOpacity(Math.max(0, Math.min(1, opacity)));
+        s.win.setBounds({
+          x: Math.round(s.baseX + offsetX),
+          y: s.baseY,
+          width: s.width,
+          height: s.height,
+        });
+      }
+
+      if (step >= totalSteps) {
+        if (this.autoHideFadeTimer) {
+          clearInterval(this.autoHideFadeTimer);
+          this.autoHideFadeTimer = null;
+        }
+        for (const s of states) {
+          if (s.win.isDestroyed()) continue;
+          // Reset to the natural position. On conceal, hide and restore
+          // opacity so the next reveal starts clean.
+          s.win.setBounds({
+            x: s.baseX,
+            y: s.baseY,
+            width: s.width,
+            height: s.height,
+          });
+          s.win.setOpacity(1);
+          if (target === 0) {
+            s.win.hide();
+          }
+        }
+      }
+    }, this.AUTO_HIDE_ANIMATION_STEP_MS);
+  }
+
   private getTargetDisplay(): Electron.Display {
     if (this.stayOnLaptop) {
       const internal = screen.getAllDisplays().find(d => d.internal === true);
@@ -1595,6 +1855,11 @@ export class DynamicIslandManager extends EventEmitter {
     if (this.dismissTimer) {
       clearTimeout(this.dismissTimer);
       this.dismissTimer = null;
+    }
+    this.stopAutoHidePolling();
+    if (this.autoHideFadeTimer) {
+      clearInterval(this.autoHideFadeTimer);
+      this.autoHideFadeTimer = null;
     }
     if (this.window && !this.window.isDestroyed()) {
       this.window.close();

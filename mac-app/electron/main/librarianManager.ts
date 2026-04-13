@@ -2399,12 +2399,23 @@ Avoid maximalism.`;
     }
 
     // Write config with all user preferences
+    const effectiveRuleContent = this.getEffectiveRuleContent();
     const config = {
       enabled: this.settings.enabled,
       frequency: this.settings.discoveryFrequency || 'sometimes',
-      rule_content: this.getEffectiveRuleContent(),  // Includes expertise!
+      rule_content: effectiveRuleContent,  // Includes expertise!
     };
     fs.writeFileSync(globalConfigPath, JSON.stringify(config, null, 2));
+
+    // Codex's stop-hook passes the rule file *path* to the agent (not inline
+    // content like Claude's UserPromptSubmit hook), so this file must stay in
+    // sync with rule_content or Codex writes artifacts without the required
+    // title/signature structure.
+    const rulesDir = path.join(dir, 'rules');
+    if (!fs.existsSync(rulesDir)) {
+      fs.mkdirSync(rulesDir, { recursive: true });
+    }
+    fs.writeFileSync(path.join(rulesDir, 'history_reading.md'), effectiveRuleContent);
 
     // Only update state.json threshold if frequency changed
     if (recalculateThreshold) {
@@ -5467,11 +5478,10 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
       }
     }
 
-    // Ensure rule file exists
+    // Always rewrite the rule file so it reflects the current
+    // getEffectiveRuleContent() — Codex reads this file directly.
     const ruleFile = path.join(centralDir, 'rules', 'history_reading.md');
-    if (!fs.existsSync(ruleFile)) {
-      fs.writeFileSync(ruleFile, this.getEffectiveRuleContent());
-    }
+    fs.writeFileSync(ruleFile, this.getEffectiveRuleContent());
 
     // Ensure config file exists and is enabled
     const configFile = path.join(centralDir, 'config.json');
