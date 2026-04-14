@@ -62,6 +62,8 @@ export default function HotMicSettings() {
   const [systemCmds, setSystemCmds] = useState<Record<string, string>>({});
   const [resettingDefaults, setResettingDefaults] = useState(false);
 
+  const [rectangleCommands, setRectangleCommands] = useState<Record<string, string>>({});
+
   const styles = getStyles(theme);
   const canEnableHotMic = whisperModelReady;
   const canToggleHotMic = enabled || canEnableHotMic;
@@ -173,6 +175,10 @@ export default function HotMicSettings() {
       // Load system commands
       window.hotMicAPI!.getSystemCommands().then(cmds => {
         setSystemCmds(cmds || {});
+      });
+
+      window.hotMicAPI!.getRectangleCommands().then(cmds => {
+        setRectangleCommands(cmds || {});
       });
 
       // Load app voice aliases
@@ -396,12 +402,23 @@ export default function HotMicSettings() {
     }
   }, [systemCmds]);
 
+  const handleCornerChange = useCallback((corner: string, value: string) => {
+    setRectangleCommands(prev => ({ ...prev, [corner]: value }));
+  }, []);
+
+  const handleCornerSave = useCallback(async (corner: string) => {
+    if (!window.hotMicAPI) return;
+    const current = rectangleCommands[corner] ?? '';
+    const updated = { ...rectangleCommands, [corner]: current.trim() };
+    await window.hotMicAPI.setRectangleCommands(updated);
+  }, [rectangleCommands]);
+
   const handleResetDefaults = useCallback(async () => {
     if (!window.hotMicAPI || resettingDefaults) return;
     setResettingDefaults(true);
     try {
       await window.hotMicAPI.resetCommandDefaults();
-      const [submit, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds] = await Promise.all([
+      const [submit, pw, cw, skw, sw, openPrefixes, quitPrefixes, pvw, nww, cww, mp, hp, qp, rcw, rcdw, fp, cp, rsw, rsc, wc, cmds, rects] = await Promise.all([
         window.hotMicAPI.getSubmitWord(),
         window.hotMicAPI.getPasteWords(),
         window.hotMicAPI.getCancelWords(),
@@ -423,6 +440,7 @@ export default function HotMicSettings() {
         window.hotMicAPI.getRestartServerCommand(),
         window.hotMicAPI.getShowWordCount(),
         window.hotMicAPI.getSystemCommands(),
+        window.hotMicAPI.getRectangleCommands(),
       ]);
 
       setSubmitWord(submit);
@@ -446,6 +464,7 @@ export default function HotMicSettings() {
       setRestartServerCommand(rsc);
       setShowWordCount(wc);
       setSystemCmds(cmds || {});
+      setRectangleCommands(rects || {});
     } finally {
       setResettingDefaults(false);
     }
@@ -598,58 +617,6 @@ export default function HotMicSettings() {
 
       <div style={styles.divider} />
 
-      {/* Submit */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Submit</span>
-        <input
-          type="text"
-          value={submitWord}
-          onChange={(e) => setSubmitWord(e.target.value)}
-          placeholder="go ahead, send it, submit, do it"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleSubmitWordSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleSubmitWordSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Paste */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Paste</span>
-        <input
-          type="text"
-          value={pasteWords}
-          onChange={(e) => setPasteWords(e.target.value)}
-          placeholder="paste, paste it, transcribe"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handlePasteWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handlePasteWordsSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Scrap draft */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Scrap Draft</span>
-        <input
-          type="text"
-          value={scrapWords}
-          onChange={(e) => setScrapWords(e.target.value)}
-          placeholder="scrap, scrap that"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleScrapWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleScrapWordsSave()}
-        />
-      </div>
-
-      <div style={styles.divider} />
-
       {/* Cancel */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>Cancel</span>
@@ -663,184 +630,6 @@ export default function HotMicSettings() {
           onKeyDown={(e) => e.key === 'Enter' && handleCancelWordsSave()}
         />
       </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Switch window */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Switch Window</span>
-        <input
-          type="text"
-          value={switchWords}
-          onChange={(e) => setSwitchWords(e.target.value)}
-          placeholder="next window, switch"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleSwitchWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleSwitchWordsSave()}
-        />
-      </div>
-
-      <div style={styles.divider} />
-
-      {/* App open prefixes */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Open App Prefixes</span>
-        <input
-          type="text"
-          value={openAppPrefixes}
-          onChange={(e) => setOpenAppPrefixes(e.target.value)}
-          placeholder="open, switch to, go to"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleOpenAppPrefixesSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleOpenAppPrefixesSave()}
-        />
-      </div>
-
-      <div style={styles.divider} />
-
-      {/* App quit prefixes */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Quit App Prefixes</span>
-        <input
-          type="text"
-          value={quitAppPrefixes}
-          onChange={(e) => setQuitAppPrefixes(e.target.value)}
-          placeholder="quit, close, kill"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleQuitAppPrefixesSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleQuitAppPrefixesSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Previous window */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Previous Window</span>
-        <input
-          type="text"
-          value={prevWindowWords}
-          onChange={(e) => setPrevWindowWords(e.target.value)}
-          placeholder="previous window"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handlePrevWindowWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handlePrevWindowWordsSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* New window */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>New Window</span>
-        <input
-          type="text"
-          value={newWindowWords}
-          onChange={(e) => setNewWindowWords(e.target.value)}
-          placeholder="new window"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleNewWindowWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleNewWindowWordsSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Close window */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Close Window</span>
-        <input
-          type="text"
-          value={closeWindowWords}
-          onChange={(e) => setCloseWindowWords(e.target.value)}
-          placeholder="close window, close the window, close this window"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleCloseWindowWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleCloseWindowWordsSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Minimize */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Minimize</span>
-        <input
-          type="text"
-          value={minimizePhrases}
-          onChange={(e) => setMinimizePhrases(e.target.value)}
-          placeholder="minimize, minimize window, minimize the window"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleMinimizePhrasesSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleMinimizePhrasesSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Hide app */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Hide App</span>
-        <input
-          type="text"
-          value={hidePhrases}
-          onChange={(e) => setHidePhrases(e.target.value)}
-          placeholder="hide, hide app, hide this app, hide the app"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleHidePhrasesSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleHidePhrasesSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Quit */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Quit</span>
-        <input
-          type="text"
-          value={quitPhrases}
-          onChange={(e) => setQuitPhrases(e.target.value)}
-          placeholder="quit app, quit this app"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleQuitPhrasesSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleQuitPhrasesSave()}
-        />
-      </div>
-
-
-
-      <div style={styles.divider} />
-
-      {/* Focus (next-display + center) */}
-      <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Focus</span>
-        <input
-          type="text"
-          value={focusPhrases}
-          onChange={(e) => setFocusPhrases(e.target.value)}
-          placeholder="focus"
-          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleFocusPhrasesSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleFocusPhrasesSave()}
-        />
-      </div>
-
-
 
       <div style={styles.divider} />
 
@@ -858,46 +647,169 @@ export default function HotMicSettings() {
         />
       </div>
 
-
-
       <div style={styles.divider} />
 
-      {/* Run Claude */}
+      {/* Close Window */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Run Claude</span>
+        <span style={styles.rowLabel}>Close Window</span>
         <input
           type="text"
-          value={runClaudeWords}
-          onChange={(e) => setRunClaudeWords(e.target.value)}
-          placeholder="start claude, start cloud, run claude, start clod"
+          value={closeWindowWords}
+          onChange={(e) => setCloseWindowWords(e.target.value)}
+          placeholder="close window, close the window, close this window"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleRunClaudeWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleRunClaudeWordsSave()}
+          onBlur={handleCloseWindowWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleCloseWindowWordsSave()}
         />
       </div>
 
-
       <div style={styles.divider} />
 
-      {/* Run Codex */}
+      {/* Focus (next-display + center) */}
       <div style={{ padding: '4px 0' }}>
-        <span style={styles.rowLabel}>Run Codex</span>
+        <span style={styles.rowLabel}>Focus</span>
         <input
           type="text"
-          value={runCodexWords}
-          onChange={(e) => setRunCodexWords(e.target.value)}
-          placeholder="start codex, run codex"
+          value={focusPhrases}
+          onChange={(e) => setFocusPhrases(e.target.value)}
+          placeholder="focus"
           style={{ ...styles.input, marginTop: '6px', width: '100%' }}
-          onBlur={handleRunCodexWordsSave}
-          onKeyDown={(e) => e.key === 'Enter' && handleRunCodexWordsSave()}
+          onBlur={handleFocusPhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleFocusPhrasesSave()}
         />
       </div>
 
+      <div style={styles.divider} />
 
+      {/* Hide App */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Hide App</span>
+        <input
+          type="text"
+          value={hidePhrases}
+          onChange={(e) => setHidePhrases(e.target.value)}
+          placeholder="hide, hide app, hide this app, hide the app"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleHidePhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleHidePhrasesSave()}
+        />
+      </div>
 
       <div style={styles.divider} />
 
-      {/* Restart server */}
+      {/* Minimize */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Minimize</span>
+        <input
+          type="text"
+          value={minimizePhrases}
+          onChange={(e) => setMinimizePhrases(e.target.value)}
+          placeholder="minimize, minimize window, minimize the window"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleMinimizePhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleMinimizePhrasesSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* New Window */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>New Window</span>
+        <input
+          type="text"
+          value={newWindowWords}
+          onChange={(e) => setNewWindowWords(e.target.value)}
+          placeholder="new window"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleNewWindowWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleNewWindowWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Open App Prefixes */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Open App Prefixes</span>
+        <input
+          type="text"
+          value={openAppPrefixes}
+          onChange={(e) => setOpenAppPrefixes(e.target.value)}
+          placeholder="open, switch to, go to"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleOpenAppPrefixesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleOpenAppPrefixesSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Paste */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Paste</span>
+        <input
+          type="text"
+          value={pasteWords}
+          onChange={(e) => setPasteWords(e.target.value)}
+          placeholder="paste, paste it, transcribe"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handlePasteWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handlePasteWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Previous Window */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Previous Window</span>
+        <input
+          type="text"
+          value={prevWindowWords}
+          onChange={(e) => setPrevWindowWords(e.target.value)}
+          placeholder="previous window"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handlePrevWindowWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handlePrevWindowWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Quit */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Quit</span>
+        <input
+          type="text"
+          value={quitPhrases}
+          onChange={(e) => setQuitPhrases(e.target.value)}
+          placeholder="quit app, quit this app"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleQuitPhrasesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleQuitPhrasesSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Quit App Prefixes */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Quit App Prefixes</span>
+        <input
+          type="text"
+          value={quitAppPrefixes}
+          onChange={(e) => setQuitAppPrefixes(e.target.value)}
+          placeholder="quit, close, kill"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleQuitAppPrefixesSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleQuitAppPrefixesSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Restart Server */}
       <div style={{ padding: '4px 0' }}>
         <span style={styles.rowLabel}>Restart Server</span>
         <input
@@ -923,6 +835,115 @@ export default function HotMicSettings() {
         />
       </div>
 
+      <div style={styles.divider} />
+
+      {/* Run Claude */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Run Claude</span>
+        <input
+          type="text"
+          value={runClaudeWords}
+          onChange={(e) => setRunClaudeWords(e.target.value)}
+          placeholder="start claude, start cloud, run claude, start clod"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleRunClaudeWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleRunClaudeWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Run Codex */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Run Codex</span>
+        <input
+          type="text"
+          value={runCodexWords}
+          onChange={(e) => setRunCodexWords(e.target.value)}
+          placeholder="start codex, run codex"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleRunCodexWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleRunCodexWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Scrap Draft */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Scrap Draft</span>
+        <input
+          type="text"
+          value={scrapWords}
+          onChange={(e) => setScrapWords(e.target.value)}
+          placeholder="scrap, scrap that"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleScrapWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleScrapWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Submit */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Submit</span>
+        <input
+          type="text"
+          value={submitWord}
+          onChange={(e) => setSubmitWord(e.target.value)}
+          placeholder="go ahead, send it, submit, do it"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleSubmitWordSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleSubmitWordSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      {/* Switch Window */}
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Switch Window</span>
+        <input
+          type="text"
+          value={switchWords}
+          onChange={(e) => setSwitchWords(e.target.value)}
+          placeholder="next window, switch"
+          style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+          onBlur={handleSwitchWordsSave}
+          onKeyDown={(e) => e.key === 'Enter' && handleSwitchWordsSave()}
+        />
+      </div>
+
+      <div style={styles.divider} />
+
+      <div style={{ padding: '4px 0' }}>
+        <span style={styles.rowLabel}>Four Corners</span>
+        <p style={styles.description}>
+          Leave blank to disable. Type your own phrases to snap the active window to a corner.
+        </p>
+      </div>
+
+      {[
+        { corner: 'bottomLeft', label: 'Bottom Left' },
+        { corner: 'bottomRight', label: 'Bottom Right' },
+        { corner: 'topLeft', label: 'Top Left' },
+        { corner: 'topRight', label: 'Top Right' },
+      ].map(({ corner, label }) => (
+        <div key={corner} style={{ padding: '4px 0' }}>
+          <span style={styles.rowLabel}>{label}</span>
+          <input
+            type="text"
+            value={rectangleCommands[corner] ?? ''}
+            onChange={(e) => handleCornerChange(corner, e.target.value)}
+            placeholder=""
+            style={{ ...styles.input, marginTop: '6px', width: '100%' }}
+            onBlur={() => handleCornerSave(corner)}
+            onKeyDown={(e) => e.key === 'Enter' && handleCornerSave(corner)}
+          />
+        </div>
+      ))}
+
 
 
       <div style={styles.divider} />
@@ -932,15 +953,15 @@ export default function HotMicSettings() {
         <span style={styles.rowLabel}>System Commands</span>
       </div>
       {[
-        { action: 'play-pause', label: 'Play / Pause' },
-        { action: 'next-track', label: 'Next Track' },
-        { action: 'previous-track', label: 'Previous Track' },
-        { action: 'volume-up', label: 'Volume Up' },
-        { action: 'volume-down', label: 'Volume Down' },
-        { action: 'mute', label: 'Mute' },
-        { action: 'unmute', label: 'Unmute' },
         { action: 'lock', label: 'Lock Screen' },
+        { action: 'mute', label: 'Mute' },
+        { action: 'next-track', label: 'Next Track' },
+        { action: 'play-pause', label: 'Play / Pause' },
+        { action: 'previous-track', label: 'Previous Track' },
         { action: 'sleep', label: 'Sleep' },
+        { action: 'unmute', label: 'Unmute' },
+        { action: 'volume-down', label: 'Volume Down' },
+        { action: 'volume-up', label: 'Volume Up' },
       ].map(({ action, label }) => (
         <div key={action} style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '3px 0' }}>
           <span style={{ fontSize: '12px', color: theme.text, minWidth: '100px', flexShrink: 0 }}>{label}</span>
