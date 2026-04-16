@@ -40,7 +40,7 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'action' | 'handoff';
+type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'artifact';
 
 interface LauncherItem {
   id: string;
@@ -50,13 +50,19 @@ interface LauncherItem {
   keywords: string[];
   hotkey?: string;
   hotkeyDisplay?: string;
-  // For commands and handoffs
+  // For commands, handoffs, wiki pages, and artifacts
   filePath?: string;
   // For actions
   actionId?: string;
   // For handoffs - relative time display
   timeAgo?: string;
 }
+
+const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
+type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
+
+let WIKI_COMMAND_PATH: string | null = null;
+try { WIKI_COMMAND_PATH = `${process.env.HOME}/.fieldtheory/commands/wiki.md`; } catch {}
 
 // Window API types for the launcher's standalone renderer context.
 // In the launcher window, these APIs are always available (not optional).
@@ -207,6 +213,8 @@ function CommandLauncher() {
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
+  const [wikiPages, setWikiPages] = useState<LauncherItem[]>([]);
+  const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -222,6 +230,38 @@ function CommandLauncher() {
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);
     }
+  }, []);
+
+  const loadWikiPages = useCallback(async () => {
+    try {
+      const tree = await window.wikiAPI?.getTree();
+      if (!tree) return;
+      setWikiPages(tree.flatMap(folder =>
+        folder.files.map(page => ({
+          id: `wiki-${page.relPath}`,
+          type: 'wiki-page' as const,
+          name: page.name,
+          displayName: page.title,
+          keywords: [page.name, page.title, page.relPath, ...page.name.split('-')],
+          filePath: page.absPath,
+        }))
+      ));
+    } catch {}
+  }, []);
+
+  const loadArtifacts = useCallback(async () => {
+    try {
+      const readings = await window.librarianAPI?.getReadings();
+      if (!readings) return;
+      setArtifactReadings(readings.map(r => ({
+        id: `artifact-${r.path}`,
+        type: 'artifact' as const,
+        name: r.title,
+        displayName: r.title,
+        keywords: [r.title, r.context ?? '', ...r.title.split(/\s+/)].filter(Boolean),
+        filePath: r.path,
+      })));
+    } catch {}
   }, []);
 
   // Load handoffs from global Field Theory directory.
@@ -282,9 +322,10 @@ function CommandLauncher() {
       setFiltered([]);
       setSelectedIndex(0);
       inputRef.current?.focus();
-      // Reload commands and handoffs to pick up any new ones added since last open.
       loadCommands();
       loadHandoffs();
+      loadWikiPages();
+      loadArtifacts();
       // Refresh theme state
       const dark = await themeAPI.getTheme();
       setIsDarkMode(dark ?? true);
@@ -300,7 +341,7 @@ function CommandLauncher() {
       unsubscribe();
       unsubscribeSquaresConfig?.();
     };
-  }, [loadCommands, loadHandoffs, loadHotkeys]);
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadWikiPages, loadArtifacts]);
 
   // Build all items (commands + actions + handoffs).
   const allItems = useMemo(() => {
@@ -385,6 +426,40 @@ function CommandLauncher() {
     }
 
     const q = query.toLowerCase();
+
+    const nsMatch = q.match(/^(wiki|artifact)\s+(.*)$/);
+    if (nsMatch) {
+      const [, ns, search] = nsMatch;
+      const pool = ns === 'wiki' ? wikiPages : artifactReadings;
+      const s = search.trim().toLowerCase();
+      const results = s
+        ? pool.filter(item =>
+            item.name.toLowerCase().includes(s) ||
+            item.displayName.toLowerCase().includes(s) ||
+            item.keywords.some(k => k.toLowerCase().includes(s))
+          )
+        : pool;
+      setFiltered(results.slice(0, 20));
+      setSelectedIndex(0);
+      const itemHeight = 22;
+      const listHeight = Math.min(results.length * itemHeight + 10, 280);
+      commandsAPI.launcherResize(inputHeight + (results.length > 0 ? listHeight : emptyStateHeight));
+      return;
+    }
+
+    if (q === 'wiki') {
+      setFiltered([{
+        id: 'wiki-command',
+        type: 'command' as const,
+        name: 'wiki',
+        displayName: 'wiki.md — lookup',
+        keywords: ['wiki'],
+        filePath: WIKI_COMMAND_PATH,
+      }, ...wikiPages.slice(0, 5)]);
+      setSelectedIndex(0);
+      commandsAPI.launcherResize(inputHeight + Math.min(6 * 22 + 10, 280));
+      return;
+    }
 
     // Score and filter items.
     const scored = allItems.map(item => {
@@ -474,6 +549,15 @@ function CommandLauncher() {
       e.preventDefault();
       hasNavigatedRef.current = true;
       setSelectedIndex(i => Math.max(i - 1, 0));
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      const q = query.trim().toLowerCase();
+      for (const prefix of NAMESPACE_PREFIXES) {
+        if (prefix.startsWith(q) && q.length > 0) {
+          setQuery(prefix + ' ');
+          return;
+        }
+      }
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
@@ -487,8 +571,12 @@ function CommandLauncher() {
     if (item.type === 'command') {
       await commandsAPI.invokeCommand(item.name);
       commandsAPI.launcherClose();
+    } else if (item.type === 'wiki-page' || item.type === 'artifact') {
+      if (item.filePath) {
+        await commandsAPI.invokeHandoff(item.filePath);
+      }
+      commandsAPI.launcherClose();
     } else if (item.type === 'handoff') {
-      // Invoke handoff - same behavior as commands (paste file reference).
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }

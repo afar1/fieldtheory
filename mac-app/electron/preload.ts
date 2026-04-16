@@ -54,6 +54,8 @@ const TranscribeIPCChannels = {
   GET_DOWNLOADING_MODELS: 'transcribe:getDownloadingModels',
   GET_SELECTED_MODEL: 'transcribe:getSelectedModel',
   SET_SELECTED_MODEL: 'transcribe:setSelectedModel',
+  GET_RECORDING_SOURCE: 'transcribe:getRecordingSource',
+  SET_RECORDING_SOURCE: 'transcribe:setRecordingSource',
   GET_HOTKEY: 'transcribe:getHotkey',
   SET_HOTKEY: 'transcribe:setHotkey',
   GET_SECONDARY_HOTKEY: 'transcribe:getSecondaryHotkey',
@@ -721,6 +723,8 @@ export interface TranscribeAPI {
   getDownloadingModels: () => Promise<string[]>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
+  getRecordingSource: () => Promise<'microphone' | 'system-audio'>;
+  setRecordingSource: (source: 'microphone' | 'system-audio') => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey: () => Promise<string | null>;
@@ -1160,6 +1164,14 @@ const transcribeAPI: TranscribeAPI = {
 
   setSelectedModel: async (modelSize: string): Promise<void> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SET_SELECTED_MODEL, modelSize);
+  },
+
+  getRecordingSource: async (): Promise<'microphone' | 'system-audio'> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.GET_RECORDING_SOURCE);
+  },
+
+  setRecordingSource: async (source: 'microphone' | 'system-audio'): Promise<void> => {
+    return ipcRenderer.invoke(TranscribeIPCChannels.SET_RECORDING_SOURCE, source);
   },
 
   getHotkey: async (): Promise<string> => {
@@ -3489,6 +3501,33 @@ type ScenarioAPI = typeof scenarioAPI;
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
+
+interface WikiPageMeta {
+  relPath: string;
+  absPath: string;
+  name: string;
+  title: string;
+  lastUpdated: number;
+}
+interface WikiPage extends WikiPageMeta {
+  content: string;
+}
+interface WikiFolder {
+  name: string;
+  files: WikiPageMeta[];
+}
+
+const wikiAPI = {
+  getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
+  getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
+  onPageChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('wiki:changed', handler);
+    return () => ipcRenderer.removeListener('wiki:changed', handler);
+  },
+};
+contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
+
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
