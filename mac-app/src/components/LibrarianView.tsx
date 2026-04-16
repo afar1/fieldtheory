@@ -10,7 +10,22 @@ import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import ConceptGraphView from './ConceptGraphView';
+import WikiSidebar from './WikiSidebar';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
+
+/** Strip YAML frontmatter from wiki page content for display.
+ *  Returns the body (everything after the closing ---) and parsed
+ *  metadata key-values for a small tag bar. */
+function splitFrontmatter(content: string): { body: string; meta: Record<string, string> } {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n?([\s\S]*)$/);
+  if (!match) return { body: content, meta: {} };
+  const meta: Record<string, string> = {};
+  for (const line of match[1].split('\n')) {
+    const m = line.match(/^([a-z_]+):\s*(.*)$/);
+    if (m) meta[m[1]] = m[2];
+  }
+  return { body: match[2].replace(/^\n+/, ''), meta };
+}
 
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
@@ -127,6 +142,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // View mode: 'reading' shows artifact content, 'graph' shows concept graph
   const [viewMode, setViewMode] = useState<'reading' | 'graph'>('reading');
   const [conceptsIndex, setConceptsIndex] = useState<ConceptsIndex | null>(null);
+
+  const [librarianSubMode, setLibrarianSubMode] = useState<'artifacts' | 'wiki'>(() => {
+    const saved = localStorage.getItem('librarian-sub-mode');
+    return (saved === 'wiki') ? 'wiki' : 'artifacts';
+  });
+  const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(null);
+  const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
 
   // Handle initial reading path and fullscreen from parent (auto-open flow)
   useEffect(() => {
@@ -260,16 +282,37 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     large: { base: '18px', h1: '32px', h2: '24px', h3: '20px' },
   };
 
+  
+  const activeReading: Reading | null = librarianSubMode === 'wiki' ? wikiSelectedPage : selectedReading;
+
+  
+  const wikiDisplay = useMemo(() => {
+    if (librarianSubMode !== 'wiki' || !activeReading) return null;
+    return splitFrontmatter(activeReading.content);
+  }, [librarianSubMode, activeReading]);
+
+  
+  const displayContent = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
+
+  
+  const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
+  useEffect(() => {
+    if (librarianSubMode === 'wiki') {
+      window.wikiAPI?.getTree().then((t) => t && setWikiTree(t));
+    }
+  }, [librarianSubMode, wikiSelectedRelPath]);
+  const flatWikiPages = useMemo(() => wikiTree.flatMap((f) => f.files), [wikiTree]);
+
   // Check if content has been modified
-  const isDirty = isEditing && editContent !== (selectedReading?.content ?? '');
+  const isDirty = isEditing && editContent !== (activeReading?.content ?? '');
 
   // Enter edit mode
   const enterEditMode = useCallback(() => {
-    if (selectedReading) {
-      setEditContent(selectedReading.content);
+    if (activeReading) {
+      setEditContent(activeReading.content);
       setIsEditing(true);
     }
-  }, [selectedReading]);
+  }, [activeReading]);
 
   // Exit edit mode (discard changes)
   const exitEditMode = useCallback(() => {
@@ -279,25 +322,32 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   // Save changes
   const saveChanges = useCallback(async () => {
-    if (!selectedReading || !isDirty) return;
+    if (!activeReading || !isDirty) return;
 
     setIsSaving(true);
     try {
-      const success = await window.librarianAPI?.saveReading(selectedReading.path, editContent);
+      const success = await window.librarianAPI?.saveReading(activeReading.path, editContent);
       if (success) {
         setIsEditing(false);
         setEditContent('');
-        // Reload the reading to get updated content
-        const updated = await window.librarianAPI?.getReading(selectedReading.path);
-        if (updated) {
-          setSelectedReading(updated);
-          // If shared, sync the updated content
-          if (shareStatus?.shared) {
-            await window.librarianAPI?.updateSharedReading(
-              selectedReading.path,
-              editContent,
-              updated.title
-            );
+        if (librarianSubMode === 'wiki' && wikiSelectedRelPath) {
+
+          const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+          if (page) {
+            setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
+          }
+        } else if (selectedReading) {
+
+          const updated = await window.librarianAPI?.getReading(selectedReading.path);
+          if (updated) {
+            setSelectedReading(updated);
+            if (shareStatus?.shared) {
+              await window.librarianAPI?.updateSharedReading(
+                selectedReading.path,
+                editContent,
+                updated.title
+              );
+            }
           }
         }
       }
@@ -392,6 +442,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const isNarrating = !!(selectedPath && narrationStatus.currentReadingPath === selectedPath);
   const isGenerating = narrationStatus.playbackStatus === 'generating' && isNarrating;
   const isPlaying = narrationStatus.playbackStatus === 'playing' && isNarrating;
+
+
+  useEffect(() => {
+    localStorage.setItem('librarian-sub-mode', librarianSubMode);
+  }, [librarianSubMode]);
+
+
+  useEffect(() => {
+    if (!wikiSelectedRelPath) { setWikiSelectedPage(null); return; }
+    (async () => {
+      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (page) {
+        setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
+      }
+    })();
+  }, [wikiSelectedRelPath]);
 
   // Load readings on mount and check setup completion
   useEffect(() => {
@@ -605,6 +671,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       // Don't handle navigation keys in edit mode (textarea needs them)
       if (isEditing) return;
 
+      if (librarianSubMode === 'wiki') {
+
+        if (flatWikiPages.length === 0) return;
+        const currentIndex = flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath);
+        if (e.key === 'ArrowUp' || e.key === 'k') {
+          e.preventDefault();
+          const newIndex = Math.max(0, currentIndex - 1);
+          setWikiSelectedRelPath(flatWikiPages[newIndex].relPath);
+        } else if (e.key === 'ArrowDown' || e.key === 'j') {
+          e.preventDefault();
+          const newIndex = Math.min(flatWikiPages.length - 1, currentIndex + 1);
+          setWikiSelectedRelPath(flatWikiPages[newIndex].relPath);
+        }
+        return;
+      }
+
       if (readings.length === 0) return;
 
       const currentIndex = readings.findIndex((r) => r.path === selectedPath);
@@ -622,7 +704,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedPath, isFullScreen, isEditing, isDirty, selectedReading, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectReading]);
+  }, [readings, selectedPath, isFullScreen, isEditing, isDirty, selectedReading, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectReading, librarianSubMode, flatWikiPages, wikiSelectedRelPath]);
 
   // Focus container on mount
   useEffect(() => {
@@ -921,38 +1003,70 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             gap: '6px',
           }}
         >
-          <span>Artifacts</span>
+          {/* Sub-mode toggle: Artifacts vs Wiki */}
+          {(['artifacts', 'wiki'] as const).map((mode) => (
+            <button
+              key={mode}
+              onClick={() => setLibrarianSubMode(mode)}
+              style={{
+                padding: '2px 6px',
+                fontSize: '11px',
+                fontWeight: 600,
+                color: librarianSubMode === mode ? theme.text : theme.textSecondary,
+                backgroundColor: librarianSubMode === mode ? theme.hoverBg : 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                textTransform: 'uppercase',
+                letterSpacing: '0.5px',
+              }}
+            >
+              {mode === 'artifacts' ? 'Artifacts' : 'Wiki'}
+            </button>
+          ))}
           {/* Spacer */}
           <div style={{ flex: 1 }} />
-          {/* Search toggle */}
-          <button
-            onClick={() => {
-              setSearchOpen(!searchOpen);
-              if (!searchOpen) {
-                setTimeout(() => searchInputRef.current?.focus(), 50);
-              } else {
-                setSearchQuery('');
-              }
-            }}
-            style={{
-              padding: '2px',
-              color: searchOpen || searchQuery ? theme.text : theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-            }}
-            title="Search"
-          >
-            <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
-            </svg>
-          </button>
+          {/* Search toggle — only for artifacts mode */}
+          {librarianSubMode === 'artifacts' && (
+            <button
+              onClick={() => {
+                setSearchOpen(!searchOpen);
+                if (!searchOpen) {
+                  setTimeout(() => searchInputRef.current?.focus(), 50);
+                } else {
+                  setSearchQuery('');
+                }
+              }}
+              style={{
+                padding: '2px',
+                color: searchOpen || searchQuery ? theme.text : theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+              }}
+              title="Search"
+            >
+              <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+              </svg>
+            </button>
+          )}
         </div>
 
-        {/* Collapsible search input */}
-        {searchOpen && (
+        {/* Wiki folder tree sidebar */}
+        {librarianSubMode === 'wiki' && (
+          <WikiSidebar
+            selectedRelPath={wikiSelectedRelPath}
+            onSelectPage={(relPath, _absPath) => {
+              setWikiSelectedRelPath(relPath);
+            }}
+          />
+        )}
+
+        {/* Collapsible search input — artifacts mode only */}
+        {librarianSubMode === 'artifacts' && searchOpen && (
           <div style={{ padding: '0 8px 8px' }}>
             <input
               ref={searchInputRef}
@@ -980,8 +1094,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           </div>
         )}
 
-        {/* Readings list */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        {/* Readings list — artifacts mode only */}
+        {librarianSubMode === 'artifacts' && <div style={{ flex: 1, overflowY: 'auto' }}>
         {Array.from(groupedReadings.entries()).map(([date, items]) => (
           <div key={date}>
             {/* Date header with horizontal rule */}
@@ -1119,7 +1233,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             ))}
           </div>
         ))}
-        </div>
+        </div>}
 
         {/* Bottom button - link to settings */}
         <div style={{ padding: '8px 12px', borderTop: `1px solid ${theme.border}` }}>
@@ -1256,7 +1370,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         </div>
 
         {/* Toolbar - includes draggable region for window movement */}
-        {selectedReading && (
+        {activeReading && (
           <div
             onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
             onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
@@ -1279,9 +1393,55 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 gap: '8px',
               }}
             >
-              {/* Toolbar controls - left aligned to content area */}
+              {/* Nav: back (fullscreen), prev/next arrows, copy path */}
+              {librarianSubMode === 'wiki' && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginRight: '8px' }}>
+                  {isFullScreen && (
+                    <button
+                      onClick={() => setIsFullScreen(false)}
+                      style={{ padding: '3px 6px', fontSize: '11px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px' }}
+                      onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
+                      onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                      title="Back to list"
+                    >←</button>
+                  )}
+                  <button
+                    onClick={() => {
+                      const idx = flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath);
+                      if (idx > 0) setWikiSelectedRelPath(flatWikiPages[idx - 1].relPath);
+                    }}
+                    disabled={flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath) <= 0}
+                    style={{ padding: '3px 5px', fontSize: '11px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px', opacity: flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath) <= 0 ? 0.3 : 1 }}
+                    onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = theme.hoverBg; }}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    title="Previous (↑)"
+                  >▲</button>
+                  <button
+                    onClick={() => {
+                      const idx = flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath);
+                      if (idx >= 0 && idx < flatWikiPages.length - 1) setWikiSelectedRelPath(flatWikiPages[idx + 1].relPath);
+                    }}
+                    disabled={flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath) >= flatWikiPages.length - 1}
+                    style={{ padding: '3px 5px', fontSize: '11px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px', opacity: flatWikiPages.findIndex((p) => p.relPath === wikiSelectedRelPath) >= flatWikiPages.length - 1 ? 0.3 : 1 }}
+                    onMouseEnter={(e) => { if (!e.currentTarget.disabled) e.currentTarget.style.backgroundColor = theme.hoverBg; }}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    title="Next (↓)"
+                  >▼</button>
+                  <button
+                    onClick={() => {
+                      if (activeReading?.path) {
+                        navigator.clipboard.writeText(activeReading.path);
+                      }
+                    }}
+                    style={{ padding: '3px 6px', fontSize: '10px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px', fontFamily: 'system-ui, sans-serif' }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+                    title="Copy file path"
+                  >⌘C</button>
+                </div>
+              )}
               <ContentToolbar
-                filePath={selectedPath || undefined}
+                filePath={activeReading?.path || undefined}
                 isFullScreen={isFullScreen}
                 onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
                 textSize={textSize}
@@ -1301,7 +1461,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 }}
                 onDelete={handleDelete}
                 showDelete={true}
-                onShowInFolder={() => selectedPath && window.shellAPI?.showItemInFolder(selectedPath)}
+                onShowInFolder={() => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path)}
                 showFolder={true}
                 onCopy={shareStatus?.shared ? copyShareLink : undefined}
                 showCopy={!!shareStatus?.shared}
@@ -1500,6 +1660,44 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             {/* Divider - only in immersive mode */}
             {isFullScreen && (
               <hr style={{ border: 'none', height: '1px', backgroundColor: theme.border, margin: '0 0 20px 0' }} />
+            )}
+            {/* Wiki metadata tags — small pill badges above content */}
+            {wikiDisplay && wikiDisplay.meta.tags && (
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
+                {wikiDisplay.meta.tags
+                  .replace(/^\[|\]$/g, '')
+                  .split(',')
+                  .map((t) => t.trim())
+                  .filter(Boolean)
+                  .map((tag) => (
+                    <span
+                      key={tag}
+                      style={{
+                        fontSize: '10px',
+                        padding: '1px 6px',
+                        borderRadius: '8px',
+                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                        color: theme.textSecondary,
+                        fontFamily: 'system-ui, sans-serif',
+                      }}
+                    >
+                      {tag}
+                    </span>
+                  ))}
+                {wikiDisplay.meta.source_type && (
+                  <span style={{
+                    fontSize: '10px',
+                    padding: '1px 6px',
+                    borderRadius: '8px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                    color: theme.textSecondary,
+                    fontFamily: 'system-ui, sans-serif',
+                    opacity: 0.7,
+                  }}>
+                    {wikiDisplay.meta.source_type}
+                  </span>
+                )}
+              </div>
             )}
             {/* Content - markdown renders the title */}
             <div
@@ -1744,7 +1942,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   ),
                 }}
               >
-                {selectedReading.content}
+                {displayContent}
               </ReactMarkdown>
             </div>
             {/* Footer - only in immersive mode */}
