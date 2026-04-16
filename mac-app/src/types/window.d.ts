@@ -279,6 +279,8 @@ interface TranscribeAPI {
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
+  getRecordingSource?: () => Promise<'microphone' | 'system-audio'>;
+  setRecordingSource?: (source: 'microphone' | 'system-audio') => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey?: () => Promise<string | null>;
@@ -1505,6 +1507,31 @@ declare global {
     enabled: boolean;
   }
 
+  // ── Wiki viewer types ──────────────────────────────────────────────────
+
+  interface WikiPageMeta {
+    relPath: string;     // e.g. 'entries/2026-04-15-foo' (no .md)
+    absPath: string;     // full filesystem path
+    name: string;        // filename slug without date/ext
+    title: string;       // from # heading or filename
+    lastUpdated: number; // mtime
+  }
+
+  interface WikiPage extends WikiPageMeta {
+    content: string;
+  }
+
+  interface WikiFolder {
+    name: string;           // 'categories', 'domains', 'entries', 'entities'
+    files: WikiPageMeta[];  // alphabetically sorted
+  }
+
+  interface WikiAPI {
+    getTree: () => Promise<WikiFolder[]>;
+    getPage: (relPath: string) => Promise<WikiPage | null>;
+    onPageChanged: (callback: () => void) => () => void;
+  }
+
   /**
    * Concepts index for story/lesson deduplication.
    * Tracks which historical examples and lessons have been used in artifacts.
@@ -1831,6 +1858,7 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    wikiAPI?: WikiAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;

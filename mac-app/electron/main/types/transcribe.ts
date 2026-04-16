@@ -10,6 +10,7 @@ export type TranscriptionEngine =
   | 'mlx-whisper'
   | 'parakeet'
   | 'parakeet-multilingual';
+export type RecordingInputSource = 'microphone' | 'system-audio';
 export type HotMicEngine = 'default' | TranscriptionEngine;
 export type ParakeetEngine = Extract<TranscriptionEngine, 'parakeet' | 'parakeet-multilingual'>;
 
@@ -87,6 +88,8 @@ export const TranscribeIPCChannels = {
   GET_DOWNLOADING_MODELS: 'transcribe:getDownloadingModels',
   GET_SELECTED_MODEL: 'transcribe:getSelectedModel',
   SET_SELECTED_MODEL: 'transcribe:setSelectedModel',
+  GET_RECORDING_SOURCE: 'transcribe:getRecordingSource',
+  SET_RECORDING_SOURCE: 'transcribe:setRecordingSource',
   GET_HOTKEY: 'transcribe:getHotkey',
   SET_HOTKEY: 'transcribe:setHotkey',
   GET_SECONDARY_HOTKEY: 'transcribe:getSecondaryHotkey',
@@ -199,6 +202,8 @@ export interface TranscribeAPI {
   getDownloadingModels: () => Promise<string[]>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
+  getRecordingSource: () => Promise<RecordingInputSource>;
+  setRecordingSource: (source: RecordingInputSource) => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string) => Promise<boolean>;
   getSecondaryHotkey: () => Promise<string | null>;

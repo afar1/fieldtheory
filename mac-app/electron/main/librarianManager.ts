@@ -1246,6 +1246,24 @@ export const DISCOVERY_CONFIG: Record<DiscoveryFrequency, { min: number; max: nu
  * Metadata for a reading (cached in index).
  * Path is the identity - no numeric IDs.
  */
+// ── Wiki viewer types ──────────────────────────────────────────────────
+export interface WikiPageMeta {
+  relPath: string;  // e.g. 'entries/2026-04-15-foo' (no .md)
+  absPath: string;
+  name: string;     // filename slug
+  title: string;    // from # heading or filename fallback
+  lastUpdated: number;
+}
+
+export interface WikiPage extends WikiPageMeta {
+  content: string;
+}
+
+export interface WikiFolder {
+  name: string;
+  files: WikiPageMeta[];
+}
+
 export interface ReadingMeta {
   path: string;
   title: string;
@@ -2056,6 +2074,126 @@ export class LibrarianManager extends EventEmitter {
     for (const dirPath of this.settings.watchedDirs) {
       this.scanDirectory(dirPath);
     }
+  }
+
+  // ── Wiki viewer ──────────────────────────────────────────────────────────
+
+  private get wikiDir(): string {
+    const ftDataDir = process.env.FT_DATA_DIR;
+    return path.join(ftDataDir ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
+  }
+
+  private wikiWatcher: chokidar.FSWatcher | null = null;
+  private wikiWatcherPending = false;
+
+  private parseWikiTitle(filePath: string): string {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n').slice(0, 20);
+      for (const line of lines) {
+        const match = line.match(/^#\s+(.+)/);
+        if (match) return match[1].trim();
+      }
+    } catch {}
+    return path.basename(filePath, '.md');
+  }
+
+  getWikiTree(): WikiFolder[] {
+    const wikiRoot = this.wikiDir;
+    if (!fs.existsSync(wikiRoot)) return [];
+
+    if (!this.wikiWatcher) this.startWikiWatcher();
+
+    const WIKI_SUBDIRS = ['categories', 'domains', 'entities', 'entries'];
+    const folders: WikiFolder[] = [];
+
+    for (const dirName of WIKI_SUBDIRS) {
+      const dirPath = path.join(wikiRoot, dirName);
+      if (!fs.existsSync(dirPath)) continue;
+
+      let files: string[];
+      try {
+        files = fs.readdirSync(dirPath).filter((f) => f.endsWith('.md')).sort();
+      } catch {
+        continue;
+      }
+
+      const pages: WikiPageMeta[] = files.map((f) => {
+        const absPath = path.join(dirPath, f);
+        const nameWithoutExt = f.replace(/\.md$/, '');
+        const stats = fs.statSync(absPath);
+        return {
+          relPath: `${dirName}/${nameWithoutExt}`,
+          absPath,
+          name: nameWithoutExt,
+          title: this.parseWikiTitle(absPath),
+          lastUpdated: Math.floor(stats.mtimeMs),
+        };
+      });
+
+      if (pages.length > 0) {
+        folders.push({ name: dirName, files: pages });
+      }
+    }
+
+    return folders;
+  }
+
+  getWikiPage(relPath: string): WikiPage | null {
+    const absPath = path.join(this.wikiDir, `${relPath}.md`);
+    if (!fs.existsSync(absPath)) return null;
+
+    try {
+      const content = fs.readFileSync(absPath, 'utf-8');
+      const stats = fs.statSync(absPath);
+      const nameWithoutExt = path.basename(absPath, '.md');
+      return {
+        relPath,
+        absPath,
+        name: nameWithoutExt,
+        title: this.parseWikiTitle(absPath),
+        lastUpdated: Math.floor(stats.mtimeMs),
+        content,
+      };
+    } catch (error) {
+      log.error(`Error reading wiki page ${relPath}:`, error);
+      return null;
+    }
+  }
+
+  startWikiWatcher(): void {
+    if (this.wikiWatcher || this.wikiWatcherPending) return;
+    const wikiRoot = this.wikiDir;
+
+    if (!fs.existsSync(wikiRoot)) {
+      const parent = path.dirname(wikiRoot);
+      if (!fs.existsSync(parent)) return;
+      this.wikiWatcherPending = true;
+      const parentWatcher = chokidar.watch(parent, {
+        ignoreInitial: true,
+        depth: 0,
+      });
+      parentWatcher.on('addDir', (dirPath) => {
+        if (path.basename(dirPath) === path.basename(wikiRoot)) {
+          parentWatcher.close();
+          this.wikiWatcherPending = false;
+          this.startWikiWatcher();
+        }
+      });
+      return;
+    }
+
+    this.wikiWatcher = chokidar.watch(`${wikiRoot}/*/*.md`, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      ignorePermissionErrors: true,
+    });
+
+    const emitChange = () => this.emit('wiki:changed');
+    this.wikiWatcher.on('add', emitChange);
+    this.wikiWatcher.on('change', emitChange);
+    this.wikiWatcher.on('unlink', emitChange);
+    this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
   }
 
   /**
