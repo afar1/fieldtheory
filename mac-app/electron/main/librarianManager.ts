@@ -2104,12 +2104,17 @@ export class LibrarianManager extends EventEmitter {
 
     if (!this.wikiWatcher) this.startWikiWatcher();
 
-    const WIKI_SUBDIRS = ['categories', 'domains', 'entities', 'entries'];
+    const SKIP = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
+    let subdirs: string[];
+    try {
+      subdirs = fs.readdirSync(wikiRoot)
+        .filter(f => !SKIP.has(f) && fs.statSync(path.join(wikiRoot, f)).isDirectory())
+        .sort();
+    } catch { return []; }
     const folders: WikiFolder[] = [];
 
-    for (const dirName of WIKI_SUBDIRS) {
+    for (const dirName of subdirs) {
       const dirPath = path.join(wikiRoot, dirName);
-      if (!fs.existsSync(dirPath)) continue;
 
       let files: string[];
       try {

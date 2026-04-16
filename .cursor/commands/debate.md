@@ -1,8 +1,8 @@
-Launch a background Field Theory council debate for the current session.
+Launch a council debate for the current session.
 
 ## Goal
 
-Set up the debate inside this session, then hand it off to Field Theory by writing a kickoff file to `~/.fieldtheory/council/kickoffs/`. The debate should run in the dedicated Council window while this session stays usable.
+Start a debate between two AI models, then hand it off to run in the background. The debate runs in a dedicated Council process while this session stays usable.
 
 ## Workflow
 
@@ -24,15 +24,23 @@ Set up the debate inside this session, then hand it off to Field Theory by writi
    - write a 3-6 sentence summary of the actual work in progress
    - include concrete files, goals, constraints, and unresolved questions when possible
    - show that summary to the user and ask whether they want to add or correct anything
-6. When the user confirms, create `~/.fieldtheory/council/kickoffs/` if needed and write one kickoff markdown file.
 
-## Kickoff File Format
+## Launching the debate
 
-Use filename format:
+Use the `mcp__council__council_start` MCP tool with these parameters:
+- `topic`: the full session summary + extra context + desired output format
+- `opus_vs_opus`: true if matchup is opus-vs-opus, false otherwise (Claude vs Codex)
+- `max_turns`: the agreed turn limit
+- `repo_path`: the absolute path to the current working directory (if relevant)
 
-`YYYY-MM-DD-HHMMSS-[slug].md`
+If the MCP tool is not available, fall back to shell:
+```bash
+~/dev/council/council-bg.sh --max-turns <N> --repo <path> "<topic>"
+```
 
-Write this structure:
+## Kickoff file (audit artifact)
+
+Also write a kickoff markdown file to `~/.fieldtheory/council/kickoffs/` with filename format `YYYY-MM-DD-HHMMSS-[slug].md` for the record. This is an audit trail, not the launch mechanism.
 
 ```md
 ---
@@ -70,9 +78,9 @@ Use only these values:
 - `codex-vs-sonnet`
 - `sonnet-vs-sonnet`
 
-## After Writing The Kickoff
+## After Launching
 
 1. Tell the user the debate has been launched.
-2. Print the exact kickoff file path.
-3. Do not wait for the debate to finish.
-4. Remind the user that Field Theory should open the Council window and paste the finished consensus back into the originating session when complete.
+2. Print the session ID and kickoff file path.
+3. Do not wait for the debate to finish — it runs in the background.
+4. The user can check status with `mcp__council__council_status` or `~/dev/council/council-bg.sh --status`.
