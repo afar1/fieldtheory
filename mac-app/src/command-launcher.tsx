@@ -454,7 +454,7 @@ function CommandLauncher() {
         name: 'wiki',
         displayName: 'wiki.md — lookup',
         keywords: ['wiki'],
-        filePath: WIKI_COMMAND_PATH,
+        filePath: WIKI_COMMAND_PATH ?? undefined,
       }, ...wikiPages.slice(0, 5)]);
       setSelectedIndex(0);
       commandsAPI.launcherResize(inputHeight + Math.min(6 * 22 + 10, 280));
