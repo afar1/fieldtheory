@@ -190,17 +190,20 @@ export class DynamicIslandManager extends EventEmitter {
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
   private stayOnLaptop: boolean = false;
 
-  // Auto-hide: when enabled, pills conceal themselves until the cursor is near
-  // the notch area OR a non-idle state / hot-mic activity forces a reveal.
+  // Auto-hide: when enabled, pill visibility tracks cursor proximity. Each
+  // tick we compute a *target* progress from cursor distance (0 = fully
+  // hidden, 1 = fully revealed) and ease the *rendered* progress toward it
+  // with exponential smoothing so jittery cursor input doesn't cause visible
+  // jitter on the pills. Non-idle states (recording, hot-mic active) force
+  // target = 1 regardless of cursor position.
   private autoHideEnabled: boolean = false;
-  private autoHideConcealed: boolean = false;
+  private autoHideRenderedProgress: number = 1;
   private autoHidePollTimer: NodeJS.Timeout | null = null;
-  private autoHideFadeTimer: NodeJS.Timeout | null = null;
-  private readonly AUTO_HIDE_POLL_INTERVAL_MS = 100;
-  private readonly AUTO_HIDE_REVEAL_HALO_PX = 60;
-  private readonly AUTO_HIDE_CONCEAL_HALO_PX = 100;
-  private readonly AUTO_HIDE_ANIMATION_DURATION_MS = 220;
-  private readonly AUTO_HIDE_ANIMATION_STEP_MS = 16;
+  private readonly AUTO_HIDE_POLL_INTERVAL_MS = 16;     // ~60 Hz cursor sampling
+  private readonly AUTO_HIDE_SMOOTHING = 0.25;          // exp-smoothing factor per tick (~150ms settle)
+  private readonly AUTO_HIDE_SNAP_EPSILON = 0.002;      // snap to target when close enough
+  private readonly AUTO_HIDE_INNER_PX = 12;             // full reveal at/below this distance
+  private readonly AUTO_HIDE_OUTER_PX = 54;             // full conceal at/beyond this distance
 
   constructor() {
     super();
@@ -290,7 +293,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.createRightWindow();
     this.syncGapFillWindow();
     this.createDrawerWindow();
-    this.evaluateAutoHideVisibility();
+    this.tickAutoHide();
   }
 
   setEnabled(enabled: boolean): void {
@@ -319,7 +322,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.sendHotMicToRight();
     this.sendInputModeToRenderers();
     this.sendHotMicRuntimeStatusToLeft();
-    this.evaluateAutoHideVisibility();
+    this.tickAutoHide();
   }
 
   setGeometryTuning(tuning: Partial<DynamicIslandGeometryTuning>): DynamicIslandGeometryTuning {
@@ -396,7 +399,7 @@ export class DynamicIslandManager extends EventEmitter {
       this.sendStateToRenderer(state);
       this.updateWindowSize();
       this.showRightPill();
-      this.evaluateAutoHideVisibility();
+      this.tickAutoHide();
       return;
     }
 
@@ -406,7 +409,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.show();
     this.sendStateToRenderer(state);
     this.updateWindowSize();
-    this.evaluateAutoHideVisibility();
+    this.tickAutoHide();
   }
 
   getState(): DynamicIslandState {
@@ -438,7 +441,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicLastWord = active ? lastWord : '';
     if (!this.enabled) return;
     this.sendHotMicToRight();
-    this.evaluateAutoHideVisibility();
+    this.tickAutoHide();
   }
 
   blinkThenHideHotMic(): void {
@@ -600,6 +603,7 @@ export class DynamicIslandManager extends EventEmitter {
         return;
       }
       this.reinforceWindowBacking('left', 'left-show');
+      if (this.isAutoHidden()) return;
       this.window.setOpacity(1);
       this.window.showInactive();
     }
@@ -700,8 +704,10 @@ export class DynamicIslandManager extends EventEmitter {
         if (this.pendingShow) {
           this.pendingShow = false;
           this.reinforceWindowBacking('left', 'left-pending-show');
-          this.window.setOpacity(1);
-          this.window.showInactive();
+          if (!this.isAutoHidden()) {
+            this.window.setOpacity(1);
+            this.window.showInactive();
+          }
         }
       }
     });
@@ -771,8 +777,10 @@ export class DynamicIslandManager extends EventEmitter {
         }
         this.updateRightWindowPosition();
         this.reinforceWindowBacking('right', 'right-ready-show');
-        this.rightWindow.setOpacity(1);
-        this.rightWindow.showInactive();
+        if (!this.isAutoHidden()) {
+          this.rightWindow.setOpacity(1);
+          this.rightWindow.showInactive();
+        }
         this.syncRightWindowState();
       }
     });
@@ -787,8 +795,10 @@ export class DynamicIslandManager extends EventEmitter {
 
     this.updateRightWindowPosition();
     this.reinforceWindowBacking('right', 'right-show-enabled');
-    this.rightWindow.setOpacity(1);
-    this.rightWindow.showInactive();
+    if (!this.isAutoHidden()) {
+      this.rightWindow.setOpacity(1);
+      this.rightWindow.showInactive();
+    }
 
     if (this.rightRendererReady) {
       this.syncRightWindowState();
@@ -1103,7 +1113,7 @@ export class DynamicIslandManager extends EventEmitter {
     );
     win.setAlwaysOnTop(true, 'screen-saver', zLevel);
 
-    if (win.isVisible()) {
+    if (win.isVisible() && !this.isAutoHidden()) {
       win.setOpacity(1);
     }
   }
@@ -1313,20 +1323,23 @@ export class DynamicIslandManager extends EventEmitter {
     this.autoHideEnabled = next;
     if (this.autoHideEnabled) {
       this.startAutoHidePolling();
-      this.evaluateAutoHideVisibility();
+      this.tickAutoHide();
     } else {
       this.stopAutoHidePolling();
-      if (this.autoHideConcealed) {
-        this.autoHideConcealed = false;
-        this.animateAutoHideWindows(1);
-      }
+      this.autoHideRenderedProgress = 1;
+      // Recompute natural bounds so any pill that was mid-slide into the
+      // notch (or fully hidden) snaps back to its correct position for the
+      // current state before we show it. Without this, pills would reappear
+      // at whatever slid-in position the last animation tick set them to.
+      this.updateWindowSize();
+      this.applyAutoHideProgress(1);
     }
   }
 
   private startAutoHidePolling(): void {
     if (this.autoHidePollTimer) return;
     this.autoHidePollTimer = setInterval(() => {
-      this.evaluateAutoHideVisibility();
+      this.tickAutoHide();
     }, this.AUTO_HIDE_POLL_INTERVAL_MS);
   }
 
@@ -1341,11 +1354,22 @@ export class DynamicIslandManager extends EventEmitter {
     return this.state !== 'idle' || this.hotMicActive;
   }
 
-  private isCursorInAutoHideRevealZone(): boolean {
+  // Final authority over whether external show() paths should be allowed to
+  // run. True when auto-hide is in control of the windows and progress is
+  // below 1 — external code that calls setOpacity(1) / showInactive() would
+  // undo the cursor-driven intermediate state.
+  private isAutoHidden(): boolean {
+    return this.autoHideEnabled && this.autoHideRenderedProgress < 1;
+  }
+
+  // Maps cursor distance from the island's idle bounding box to a progress
+  // value in [0, 1]: 1 at the island (inside INNER_PX), 0 far from it (at or
+  // beyond OUTER_PX), linear in between. Returns 0 when the cursor is on a
+  // different display than the island.
+  private computeAutoHideProgressFromCursor(): number {
     const display = this.getTargetDisplay();
-    if (!display) return false;
+    if (!display) return 0;
     const cursor = screen.getCursorScreenPoint();
-    // Only reveal when the cursor is on the same display as the island.
     const bounds = display.bounds;
     if (
       cursor.x < bounds.x ||
@@ -1353,7 +1377,7 @@ export class DynamicIslandManager extends EventEmitter {
       cursor.y < bounds.y ||
       cursor.y > bounds.y + bounds.height
     ) {
-      return false;
+      return 0;
     }
 
     const idleWidth = this.getIdlePillWidth();
@@ -1363,191 +1387,140 @@ export class DynamicIslandManager extends EventEmitter {
     const topY = this.getTopWindowY();
     const bottomY = topY + Math.max(idleHeight, this.getRightPillHeight());
 
-    const halo = this.autoHideConcealed
-      ? this.AUTO_HIDE_REVEAL_HALO_PX
-      : this.AUTO_HIDE_CONCEAL_HALO_PX;
+    // Distance from cursor to the island's axis-aligned bounding box.
+    const dx = Math.max(leftX - cursor.x, 0, cursor.x - rightX);
+    const dy = Math.max(topY - cursor.y, 0, cursor.y - bottomY);
+    const distance = Math.sqrt(dx * dx + dy * dy);
 
-    return (
-      cursor.x >= leftX - halo &&
-      cursor.x <= rightX + halo &&
-      cursor.y >= topY - halo &&
-      cursor.y <= bottomY + halo
-    );
+    if (distance <= this.AUTO_HIDE_INNER_PX) return 1;
+    if (distance >= this.AUTO_HIDE_OUTER_PX) return 0;
+    return 1 - (distance - this.AUTO_HIDE_INNER_PX) / (this.AUTO_HIDE_OUTER_PX - this.AUTO_HIDE_INNER_PX);
   }
 
-  private evaluateAutoHideVisibility(): void {
+  private tickAutoHide(): void {
     if (!this.autoHideEnabled || !this.enabled) return;
 
-    const shouldReveal = this.isAutoHideActiveState() || this.isCursorInAutoHideRevealZone();
+    const target = this.isAutoHideActiveState()
+      ? 1
+      : this.computeAutoHideProgressFromCursor();
 
-    if (shouldReveal && this.autoHideConcealed) {
-      this.autoHideConcealed = false;
-      this.animateAutoHideWindows(1);
-    } else if (!shouldReveal && !this.autoHideConcealed) {
-      this.autoHideConcealed = true;
-      this.animateAutoHideWindows(0);
+    // If already settled at target, nothing to do. This is the hot path
+    // when the cursor is stationary — we tick at 60 Hz but early-out.
+    const delta = target - this.autoHideRenderedProgress;
+    if (Math.abs(delta) < this.AUTO_HIDE_SNAP_EPSILON) {
+      if (this.autoHideRenderedProgress !== target) {
+        this.autoHideRenderedProgress = target;
+        this.applyAutoHideProgress(target);
+      }
+      return;
     }
+
+    // Exponential smoothing: move a fraction of the remaining distance each
+    // tick. Jittery targets are filtered out because the rendered value only
+    // integrates ~25% of each new target per 16ms frame.
+    this.autoHideRenderedProgress += delta * this.AUTO_HIDE_SMOOTHING;
+    this.applyAutoHideProgress(this.autoHideRenderedProgress);
   }
 
-  private animateAutoHideWindows(target: 0 | 1): void {
-    // Don't show anything when the whole Dynamic Island feature is off —
-    // setEnabled(false) has already called hideAllWindows() and the pills
-    // should stay hidden regardless of auto-hide state.
-    if (target === 1 && !this.enabled) return;
+  // Maps a progress value (0 = fully concealed, 1 = fully revealed) to
+  // concrete window positions and opacities. Called from the poll tick every
+  // 16ms whenever the cursor-derived progress changes. The method is also
+  // safe to call standalone from transitions (setEnabled, disable, etc.).
+  private applyAutoHideProgress(progress: number): void {
+    const clamped = Math.max(0, Math.min(1, progress));
+    const hasNotch = this.getActiveNotchProfile() !== null;
 
-    if (this.autoHideFadeTimer) {
-      clearInterval(this.autoHideFadeTimer);
-      this.autoHideFadeTimer = null;
+    if (clamped <= 0) {
+      // Fully concealed — hide everything.
+      if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
+        this.window.hide();
+      }
+      if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightWindow.isVisible()) {
+        this.rightWindow.hide();
+      }
+      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillWindow.isVisible()) {
+        this.gapFillWindow.hide();
+      }
+      return;
     }
 
-    // Each pill slides horizontally toward the notch on conceal and
-    // emerges out from behind it on reveal. The gap filler sits behind the
-    // notch so it just fades.
-    interface AutoHideWindowState {
-      win: BrowserWindow;
-      baseX: number;
-      baseY: number;
-      width: number;
-      height: number;
-      slideDx: number; // horizontal offset at fully-concealed (px, signed)
-      startOpacity: number;
-      startOffsetX: number;
-    }
-
-    const collect = (): AutoHideWindowState[] => {
-      const out: AutoHideWindowState[] = [];
-      const topY = this.getTopWindowY();
-
+    if (clamped >= 1) {
+      // Fully revealed — setOpacity(1) + showInactive on all three. We do
+      // NOT touch position: in idle state the pills' natural position was
+      // already set by updateWindowSize; in active state, the show() path
+      // handles bounds (and this guard is unblocked once isAutoHidden()
+      // returns false at progress=1).
       if (this.window && !this.window.isDestroyed() && this.rendererReady) {
-        const [w, h] = this.window.getSize();
-        const baseX = this.getLeftWindowX(
-          this.historyVisible ? this.ISLAND_WIDTH : this.getIdlePillWidth(),
-          !this.historyVisible,
-        );
-        out.push({
-          win: this.window,
-          baseX,
-          baseY: topY,
-          width: w,
-          height: h,
-          // Left pill retreats to the right (into the notch's left edge).
-          slideDx: w,
-          startOpacity: 0,
-          startOffsetX: 0,
-        });
+        this.window.setOpacity(1);
+        this.window.showInactive();
       }
-
       if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-        const [w, h] = this.rightWindow.getSize();
-        out.push({
-          win: this.rightWindow,
-          baseX: this.getRightWindowX(),
-          baseY: topY,
-          width: w,
-          height: h,
-          // Right pill retreats to the left (into the notch's right edge).
-          slideDx: -w,
-          startOpacity: 0,
-          startOffsetX: 0,
-        });
+        this.rightWindow.setOpacity(1);
+        this.rightWindow.showInactive();
       }
-
       if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillRendererReady) {
-        const [w, h] = this.gapFillWindow.getSize();
-        out.push({
-          win: this.gapFillWindow,
-          baseX: this.getGapFillX(),
-          baseY: topY,
-          width: w,
-          height: h,
-          // Gap filler sits behind the notch — no slide, just opacity.
-          slideDx: 0,
-          startOpacity: 0,
-          startOffsetX: 0,
-        });
+        this.gapFillWindow.setOpacity(1);
+        this.gapFillWindow.showInactive();
       }
+      return;
+    }
 
-      return out;
-    };
+    // Partial reveal (0 < progress < 1) — cursor-driven.
+    //
+    // Notch path: pills are interpolated between slid-in (inside notch) and
+    // natural idle position. Gap filler opacity fades up at 2× speed so the
+    // notch overlap slivers are covered before they'd otherwise be exposed.
+    //
+    // External path: all three fade opacity in lockstep (no slide — there's
+    // no notch to hide behind).
+    const topY = this.getTopWindowY();
 
-    const states = collect();
-    if (states.length === 0) return;
-
-    for (const s of states) {
-      if (!s.win.isVisible()) {
-        if (target === 0) {
-          // Already hidden, nothing to animate for this window.
-          s.startOpacity = 0;
-          s.startOffsetX = s.slideDx;
-          continue;
-        }
-        // Reveal from hidden: place at the concealed position at 0 opacity, then show.
-        s.win.setOpacity(0);
-        s.win.setBounds({
-          x: s.baseX + s.slideDx,
-          y: s.baseY,
-          width: s.width,
-          height: s.height,
-        });
-        s.win.showInactive();
-        s.startOpacity = 0;
-        s.startOffsetX = s.slideDx;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      if (!this.window.isVisible()) {
+        this.window.setOpacity(1);
+        this.window.showInactive();
+      }
+      if (hasNotch) {
+        const w = this.window.getSize()[0];
+        const naturalX = this.getLeftWindowX(this.getIdlePillWidth(), true);
+        // At progress=1: naturalX. At progress=0: naturalX + w (slid right into notch).
+        const x = naturalX + w * (1 - clamped);
+        this.window.setPosition(Math.round(x), topY);
       } else {
-        s.startOpacity = s.win.getOpacity();
-        s.startOffsetX = s.win.getPosition()[0] - s.baseX;
+        this.window.setOpacity(clamped);
       }
     }
 
-    const totalSteps = Math.max(
-      1,
-      Math.round(this.AUTO_HIDE_ANIMATION_DURATION_MS / this.AUTO_HIDE_ANIMATION_STEP_MS),
-    );
-    let step = 0;
-    const targetOpacity = target;
-
-    this.autoHideFadeTimer = setInterval(() => {
-      step += 1;
-      const t = Math.min(1, step / totalSteps);
-      const eased = target === 1
-        ? 1 - Math.pow(1 - t, 3)   // ease-out cubic (reveal)
-        : Math.pow(t, 3);           // ease-in cubic (conceal)
-
-      for (const s of states) {
-        if (s.win.isDestroyed()) continue;
-        const endOffsetX = target === 1 ? 0 : s.slideDx;
-        const opacity = s.startOpacity + (targetOpacity - s.startOpacity) * eased;
-        const offsetX = s.startOffsetX + (endOffsetX - s.startOffsetX) * eased;
-        s.win.setOpacity(Math.max(0, Math.min(1, opacity)));
-        s.win.setBounds({
-          x: Math.round(s.baseX + offsetX),
-          y: s.baseY,
-          width: s.width,
-          height: s.height,
-        });
+    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
+      if (!this.rightWindow.isVisible()) {
+        this.rightWindow.setOpacity(1);
+        this.rightWindow.showInactive();
       }
-
-      if (step >= totalSteps) {
-        if (this.autoHideFadeTimer) {
-          clearInterval(this.autoHideFadeTimer);
-          this.autoHideFadeTimer = null;
-        }
-        for (const s of states) {
-          if (s.win.isDestroyed()) continue;
-          // Reset to the natural position. On conceal, hide and restore
-          // opacity so the next reveal starts clean.
-          s.win.setBounds({
-            x: s.baseX,
-            y: s.baseY,
-            width: s.width,
-            height: s.height,
-          });
-          s.win.setOpacity(1);
-          if (target === 0) {
-            s.win.hide();
-          }
-        }
+      if (hasNotch) {
+        const w = this.rightWindow.getSize()[0];
+        const naturalX = this.getRightWindowX();
+        // At progress=1: naturalX. At progress=0: naturalX - w (slid left into notch).
+        const x = naturalX - w * (1 - clamped);
+        this.rightWindow.setPosition(Math.round(x), topY);
+      } else {
+        this.rightWindow.setOpacity(clamped);
       }
-    }, this.AUTO_HIDE_ANIMATION_STEP_MS);
+    }
+
+    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillRendererReady) {
+      if (!this.gapFillWindow.isVisible()) {
+        this.gapFillWindow.setOpacity(0);
+        this.gapFillWindow.showInactive();
+      }
+      if (hasNotch) {
+        // 2× fast ramp: opacity reaches 1 at progress=0.5 so the gap filler
+        // is fully opaque before the pills have slid far enough to expose
+        // the 1-2px overlap slivers.
+        this.gapFillWindow.setOpacity(Math.min(1, clamped * 2));
+      } else {
+        this.gapFillWindow.setOpacity(clamped);
+      }
+    }
   }
 
   private getTargetDisplay(): Electron.Display {
@@ -1784,8 +1757,10 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (this.gapFillRendererReady) {
       this.reinforceWindowBacking('filler', 'filler-show');
-      this.gapFillWindow.setOpacity(1);
-      this.gapFillWindow.showInactive();
+      if (!this.isAutoHidden()) {
+        this.gapFillWindow.setOpacity(1);
+        this.gapFillWindow.showInactive();
+      }
     }
   }
 
@@ -1857,10 +1832,6 @@ export class DynamicIslandManager extends EventEmitter {
       this.dismissTimer = null;
     }
     this.stopAutoHidePolling();
-    if (this.autoHideFadeTimer) {
-      clearInterval(this.autoHideFadeTimer);
-      this.autoHideFadeTimer = null;
-    }
     if (this.window && !this.window.isDestroyed()) {
       this.window.close();
     }

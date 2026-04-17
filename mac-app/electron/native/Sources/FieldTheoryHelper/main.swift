@@ -59,6 +59,7 @@ enum MessageType: String, Codable {
 struct IncomingMessage: Codable {
     let type: MessageType
     let deviceId: String?
+    let recordingSource: String?
     let soundPath: String?      // For playSound
     let soundPaths: [String]?   // For preloadSounds
     let bundleId: String?       // For typeIntoApp, focusWindowByTitle
@@ -2108,33 +2109,47 @@ final class MessageHandler {
             RecordingHelper.shared.warmupAudio()
 
         case .startRecording:
-            if RecordingHelper.shared.startRecording() {
-                let response = RecordingStartedMessage()
-                sendJSON(response)
-            } else {
-                sendError("Failed to start recording")
+            let source = RecordingSource(rawValue: message.recordingSource ?? RecordingSource.microphone.rawValue) ?? .microphone
+            Task { @MainActor in
+                do {
+                    try await RecordingCoordinator.shared.startRecording(source: source)
+                    sendJSON(RecordingStartedMessage())
+                } catch {
+                    sendError(error.localizedDescription)
+                }
             }
             
         case .stopRecording:
-            if let filePath = RecordingHelper.shared.stopRecording() {
-                let response = RecordingStoppedMessage(filePath: filePath)
-                sendJSON(response)
-            } else {
-                sendError("Failed to stop recording")
+            Task { @MainActor in
+                do {
+                    if let filePath = try await RecordingCoordinator.shared.stopRecording() {
+                        sendJSON(RecordingStoppedMessage(filePath: filePath))
+                    } else {
+                        sendError("Failed to stop recording")
+                    }
+                } catch {
+                    sendError(error.localizedDescription)
+                }
             }
             
         case .snapshotRecording:
-            if let filePath = RecordingHelper.shared.snapshotRecording() {
-                let response = RecordingSnapshotMessage(filePath: filePath)
-                sendJSON(response)
-            } else {
-                sendError("Failed to snapshot recording")
+            Task { @MainActor in
+                do {
+                    if let filePath = try await RecordingCoordinator.shared.snapshotRecording() {
+                        sendJSON(RecordingSnapshotMessage(filePath: filePath))
+                    } else {
+                        sendError("Failed to snapshot recording")
+                    }
+                } catch {
+                    sendError(error.localizedDescription)
+                }
             }
 
         case .cancelRecording:
-            RecordingHelper.shared.cancelRecording()
-            let response = RecordingCancelledMessage()
-            sendJSON(response)
+            Task { @MainActor in
+                await RecordingCoordinator.shared.cancelRecording()
+                sendJSON(RecordingCancelledMessage())
+            }
             
         case .checkPermissions:
             let accessibilityGranted = KeyboardMonitor.shared.checkAccessibilityPermission()
@@ -2197,7 +2212,7 @@ final class MessageHandler {
 
         case .setHarvestMode:
             if let mode = message.mode {
-                RecordingHelper.shared.setHarvestMode(mode, silenceMs: message.silenceMs)
+                RecordingCoordinator.shared.setHarvestMode(mode, silenceMs: message.silenceMs)
                 sendLog(level: "info", message: "Harvest mode set to: \(mode), silenceMs: \(message.silenceMs.map(String.init) ?? "default")")
             } else {
                 sendError("setHarvestMode requires mode")

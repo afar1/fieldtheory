@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { app, globalShortcut, clipboard, nativeImage, Notification } from 'electron';
+import { app, globalShortcut, clipboard, nativeImage, Notification, systemPreferences } from 'electron';
 import { getHotkeyManager } from './hotkeyManager';
 import { spawn, ChildProcess } from 'child_process';
 import path from 'path';
@@ -42,6 +42,7 @@ import {
   type ParakeetSetupProgress,
   type ParakeetSetupStage,
   type ParakeetStatus,
+  type RecordingInputSource,
   type TranscriptionEngine,
   type HotMicEngine,
   type ParakeetEngine,
@@ -191,6 +192,7 @@ export class TranscriberManager extends EventEmitter {
   private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
   private autoStackLimitShownThisSession: boolean = false; // Only show limit message once per session
   private lastExternalPasteTargetBundleId: string | null = null;
+  private activeRecordingSource: RecordingInputSource | null = null;
   private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
     'com.fieldtheory.app',
     'com.fieldtheory.experimental',
@@ -712,6 +714,8 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    const recordingSource = this.getRecordingSource();
+
     // Yield Hot Mic's recording so we can use the audio device
     let yieldedHotMic = false;
     if (this.hotMicDelegate?.isActive) {
@@ -742,6 +746,16 @@ export class TranscriberManager extends EventEmitter {
         }
         return;
       }
+    }
+
+    if (recordingSource === 'system-audio' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+      const errorMsg = 'System audio capture requires Screen Recording permission. Open Settings → Privacy & Security → Screen Recording.';
+      this.emit('error', new Error(errorMsg));
+      this.cursorStatusManager?.showRecordingNote(errorMsg);
+      if (yieldedHotMic) {
+        this.hotMicDelegate?.resumeAfterTranscriber().catch(() => {});
+      }
+      return;
     }
 
     // Check priority mic quota if a priority device is selected.
@@ -787,12 +801,18 @@ export class TranscriberManager extends EventEmitter {
       this.soundManager.play('recordingStart');
 
       this.resetStandardRealtimeSession();
-      this.attachStandardChunkListener();
-      this.setStandardRealtimeHarvestMode();
-      await this.nativeHelper.startRecording();
+      this.activeRecordingSource = recordingSource;
+      if (recordingSource === 'microphone') {
+        this.attachStandardChunkListener();
+        this.setStandardRealtimeHarvestMode();
+      } else {
+        this.nativeHelper.setHarvestMode('off');
+      }
+      await this.nativeHelper.startRecording(recordingSource);
       log.info('Recording started');
     } catch (error) {
       log.error('Failed to start recording:', error);
+      this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1183,6 +1203,8 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
+    const activeRecordingSource = this.activeRecordingSource ?? this.getRecordingSource();
+
     try {
       // Unregister abandon hotkey.
       this.unregisterAbandonHotkey();
@@ -1192,7 +1214,7 @@ export class TranscriberManager extends EventEmitter {
 
       // Force one final harvest snapshot so trailing speech is captured even if
       // the user stops before Swift's silence detector emits a chunk.
-      if (!this.pendingImmediateSquaresAction) {
+      if (activeRecordingSource === 'microphone' && !this.pendingImmediateSquaresAction) {
         try {
           const tailChunkPath = await this.nativeHelper.snapshotRecording();
           const readyAtMs = this.recordingStartTime > 0
@@ -1207,8 +1229,11 @@ export class TranscriberManager extends EventEmitter {
       
       // Stop recording and get WAV file path
       const wavPath = await this.nativeHelper.stopRecording();
-      await this.waitForStandardChunkDrain();
-      this.detachStandardChunkListener();
+      if (activeRecordingSource === 'microphone') {
+        await this.waitForStandardChunkDrain();
+        this.detachStandardChunkListener();
+      }
+      this.activeRecordingSource = null;
 
       const immediateSquaresAction = this.pendingImmediateSquaresAction;
       this.pendingImmediateSquaresAction = null;
@@ -1435,6 +1460,7 @@ export class TranscriberManager extends EventEmitter {
       this.skipNextPasteFailedNotification = false;
     } catch (error) {
       log.error('Transcription failed:', error);
+      this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1462,6 +1488,7 @@ export class TranscriberManager extends EventEmitter {
     try {
       // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
+      this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -1472,6 +1499,7 @@ export class TranscriberManager extends EventEmitter {
       this.unregisterAbandonHotkey();
     } catch (error) {
       log.error('Failed to cancel recording:', error);
+      this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
@@ -3620,6 +3648,15 @@ export class TranscriberManager extends EventEmitter {
    */
   getSelectedModel(): string {
     return this.modelManager.getSelectedModel();
+  }
+
+  getRecordingSource(): RecordingInputSource {
+    const configured = this.preferences.getPreference('transcriptionInputSource');
+    return configured === 'system-audio' ? 'system-audio' : 'microphone';
+  }
+
+  async setRecordingSource(source: RecordingInputSource): Promise<void> {
+    await this.preferences.save({ transcriptionInputSource: source });
   }
 
   /**

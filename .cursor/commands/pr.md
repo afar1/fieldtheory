@@ -10,4 +10,8 @@ If you've not run deslop, do so! If you've not run refactor.md, do so! then cont
 
 PRs should not be drafts unless specified. Make them able to merge. Then poll until you notice they are ready to be merged without conflict and then let me know and I'll hit the url and merge.
 
-If conflicts, fix it and update. Your last note to me should always be the clickable URL
+If conflicts, fix it and update. Your last note to me should always be the clickable URL.
+
+Make sure to update any readme's related to this. take into account any changes already on main before we do that.
+
+Please make sure to keep the PR succinct.

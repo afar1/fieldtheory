@@ -104,7 +104,7 @@
       "extendInfo": {
         "LSUIElement": true,
         "NSMicrophoneUsageDescription": "Field Theory needs microphone access to transcribe your voice into text.",
-        "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots for AI context.",
+        "NSScreenCaptureDescription": "Field Theory needs screen recording permission to capture screenshots and system audio for AI context.",
         "NSAppleEventsUsageDescription": "Field Theory needs automation permission to paste transcribed text into other applications."
       },
       "extraResources": [

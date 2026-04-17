@@ -8,7 +8,7 @@ import PackageDescription
 let package = Package(
     name: "FieldTheoryHelper",
     platforms: [
-        .macOS(.v11)
+        .macOS(.v13)
     ],
     products: [
         .executable(name: "FieldTheoryHelper", targets: ["FieldTheoryHelper"])
@@ -32,7 +32,9 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
                 .linkedFramework("CoreAudio"),
-                .linkedFramework("AudioToolbox")
+                .linkedFramework("AudioToolbox"),
+                .linkedFramework("CoreMedia"),
+                .linkedFramework("ScreenCaptureKit")
             ]
         )
     ]

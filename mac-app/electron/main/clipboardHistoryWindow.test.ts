@@ -53,6 +53,7 @@ function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<t
     isDestroyed: vi.fn(() => false),
     setFocusable: vi.fn(),
     setAlwaysOnTop: vi.fn(),
+    setVisibleOnAllWorkspaces: vi.fn(),
     show: vi.fn(),
     moveTop: vi.fn(),
     focus: vi.fn(),
@@ -63,6 +64,28 @@ function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<t
 
   vi.spyOn(window as any, 'sendTargetAppInfo').mockImplementation(() => {});
   vi.spyOn(window as any, 'refreshAppDataInBackground').mockResolvedValue(undefined);
+}
+
+function attachWindowWithBounds(window: ClipboardHistoryWindow, bounds: Electron.Rectangle) {
+  const getBounds = vi.fn(() => bounds);
+  const setBounds = vi.fn((nextBounds: Electron.Rectangle) => {
+    bounds = nextBounds;
+  });
+
+  (window as any).window = {
+    isDestroyed: vi.fn(() => false),
+    isVisible: vi.fn(() => true),
+    getBounds,
+    setBounds,
+    setFocusable: vi.fn(),
+    setAlwaysOnTop: vi.fn(),
+    setVisibleOnAllWorkspaces: vi.fn(),
+    webContents: {
+      send: vi.fn(),
+    },
+  };
+
+  return { getBounds, setBounds, windowRef: (window as any).window };
 }
 
 describe('ClipboardHistoryWindow helper methods', () => {
@@ -142,6 +165,48 @@ describe('ClipboardHistoryWindow helper methods', () => {
 
     window.setSketchModeActive(true);
     expect(window.shouldAutoHideOnBlur()).toBe(false);
+  });
+
+  it('expands vertically in immersive mode and restores the original bounds on exit', () => {
+    const { windowRef } = attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
+    const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
+
+    window.setImmersiveMode(true);
+
+    expect(animateBounds).toHaveBeenNthCalledWith(1, {
+      x: 64,
+      y: 0,
+      width: 972,
+      height: 918,
+    });
+    expect(windowRef.setAlwaysOnTop).toHaveBeenCalledWith(false);
+    expect(windowRef.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(false);
+
+    window.setImmersiveMode(false);
+
+    expect(animateBounds).toHaveBeenNthCalledWith(2, {
+      x: 100,
+      y: 100,
+      width: 900,
+      height: 600,
+    });
+    expect(windowRef.setAlwaysOnTop).toHaveBeenCalledWith(true, 'screen-saver', 1);
+    expect(windowRef.setVisibleOnAllWorkspaces).toHaveBeenCalledWith(true, { visibleOnFullScreen: true });
+  });
+
+  it('uses the configured immersive height percentage when expanding the library view', () => {
+    attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
+    const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
+
+    window.setImmersiveHeightPercentGetter(() => 90);
+    window.setImmersiveMode(true);
+
+    expect(animateBounds).toHaveBeenCalledWith({
+      x: 64,
+      y: 0,
+      width: 972,
+      height: 972,
+    });
   });
 
   it('hides the window and restores the previous app when one is known', async () => {
