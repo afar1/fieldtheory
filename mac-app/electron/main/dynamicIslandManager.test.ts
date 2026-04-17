@@ -52,7 +52,9 @@ const testState = vi.hoisted(() => {
       MockBrowserWindow.instances.push(this);
     }
 
-    setOpacity(_value: number): void {}
+    private opacity = 0;
+    setOpacity(value: number): void { this.opacity = value; }
+    getOpacity(): number { return this.opacity; }
     setBackgroundColor(color: string): void {
       this.backgroundColorCalls.push(color);
     }
@@ -152,11 +154,11 @@ const testState = vi.hoisted(() => {
     }
   };
 
-  const getWindowBySide = (side: 'left' | 'right' | 'drawer' | 'filler'): MockBrowserWindow | undefined => {
+  const getWindowBySide = (side: 'unified' | 'left' | 'right' | 'drawer' | 'filler'): MockBrowserWindow | undefined => {
     return MockBrowserWindow.instances.find((win) => {
       const search = win.loadTarget.search;
       const url = win.loadTarget.url;
-      return search === `?side=${side}` || url?.includes(`side=${side}`) === true;
+      return search?.includes(`side=${side}`) === true || url?.includes(`side=${side}`) === true;
     });
   };
 
@@ -249,21 +251,23 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager = null;
   });
 
-  it('keeps a center filler visible on internal primary displays so the island stays contiguous', () => {
+  it('creates a single unified island window spanning left pill, notch gap, and right pill', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
 
-    expect(testState.getWindowBySide('left')).toBeDefined();
-    expect(testState.getWindowBySide('right')).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+    expect(unified?.isVisible()).toBe(true);
     expect(testState.getWindowBySide('drawer')).toBeDefined();
-    const filler = testState.getWindowBySide('filler');
-    expect(filler).toBeDefined();
-    expect(filler?.isVisible()).toBe(true);
+    // No separate left, right, or filler windows.
+    expect(testState.getWindowBySide('left')).toBeUndefined();
+    expect(testState.getWindowBySide('right')).toBeUndefined();
+    expect(testState.getWindowBySide('filler')).toBeUndefined();
   });
 
-  it('keeps the center filler visible on external primary displays', () => {
+  it('creates the unified island window on external primary displays (no notch profile)', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
@@ -271,9 +275,9 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const filler = testState.getWindowBySide('filler');
-    expect(filler).toBeDefined();
-    expect(filler?.isVisible()).toBe(true);
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+    expect(unified?.isVisible()).toBe(true);
   });
 
   it('does not create island windows while disabled until re-enabled', () => {
@@ -289,12 +293,11 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     manager.setEnabled(true);
 
-    expect(testState.getWindowBySide('left')).toBeDefined();
-    expect(testState.getWindowBySide('right')).toBeDefined();
+    expect(testState.getWindowBySide('unified')).toBeDefined();
     expect(testState.getWindowBySide('drawer')).toBeDefined();
   });
 
-  it('keeps the center filler visible when switching primary back to internal', () => {
+  it('keeps the unified window visible when switching primary back to internal', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
@@ -302,40 +305,34 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const filler = testState.getWindowBySide('filler');
-    expect(filler).toBeDefined();
-    expect(filler?.isVisible()).toBe(true);
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+    expect(unified?.isVisible()).toBe(true);
 
     testState.setPrimaryInternal(true);
     testState.emitScreenEvent('display-metrics-changed');
 
-    expect(filler?.isVisible()).toBe(true);
+    expect(unified?.isVisible()).toBe(true);
   });
 
-  it('restores the right pill visibility when hot mic is re-enabled', () => {
+  it('restores the unified island visibility when re-enabled', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
-    expect(left?.isVisible()).toBe(true);
-    expect(right?.isVisible()).toBe(true);
-    const rightShowCallsBeforeDisable = right?.showInactiveCalls ?? 0;
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+    expect(unified?.isVisible()).toBe(true);
+    const showCallsBeforeDisable = unified?.showInactiveCalls ?? 0;
 
     manager.setEnabled(false);
-    expect(left?.isVisible()).toBe(false);
-    expect(right?.isVisible()).toBe(false);
-    expect(left?.hideCalls).toBeGreaterThan(0);
-    expect(right?.hideCalls).toBeGreaterThan(0);
+    expect(unified?.isVisible()).toBe(false);
+    expect(unified?.hideCalls).toBeGreaterThan(0);
 
     manager.setEnabled(true);
-    expect(left?.isVisible()).toBe(true);
-    expect(right?.isVisible()).toBe(true);
-    expect((right?.showInactiveCalls ?? 0)).toBeGreaterThan(rightShowCallsBeforeDisable);
+    expect(unified?.isVisible()).toBe(true);
+    expect((unified?.showInactiveCalls ?? 0)).toBeGreaterThan(showCallsBeforeDisable);
   });
 
   it('documents that dynamic-island IPC can request opening the main Field Theory window', () => {
@@ -352,17 +349,18 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const openFieldTheoryHandler = openFieldTheoryCall?.[1] as (() => void) | undefined;
     expect(openFieldTheoryHandler).toBeDefined();
 
-    const left = testState.getWindowBySide('left');
-    expect(left?.getSize()).toEqual([72, 38]);
+    // Unified window: left(72) + gapFill(NOTCH_WIDTH=200 + 2×overlap=2) + right(72) = 346
+    const unified = testState.getWindowBySide('unified');
+    expect(unified?.getSize()).toEqual([346, 38]);
 
     const listener = vi.fn();
     manager.on('open-field-theory', listener);
     openFieldTheoryHandler?.();
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(left?.constructorOptions.transparent).toBe(true);
-    expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
+    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.constructorOptions.transparent).toBe(true);
+    expect(unified?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
 
   it('documents that dynamic-island IPC can dismiss the live hot-mic transcript buffer', () => {
@@ -453,10 +451,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       chunkSuppressed: false,
     });
 
-    const left = testState.getWindowBySide('left');
-    expect(left).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
-    const meterEvent = left?.webContents.sent.find(
+    const meterEvent = unified?.webContents.sent.find(
       (entry) => entry.channel === 'dynamic-island-hotmic-filter-meter'
     );
     expect(meterEvent).toBeDefined();
@@ -467,7 +465,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
   });
 
-  it('forwards drawer transcript updates to the right pill for dismiss-control visibility', () => {
+  it('forwards drawer transcript updates to the drawer window', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -475,10 +473,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     manager.updateDrawerTranscript('hello world again');
 
-    const right = testState.getWindowBySide('right');
-    expect(right).toBeDefined();
+    const drawer = testState.getWindowBySide('drawer');
+    expect(drawer).toBeDefined();
 
-    const transcriptEvents = right?.webContents.sent.filter(
+    const transcriptEvents = drawer?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-drawer-transcript'
     ) ?? [];
     expect(transcriptEvents.length).toBeGreaterThan(0);
@@ -511,7 +509,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(transcriptEvents[transcriptEvents.length - 1]?.args[0]).toBe('drawer recovered');
   });
 
-  it('includes mute state in right-pill hot-mic payloads', () => {
+  it('includes mute state in hot-mic payloads sent to the unified window', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -520,10 +518,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.sendMuteState(true);
     manager.updateHotMic(true, 4, 'world');
 
-    const right = testState.getWindowBySide('right');
-    expect(right).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
-    const hotMicEvents = right?.webContents.sent.filter(
+    const hotMicEvents = unified?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-hotmic'
     ) ?? [];
     expect(hotMicEvents.length).toBeGreaterThan(0);
@@ -533,7 +531,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
   });
 
-  it('broadcasts input mode updates to island renderers', () => {
+  it('broadcasts input mode updates to the unified island renderer', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -541,46 +539,35 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     manager.setInputMode('hot-mic');
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    const leftModeEvents = left?.webContents.sent.filter(
-      (entry) => entry.channel === 'dynamic-island-input-mode'
-    ) ?? [];
-    const rightModeEvents = right?.webContents.sent.filter(
+    const unified = testState.getWindowBySide('unified');
+    const modeEvents = unified?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-input-mode'
     ) ?? [];
 
-    expect(leftModeEvents[leftModeEvents.length - 1]?.args[0]).toBe('hot-mic');
-    expect(rightModeEvents[rightModeEvents.length - 1]?.args[0]).toBe('hot-mic');
+    expect(modeEvents[modeEvents.length - 1]?.args[0]).toBe('hot-mic');
   });
 
-  it('keeps both pill windows at expanded width (animation is renderer-side CSS)', () => {
+  it('keeps the unified window at full width regardless of state (animation is renderer-side CSS)', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
-
-    // BrowserWindow is always at expanded width (72px) regardless of state.
-    // The renderer handles compact/expanded animation via CSS transitions.
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(right?.getSize()).toEqual([72, 38]);
+    // 2560px display: no notch profile (delta > 96), fallback NOTCH_WIDTH=200.
+    // unified = left(72) + gapFill(200+2) + right(72) = 346
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+    expect(unified?.getSize()).toEqual([346, 38]);
 
     manager.setInputMode('hot-mic');
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(right?.getSize()).toEqual([72, 38]);
+    expect(unified?.getSize()).toEqual([346, 38]);
 
     manager.setState('recording');
-    expect(left?.getSize()).toEqual([72, 38]);
+    expect(unified?.getSize()).toEqual([346, 38]);
 
     manager.setState('idle');
     manager.setInputMode('standard');
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(right?.getSize()).toEqual([72, 38]);
+    expect(unified?.getSize()).toEqual([346, 38]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {
@@ -589,10 +576,8 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
     const updated = manager.setGeometryTuning({
       notchWidthOverride: 100,
@@ -609,12 +594,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       offsetX: 10,
       offsetY: 6,
     });
-    // With tuning pillWidth=84, both pills use max(84, 72) = 84
-    expect(left?.getSize()).toEqual([84, 42]);
-    expect(right?.getSize()).toEqual([84, 42]);
-    // Left: floor((2560 - 100) / 2 - 84) + 10 = 1156
-    expect(left?.getPosition()).toEqual([1156, 6]);
-    expect(right?.getPosition()).toEqual([1340, 6]);
+    // pillWidth=84, notchOverride=100: unified = left(84) + gapFill(100+2) + right(84) = 270
+    expect(unified?.getSize()).toEqual([270, 42]);
+    // Unified X = leftWindowX(84, idle): floor((2560-100)/2 - 84) + 10 = 1156
+    expect(unified?.getPosition()).toEqual([1156, 6]);
   });
 
   it('uses full display width for notch profile matching even when work area width is reduced', () => {
@@ -629,17 +612,13 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
-    // 1728 width maps to the current profile notch width 170.
-    // Left: floor((1728 - 170) / 2 - 72) = 707
-    expect(left?.getPosition()).toEqual([707, 0]);
-    expect(right?.getPosition()).toEqual([949, 0]);
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(right?.getSize()).toEqual([72, 38]);
+    // 1728 width → notchWidth=170. unified = left(72) + gapFill(170+2) + right(72) = 316
+    // Unified X = leftWindowX(72, idle): floor((1728 - 170) / 2 - 72) = 707
+    expect(unified?.getPosition()).toEqual([707, 0]);
+    expect(unified?.getSize()).toEqual([316, 38]);
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {
@@ -648,10 +627,11 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    expect(left).toBeDefined();
-    expect(left?.getSize()).toEqual([72, 38]);
-    const initialPosition = left?.getPosition();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+    // unified = left(72) + gapFill(200+2) + right(72) = 346
+    expect(unified?.getSize()).toEqual([346, 38]);
+    const initialPosition = unified?.getPosition();
 
     const historyVisibleCall = testState.ipcMainMock.on.mock.calls.find(
       (call: unknown[]) => call[0] === 'dynamic-island-history-visible'
@@ -664,12 +644,12 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     historyVisibleHandler?.({}, true);
     expect(openFieldTheoryListener).toHaveBeenCalledTimes(1);
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(left?.getPosition()).toEqual(initialPosition);
+    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getPosition()).toEqual(initialPosition);
 
     historyVisibleHandler?.({}, false);
-    expect(left?.getSize()).toEqual([72, 38]);
-    expect(left?.getPosition()).toEqual(initialPosition);
+    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getPosition()).toEqual(initialPosition);
   });
 
   it('reasserts configured backing during refresh while avoiding transparent side rewrites', () => {
@@ -682,35 +662,25 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     manager.refreshWindowProperties('test-refresh');
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    const filler = testState.getWindowBySide('filler');
+    const unified = testState.getWindowBySide('unified');
     const drawer = testState.getWindowBySide('drawer');
 
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
-    expect(filler).toBeDefined();
+    expect(unified).toBeDefined();
     expect(drawer).toBeDefined();
 
-    expect(left?.backgroundColorCalls).not.toContain('#ff0000');
-    expect(right?.backgroundColorCalls).not.toContain('#ff0000');
-    expect(filler?.backgroundColorCalls).not.toContain('#ff0000');
+    expect(unified?.backgroundColorCalls).not.toContain('#ff0000');
     expect(drawer?.backgroundColorCalls).not.toContain('#ff0000');
 
-    // Side windows stay constructor-transparent; forced refreshes re-apply
-    // transparent backing to recover from macOS compositor corruption.
-    expect(left?.constructorOptions.transparent).toBe(true);
-    expect(right?.constructorOptions.transparent).toBe(true);
-    expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
-    expect(right?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
-    // Center fill remains opaque to avoid fake-notch white slabs.
-    expect(filler?.backgroundColorCalls).toContain('#000000');
+    // Unified window stays transparent; forced refreshes re-apply transparent
+    // backing to recover from macOS compositor corruption.
+    expect(unified?.constructorOptions.transparent).toBe(true);
+    expect(unified?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
     // Drawer stays transparent so transcript panel corner rounding is visible.
     expect(drawer?.constructorOptions.transparent).toBe(true);
     expect(drawer?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
 
-  it('forwards stack count updates to the right pill', () => {
+  it('forwards stack count updates to the unified island renderer', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -718,35 +688,17 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     manager.updateStackCount(2);
 
-    const right = testState.getWindowBySide('right');
-    expect(right).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
-    const stackEvents = right?.webContents.sent.filter(
+    const stackEvents = unified?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-stack-changed'
     ) ?? [];
     expect(stackEvents.length).toBeGreaterThan(0);
     expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(2);
   });
 
-  it('forwards stack count to the left pill so the renderer can keep state in sync', () => {
-    manager = new DynamicIslandManager();
-    manager.setClipboardManager({
-      queryItems: () => [],
-    });
-
-    manager.updateStackCount(3);
-
-    const left = testState.getWindowBySide('left');
-    expect(left).toBeDefined();
-
-    const stackEvents = left?.webContents.sent.filter(
-      (entry) => entry.channel === 'dynamic-island-stack-changed'
-    ) ?? [];
-    expect(stackEvents.length).toBeGreaterThan(0);
-    expect(stackEvents[stackEvents.length - 1]?.args[0]).toBe(3);
-  });
-
-  it('restores stack count when right pill reconnects', () => {
+  it('re-sends stack count to the unified window after it reconnects', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -754,20 +706,19 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     manager.updateStackCount(5);
 
-    // Simulate right window teardown and recreation.
-    const originalRight = testState.getWindowBySide('right');
-    originalRight?.close();
+    // Simulate unified window teardown and recreation.
+    const originalUnified = testState.getWindowBySide('unified');
+    originalUnified?.close();
 
-    // Re-enable triggers window recreation.
     manager.setEnabled(false);
     manager.setEnabled(true);
 
-    const newRight = testState.MockBrowserWindow.instances
+    const newUnified = testState.MockBrowserWindow.instances
       .filter(w => !w.isDestroyed())
-      .find(w => w.loadTarget.search === '?side=right' || w.loadTarget.url?.includes('side=right'));
-    expect(newRight).toBeDefined();
+      .find(w => w.loadTarget.search?.includes('side=unified') || w.loadTarget.url?.includes('side=unified'));
+    expect(newUnified).toBeDefined();
 
-    const stackEvents = newRight?.webContents.sent.filter(
+    const stackEvents = newUnified?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-stack-changed'
     ) ?? [];
     expect(stackEvents.length).toBeGreaterThan(0);
@@ -780,19 +731,16 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    const filler = testState.getWindowBySide('filler');
-    expect(left).toBeDefined();
-    expect(filler).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
-    const initialCalls = left?.backgroundColorCalls.length ?? 0;
+    const initialCalls = unified?.backgroundColorCalls.length ?? 0;
     manager.refreshWindowProperties('refresh-1');
     manager.refreshWindowProperties('refresh-2');
 
-    const afterCalls = left?.backgroundColorCalls.length ?? 0;
-    // Each forced refresh re-applies transparent color to recover from white flashes.
+    const afterCalls = unified?.backgroundColorCalls.length ?? 0;
     expect(afterCalls).toBeGreaterThan(initialCalls);
-    expect(left?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
+    expect(unified?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
 
   it('re-applies island backing when display metrics change', () => {
@@ -801,22 +749,14 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
-    const left = testState.getWindowBySide('left');
-    const right = testState.getWindowBySide('right');
-    const filler = testState.getWindowBySide('filler');
-    expect(left).toBeDefined();
-    expect(right).toBeDefined();
-    expect(filler).toBeDefined();
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
 
-    const leftCallsBefore = left?.backgroundColorCalls.length ?? 0;
-    const rightCallsBefore = right?.backgroundColorCalls.length ?? 0;
-    const fillerCallsBefore = filler?.backgroundColorCalls.length ?? 0;
+    const callsBefore = unified?.backgroundColorCalls.length ?? 0;
 
     testState.emitScreenEvent('display-metrics-changed');
 
-    expect((left?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(leftCallsBefore);
-    expect((right?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(rightCallsBefore);
-    expect((filler?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(fillerCallsBefore);
-    expect(filler?.isVisible()).toBe(true);
+    expect((unified?.backgroundColorCalls.length ?? 0)).toBeGreaterThan(callsBefore);
+    expect(unified?.isVisible()).toBe(true);
   });
 });

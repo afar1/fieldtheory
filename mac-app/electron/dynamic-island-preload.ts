@@ -184,6 +184,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-drawer-text-size', (_event, size) => callback(size));
   },
 
+  // Unified window resize — notifies the renderer of the new left-pill width.
+  onResize: (callback: (data: { leftWidth: number }) => void) => {
+    ipcRenderer.on('dynamic-island-resize', (_event, data) => callback(data));
+  },
+
   // Hot-mic background filter controls.
   getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
   setHotMicBackgroundFilterEnabled: (enabled: boolean) => ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled),
