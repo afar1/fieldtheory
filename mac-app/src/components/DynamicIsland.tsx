@@ -670,7 +670,7 @@ function WaveformBars({ levels, color }: { levels: number[]; color: string }) {
 // Left pill — mode toggle + history controls
 // =============================================================================
 
-function LeftPill() {
+function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
   const [state, setState] = useState<IslandState>('idle');
   const [transcript, setTranscript] = useState<string>('');
   const [isFinal, setIsFinal] = useState<boolean>(false);
@@ -685,7 +685,7 @@ function LeftPill() {
   const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(50);
-  const [compactPillWidth, setCompactPillWidth] = useState<number>(() => window.innerWidth);
+  const [compactPillWidth, setCompactPillWidth] = useState<number>(() => containerWidth ?? window.innerWidth);
   const [compactPillHeight, setCompactPillHeight] = useState<number>(() => window.innerHeight);
   const [filterMeter, setFilterMeter] = useState<HotMicFilterMeter>({
     enabled: false,
@@ -844,14 +844,14 @@ function LeftPill() {
   useEffect(() => {
     const syncCompactPillSize = () => {
       if (historyVisible) return;
-      setCompactPillWidth(window.innerWidth);
+      setCompactPillWidth(containerWidth ?? window.innerWidth);
       setCompactPillHeight(window.innerHeight);
     };
 
     syncCompactPillSize();
     window.addEventListener('resize', syncCompactPillSize);
     return () => window.removeEventListener('resize', syncCompactPillSize);
-  }, [historyVisible]);
+  }, [historyVisible, containerWidth]);
 
   const toggleHistory = useCallback(() => {
     // Keep hamburger decoupled from left-pill geometry:
@@ -1021,19 +1021,23 @@ function LeftPill() {
   }, []);
 
   return (
-    <div style={{
-      ...styles.outerContainer,
-      alignItems: 'flex-end',
-    }}>
+    <div
+      className={historyVisible ? 'di-history-visible' : ''}
+      style={{
+        ...styles.outerContainer,
+        alignItems: 'flex-start',
+      }}
+    >
       <div
         className="di-left-pill"
         style={{
           ...styles.island,
           ...styles.islandIdle,
-          justifyContent: 'center',
+          justifyContent: 'flex-start',
           width: expanded ? `${compactPillWidth}px` : '48px',
           height: `${compactPillHeight}px`,
           gap: '0px',
+          padding: '0 8px',
           transition: 'width 200ms ease',
         }}
       >
@@ -1637,10 +1641,8 @@ styleSheet.textContent = `
   .di-left-pill {
     margin-left: 0 !important;
   }
-  @media (min-width: ${HISTORY_LAYOUT_MIN_WIDTH_PX}px) {
-    .di-left-pill {
-      margin-left: ${HISTORY_PILL_OFFSET_PX}px !important;
-    }
+  .di-history-visible .di-left-pill {
+    margin-left: ${HISTORY_PILL_OFFSET_PX}px !important;
   }
   @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -1716,6 +1718,50 @@ styleSheet.textContent = `
 document.head.appendChild(styleSheet);
 
 // =============================================================================
+// Unified island — single bar spanning left pill, notch gap, and right pill.
+// =============================================================================
+
+function UnifiedIsland() {
+  const initParams = new URLSearchParams(window.location.search);
+  const rightW = parseInt(initParams.get('rightWidth') || '72', 10);
+  const initLeftW = parseInt(initParams.get('leftWidth') || '72', 10);
+  const [leftWidth, setLeftWidth] = useState(initLeftW);
+
+  useEffect(() => {
+    const api = (window as any).dynamicIslandAPI;
+    api?.onResize?.((data: { leftWidth: number }) => setLeftWidth(data.leftWidth));
+  }, []);
+
+  const NOTCH_R = '15px';
+
+  return (
+    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+      <div style={{
+        width: leftWidth,
+        flexShrink: 0,
+        height: '100%',
+        overflow: 'hidden',
+        background: '#000',
+        borderRadius: `0 0 0 ${NOTCH_R}`,
+      }}>
+        <LeftPill containerWidth={leftWidth} />
+      </div>
+      <div style={{ flex: 1, height: '100%', background: '#000' }} />
+      <div style={{
+        width: rightW,
+        flexShrink: 0,
+        height: '100%',
+        overflow: 'hidden',
+        background: '#000',
+        borderRadius: `0 0 ${NOTCH_R} 0`,
+      }}>
+        <RightPill />
+      </div>
+    </div>
+  );
+}
+
+// =============================================================================
 // Root — delegates to left or right pill based on query param
 // =============================================================================
 
@@ -1725,6 +1771,7 @@ export default function DynamicIsland() {
   if (side === 'drawer') return <DrawerPill />;
   if (side === 'right') return <RightPill />;
   if (side === 'filler') return <GapFill />;
+  if (side === 'unified') return <UnifiedIsland />;
   return <LeftPill />;
 }
 
