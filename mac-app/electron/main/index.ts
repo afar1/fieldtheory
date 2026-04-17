@@ -1257,6 +1257,9 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   window.setResumeAfterCloseGetter(() => {
     return librarianManager?.isResumeAfterCloseEnabled() ?? false;
   });
+  window.setImmersiveHeightPercentGetter(() => {
+    return librarianManager?.getImmersiveHeightPercent() ?? 85;
+  });
 
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
@@ -1494,6 +1497,21 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('wiki:getPage', (_event, relPath: string): WikiPage | null => {
     if (!librarianManager) return null;
     return librarianManager.getWikiPage(relPath);
+  });
+
+  ipcMain.handle('wiki:save', (_event, relPath: string, content: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.saveWikiPage(relPath, content);
+  });
+
+  ipcMain.handle('wiki:createFile', (_event, folderName: string, fileName: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.createWikiFile(folderName, fileName);
+  });
+
+  ipcMain.handle('wiki:createDir', (_event, dirName: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.createWikiDir(dirName);
   });
 
   if (librarianManager) {
@@ -1848,6 +1866,14 @@ function setupLibrarianIPCHandlers(): void {
   // Set resume after close setting
   ipcMain.handle('librarian:setResumeAfterClose', (_event, enabled: boolean): void => {
     librarianManager?.setResumeAfterClose(enabled);
+  });
+
+  ipcMain.handle('librarian:getImmersiveHeightPercent', (): number => {
+    return librarianManager?.getImmersiveHeightPercent() ?? 85;
+  });
+
+  ipcMain.handle('librarian:setImmersiveHeightPercent', (_event, percent: number): void => {
+    librarianManager?.setImmersiveHeightPercent(percent);
   });
 
   // Get Claude config file path
@@ -6706,6 +6732,7 @@ if (process.defaultApp) {
  * Handle fieldtheory:// URLs
  * Supported paths:
  * - fieldtheory://librarian/import?file=/path/to/reading.md&fullscreen=true - Import a reading and show it
+ * - fieldtheory://wiki/open?file=/abs/path/to/page.md&immersive=true - Open a wiki page in the library view
  */
 async function handleProtocolUrl(url: string): Promise<void> {
   try {
@@ -6717,6 +6744,28 @@ async function handleProtocolUrl(url: string): Promise<void> {
         applyHotMicMode('start');
       } else if (parsed.pathname === '/stop') {
         applyHotMicMode('deactivate');
+      }
+      return;
+    }
+
+    if (parsed.host === 'wiki' && parsed.pathname === '/open') {
+      const filePath = parsed.searchParams.get('file');
+      const immersive = parsed.searchParams.get('immersive') === 'true';
+
+      if (!filePath) return;
+
+      const decodedPath = decodeURIComponent(filePath);
+      const wikiRoot = path.join(process.env.FT_DATA_DIR ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
+      const relPath = path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+
+      if (clipboardHistoryWindow) {
+        const boundsToUse = restoreClipboardHistoryBounds();
+        suspendDynamicIslandFocusForClipboardHistory('show-reading');
+        clipboardHistoryWindow.show(boundsToUse);
+        clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
+        if (immersive) {
+          clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
+        }
       }
       return;
     }

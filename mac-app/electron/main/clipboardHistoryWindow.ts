@@ -100,6 +100,9 @@ export class ClipboardHistoryWindow {
   // Callback to check if resume after close is enabled (returns to last artifact vs clipboard)
   private resumeAfterCloseGetter: (() => boolean) | null = null;
 
+  // Callback to resolve the target immersive reader height as a percentage of work-area height.
+  private immersiveHeightPercentGetter: (() => number) | null = null;
+
   // Track if scenario testing panel is active - window should not auto-hide when adjusting overrides
   private scenarioTestingActive: boolean = false;
 
@@ -107,8 +110,11 @@ export class ClipboardHistoryWindow {
   // Updated in show() and hide() to stay in sync with all visibility changes.
   private _isShowing: boolean = false;
 
-  // Saved window bounds before sketch mode expansion (to restore on exit).
-  private normalBounds: Electron.Rectangle | null = null;
+  // Saved window bounds before draw expansion (to restore on exit).
+  private sketchNormalBounds: Electron.Rectangle | null = null;
+
+  // Saved window bounds before librarian immersive expansion (to restore on exit).
+  private immersiveNormalBounds: Electron.Rectangle | null = null;
   
   // Timer for smooth window resize animation.
   private animationTimer: ReturnType<typeof setInterval> | null = null;
@@ -818,18 +824,28 @@ export class ClipboardHistoryWindow {
       this.animationTimer = null;
     }
 
+    const hadExpandedMode = this.sketchModeActive || !!this.sketchNormalBounds || !!this.immersiveNormalBounds;
+
     // Save current bounds before any modifications (defensive - ensures bounds are captured).
     // This is especially important if the resize event didn't fire properly.
-    if (!this.sketchModeActive) {
+    if (!hadExpandedMode) {
       this.emitBoundsChanged();
     }
 
-    // Restore normal bounds if we were in expanded sketch mode.
-    if (this.normalBounds && this.window && !this.window.isDestroyed()) {
-      this.window.setBounds(this.normalBounds);
+    // Restore normal bounds if we were in an expanded mode.
+    if (this.sketchNormalBounds && this.window && !this.window.isDestroyed()) {
+      this.window.setBounds(this.sketchNormalBounds);
     }
-    this.normalBounds = null;
+    if (this.immersiveNormalBounds && this.window && !this.window.isDestroyed()) {
+      this.window.setBounds(this.immersiveNormalBounds);
+    }
+    this.sketchNormalBounds = null;
+    this.immersiveNormalBounds = null;
     this.sketchModeActive = false;
+
+    if (hadExpandedMode) {
+      this.emitBoundsChanged();
+    }
 
     // If we were in immersive mode, tell renderer to reset to clipboard view
     // so re-opening the window doesn't show the artifact again
@@ -1067,6 +1083,50 @@ export class ClipboardHistoryWindow {
     }, stepDuration);
   }
 
+  private computeExpandedBounds(
+    current: Electron.Rectangle,
+    widthFactor: number,
+    heightFactor: number
+  ): Electron.Rectangle {
+    const newWidth = Math.round(current.width * widthFactor);
+    const newHeight = Math.round(current.height * heightFactor);
+    const newX = Math.round(current.x - (newWidth - current.width) / 2);
+    const newY = Math.round(current.y - (newHeight - current.height) / 2);
+
+    const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
+    const workArea = display.workArea ?? display.bounds;
+
+    return {
+      x: Math.max(workArea.x, Math.min(newX, workArea.x + workArea.width - newWidth)),
+      y: Math.max(workArea.y, Math.min(newY, workArea.y + workArea.height - newHeight)),
+      width: Math.min(newWidth, workArea.width),
+      height: Math.min(newHeight, workArea.height),
+    };
+  }
+
+  private computeImmersiveBounds(
+    current: Electron.Rectangle,
+    widthFactor: number,
+    heightPercent: number
+  ): Electron.Rectangle {
+    const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
+    const workArea = display.workArea ?? display.bounds;
+    const clampedHeightPercent = Math.max(50, Math.min(100, Math.round(heightPercent)));
+    const targetWidth = Math.min(Math.round(current.width * widthFactor), workArea.width);
+    const targetHeight = Math.min(Math.round(workArea.height * (clampedHeightPercent / 100)), workArea.height);
+    const centerX = current.x + current.width / 2;
+    const centerY = current.y + current.height / 2;
+    const nextX = Math.round(centerX - targetWidth / 2);
+    const nextY = Math.round(centerY - targetHeight / 2);
+
+    return {
+      x: Math.max(workArea.x, Math.min(nextX, workArea.x + workArea.width - targetWidth)),
+      y: Math.max(workArea.y, Math.min(nextY, workArea.y + workArea.height - targetHeight)),
+      width: targetWidth,
+      height: targetHeight,
+    };
+  }
+
   /**
    * Set recording state - used to decide whether to hide the entire app when dismissing.
    * When recording is active, we want to keep the recording overlay visible.
@@ -1089,6 +1149,17 @@ export class ClipboardHistoryWindow {
    */
   setImmersiveMode(immersive: boolean): void {
     this.isImmersiveMode = immersive;
+
+    if (this.window && !this.window.isDestroyed()) {
+      if (immersive && !this.immersiveNormalBounds) {
+        const immersiveHeightPercent = this.immersiveHeightPercentGetter?.() ?? 85;
+        this.immersiveNormalBounds = this.window.getBounds();
+        this.animateBounds(this.computeImmersiveBounds(this.immersiveNormalBounds, 1.08, immersiveHeightPercent));
+      } else if (!immersive && this.immersiveNormalBounds) {
+        this.animateBounds(this.immersiveNormalBounds);
+        this.immersiveNormalBounds = null;
+      }
+    }
 
     // Dock stays hidden - panel mode is the only mode now.
     // Don't show dock when entering immersive mode.
@@ -1133,6 +1204,10 @@ export class ClipboardHistoryWindow {
     this.resumeAfterCloseGetter = getter;
   }
 
+  setImmersiveHeightPercentGetter(getter: () => number): void {
+    this.immersiveHeightPercentGetter = getter;
+  }
+
   /**
    * Send collapse-immersive event to renderer.
    */
@@ -1156,32 +1231,14 @@ export class ClipboardHistoryWindow {
     
     if (!this.window || this.window.isDestroyed()) return;
     
-    if (active && !this.normalBounds) {
+    if (active && !this.sketchNormalBounds) {
       // Expand window when entering sketch mode.
-      this.normalBounds = this.window.getBounds();
-      
-      const expandFactor = 1.2;
-      const current = this.normalBounds;
-      const newWidth = Math.round(current.width * expandFactor);
-      const newHeight = Math.round(current.height * expandFactor);
-      const newX = Math.round(current.x - (newWidth - current.width) / 2);
-      const newY = Math.round(current.y - (newHeight - current.height) / 2);
-      
-      const display = screen.getDisplayNearestPoint({ x: current.x, y: current.y });
-      const workArea = display.workArea;
-      
-      const clampedBounds = {
-        x: Math.max(workArea.x, Math.min(newX, workArea.x + workArea.width - newWidth)),
-        y: Math.max(workArea.y, Math.min(newY, workArea.y + workArea.height - newHeight)),
-        width: Math.min(newWidth, workArea.width),
-        height: Math.min(newHeight, workArea.height),
-      };
-      
-      this.animateBounds(clampedBounds);
-    } else if (!active && this.normalBounds) {
+      this.sketchNormalBounds = this.window.getBounds();
+      this.animateBounds(this.computeExpandedBounds(this.sketchNormalBounds, 1.2, 1.2));
+    } else if (!active && this.sketchNormalBounds) {
       // Contract window when exiting sketch mode.
-      this.animateBounds(this.normalBounds);
-      this.normalBounds = null;
+      this.animateBounds(this.sketchNormalBounds);
+      this.sketchNormalBounds = null;
     }
   }
 

@@ -3192,6 +3192,8 @@ const librarianAPI = {
   // Resume after close settings (return to last artifact vs clipboard)
   getResumeAfterClose: (): Promise<boolean> => ipcRenderer.invoke('librarian:getResumeAfterClose'),
   setResumeAfterClose: (enabled: boolean): Promise<void> => ipcRenderer.invoke('librarian:setResumeAfterClose', enabled),
+  getImmersiveHeightPercent: (): Promise<number> => ipcRenderer.invoke('librarian:getImmersiveHeightPercent'),
+  setImmersiveHeightPercent: (percent: number): Promise<void> => ipcRenderer.invoke('librarian:setImmersiveHeightPercent', percent),
 
   // Get Claude config file path
   getClaudeConfigPath: (): Promise<string> => ipcRenderer.invoke('librarian:getClaudeConfigPath'),
@@ -3520,10 +3522,18 @@ interface WikiFolder {
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
+  save: (relPath: string, content: string): Promise<boolean> => ipcRenderer.invoke('wiki:save', relPath, content),
+  createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
+  createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
   onPageChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('wiki:changed', handler);
     return () => ipcRenderer.removeListener('wiki:changed', handler);
+  },
+  onOpenWikiPage: (callback: (relPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
+    ipcRenderer.on('wiki:openPage', handler);
+    return () => ipcRenderer.removeListener('wiki:openPage', handler);
   },
 };
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
