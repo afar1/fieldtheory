@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY } from './LibrarianView';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
@@ -270,7 +270,9 @@ export default function ClipboardHistory() {
   const [redoStack, setRedoStack] = useState<UndoAction[]>([]);
 
   // Librarian immersive mode - when in full-screen reading, fade the header
-  const [librarianImmersive, setLibrarianImmersive] = useState(false);
+  const [librarianImmersive, setLibrarianImmersive] = useState(
+    () => localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+  );
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -1397,6 +1399,17 @@ export default function ClipboardHistory() {
     });
   }, [showSettings, viewMode]);
 
+  useEffect(() => {
+    localStorage.setItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY, librarianImmersive ? 'true' : 'false');
+    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive);
+  }, [librarianImmersive, showSettings, viewMode]);
+
+  useEffect(() => {
+    if ((showSettings || viewMode !== 'librarian') && librarianImmersive) {
+      setLibrarianImmersive(false);
+    }
+  }, [librarianImmersive, showSettings, viewMode]);
+
   // Clear section override when settings closes.
   useEffect(() => {
     if (!showSettings) {
@@ -1511,6 +1524,11 @@ export default function ClipboardHistory() {
       const restoreState = resolveClipboardRestoreState(localStorage);
       setViewMode(restoreState.viewMode);
       setShowSettings(restoreState.showSettings);
+      setLibrarianImmersive(
+        restoreState.viewMode === 'librarian' &&
+        !restoreState.showSettings &&
+        localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+      );
     });
 
     const unsubscribeShowTranscriptHistory = window.clipboardAPI.onShowTranscriptHistory?.(() => {
@@ -1532,15 +1550,6 @@ export default function ClipboardHistory() {
     // Listen for collapse-immersive event (triggered by hotkey when in immersive mode)
     const unsubscribeCollapseImmersive = window.clipboardAPI.onCollapseImmersive?.(() => {
       setLibrarianImmersive(false);
-    });
-
-    // Listen for reset-to-clipboard event (triggered when window hides while in immersive mode)
-    // This ensures re-opening the window shows clipboard, not the artifact
-    const unsubscribeResetToClipboard = window.clipboardAPI.onResetToClipboardView?.(() => {
-      setShowSettings(false);
-      setLibrarianImmersive(false);
-      setViewMode('clipboard');
-      setPendingReadingPath(null);
     });
 
     // Preload sounds for instant playback via Web Audio API.
@@ -1638,7 +1647,6 @@ export default function ClipboardHistory() {
       unsubscribeShowTranscriptHistory?.();
       unsubscribeShowSettings?.();
       unsubscribeCollapseImmersive?.();
-      unsubscribeResetToClipboard?.();
       unsubscribePlaySound?.();
       unsubscribeShowTodos?.();
       unsubscribeTasksTabToggled?.();
@@ -2023,9 +2031,13 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else {
-          // Tab key: just return to clipboard view (no cycling to other tabs)
+          // Tab key: toggle between Fields and Library when not editing a control.
           setShowSettings(false);
-          setViewMode('clipboard');
+          setViewMode((prev) => {
+            if (prev === 'clipboard' && librarianEnabled) return 'librarian';
+            if (prev === 'librarian') return 'clipboard';
+            return 'clipboard';
+          });
         }
         return;
       }
@@ -2719,9 +2731,13 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else {
-          // No cycling - just stay on clipboard
+          // Tab key: toggle between Fields and Library when not editing a control.
           setShowSettings(false);
-          setViewMode('clipboard');
+          setViewMode((prev) => {
+            if (prev === 'clipboard' && librarianEnabled) return 'librarian';
+            if (prev === 'librarian') return 'clipboard';
+            return 'clipboard';
+          });
         }
         return;
       }
@@ -2892,7 +2908,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -3209,7 +3225,7 @@ export default function ClipboardHistory() {
             color: theme.textSecondary,
             marginRight: 'auto',
           }}>
-            {showSettings ? 'Settings' : viewMode === 'commands' ? 'Commands' : viewMode === 'feedback' ? 'Feedback' : viewMode === 'sketch' ? 'Draw' : viewMode === 'librarian' ? 'Librarian' : ''}
+            {showSettings ? 'Settings' : viewMode === 'commands' ? 'Commands' : viewMode === 'feedback' ? 'Feedback' : viewMode === 'sketch' ? 'Draw' : viewMode === 'librarian' ? 'Library' : ''}
           </span>
         )}
         {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'sketch' && viewMode !== 'librarian' && <div style={{ marginRight: 'auto' }} />}
@@ -3457,7 +3473,58 @@ export default function ClipboardHistory() {
               </button>
             );
           })}
-          
+          {/* Librarian button */}
+          {librarianEnabled && (
+            <button
+              onClick={() => {
+                setViewMode('librarian');
+                setShowSettings(false);
+              }}
+              tabIndex={0}
+              style={{
+                padding: '5px 6px',
+                fontSize: '9px',
+                fontWeight: 500,
+                backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
+                color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
+                border: 'none',
+                borderRadius: '3px',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+                outline: 'none',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '3px',
+                position: 'relative',
+              }}
+              onMouseEnter={(e) => {
+                if (viewMode !== 'librarian' || showSettings) {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (viewMode !== 'librarian' || showSettings) {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }
+            }}
+            title="Personal wiki"
+          >
+            Library
+            {/* New reading indicator */}
+            {hasNewReading && viewMode !== 'librarian' && (
+                <span style={{
+                  position: 'absolute',
+                  top: '-2px',
+                  right: '-2px',
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: theme.info,
+                }} />
+              )}
+            </button>
+          )}
+
           <button
             onClick={() => {
               setEditingSketchItem(null);
@@ -3498,7 +3565,7 @@ export default function ClipboardHistory() {
             </svg>
             Draw
           </button>
-          
+
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {actionFeedback && (
               <span 
@@ -3580,7 +3647,7 @@ export default function ClipboardHistory() {
               )}
             </div>
           )}
-          
+
           {/* Commands button */}
           <button
             onClick={() => {
@@ -3621,62 +3688,6 @@ export default function ClipboardHistory() {
             </svg>
             Commands
           </button>
-
-          {/* Librarian button */}
-          {librarianEnabled && (
-            <button
-              onClick={() => {
-                setViewMode('librarian');
-                setShowSettings(false);
-              }}
-              tabIndex={0}
-              style={{
-                padding: '5px 6px',
-                fontSize: '9px',
-                fontWeight: 500,
-                backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
-                color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
-                border: 'none',
-                borderRadius: '3px',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                outline: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '3px',
-                position: 'relative',
-              }}
-              onMouseEnter={(e) => {
-                if (viewMode !== 'librarian' || showSettings) {
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (viewMode !== 'librarian' || showSettings) {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                }
-              }}
-              title="Librarian readings"
-            >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
-              </svg>
-              Librarian
-              {/* New reading indicator */}
-              {hasNewReading && viewMode !== 'librarian' && (
-                <span style={{
-                  position: 'absolute',
-                  top: '-2px',
-                  right: '-2px',
-                  width: '6px',
-                  height: '6px',
-                  borderRadius: '50%',
-                  backgroundColor: theme.info,
-                }} />
-              )}
-            </button>
-          )}
 
           {/* Feedback button */}
           <button

@@ -74,6 +74,7 @@ export default function TranscriptionSettings() {
   const [deletingModel, setDeletingModel] = useState<string | null>(null);
   const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { downloaded: number; total: number }>>({});
   const [copiedError, setCopiedError] = useState<'general' | null>(null);
+  const [recordingSource, setRecordingSource] = useState<'microphone' | 'system-audio'>('microphone');
 
   // Engine selection state.
   const [selectedEngine, setSelectedEngine] = useState<VisibleTranscriptionEngine>(DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE);
@@ -117,6 +118,7 @@ export default function TranscriptionSettings() {
           currentHotkey,
           models,
           currentSelectedModel,
+          currentRecordingSource,
           downloadStatus,
           downloadingModels,
           currentAbandonHotkey,
@@ -127,6 +129,7 @@ export default function TranscriptionSettings() {
           window.transcribeAPI!.getHotkey(),
           window.transcribeAPI!.getAvailableModels(),
           window.transcribeAPI!.getSelectedModel(),
+          window.transcribeAPI!.getRecordingSource?.() ?? 'microphone',
           window.transcribeAPI!.getModelDownloadStatus(),
           window.transcribeAPI!.getDownloadingModels?.() ?? [],
           window.transcribeAPI!.getAbandonHotkey?.() ?? 'Escape',
@@ -137,6 +140,7 @@ export default function TranscriptionSettings() {
         setHotkey(currentHotkey);
         setAvailableModels(withDefaultWhisperModels(models));
         setSelectedModel(currentSelectedModel);
+        setRecordingSource(currentRecordingSource as 'microphone' | 'system-audio');
         setModelDownloadStatus(downloadStatus);
         // If a download is in progress, restore that state.
         if (downloadingModels.length > 0) {
@@ -262,6 +266,16 @@ export default function TranscriptionSettings() {
       await window.transcribeAPI.setTranscriptionEngine?.(engine);
     } catch (err) {
       console.error('Failed to set transcription engine:', err);
+    }
+  }, []);
+
+  const handleRecordingSourceChange = useCallback(async (source: 'microphone' | 'system-audio') => {
+    if (!window.transcribeAPI?.setRecordingSource) return;
+    setRecordingSource(source);
+    try {
+      await window.transcribeAPI.setRecordingSource(source);
+    } catch (err) {
+      console.error('Failed to set recording source:', err);
     }
   }, []);
 
@@ -695,6 +709,29 @@ export default function TranscriptionSettings() {
             {hotkeyError}
           </div>
         )}
+
+        <div style={{ ...styles.row, alignItems: 'flex-start' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <span style={styles.rowLabel}>Recording Source</span>
+            <span style={styles.modelHint}>
+              System audio uses Screen Recording permission and captures call output instead of your microphone.
+            </span>
+          </div>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => void handleRecordingSourceChange('microphone')}
+              style={recordingSource === 'microphone' ? styles.btn : styles.btnGhost}
+            >
+              Microphone
+            </button>
+            <button
+              onClick={() => void handleRecordingSourceChange('system-audio')}
+              style={recordingSource === 'system-audio' ? styles.btn : styles.btnGhost}
+            >
+              System Audio
+            </button>
+          </div>
+        </div>
 
         <div style={{ height: '12px' }} />
       </div>

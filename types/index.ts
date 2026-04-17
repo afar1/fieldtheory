@@ -106,5 +106,3 @@ export interface CommandDetectionResult {
   unmatchedNames: string[];
   textWithoutCommandRefs: string;
 }
-
-

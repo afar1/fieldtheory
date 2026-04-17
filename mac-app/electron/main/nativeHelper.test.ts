@@ -84,7 +84,7 @@ describe('NativeHelper recording command sequencing', () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(sentCommands()).toEqual([
       { type: 'cancelRecording' },
-      { type: 'startRecording' },
+      { type: 'startRecording', recordingSource: 'microphone' },
     ]);
 
     helper.handleMessage({ type: 'recordingStarted' });
@@ -100,21 +100,33 @@ describe('NativeHelper recording command sequencing', () => {
     const startPromise = helper.startRecording();
     await flushMicrotasks();
 
-    expect(sentCommands()).toEqual([{ type: 'startRecording' }]);
+    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'microphone' }]);
 
     helper.handleMessage({ type: 'error', message: 'Failed to start recording' });
     await flushMicrotasks();
 
-    expect(sentCommands()).toEqual([{ type: 'startRecording' }]);
+    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'microphone' }]);
 
     await vi.advanceTimersByTimeAsync(120);
     expect(sentCommands()).toEqual([
-      { type: 'startRecording' },
-      { type: 'startRecording' },
+      { type: 'startRecording', recordingSource: 'microphone' },
+      { type: 'startRecording', recordingSource: 'microphone' },
     ]);
 
     helper.handleMessage({ type: 'recordingStarted' });
 
+    await expect(startPromise).resolves.toBeUndefined();
+  });
+
+  it('passes through a system-audio recording source override', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const startPromise = helper.startRecording('system-audio');
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{ type: 'startRecording', recordingSource: 'system-audio' }]);
+
+    helper.handleMessage({ type: 'recordingStarted' });
     await expect(startPromise).resolves.toBeUndefined();
   });
 });

@@ -1,6 +1,8 @@
 #import "AppDelegate.h"
 
 #import <React/RCTBundleURLProvider.h>
+#import <React/RCTBridgeModule.h>
+#import <React/RCTEventEmitter.h>
 #import <React/RCTLinkingManager.h>
 
 @implementation AppDelegate
@@ -58,5 +60,27 @@
 {
   return [super application:application didReceiveRemoteNotification:userInfo fetchCompletionHandler:completionHandler];
 }
+
+@end
+
+@interface RCT_EXTERN_MODULE(VoiceSamplerModule, RCTEventEmitter)
+
+RCT_EXTERN_METHOD(personalVoiceAuthorizationStatus:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(requestPersonalVoiceAuthorization:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(listVoices:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+
+RCT_EXTERN_METHOD(speak:(NSString *)identifier
+                  text:(NSString *)text)
+
+RCT_EXTERN_METHOD(pause)
+
+RCT_EXTERN_METHOD(resume)
+
+RCT_EXTERN_METHOD(stop)
 
 @end

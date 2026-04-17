@@ -38,6 +38,14 @@ import { CommandsList } from './components/CommandsList';
 import { StorageService } from './services/storage';
 import { SketchStorageService } from './services/sketchStorage';
 import { syncAllPendingSketches } from './services/sketchSync';
+import {
+  pauseReadback,
+  resumeReadback,
+  speakReadback,
+  SpeechPlaybackState,
+  stopReadback,
+  subscribeToSpeechPlaybackState,
+} from './services/speech';
 import { processTranscription } from './services/llm';
 import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, SketchEntry } from './types';
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
@@ -215,6 +223,8 @@ function AppContent() {
   
   // Track which specific item is being processed for "Separate Tasks"
   const [processingItemId, setProcessingItemId] = useState<string | null>(null);
+  const [speakingTranscriptId, setSpeakingTranscriptId] = useState<string | null>(null);
+  const [speechPlaybackState, setSpeechPlaybackState] = useState<SpeechPlaybackState>('stopped');
   
   // Track which items have had tasks separated (so we show "Tasks Saved" instead of button)
   const [separatedIds, setSeparatedIds] = useState<Set<string>>(new Set());
@@ -371,6 +381,24 @@ function AppContent() {
 
   // Configure audio session for headset controls
   useHeadsetControls();
+
+  const closeSettings = useCallback(() => {
+    setShowSettings(false);
+  }, []);
+
+  useEffect(() => {
+    const subscription = subscribeToSpeechPlaybackState((state) => {
+      setSpeechPlaybackState(state);
+
+      if (state === 'stopped') {
+        setSpeakingTranscriptId(null);
+      }
+    });
+
+    return () => {
+      subscription?.remove();
+    };
+  }, []);
 
   // Auto-start recording when app returns to foreground (if enabled)
   useEffect(() => {
@@ -980,6 +1008,37 @@ function AppContent() {
     Vibration.vibrate();
   }, []);
 
+  const handleSpeakTranscript = useCallback(async (entry: TranscriptEntry) => {
+    if (speakingTranscriptId === entry.id) {
+      if (speechPlaybackState === 'speaking') {
+        pauseReadback();
+        return;
+      }
+
+      if (speechPlaybackState === 'paused') {
+        resumeReadback();
+        return;
+      }
+    }
+
+    const spoke = await speakReadback(entry.text);
+    if (!spoke) {
+      setSpeakingTranscriptId(null);
+      setSpeechPlaybackState('stopped');
+      Alert.alert('Voice unavailable', 'Unable to speak this stack right now.');
+      return;
+    }
+
+    setSpeakingTranscriptId(entry.id);
+    setSpeechPlaybackState('speaking');
+  }, [speakingTranscriptId, speechPlaybackState]);
+
+  useEffect(() => {
+    return () => {
+      stopReadback();
+    };
+  }, []);
+
   // Manually separate a transcript into tasks and observations.
   // This is used when auto-separate is disabled.
   const handleManualSeparate = useCallback(async (text: string, itemId: string) => {
@@ -1215,6 +1274,8 @@ function AppContent() {
         isSelected={selectedIds.has(item.id)}
         isProcessingThis={processingItemId === item.id}
         isSeparated={separatedIds.has(item.id)}
+        isSpeaking={speakingTranscriptId === item.id && speechPlaybackState === 'speaking'}
+        isPaused={speakingTranscriptId === item.id && speechPlaybackState === 'paused'}
         showDateHeader={showDateHeader}
         selectionMode={selectionMode}
         isProcessingLLM={isProcessingLLM}
@@ -1225,6 +1286,7 @@ function AppContent() {
         onEditTextChange={setEditTranscriptText}
         onToggleExpand={handleToggleExpand}
         onSendToCursor={handleSendToCursor}
+        onSpeak={handleSpeakTranscript}
         onManualSeparate={handleManualSeparate}
         onUnstack={handleUnstackTranscript}
         onCopy={handleCopyTranscript}
@@ -1242,6 +1304,8 @@ function AppContent() {
     selectedIds,
     processingItemId,
     separatedIds,
+    speakingTranscriptId,
+    speechPlaybackState,
     selectionMode,
     isProcessingLLM,
     settings.showCursor,
@@ -1250,6 +1314,7 @@ function AppContent() {
     editTranscriptText,
     handleToggleExpand,
     handleSendToCursor,
+    handleSpeakTranscript,
     handleManualSeparate,
     handleUnstackTranscript,
     handleCopyTranscript,
@@ -1527,7 +1592,7 @@ function AppContent() {
           </>
         ) : (
           /* Normal mode: show tab navigation
-           * Layout: Fields, Shared Fields, Cursor, [RECORD], Tasks, Observations, Settings
+           * Layout: Fields, Shared Fields, Cursor, [RECORD], Tasks, Settings, Commands
            * Record button is centered with 3 tabs on each side.
            */
           <>
@@ -1628,22 +1693,20 @@ function AppContent() {
               </TouchableOpacity>
             )}
 
-            {/* Observations Tab */}
-            {settings.showObservations && (
-              <TouchableOpacity
-                style={styles.tabButton}
-                onPress={() => pagerRef.current?.setPageWithoutAnimation(3)}
-              >
-                <Feather
-                  name="eye"
-                  size={22}
-                  color={pageIndex === 3 ? '#007AFF' : '#9CA3AF'}
-                />
-                <Text style={[styles.tabLabel, pageIndex === 3 && styles.tabLabelActive]}>
-                  Notes
-                </Text>
-              </TouchableOpacity>
-            )}
+            {/* Settings Tab */}
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => setShowSettings(true)}
+            >
+              <Feather
+                name="settings"
+                size={22}
+                color="#9CA3AF"
+              />
+              <Text style={styles.tabLabel}>
+                Settings
+              </Text>
+            </TouchableOpacity>
 
             {/* Commands Tab - Portable commands synced from Mac */}
             <TouchableOpacity
@@ -1659,21 +1722,6 @@ function AppContent() {
                 Commands
               </Text>
             </TouchableOpacity>
-
-            {/* Settings Tab */}
-            <TouchableOpacity 
-              style={styles.tabButton} 
-              onPress={() => setShowSettings(true)}
-            >
-              <Feather 
-                name="settings" 
-                size={22} 
-                color="#9CA3AF" 
-              />
-              <Text style={styles.tabLabel}>
-                Settings
-              </Text>
-            </TouchableOpacity>
           </>
           )}
         </View>
@@ -1684,7 +1732,7 @@ function AppContent() {
         visible={showSettings}
         transparent
         animationType="fade"
-        onRequestClose={() => setShowSettings(false)}
+        onRequestClose={closeSettings}
       >
         <KeyboardAvoidingView 
           style={styles.modalOverlay}
@@ -1857,7 +1905,7 @@ function AppContent() {
 
             <TouchableOpacity
               style={styles.modalButton}
-              onPress={() => setShowSettings(false)}
+              onPress={closeSettings}
             >
               <Text style={styles.modalButtonText}>Close</Text>
             </TouchableOpacity>
@@ -2229,4 +2277,3 @@ const styles = StyleSheet.create({
     color: '#666',
   },
 });
-
