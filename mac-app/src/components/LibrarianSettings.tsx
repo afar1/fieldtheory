@@ -69,6 +69,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Resume after close (return to last artifact vs clipboard)
   const [resumeAfterClose, setResumeAfterClose] = useState(false);
+  const [immersiveHeightPercent, setImmersiveHeightPercent] = useState(85);
 
   // Mute status
   const [isMutedForToday, setIsMutedForToday] = useState(false);
@@ -132,10 +133,11 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getDiscoveryFrequency(),
       window.librarianAPI.getUserExpertiseContext(),
       window.librarianAPI.getResumeAfterClose(),
+      window.librarianAPI.getImmersiveHeightPercent(),
       // Mute status
       window.librarianAPI.isMutedForToday(),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, mutedStatus]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, immersiveHeight, mutedStatus]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -157,6 +159,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setUserExpertiseContext(expertiseCtx || '');
         setExpertiseText(expertiseCtx || '');
         setResumeAfterClose(resumeClose);
+        setImmersiveHeightPercent(typeof immersiveHeight === 'number' ? immersiveHeight : 85);
         setIsMutedForToday(mutedStatus);
         setLoading(false);
       })
@@ -772,6 +775,51 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             }}
             style={{ width: '18px', height: '18px', cursor: 'pointer' }}
           />
+        </label>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 0',
+            gap: '12px',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+              Immersive height
+            </span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Target height for the expanded Library view as a percent of the screen work area
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <input
+              type="number"
+              min={50}
+              max={100}
+              step={5}
+              value={immersiveHeightPercent}
+              onChange={(e) => setImmersiveHeightPercent(Number(e.target.value))}
+              onBlur={async () => {
+                const clamped = Math.max(50, Math.min(100, isNaN(immersiveHeightPercent) ? 85 : immersiveHeightPercent));
+                setImmersiveHeightPercent(clamped);
+                await window.librarianAPI?.setImmersiveHeightPercent(clamped);
+              }}
+              style={{
+                width: '52px',
+                fontSize: '12px',
+                padding: '4px 6px',
+                borderRadius: '4px',
+                border: `1px solid ${theme.border}`,
+                backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+                color: theme.text,
+                textAlign: 'center',
+              }}
+            />
+            <span style={{ fontSize: '12px', color: theme.textSecondary }}>%</span>
+          </div>
         </label>
 
         {/* Muted status indicator with unmute option */}

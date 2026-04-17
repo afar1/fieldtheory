@@ -5,6 +5,8 @@ import {
   hasArtifactStructureInstruction,
   hasArtifactTitleInstruction,
   hasArtifactModelSignatureInstruction,
+  isHiddenWikiFileName,
+  isHiddenWikiFolderName,
   parseMarkdownHeader,
 } from './librarianManager';
 
@@ -113,5 +115,18 @@ describe('artifact signature helpers', () => {
     expect(result).toContain('Required artifact format:');
     expect(result).toContain('Signature metadata line');
     expect(result).toContain('*Model: <the exact model or assistant name that wrote this artifact>*');
+  });
+});
+
+describe('wiki tree visibility helpers', () => {
+  it('hides underscore transcript sidecars from the visible wiki tree', () => {
+    expect(isHiddenWikiFileName('_2026-04-15-wiki-entries-initial-debate-transcript.md')).toBe(true);
+    expect(isHiddenWikiFileName('2026-04-15-wiki-entries-initial-debate.md')).toBe(false);
+  });
+
+  it('hides dot and underscore prefixed folders from the visible wiki tree', () => {
+    expect(isHiddenWikiFolderName('_transcripts')).toBe(true);
+    expect(isHiddenWikiFolderName('.system')).toBe(true);
+    expect(isHiddenWikiFolderName('debates')).toBe(false);
   });
 });

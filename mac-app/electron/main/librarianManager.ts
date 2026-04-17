@@ -1156,6 +1156,14 @@ export function hasArtifactStructureInstruction(content: string): boolean {
   return hasArtifactTitleInstruction(content) && hasArtifactModelSignatureInstruction(content);
 }
 
+export function isHiddenWikiFolderName(name: string): boolean {
+  return name.startsWith('.') || name.startsWith('_');
+}
+
+export function isHiddenWikiFileName(name: string): boolean {
+  return name.startsWith('.') || name.startsWith('_');
+}
+
 export function buildEffectiveArtifactRuleContent(baseRule: string, expertise?: string): string {
   const normalizedExpertise = expertise?.trim();
   const additions: string[] = [];
@@ -1299,6 +1307,7 @@ interface LibrarianSettings {
   autoShowEnabled: boolean;
   autoShowStealsFocus?: boolean;
   resumeAfterClose?: boolean;          // If true, reopen to last artifact instead of clipboard
+  immersiveHeightPercent?: number;     // Height of immersive library view as a percent of work-area height
   librarianSetupComplete?: boolean;    // True after setup wizard completes
   // State-enforced mode settings (the only mode now)
   stateEnforcedThreshold?: number;     // Prompts before job creation (default: 7 = 'sometimes')
@@ -1534,6 +1543,7 @@ export class LibrarianManager extends EventEmitter {
       enabled: true,
       autoShowEnabled: true,
       autoShowStealsFocus: true,
+      immersiveHeightPercent: 85,
       librarianSetupComplete: undefined,
       stateEnforcedThreshold: 7,  // Default to 'sometimes' frequency (7-13 prompts)
       stateEnforcedRuleContent: undefined,
@@ -1557,6 +1567,7 @@ export class LibrarianManager extends EventEmitter {
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           autoShowStealsFocus: data.autoShowStealsFocus ?? defaults.autoShowStealsFocus,
           resumeAfterClose: data.resumeAfterClose,
+          immersiveHeightPercent: data.immersiveHeightPercent ?? defaults.immersiveHeightPercent,
           librarianSetupComplete: data.librarianSetupComplete,
           // State-enforced mode settings (the only mode now)
           stateEnforcedThreshold: data.stateEnforcedThreshold ?? defaults.stateEnforcedThreshold,
@@ -2108,7 +2119,7 @@ export class LibrarianManager extends EventEmitter {
     let subdirs: string[];
     try {
       subdirs = fs.readdirSync(wikiRoot)
-        .filter(f => !SKIP.has(f) && fs.statSync(path.join(wikiRoot, f)).isDirectory())
+        .filter(f => !SKIP.has(f) && !isHiddenWikiFolderName(f) && fs.statSync(path.join(wikiRoot, f)).isDirectory())
         .sort();
     } catch { return []; }
     const folders: WikiFolder[] = [];
@@ -2118,7 +2129,9 @@ export class LibrarianManager extends EventEmitter {
 
       let files: string[];
       try {
-        files = fs.readdirSync(dirPath).filter((f) => f.endsWith('.md')).sort();
+        files = fs.readdirSync(dirPath)
+          .filter((f) => f.endsWith('.md') && !isHiddenWikiFileName(f))
+          .sort();
       } catch {
         continue;
       }
@@ -2199,6 +2212,50 @@ export class LibrarianManager extends EventEmitter {
     this.wikiWatcher.on('change', emitChange);
     this.wikiWatcher.on('unlink', emitChange);
     this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
+  }
+
+  saveWikiPage(relPath: string, content: string): boolean {
+    const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
+    if (!absPath.startsWith(this.wikiDir)) return false;
+    try {
+      fs.writeFileSync(absPath, content, 'utf-8');
+      return true;
+    } catch (error) {
+      log.error(`Error saving wiki page ${relPath}:`, error);
+      return false;
+    }
+  }
+
+  createWikiFile(folderName: string, fileName: string): WikiPage | null {
+    const slug = fileName.replace(/\.md$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    if (!slug || folderName === 'artifacts') return null;
+    const relPath = `${folderName}/${slug}`;
+    const absPath = path.join(this.wikiDir, folderName, `${slug}.md`);
+    if (fs.existsSync(absPath)) return null;
+    const dirPath = path.join(this.wikiDir, folderName);
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    const content = `# ${fileName.replace(/\.md$/, '')}\n`;
+    try {
+      fs.writeFileSync(absPath, content, 'utf-8');
+      const stats = fs.statSync(absPath);
+      return { relPath, absPath, name: slug, title: fileName.replace(/\.md$/, ''), lastUpdated: Math.floor(stats.mtimeMs), content };
+    } catch (error) {
+      log.error(`Error creating wiki file ${relPath}:`, error);
+      return null;
+    }
+  }
+
+  createWikiDir(dirName: string): boolean {
+    const slug = dirName.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    const dirPath = path.join(this.wikiDir, slug);
+    if (fs.existsSync(dirPath)) return false;
+    try {
+      fs.mkdirSync(dirPath, { recursive: true });
+      return true;
+    } catch (error) {
+      log.error(`Error creating wiki dir ${slug}:`, error);
+      return false;
+    }
   }
 
   /**
@@ -2858,6 +2915,16 @@ Avoid maximalism.`;
    */
   setResumeAfterClose(enabled: boolean): void {
     this.settings.resumeAfterClose = enabled;
+    this.saveSettings();
+  }
+
+  getImmersiveHeightPercent(): number {
+    const value = this.settings.immersiveHeightPercent ?? 85;
+    return Math.max(50, Math.min(100, Math.round(value)));
+  }
+
+  setImmersiveHeightPercent(percent: number): void {
+    this.settings.immersiveHeightPercent = Math.max(50, Math.min(100, Math.round(percent)));
     this.saveSettings();
   }
 

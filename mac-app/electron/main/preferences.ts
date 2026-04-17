@@ -145,6 +145,7 @@ interface Preferences {
 
   // Transcription engine selection. See TranscriptionEngine type in types/transcribe.ts.
   transcriptionEngine?: 'whisper' | 'mlx-whisper' | 'parakeet' | 'parakeet-multilingual';
+  transcriptionInputSource?: 'microphone' | 'system-audio';
 
   // Hot Mic - continuous voice input for Claude Code terminals.
   // When enabled, auto-records voice fragments and injects them into a target terminal.
@@ -230,6 +231,7 @@ interface Preferences {
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Option+/',
   selectedModel: 'small',
+  transcriptionInputSource: 'microphone',
   clipboardScreenshotHotkey: 'Alt+4',
   clipboardDesktopScreenshotHotkey: 'Alt+3',
   clipboardHistoryHotkey: 'Alt+Space',

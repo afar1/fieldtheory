@@ -1425,6 +1425,8 @@ interface LibrarianAPI {
   setAutoShowStealsFocus: (enabled: boolean) => Promise<void>;
   getResumeAfterClose: () => Promise<boolean>;
   setResumeAfterClose: (enabled: boolean) => Promise<void>;
+  getImmersiveHeightPercent: () => Promise<number>;
+  setImmersiveHeightPercent: (percent: number) => Promise<void>;
   getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;
   getClaudeConfigPath: () => Promise<string>;
   resyncClaudeMd: () => Promise<boolean>;
@@ -1529,7 +1531,11 @@ declare global {
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
+    save: (relPath: string, content: string) => Promise<boolean>;
+    createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
+    createDir: (dirName: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
+    onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
   }
 
   /**

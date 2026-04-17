@@ -8,6 +8,7 @@
  * Used to distinguish between the USB-C dongle and Bluetooth variants of Little One.
  */
 export type TransportType = 'usb' | 'bluetooth' | 'built-in' | 'other';
+export type RecordingInputSource = 'microphone' | 'system-audio';
 
 /**
  * Represents a single audio device as seen by CoreAudio.
@@ -487,6 +488,7 @@ export interface WarmupAudioCommand {
 
 export interface StartRecordingCommand {
   type: 'startRecording';
+  recordingSource?: RecordingInputSource;
 }
 
 export interface StopRecordingCommand {
