@@ -349,16 +349,16 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const openFieldTheoryHandler = openFieldTheoryCall?.[1] as (() => void) | undefined;
     expect(openFieldTheoryHandler).toBeDefined();
 
-    // Unified window: left(72) + gapFill(NOTCH_WIDTH=200 + 2×overlap=2) + right(72) = 346
+    // Unified window: left(60) + gapFill(notchOverride=207 + 2×overlap=2) + right(60) = 329
     const unified = testState.getWindowBySide('unified');
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
 
     const listener = vi.fn();
     manager.on('open-field-theory', listener);
     openFieldTheoryHandler?.();
 
     expect(listener).toHaveBeenCalledTimes(1);
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
     expect(unified?.constructorOptions.transparent).toBe(true);
     expect(unified?.backgroundColorCalls.every((c: string) => c === '#00000000')).toBe(true);
   });
@@ -547,27 +547,27 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(modeEvents[modeEvents.length - 1]?.args[0]).toBe('hot-mic');
   });
 
-  it('keeps the unified window at full width regardless of state (animation is renderer-side CSS)', () => {
+  it('resizes the unified window for active states and restores idle size on return', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
 
-    // 2560px display: no notch profile (delta > 96), fallback NOTCH_WIDTH=200.
-    // unified = left(72) + gapFill(200+2) + right(72) = 346
+    // idle: left(60) + gapFill(notchOverride=207+2) + right(60) = 329
+    // active (recording): expanded = round(60*1.5)=90 each side → 90+209+90 = 389
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
 
     manager.setInputMode('hot-mic');
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
 
     manager.setState('recording');
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([389, 39]);
 
     manager.setState('idle');
     manager.setInputMode('standard');
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {
@@ -615,10 +615,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
 
-    // 1728 width → notchWidth=170. unified = left(72) + gapFill(170+2) + right(72) = 316
-    // Unified X = leftWindowX(72, idle): floor((1728 - 170) / 2 - 72) = 707
-    expect(unified?.getPosition()).toEqual([707, 0]);
-    expect(unified?.getSize()).toEqual([316, 38]);
+    // 1728 display, notchOverride=207 applied. unified = left(60) + gapFill(207+2) + right(60) = 329
+    // Unified X = leftWindowX(60, idle): floor((1728 - 207) / 2 - 60) + offsetX=0 = 700, offsetY=-1
+    expect(unified?.getPosition()).toEqual([700, -1]);
+    expect(unified?.getSize()).toEqual([329, 39]);
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {
@@ -629,8 +629,8 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
-    // unified = left(72) + gapFill(200+2) + right(72) = 346
-    expect(unified?.getSize()).toEqual([346, 38]);
+    // unified = left(60) + gapFill(notchOverride=207+2) + right(60) = 329
+    expect(unified?.getSize()).toEqual([329, 39]);
     const initialPosition = unified?.getPosition();
 
     const historyVisibleCall = testState.ipcMainMock.on.mock.calls.find(
@@ -644,11 +644,11 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     historyVisibleHandler?.({}, true);
     expect(openFieldTheoryListener).toHaveBeenCalledTimes(1);
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
     expect(unified?.getPosition()).toEqual(initialPosition);
 
     historyVisibleHandler?.({}, false);
-    expect(unified?.getSize()).toEqual([346, 38]);
+    expect(unified?.getSize()).toEqual([329, 39]);
     expect(unified?.getPosition()).toEqual(initialPosition);
   });
 
