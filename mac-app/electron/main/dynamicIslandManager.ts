@@ -72,7 +72,7 @@ export interface DynamicIslandGeometryTuning {
 }
 
 export const DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING: DynamicIslandGeometryTuning = {
-  notchWidthOverride: 167,
+  notchWidthOverride: 207,
   pillWidth: 60,
   pillHeight: 39,
   offsetX: 0,
@@ -426,6 +426,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicLastWord = active ? lastWord : '';
     if (!this.enabled) return;
     this.sendHotMicToRight();
+    this.updateWindowSize();
     this.tickAutoHide();
   }
 
@@ -1340,14 +1341,22 @@ export class DynamicIslandManager extends EventEmitter {
     return y + (profile?.pillY ?? 0) + this.geometryTuning.offsetY;
   }
 
-  private getActivePillWidth(): number {
-    // 0 = auto: use the default idle width
-    if (this.geometryTuning.pillWidth === 0) return this.ISLAND_WIDTH_IDLE;
-    return Math.max(this.geometryTuning.pillWidth, this.ISLAND_WIDTH_IDLE);
+  private isActiveState(): boolean {
+    return this.hotMicActive || this.state !== 'idle';
   }
 
   private getIdlePillWidth(): number {
-    return this.getActivePillWidth();
+    if (this.geometryTuning.pillWidth === 0) return this.ISLAND_WIDTH_IDLE;
+    return this.geometryTuning.pillWidth;
+  }
+
+  private getExpandedPillWidth(): number {
+    const idle = this.getIdlePillWidth();
+    return Math.max(Math.round(idle * 1.5), this.ISLAND_WIDTH_IDLE);
+  }
+
+  private getPillWidth(): number {
+    return this.isActiveState() ? this.getExpandedPillWidth() : this.getIdlePillWidth();
   }
 
   private getIdlePillHeight(): number {
@@ -1359,7 +1368,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getRightPillWidth(): number {
-    return this.getActivePillWidth();
+    return this.getPillWidth();
   }
 
   private getLeftWindowX(width: number, isIdle: boolean): number {
@@ -1424,7 +1433,7 @@ export class DynamicIslandManager extends EventEmitter {
     const showingHistory = this.historyVisible;
     const idleWidth = this.getIdlePillWidth();
     const idleHeight = this.getIdlePillHeight();
-    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : idleWidth;
+    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : this.getPillWidth();
     const targetHeight = showingHistory ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
     const targetWidth = this.getUnifiedWindowWidth(targetLeftWidth);
 
