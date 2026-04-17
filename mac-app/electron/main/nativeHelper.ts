@@ -6,6 +6,7 @@ import {
   AudioDevice,
   HelperOutgoingMessage,
   HelperIncomingCommand,
+  RecordingInputSource,
   NativeWindowInfo,
   GazeTrackingStatusMessage,
   GazeSampleMessage,
@@ -322,14 +323,14 @@ export class NativeHelper extends EventEmitter {
    * Start recording audio from the default input device.
    * Returns a promise that resolves when recording starts.
    */
-  async startRecording(): Promise<void> {
+  async startRecording(recordingSource: RecordingInputSource = 'microphone'): Promise<void> {
     return this.enqueueRecordingCommand('startRecording', async () => {
       let lastError: Error | null = null;
 
       for (let attempt = 0; attempt <= START_RECORDING_RETRY_DELAYS_MS.length; attempt += 1) {
         try {
           await this.waitForRecordingTransitionGraceWindow();
-          await this.startRecordingOnce();
+          await this.startRecordingOnce(recordingSource);
           return;
         } catch (error) {
           lastError = error instanceof Error ? error : new Error(String(error));
@@ -357,7 +358,7 @@ export class NativeHelper extends EventEmitter {
         log.warn('[AudioRecovery] All retries failed with audio engine error — restarting helper');
         try {
           await this.restart('startRecording: audio engine inputNode null after all retries');
-          await this.startRecordingOnce();
+          await this.startRecordingOnce(recordingSource);
           log.info('[AudioRecovery] Recording started successfully after helper restart');
           return;
         } catch {
@@ -368,7 +369,7 @@ export class NativeHelper extends EventEmitter {
         try {
           await this.restartCoreAudioDaemon();
           await this.restart('startRecording: post-coreaudiod restart');
-          await this.startRecordingOnce();
+          await this.startRecordingOnce(recordingSource);
           log.info('[AudioRecovery] Recording started successfully after coreaudiod restart');
           return;
         } catch (daemonError) {
@@ -1090,7 +1091,7 @@ export class NativeHelper extends EventEmitter {
     }
   }
 
-  private async startRecordingOnce(): Promise<void> {
+  private async startRecordingOnce(recordingSource: RecordingInputSource): Promise<void> {
     await this.waitForReady();
     log.info('[AudioRecovery] startRecordingOnce: helperRunning=%s helperReady=%s recordingActive=%s',
       this.isRunning, this.isReady, this.recordingActive);
@@ -1120,7 +1121,7 @@ export class NativeHelper extends EventEmitter {
       };
 
       this.on('message', handler);
-      this.send({ type: 'startRecording' });
+      this.send({ type: 'startRecording', recordingSource });
     });
   }
 

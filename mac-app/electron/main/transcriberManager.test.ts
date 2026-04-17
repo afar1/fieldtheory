@@ -11,6 +11,9 @@ vi.mock('electron', () => ({
     getPath: vi.fn(() => '/tmp'),
     on: vi.fn(),
   },
+  systemPreferences: {
+    getMediaAccessStatus: vi.fn(() => 'granted'),
+  },
   globalShortcut: {
     register: vi.fn(() => true),
     unregister: vi.fn(),
@@ -256,6 +259,48 @@ describe('TranscriberManager fallback tracking', () => {
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
     expect(manager.lastHotMicUsedWhisperFallback).toBe(false);
+  });
+});
+
+describe('TranscriberManager recording source selection', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('defaults recording source to microphone', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: () => undefined,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.getRecordingSource()).toBe('microphone');
+  });
+
+  it('returns a saved system-audio recording source', () => {
+    const manager: any = {
+      preferences: {
+        getPreference: (key: string) => key === 'transcriptionInputSource' ? 'system-audio' : undefined,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.getRecordingSource()).toBe('system-audio');
+  });
+
+  it('persists recording source changes to preferences', async () => {
+    const save = vi.fn(async () => undefined);
+    const manager: any = {
+      preferences: {
+        save,
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.setRecordingSource('system-audio');
+
+    expect(save).toHaveBeenCalledWith({ transcriptionInputSource: 'system-audio' });
   });
 });
 

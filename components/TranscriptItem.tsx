@@ -69,6 +69,8 @@ export interface TranscriptItemProps {
   isSelected: boolean;
   isProcessingThis: boolean;
   isSeparated: boolean;
+  isSpeaking: boolean;
+  isPaused: boolean;
   showDateHeader: boolean;
   // Mode flags
   selectionMode: boolean;
@@ -83,6 +85,7 @@ export interface TranscriptItemProps {
   // Callbacks
   onToggleExpand: (id: string) => void;
   onSendToCursor: (text: string) => void;
+  onSpeak: (entry: TranscriptEntry) => void;
   onManualSeparate: (text: string, id: string) => void;
   onUnstack: (id: string) => void;
   onCopy: (entry: TranscriptEntry) => void;
@@ -104,6 +107,8 @@ function TranscriptItemComponent({
   isSelected,
   isProcessingThis,
   isSeparated,
+  isSpeaking,
+  isPaused,
   showDateHeader,
   selectionMode,
   isProcessingLLM,
@@ -114,6 +119,7 @@ function TranscriptItemComponent({
   onEditTextChange,
   onToggleExpand,
   onSendToCursor,
+  onSpeak,
   onManualSeparate,
   onUnstack,
   onCopy,
@@ -146,6 +152,11 @@ function TranscriptItemComponent({
   const handleFindTasksPress = (event: GestureResponderEvent) => {
     event.stopPropagation();
     onManualSeparate(item.text, item.id);
+  };
+
+  const handleSpeakPress = (event: GestureResponderEvent) => {
+    event.stopPropagation();
+    onSpeak(item);
   };
 
   const handleStackBadgeLongPress = (event: GestureResponderEvent) => {
@@ -289,6 +300,21 @@ function TranscriptItemComponent({
                 <Text style={[styles.sendToCursorText, selectionMode && styles.sendToCursorTextDisabled]}>Send to Cursor</Text>
               </TouchableOpacity>
             )}
+            <TouchableOpacity
+              onPress={handleSpeakPress}
+              hitSlop={8}
+              style={[styles.speakButton, selectionMode && styles.actionButtonDisabled]}
+              disabled={selectionMode}
+            >
+              <Feather
+                name={isPaused ? 'play' : isSpeaking ? 'pause' : 'volume-2'}
+                size={14}
+                color={selectionMode ? '#9CA3AF' : '#B45309'}
+              />
+              <Text style={[styles.speakButtonText, selectionMode && styles.speakButtonTextDisabled]}>
+                {isPaused ? 'Resume' : isSpeaking ? 'Pause' : 'Play'}
+              </Text>
+            </TouchableOpacity>
             {/* Create Tasks - button when auto-create off, status when auto-create on */}
             {autoSeparate ? (
               // Auto-create is ON - show status
@@ -532,6 +558,25 @@ const styles = StyleSheet.create({
   sendToCursorTextDisabled: {
     color: '#9CA3AF',
   },
+  speakButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#FEF3C7',
+    borderWidth: 1,
+    borderColor: '#FCD34D',
+    gap: 5,
+  },
+  speakButtonText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#B45309',
+  },
+  speakButtonTextDisabled: {
+    color: '#9CA3AF',
+  },
   separateButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -574,5 +619,3 @@ const styles = StyleSheet.create({
     color: '#6B7280',
   },
 });
-
-

@@ -1156,6 +1156,14 @@ export function hasArtifactStructureInstruction(content: string): boolean {
   return hasArtifactTitleInstruction(content) && hasArtifactModelSignatureInstruction(content);
 }
 
+export function isHiddenWikiFolderName(name: string): boolean {
+  return name.startsWith('.') || name.startsWith('_');
+}
+
+export function isHiddenWikiFileName(name: string): boolean {
+  return name.startsWith('.') || name.startsWith('_');
+}
+
 export function buildEffectiveArtifactRuleContent(baseRule: string, expertise?: string): string {
   const normalizedExpertise = expertise?.trim();
   const additions: string[] = [];
@@ -1246,6 +1254,24 @@ export const DISCOVERY_CONFIG: Record<DiscoveryFrequency, { min: number; max: nu
  * Metadata for a reading (cached in index).
  * Path is the identity - no numeric IDs.
  */
+// ── Wiki viewer types ──────────────────────────────────────────────────
+export interface WikiPageMeta {
+  relPath: string;  // e.g. 'entries/2026-04-15-foo' (no .md)
+  absPath: string;
+  name: string;     // filename slug
+  title: string;    // from # heading or filename fallback
+  lastUpdated: number;
+}
+
+export interface WikiPage extends WikiPageMeta {
+  content: string;
+}
+
+export interface WikiFolder {
+  name: string;
+  files: WikiPageMeta[];
+}
+
 export interface ReadingMeta {
   path: string;
   title: string;
@@ -1281,6 +1307,7 @@ interface LibrarianSettings {
   autoShowEnabled: boolean;
   autoShowStealsFocus?: boolean;
   resumeAfterClose?: boolean;          // If true, reopen to last artifact instead of clipboard
+  immersiveHeightPercent?: number;     // Height of immersive library view as a percent of work-area height
   librarianSetupComplete?: boolean;    // True after setup wizard completes
   // State-enforced mode settings (the only mode now)
   stateEnforcedThreshold?: number;     // Prompts before job creation (default: 7 = 'sometimes')
@@ -1516,6 +1543,7 @@ export class LibrarianManager extends EventEmitter {
       enabled: true,
       autoShowEnabled: true,
       autoShowStealsFocus: true,
+      immersiveHeightPercent: 85,
       librarianSetupComplete: undefined,
       stateEnforcedThreshold: 7,  // Default to 'sometimes' frequency (7-13 prompts)
       stateEnforcedRuleContent: undefined,
@@ -1539,6 +1567,7 @@ export class LibrarianManager extends EventEmitter {
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           autoShowStealsFocus: data.autoShowStealsFocus ?? defaults.autoShowStealsFocus,
           resumeAfterClose: data.resumeAfterClose,
+          immersiveHeightPercent: data.immersiveHeightPercent ?? defaults.immersiveHeightPercent,
           librarianSetupComplete: data.librarianSetupComplete,
           // State-enforced mode settings (the only mode now)
           stateEnforcedThreshold: data.stateEnforcedThreshold ?? defaults.stateEnforcedThreshold,
@@ -2055,6 +2084,177 @@ export class LibrarianManager extends EventEmitter {
   refreshReadings(): void {
     for (const dirPath of this.settings.watchedDirs) {
       this.scanDirectory(dirPath);
+    }
+  }
+
+  // ── Wiki viewer ──────────────────────────────────────────────────────────
+
+  private get wikiDir(): string {
+    const ftDataDir = process.env.FT_DATA_DIR;
+    return path.join(ftDataDir ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
+  }
+
+  private wikiWatcher: chokidar.FSWatcher | null = null;
+  private wikiWatcherPending = false;
+
+  private parseWikiTitle(filePath: string): string {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const lines = content.split('\n').slice(0, 20);
+      for (const line of lines) {
+        const match = line.match(/^#\s+(.+)/);
+        if (match) return match[1].trim();
+      }
+    } catch {}
+    return path.basename(filePath, '.md');
+  }
+
+  getWikiTree(): WikiFolder[] {
+    const wikiRoot = this.wikiDir;
+    if (!fs.existsSync(wikiRoot)) return [];
+
+    if (!this.wikiWatcher) this.startWikiWatcher();
+
+    const SKIP = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
+    let subdirs: string[];
+    try {
+      subdirs = fs.readdirSync(wikiRoot)
+        .filter(f => !SKIP.has(f) && !isHiddenWikiFolderName(f) && fs.statSync(path.join(wikiRoot, f)).isDirectory())
+        .sort();
+    } catch { return []; }
+    const folders: WikiFolder[] = [];
+
+    for (const dirName of subdirs) {
+      const dirPath = path.join(wikiRoot, dirName);
+
+      let files: string[];
+      try {
+        files = fs.readdirSync(dirPath)
+          .filter((f) => f.endsWith('.md') && !isHiddenWikiFileName(f))
+          .sort();
+      } catch {
+        continue;
+      }
+
+      const pages: WikiPageMeta[] = files.map((f) => {
+        const absPath = path.join(dirPath, f);
+        const nameWithoutExt = f.replace(/\.md$/, '');
+        const stats = fs.statSync(absPath);
+        return {
+          relPath: `${dirName}/${nameWithoutExt}`,
+          absPath,
+          name: nameWithoutExt,
+          title: this.parseWikiTitle(absPath),
+          lastUpdated: Math.floor(stats.mtimeMs),
+        };
+      });
+
+      if (pages.length > 0) {
+        folders.push({ name: dirName, files: pages });
+      }
+    }
+
+    return folders;
+  }
+
+  getWikiPage(relPath: string): WikiPage | null {
+    const absPath = path.join(this.wikiDir, `${relPath}.md`);
+    if (!fs.existsSync(absPath)) return null;
+
+    try {
+      const content = fs.readFileSync(absPath, 'utf-8');
+      const stats = fs.statSync(absPath);
+      const nameWithoutExt = path.basename(absPath, '.md');
+      return {
+        relPath,
+        absPath,
+        name: nameWithoutExt,
+        title: this.parseWikiTitle(absPath),
+        lastUpdated: Math.floor(stats.mtimeMs),
+        content,
+      };
+    } catch (error) {
+      log.error(`Error reading wiki page ${relPath}:`, error);
+      return null;
+    }
+  }
+
+  startWikiWatcher(): void {
+    if (this.wikiWatcher || this.wikiWatcherPending) return;
+    const wikiRoot = this.wikiDir;
+
+    if (!fs.existsSync(wikiRoot)) {
+      const parent = path.dirname(wikiRoot);
+      if (!fs.existsSync(parent)) return;
+      this.wikiWatcherPending = true;
+      const parentWatcher = chokidar.watch(parent, {
+        ignoreInitial: true,
+        depth: 0,
+      });
+      parentWatcher.on('addDir', (dirPath) => {
+        if (path.basename(dirPath) === path.basename(wikiRoot)) {
+          parentWatcher.close();
+          this.wikiWatcherPending = false;
+          this.startWikiWatcher();
+        }
+      });
+      return;
+    }
+
+    this.wikiWatcher = chokidar.watch(`${wikiRoot}/*/*.md`, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      ignorePermissionErrors: true,
+    });
+
+    const emitChange = () => this.emit('wiki:changed');
+    this.wikiWatcher.on('add', emitChange);
+    this.wikiWatcher.on('change', emitChange);
+    this.wikiWatcher.on('unlink', emitChange);
+    this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
+  }
+
+  saveWikiPage(relPath: string, content: string): boolean {
+    const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
+    if (!absPath.startsWith(this.wikiDir)) return false;
+    try {
+      fs.writeFileSync(absPath, content, 'utf-8');
+      return true;
+    } catch (error) {
+      log.error(`Error saving wiki page ${relPath}:`, error);
+      return false;
+    }
+  }
+
+  createWikiFile(folderName: string, fileName: string): WikiPage | null {
+    const slug = fileName.replace(/\.md$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    if (!slug || folderName === 'artifacts') return null;
+    const relPath = `${folderName}/${slug}`;
+    const absPath = path.join(this.wikiDir, folderName, `${slug}.md`);
+    if (fs.existsSync(absPath)) return null;
+    const dirPath = path.join(this.wikiDir, folderName);
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    const content = `# ${fileName.replace(/\.md$/, '')}\n`;
+    try {
+      fs.writeFileSync(absPath, content, 'utf-8');
+      const stats = fs.statSync(absPath);
+      return { relPath, absPath, name: slug, title: fileName.replace(/\.md$/, ''), lastUpdated: Math.floor(stats.mtimeMs), content };
+    } catch (error) {
+      log.error(`Error creating wiki file ${relPath}:`, error);
+      return null;
+    }
+  }
+
+  createWikiDir(dirName: string): boolean {
+    const slug = dirName.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    const dirPath = path.join(this.wikiDir, slug);
+    if (fs.existsSync(dirPath)) return false;
+    try {
+      fs.mkdirSync(dirPath, { recursive: true });
+      return true;
+    } catch (error) {
+      log.error(`Error creating wiki dir ${slug}:`, error);
+      return false;
     }
   }
 
@@ -2715,6 +2915,16 @@ Avoid maximalism.`;
    */
   setResumeAfterClose(enabled: boolean): void {
     this.settings.resumeAfterClose = enabled;
+    this.saveSettings();
+  }
+
+  getImmersiveHeightPercent(): number {
+    const value = this.settings.immersiveHeightPercent ?? 85;
+    return Math.max(50, Math.min(100, Math.round(value)));
+  }
+
+  setImmersiveHeightPercent(percent: number): void {
+    this.settings.immersiveHeightPercent = Math.max(50, Math.min(100, Math.round(percent)));
     this.saveSettings();
   }
 

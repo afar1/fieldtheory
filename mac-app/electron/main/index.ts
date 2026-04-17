@@ -64,7 +64,7 @@ import { CommandSyncService } from './commandSyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, Reading, ReadingMeta, WatchedDir } from './librarianManager';
+import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
@@ -1257,6 +1257,9 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   window.setResumeAfterCloseGetter(() => {
     return librarianManager?.isResumeAfterCloseEnabled() ?? false;
   });
+  window.setImmersiveHeightPercentGetter(() => {
+    return librarianManager?.getImmersiveHeightPercent() ?? 85;
+  });
 
   // Set up callback to save bounds when window is moved/resized.
   window.setOnBoundsChanged(async (bounds) => {
@@ -1485,6 +1488,40 @@ function setupLibrarianIPCHandlers(): void {
     }
     return librarianManager.deleteReading(filePath);
   });
+
+  ipcMain.handle('wiki:getTree', (): WikiFolder[] => {
+    if (!librarianManager) return [];
+    return librarianManager.getWikiTree();
+  });
+
+  ipcMain.handle('wiki:getPage', (_event, relPath: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.getWikiPage(relPath);
+  });
+
+  ipcMain.handle('wiki:save', (_event, relPath: string, content: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.saveWikiPage(relPath, content);
+  });
+
+  ipcMain.handle('wiki:createFile', (_event, folderName: string, fileName: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.createWikiFile(folderName, fileName);
+  });
+
+  ipcMain.handle('wiki:createDir', (_event, dirName: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.createWikiDir(dirName);
+  });
+
+  if (librarianManager) {
+    librarianManager.startWikiWatcher();
+    librarianManager.on('wiki:changed', () => {
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('wiki:changed');
+      });
+    });
+  }
 
   // Get all watched directories
   ipcMain.handle('librarian:getWatchedDirs', (): WatchedDir[] => {
@@ -1829,6 +1866,14 @@ function setupLibrarianIPCHandlers(): void {
   // Set resume after close setting
   ipcMain.handle('librarian:setResumeAfterClose', (_event, enabled: boolean): void => {
     librarianManager?.setResumeAfterClose(enabled);
+  });
+
+  ipcMain.handle('librarian:getImmersiveHeightPercent', (): number => {
+    return librarianManager?.getImmersiveHeightPercent() ?? 85;
+  });
+
+  ipcMain.handle('librarian:setImmersiveHeightPercent', (_event, percent: number): void => {
+    librarianManager?.setImmersiveHeightPercent(percent);
   });
 
   // Get Claude config file path
@@ -2596,6 +2641,17 @@ function setupTranscribeIPCHandlers(): void {
     log.info('Transcription model set: %s', modelSize);
     await transcriberManager.setSelectedModel(modelSize);
     broadcastHotMicRuntimeStatus();
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.GET_RECORDING_SOURCE, () => {
+    return transcriberManager?.getRecordingSource() ?? 'microphone';
+  });
+
+  ipcMain.handle(TranscribeIPCChannels.SET_RECORDING_SOURCE, async (_event, source: 'microphone' | 'system-audio') => {
+    if (!transcriberManager) {
+      throw new Error('TranscriberManager not initialized');
+    }
+    await transcriberManager.setRecordingSource(source);
   });
 
   ipcMain.handle(TranscribeIPCChannels.GET_HOTKEY, () => {
@@ -4948,7 +5004,7 @@ function setupClipboardIPCHandlers(): void {
       commandLauncherWindow?.hide(true);
 
       if (isTerminal || isIDE) {
-        clipboard.writeText(`[run this command: ${command.name}.md]\n${command.filePath} `);
+        clipboard.writeText(`[${command.name}.md]\n${command.filePath} `);
         clipboardManager?.syncClipboardHash();
       } else {
         const plistData = plist.build([command.filePath]);
@@ -6676,6 +6732,7 @@ if (process.defaultApp) {
  * Handle fieldtheory:// URLs
  * Supported paths:
  * - fieldtheory://librarian/import?file=/path/to/reading.md&fullscreen=true - Import a reading and show it
+ * - fieldtheory://wiki/open?file=/abs/path/to/page.md&immersive=true - Open a wiki page in the library view
  */
 async function handleProtocolUrl(url: string): Promise<void> {
   try {
@@ -6687,6 +6744,28 @@ async function handleProtocolUrl(url: string): Promise<void> {
         applyHotMicMode('start');
       } else if (parsed.pathname === '/stop') {
         applyHotMicMode('deactivate');
+      }
+      return;
+    }
+
+    if (parsed.host === 'wiki' && parsed.pathname === '/open') {
+      const filePath = parsed.searchParams.get('file');
+      const immersive = parsed.searchParams.get('immersive') === 'true';
+
+      if (!filePath) return;
+
+      const decodedPath = decodeURIComponent(filePath);
+      const wikiRoot = path.join(process.env.FT_DATA_DIR ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
+      const relPath = path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+
+      if (clipboardHistoryWindow) {
+        const boundsToUse = restoreClipboardHistoryBounds();
+        suspendDynamicIslandFocusForClipboardHistory('show-reading');
+        clipboardHistoryWindow.show(boundsToUse);
+        clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
+        if (immersive) {
+          clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
+        }
       }
       return;
     }

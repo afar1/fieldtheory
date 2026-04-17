@@ -279,6 +279,8 @@ interface TranscribeAPI {
   getModelDownloadStatus: () => Promise<Record<string, boolean>>;
   getSelectedModel: () => Promise<string>;
   setSelectedModel: (modelSize: string) => Promise<void>;
+  getRecordingSource?: () => Promise<'microphone' | 'system-audio'>;
+  setRecordingSource?: (source: 'microphone' | 'system-audio') => Promise<void>;
   getHotkey: () => Promise<string>;
   setHotkey: (hotkey: string | null) => Promise<boolean>;
   getSecondaryHotkey?: () => Promise<string | null>;
@@ -1423,6 +1425,8 @@ interface LibrarianAPI {
   setAutoShowStealsFocus: (enabled: boolean) => Promise<void>;
   getResumeAfterClose: () => Promise<boolean>;
   setResumeAfterClose: (enabled: boolean) => Promise<void>;
+  getImmersiveHeightPercent: () => Promise<number>;
+  setImmersiveHeightPercent: (percent: number) => Promise<void>;
   getClaudeCodeStatus: () => Promise<'installed' | 'directory-only' | 'not-installed'>;
   getClaudeConfigPath: () => Promise<string>;
   resyncClaudeMd: () => Promise<boolean>;
@@ -1503,6 +1507,35 @@ declare global {
   interface WatchedDir {
     path: string;
     enabled: boolean;
+  }
+
+  // ── Wiki viewer types ──────────────────────────────────────────────────
+
+  interface WikiPageMeta {
+    relPath: string;     // e.g. 'entries/2026-04-15-foo' (no .md)
+    absPath: string;     // full filesystem path
+    name: string;        // filename slug without date/ext
+    title: string;       // from # heading or filename
+    lastUpdated: number; // mtime
+  }
+
+  interface WikiPage extends WikiPageMeta {
+    content: string;
+  }
+
+  interface WikiFolder {
+    name: string;           // 'categories', 'domains', 'entries', 'entities'
+    files: WikiPageMeta[];  // alphabetically sorted
+  }
+
+  interface WikiAPI {
+    getTree: () => Promise<WikiFolder[]>;
+    getPage: (relPath: string) => Promise<WikiPage | null>;
+    save: (relPath: string, content: string) => Promise<boolean>;
+    createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
+    createDir: (dirName: string) => Promise<boolean>;
+    onPageChanged: (callback: () => void) => () => void;
+    onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
   }
 
   /**
@@ -1831,6 +1864,7 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    wikiAPI?: WikiAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;
