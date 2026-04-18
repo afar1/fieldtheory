@@ -22,6 +22,7 @@ import {
   scaleAudioLevel,
   WAVEFORM_BAR_COUNT,
 } from '../utils/audioWaveform';
+import { AgentAttention } from './AgentAttention';
 
 type IslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
@@ -1033,12 +1034,11 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
         style={{
           ...styles.island,
           ...styles.islandIdle,
-          justifyContent: 'flex-start',
-          width: expanded ? `${compactPillWidth}px` : '48px',
+          justifyContent: 'flex-end',
+          width: `${compactPillWidth}px`,
           height: `${compactPillHeight}px`,
           gap: '0px',
           padding: '0 8px',
-          transition: 'width 200ms ease',
         }}
       >
         {/* X cancel button — collapses to 0 width when no session active */}
@@ -1052,6 +1052,7 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
             <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </div>
+        <AgentAttention />
         {/* Hamburger menu — always visible */}
         <button
           className="di-hamburger"
@@ -1723,13 +1724,17 @@ document.head.appendChild(styleSheet);
 
 function UnifiedIsland() {
   const initParams = new URLSearchParams(window.location.search);
-  const rightW = parseInt(initParams.get('rightWidth') || '72', 10);
+  const initRightW = parseInt(initParams.get('rightWidth') || '72', 10);
   const initLeftW = parseInt(initParams.get('leftWidth') || '72', 10);
   const [leftWidth, setLeftWidth] = useState(initLeftW);
+  const [rightWidth, setRightWidth] = useState(initRightW);
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
-    api?.onResize?.((data: { leftWidth: number }) => setLeftWidth(data.leftWidth));
+    api?.onResize?.((data: { leftWidth: number; rightWidth: number }) => {
+      setLeftWidth(data.leftWidth);
+      if (data.rightWidth !== undefined) setRightWidth(data.rightWidth);
+    });
   }, []);
 
   const NOTCH_R = '15px';
@@ -1748,7 +1753,7 @@ function UnifiedIsland() {
       </div>
       <div style={{ flex: 1, height: '100%', background: '#000' }} />
       <div style={{
-        width: rightW,
+        width: rightWidth,
         flexShrink: 0,
         height: '100%',
         overflow: 'hidden',
@@ -1811,6 +1816,16 @@ declare global {
       deleteHistoryItem?: (id: number) => void;
       toggleHistory: () => void;
       setHistoryVisible: (visible: boolean) => void;
+      onAgentsChange?: (cb: (agents: Array<{
+        agentId: string;
+        tool: 'claude' | 'codex';
+        pid: number;
+        cwd: string;
+        ttyTitle: string;
+        terminalApp: string;
+        waitingSince: number;
+      }>) => void) => void;
+      focusAgent?: (agentId: string) => Promise<boolean>;
       removeAllListeners: (channel: string) => void;
     };
   }

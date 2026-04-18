@@ -1873,10 +1873,21 @@ declare global {
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
     hotMicAPI?: HotMicAPI;
     squaresAPI?: SquaresAPI;
+    agentHooksAPI?: AgentHooksAPI;
 
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
+}
+
+interface AgentHookTargets { claude?: boolean; codex?: boolean }
+interface AgentHookStatus { claude: boolean; codex: boolean }
+interface AgentHookResult { success: boolean; message: string; claude: boolean; codex: boolean }
+
+interface AgentHooksAPI {
+  install: (targets: AgentHookTargets) => Promise<AgentHookResult>;
+  uninstall: (targets: AgentHookTargets) => Promise<AgentHookResult>;
+  getStatus: () => Promise<AgentHookStatus>;
 }
 
 export {};

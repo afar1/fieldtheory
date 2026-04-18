@@ -3538,6 +3538,20 @@ const wikiAPI = {
 };
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
 
+interface AgentHookTargets { claude?: boolean; codex?: boolean }
+interface AgentHookStatus { claude: boolean; codex: boolean }
+interface AgentHookResult { success: boolean; message: string; claude: boolean; codex: boolean }
+
+const agentHooksAPI = {
+  install: (targets: AgentHookTargets): Promise<AgentHookResult> =>
+    ipcRenderer.invoke('agent-hooks:install', targets),
+  uninstall: (targets: AgentHookTargets): Promise<AgentHookResult> =>
+    ipcRenderer.invoke('agent-hooks:uninstall', targets),
+  getStatus: (): Promise<AgentHookStatus> =>
+    ipcRenderer.invoke('agent-hooks:status'),
+};
+contextBridge.exposeInMainWorld('agentHooksAPI', agentHooksAPI);
+
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);

@@ -57,6 +57,8 @@ import {
   DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING,
   type DynamicIslandGeometryTuning,
 } from './dynamicIslandManager';
+import { AgentAttentionManager } from './agentAttentionManager';
+import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
@@ -242,6 +244,8 @@ let feedbackManager: FeedbackManager | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let dynamicIslandManager: DynamicIslandManager | null = null;
+let agentAttentionManager: AgentAttentionManager | null = null;
+let agentHookInstaller: AgentHookInstaller | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
@@ -6106,6 +6110,29 @@ async function initTranscriberSystem(): Promise<void> {
   dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
   dynamicIslandManager.setStayOnLaptop(preferencesManager.getPreference('hotMicIslandStayOnLaptop') ?? false);
   dynamicIslandManager.setAutoHide(preferencesManager.getPreference('hotMicIslandAutoHide') ?? false);
+
+  // Watch ~/.fieldtheory/agents/state/ for agent-waiting snapshots and
+  // surface them as glyphs in the Dynamic Island.
+  agentAttentionManager = new AgentAttentionManager();
+  agentAttentionManager.on('change', (agents) => {
+    dynamicIslandManager?.setWaitingAgents(agents);
+  });
+  agentAttentionManager.start();
+  dynamicIslandManager.setWaitingAgents(agentAttentionManager.getWaiting());
+  ipcMain.handle('agent:focus', async (_e, agentId: string) => {
+    return agentAttentionManager?.focus(agentId) ?? false;
+  });
+
+  agentHookInstaller = new AgentHookInstaller();
+  ipcMain.handle('agent-hooks:install', async (_e, targets: InstallTargets) => {
+    return agentHookInstaller?.install(targets ?? {});
+  });
+  ipcMain.handle('agent-hooks:uninstall', async (_e, targets: InstallTargets) => {
+    return agentHookInstaller?.uninstall(targets ?? {});
+  });
+  ipcMain.handle('agent-hooks:status', async () => {
+    return agentHookInstaller?.getStatus();
+  });
 
   // Now create transcriberManager with cursorStatusManager.
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
