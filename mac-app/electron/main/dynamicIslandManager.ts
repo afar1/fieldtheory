@@ -2,6 +2,7 @@ import { BrowserWindow, screen, app, ipcMain, clipboard } from 'electron';
 import { EventEmitter } from 'events';
 import path from 'path';
 import { createLogger } from './logger';
+import type { WaitingAgent } from './types/agentAttention';
 
 const log = createLogger('DynamicIsland');
 
@@ -156,6 +157,9 @@ export class DynamicIslandManager extends EventEmitter {
 
   // Stack count for screenshots captured during standard recording.
   private stackCount: number = 0;
+
+  // Agents currently waiting for user attention (hook-driven).
+  private waitingAgents: WaitingAgent[] = [];
 
   // Hot-mic state tracked for the right pill.
   private hotMicActive: boolean = false;
@@ -414,6 +418,18 @@ export class DynamicIslandManager extends EventEmitter {
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-stack-changed', count);
     }
+  }
+
+  setWaitingAgents(agents: WaitingAgent[]): void {
+    this.waitingAgents = agents;
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-agents', agents);
+    }
+  }
+
+  getWaitingAgents(): WaitingAgent[] {
+    return this.waitingAgents;
   }
 
   // -------------------------------------------------------------------------
@@ -680,8 +696,9 @@ export class DynamicIslandManager extends EventEmitter {
         this.sendStateToRenderer(this.state);
         this.sendInputModeToRenderers();
         const leftWidth = this.historyVisible ? this.ISLAND_WIDTH : this.getIdlePillWidth();
-        this.window.webContents.send('dynamic-island-resize', { leftWidth });
+        this.window.webContents.send('dynamic-island-resize', { leftWidth, rightWidth: this.getRightPillWidth() });
         this.window.webContents.send('dynamic-island-stack-changed', this.stackCount);
+        this.window.webContents.send('dynamic-island-agents', this.waitingAgents);
         this.sendHistory();
         this.sendHotMicRuntimeStatusToLeft();
 
@@ -1147,10 +1164,6 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
-  private isAutoHideActiveState(): boolean {
-    return this.state !== 'idle' || this.hotMicActive;
-  }
-
   // Final authority over whether external show() paths should be allowed to
   // run. True when auto-hide is in control of the windows and progress is
   // below 1 — external code that calls setOpacity(1) / showInactive() would
@@ -1197,9 +1210,16 @@ export class DynamicIslandManager extends EventEmitter {
   private tickAutoHide(): void {
     if (!this.autoHideEnabled || !this.enabled) return;
 
-    const target = this.isAutoHideActiveState()
-      ? 1
-      : this.computeAutoHideProgressFromCursor();
+    const forceVisible = this.isActiveState();
+    const target = forceVisible ? 1 : this.computeAutoHideProgressFromCursor();
+
+    // Active states (recording, hot-mic, etc.) snap instantly to fully visible
+    // so the animation doesn't fight the window resize from updateWindowSize().
+    if (forceVisible && this.autoHideRenderedProgress < 1) {
+      this.autoHideRenderedProgress = 1;
+      this.applyAutoHideProgress(1);
+      return;
+    }
 
     // If already settled at target, nothing to do. This is the hot path
     // when the cursor is stationary — we tick at 60 Hz but early-out.
@@ -1439,7 +1459,7 @@ export class DynamicIslandManager extends EventEmitter {
 
     const x = showingHistory
       ? this.getUnifiedWindowX(this.ISLAND_WIDTH, false)
-      : this.getUnifiedWindowX(idleWidth, true);
+      : this.getUnifiedWindowX(targetLeftWidth, true);
     const y = this.getTopWindowY();
 
     const [currentWidth, currentHeight] = this.window.getSize();
@@ -1450,7 +1470,7 @@ export class DynamicIslandManager extends EventEmitter {
     }
 
     if (this.rendererReady) {
-      this.window.webContents.send('dynamic-island-resize', { leftWidth: targetLeftWidth });
+      this.window.webContents.send('dynamic-island-resize', { leftWidth: targetLeftWidth, rightWidth: this.getRightPillWidth() });
     }
   }
 

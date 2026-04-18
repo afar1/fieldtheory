@@ -185,9 +185,25 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   },
 
   // Unified window resize — notifies the renderer of the new left-pill width.
-  onResize: (callback: (data: { leftWidth: number }) => void) => {
+  onResize: (callback: (data: { leftWidth: number; rightWidth: number }) => void) => {
     ipcRenderer.on('dynamic-island-resize', (_event, data) => callback(data));
   },
+
+  // Agents currently waiting for user attention (Claude / Codex Stop hooks).
+  onAgentsChange: (callback: (agents: Array<{
+    agentId: string;
+    tool: 'claude' | 'codex';
+    pid: number;
+    cwd: string;
+    ttyTitle: string;
+    terminalApp: string;
+    waitingSince: number;
+  }>) => void) => {
+    ipcRenderer.on('dynamic-island-agents', (_event, agents) => callback(agents));
+  },
+
+  // Focus the terminal window/tab associated with a waiting agent.
+  focusAgent: (agentId: string) => ipcRenderer.invoke('agent:focus', agentId),
 
   // Hot-mic background filter controls.
   getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
