@@ -1538,6 +1538,41 @@ declare global {
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
   }
 
+  interface BookmarkImage {
+    url: string;
+    width: number;
+    height: number;
+    type: string;
+    videoUrl?: string;
+  }
+  interface Bookmark {
+    id: string;
+    text: string;
+    url: string;
+    authorHandle: string;
+    authorName: string;
+    authorAvatar: string;
+    postedAt: string;
+    images: BookmarkImage[];
+    mediaCount: number;
+    likeCount: number;
+    repostCount: number;
+    bookmarkCount: number;
+    folders: string[];
+  }
+  interface BookmarkFolder {
+    name: string;
+    id?: string;
+  }
+  interface BookmarksSnapshot {
+    bookmarks: Bookmark[];
+    folders: BookmarkFolder[];
+  }
+  interface BookmarksAPI {
+    getAll: () => Promise<BookmarksSnapshot>;
+    onChanged: (callback: () => void) => () => void;
+  }
+
   /**
    * Concepts index for story/lesson deduplication.
    * Tracks which historical examples and lessons have been used in artifacts.
@@ -1865,6 +1900,7 @@ declare global {
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
     wikiAPI?: WikiAPI;
+    bookmarksAPI?: BookmarksAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;

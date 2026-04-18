@@ -6,11 +6,13 @@ type SortMode = 'alpha' | 'time';
 interface UnifiedItem {
   id: string;
   title: string;
-  type: 'wiki' | 'artifact';
+  type: 'wiki' | 'artifact' | 'bookmarks';
   absPath: string;
   relPath?: string;
   timestamp: number;
 }
+
+export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
 
 interface UnifiedFolder {
   name: string;
@@ -201,13 +203,7 @@ export default function WikiSidebar({
   const visiblePages = flatItems.length;
   const isSearching = searchQuery.trim().length > 0;
 
-  if (unifiedFolders.length === 0) {
-    return (
-      <div style={{ padding: '16px 12px', color: theme.textSecondary, fontSize: '11px' }}>
-        No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
-      </div>
-    );
-  }
+  const emptyWiki = unifiedFolders.length === 0;
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -277,8 +273,54 @@ export default function WikiSidebar({
         {isSearching ? `${visiblePages} of ${totalPages} pages` : `${totalPages} pages`}
       </div>
 
+      {/* Bookmarks — pinned leaf above folders */}
+      {(!isSearching || 'bookmarks'.includes(searchQuery.trim().toLowerCase())) && (
+        <div
+          onClick={() =>
+            onSelectItem({
+              id: BOOKMARKS_ITEM_ID,
+              title: 'Bookmarks',
+              type: 'bookmarks',
+              absPath: '',
+              timestamp: 0,
+            })
+          }
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '8px',
+            padding: '6px 12px',
+            margin: '0 0 4px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 500,
+            color: theme.text,
+            backgroundColor: selectedId === BOOKMARKS_ITEM_ID
+              ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+              : 'transparent',
+            borderLeft: selectedId === BOOKMARKS_ITEM_ID ? `2px solid ${theme.accent}` : '2px solid transparent',
+            userSelect: 'none',
+          }}
+          onMouseEnter={(e) => {
+            if (selectedId !== BOOKMARKS_ITEM_ID) e.currentTarget.style.backgroundColor = theme.hoverBg;
+          }}
+          onMouseLeave={(e) => {
+            if (selectedId !== BOOKMARKS_ITEM_ID) e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+        >
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ color: theme.textSecondary, flexShrink: 0 }}>
+            <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.777.416L8 13.101l-5.223 2.815A.5.5 0 0 1 2 15.5V2z" />
+          </svg>
+          <span>Bookmarks</span>
+        </div>
+      )}
+
       {/* Folder tree */}
-      {filteredFolders.length === 0 ? (
+      {emptyWiki ? (
+        <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
+          No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
+        </div>
+      ) : filteredFolders.length === 0 ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages match that search.
         </div>
