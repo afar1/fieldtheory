@@ -3538,6 +3538,41 @@ const wikiAPI = {
 };
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
 
+interface BookmarkImage {
+  url: string;
+  width: number;
+  height: number;
+  type: string;
+  videoUrl?: string;
+}
+interface Bookmark {
+  id: string;
+  text: string;
+  url: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  postedAt: string;
+  images: BookmarkImage[];
+  mediaCount: number;
+  likeCount: number;
+  repostCount: number;
+  bookmarkCount: number;
+  folders: string[];
+}
+interface BookmarkFolder { name: string; id?: string }
+interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+
+const bookmarksAPI = {
+  getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
+  onChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('bookmarks:changed', handler);
+    return () => ipcRenderer.removeListener('bookmarks:changed', handler);
+  },
+};
+contextBridge.exposeInMainWorld('bookmarksAPI', bookmarksAPI);
+
 interface AgentHookTargets { claude?: boolean; codex?: boolean }
 interface AgentHookStatus { claude: boolean; codex: boolean }
 interface AgentHookResult { success: boolean; message: string; claude: boolean; codex: boolean }

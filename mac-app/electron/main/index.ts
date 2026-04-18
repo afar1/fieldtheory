@@ -67,6 +67,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
@@ -249,6 +250,7 @@ let agentHookInstaller: AgentHookInstaller | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let bookmarksManager: BookmarksManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
@@ -1523,6 +1525,20 @@ function setupLibrarianIPCHandlers(): void {
     librarianManager.on('wiki:changed', () => {
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('wiki:changed');
+      });
+    });
+  }
+
+  ipcMain.handle('bookmarks:getAll', (): BookmarksSnapshot => {
+    if (!bookmarksManager) return { bookmarks: [], folders: [] };
+    return bookmarksManager.getSnapshot();
+  });
+
+  if (bookmarksManager) {
+    bookmarksManager.startWatcher();
+    bookmarksManager.on('bookmarks:changed', () => {
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
       });
     });
   }
@@ -5954,6 +5970,9 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
+
+  // Initialize bookmarks manager for reading synced X bookmarks.
+  bookmarksManager = new BookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
