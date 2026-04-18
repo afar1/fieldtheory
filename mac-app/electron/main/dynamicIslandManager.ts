@@ -161,6 +161,12 @@ export class DynamicIslandManager extends EventEmitter {
   // Agents currently waiting for user attention (hook-driven).
   private waitingAgents: WaitingAgent[] = [];
 
+  // When set, the renderer's computed slot-sum takes precedence over the
+  // state-derived width in updateWindowSize().
+  private requestedLeftWidth: number | null = null;
+  private readonly MIN_REQUESTED_LEFT_WIDTH = 32;
+  private readonly MAX_REQUESTED_LEFT_WIDTH = 240;
+
   // Hot-mic state tracked for the right pill.
   private hotMicActive: boolean = false;
   private hotMicWordCount: number = 0;
@@ -270,6 +276,10 @@ export class DynamicIslandManager extends EventEmitter {
       // transient expanded transparent surfaces during focus transfer.
       this.collapseHistoryPanel('open-field-theory');
       this.emit('open-field-theory');
+    });
+
+    ipcMain.on('dynamic-island-request-left-width', (_event, width: number) => {
+      this.setRequestedLeftWidth(width);
     });
 
     ipcMain.on('dynamic-island-history-visible', (_event, visible: boolean) => {
@@ -420,11 +430,31 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
+  setRequestedLeftWidth(width: number | null): void {
+    const next =
+      width === null
+        ? null
+        : this.clampInt(
+            width,
+            this.MIN_REQUESTED_LEFT_WIDTH,
+            this.MAX_REQUESTED_LEFT_WIDTH,
+            this.MIN_REQUESTED_LEFT_WIDTH
+          );
+    if (next === this.requestedLeftWidth) return;
+    this.requestedLeftWidth = next;
+    this.updateWindowSize();
+  }
+
   setWaitingAgents(agents: WaitingAgent[]): void {
+    const wasActive = this.waitingAgents.length > 0;
+    const isActive = agents.length > 0;
     this.waitingAgents = agents;
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-agents', agents);
+    }
+    if (wasActive !== isActive) {
+      this.tickAutoHide();
     }
   }
 
@@ -1210,7 +1240,7 @@ export class DynamicIslandManager extends EventEmitter {
   private tickAutoHide(): void {
     if (!this.autoHideEnabled || !this.enabled) return;
 
-    const forceVisible = this.isActiveState();
+    const forceVisible = this.shouldForceAutoHideReveal();
     const target = forceVisible ? 1 : this.computeAutoHideProgressFromCursor();
 
     // Active states (recording, hot-mic, etc.) snap instantly to fully visible
@@ -1365,6 +1395,13 @@ export class DynamicIslandManager extends EventEmitter {
     return this.hotMicActive || this.state !== 'idle';
   }
 
+  // Conditions that should force the auto-hide pill to reveal, regardless of
+  // cursor proximity. Broader than isActiveState() — includes passive
+  // notifications (waiting agents) that don't warrant pill-width expansion.
+  private shouldForceAutoHideReveal(): boolean {
+    return this.isActiveState() || this.waitingAgents.length > 0;
+  }
+
   private getIdlePillWidth(): number {
     if (this.geometryTuning.pillWidth === 0) return this.ISLAND_WIDTH_IDLE;
     return this.geometryTuning.pillWidth;
@@ -1453,7 +1490,9 @@ export class DynamicIslandManager extends EventEmitter {
     const showingHistory = this.historyVisible;
     const idleWidth = this.getIdlePillWidth();
     const idleHeight = this.getIdlePillHeight();
-    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : this.getPillWidth();
+    const derivedLeftWidth =
+      this.requestedLeftWidth !== null ? this.requestedLeftWidth : this.getPillWidth();
+    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : derivedLeftWidth;
     const targetHeight = showingHistory ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
     const targetWidth = this.getUnifiedWindowWidth(targetLeftWidth);
 
@@ -1464,8 +1503,13 @@ export class DynamicIslandManager extends EventEmitter {
 
     const [currentWidth, currentHeight] = this.window.getSize();
     const [currentX, currentY] = this.window.getPosition();
-    if (currentHeight !== targetHeight || currentWidth !== targetWidth || currentX !== x || currentY !== y) {
-      this.window.setBounds({ x, y, width: targetWidth, height: targetHeight });
+    const widthChanged = currentWidth !== targetWidth;
+    const heightChanged = currentHeight !== targetHeight;
+    const positionChanged = currentX !== x || currentY !== y;
+    if (widthChanged || heightChanged || positionChanged) {
+      // Animate slot-level resizes (width/position only); history expand snaps.
+      const animate = (widthChanged || positionChanged) && !heightChanged && !showingHistory;
+      this.window.setBounds({ x, y, width: targetWidth, height: targetHeight }, animate);
       this.reinforceWindowBacking('left', 'left-set-bounds');
     }
 
@@ -1518,6 +1562,7 @@ export class DynamicIslandManager extends EventEmitter {
     ipcMain.removeAllListeners('dynamic-island-dismiss-transcript');
     ipcMain.removeAllListeners('dynamic-island-cancel-session');
     ipcMain.removeAllListeners('dynamic-island-open-field-theory');
+    ipcMain.removeAllListeners('dynamic-island-request-left-width');
     this.stackCount = 0;
   }
 }

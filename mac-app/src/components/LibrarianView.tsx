@@ -3,13 +3,14 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo, Fragment } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
-import WikiSidebar, { type UnifiedItem } from './WikiSidebar';
+import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem } from './WikiSidebar';
+import BookmarksPane from './BookmarksPane';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 
 /** Strip YAML frontmatter from wiki page content for display.
@@ -31,7 +32,8 @@ export const LIBRARIAN_IMMERSIVE_STORAGE_KEY = 'librarian-immersive';
 
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
-  | { type: 'artifact'; path: string };
+  | { type: 'artifact'; path: string }
+  | { type: 'bookmarks' };
 
 export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): LibrarianStoredSelection | null {
   const raw = storage.getItem(LIBRARIAN_SELECTION_STORAGE_KEY);
@@ -50,6 +52,9 @@ export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): Li
         type: 'artifact',
         path: parsed.path.trim(),
       };
+    }
+    if (parsed?.type === 'bookmarks') {
+      return { type: 'bookmarks' };
     }
   } catch {
     return null;
@@ -72,7 +77,7 @@ export function persistLibrarianSelection(
 
 export function resolveWikiCreateFolder(
   requestedFolderName: string,
-  selectedItemType: 'wiki' | 'artifact' | null,
+  selectedItemType: 'wiki' | 'artifact' | 'bookmarks' | null,
   wikiSelectedRelPath: string | null
 ): string {
   if (requestedFolderName && requestedFolderName !== 'artifacts') {
@@ -159,11 +164,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
     if (!restoredSelection) return null;
-    return restoredSelection.type === 'wiki'
-      ? `wiki:${restoredSelection.relPath}`
-      : `artifact:${restoredSelection.path}`;
+    if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
+    if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
+    return BOOKMARKS_ITEM_ID;
   });
-  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | null>(() => restoredSelection?.type ?? null);
+  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | null>(() => restoredSelection?.type ?? null);
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
 
@@ -228,6 +233,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
     if (selectedItemType === 'artifact' && selectedPath) {
       persistLibrarianSelection(localStorage, { type: 'artifact', path: selectedPath });
+      return;
+    }
+    if (selectedItemType === 'bookmarks') {
+      persistLibrarianSelection(localStorage, { type: 'bookmarks' });
       return;
     }
     if (selectedPath) {
@@ -421,6 +430,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(item.relPath);
     } else if (item.type === 'artifact') {
       selectArtifactPath(item.absPath);
+    } else if (item.type === 'bookmarks') {
+      setSelectedItemId(BOOKMARKS_ITEM_ID);
+      setSelectedItemType('bookmarks');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
     }
     setContentMode('rendered');
   }, [isDirty, exitEditMode, openWikiPage, selectArtifactPath]);
@@ -1123,6 +1137,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           minHeight: 0, // Required for flex child to shrink below content size
         }}
       >
+        {selectedItemType === 'bookmarks' ? (
+          <BookmarksPane />
+        ) : (<Fragment>
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
           onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
@@ -1837,6 +1854,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           </div>
         )}
         </div>
+        </Fragment>
+        )}
       </div>
 
     </div>

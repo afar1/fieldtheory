@@ -680,6 +680,8 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
   const [historyVisible, setHistoryVisible] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [deletedId, setDeletedId] = useState<number | null>(null);
+  const [waitingAgentCount, setWaitingAgentCount] = useState(0);
+  const [pillHovered, setPillHovered] = useState(false);
   const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
   const [stackCount, setStackCount] = useState(0);
   const [historyWordsPerLine, setHistoryWordsPerLine] = useState(10);
@@ -1017,6 +1019,26 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
   // Pills expand for waveform, silentStacking, or idle with stacked screenshots (so X is visible).
   const expanded = waveformActive || state === 'silentStacking' || (state === 'idle' && stackCount > 0);
 
+  // Slot-based left pill width; reported to main so the window resizes to match.
+  const hamburgerExpanded = waitingAgentCount === 0 || pillHovered;
+  const agentSlotWidth = waitingAgentCount > 0
+    ? Math.min(waitingAgentCount, 3) * 22
+      + (waitingAgentCount > 3 ? 22 : 0)
+      + 8 /* AgentAttention internal padding */
+    : 0;
+  const SLOT_CONTENT_WIDTH = 22; // matches traySlotStyle
+  const SLOT_MARGIN = 8;
+  const PILL_PADDING = 16; // 8 each side
+  const desiredLeftWidth =
+    PILL_PADDING
+    + (expanded ? SLOT_CONTENT_WIDTH + SLOT_MARGIN : 0)
+    + agentSlotWidth
+    + (hamburgerExpanded ? SLOT_CONTENT_WIDTH + SLOT_MARGIN : 0);
+
+  useEffect(() => {
+    (window as any).dynamicIslandAPI?.requestLeftPillWidth?.(desiredLeftWidth);
+  }, [desiredLeftWidth]);
+
   const handleCancelSession = useCallback(() => {
     (window as any).dynamicIslandAPI?.cancelSession?.();
   }, []);
@@ -1031,6 +1053,8 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
     >
       <div
         className="di-left-pill"
+        onMouseEnter={() => setPillHovered(true)}
+        onMouseLeave={() => setPillHovered(false)}
         style={{
           ...styles.island,
           ...styles.islandIdle,
@@ -1052,15 +1076,13 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
             <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </div>
-        <AgentAttention />
-        {/* Hamburger menu — always visible */}
-        <button
+        <AgentAttention onCountChanged={setWaitingAgentCount} />
+        {/* Hamburger slot — collapses to 0 width when an agent glyph is showing
+            and the user isn't hovering. Same slide-in animation as the X cancel. */}
+        <div
           className="di-hamburger"
           onClick={toggleHistory}
-          style={{
-            ...styles.hamburger,
-            backgroundColor: 'transparent',
-          }}
+          style={{ ...traySlotStyle(hamburgerExpanded), cursor: 'pointer' }}
           title="transcript history"
         >
           <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
@@ -1068,7 +1090,7 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
             <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
             <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
           </svg>
-        </button>
+        </div>
       </div>
 
       {historyVisible && (
@@ -1826,6 +1848,7 @@ declare global {
         waitingSince: number;
       }>) => void) => void;
       focusAgent?: (agentId: string) => Promise<boolean>;
+      requestLeftPillWidth?: (width: number) => void;
       removeAllListeners: (channel: string) => void;
     };
   }

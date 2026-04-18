@@ -42,13 +42,21 @@ if (typeof document !== 'undefined' && !document.getElementById(KEYFRAMES_ID)) {
 
 const MAX_VISIBLE = 3;
 
-export function AgentAttention() {
+interface AgentAttentionProps {
+  onCountChanged?: (count: number) => void;
+}
+
+export function AgentAttention({ onCountChanged }: AgentAttentionProps = {}) {
   const [agents, setAgents] = useState<WaitingAgent[]>([]);
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
     api?.onAgentsChange?.((next: WaitingAgent[]) => setAgents(next));
   }, []);
+
+  useEffect(() => {
+    onCountChanged?.(agents.length);
+  }, [agents.length, onCountChanged]);
 
   if (agents.length === 0) return null;
 

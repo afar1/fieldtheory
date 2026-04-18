@@ -205,6 +205,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   // Focus the terminal window/tab associated with a waiting agent.
   focusAgent: (agentId: string) => ipcRenderer.invoke('agent:focus', agentId),
 
+  // Renderer-driven left pill width — sum of currently visible slot widths.
+  requestLeftPillWidth: (width: number) => {
+    ipcRenderer.send('dynamic-island-request-left-width', width);
+  },
+
   // Hot-mic background filter controls.
   getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
   setHotMicBackgroundFilterEnabled: (enabled: boolean) => ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled),
