@@ -414,12 +414,24 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const vh = window.innerHeight;
       const maxW = vw * 0.7;
       const maxH = vh * 0.7;
-      const aspectRatio = rect.width / rect.height;
-      let targetW: number; let targetH: number;
-      if (maxW / maxH > aspectRatio) {
-        targetH = maxH; targetW = targetH * aspectRatio;
+      const hasImage = !!(bookmark.images && bookmark.images.length > 0);
+      let targetW: number;
+      let targetH: number;
+      if (hasImage) {
+        // Image bookmarks keep their intrinsic aspect ratio when zoomed.
+        const aspectRatio = rect.width / rect.height;
+        if (maxW / maxH > aspectRatio) {
+          targetH = maxH; targetW = targetH * aspectRatio;
+        } else {
+          targetW = maxW; targetH = targetW / aspectRatio;
+        }
       } else {
-        targetW = maxW; targetH = targetW / aspectRatio;
+        // Text-only cards reflow when scaled, so aspect ratio is meaningless —
+        // measure actual content at a readable width and clamp to [min, maxH].
+        const MIN_TEXT_H = 160;
+        targetW = Math.min(maxW, 560);
+        const measured = measureTextCardHeight(bookmark, targetW);
+        targetH = Math.min(maxH, Math.max(MIN_TEXT_H, measured));
       }
 
       const startX = rect.left;
@@ -450,7 +462,6 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         if (val) clone.style.setProperty(v, val);
       }
 
-      const hasImage = bookmark.images && bookmark.images.length > 0;
       if (hasImage) {
         const hiRes = document.createElement('img');
         hiRes.src = twitterImageUrl(bookmark.images[0].url, '4096x4096');
