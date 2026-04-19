@@ -5,6 +5,7 @@
 
 import { useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import ImmersiveToggle from './ImmersiveToggle';
 
 // Icon sizes - 22% larger than the original 13px base
 const ICON_SIZE = 16; // ~22% larger than 13px
@@ -120,30 +121,6 @@ export default function ContentToolbar({
         padding: '0 4px',
       }}
     >
-      {/* Expand/collapse toggle */}
-      {onToggleFullScreen && (
-        <button
-          onClick={onToggleFullScreen}
-          style={{
-            padding: '4px 6px',
-            fontSize: '20px',
-            color: theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            lineHeight: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
-          }}
-          title={isFullScreen ? "Show sidebar" : "Focus mode"}
-        >
-          {isFullScreen ? '⤡' : '⤢'}
-        </button>
-      )}
-
       {/* Text size controls */}
       {showTextSize && onTextSizeChange && (
         <div
@@ -396,6 +373,10 @@ export default function ContentToolbar({
         </button>
       )}
 
+      {/* Immersive toggle — standardized top-right position across views. */}
+      {onToggleFullScreen && (
+        <ImmersiveToggle isFullScreen={isFullScreen} onToggle={onToggleFullScreen} />
+      )}
     </div>
   );
 }

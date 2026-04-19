@@ -234,6 +234,12 @@ export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(document.visibilityState === 'visible');
+
+  // When the window hides, the auto-popped-artifact exception expires: next
+  // open is a fresh session and Escape should follow the normal hierarchy.
+  useEffect(() => {
+    if (!isWindowVisible) setAutoPopArtifactPath(null);
+  }, [isWindowVisible]);
   useEffect(() => {
     const handler = () => setIsWindowVisible(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', handler);
@@ -280,6 +286,10 @@ export default function ClipboardHistory() {
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
+  // Path of an artifact the librarian auto-popped that the user hasn't navigated
+  // away from yet. While this is set, Escape dismisses the window (preserving
+  // the artifact-popup UX) rather than merely exiting immersive.
+  const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [headerHovered, setHeaderHovered] = useState(false);
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
@@ -1392,6 +1402,16 @@ export default function ClipboardHistory() {
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
 
+    // Push the active size-key to main so window bounds match the view.
+    // Librarian is delegated: LibrarianView/BookmarksPane push their own key.
+    if (showSettings) {
+      window.librarianAPI?.setSizeKey?.('fields');
+    } else if (viewMode === 'sketch') {
+      window.librarianAPI?.setSizeKey?.('draw');
+    } else if (viewMode !== 'librarian') {
+      window.librarianAPI?.setSizeKey?.('fields');
+    }
+
     // Log completion time
     requestAnimationFrame(() => {
       const switchEndTime = performance.now();
@@ -1676,6 +1696,7 @@ export default function ClipboardHistory() {
       // If there's a pending reading, show it in immersive mode
       if (status.pendingPath) {
         setPendingReadingPath(status.pendingPath);
+        setAutoPopArtifactPath(status.pendingPath);
         setShowSettings(false);
         setViewMode('librarian');
         setLibrarianImmersive(true);
@@ -3970,6 +3991,8 @@ export default function ClipboardHistory() {
           initialReadingPath={pendingReadingPath}
           initialFullScreen={librarianImmersive}
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
+          autoPopArtifactPath={autoPopArtifactPath}
+          onAutoPopArtifactSuperseded={() => setAutoPopArtifactPath(null)}
         />
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others

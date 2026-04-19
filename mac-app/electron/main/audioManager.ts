@@ -116,6 +116,9 @@ export class AudioManager extends EventEmitter {
    * Sets up event listeners, fetches initial state, and starts monitoring.
    */
   async init(): Promise<void> {
+    const initStart = Date.now();
+    log.info('[audio-startup] init begin');
+
     // Set up event listeners for the native helper.
     this.helper.on('devicesChanged', (devices: AudioDevice[]) => {
       this.handleDevicesChanged(devices);
@@ -131,8 +134,11 @@ export class AudioManager extends EventEmitter {
 
     // Fetch initial device list and default input.
     try {
+      const tRefresh = Date.now();
       await this.refreshDevices();
       await this.refreshDefaultInput();
+      log.info('[audio-startup] refresh done in %dms (default=%s, saved=%s, favorite=%s)',
+        Date.now() - tRefresh, this.defaultInputId, this.savedPriorityDeviceId, this.favoriteDeviceName);
 
       log.info('Audio init - favoriteDeviceName from prefs:', this.favoriteDeviceName);
       log.info('Audio init - available inputs:', this.devices.filter(d => d.isInput).map(d => d.name));
@@ -143,9 +149,11 @@ export class AudioManager extends EventEmitter {
       if (this.savedPriorityDeviceId) {
         const deviceExists = this.devices.some(d => d.id === this.savedPriorityDeviceId);
         if (deviceExists) {
+          log.info('[audio-startup] restoring priority by saved ID: %s', this.savedPriorityDeviceId);
           await this.setPriorityDevice(this.savedPriorityDeviceId);
           deviceRestored = true;
         } else {
+          log.info('[audio-startup] saved priority ID %s not present; will try favorite name', this.savedPriorityDeviceId);
           this.savedPriorityDeviceId = null;
         }
       }
@@ -155,18 +163,23 @@ export class AudioManager extends EventEmitter {
       if (!deviceRestored && this.favoriteDeviceName) {
         const favoriteDevice = this.devices.find(d => d.name === this.favoriteDeviceName && d.isInput);
         if (favoriteDevice) {
-          log.info('Restoring priority from favorite:', this.favoriteDeviceName);
+          log.info('[audio-startup] restoring priority by favorite name "%s" -> %s', this.favoriteDeviceName, favoriteDevice.id);
           await this.setPriorityDevice(favoriteDevice.id);
         } else {
-          log.info('Favorite device not currently connected:', this.favoriteDeviceName);
+          log.info('[audio-startup] favorite "%s" not connected; no priority restore', this.favoriteDeviceName);
         }
+      } else if (!deviceRestored) {
+        log.info('[audio-startup] no priority restore (no saved ID, no favorite)');
       }
     } catch (error) {
       log.error('Failed to fetch initial state:', error);
     }
 
     // Start monitoring for CoreAudio changes.
+    const tMonitor = Date.now();
     await this.helper.startMonitoring();
+    log.info('[audio-startup] startMonitoring done in %dms', Date.now() - tMonitor);
+    log.info('[audio-startup] init complete in %dms', Date.now() - initStart);
 
     // Emit initial state to subscribers.
     this.emitStateChanged();
@@ -417,19 +430,22 @@ export class AudioManager extends EventEmitter {
 
     // If priority device is already the default, nothing to do.
     if (this.defaultInputId === this.priorityDeviceId) {
-      log.debug('enforcePriority: already default (%s)', priorityDevice.name);
+      log.info('[audio-startup] enforcePriority: already default (%s) — no HAL write', priorityDevice.name);
       return;
     }
 
     // Set priority device as the default input.
     // When locked, we always enforce - ignore auto-switches from macOS.
-    log.info('enforcePriority: switching default input to "%s" (was %s)', priorityDevice.name, this.defaultInputId);
+    log.info('[audio-startup] enforcePriority: WILL HAL-WRITE default input "%s" (was %s) — this is the cutout point',
+      priorityDevice.name, this.defaultInputId);
 
     // Mark that we're setting the default to avoid treating it as user override.
     this.isSettingDefaultInput = true;
 
+    const tEnforce = Date.now();
     try {
       await this.applyDefaultInputAndWaitForSettle(this.priorityDeviceId);
+      log.info('[audio-startup] enforcePriority: settle complete in %dms', Date.now() - tEnforce);
       this.defaultInputId = this.priorityDeviceId;
       this.emit('deviceEnforced');
     } finally {
@@ -486,9 +502,14 @@ export class AudioManager extends EventEmitter {
 
       this.helper.on('defaultInputChanged', onDefaultInputChanged);
 
+      const tHalBefore = Date.now();
       try {
+        log.info('[audio-startup] helper.setDefaultInput(%s): calling HAL write', deviceId);
         this.helper.setDefaultInput(deviceId);
+        log.info('[audio-startup] helper.setDefaultInput(%s): returned synchronously in %dms (audio cutout should occur during this call)',
+          deviceId, Date.now() - tHalBefore);
       } catch (error) {
+        log.error('[audio-startup] helper.setDefaultInput(%s) threw after %dms: %s', deviceId, Date.now() - tHalBefore, error);
         cleanup();
         reject(error);
       }

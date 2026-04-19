@@ -1,46 +1,82 @@
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import BookmarksList from './BookmarksList';
 import BookmarksCanvas from './BookmarksCanvas';
+import ImmersiveToggle from './ImmersiveToggle';
+import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
 const STORAGE_KEY = 'bookmarks-view-mode';
+const SHOW_TEXT_KEY = 'bookmarks-show-text';
 
 function loadMode(): BookmarksViewMode {
   const saved = localStorage.getItem(STORAGE_KEY);
   return saved === 'list' ? 'list' : 'canvas';
 }
 
-export default function BookmarksPane() {
+function loadShowText(): boolean {
+  const saved = localStorage.getItem(SHOW_TEXT_KEY);
+  return saved === null ? true : saved === '1';
+}
+
+interface BookmarksPaneProps {
+  isFullScreen?: boolean;
+  onToggleFullScreen?: () => void;
+}
+
+export default function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
-  const [snapshot, setSnapshot] = useState<BookmarksSnapshot | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [snapshot, setSnapshot] = useState<BookmarksSnapshot | null>(() => peekBookmarks());
   const [folder, setFolder] = useState<string>('All');
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedQuery, setDebouncedQuery] = useState('');
+  const [showText, setShowText] = useState<boolean>(loadShowText);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const loading = snapshot === null;
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
+    // Push the right size-key so the window resizes to the canvas or library
+    // profile depending on which bookmarks view is active.
+    window.librarianAPI?.setSizeKey?.(mode === 'canvas' ? 'canvas' : 'library');
   }, [mode]);
 
   useEffect(() => {
+    localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
+  }, [showText]);
+
+  useEffect(() => {
     let cancelled = false;
-    const load = async () => {
-      const data = await window.bookmarksAPI?.getAll();
-      if (cancelled) return;
-      setSnapshot(data ?? { bookmarks: [], folders: [] });
-      setLoading(false);
-    };
-    load();
-    const unsub = window.bookmarksAPI?.onChanged(() => load());
-    return () => { cancelled = true; unsub?.(); };
+    getBookmarks().then((data) => {
+      if (!cancelled) setSnapshot(data);
+    });
+    const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
+    return () => { cancelled = true; unsub(); };
   }, []);
+
+  // Debounce search input; 7k substring scans is fast but avoid churn while typing.
+  useEffect(() => {
+    const id = window.setTimeout(() => setDebouncedQuery(searchQuery.trim().toLowerCase()), 80);
+    return () => window.clearTimeout(id);
+  }, [searchQuery]);
 
   const filtered = useMemo(() => {
     if (!snapshot) return [];
-    if (folder === 'All') return snapshot.bookmarks;
-    return snapshot.bookmarks.filter((b) => b.folders.includes(folder));
-  }, [snapshot, folder]);
+    let list = snapshot.bookmarks;
+    if (!showText) list = list.filter((b) => b.images && b.images.length > 0);
+    if (folder !== 'All') list = list.filter((b) => b.folders.includes(folder));
+    if (debouncedQuery) {
+      const q = debouncedQuery;
+      list = list.filter((b) =>
+        b.text.toLowerCase().includes(q) ||
+        b.authorHandle.toLowerCase().includes(q) ||
+        b.authorName.toLowerCase().includes(q)
+      );
+    }
+    return list;
+  }, [snapshot, folder, debouncedQuery, showText]);
 
   const folders = snapshot?.folders ?? [];
 
@@ -91,7 +127,52 @@ export default function BookmarksPane() {
           })}
         </div>
 
-        <div style={{ flex: 1 }} />
+        {/* Search */}
+        <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search bookmarks"
+            style={{
+              flex: 1,
+              maxWidth: '360px',
+              padding: '5px 10px',
+              fontSize: '11px',
+              color: theme.text,
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              outline: 'none',
+            }}
+          />
+        </div>
+
+        {/* Show text toggle */}
+        <button
+          onClick={() => setShowText((v) => !v)}
+          title={showText ? 'Hide text-only bookmarks' : 'Show text-only bookmarks'}
+          style={{
+            padding: '4px 10px',
+            fontSize: '11px',
+            color: showText ? theme.text : theme.textSecondary,
+            backgroundColor: showText
+              ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+              : 'transparent',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontWeight: 500,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+          }}
+        >
+          <svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2 4h12v1.5H2V4zm0 3h12v1.5H2V7zm0 3h8v1.5H2V10z" />
+          </svg>
+          <span>Text</span>
+        </button>
 
         {/* Folder filter */}
         {folders.length > 0 && (
@@ -168,6 +249,10 @@ export default function BookmarksPane() {
         <div style={{ fontSize: '10px', color: theme.textSecondary, opacity: 0.7 }}>
           {loading ? 'Loading…' : `${filtered.length} bookmarks`}
         </div>
+
+        {onToggleFullScreen && (
+          <ImmersiveToggle isFullScreen={!!isFullScreen} onToggle={onToggleFullScreen} />
+        )}
       </div>
 
       {/* Content */}

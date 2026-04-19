@@ -205,11 +205,6 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   // Focus the terminal window/tab associated with a waiting agent.
   focusAgent: (agentId: string) => ipcRenderer.invoke('agent:focus', agentId),
 
-  // Renderer-driven left pill width — sum of currently visible slot widths.
-  requestLeftPillWidth: (width: number) => {
-    ipcRenderer.send('dynamic-island-request-left-width', width);
-  },
-
   // Hot-mic background filter controls.
   getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
   setHotMicBackgroundFilterEnabled: (enabled: boolean) => ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled),
@@ -218,6 +213,12 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   getHotMicDrawerTextSize: () => ipcRenderer.invoke('hotmic:getDrawerTextSize'),
   getInputMode: () => ipcRenderer.invoke('hotmic:getInputMode'),
   setInputMode: (mode: 'hot-mic' | 'standard') => ipcRenderer.invoke('hotmic:setInputMode', mode),
+
+  // Diagnostic: renderer echoes its width math to main so widths from both
+  // sides land in the same trace file (~/.fieldtheory/debug/pill-widths.log).
+  debugRender: (payload: Record<string, unknown>) => {
+    ipcRenderer.send('di:debug-render', payload);
+  },
 
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);

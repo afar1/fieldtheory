@@ -1,10 +1,30 @@
 import { BrowserWindow, screen, app, ipcMain, clipboard } from 'electron';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { createLogger } from './logger';
 import type { WaitingAgent } from './types/agentAttention';
 
 const log = createLogger('DynamicIsland');
+
+// Debug: pill-width trace. Writes to ~/.fieldtheory/debug/pill-widths.log
+// every time main resizes the island window. Includes renderer echo-back
+// values via the 'di:debug-render' IPC. Read this file to diagnose clipped
+// corners / wrong widths / animation mismatches.
+const PILL_DEBUG_FILE = path.join(os.homedir(), '.fieldtheory', 'debug', 'pill-widths.log');
+let pillDebugReady = false;
+function pillDebugWrite(line: string): void {
+  try {
+    if (!pillDebugReady) {
+      fs.mkdirSync(path.dirname(PILL_DEBUG_FILE), { recursive: true });
+      pillDebugReady = true;
+    }
+    fs.appendFileSync(PILL_DEBUG_FILE, `${new Date().toISOString()} ${line}\n`, 'utf-8');
+  } catch {
+    // best-effort, never break on logging
+  }
+}
 
 // =============================================================================
 // DynamicIslandManager - Fixed-position overlay near the macOS notch.
@@ -161,12 +181,6 @@ export class DynamicIslandManager extends EventEmitter {
   // Agents currently waiting for user attention (hook-driven).
   private waitingAgents: WaitingAgent[] = [];
 
-  // When set, the renderer's computed slot-sum takes precedence over the
-  // state-derived width in updateWindowSize().
-  private requestedLeftWidth: number | null = null;
-  private readonly MIN_REQUESTED_LEFT_WIDTH = 32;
-  private readonly MAX_REQUESTED_LEFT_WIDTH = 240;
-
   // Hot-mic state tracked for the right pill.
   private hotMicActive: boolean = false;
   private hotMicWordCount: number = 0;
@@ -278,10 +292,6 @@ export class DynamicIslandManager extends EventEmitter {
       this.emit('open-field-theory');
     });
 
-    ipcMain.on('dynamic-island-request-left-width', (_event, width: number) => {
-      this.setRequestedLeftWidth(width);
-    });
-
     ipcMain.on('dynamic-island-history-visible', (_event, visible: boolean) => {
       if (!visible) {
         this.collapseHistoryPanel('renderer-history-toggle-close');
@@ -293,6 +303,10 @@ export class DynamicIslandManager extends EventEmitter {
       // window so the left pill geometry never expands/couples again.
       this.collapseHistoryPanel('renderer-history-toggle-open-redirect');
       this.emit('open-field-theory');
+    });
+
+    ipcMain.on('di:debug-render', (_event, payload: Record<string, unknown>) => {
+      pillDebugWrite(`REND ${JSON.stringify(payload)}`);
     });
   }
 
@@ -430,31 +444,22 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
-  setRequestedLeftWidth(width: number | null): void {
-    const next =
-      width === null
-        ? null
-        : this.clampInt(
-            width,
-            this.MIN_REQUESTED_LEFT_WIDTH,
-            this.MAX_REQUESTED_LEFT_WIDTH,
-            this.MIN_REQUESTED_LEFT_WIDTH
-          );
-    if (next === this.requestedLeftWidth) return;
-    this.requestedLeftWidth = next;
-    this.updateWindowSize();
-  }
-
   setWaitingAgents(agents: WaitingAgent[]): void {
-    const wasActive = this.waitingAgents.length > 0;
-    const isActive = agents.length > 0;
+    const prevCount = this.waitingAgents.length;
+    const nextCount = agents.length;
     this.waitingAgents = agents;
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-agents', agents);
     }
-    if (wasActive !== isActive) {
-      this.tickAutoHide();
+    // Pill width is granular per agent count (see getPillWidth), so resize on
+    // every count change. Auto-hide only ticks on the 0↔non-zero transition
+    // because that's when the "should be revealed" predicate flips.
+    if (prevCount !== nextCount) {
+      this.updateWindowSize();
+      if ((prevCount === 0) !== (nextCount === 0)) {
+        this.tickAutoHide();
+      }
     }
   }
 
@@ -725,7 +730,9 @@ export class DynamicIslandManager extends EventEmitter {
         }
         this.sendStateToRenderer(this.state);
         this.sendInputModeToRenderers();
-        const leftWidth = this.historyVisible ? this.ISLAND_WIDTH : this.getIdlePillWidth();
+        // Seed both sides with the same width so the first frame is symmetric;
+        // getPillWidth() already accounts for agents and active state.
+        const leftWidth = this.historyVisible ? this.ISLAND_WIDTH : this.getPillWidth();
         this.window.webContents.send('dynamic-island-resize', { leftWidth, rightWidth: this.getRightPillWidth() });
         this.window.webContents.send('dynamic-island-stack-changed', this.stackCount);
         this.window.webContents.send('dynamic-island-agents', this.waitingAgents);
@@ -1407,13 +1414,49 @@ export class DynamicIslandManager extends EventEmitter {
     return this.geometryTuning.pillWidth;
   }
 
-  private getExpandedPillWidth(): number {
-    const idle = this.getIdlePillWidth();
-    return Math.max(Math.round(idle * 1.5), this.ISLAND_WIDTH_IDLE);
+  // Main sizes the Electron window to fit the renderer's worst-case slot sum
+  // for the current state so the outer wrapper stays tight against the
+  // visible pill. Constants must stay in sync with src/components/pillWidths.ts.
+  private readonly PILL_PADDING = 18;
+  private readonly PILL_HAMBURGER = 22;
+  private readonly PILL_CANCEL_X = 30;   // X cancel slot (22) + 8 gap
+  private readonly PILL_WAVEFORM = 88;   // waveform slot (80) + 8 gap
+  private readonly PILL_AGENT_SLOT = 28;
+  private readonly PILL_AGENT_OVERFLOW = 30;
+  private readonly PILL_AGENT_MAX_VISIBLE = 3;
+
+  private pipeSlotWidth(pipeCount: number): number {
+    if (pipeCount >= 10) return 38;
+    if (pipeCount > 3) return 32;
+    return 22;
   }
 
+  // Worst-case pill width the renderer might ever show for the current state +
+  // agent count, on EITHER side. Window is sized to this; sections never
+  // overflow, so the rounded outer corners stay inside the window clip area.
   private getPillWidth(): number {
-    return this.isActiveState() ? this.getExpandedPillWidth() : this.getIdlePillWidth();
+    const n = this.waitingAgents.length;
+    const isActive = this.isActiveState();
+    if (!isActive && n === 0) return this.getIdlePillWidth();
+
+    const visible = Math.min(n, this.PILL_AGENT_MAX_VISIBLE);
+    const hasOverflow = n > this.PILL_AGENT_MAX_VISIBLE;
+
+    // Left section: padding + X cancel (active) + agents + overflow + hamburger.
+    const left =
+      this.PILL_PADDING
+      + (isActive ? this.PILL_CANCEL_X : 0)
+      + visible * this.PILL_AGENT_SLOT
+      + (hasOverflow ? this.PILL_AGENT_OVERFLOW : 0)
+      + this.PILL_HAMBURGER;
+
+    // Right section: padding + waveform (active) + pipe slot (stacking).
+    const right =
+      this.PILL_PADDING
+      + (isActive ? this.PILL_WAVEFORM : 0)
+      + (this.stackCount > 0 ? this.pipeSlotWidth(this.stackCount) : 0);
+
+    return Math.max(left, right, this.getIdlePillWidth());
   }
 
   private getIdlePillHeight(): number {
@@ -1490,9 +1533,7 @@ export class DynamicIslandManager extends EventEmitter {
     const showingHistory = this.historyVisible;
     const idleWidth = this.getIdlePillWidth();
     const idleHeight = this.getIdlePillHeight();
-    const derivedLeftWidth =
-      this.requestedLeftWidth !== null ? this.requestedLeftWidth : this.getPillWidth();
-    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : derivedLeftWidth;
+    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : this.getPillWidth();
     const targetHeight = showingHistory ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
     const targetWidth = this.getUnifiedWindowWidth(targetLeftWidth);
 
@@ -1507,10 +1548,27 @@ export class DynamicIslandManager extends EventEmitter {
     const heightChanged = currentHeight !== targetHeight;
     const positionChanged = currentX !== x || currentY !== y;
     if (widthChanged || heightChanged || positionChanged) {
-      // Animate slot-level resizes (width/position only); history expand snaps.
+      // Animate slot-level resizes (width-only); history expand (height
+      // change) snaps because it's a distinct motion, not a slot reflow.
       const animate = (widthChanged || positionChanged) && !heightChanged && !showingHistory;
       this.window.setBounds({ x, y, width: targetWidth, height: targetHeight }, animate);
       this.reinforceWindowBacking('left', 'left-set-bounds');
+      log.debug(
+        'pill %d+%d+%d=%d agents=%d active=%s stack=%d',
+        targetLeftWidth,
+        this.getGapFillWidth(),
+        this.getRightPillWidth(),
+        targetWidth,
+        this.waitingAgents.length,
+        this.isActiveState(),
+        this.stackCount,
+      );
+      pillDebugWrite(
+        `MAIN setBounds W=${targetWidth} left=${targetLeftWidth} gap=${this.getGapFillWidth()} ` +
+        `right=${this.getRightPillWidth()} animate=${animate} ` +
+        `agents=${this.waitingAgents.length} active=${this.isActiveState()} ` +
+        `state=${this.state} mode=${this.inputMode} stack=${this.stackCount}`,
+      );
     }
 
     if (this.rendererReady) {
@@ -1562,7 +1620,6 @@ export class DynamicIslandManager extends EventEmitter {
     ipcMain.removeAllListeners('dynamic-island-dismiss-transcript');
     ipcMain.removeAllListeners('dynamic-island-cancel-session');
     ipcMain.removeAllListeners('dynamic-island-open-field-theory');
-    ipcMain.removeAllListeners('dynamic-island-request-left-width');
     this.stackCount = 0;
   }
 }

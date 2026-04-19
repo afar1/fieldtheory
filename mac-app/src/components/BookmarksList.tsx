@@ -41,7 +41,10 @@ export default function BookmarksList({ bookmarks }: { bookmarks: Bookmark[] }) 
               borderRadius: '10px',
               backgroundColor: theme.isDark ? 'rgba(255,255,255,0.02)' : 'rgba(0,0,0,0.015)',
               transition: 'background-color 0.15s ease, border-color 0.15s ease',
-            }}
+              // Skip layout + paint for cards offscreen — huge win at 7k items.
+              contentVisibility: 'auto',
+              containIntrinsicSize: '160px',
+            } as React.CSSProperties}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = theme.hoverBg;
             }}
