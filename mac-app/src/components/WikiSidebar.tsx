@@ -127,11 +127,18 @@ export default function WikiSidebar({
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
+    // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
+    const onFocus = () => {
+      loadTree();
+      loadArtifacts();
+    };
+    window.addEventListener('focus', onFocus);
     return () => {
       unsubWiki?.();
       unsubAdded?.();
       unsubRemoved?.();
       unsubUpdated?.();
+      window.removeEventListener('focus', onFocus);
     };
   }, [loadTree, loadArtifacts]);
 
