@@ -5,7 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createLogger } from './logger';
-import type { WaitingAgent } from './types/agentAttention';
+import type { AgentTool, WaitingAgent } from './types/agentAttention';
 
 const log = createLogger('AgentAttention');
 const execAsync = promisify(exec);
@@ -25,6 +25,10 @@ export class AgentAttentionManager extends EventEmitter {
   private debounceTimer: NodeJS.Timeout | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private readonly RESCAN_DEBOUNCE_MS = 80;
+  // When set, real file-watcher updates are suppressed and getWaiting() returns
+  // the synthetic list. Used by the dev hotkey (Ctrl+Alt+Shift+A) to stress-test
+  // Dynamic Island pill sizing with N agents without needing live CLI sessions.
+  private syntheticOverride: WaitingAgent[] | null = null;
 
   constructor(stateDir?: string) {
     super();
@@ -44,9 +48,30 @@ export class AgentAttentionManager extends EventEmitter {
   }
 
   getWaiting(): WaitingAgent[] {
+    if (this.syntheticOverride !== null) return [...this.syntheticOverride];
     return Array.from(this.waiting.values()).sort(
       (a, b) => a.waitingSince - b.waitingSince
     );
+  }
+
+  setSynthetic(count: number): void {
+    if (count <= 0) {
+      this.syntheticOverride = null;
+      this.emit('change', this.getWaiting());
+      return;
+    }
+    const tools: AgentTool[] = ['claude', 'codex'];
+    const now = Date.now();
+    this.syntheticOverride = Array.from({ length: count }, (_, i) => ({
+      agentId: `synthetic-${i}`,
+      tool: tools[i % tools.length],
+      pid: 0,
+      cwd: `/synthetic/${i}`,
+      ttyTitle: `synthetic-${i}`,
+      terminalApp: 'synthetic',
+      waitingSince: now + i,
+    }));
+    this.emit('change', [...this.syntheticOverride]);
   }
 
   async focus(agentId: string): Promise<boolean> {
@@ -88,6 +113,10 @@ export class AgentAttentionManager extends EventEmitter {
   }
 
   private rescan(): void {
+    // Synthetic override freezes the agent list so the dev hotkey's chosen
+    // count isn't immediately overwritten by the real watcher emitting an
+    // empty set (no real agents waiting in dev).
+    if (this.syntheticOverride !== null) return;
     let files: string[];
     try {
       files = fs.readdirSync(this.stateDir).filter(f => f.endsWith('.json'));

@@ -23,6 +23,12 @@ import {
   WAVEFORM_BAR_COUNT,
 } from '../utils/audioWaveform';
 import { AgentAttention } from './AgentAttention';
+import { PillSlot } from './PillSlot';
+import {
+  computeLeftPillWidth,
+  computeRightPillWidth,
+  pipeSlotWidthForCount,
+} from './pillWidths';
 
 type IslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
 
@@ -148,26 +154,15 @@ function timeAgo(timestamp: number): string {
   return `${days}d ago`;
 }
 
-// Shared animated tray slot style — used by both pills for collapsible elements.
-function traySlotStyle(expanded: boolean): React.CSSProperties {
-  return {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: expanded ? '22px' : '0px',
-    minWidth: expanded ? '22px' : '0px',
-    height: '22px',
-    overflow: 'hidden',
-    transition: 'width 200ms ease, min-width 200ms ease, margin-right 200ms ease',
-    marginRight: expanded ? '8px' : '0px',
-  };
-}
-
 // =============================================================================
 // Right pill — waveform + pipe bars
 // =============================================================================
 
-function RightPill() {
+interface RightPillProps {
+  sectionWidth?: number;
+  onSlotSumChange?: (sum: number) => void;
+}
+function RightPill({ sectionWidth, onSlotSumChange }: RightPillProps = {}) {
   const [pipeCount, setPipeCount] = useState(0);
   const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
   const [state, setState] = useState<IslandState>('idle');
@@ -239,43 +234,34 @@ function RightPill() {
     setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
   }, [filterMeterRawLevel, standardAudioLevel, inputMode, state]);
 
-  const pipeSlotWidth = pipeCount > 3 ? (pipeCount >= 10 ? '38px' : '32px') : '22px';
+  const WAVEFORM_SLOT_WIDTH = 80;
+  const pipeSlotWidth = pipeSlotWidthForCount(pipeCount);
+
+  const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount });
+  useEffect(() => {
+    onSlotSumChange?.(rightSlotSum);
+  }, [rightSlotSum, onSlotSumChange]);
 
   return (
-    <div style={rightStyles.outerContainer}>
-      <div
-        className="di-right-pill"
-        style={{
-          ...rightStyles.pill,
-          width: expanded ? '100%' : '48px',
-          transition: 'width 200ms ease',
-        }}
-      >
-        {/* Slot 3: Waveform — collapses to 0 when no session active (not during silentStacking) */}
-        <div style={traySlotStyle(waveformActive)}>
-          <div aria-hidden="true" style={rightStyles.waveformContainer}>
-            <WaveformBars levels={waveformLevels} color={waveformColor} />
-          </div>
+    <div
+      className="di-section di-section--right"
+      style={{ width: sectionWidth, height: 38 }}
+    >
+      <PillSlot visible={waveformActive} width={WAVEFORM_SLOT_WIDTH} marginRight={8}>
+        <div aria-hidden="true" style={rightStyles.waveformContainer}>
+          <WaveformBars levels={waveformLevels} color={waveformColor} />
         </div>
-        {/* Slot 4: Pipe bars — widens when overflow count appears */}
-        <div style={{
-          ...rightStyles.pipeSlot,
-          width: pipeSlotWidth,
-          minWidth: pipeSlotWidth,
-          transition: 'width 200ms ease, min-width 200ms ease',
-        }}>
-          {pipeCount > 0 && (
-            <div style={rightStyles.pipeGroup}>
-              {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
-                <span key={i} style={{ ...rightStyles.pipeChar, opacity: animatedPipes.has(i) ? 1 : 0 }}>|</span>
-              ))}
-              {pipeCount > 3 && (
-                <span style={rightStyles.pipeOverflow}>+{pipeCount - 3}</span>
-              )}
-            </div>
+      </PillSlot>
+      <PillSlot visible={pipeCount > 0} width={pipeSlotWidth} marginRight={0}>
+        <div style={rightStyles.pipeGroup}>
+          {Array.from({ length: Math.min(pipeCount, 3) }, (_, i) => (
+            <span key={i} style={{ ...rightStyles.pipeChar, opacity: animatedPipes.has(i) ? 1 : 0 }}>|</span>
+          ))}
+          {pipeCount > 3 && (
+            <span style={rightStyles.pipeOverflow}>+{pipeCount - 3}</span>
           )}
         </div>
-      </div>
+      </PillSlot>
     </div>
   );
 }
@@ -288,30 +274,11 @@ const rightStyles: Record<string, React.CSSProperties> = {
     height: '100%',
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
   },
-  pill: {
-    display: 'flex',
-    alignItems: 'center',
-    width: '100%',
-    height: '100%',
-    padding: '0 10px',
-    boxSizing: 'border-box',
-    backgroundColor: '#000000',
-    borderRadius: '0 0 16px 0',
-    overflow: 'hidden',
-  },
   waveformContainer: {
     display: 'flex',
     alignItems: 'center',
     gap: '1.5px',
     height: '14px',
-  },
-  pipeSlot: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '22px',
-    minWidth: '22px',
-    height: '22px',
   },
   pipeGroup: {
     display: 'flex',
@@ -671,7 +638,11 @@ function WaveformBars({ levels, color }: { levels: number[]; color: string }) {
 // Left pill — mode toggle + history controls
 // =============================================================================
 
-function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
+interface LeftPillProps {
+  sectionWidth?: number;
+  onSlotSumChange?: (sum: number) => void;
+}
+function LeftPill({ sectionWidth, onSlotSumChange }: LeftPillProps = {}) {
   const [state, setState] = useState<IslandState>('idle');
   const [transcript, setTranscript] = useState<string>('');
   const [isFinal, setIsFinal] = useState<boolean>(false);
@@ -688,8 +659,6 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
   const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
   const [backgroundFilterEnabled, setBackgroundFilterEnabled] = useState(false);
   const [backgroundFilterStrength, setBackgroundFilterStrength] = useState(50);
-  const [compactPillWidth, setCompactPillWidth] = useState<number>(() => containerWidth ?? window.innerWidth);
-  const [compactPillHeight, setCompactPillHeight] = useState<number>(() => window.innerHeight);
   const [filterMeter, setFilterMeter] = useState<HotMicFilterMeter>({
     enabled: false,
     strength: 50,
@@ -843,18 +812,6 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
     window.addEventListener('resize', updateEstimate);
     return () => window.removeEventListener('resize', updateEstimate);
   }, [historyVisible]);
-
-  useEffect(() => {
-    const syncCompactPillSize = () => {
-      if (historyVisible) return;
-      setCompactPillWidth(containerWidth ?? window.innerWidth);
-      setCompactPillHeight(window.innerHeight);
-    };
-
-    syncCompactPillSize();
-    window.addEventListener('resize', syncCompactPillSize);
-    return () => window.removeEventListener('resize', syncCompactPillSize);
-  }, [historyVisible, containerWidth]);
 
   const toggleHistory = useCallback(() => {
     // Keep hamburger decoupled from left-pill geometry:
@@ -1019,25 +976,18 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
   // Pills expand for waveform, silentStacking, or idle with stacked screenshots (so X is visible).
   const expanded = waveformActive || state === 'silentStacking' || (state === 'idle' && stackCount > 0);
 
-  // Slot-based left pill width; reported to main so the window resizes to match.
+  // Hamburger reveals on hover when an agent glyph is occupying the pill;
+  // otherwise it's always visible.
   const hamburgerExpanded = waitingAgentCount === 0 || pillHovered;
-  const agentSlotWidth = waitingAgentCount > 0
-    ? Math.min(waitingAgentCount, 3) * 22
-      + (waitingAgentCount > 3 ? 22 : 0)
-      + 8 /* AgentAttention internal padding */
-    : 0;
-  const SLOT_CONTENT_WIDTH = 22; // matches traySlotStyle
-  const SLOT_MARGIN = 8;
-  const PILL_PADDING = 16; // 8 each side
-  const desiredLeftWidth =
-    PILL_PADDING
-    + (expanded ? SLOT_CONTENT_WIDTH + SLOT_MARGIN : 0)
-    + agentSlotWidth
-    + (hamburgerExpanded ? SLOT_CONTENT_WIDTH + SLOT_MARGIN : 0);
 
+  const leftSlotSum = computeLeftPillWidth({
+    xExpanded: expanded,
+    agentCount: waitingAgentCount,
+    hamburgerExpanded,
+  });
   useEffect(() => {
-    (window as any).dynamicIslandAPI?.requestLeftPillWidth?.(desiredLeftWidth);
-  }, [desiredLeftWidth]);
+    onSlotSumChange?.(leftSlotSum);
+  }, [leftSlotSum, onSlotSumChange]);
 
   const handleCancelSession = useCallback(() => {
     (window as any).dynamicIslandAPI?.cancelSession?.();
@@ -1047,42 +997,34 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
     <div
       className={historyVisible ? 'di-history-visible' : ''}
       style={{
-        ...styles.outerContainer,
-        alignItems: 'flex-start',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        height: '100%',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
       }}
+      onMouseEnter={() => setPillHovered(true)}
+      onMouseLeave={() => setPillHovered(false)}
     >
       <div
-        className="di-left-pill"
-        onMouseEnter={() => setPillHovered(true)}
-        onMouseLeave={() => setPillHovered(false)}
-        style={{
-          ...styles.island,
-          ...styles.islandIdle,
-          justifyContent: 'flex-end',
-          width: `${compactPillWidth}px`,
-          height: `${compactPillHeight}px`,
-          gap: '0px',
-          padding: '0 8px',
-        }}
+        className="di-section di-section--left"
+        style={{ width: sectionWidth, height: 38 }}
       >
-        {/* X cancel button — collapses to 0 width when no session active */}
-        <div
-          className="di-cancel-btn"
+        <PillSlot
+          visible={expanded}
           onClick={handleCancelSession}
-          style={{ ...traySlotStyle(expanded), cursor: 'pointer', opacity: 0.5, transition: 'width 200ms ease, min-width 200ms ease, margin-right 200ms ease, opacity 150ms ease' }}
           title="cancel session"
+          style={{ opacity: 0.5 }}
         >
           <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
             <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
-        </div>
+        </PillSlot>
         <AgentAttention onCountChanged={setWaitingAgentCount} />
-        {/* Hamburger slot — collapses to 0 width when an agent glyph is showing
-            and the user isn't hovering. Same slide-in animation as the X cancel. */}
-        <div
-          className="di-hamburger"
+        <PillSlot
+          visible={hamburgerExpanded}
+          marginRight={0}
           onClick={toggleHistory}
-          style={{ ...traySlotStyle(hamburgerExpanded), cursor: 'pointer' }}
           title="transcript history"
         >
           <svg width="12" height="8" viewBox="0 0 14 10" fill="none" shapeRendering="crispEdges" aria-hidden="true">
@@ -1090,7 +1032,7 @@ function LeftPill({ containerWidth }: { containerWidth?: number } = {}) {
             <path d="M0 5H10V6H0V5Z" fill="rgba(255,255,255,0.78)" />
             <path d="M0 9H14V10H0V9Z" fill="rgba(255,255,255,0.78)" />
           </svg>
-        </div>
+        </PillSlot>
       </div>
 
       {historyVisible && (
@@ -1265,42 +1207,6 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '100%',
     fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-  },
-
-  island: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '8px',
-    width: '48px',
-    height: '38px',
-    padding: '0 10px',
-    boxSizing: 'border-box',
-    backgroundColor: '#000000',
-    borderRadius: '0 0 22px 22px',
-    boxShadow: 'none',
-    overflow: 'hidden',
-    margin: '0',
-    animation: 'fadeInIsland 0.2s ease-out',
-  },
-
-  islandIdle: {
-    height: '38px',
-    justifyContent: 'center',
-    borderRadius: '0 0 0 16px',
-  },
-
-  hamburger: {
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: '22px',
-    height: '22px',
-    minWidth: '22px',
-    borderRadius: '8px',
-    border: 'none',
-    cursor: 'pointer',
-    transition: 'background-color 0.15s ease',
-    flexShrink: 0,
   },
 
   contentArea: {
@@ -1745,44 +1651,72 @@ document.head.appendChild(styleSheet);
 // =============================================================================
 
 function UnifiedIsland() {
+  // Main sizes the Electron window (and these outer wrappers) to fit the MAX
+  // possible pill for the current state; renderer computes the ACTUAL pill
+  // width from visible slots and animates the inner section within.
+  // The notch stays centered because outer wrappers are symmetric and the
+  // middle strip is the fixed notch width.
   const initParams = new URLSearchParams(window.location.search);
   const initRightW = parseInt(initParams.get('rightWidth') || '72', 10);
   const initLeftW = parseInt(initParams.get('leftWidth') || '72', 10);
-  const [leftWidth, setLeftWidth] = useState(initLeftW);
-  const [rightWidth, setRightWidth] = useState(initRightW);
+  const [outerLeft, setOuterLeft] = useState(initLeftW);
+  const [outerRight, setOuterRight] = useState(initRightW);
+  const [leftSum, setLeftSum] = useState(0);
+  const [rightSum, setRightSum] = useState(0);
 
   useEffect(() => {
     const api = (window as any).dynamicIslandAPI;
     api?.onResize?.((data: { leftWidth: number; rightWidth: number }) => {
-      setLeftWidth(data.leftWidth);
-      if (data.rightWidth !== undefined) setRightWidth(data.rightWidth);
+      setOuterLeft(data.leftWidth);
+      if (data.rightWidth !== undefined) setOuterRight(data.rightWidth);
     });
   }, []);
 
-  const NOTCH_R = '15px';
+  const pillWidth = Math.max(leftSum, rightSum);
+
+  // Diagnostic: push renderer widths to main so they land in
+  // ~/.fieldtheory/debug/pill-widths.log alongside main's setBounds calls.
+  useEffect(() => {
+    const clipLeft = pillWidth > outerLeft;
+    const clipRight = pillWidth > outerRight;
+    const api = (window as any).dynamicIslandAPI;
+    api?.debugRender?.({
+      leftSum, rightSum, section: pillWidth,
+      outerLeft, outerRight,
+      clipLeft, clipRight,
+      windowInnerWidth: window.innerWidth,
+    });
+  }, [leftSum, rightSum, pillWidth, outerLeft, outerRight]);
 
   return (
-    <div style={{ display: 'flex', width: '100%', height: '100%' }}>
+    <div style={{
+      display: 'flex',
+      width: '100%',
+      height: '100%',
+      alignItems: 'flex-start',
+    }}>
       <div style={{
-        width: leftWidth,
+        width: outerLeft,
         flexShrink: 0,
         height: '100%',
-        overflow: 'hidden',
-        background: '#000',
-        borderRadius: `0 0 0 ${NOTCH_R}`,
+        display: 'flex',
+        justifyContent: 'flex-end',
+        alignItems: 'flex-start',
+        pointerEvents: 'none',
       }}>
-        <LeftPill containerWidth={leftWidth} />
+        <LeftPill sectionWidth={pillWidth} onSlotSumChange={setLeftSum} />
       </div>
-      <div style={{ flex: 1, height: '100%', background: '#000' }} />
+      <div style={{ flex: 1, height: 38, background: '#000' }} />
       <div style={{
-        width: rightWidth,
+        width: outerRight,
         flexShrink: 0,
         height: '100%',
-        overflow: 'hidden',
-        background: '#000',
-        borderRadius: `0 0 ${NOTCH_R} 0`,
+        display: 'flex',
+        justifyContent: 'flex-start',
+        alignItems: 'flex-start',
+        pointerEvents: 'none',
       }}>
-        <RightPill />
+        <RightPill sectionWidth={pillWidth} onSlotSumChange={setRightSum} />
       </div>
     </div>
   );
@@ -1848,7 +1782,6 @@ declare global {
         waitingSince: number;
       }>) => void) => void;
       focusAgent?: (agentId: string) => Promise<boolean>;
-      requestLeftPillWidth?: (width: number) => void;
       removeAllListeners: (channel: string) => void;
     };
   }

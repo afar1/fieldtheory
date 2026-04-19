@@ -10,7 +10,7 @@ import { NativeHelper } from './nativeHelper';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager } from './preferences';
+import { PreferencesManager, pickSavedBoundsByKey } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -92,6 +92,8 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
+
+const BOOT_MARK = Date.now();
 const VISION_BUILD_ENABLED = false;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
@@ -1196,8 +1198,9 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
     return undefined;
   }
 
-  const prefs = preferencesManager.get();
-  const savedBounds = prefs?.clipboardHistoryBounds;
+  // Initial restore always starts in 'fields' view; other views' bounds are
+  // applied later via setSizeKey when the renderer reports its active view.
+  const savedBounds = pickSavedBoundsByKey(preferencesManager.get(), 'fields');
   if (!savedBounds) {
     return undefined;
   }
@@ -1268,21 +1271,30 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   });
 
   // Set up callback to save bounds when window is moved/resized.
+  // Bounds are persisted per size-key so each view remembers its own dims.
   window.setOnBoundsChanged(async (bounds) => {
     if (!preferencesManager) return;
 
     const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
     const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
+    const key = window.getCurrentSizeKey();
 
+    const entry = {
+      relativeX: displayRelative.relativeX,
+      relativeY: displayRelative.relativeY,
+      width: bounds.width,
+      height: bounds.height,
+      displayId: displayRelative.displayId,
+      displayConfig,
+    };
+
+    const prefs = preferencesManager.get();
+    const existing = prefs?.clipboardHistoryBoundsByView ?? {};
     await preferencesManager.save({
-      clipboardHistoryBounds: {
-        relativeX: displayRelative.relativeX,
-        relativeY: displayRelative.relativeY,
-        width: bounds.width,
-        height: bounds.height,
-        displayId: displayRelative.displayId,
-        displayConfig,
-      },
+      clipboardHistoryBoundsByView: { ...existing, [key]: entry },
+      // Also mirror into legacy single-bounds field for 'fields' so older
+      // builds (and code paths that still read it) keep working.
+      ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
     });
   });
 
@@ -3497,27 +3509,30 @@ function setupClipboardIPCHandlers(): void {
     await transcriberManager.separateIntoTasks(id);
   });
 
-  // Save bounds handler - now receives absolute screen coordinates directly.
-  // Called when window is hidden or on explicit save request.
+  // Save bounds handler - receives absolute screen coordinates directly.
+  // Called on window hide or explicit save. Persists under the currently-
+  // active size key so each view remembers its own dims.
   ipcMain.handle(ClipboardIPCChannels.SAVE_BOUNDS, async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-    if (!preferencesManager) {
-      return;
-    }
-    
+    if (!preferencesManager) return;
+
     const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-    
-    // Convert absolute coords to display-relative for persistence.
     const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
-    
+    const key = clipboardHistoryWindow?.getCurrentSizeKey() ?? 'fields';
+
+    const entry = {
+      relativeX: displayRelative.relativeX,
+      relativeY: displayRelative.relativeY,
+      width: bounds.width,
+      height: bounds.height,
+      displayId: displayRelative.displayId,
+      displayConfig,
+    };
+
+    const prefs = preferencesManager.get();
+    const existing = prefs?.clipboardHistoryBoundsByView ?? {};
     await preferencesManager.save({
-      clipboardHistoryBounds: {
-        relativeX: displayRelative.relativeX,
-        relativeY: displayRelative.relativeY,
-        width: bounds.width,
-        height: bounds.height,
-        displayId: displayRelative.displayId,
-        displayConfig,
-      },
+      clipboardHistoryBoundsByView: { ...existing, [key]: entry },
+      ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
     });
   });
 
@@ -3605,6 +3620,20 @@ function setupClipboardIPCHandlers(): void {
   // Immersive mode for Librarian - when active, window should not auto-hide on blur
   ipcMain.on('clipboard-history:setImmersiveMode', async (_event, immersive: boolean) => {
     clipboardHistoryWindow?.setImmersiveMode(immersive);
+  });
+
+  // Some immersive content (bookmarks canvas) opts in to dismiss-on-blur,
+  // while artifact reading keeps the current stay-put behavior.
+  ipcMain.on('clipboard-history:setImmersiveDismissable', async (_event, dismissable: boolean) => {
+    clipboardHistoryWindow?.setImmersiveDismissableOnBlur(dismissable);
+  });
+
+  // Renderer reports the currently-active "size profile" (fields, library,
+  // canvas, draw). Main animates to the saved bounds for that profile and
+  // subsequent user resizes persist under that key.
+  ipcMain.on('clipboard-history:setSizeKey', (_event, key: string) => {
+    if (key !== 'fields' && key !== 'library' && key !== 'canvas' && key !== 'draw') return;
+    clipboardHistoryWindow?.setSizeKey(key);
   });
 
   // Stack operations for prompt stacking feature
@@ -5651,9 +5680,12 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     await preferencesManager.load();
   }
 
+  log.info('[audio-startup] === BOOT TIMELINE (ready handler): +%dms since module load', Date.now() - BOOT_MARK);
   nativeHelper = new NativeHelper();
   nativeHelper.start();
+  log.info('[audio-startup] after nativeHelper.start(): +%dms', Date.now() - BOOT_MARK);
   nativeHelper.warmupAudio();
+  log.info('[audio-startup] after nativeHelper.warmupAudio() call (async): +%dms', Date.now() - BOOT_MARK);
 
   // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
   // NSPanel windows don't always trigger blur events on other panels, so we use
@@ -5716,7 +5748,9 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     metricsManager?.recordPriorityMicMinute();
   });
 
+  log.info('[audio-startup] before audioManager.init(): +%dms', Date.now() - BOOT_MARK);
   await audioManager.init();
+  log.info('[audio-startup] after audioManager.init(): +%dms', Date.now() - BOOT_MARK);
 
   trayManager = new TrayManager(audioManager, undefined, preferencesManager);
 
@@ -6141,6 +6175,21 @@ async function initTranscriberSystem(): Promise<void> {
   ipcMain.handle('agent:focus', async (_e, agentId: string) => {
     return agentAttentionManager?.focus(agentId) ?? false;
   });
+  ipcMain.handle('agent:setSynthetic', async (_e, count: number) => {
+    agentAttentionManager?.setSynthetic(Math.max(0, Math.floor(count)));
+  });
+
+  // Dev-only: cycle synthetic waiting-agent count to stress-test Dynamic
+  // Island pill sizing. 0 → 1 → 2 → 3 → 5 → 0. Look for clipped rounded
+  // corners as the count changes, with recording on/off.
+  const syntheticAgentCounts = [0, 1, 2, 3, 5];
+  let syntheticAgentIndex = 0;
+  globalShortcut.register('CommandOrControl+Alt+Shift+A', () => {
+    syntheticAgentIndex = (syntheticAgentIndex + 1) % syntheticAgentCounts.length;
+    const count = syntheticAgentCounts[syntheticAgentIndex];
+    agentAttentionManager?.setSynthetic(count);
+    console.log(`[DynamicIsland] synthetic agents → ${count}`);
+  });
 
   agentHookInstaller = new AgentHookInstaller();
   ipcMain.handle('agent-hooks:install', async (_e, targets: InstallTargets) => {
@@ -6154,11 +6203,14 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Now create transcriberManager with cursorStatusManager.
+  log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
+  log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   broadcastTranscribeEvents();
 
   // Pre-warm transcription engine so first use is fast (Parakeet model load, etc.).
+  log.info('[audio-startup] calling transcriberManager.warmup() (async): +%dms', Date.now() - BOOT_MARK);
   transcriberManager.warmup().catch((err) => {
     log.warn('Transcription warmup failed (non-fatal): %s', err?.message || err);
   });
@@ -6170,6 +6222,7 @@ async function initTranscriberSystem(): Promise<void> {
     transcriberSoundManager.setNativeHelper(nativeHelper);
 
     // Preload all sounds once (shared cache in native helper).
+    log.info('[audio-startup] calling preloadAllSounds() (async): +%dms', Date.now() - BOOT_MARK);
     transcriberSoundManager.preloadAllSounds().catch((err) => {
     });
   }

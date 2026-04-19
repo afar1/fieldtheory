@@ -11,6 +11,7 @@ import ContentToolbar from './ContentToolbar';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
+import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 
 /** Strip YAML frontmatter from wiki page content for display.
@@ -99,13 +100,19 @@ interface LibrarianViewProps {
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialFullScreen?: boolean; // Start in fullscreen/immersive mode (for auto-open)
   onInitialReadingConsumed?: () => void; // Called after initial reading is consumed
+  // Path of an artifact the librarian just auto-popped. While the user is
+  // still on this artifact, Escape closes the window instead of merely
+  // exiting immersive. Call onAutoPopArtifactSuperseded when the user
+  // navigates away from it.
+  autoPopArtifactPath?: string | null;
+  onAutoPopArtifactSuperseded?: () => void;
 }
 
 function isArtifactModelSignatureText(text: string): boolean {
   return /^(Model|Signed by):\s+.+$/i.test(text.trim());
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed }: LibrarianViewProps) {
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded }: LibrarianViewProps) {
   const { theme } = useTheme();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
 
@@ -221,6 +228,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     });
   }, []);
 
+  // Prefetch bookmarks snapshot in the background so the first click is instant
+  useEffect(() => { prefetchBookmarks(); }, []);
+
   // Persist sidebar width
   useEffect(() => {
     localStorage.setItem('librarian-sidebar-width', String(sidebarWidth));
@@ -281,6 +291,21 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     onFullScreenChange?.(isFullScreen);
   }, [isFullScreen, onFullScreenChange]);
+
+  // Bookmarks immersive dismisses on blur (panel-like); artifact/wiki immersive
+  // stays put so users can reference other apps while reading.
+  useEffect(() => {
+    const dismissable = isFullScreen && selectedItemType === 'bookmarks';
+    window.librarianAPI?.setImmersiveDismissable?.(dismissable);
+    return () => window.librarianAPI?.setImmersiveDismissable?.(false);
+  }, [isFullScreen, selectedItemType]);
+
+  // Push size-key for non-bookmarks librarian views. BookmarksPane handles
+  // 'canvas'/'library' for the bookmarks case based on its list/canvas mode.
+  useEffect(() => {
+    if (selectedItemType === 'bookmarks') return;
+    window.librarianAPI?.setSizeKey?.('library');
+  }, [selectedItemType]);
 
   // Initialize narration state and subscribe to events (feature flagged)
   useEffect(() => {
@@ -420,6 +445,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   // Unified item selection handler
+  // True while the currently-selected item is the artifact the librarian
+  // just auto-popped. Escape should close the window in that case.
+  const isOnAutoPopArtifact =
+    !!autoPopArtifactPath &&
+    selectedItemType === 'artifact' &&
+    selectedPath === autoPopArtifactPath;
+
   const handleSelectItem = useCallback((item: UnifiedItem) => {
     if (isDirty) {
       const confirmed = window.confirm('You have unsaved changes. Discard them?');
@@ -437,7 +469,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       setWikiSelectedRelPath(null);
     }
     setContentMode('rendered');
-  }, [isDirty, exitEditMode, openWikiPage, selectArtifactPath]);
+    // Any navigation other than reselecting the same auto-popped artifact
+    // dismisses the auto-pop exception.
+    const stayingOnAutoPop = item.type === 'artifact' && item.absPath === autoPopArtifactPath;
+    if (autoPopArtifactPath && !stayingOnAutoPop) {
+      onAutoPopArtifactSuperseded?.();
+    }
+  }, [isDirty, exitEditMode, openWikiPage, selectArtifactPath, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
 
   // Sync editContent when entering markdown mode
   useEffect(() => {
@@ -765,7 +803,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Escape: exit markdown mode first, then close window
+      // Escape hierarchy: edit-mode → auto-popped artifact → immersive-exit → close window.
+      // The auto-pop exception preserves the "dismiss window to go back to what
+      // you were doing" feel when the librarian interrupts you with a new artifact.
       if (e.key === 'Escape') {
         if (contentMode === 'markdown') {
           if (isDirty) {
@@ -773,6 +813,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             if (!confirmed) return;
           }
           exitEditMode();
+        } else if (isFullScreen && isOnAutoPopArtifact) {
+          window.clipboardAPI?.closeWindow();
+        } else if (isFullScreen) {
+          setIsFullScreen(false);
         } else {
           window.clipboardAPI?.closeWindow();
         }
@@ -808,7 +852,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedPath, isFullScreen, contentMode, isDirty, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem]);
+  }, [readings, selectedPath, isFullScreen, contentMode, isDirty, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1138,7 +1182,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         }}
       >
         {selectedItemType === 'bookmarks' ? (
-          <BookmarksPane />
+          <BookmarksPane
+            isFullScreen={isFullScreen}
+            onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
+          />
         ) : (<Fragment>
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
