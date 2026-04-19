@@ -23,7 +23,7 @@ import {
   WAVEFORM_BAR_COUNT,
 } from '../utils/audioWaveform';
 import { AgentAttention } from './AgentAttention';
-import { PillSlot } from './PillSlot';
+import { PillSlot, PILL_SLOT_CONTENT_FADE_MS } from './PillSlot';
 import {
   computeLeftPillWidth,
   computeRightPillWidth,
@@ -161,8 +161,9 @@ function timeAgo(timestamp: number): string {
 interface RightPillProps {
   sectionWidth?: number;
   onSlotSumChange?: (sum: number) => void;
+  sectionTransitionDelay?: string;
 }
-function RightPill({ sectionWidth, onSlotSumChange }: RightPillProps = {}) {
+function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: RightPillProps = {}) {
   const [pipeCount, setPipeCount] = useState(0);
   const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
   const [state, setState] = useState<IslandState>('idle');
@@ -245,7 +246,7 @@ function RightPill({ sectionWidth, onSlotSumChange }: RightPillProps = {}) {
   return (
     <div
       className="di-section di-section--right"
-      style={{ width: sectionWidth, height: 38 }}
+      style={{ width: sectionWidth, height: 38, transitionDelay: sectionTransitionDelay }}
     >
       <PillSlot visible={waveformActive} width={WAVEFORM_SLOT_WIDTH} marginRight={8}>
         <div aria-hidden="true" style={rightStyles.waveformContainer}>
@@ -641,8 +642,9 @@ function WaveformBars({ levels, color }: { levels: number[]; color: string }) {
 interface LeftPillProps {
   sectionWidth?: number;
   onSlotSumChange?: (sum: number) => void;
+  sectionTransitionDelay?: string;
 }
-function LeftPill({ sectionWidth, onSlotSumChange }: LeftPillProps = {}) {
+function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: LeftPillProps = {}) {
   const [state, setState] = useState<IslandState>('idle');
   const [transcript, setTranscript] = useState<string>('');
   const [isFinal, setIsFinal] = useState<boolean>(false);
@@ -1008,7 +1010,7 @@ function LeftPill({ sectionWidth, onSlotSumChange }: LeftPillProps = {}) {
     >
       <div
         className="di-section di-section--left"
-        style={{ width: sectionWidth, height: 38 }}
+        style={{ width: sectionWidth, height: 38, transitionDelay: sectionTransitionDelay }}
       >
         <PillSlot
           visible={expanded}
@@ -1674,8 +1676,16 @@ function UnifiedIsland() {
 
   const pillWidth = Math.max(leftSum, rightSum);
 
-  // Diagnostic: push renderer widths to main so they land in
-  // ~/.fieldtheory/debug/pill-widths.log alongside main's setBounds calls.
+  // Shrink the section AFTER slot content has faded; grow is instant so the
+  // slot has room to open into. Delaying shrink keeps flex-end-anchored
+  // dots still during the fade, then both collapse in sync.
+  const prevPillWidthRef = useRef(pillWidth);
+  const sectionTransitionDelay =
+    pillWidth < prevPillWidthRef.current ? `${PILL_SLOT_CONTENT_FADE_MS}ms` : '0ms';
+  useEffect(() => {
+    prevPillWidthRef.current = pillWidth;
+  }, [pillWidth]);
+
   useEffect(() => {
     const clipLeft = pillWidth > outerLeft;
     const clipRight = pillWidth > outerRight;
@@ -1704,7 +1714,7 @@ function UnifiedIsland() {
         alignItems: 'flex-start',
         pointerEvents: 'none',
       }}>
-        <LeftPill sectionWidth={pillWidth} onSlotSumChange={setLeftSum} />
+        <LeftPill sectionWidth={pillWidth} onSlotSumChange={setLeftSum} sectionTransitionDelay={sectionTransitionDelay} />
       </div>
       <div style={{ flex: 1, height: 38, background: '#000' }} />
       <div style={{
@@ -1716,7 +1726,7 @@ function UnifiedIsland() {
         alignItems: 'flex-start',
         pointerEvents: 'none',
       }}>
-        <RightPill sectionWidth={pillWidth} onSlotSumChange={setRightSum} />
+        <RightPill sectionWidth={pillWidth} onSlotSumChange={setRightSum} sectionTransitionDelay={sectionTransitionDelay} />
       </div>
     </div>
   );

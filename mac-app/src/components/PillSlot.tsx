@@ -8,6 +8,12 @@ import { type CSSProperties, type ReactNode } from 'react';
 // Everything above the stylesheet is API; everything below is implementation.
 // =============================================================================
 
+// Content fade duration on hide, also the delay before the slot width
+// collapses. The containing section must use the same value as its
+// transition-delay when shrinking (UnifiedIsland handles that).
+export const PILL_SLOT_CONTENT_FADE_MS = 140;
+const SLOT_WIDTH_DURATION_MS = 260;
+
 const STYLESHEET_ID = 'di-pill-slot-styles';
 if (typeof document !== 'undefined' && !document.getElementById(STYLESHEET_ID)) {
   const sheet = document.createElement('style');
@@ -30,16 +36,16 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLESHEET_ID)) 
       width: var(--di-slot-w, 22px);
       margin-right: var(--di-slot-m, 8px);
       transition:
-        width 260ms cubic-bezier(0.2, 0.8, 0.2, 1),
-        margin-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1);
+        width ${SLOT_WIDTH_DURATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1),
+        margin-right ${SLOT_WIDTH_DURATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1);
     }
     .di-slot--hidden {
       width: 0;
       min-width: 0;
       margin-right: 0;
       transition:
-        width 260ms cubic-bezier(0.2, 0.8, 0.2, 1) 140ms,
-        margin-right 260ms cubic-bezier(0.2, 0.8, 0.2, 1) 140ms;
+        width ${SLOT_WIDTH_DURATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) ${PILL_SLOT_CONTENT_FADE_MS}ms,
+        margin-right ${SLOT_WIDTH_DURATION_MS}ms cubic-bezier(0.2, 0.8, 0.2, 1) ${PILL_SLOT_CONTENT_FADE_MS}ms;
     }
     .di-slot__content {
       display: flex;
