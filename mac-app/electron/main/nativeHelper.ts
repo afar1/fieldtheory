@@ -127,6 +127,8 @@ export class NativeHelper extends EventEmitter {
     }
 
     const helperPath = this.getHelperPath();
+    const tSpawn = Date.now();
+    log.info('[audio-startup] nativeHelper.start: spawning %s', helperPath);
 
     try {
       this.child = spawn(helperPath, [], {
@@ -134,10 +136,12 @@ export class NativeHelper extends EventEmitter {
       });
 
       this.isRunning = true;
+      log.info('[audio-startup] nativeHelper.start: spawn returned in %dms (pid=%s)', Date.now() - tSpawn, this.child.pid);
 
       this.child.stdout.on('data', (data: Buffer) => {
         if (!this.isReady) {
           this.isReady = true;
+          log.info('[audio-startup] nativeHelper: helper is READY (first stdout at %dms after spawn)', Date.now() - tSpawn);
         }
         this.onStdout(data);
       });
@@ -298,6 +302,7 @@ export class NativeHelper extends EventEmitter {
    * Set the system default input device.
    */
   setDefaultInput(deviceId: string): void {
+    log.info('[audio-startup] nativeHelper.setDefaultInput(%s): sending to Swift helper', deviceId);
     this.send({ type: 'setDefaultInput', deviceId });
   }
 
@@ -306,7 +311,9 @@ export class NativeHelper extends EventEmitter {
    * After this, we'll receive 'devicesChanged' and 'defaultInputChanged' events.
    */
   async startMonitoring(): Promise<void> {
+    const t = Date.now();
     await this.waitForReady();
+    log.info('[audio-startup] nativeHelper.startMonitoring: waitForReady took %dms, sending startMonitoring', Date.now() - t);
     this.send({ type: 'startMonitoring' });
   }
 
@@ -315,7 +322,9 @@ export class NativeHelper extends EventEmitter {
    * Fire-and-forget — no response expected.
    */
   async warmupAudio(): Promise<void> {
+    const t = Date.now();
     await this.waitForReady();
+    log.info('[audio-startup] nativeHelper.warmupAudio: waitForReady took %dms, sending warmupAudio (opens AVAudioEngine — likely cutout cause)', Date.now() - t);
     this.send({ type: 'warmupAudio' });
   }
 

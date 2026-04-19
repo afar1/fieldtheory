@@ -3089,6 +3089,12 @@ const librarianAPI = {
   },
 
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
+  setImmersiveDismissable: (dismissable: boolean): void => {
+    ipcRenderer.send('clipboard-history:setImmersiveDismissable', dismissable);
+  },
+  setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw'): void => {
+    ipcRenderer.send('clipboard-history:setSizeKey', key);
+  },
   setImmersiveMode: (immersive: boolean): void => {
     ipcRenderer.send('clipboard-history:setImmersiveMode', immersive);
   },
@@ -3545,6 +3551,16 @@ interface BookmarkImage {
   type: string;
   videoUrl?: string;
 }
+interface QuotedTweet {
+  id: string;
+  text: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  postedAt: string;
+  url: string;
+  images: BookmarkImage[];
+}
 interface Bookmark {
   id: string;
   text: string;
@@ -3559,6 +3575,7 @@ interface Bookmark {
   repostCount: number;
   bookmarkCount: number;
   folders: string[];
+  quotedTweet?: QuotedTweet;
 }
 interface BookmarkFolder { name: string; id?: string }
 interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }

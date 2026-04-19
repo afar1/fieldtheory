@@ -15,6 +15,17 @@ export interface BookmarkImage {
   videoUrl?: string;
 }
 
+export interface QuotedTweet {
+  id: string;
+  text: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  postedAt: string;
+  url: string;
+  images: BookmarkImage[];
+}
+
 export interface Bookmark {
   id: string;
   text: string;
@@ -29,6 +40,7 @@ export interface Bookmark {
   repostCount: number;
   bookmarkCount: number;
   folders: string[];
+  quotedTweet?: QuotedTweet;
 }
 
 export interface BookmarkFolder {
@@ -49,6 +61,17 @@ interface RawMediaObject {
   videoVariants?: Array<{ url?: string; bitrate?: number }>;
 }
 
+export interface RawQuotedTweet {
+  id?: string;
+  text?: string;
+  authorHandle?: string;
+  authorName?: string;
+  authorProfileImageUrl?: string;
+  postedAt?: string;
+  url?: string;
+  mediaObjects?: RawMediaObject[];
+}
+
 export interface RawBookmark {
   id?: string;
   tweetId?: string;
@@ -65,6 +88,7 @@ export interface RawBookmark {
     repostCount?: number;
     bookmarkCount?: number;
   };
+  quotedTweet?: RawQuotedTweet;
 }
 
 function bookmarksDir(): string {
@@ -80,15 +104,11 @@ function foldersPath(): string {
   return path.join(bookmarksDir(), 'folders-data.json');
 }
 
-export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
-  const id = raw.tweetId || raw.id;
-  if (!id) return null;
-
+function extractImages(raw: { mediaObjects?: RawMediaObject[] }): BookmarkImage[] {
   const mediaObjects = (raw.mediaObjects ?? []).filter(
     (m) => (m.type === 'photo' || m.type === 'video' || m.type === 'animated_gif') && m.url
   );
-
-  const images: BookmarkImage[] = mediaObjects.map((m) => {
+  return mediaObjects.map((m) => {
     const entry: BookmarkImage = {
       url: m.url!,
       width: m.width ?? 1,
@@ -103,6 +123,27 @@ export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
     }
     return entry;
   });
+}
+
+function parseQuotedTweet(raw: RawQuotedTweet | undefined): QuotedTweet | undefined {
+  if (!raw || !raw.id) return undefined;
+  return {
+    id: raw.id,
+    text: raw.text ?? '',
+    authorHandle: raw.authorHandle ?? '',
+    authorName: raw.authorName ?? '',
+    authorAvatar: raw.authorProfileImageUrl ?? '',
+    postedAt: raw.postedAt ?? '',
+    url: raw.url ?? (raw.authorHandle ? `https://x.com/${raw.authorHandle}/status/${raw.id}` : ''),
+    images: extractImages(raw),
+  };
+}
+
+export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
+  const id = raw.tweetId || raw.id;
+  if (!id) return null;
+
+  const images = extractImages(raw);
 
   return {
     id,
@@ -118,6 +159,7 @@ export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
     repostCount: raw.engagement?.repostCount ?? 0,
     bookmarkCount: raw.engagement?.bookmarkCount ?? 0,
     folders: [],
+    quotedTweet: parseQuotedTweet(raw.quotedTweet),
   };
 }
 

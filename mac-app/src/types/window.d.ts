@@ -1438,6 +1438,8 @@ interface LibrarianAPI {
   onNewReadingAvailable: (callback: (readingPath: string) => void) => () => void;
   onShowNewReading: (callback: (readingPath: string) => void) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
+  setImmersiveDismissable: (dismissable: boolean) => void;
+  setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw') => void;
   // Content guidance customization
   getDefaultContentGuidance: () => Promise<string>;
   getContentGuidance: () => Promise<string>;
@@ -1545,6 +1547,16 @@ declare global {
     type: string;
     videoUrl?: string;
   }
+  interface QuotedTweet {
+    id: string;
+    text: string;
+    authorHandle: string;
+    authorName: string;
+    authorAvatar: string;
+    postedAt: string;
+    url: string;
+    images: BookmarkImage[];
+  }
   interface Bookmark {
     id: string;
     text: string;
@@ -1559,6 +1571,7 @@ declare global {
     repostCount: number;
     bookmarkCount: number;
     folders: string[];
+    quotedTweet?: QuotedTweet;
   }
   interface BookmarkFolder {
     name: string;

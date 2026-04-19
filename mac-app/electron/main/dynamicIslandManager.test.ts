@@ -554,7 +554,8 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
 
     // idle: left(60) + gapFill(notchOverride=207+2) + right(60) = 329
-    // active (recording): expanded = round(60*1.5)=90 each side → 90+209+90 = 389
+    // recording: right worst case = padding(18) + waveform(88) = 106 per side.
+    // Window = 106 + 209 + 106 = 421.
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
     expect(unified?.getSize()).toEqual([329, 39]);
@@ -563,11 +564,45 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(unified?.getSize()).toEqual([329, 39]);
 
     manager.setState('recording');
-    expect(unified?.getSize()).toEqual([389, 39]);
+    expect(unified?.getSize()).toEqual([421, 39]);
 
     manager.setState('idle');
     manager.setInputMode('standard');
     expect(unified?.getSize()).toEqual([329, 39]);
+  });
+
+  it('sizes the pill for recording + waiting agents so the left corner is not clipped', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
+
+    // 2 agents + recording: left = padding(18) + X(30) + 2*agent(28) + hamburger(22) = 126.
+    // Right = padding(18) + waveform(88) = 106. Max = 126. Window = 126+209+126 = 461.
+    manager.setWaitingAgents([
+      { agentId: 'a', tool: 'claude', pid: 0, cwd: '/', ttyTitle: 't', terminalApp: 'x', waitingSince: 1 },
+      { agentId: 'b', tool: 'codex', pid: 0, cwd: '/', ttyTitle: 't', terminalApp: 'x', waitingSince: 2 },
+    ]);
+    manager.setState('recording');
+    expect(unified?.getSize()).toEqual([461, 39]);
+
+    // 5 agents + recording: left = 18 + 30 + 3*28 + 30 + 22 = 184. Max = 184.
+    // Window = 184 + 209 + 184 = 577.
+    manager.setWaitingAgents(
+      Array.from({ length: 5 }, (_, i) => ({
+        agentId: `a${i}`,
+        tool: 'claude' as const,
+        pid: 0,
+        cwd: '/',
+        ttyTitle: 't',
+        terminalApp: 'x',
+        waitingSince: i,
+      })),
+    );
+    expect(unified?.getSize()).toEqual([577, 39]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {

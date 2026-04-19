@@ -2,7 +2,7 @@ import { app, BrowserWindow, BrowserWindowConstructorOptions, screen, Menu } fro
 import path from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
-import { PreferencesManager } from './preferences';
+import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistoryBounds, type ClipboardHistorySizeKey } from './preferences';
 import { SoundManager } from './soundManager';
 import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
@@ -83,6 +83,19 @@ export class ClipboardHistoryWindow {
   
   private readonly DIALOG_WIDTH = 900;
   private readonly DIALOG_HEIGHT = 600;
+
+  // Default width/height per size-key. Used when the user has no saved bounds
+  // for a given view yet. "When in doubt, use fields" — unknown keys fall back.
+  private static readonly DEFAULT_BOUNDS_BY_KEY: Record<ClipboardHistorySizeKey, { width: number; height: number }> = {
+    fields: { width: 900, height: 600 },
+    library: { width: 720, height: 820 },
+    canvas: { width: 1180, height: 760 },
+    draw: { width: 1180, height: 760 },
+  };
+
+  // Which size-key is currently active. Bounds changes emitted while in this
+  // key are persisted under it in preferences.
+  private currentSizeKey: ClipboardHistorySizeKey = 'fields';
   
   // Callback for when window bounds change (for persistence).
   private onBoundsChanged: ((bounds: { x: number; y: number; width: number; height: number }) => void) | null = null;
@@ -96,6 +109,15 @@ export class ClipboardHistoryWindow {
 
   // Track if immersive/fullscreen reading mode is active - window should not auto-hide
   private isImmersiveMode: boolean = false;
+  // When true, immersive mode does not block blur-dismiss (e.g. bookmarks canvas
+  // vs. artifact reading, which deliberately stays on blur so users can
+  // reference other apps while reading).
+  private immersiveDismissableOnBlur: boolean = false;
+  // Timestamp (ms) until which blur-dismiss is suppressed. Used to bridge the
+  // bounds-animation window right after exiting immersive, so a transient
+  // focus blip during the animation doesn't hide the window the user just
+  // Escaped back into.
+  private blurDismissSuppressedUntil: number = 0;
 
   // Callback to check if resume after close is enabled (returns to last artifact vs clipboard)
   private resumeAfterCloseGetter: (() => boolean) | null = null;
@@ -111,7 +133,6 @@ export class ClipboardHistoryWindow {
   private _isShowing: boolean = false;
 
   // Saved window bounds before draw expansion (to restore on exit).
-  private sketchNormalBounds: Electron.Rectangle | null = null;
 
   // Saved window bounds before librarian immersive expansion (to restore on exit).
   private immersiveNormalBounds: Electron.Rectangle | null = null;
@@ -384,10 +405,94 @@ export class ClipboardHistoryWindow {
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
     return {
       showInDock,
-      immersive: this.isImmersiveMode,
+      // Only treat immersive as blur-blocking when the current content isn't
+      // dismissable (artifact reading). Bookmarks canvas opts in to dismiss.
+      immersive: this.isImmersiveMode && !this.immersiveDismissableOnBlur,
       sketch: this.sketchModeActive,
       scenario: this.scenarioTestingActive,
       recording: this.isRecordingActive,
+    };
+  }
+
+  setImmersiveDismissableOnBlur(dismissable: boolean): void {
+    this.immersiveDismissableOnBlur = dismissable;
+  }
+
+  getCurrentSizeKey(): ClipboardHistorySizeKey {
+    return this.currentSizeKey;
+  }
+
+  /**
+   * Switch the active size-key (e.g., when the user navigates to a different
+   * view). Persists any pending resize under the old key, then animates to
+   * the saved (or default) bounds for the new key. During immersive mode,
+   * the key is tracked but the window stays immersive — exit will pick up
+   * the new key automatically.
+   */
+  setSizeKey(key: ClipboardHistorySizeKey): void {
+    if (key === this.currentSizeKey) return;
+
+    // Flush any pending unsaved bounds under the old key before switching.
+    // (Some code paths update bounds without a `resized` event; be defensive.)
+    if (!this.isImmersiveMode) {
+      this.emitBoundsChanged();
+    }
+
+    this.currentSizeKey = key;
+
+    // While immersive, don't change visible dims; the exit path reads the key.
+    if (this.isImmersiveMode) return;
+
+    if (!this.window || this.window.isDestroyed()) return;
+
+    // Keep the window anchored at its current on-screen position when
+    // switching views — only width/height should track the new section.
+    const saved = pickSavedBoundsByKey(this.preferencesManager.get(), key);
+    const defaultDims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[key];
+    const current = this.window.getBounds();
+    this.animateBounds({
+      x: current.x,
+      y: current.y,
+      width: saved?.width ?? defaultDims.width,
+      height: saved?.height ?? defaultDims.height,
+    });
+  }
+
+  private resolveSavedBoundsForKey(key: ClipboardHistorySizeKey): Electron.Rectangle | null {
+    const saved = pickSavedBoundsByKey(this.preferencesManager.get(), key);
+    if (!saved) return null;
+
+    if (saved.relativeX !== undefined && saved.relativeY !== undefined && saved.displayId) {
+      const absolute = ClipboardHistoryWindow.convertToAbsolute(
+        saved.relativeX,
+        saved.relativeY,
+        saved.displayId
+      );
+      if (absolute) {
+        return { x: absolute.x, y: absolute.y, width: saved.width, height: saved.height };
+      }
+    }
+    if (saved.x !== undefined && saved.y !== undefined) {
+      return { x: saved.x, y: saved.y, width: saved.width, height: saved.height };
+    }
+    return null;
+  }
+
+  private defaultBoundsForKey(key: ClipboardHistorySizeKey): Electron.Rectangle {
+    const dims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[key];
+    const current = this.window && !this.window.isDestroyed() ? this.window.getBounds() : null;
+    const display = current
+      ? screen.getDisplayNearestPoint({
+          x: current.x + Math.floor(current.width / 2),
+          y: current.y + Math.floor(current.height / 2),
+        })
+      : screen.getPrimaryDisplay();
+    const work = display.workArea;
+    return {
+      x: Math.round(work.x + (work.width - dims.width) / 2),
+      y: Math.round(work.y + 80),
+      width: dims.width,
+      height: dims.height,
     };
   }
 
@@ -395,6 +500,7 @@ export class ClipboardHistoryWindow {
    * Whether blur should dismiss the clipboard history window in panel mode.
    */
   shouldAutoHideOnBlur(): boolean {
+    if (Date.now() < this.blurDismissSuppressedUntil) return false;
     const state = this.getBlurDismissState();
     return !state.showInDock
       && !state.immersive
@@ -824,7 +930,7 @@ export class ClipboardHistoryWindow {
       this.animationTimer = null;
     }
 
-    const hadExpandedMode = this.sketchModeActive || !!this.sketchNormalBounds || !!this.immersiveNormalBounds;
+    const hadExpandedMode = this.sketchModeActive || !!this.immersiveNormalBounds;
 
     // Save current bounds before any modifications (defensive - ensures bounds are captured).
     // This is especially important if the resize event didn't fire properly.
@@ -832,14 +938,10 @@ export class ClipboardHistoryWindow {
       this.emitBoundsChanged();
     }
 
-    // Restore normal bounds if we were in an expanded mode.
-    if (this.sketchNormalBounds && this.window && !this.window.isDestroyed()) {
-      this.window.setBounds(this.sketchNormalBounds);
-    }
+    // Restore pre-immersive bounds if we were in immersive mode.
     if (this.immersiveNormalBounds && this.window && !this.window.isDestroyed()) {
       this.window.setBounds(this.immersiveNormalBounds);
     }
-    this.sketchNormalBounds = null;
     this.immersiveNormalBounds = null;
     this.sketchModeActive = false;
 
@@ -855,6 +957,7 @@ export class ClipboardHistoryWindow {
       this.window.webContents.send('clipboard:resetToClipboardView');
     }
     this.isImmersiveMode = false;
+    this.immersiveDismissableOnBlur = false;
 
     // Only play sound if window is actually visible and sounds are enabled.
     // This prevents double-play when blur event fires after direct hide() call.
@@ -1148,6 +1251,7 @@ export class ClipboardHistoryWindow {
    * When active, window will not auto-hide on blur and behaves like a normal window.
    */
   setImmersiveMode(immersive: boolean): void {
+    const wasImmersive = this.isImmersiveMode;
     this.isImmersiveMode = immersive;
 
     if (this.window && !this.window.isDestroyed()) {
@@ -1155,10 +1259,22 @@ export class ClipboardHistoryWindow {
         const immersiveHeightPercent = this.immersiveHeightPercentGetter?.() ?? 85;
         this.immersiveNormalBounds = this.window.getBounds();
         this.animateBounds(this.computeImmersiveBounds(this.immersiveNormalBounds, 1.08, immersiveHeightPercent));
-      } else if (!immersive && this.immersiveNormalBounds) {
-        this.animateBounds(this.immersiveNormalBounds);
+      } else if (!immersive) {
+        // Exit: animate to the current size-key's saved/default bounds, not the
+        // pre-immersive bounds. If the user switched views while immersive,
+        // this lands them on the right size for whatever view they're in now.
+        const targetBounds = this.resolveSavedBoundsForKey(this.currentSizeKey)
+          ?? this.defaultBoundsForKey(this.currentSizeKey);
+        this.animateBounds(targetBounds);
         this.immersiveNormalBounds = null;
       }
+    }
+
+    // Exiting immersive can trigger a transient blur during the bounds
+    // animation and setAlwaysOnTop transition. Suppress blur-dismiss briefly
+    // so the window isn't hidden out from under a user who just Escaped.
+    if (wasImmersive && !immersive) {
+      this.blurDismissSuppressedUntil = Date.now() + 400;
     }
 
     // Dock stays hidden - panel mode is the only mode now.
@@ -1227,19 +1343,10 @@ export class ClipboardHistoryWindow {
   }
 
   setSketchModeActive(active: boolean): void {
+    // Window dimensions are handled by the size-key mechanism (setSizeKey('draw')
+    // on entry, and whichever key the renderer reports on exit). This method
+    // only tracks the flag that other behavior keys off of (e.g. blur-dismiss).
     this.sketchModeActive = active;
-    
-    if (!this.window || this.window.isDestroyed()) return;
-    
-    if (active && !this.sketchNormalBounds) {
-      // Expand window when entering sketch mode.
-      this.sketchNormalBounds = this.window.getBounds();
-      this.animateBounds(this.computeExpandedBounds(this.sketchNormalBounds, 1.2, 1.2));
-    } else if (!active && this.sketchNormalBounds) {
-      // Contract window when exiting sketch mode.
-      this.animateBounds(this.sketchNormalBounds);
-      this.sketchNormalBounds = null;
-    }
   }
 
   isSketchModeActive(): boolean {
