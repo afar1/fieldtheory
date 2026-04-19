@@ -176,6 +176,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return BOOKMARKS_ITEM_ID;
   });
   const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | null>(() => restoredSelection?.type ?? null);
+  // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
+  // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
+  // search input persist across sidebar switches.
+  const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => restoredSelection?.type === 'bookmarks');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
 
@@ -235,6 +239,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     localStorage.setItem('librarian-sidebar-width', String(sidebarWidth));
   }, [sidebarWidth]);
+
+  useEffect(() => {
+    if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
+      setBookmarksEverShown(true);
+    }
+  }, [selectedItemType, bookmarksEverShown]);
 
   useEffect(() => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -1181,12 +1191,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           minHeight: 0, // Required for flex child to shrink below content size
         }}
       >
-        {selectedItemType === 'bookmarks' ? (
-          <BookmarksPane
-            isFullScreen={isFullScreen}
-            onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
-          />
-        ) : (<Fragment>
+        {bookmarksEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'bookmarks' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}
+          >
+            <BookmarksPane
+              isFullScreen={isFullScreen}
+              onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
+            />
+          </div>
+        )}
+        {selectedItemType !== 'bookmarks' && (<Fragment>
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
           onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
