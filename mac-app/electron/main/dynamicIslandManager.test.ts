@@ -580,17 +580,18 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
 
-    // 2 agents + recording: left = padding(18) + X(30) + 2*agent(28) + hamburger(22) = 126.
-    // Right = padding(18) + waveform(88) = 106. Max = 126. Window = 126+209+126 = 461.
+    // Simplified renderer (single green star for any count): left =
+    // padding(18) + X(30) + 1*agent(28) + hamburger(22) = 98. Right =
+    // padding(18) + waveform(88) = 106. Max = 106. Window = 106+209+106 = 421.
+    // Left + right side widths are max-equalized for symmetric growth.
     manager.setWaitingAgents([
       { agentId: 'a', tool: 'claude', pid: 0, cwd: '/', ttyTitle: 't', terminalApp: 'x', waitingSince: 1 },
       { agentId: 'b', tool: 'codex', pid: 0, cwd: '/', ttyTitle: 't', terminalApp: 'x', waitingSince: 2 },
     ]);
     manager.setState('recording');
-    expect(unified?.getSize()).toEqual([461, 39]);
+    expect(unified?.getSize()).toEqual([421, 39]);
 
-    // 5 agents + recording: left = 18 + 30 + 3*28 + 30 + 22 = 184. Max = 184.
-    // Window = 184 + 209 + 184 = 577.
+    // 5 agents + recording: same as 2 — count doesn't grow the pill anymore.
     manager.setWaitingAgents(
       Array.from({ length: 5 }, (_, i) => ({
         agentId: `a${i}`,
@@ -602,7 +603,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
         waitingSince: i,
       })),
     );
-    expect(unified?.getSize()).toEqual([577, 39]);
+    expect(unified?.getSize()).toEqual([421, 39]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {

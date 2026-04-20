@@ -6,9 +6,23 @@ import os from 'os';
 import path from 'path';
 import { createLogger } from './logger';
 import type { AgentTool, WaitingAgent } from './types/agentAttention';
+import {
+  computeAgentLayout,
+  type AgentLayout,
+  type DisplayBounds,
+} from './agentLayout';
+import type { NativeWindowInfo } from './types/audio';
 
 const log = createLogger('AgentAttention');
 const execAsync = promisify(exec);
+
+// Provider interface for spatial layout inputs. Injected so the manager
+// doesn't import electron or nativeHelper directly — keeps it testable and
+// lets us skip window enumeration in headless/test contexts.
+export interface AgentLayoutProvider {
+  listWindows(): Promise<NativeWindowInfo[]>;
+  listDisplays(): DisplayBounds[];
+}
 
 // =============================================================================
 // AgentAttentionManager - Watches ~/.fieldtheory/agents/state/ for JSON
@@ -16,6 +30,10 @@ const execAsync = promisify(exec);
 // one agent session currently waiting on the user. The manager emits 'change'
 // with a sorted list whenever the set changes, and exposes focus() to bring
 // the associated terminal window to the foreground.
+//
+// When ≥2 agents are waiting AND a layout provider is attached, the manager
+// also polls the native window list to compute a spatial 1x4 / 2x2 layout
+// and emits it on the 'layout' event for the Dynamic Island to render.
 // =============================================================================
 
 export class AgentAttentionManager extends EventEmitter {
@@ -33,6 +51,12 @@ export class AgentAttentionManager extends EventEmitter {
   // when a tool's hook is uninstalled, its agents are filtered out of the
   // emitted list so the Dynamic Island dots disappear immediately.
   private toolFilter: Record<AgentTool, boolean> = { claude: true, codex: true };
+  // Spatial layout plumbing. Poll only runs while agents.length ≥ 2 so we
+  // don't burn cycles when there's nothing to position.
+  private layoutProvider: AgentLayoutProvider | null = null;
+  private layoutPollTimer: NodeJS.Timeout | null = null;
+  private lastLayoutKey: string | null = null;
+  private readonly LAYOUT_POLL_INTERVAL_MS = 250;
 
   constructor(stateDir?: string) {
     super();
@@ -63,13 +87,64 @@ export class AgentAttentionManager extends EventEmitter {
       this.toolFilter.claude !== filter.claude ||
       this.toolFilter.codex !== filter.codex;
     this.toolFilter = { ...filter };
-    if (changed) this.emit('change', this.getWaiting());
+    if (changed) {
+      this.emit('change', this.getWaiting());
+      this.reconcileLayoutPolling();
+    }
+  }
+
+  setLayoutProvider(provider: AgentLayoutProvider | null): void {
+    this.layoutProvider = provider;
+    this.reconcileLayoutPolling();
+  }
+
+  // Starts polling when ≥2 agents are waiting, stops when fewer. Called from
+  // every path that changes the waiting set (rescan, setSynthetic, filter
+  // changes). Safe to call redundantly — it's idempotent.
+  private reconcileLayoutPolling(): void {
+    const shouldPoll =
+      this.layoutProvider !== null && this.getWaiting().length >= 2;
+    if (shouldPoll && !this.layoutPollTimer) {
+      // Fire one immediate tick so dots snap into place without waiting for
+      // the next interval (~250ms delay feels laggy on the first appearance).
+      void this.tickLayout();
+      this.layoutPollTimer = setInterval(
+        () => void this.tickLayout(),
+        this.LAYOUT_POLL_INTERVAL_MS
+      );
+    } else if (!shouldPoll && this.layoutPollTimer) {
+      clearInterval(this.layoutPollTimer);
+      this.layoutPollTimer = null;
+      this.lastLayoutKey = null;
+    }
+  }
+
+  private async tickLayout(): Promise<void> {
+    const provider = this.layoutProvider;
+    if (!provider) return;
+    const agents = this.getWaiting();
+    if (agents.length < 2) return;
+
+    let windows: NativeWindowInfo[] = [];
+    try {
+      windows = await provider.listWindows();
+    } catch (err) {
+      log.warn('listWindows failed during layout tick:', err);
+      return;
+    }
+
+    const layout = computeAgentLayout(agents, windows, provider.listDisplays());
+    const key = layoutKey(layout);
+    if (key === this.lastLayoutKey) return; // no visible change → skip IPC
+    this.lastLayoutKey = key;
+    this.emit('layout', layout);
   }
 
   setSynthetic(count: number): void {
     if (count <= 0) {
       this.syntheticOverride = null;
       this.emit('change', this.getWaiting());
+      this.reconcileLayoutPolling();
       return;
     }
     const tools: AgentTool[] = ['claude', 'codex'];
@@ -84,6 +159,7 @@ export class AgentAttentionManager extends EventEmitter {
       waitingSince: now + i,
     }));
     this.emit('change', [...this.syntheticOverride]);
+    this.reconcileLayoutPolling();
   }
 
   async focus(agentId: string): Promise<boolean> {
@@ -116,6 +192,10 @@ export class AgentAttentionManager extends EventEmitter {
     if (this.pollTimer) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
+    }
+    if (this.layoutPollTimer) {
+      clearInterval(this.layoutPollTimer);
+      this.layoutPollTimer = null;
     }
   }
 
@@ -169,6 +249,7 @@ export class AgentAttentionManager extends EventEmitter {
 
     if (changed) {
       this.emit('change', this.getWaiting());
+      this.reconcileLayoutPolling();
     }
   }
 
@@ -236,4 +317,14 @@ end tell`;
   private escapeAppleScript(s: string): string {
     return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
+}
+
+// Stable string fingerprint for a layout. Used to skip redundant IPC emits
+// when the poll tick produces an identical layout to the last one.
+function layoutKey(layout: AgentLayout): string {
+  const slotKey = layout.slots
+    .map(s => `${s.position}:${s.agentIds.slice().sort().join(',')}`)
+    .join('|');
+  const unmatched = layout.unmatched.slice().sort().join(',');
+  return `${layout.kind}@${slotKey}#${unmatched}`;
 }

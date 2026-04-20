@@ -9,7 +9,7 @@ describe('computeLeftPillWidth', () => {
   it('idle (only hamburger visible) = padding + hamburger', () => {
     const w = computeLeftPillWidth({
       xExpanded: false,
-      agentCount: 0,
+      agentsSlotSum: 0,
       hamburgerExpanded: true,
     });
     expect(w).toBe(18 + 22);
@@ -18,7 +18,7 @@ describe('computeLeftPillWidth', () => {
   it('0 agents with hamburger hidden collapses to just padding', () => {
     const w = computeLeftPillWidth({
       xExpanded: false,
-      agentCount: 0,
+      agentsSlotSum: 0,
       hamburgerExpanded: false,
     });
     expect(w).toBe(18);
@@ -27,54 +27,40 @@ describe('computeLeftPillWidth', () => {
   it('adds the X slot (+30) when expanded', () => {
     const base = computeLeftPillWidth({
       xExpanded: false,
-      agentCount: 0,
+      agentsSlotSum: 0,
       hamburgerExpanded: true,
     });
     const withX = computeLeftPillWidth({
       xExpanded: true,
-      agentCount: 0,
+      agentsSlotSum: 0,
       hamburgerExpanded: true,
     });
     expect(withX - base).toBe(22 + 8);
   });
 
-  it('each agent adds 28 (22 glyph + 6 gap) up to 3', () => {
+  it('agent slot sum is added through verbatim', () => {
     const base = computeLeftPillWidth({
       xExpanded: false,
-      agentCount: 0,
+      agentsSlotSum: 0,
       hamburgerExpanded: false,
     });
-    for (let n = 0; n <= 3; n++) {
+    for (const sum of [0, 28, 56, 84, 114]) {
       const w = computeLeftPillWidth({
         xExpanded: false,
-        agentCount: n,
+        agentsSlotSum: sum,
         hamburgerExpanded: false,
       });
-      expect(w - base).toBe(n * 28);
+      expect(w - base).toBe(sum);
     }
   });
 
-  it('4+ agents caps visible at 3 and adds a +30 overflow slot', () => {
-    const three = computeLeftPillWidth({
-      xExpanded: false,
-      agentCount: 3,
-      hamburgerExpanded: false,
-    });
-    const fourOrMore = computeLeftPillWidth({
-      xExpanded: false,
-      agentCount: 7,
-      hamburgerExpanded: false,
-    });
-    expect(fourOrMore - three).toBe(24 + 6);
-  });
-
-  it('kitchen sink: X + 3 agents + overflow + hamburger fits expected total', () => {
+  it('kitchen sink: X + agents + hamburger fits expected total', () => {
     const w = computeLeftPillWidth({
       xExpanded: true,
-      agentCount: 5,
+      agentsSlotSum: 114, // e.g. 3 agents (84) + overflow (30)
       hamburgerExpanded: true,
     });
-    // 18 pad + 30 X + 3*28 agents + 30 overflow + 22 hamburger = 184
+    // 18 pad + 30 X + 114 agents + 22 hamburger = 184
     expect(w).toBe(184);
   });
 });

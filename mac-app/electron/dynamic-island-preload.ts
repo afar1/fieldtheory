@@ -202,6 +202,16 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-agents', (_event, agents) => callback(agents));
   },
 
+  // Spatial layout for waiting-agent dots. Null when <2 agents or no native
+  // window data is available; renderer falls back to legacy ordering.
+  onAgentLayout: (callback: (layout: {
+    kind: 'row' | 'grid';
+    slots: Array<{ position: number; agentIds: string[] }>;
+    unmatched: string[];
+  } | null) => void) => {
+    ipcRenderer.on('dynamic-island-agent-layout', (_event, layout) => callback(layout));
+  },
+
   // Focus the terminal window/tab associated with a waiting agent.
   focusAgent: (agentId: string) => ipcRenderer.invoke('agent:focus', agentId),
 

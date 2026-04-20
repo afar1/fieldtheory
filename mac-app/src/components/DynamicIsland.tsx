@@ -654,6 +654,7 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [deletedId, setDeletedId] = useState<number | null>(null);
   const [waitingAgentCount, setWaitingAgentCount] = useState(0);
+  const [agentsSlotSum, setAgentsSlotSum] = useState(0);
   const [pillHovered, setPillHovered] = useState(false);
   const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
   const [stackCount, setStackCount] = useState(0);
@@ -984,7 +985,7 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
 
   const leftSlotSum = computeLeftPillWidth({
     xExpanded: expanded,
-    agentCount: waitingAgentCount,
+    agentsSlotSum,
     hamburgerExpanded,
   });
   useEffect(() => {
@@ -1022,7 +1023,10 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
             <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </PillSlot>
-        <AgentAttention onCountChanged={setWaitingAgentCount} />
+        <AgentAttention
+          onCountChanged={setWaitingAgentCount}
+          onSlotSumChange={setAgentsSlotSum}
+        />
         <PillSlot
           visible={hamburgerExpanded}
           marginRight={0}
@@ -1791,6 +1795,11 @@ declare global {
         terminalApp: string;
         waitingSince: number;
       }>) => void) => void;
+      onAgentLayout?: (cb: (layout: {
+        kind: 'row' | 'grid';
+        slots: Array<{ position: number; agentIds: string[] }>;
+        unmatched: string[];
+      } | null) => void) => void;
       focusAgent?: (agentId: string) => Promise<boolean>;
       removeAllListeners: (channel: string) => void;
     };

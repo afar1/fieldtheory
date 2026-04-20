@@ -10,32 +10,27 @@
 const PILL_PADDING = 18; // 10 + 8
 const SLOT_WIDTH = 22;
 const SLOT_GAP = 8;
-const AGENT_SLOT_WIDTH = 22;
-const AGENT_SLOT_GAP = 6;
-const AGENT_OVERFLOW_WIDTH = 24;
-const AGENT_OVERFLOW_GAP = 6;
-const AGENT_MAX_VISIBLE = 3;
 const WAVEFORM_WIDTH = 80;
 const WAVEFORM_GAP = 8;
 
 export interface LeftPillSlotInputs {
   xExpanded: boolean;
-  agentCount: number;
+  // Sum of the agent-attention region's rendered slot widths (including gaps).
+  // The AgentAttention component reports this up because it varies with the
+  // spatial layout mode (row vs grid) and the per-slot ×N badge state.
+  agentsSlotSum: number;
   hamburgerExpanded: boolean;
 }
 
 export function computeLeftPillWidth({
   xExpanded,
-  agentCount,
+  agentsSlotSum,
   hamburgerExpanded,
 }: LeftPillSlotInputs): number {
-  const visibleAgents = Math.min(agentCount, AGENT_MAX_VISIBLE);
-  const hasOverflow = agentCount > AGENT_MAX_VISIBLE;
   return (
     PILL_PADDING
     + (xExpanded ? SLOT_WIDTH + SLOT_GAP : 0)
-    + visibleAgents * (AGENT_SLOT_WIDTH + AGENT_SLOT_GAP)
-    + (hasOverflow ? AGENT_OVERFLOW_WIDTH + AGENT_OVERFLOW_GAP : 0)
+    + agentsSlotSum
     + (hamburgerExpanded ? SLOT_WIDTH : 0)
   );
 }
