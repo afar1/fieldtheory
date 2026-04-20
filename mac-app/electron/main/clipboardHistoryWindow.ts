@@ -1153,32 +1153,29 @@ export class ClipboardHistoryWindow {
    */
   private animateBounds(targetBounds: Electron.Rectangle, duration: number = 150): void {
     if (!this.window || this.window.isDestroyed()) return;
-    
-    // Cancel any in-progress animation.
+
     if (this.animationTimer) {
       clearInterval(this.animationTimer);
       this.animationTimer = null;
     }
-    
+
     const startBounds = this.window.getBounds();
     const steps = 6;
     const stepDuration = duration / steps;
     let currentStep = 0;
-    
+
     this.animationTimer = setInterval(() => {
       currentStep++;
       const t = currentStep / steps;
       const eased = 1 - (1 - t) * (1 - t); // easeOutQuad
-      
-      const newBounds = {
+
+      this.window?.setBounds({
         x: Math.round(startBounds.x + (targetBounds.x - startBounds.x) * eased),
         y: Math.round(startBounds.y + (targetBounds.y - startBounds.y) * eased),
         width: Math.round(startBounds.width + (targetBounds.width - startBounds.width) * eased),
         height: Math.round(startBounds.height + (targetBounds.height - startBounds.height) * eased),
-      };
-      
-      this.window?.setBounds(newBounds);
-      
+      });
+
       if (currentStep >= steps) {
         clearInterval(this.animationTimer!);
         this.animationTimer = null;
@@ -1251,6 +1248,10 @@ export class ClipboardHistoryWindow {
    * When active, window will not auto-hide on blur and behaves like a normal window.
    */
   setImmersiveMode(immersive: boolean): void {
+    // Renderer may fire this twice for the same transition — once directly from
+    // the toggle click (for snappy animation start) and once later via the
+    // React state→useEffect chain. Bail on the redundant second call.
+    if (immersive === this.isImmersiveMode) return;
     const wasImmersive = this.isImmersiveMode;
     this.isImmersiveMode = immersive;
 
