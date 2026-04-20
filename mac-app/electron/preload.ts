@@ -3551,6 +3551,7 @@ interface BookmarkImage {
   type: string;
   videoUrl?: string;
   localFilename?: string;
+  localVideoFilename?: string;
 }
 interface QuotedTweet {
   id: string;
@@ -3558,6 +3559,7 @@ interface QuotedTweet {
   authorHandle: string;
   authorName: string;
   authorAvatar: string;
+  localAvatarFilename?: string;
   postedAt: string;
   url: string;
   images: BookmarkImage[];
@@ -3569,6 +3571,7 @@ interface Bookmark {
   authorHandle: string;
   authorName: string;
   authorAvatar: string;
+  localAvatarFilename?: string;
   postedAt: string;
   images: BookmarkImage[];
   mediaCount: number;
