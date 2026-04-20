@@ -1042,6 +1042,7 @@ interface QuotaAPI {
 interface ShellAPI {
   openExternal: (url: string) => Promise<void>;
   showItemInFolder: (fullPath: string) => Promise<void>;
+  setRepresentedFilename: (fullPath: string) => Promise<void>;
 }
 
 /**
@@ -1537,6 +1538,7 @@ declare global {
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
+    deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
     onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
@@ -1555,6 +1557,19 @@ declare global {
     open: (absPath: string) => Promise<ExternalMarkdownFile | null>;
     save: (absPath: string, content: string) => Promise<boolean>;
     onOpenExternal: (callback: (absPath: string) => void) => () => void;
+  }
+
+  interface RecentEntry {
+    kind: 'wiki' | 'external';
+    path: string;
+    title: string;
+    lastOpenedAt: number;
+  }
+
+  interface RecentAPI {
+    list: () => Promise<RecentEntry[]>;
+    visit: (entry: RecentEntry) => Promise<RecentEntry[]>;
+    remove: (kind: 'wiki' | 'external', entryPath: string) => Promise<RecentEntry[]>;
   }
 
   interface BookmarkImage {
@@ -1935,6 +1950,7 @@ declare global {
     librarianAPI?: LibrarianAPI;
     wikiAPI?: WikiAPI;
     externalAPI?: ExternalAPI;
+    recentAPI?: RecentAPI;
     bookmarksAPI?: BookmarksAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;

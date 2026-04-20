@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, shell } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
@@ -2259,6 +2259,20 @@ export class LibrarianManager extends EventEmitter {
       return true;
     } catch (error) {
       log.error(`Error saving wiki page ${relPath}:`, error);
+      return false;
+    }
+  }
+
+  async deleteWikiPage(relPath: string): Promise<boolean> {
+    const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
+    if (!absPath.startsWith(this.wikiDir)) return false;
+    if (!fs.existsSync(absPath)) return false;
+    try {
+      await shell.trashItem(absPath);
+      this.emit('wiki:changed');
+      return true;
+    } catch (error) {
+      log.error(`Error trashing wiki page ${relPath}:`, error);
       return false;
     }
   }

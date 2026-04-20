@@ -13,6 +13,7 @@ import ContentToolbar from './ContentToolbar';
 
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
+  sidebarCollapsed?: boolean;
 }
 
 /**
@@ -52,7 +53,7 @@ interface WatchedDir {
   enabled: boolean;
 }
 
-export default function CommandsView({ onSwitchToClipboard }: CommandsViewProps) {
+export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = false }: CommandsViewProps) {
   const { theme } = useTheme();
 
   // View mode: 'mine' or 'popular'
@@ -781,16 +782,18 @@ export default function CommandsView({ onSwitchToClipboard }: CommandsViewProps)
         backgroundColor: theme.bg,
       }}
     >
-      {/* Sidebar */}
+      {/* Sidebar - kept in DOM when collapsed for instant transition */}
       <div
         style={{
-          width: `${sidebarWidth}px`,
-          minWidth: `${sidebarWidth}px`,
+          width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
           overflowY: 'auto',
-          padding: '12px 0',
+          overflowX: 'hidden',
+          padding: sidebarCollapsed ? '0' : '12px 0',
           userSelect: isResizing ? 'none' : 'auto',
           display: isFullScreen ? 'none' : 'flex',
           flexDirection: 'column',
+          transition: 'width 0.18s ease, min-width 0.18s ease, padding 0.18s ease',
         }}
       >
         {/* Header - Librarian style */}
@@ -1112,7 +1115,7 @@ export default function CommandsView({ onSwitchToClipboard }: CommandsViewProps)
           borderRight: `1px solid ${theme.border}`,
           transition: 'background-color 0.15s ease',
           flexShrink: 0,
-          display: isFullScreen ? 'none' : 'block',
+          display: isFullScreen || sidebarCollapsed ? 'none' : 'block',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {

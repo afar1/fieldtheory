@@ -69,6 +69,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
+import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -261,6 +262,7 @@ let agentHookInstaller: AgentHookInstaller | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
@@ -1582,6 +1584,11 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.createWikiFile(folderName, fileName);
   });
 
+  ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
+    if (!librarianManager) return false;
+    return librarianManager.deleteWikiPage(relPath);
+  });
+
   ipcMain.handle('wiki:createScratchpadDefault', (): WikiPage | null => {
     if (!librarianManager) return null;
     return librarianManager.createScratchpadDefault();
@@ -1591,6 +1598,18 @@ function setupLibrarianIPCHandlers(): void {
     if (!librarianManager) return false;
     return librarianManager.createWikiDir(dirName);
   });
+
+  // Recent items (wiki + external). Returns the updated list so the renderer
+  // can re-render without a second round-trip.
+  ipcMain.handle('recent:list', (): RecentEntry[] => recentManager?.list() ?? []);
+  ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] =>
+    recentManager?.visit(entry) ?? [],
+  );
+  ipcMain.handle(
+    'recent:remove',
+    (_event, kind: 'wiki' | 'external', entryPath: string): RecentEntry[] =>
+      recentManager?.remove(kind, entryPath) ?? [],
+  );
 
   // External markdown files — used when macOS opens a .md file "With Field
   // Theory" and the canonical path falls outside the wiki root. The app
@@ -4177,6 +4196,12 @@ function setupClipboardIPCHandlers(): void {
     shell.showItemInFolder(fullPath);
   });
 
+  // macOS proxy-icon / Cmd-click title menu. Empty string clears.
+  ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.setRepresentedFilename(fullPath || '');
+  });
+
   // =========================================================================
   // Generic Hotkey IPC Handlers (for UI-configurable hotkeys)
   // =========================================================================
@@ -6100,6 +6125,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
+  recentManager = new RecentManager();
 
   // Initialize bookmarks manager for reading synced X bookmarks.
   bookmarksManager = new BookmarksManager();
@@ -6635,6 +6661,9 @@ async function initTranscriberSystem(): Promise<void> {
     if (userDataManager.isLoggedIn()) {
       await commandsManager.reinitializeForUser();
     }
+  }
+  if (recentManager) {
+    recentManager.setUserDataManager(userDataManager);
   }
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);

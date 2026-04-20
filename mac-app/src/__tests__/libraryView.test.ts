@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatBreadcrumb,
   persistLibrarianSelection,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   splitFrontmatter,
 } from '../components/LibrarianView';
-import { ensureScratchpadPinned, filterUnifiedFolders } from '../components/WikiSidebar';
+import { ensureScratchpadPinned, filterUnifiedFolders, splitRecent } from '../components/WikiSidebar';
 
 describe('splitFrontmatter', () => {
   it('strips YAML frontmatter and returns body + metadata', () => {
@@ -200,5 +201,56 @@ describe('resolveWikiCreateFolder', () => {
   it('falls back to entries when no wiki folder is selected', () => {
     expect(resolveWikiCreateFolder('artifacts', 'artifact', '/tmp/example.md')).toBe('entries');
     expect(resolveWikiCreateFolder('', null, null)).toBe('entries');
+  });
+});
+
+describe('splitRecent', () => {
+  const make = (kind: 'wiki' | 'external', p: string) => ({ kind, path: p, title: p, lastOpenedAt: 1 });
+
+  it('splits by kind and preserves input order inside each group', () => {
+    const entries = [make('wiki', 'a'), make('external', 'x'), make('wiki', 'b')];
+    const out = splitRecent(entries, null);
+    expect(out.wiki.map((e) => e.path)).toEqual(['a', 'b']);
+    expect(out.external.map((e) => e.path)).toEqual(['x']);
+    expect(out.wikiTotal).toBe(2);
+    expect(out.externalTotal).toBe(1);
+  });
+
+  it('caps each side at 3 when collapsed, at 10 when the corresponding side is expanded', () => {
+    const wikiEntries = Array.from({ length: 8 }, (_, i) => make('wiki', `w${i}`));
+    const externalEntries = Array.from({ length: 8 }, (_, i) => make('external', `e${i}`));
+    const collapsed = splitRecent([...wikiEntries, ...externalEntries], null);
+    expect(collapsed.wiki).toHaveLength(3);
+    expect(collapsed.external).toHaveLength(3);
+
+    const wikiExpanded = splitRecent([...wikiEntries, ...externalEntries], 'wiki');
+    expect(wikiExpanded.wiki).toHaveLength(8); // all 8 fit under the 10 cap
+    expect(wikiExpanded.external).toHaveLength(3);
+  });
+});
+
+describe('formatBreadcrumb', () => {
+  const reading = { path: '/Users/me/notes/journal.md', title: 'My Journal' };
+
+  it('returns an empty string when no reading is provided', () => {
+    expect(formatBreadcrumb('wiki', null, 'anything')).toBe('');
+    expect(formatBreadcrumb('external', null, null)).toBe('');
+  });
+
+  it('wiki: prefixes the top-level folder from the relPath', () => {
+    expect(formatBreadcrumb('wiki', reading, 'debates/my-journal')).toBe('debates / My Journal');
+  });
+
+  it('wiki: drops the prefix when relPath is flat (no folder)', () => {
+    expect(formatBreadcrumb('wiki', reading, 'my-journal')).toBe('My Journal');
+    expect(formatBreadcrumb('wiki', reading, null)).toBe('My Journal');
+  });
+
+  it('external: shows parent-dir / filename from the absolute path', () => {
+    expect(formatBreadcrumb('external', reading, null)).toBe('notes / journal.md');
+  });
+
+  it('external: falls back to the title when the path has no parent', () => {
+    expect(formatBreadcrumb('external', { path: 'loose.md', title: 'Loose' }, null)).toBe('loose.md');
   });
 });
