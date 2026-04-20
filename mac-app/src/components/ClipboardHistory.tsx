@@ -281,13 +281,14 @@ export default function ClipboardHistory() {
     () => localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
   );
   // Sidebar collapse state lives here so the footer toggle can drive it
-  // regardless of which view is currently active.
-  const [librarianSidebarCollapsed, setLibrarianSidebarCollapsed] = useState<boolean>(
+  // regardless of which view is currently active. Shared between Library and
+  // Commands views so the toggle has consistent behavior.
+  const [navSidebarCollapsed, setNavSidebarCollapsed] = useState<boolean>(
     () => localStorage.getItem('librarian-sidebar-collapsed') === '1'
   );
   useEffect(() => {
-    localStorage.setItem('librarian-sidebar-collapsed', librarianSidebarCollapsed ? '1' : '0');
-  }, [librarianSidebarCollapsed]);
+    localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
+  }, [navSidebarCollapsed]);
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -4003,7 +4004,7 @@ export default function ClipboardHistory() {
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
           autoPopArtifactPath={autoPopArtifactPath}
           onAutoPopArtifactSuperseded={() => setAutoPopArtifactPath(null)}
-          sidebarCollapsed={librarianSidebarCollapsed}
+          sidebarCollapsed={navSidebarCollapsed}
         />
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
@@ -4062,7 +4063,10 @@ export default function ClipboardHistory() {
           </div>
         )
       ) : viewMode === 'commands' ? (
-        <CommandsView onSwitchToClipboard={() => setViewMode('clipboard')} />
+        <CommandsView
+          onSwitchToClipboard={() => setViewMode('clipboard')}
+          sidebarCollapsed={navSidebarCollapsed}
+        />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
           <SketchView
@@ -6082,17 +6086,19 @@ export default function ClipboardHistory() {
             flex: 1,
           }}
         >
-          {/* Sidebar collapse toggle — only actionable in Library view
-              (non-immersive). In other views it stays visible but
-              disabled so the footer layout doesn't jump. */}
+          {/* Sidebar collapse toggle — actionable in Library (non-immersive)
+              and Commands views. In other views it stays visible but disabled
+              so the footer layout doesn't jump. */}
           {(() => {
-            const collapseEnabled = viewMode === 'librarian' && !librarianImmersive && !showSettings;
+            const collapseEnabled =
+              (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
+              (viewMode === 'commands' && !showSettings);
             return (
               <button
-                onClick={() => setLibrarianSidebarCollapsed((v) => !v)}
+                onClick={() => setNavSidebarCollapsed((v) => !v)}
                 disabled={!collapseEnabled}
-                title={collapseEnabled ? (librarianSidebarCollapsed ? 'Show Library sidebar' : 'Hide Library sidebar') : 'Library sidebar toggle'}
-                aria-label="Toggle Library sidebar"
+                title={collapseEnabled ? (navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') : 'Sidebar toggle'}
+                aria-label="Toggle sidebar"
                 style={{
                   width: '20px',
                   height: '20px',
@@ -6124,7 +6130,7 @@ export default function ClipboardHistory() {
                   strokeLinecap="round"
                   strokeLinejoin="round"
                   style={{
-                    transform: collapseEnabled && librarianSidebarCollapsed ? 'rotate(180deg)' : 'none',
+                    transform: collapseEnabled && navSidebarCollapsed ? 'rotate(180deg)' : 'none',
                     transition: 'transform 0.15s ease',
                   }}
                 >

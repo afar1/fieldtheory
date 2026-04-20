@@ -6,7 +6,7 @@ type SortMode = 'alpha' | 'time';
 interface UnifiedItem {
   id: string;
   title: string;
-  type: 'wiki' | 'artifact' | 'bookmarks';
+  type: 'wiki' | 'artifact' | 'bookmarks' | 'external';
   absPath: string;
   relPath?: string;
   timestamp: number;
@@ -95,6 +95,32 @@ export function filterUnifiedFolders(folders: UnifiedFolder[], searchQuery: stri
     .filter((folder) => folder.items.length > 0);
 }
 
+/** Split the recent list into wiki/external groups and clip each to a
+ *  visible count that expands when the caller passes a non-null `expanded`
+ *  kind. Returns stable shapes so the sidebar render can map() blindly. */
+export function splitRecent(
+  entries: RecentEntry[],
+  expanded: 'wiki' | 'external' | null,
+  collapsed: number = 3,
+  expandedMax: number = 10,
+): {
+  wiki: RecentEntry[];
+  wikiTotal: number;
+  external: RecentEntry[];
+  externalTotal: number;
+} {
+  const wikiAll = entries.filter((e) => e.kind === 'wiki');
+  const externalAll = entries.filter((e) => e.kind === 'external');
+  const wikiLimit = expanded === 'wiki' ? expandedMax : collapsed;
+  const externalLimit = expanded === 'external' ? expandedMax : collapsed;
+  return {
+    wiki: wikiAll.slice(0, wikiLimit),
+    wikiTotal: wikiAll.length,
+    external: externalAll.slice(0, externalLimit),
+    externalTotal: externalAll.length,
+  };
+}
+
 /** Pin Scratchpad at the top when the wiki tree doesn't already expose it, so
  * the user can create ad-hoc docs without running a backfill first. */
 export function ensureScratchpadPinned(folders: UnifiedFolder[]): UnifiedFolder[] {
@@ -142,6 +168,35 @@ function WikiSidebar({
   >(null);
   const [newName, setNewName] = useState('');
   const createInputRef = useRef<HTMLInputElement | null>(null);
+  const [recent, setRecent] = useState<RecentEntry[]>([]);
+  const [recentExpanded, setRecentExpanded] = useState<'wiki' | 'external' | null>(null);
+  const selectedItemRef = useRef<HTMLDivElement | null>(null);
+
+  // Auto-expand the parent folder of the selected wiki item so programmatic
+  // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
+  // of leaving it hidden under a collapsed folder.
+  useEffect(() => {
+    if (!selectedId?.startsWith('wiki:')) return;
+    const relPath = selectedId.slice('wiki:'.length);
+    const folder = relPath.includes('/') ? relPath.split('/')[0] : null;
+    if (!folder) return;
+    setExpandedFolders((prev) => {
+      if (prev.has(folder)) return prev;
+      const next = new Set(prev);
+      next.add(folder);
+      return next;
+    });
+  }, [selectedId]);
+
+  // Scroll the selected item into view when the selection changes programmatically.
+  useEffect(() => {
+    if (!selectedId) return;
+    // Defer to next frame so the newly-expanded folder has rendered its items.
+    const id = requestAnimationFrame(() => {
+      selectedItemRef.current?.scrollIntoView({ block: 'nearest' });
+    });
+    return () => cancelAnimationFrame(id);
+  }, [selectedId]);
 
   const loadTree = useCallback(async () => {
     const result = await window.wikiAPI?.getTree();
@@ -153,9 +208,15 @@ function WikiSidebar({
     if (result) setArtifacts(result);
   }, []);
 
+  const loadRecent = useCallback(async () => {
+    const result = await window.recentAPI?.list();
+    if (result) setRecent(result);
+  }, []);
+
   useEffect(() => {
     loadTree();
     loadArtifacts();
+    loadRecent();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => loadTree());
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
@@ -164,6 +225,7 @@ function WikiSidebar({
     const onFocus = () => {
       loadTree();
       loadArtifacts();
+      loadRecent();
     };
     window.addEventListener('focus', onFocus);
     return () => {
@@ -173,7 +235,7 @@ function WikiSidebar({
       unsubUpdated?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [loadTree, loadArtifacts]);
+  }, [loadTree, loadArtifacts, loadRecent]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
@@ -406,6 +468,36 @@ function WikiSidebar({
         </div>
       )}
 
+      {/* Recent block — wiki + external, each with show more/less */}
+      {!isSearching && recent.length > 0 && (
+        <RecentBlock
+          recent={recent}
+          expanded={recentExpanded}
+          onExpand={setRecentExpanded}
+          selectedId={selectedId}
+          theme={theme}
+          onOpenWiki={(relPath, title, path) =>
+            onSelectItem({
+              id: `wiki:${relPath}`,
+              title,
+              type: 'wiki',
+              absPath: path,
+              relPath,
+              timestamp: 0,
+            })
+          }
+          onOpenExternal={(absPath, title) =>
+            onSelectItem({
+              id: `external:${absPath}`,
+              title,
+              type: 'external',
+              absPath,
+              timestamp: 0,
+            })
+          }
+        />
+      )}
+
       {/* Folder tree */}
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
@@ -541,31 +633,39 @@ function WikiSidebar({
                           backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
                         }} />
                       </div>
-                      {items.map((item) => (
-                        <FileItem
-                          key={item.id}
-                          item={item}
-                          isSelected={item.id === selectedId}
-                          isHovered={item.id === hoveredId}
-                          theme={theme}
-                          onSelect={() => onSelectItem(item)}
-                          onHover={setHoveredId}
-                        />
-                      ))}
+                      {items.map((item) => {
+                        const isSel = item.id === selectedId;
+                        return (
+                          <FileItem
+                            key={item.id}
+                            item={item}
+                            isSelected={isSel}
+                            isHovered={item.id === hoveredId}
+                            theme={theme}
+                            onSelect={() => onSelectItem(item)}
+                            onHover={setHoveredId}
+                            refProp={isSel ? selectedItemRef : undefined}
+                          />
+                        );
+                      })}
                     </div>
                   ))
                 ) : (
-                  folder.items.map((item) => (
-                    <FileItem
-                      key={item.id}
-                      item={item}
-                      isSelected={item.id === selectedId}
-                      isHovered={item.id === hoveredId}
-                      theme={theme}
-                      onSelect={() => onSelectItem(item)}
-                      onHover={setHoveredId}
-                    />
-                  ))
+                  folder.items.map((item) => {
+                    const isSel = item.id === selectedId;
+                    return (
+                      <FileItem
+                        key={item.id}
+                        item={item}
+                        isSelected={isSel}
+                        isHovered={item.id === hoveredId}
+                        theme={theme}
+                        onSelect={() => onSelectItem(item)}
+                        onHover={setHoveredId}
+                        refProp={isSel ? selectedItemRef : undefined}
+                      />
+                    );
+                  })
                 )}
               </div>
             )}
@@ -578,16 +678,18 @@ function WikiSidebar({
 
 export default memo(WikiSidebar);
 
-function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover }: {
+function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refProp }: {
   item: UnifiedItem;
   isSelected: boolean;
   isHovered: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelect: () => void;
   onHover: (id: string | null) => void;
+  refProp?: MutableRefObject<HTMLDivElement | null>;
 }) {
   return (
     <div
+      ref={refProp}
       onClick={onSelect}
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
@@ -656,6 +758,105 @@ function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover }: {
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+interface RecentBlockProps {
+  recent: RecentEntry[];
+  expanded: 'wiki' | 'external' | null;
+  onExpand: (kind: 'wiki' | 'external' | null) => void;
+  selectedId: string | null;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onOpenWiki: (relPath: string, title: string, absPath: string) => void;
+  onOpenExternal: (absPath: string, title: string) => void;
+}
+
+function RecentBlock({ recent, expanded, onExpand, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+  const { wiki, wikiTotal, external, externalTotal } = splitRecent(recent, expanded);
+  if (wikiTotal === 0 && externalTotal === 0) return null;
+  const headerStyle: React.CSSProperties = {
+    padding: '6px 12px 2px',
+    fontSize: '10px',
+    fontWeight: 600,
+    color: theme.textSecondary,
+    letterSpacing: '0.3px',
+    textTransform: 'uppercase',
+    opacity: 0.7,
+  };
+  const itemStyle = (isSelected: boolean): React.CSSProperties => ({
+    padding: '5px 12px 5px 20px',
+    fontSize: '11.5px',
+    cursor: 'pointer',
+    color: theme.text,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
+    userSelect: 'none',
+    backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
+    borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
+  });
+  const showMoreStyle: React.CSSProperties = {
+    padding: '3px 12px 5px 20px',
+    fontSize: '10px',
+    color: theme.textSecondary,
+    cursor: 'pointer',
+    opacity: 0.6,
+  };
+  return (
+    <div style={{ marginBottom: '4px' }}>
+      {wikiTotal > 0 && (
+        <>
+          <div style={headerStyle}>Recent</div>
+          {wiki.map((e) => {
+            const id = `wiki:${e.path}`;
+            return (
+              <div
+                key={id}
+                onClick={() => onOpenWiki(e.path, e.title, e.path)}
+                style={itemStyle(selectedId === id)}
+                title={e.title}
+                onMouseEnter={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
+                onMouseLeave={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = 'transparent'; }}
+              >
+                {e.title}
+              </div>
+            );
+          })}
+          {wikiTotal > wiki.length && (
+            <div onClick={() => onExpand('wiki')} style={showMoreStyle}>Show more ({wikiTotal - wiki.length})</div>
+          )}
+          {expanded === 'wiki' && (
+            <div onClick={() => onExpand(null)} style={showMoreStyle}>Show less</div>
+          )}
+        </>
+      )}
+      {externalTotal > 0 && (
+        <>
+          <div style={headerStyle}>External</div>
+          {external.map((e) => {
+            const id = `external:${e.path}`;
+            return (
+              <div
+                key={id}
+                onClick={() => onOpenExternal(e.path, e.title)}
+                style={itemStyle(selectedId === id)}
+                title={e.path}
+                onMouseEnter={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
+                onMouseLeave={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = 'transparent'; }}
+              >
+                {e.title}
+              </div>
+            );
+          })}
+          {externalTotal > external.length && (
+            <div onClick={() => onExpand('external')} style={showMoreStyle}>Show more ({externalTotal - external.length})</div>
+          )}
+          {expanded === 'external' && (
+            <div onClick={() => onExpand(null)} style={showMoreStyle}>Show less</div>
+          )}
+        </>
+      )}
     </div>
   );
 }
