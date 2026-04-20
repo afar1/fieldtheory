@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, type MutableRefObject } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 type SortMode = 'alpha' | 'time';
@@ -13,6 +13,7 @@ interface UnifiedItem {
 }
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
+export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
 
 interface UnifiedFolder {
   name: string;
@@ -21,15 +22,23 @@ interface UnifiedFolder {
   canCreateFile?: boolean;
 }
 
+// Lets callers (keyboard shortcuts) drive the inline-create UI since
+// Electron silently returns null from window.prompt().
+export interface WikiCreationController {
+  beginCreateFile: (folder?: string) => void;
+  beginCreateDir: () => void;
+}
+
 interface WikiSidebarProps {
   onSelectItem: (item: UnifiedItem) => void;
   selectedId: string | null;
-  onCreateFile: (folderName: string) => void;
-  onCreateDir: () => void;
+  onCreateFile: (folderName: string, fileName: string) => void | Promise<void>;
+  onCreateDir: (dirName: string) => void | Promise<void>;
   flatItemsRef?: MutableRefObject<UnifiedItem[]>;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
   searchInputRef?: MutableRefObject<HTMLInputElement | null>;
+  creationControllerRef?: MutableRefObject<WikiCreationController | null>;
 }
 
 function formatDateGroup(timestamp: number): string {
@@ -83,6 +92,16 @@ export function filterUnifiedFolders(folders: UnifiedFolder[], searchQuery: stri
     .filter((folder) => folder.items.length > 0);
 }
 
+/** Pin Scratchpad at the top when the wiki tree doesn't already expose it, so
+ * the user can create ad-hoc docs without running a backfill first. */
+export function ensureScratchpadPinned(folders: UnifiedFolder[]): UnifiedFolder[] {
+  if (folders.some((f) => f.name === SCRATCHPAD_FOLDER_NAME)) return folders;
+  return [
+    { name: SCRATCHPAD_FOLDER_NAME, label: 'Scratchpad', items: [], canCreateFile: true },
+    ...folders,
+  ];
+}
+
 export default function WikiSidebar({
   onSelectItem,
   selectedId,
@@ -92,6 +111,7 @@ export default function WikiSidebar({
   searchQuery,
   onSearchQueryChange,
   searchInputRef,
+  creationControllerRef,
 }: WikiSidebarProps) {
   const { theme } = useTheme();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
@@ -109,6 +129,13 @@ export default function WikiSidebar({
     }
   });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [creating, setCreating] = useState<
+    | { kind: 'file'; folder: string }
+    | { kind: 'dir' }
+    | null
+  >(null);
+  const [newName, setNewName] = useState('');
+  const createInputRef = useRef<HTMLInputElement | null>(null);
 
   const loadTree = useCallback(async () => {
     const result = await window.wikiAPI?.getTree();
@@ -159,6 +186,47 @@ export default function WikiSidebar({
     });
   };
 
+  const beginCreateFile = useCallback((folder?: string) => {
+    const target = folder ?? SCRATCHPAD_FOLDER_NAME;
+    setExpandedFolders((prev) => {
+      if (prev.has(target)) return prev;
+      const next = new Set(prev);
+      next.add(target);
+      return next;
+    });
+    setCreating({ kind: 'file', folder: target });
+    setNewName('');
+  }, []);
+
+  const beginCreateDir = useCallback(() => {
+    setCreating({ kind: 'dir' });
+    setNewName('');
+  }, []);
+
+  useEffect(() => {
+    if (!creationControllerRef) return;
+    creationControllerRef.current = { beginCreateFile, beginCreateDir };
+    return () => { creationControllerRef.current = null; };
+  }, [creationControllerRef, beginCreateFile, beginCreateDir]);
+
+  useEffect(() => {
+    if (creating) createInputRef.current?.focus();
+  }, [creating]);
+
+  const cancelCreate = useCallback(() => {
+    setCreating(null);
+    setNewName('');
+  }, []);
+
+  const submitCreate = useCallback(async () => {
+    const name = newName.trim();
+    if (!name || !creating) { cancelCreate(); return; }
+    if (creating.kind === 'file') await onCreateFile(creating.folder, name);
+    else await onCreateDir(name);
+    setCreating(null);
+    setNewName('');
+  }, [newName, creating, onCreateFile, onCreateDir, cancelCreate]);
+
   const unifiedFolders: UnifiedFolder[] = useMemo(() => {
     const folders: UnifiedFolder[] = [];
 
@@ -195,7 +263,7 @@ export default function WikiSidebar({
     }
 
     folders.sort((a, b) => a.label.localeCompare(b.label));
-    return folders;
+    return ensureScratchpadPinned(folders);
   }, [wikiTree, artifacts, sortMode]);
 
   const filteredFolders = useMemo(
@@ -376,26 +444,53 @@ export default function WikiSidebar({
             {/* Expanded file list */}
             {isExpanded && (
               <div>
-                {/* New file button */}
+                {/* New file button — swaps to an inline input while creating,
+                    since Electron silently disables window.prompt(). */}
                 {folder.canCreateFile !== false && (
-                  <div
-                    onClick={() => onCreateFile(folder.name)}
-                    style={{
-                      padding: '5px 12px 5px 28px',
-                      fontSize: '11px',
-                      cursor: 'pointer',
-                      color: theme.textSecondary,
-                      opacity: 0.5,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                    }}
-                    onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; e.currentTarget.style.backgroundColor = theme.hoverBg; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.backgroundColor = 'transparent'; }}
-                  >
-                    <span style={{ fontSize: '13px', lineHeight: 1 }}>+</span>
-                    <span>New file</span>
-                  </div>
+                  creating?.kind === 'file' && creating.folder === folder.name ? (
+                    <div style={{ padding: '4px 12px 4px 28px' }}>
+                      <input
+                        ref={createInputRef}
+                        value={newName}
+                        onChange={(e) => setNewName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); void submitCreate(); }
+                          else if (e.key === 'Escape') { e.preventDefault(); cancelCreate(); }
+                        }}
+                        onBlur={cancelCreate}
+                        placeholder="Untitled"
+                        style={{
+                          width: '100%',
+                          padding: '4px 6px',
+                          fontSize: '11px',
+                          color: theme.text,
+                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                          border: `1px solid ${theme.border}`,
+                          borderRadius: '4px',
+                          outline: 'none',
+                        }}
+                      />
+                    </div>
+                  ) : (
+                    <div
+                      onClick={() => beginCreateFile(folder.name)}
+                      style={{
+                        padding: '5px 12px 5px 28px',
+                        fontSize: '11px',
+                        cursor: 'pointer',
+                        color: theme.textSecondary,
+                        opacity: 0.5,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; e.currentTarget.style.backgroundColor = theme.hoverBg; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.backgroundColor = 'transparent'; }}
+                    >
+                      <span style={{ fontSize: '13px', lineHeight: 1 }}>+</span>
+                      <span>New file</span>
+                    </div>
+                  )
                 )}
 
                 {sortMode === 'time' && dateGroups ? (
