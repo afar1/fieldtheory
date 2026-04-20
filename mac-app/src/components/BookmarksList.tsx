@@ -47,8 +47,10 @@ function Row({ index, style, bookmarks, theme }: { index: number; style: React.C
     <div style={style}>
       <a
         href={bm.url}
-        target="_blank"
-        rel="noreferrer noopener"
+        onClick={(e) => {
+          e.preventDefault();
+          void window.shellAPI?.openExternal(bm.url);
+        }}
         style={{
           display: 'flex',
           gap: '12px',

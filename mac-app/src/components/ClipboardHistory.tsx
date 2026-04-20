@@ -3546,47 +3546,6 @@ export default function ClipboardHistory() {
             </button>
           )}
 
-          <button
-            onClick={() => {
-              setEditingSketchItem(null);
-              setSketchBackgroundImage(null);
-              setViewMode('sketch');
-            }}
-            tabIndex={0}
-            style={{
-              marginLeft: '8px',
-              padding: '6px 8px',
-              fontSize: '10px',
-              fontWeight: 500,
-              backgroundColor: 'transparent',
-              color: theme.textSecondary,
-              border: `1px solid ${theme.border}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              e.currentTarget.style.borderColor = theme.text;
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.borderColor = theme.border;
-            }}
-            title="Create a new drawing"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19l7-7 3 3-7 7-3-3z" />
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-              <path d="M2 2l7.586 7.586" />
-            </svg>
-            Draw
-          </button>
-
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {actionFeedback && (
               <span 
@@ -3708,6 +3667,47 @@ export default function ClipboardHistory() {
               <line x1="12" y1="19" x2="20" y2="19" />
             </svg>
             Commands
+          </button>
+
+          {/* Draw button — this button only renders when viewMode !== 'sketch'
+              (outer guard), so no active-state styling is needed. */}
+          <button
+            onClick={() => {
+              setEditingSketchItem(null);
+              setSketchBackgroundImage(null);
+              setViewMode('sketch');
+              setShowSettings(false);
+            }}
+            tabIndex={0}
+            style={{
+              padding: '5px 6px',
+              fontSize: '9px',
+              fontWeight: 500,
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
+              border: 'none',
+              borderRadius: '3px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '3px',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+            title="Create a new drawing"
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 19l7-7 3 3-7 7-3-3z" />
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+              <path d="M2 2l7.586 7.586" />
+            </svg>
+            Draw
           </button>
 
           {/* Feedback button */}
