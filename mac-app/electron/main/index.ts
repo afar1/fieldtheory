@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol } from 'electron';
+import { pathToFileURL } from 'url';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -67,7 +68,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
-import { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
+import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
@@ -212,6 +213,13 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
     supabaseAnonKey: 'FIELD_THEORY_SUPABASE_ANON_KEY',
   };
 }
+
+// Register the ftmedia:// scheme as privileged so the renderer can load
+// locally-cached bookmark media without going through the Twitter CDN.
+// Must happen before app.whenReady(). The actual handler is installed inside.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'ftmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
+]);
 
 // Pin userData paths explicitly so auth/session storage is stable across package-name changes.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -6164,9 +6172,14 @@ async function initTranscriberSystem(): Promise<void> {
   dynamicIslandManager.setStayOnLaptop(preferencesManager.getPreference('hotMicIslandStayOnLaptop') ?? false);
   dynamicIslandManager.setAutoHide(preferencesManager.getPreference('hotMicIslandAutoHide') ?? false);
 
+  // Hook installer must exist before the attention manager so the manager's
+  // tool filter can be seeded from install status (and re-synced on toggle).
+  agentHookInstaller = new AgentHookInstaller();
+
   // Watch ~/.fieldtheory/agents/state/ for agent-waiting snapshots and
   // surface them as glyphs in the Dynamic Island.
   agentAttentionManager = new AgentAttentionManager();
+  agentAttentionManager.setToolFilter(agentHookInstaller.getStatus());
   agentAttentionManager.on('change', (agents) => {
     dynamicIslandManager?.setWaitingAgents(agents);
   });
@@ -6191,12 +6204,19 @@ async function initTranscriberSystem(): Promise<void> {
     console.log(`[DynamicIsland] synthetic agents → ${count}`);
   });
 
-  agentHookInstaller = new AgentHookInstaller();
+  const syncAgentToolFilter = () => {
+    if (!agentHookInstaller || !agentAttentionManager) return;
+    agentAttentionManager.setToolFilter(agentHookInstaller.getStatus());
+  };
   ipcMain.handle('agent-hooks:install', async (_e, targets: InstallTargets) => {
-    return agentHookInstaller?.install(targets ?? {});
+    const result = agentHookInstaller?.install(targets ?? {});
+    syncAgentToolFilter();
+    return result;
   });
   ipcMain.handle('agent-hooks:uninstall', async (_e, targets: InstallTargets) => {
-    return agentHookInstaller?.uninstall(targets ?? {});
+    const result = agentHookInstaller?.uninstall(targets ?? {});
+    syncAgentToolFilter();
+    return result;
   });
   ipcMain.handle('agent-hooks:status', async () => {
     return agentHookInstaller?.getStatus();
@@ -6934,6 +6954,13 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     log.info('App ready');
+
+    // ftmedia://media/<filename> → ~/.ft-bookmarks/media/<filename>.
+    // basename() strips any path traversal attempts from the URL.
+    protocol.handle('ftmedia', (req) => {
+      const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));
+      return net.fetch(pathToFileURL(path.join(bookmarkMediaDir(), filename)).toString());
+    });
 
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();

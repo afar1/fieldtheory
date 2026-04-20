@@ -1546,6 +1546,7 @@ declare global {
     height: number;
     type: string;
     videoUrl?: string;
+    localFilename?: string;
   }
   interface QuotedTweet {
     id: string;
