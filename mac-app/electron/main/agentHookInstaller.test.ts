@@ -199,4 +199,20 @@ describe('AgentHookInstaller', () => {
     expect(result.codex).toBe(false);
     expect(existsSync(join(home, '.claude/settings.json'))).toBe(false);
   });
+
+  it('uninstall deletes the disabled tool state files but spares the other tool', () => {
+    const installer = new AgentHookInstaller({ home });
+    installer.install({ claude: true, codex: true });
+
+    const stateDir = join(home, '.fieldtheory/agents/state');
+    const claudeState = join(stateDir, 'claude-abc.json');
+    const codexState = join(stateDir, 'codex-xyz.json');
+    writeFileSync(claudeState, JSON.stringify({ agentId: 'claude-abc' }));
+    writeFileSync(codexState, JSON.stringify({ agentId: 'codex-xyz' }));
+
+    installer.uninstall({ claude: true });
+
+    expect(existsSync(claudeState)).toBe(false);
+    expect(existsSync(codexState)).toBe(true);
+  });
 });
