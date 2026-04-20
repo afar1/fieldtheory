@@ -3589,6 +3589,11 @@ const recentAPI = {
   visit: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:visit', entry),
   remove: (kind: 'wiki' | 'external', entryPath: string): Promise<RecentEntry[]> =>
     ipcRenderer.invoke('recent:remove', kind, entryPath),
+  onChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('recent:changed', handler);
+    return () => ipcRenderer.removeListener('recent:changed', handler);
+  },
 };
 contextBridge.exposeInMainWorld('recentAPI', recentAPI);
 

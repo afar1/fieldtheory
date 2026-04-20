@@ -2270,6 +2270,7 @@ export class LibrarianManager extends EventEmitter {
     try {
       await shell.trashItem(absPath);
       this.emit('wiki:changed');
+      this.emit('wiki:deleted', relPath);
       return true;
     } catch (error) {
       log.error(`Error trashing wiki page ${relPath}:`, error);

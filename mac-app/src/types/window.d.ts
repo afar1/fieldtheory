@@ -1570,6 +1570,7 @@ declare global {
     list: () => Promise<RecentEntry[]>;
     visit: (entry: RecentEntry) => Promise<RecentEntry[]>;
     remove: (kind: 'wiki' | 'external', entryPath: string) => Promise<RecentEntry[]>;
+    onChanged: (callback: () => void) => () => void;
   }
 
   interface BookmarkImage {

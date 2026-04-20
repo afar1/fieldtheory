@@ -1600,15 +1600,26 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // Recent items (wiki + external). Returns the updated list so the renderer
-  // can re-render without a second round-trip.
+  // can re-render without a second round-trip; also broadcasts `recent:changed`
+  // so other windows/components (e.g. sidebar) drop stale entries immediately.
+  const broadcastRecentChanged = () => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('recent:changed');
+    });
+  };
   ipcMain.handle('recent:list', (): RecentEntry[] => recentManager?.list() ?? []);
-  ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] =>
-    recentManager?.visit(entry) ?? [],
-  );
+  ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] => {
+    const next = recentManager?.visit(entry) ?? [];
+    broadcastRecentChanged();
+    return next;
+  });
   ipcMain.handle(
     'recent:remove',
-    (_event, kind: 'wiki' | 'external', entryPath: string): RecentEntry[] =>
-      recentManager?.remove(kind, entryPath) ?? [],
+    (_event, kind: 'wiki' | 'external', entryPath: string): RecentEntry[] => {
+      const next = recentManager?.remove(kind, entryPath) ?? [];
+      broadcastRecentChanged();
+      return next;
+    },
   );
 
   // External markdown files — used when macOS opens a .md file "With Field
@@ -1653,6 +1664,13 @@ function setupLibrarianIPCHandlers(): void {
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('wiki:changed');
       });
+    });
+    // Auto-prune recent when a wiki page is trashed so stale entries drop
+    // from the sidebar even if the caller didn't explicitly call recent:remove.
+    librarianManager.on('wiki:deleted', (relPath: string) => {
+      if (!recentManager) return;
+      recentManager.remove('wiki', relPath);
+      broadcastRecentChanged();
     });
   }
 

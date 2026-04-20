@@ -170,6 +170,13 @@ function WikiSidebar({
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
   const [recentExpanded, setRecentExpanded] = useState<'wiki' | 'external' | null>(null);
+  const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('wiki-recent-collapsed') === '1';
+    } catch {
+      return false;
+    }
+  });
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
 
   // Auto-expand the parent folder of the selected wiki item so programmatic
@@ -221,6 +228,7 @@ function WikiSidebar({
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
+    const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
     const onFocus = () => {
       loadTree();
@@ -233,6 +241,7 @@ function WikiSidebar({
       unsubAdded?.();
       unsubRemoved?.();
       unsubUpdated?.();
+      unsubRecent?.();
       window.removeEventListener('focus', onFocus);
     };
   }, [loadTree, loadArtifacts, loadRecent]);
@@ -244,6 +253,10 @@ function WikiSidebar({
   useEffect(() => {
     localStorage.setItem('library-sort-mode', sortMode);
   }, [sortMode]);
+
+  useEffect(() => {
+    localStorage.setItem('wiki-recent-collapsed', recentCollapsed ? '1' : '0');
+  }, [recentCollapsed]);
 
   const toggleFolder = (name: string) => {
     setExpandedFolders((prev) => {
@@ -468,36 +481,6 @@ function WikiSidebar({
         </div>
       )}
 
-      {/* Recent block — wiki + external, each with show more/less */}
-      {!isSearching && recent.length > 0 && (
-        <RecentBlock
-          recent={recent}
-          expanded={recentExpanded}
-          onExpand={setRecentExpanded}
-          selectedId={selectedId}
-          theme={theme}
-          onOpenWiki={(relPath, title, path) =>
-            onSelectItem({
-              id: `wiki:${relPath}`,
-              title,
-              type: 'wiki',
-              absPath: path,
-              relPath,
-              timestamp: 0,
-            })
-          }
-          onOpenExternal={(absPath, title) =>
-            onSelectItem({
-              id: `external:${absPath}`,
-              title,
-              type: 'external',
-              absPath,
-              timestamp: 0,
-            })
-          }
-        />
-      )}
-
       {/* Folder tree */}
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
@@ -672,6 +655,41 @@ function WikiSidebar({
           </div>
         );
       })}
+
+      {/* Recent block — pinned to the bottom, below the folder tree. Wiki +
+          external, each with show more/less. */}
+      {!isSearching && recent.length > 0 && (
+        <RecentBlock
+          recent={recent}
+          expanded={recentExpanded}
+          onExpand={setRecentExpanded}
+          collapsed={recentCollapsed}
+          onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
+          selectedId={selectedId}
+          theme={theme}
+          onOpenWiki={(relPath, title) =>
+            onSelectItem({
+              id: `wiki:${relPath}`,
+              title,
+              type: 'wiki',
+              // Recent wiki items don't carry the abs path; Show-in-Finder
+              // isn't exposed here so the empty string is fine.
+              absPath: '',
+              relPath,
+              timestamp: 0,
+            })
+          }
+          onOpenExternal={(absPath, title) =>
+            onSelectItem({
+              id: `external:${absPath}`,
+              title,
+              type: 'external',
+              absPath,
+              timestamp: 0,
+            })
+          }
+        />
+      )}
     </div>
   );
 }
@@ -766,15 +784,19 @@ interface RecentBlockProps {
   recent: RecentEntry[];
   expanded: 'wiki' | 'external' | null;
   onExpand: (kind: 'wiki' | 'external' | null) => void;
+  collapsed: boolean;
+  onToggleCollapsed: () => void;
   selectedId: string | null;
   theme: ReturnType<typeof useTheme>['theme'];
-  onOpenWiki: (relPath: string, title: string, absPath: string) => void;
+  onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const { wiki, wikiTotal, external, externalTotal } = splitRecent(recent, expanded);
   if (wikiTotal === 0 && externalTotal === 0) return null;
+
+  const showBothSubheads = wikiTotal > 0 && externalTotal > 0;
   const headerStyle: React.CSSProperties = {
     padding: '6px 12px 2px',
     fontSize: '10px',
@@ -783,6 +805,16 @@ function RecentBlock({ recent, expanded, onExpand, selectedId, theme, onOpenWiki
     letterSpacing: '0.3px',
     textTransform: 'uppercase',
     opacity: 0.7,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
+    cursor: 'pointer',
+    userSelect: 'none',
+  };
+  const subheadStyle: React.CSSProperties = {
+    ...headerStyle,
+    padding: '4px 12px 2px 20px',
+    opacity: 0.5,
   };
   const itemStyle = (isSelected: boolean): React.CSSProperties => ({
     padding: '5px 12px 5px 20px',
@@ -803,60 +835,61 @@ function RecentBlock({ recent, expanded, onExpand, selectedId, theme, onOpenWiki
     cursor: 'pointer',
     opacity: 0.6,
   };
+
+  const renderSection = (
+    kind: 'wiki' | 'external',
+    entries: RecentEntry[],
+    total: number,
+  ) => (
+    <>
+      {showBothSubheads && (
+        <div style={subheadStyle}>{kind === 'wiki' ? 'Wiki' : 'External'}</div>
+      )}
+      {entries.map((e) => {
+        const id = `${kind}:${e.path}`;
+        const isSel = selectedId === id;
+        return (
+          <div
+            key={id}
+            onClick={() => (kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
+            style={itemStyle(isSel)}
+            title={kind === 'external' ? e.path : e.title}
+            onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
+            onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
+          >
+            {e.title}
+          </div>
+        );
+      })}
+      {total > entries.length && (
+        <div onClick={() => onExpand(kind)} style={showMoreStyle}>Show more ({total - entries.length})</div>
+      )}
+      {expanded === kind && (
+        <div onClick={() => onExpand(null)} style={showMoreStyle}>Show less</div>
+      )}
+    </>
+  );
+
   return (
     <div style={{ marginBottom: '4px' }}>
-      {wikiTotal > 0 && (
-        <>
-          <div style={headerStyle}>Recent</div>
-          {wiki.map((e) => {
-            const id = `wiki:${e.path}`;
-            return (
-              <div
-                key={id}
-                onClick={() => onOpenWiki(e.path, e.title, e.path)}
-                style={itemStyle(selectedId === id)}
-                title={e.title}
-                onMouseEnter={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
-                onMouseLeave={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = 'transparent'; }}
-              >
-                {e.title}
-              </div>
-            );
-          })}
-          {wikiTotal > wiki.length && (
-            <div onClick={() => onExpand('wiki')} style={showMoreStyle}>Show more ({wikiTotal - wiki.length})</div>
-          )}
-          {expanded === 'wiki' && (
-            <div onClick={() => onExpand(null)} style={showMoreStyle}>Show less</div>
-          )}
-        </>
-      )}
-      {externalTotal > 0 && (
-        <>
-          <div style={headerStyle}>External</div>
-          {external.map((e) => {
-            const id = `external:${e.path}`;
-            return (
-              <div
-                key={id}
-                onClick={() => onOpenExternal(e.path, e.title)}
-                style={itemStyle(selectedId === id)}
-                title={e.path}
-                onMouseEnter={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
-                onMouseLeave={(el) => { if (selectedId !== id) el.currentTarget.style.backgroundColor = 'transparent'; }}
-              >
-                {e.title}
-              </div>
-            );
-          })}
-          {externalTotal > external.length && (
-            <div onClick={() => onExpand('external')} style={showMoreStyle}>Show more ({externalTotal - external.length})</div>
-          )}
-          {expanded === 'external' && (
-            <div onClick={() => onExpand(null)} style={showMoreStyle}>Show less</div>
-          )}
-        </>
-      )}
+      <div style={headerStyle} onClick={onToggleCollapsed}>
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          fill="currentColor"
+          style={{
+            transition: 'transform 0.15s ease',
+            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
+            flexShrink: 0,
+          }}
+        >
+          <path d="M2 1l4 3-4 3V1z" />
+        </svg>
+        <span>Recent</span>
+      </div>
+      {!collapsed && wikiTotal > 0 && renderSection('wiki', wiki, wikiTotal)}
+      {!collapsed && externalTotal > 0 && renderSection('external', external, externalTotal)}
     </div>
   );
 }

@@ -671,24 +671,34 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     setTimeout(() => setLinkCopied(false), 2000);
   }, [shareStatus?.url]);
 
-  // Delete current artifact
+  // Delete current item — branches on selectedItemType. Wiki pages go to
+  // macOS Trash via shell.trashItem (recoverable) and the main process
+  // auto-prunes any matching Recent entry; artifacts use the existing
+  // librarian delete flow.
   const handleDelete = useCallback(async () => {
-    if (!selectedPath || !selectedReading) return;
-
-    const confirmed = window.confirm(`Delete "${selectedReading.title}"? This cannot be undone.`);
-    if (!confirmed) return;
-
-    // If shared, unshare first
-    if (shareStatus?.shared) {
-      await window.librarianAPI?.unshareReading(selectedPath);
+    if (selectedItemType === 'wiki') {
+      if (!wikiSelectedRelPath || !activeReading) return;
+      const confirmed = window.confirm(`Move "${activeReading.title}" to Trash?`);
+      if (!confirmed) return;
+      const success = await window.wikiAPI?.deletePage(wikiSelectedRelPath);
+      if (success) {
+        setWikiSelectedRelPath(null);
+        setWikiSelectedPage(null);
+      }
+      return;
     }
 
-    // Delete the file
-    const success = await window.librarianAPI?.deleteReading(selectedPath);
-    if (success) {
+    if (selectedItemType === 'artifact') {
+      if (!selectedPath || !selectedReading) return;
+      const confirmed = window.confirm(`Delete "${selectedReading.title}"? This cannot be undone.`);
+      if (!confirmed) return;
+      if (shareStatus?.shared) {
+        await window.librarianAPI?.unshareReading(selectedPath);
+      }
+      await window.librarianAPI?.deleteReading(selectedPath);
       // The onReadingRemoved listener will handle updating state and selecting next item
     }
-  }, [selectedPath, selectedReading, shareStatus?.shared]);
+  }, [selectedItemType, selectedPath, selectedReading, wikiSelectedRelPath, activeReading, shareStatus?.shared]);
 
   // Play narration for current reading
   const handlePlayNarration = useCallback(async () => {
