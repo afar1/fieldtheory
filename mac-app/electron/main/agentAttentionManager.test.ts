@@ -142,4 +142,33 @@ describe('AgentAttentionManager', () => {
     expect(changes[changes.length - 1]).toEqual([]);
     expect(mgr.getWaiting()).toHaveLength(0);
   });
+
+  it('setToolFilter hides agents whose tool is disabled', () => {
+    writeAgent(stateDir, makeAgent({ agentId: 'c1', tool: 'claude' }));
+    writeAgent(stateDir, makeAgent({ agentId: 'x1', tool: 'codex' }));
+
+    mgr = new AgentAttentionManager(stateDir);
+    mgr.start();
+    expect(mgr.getWaiting()).toHaveLength(2);
+
+    mgr.setToolFilter({ claude: true, codex: false });
+    expect(mgr.getWaiting().map(a => a.agentId)).toEqual(['c1']);
+
+    mgr.setToolFilter({ claude: false, codex: false });
+    expect(mgr.getWaiting()).toHaveLength(0);
+  });
+
+  it('setToolFilter emits change only when the filter actually changes', () => {
+    mgr = new AgentAttentionManager(stateDir);
+    mgr.start();
+
+    const changes: WaitingAgent[][] = [];
+    mgr.on('change', (agents: WaitingAgent[]) => changes.push(agents));
+
+    mgr.setToolFilter({ claude: true, codex: true });
+    expect(changes).toHaveLength(0);
+
+    mgr.setToolFilter({ claude: true, codex: false });
+    expect(changes).toHaveLength(1);
+  });
 });

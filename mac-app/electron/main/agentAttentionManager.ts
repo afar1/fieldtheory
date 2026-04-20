@@ -29,6 +29,10 @@ export class AgentAttentionManager extends EventEmitter {
   // the synthetic list. Used by the dev hotkey (Ctrl+Alt+Shift+A) to stress-test
   // Dynamic Island pill sizing with N agents without needing live CLI sessions.
   private syntheticOverride: WaitingAgent[] | null = null;
+  // Tracks per-tool visibility. Driven by AgentHookInstaller.getStatus() —
+  // when a tool's hook is uninstalled, its agents are filtered out of the
+  // emitted list so the Dynamic Island dots disappear immediately.
+  private toolFilter: Record<AgentTool, boolean> = { claude: true, codex: true };
 
   constructor(stateDir?: string) {
     super();
@@ -49,9 +53,17 @@ export class AgentAttentionManager extends EventEmitter {
 
   getWaiting(): WaitingAgent[] {
     if (this.syntheticOverride !== null) return [...this.syntheticOverride];
-    return Array.from(this.waiting.values()).sort(
-      (a, b) => a.waitingSince - b.waitingSince
-    );
+    return Array.from(this.waiting.values())
+      .filter(a => this.toolFilter[a.tool])
+      .sort((a, b) => a.waitingSince - b.waitingSince);
+  }
+
+  setToolFilter(filter: Record<AgentTool, boolean>): void {
+    const changed =
+      this.toolFilter.claude !== filter.claude ||
+      this.toolFilter.codex !== filter.codex;
+    this.toolFilter = { ...filter };
+    if (changed) this.emit('change', this.getWaiting());
   }
 
   setSynthetic(count: number): void {
