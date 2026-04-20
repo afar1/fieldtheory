@@ -168,4 +168,148 @@ describe('BookmarksManager.getSnapshot', () => {
     // Reference-equal proves we hit the cache, not re-read the file.
     expect(second).toBe(first);
   });
+
+  it('attaches exact local files for multi-image and quoted-tweet media from the manifest', () => {
+    fs.mkdirSync(path.join(tmpDir, 'media'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'media-manifest.json'),
+      JSON.stringify({
+        entries: [
+          {
+            tweetId: 'outer1',
+            sourceUrl: 'https://pbs/a.jpg',
+            localPath: path.join(tmpDir, 'media', 'outer1-a.jpg'),
+            status: 'downloaded',
+          },
+          {
+            tweetId: 'outer1',
+            sourceUrl: 'https://pbs/b.jpg',
+            localPath: path.join(tmpDir, 'media', 'outer1-b.jpg'),
+            status: 'downloaded',
+          },
+          {
+            tweetId: 'quoted9',
+            sourceUrl: 'https://pbs/q.jpg',
+            localPath: path.join(tmpDir, 'media', 'quoted9-q.jpg'),
+            status: 'downloaded',
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'bookmarks.jsonl'),
+      JSON.stringify({
+        tweetId: 'outer1',
+        text: 'with multiple images',
+        authorHandle: 'alice',
+        mediaObjects: [
+          { type: 'photo', url: 'https://pbs/a.jpg', width: 800, height: 600 },
+          { type: 'photo', url: 'https://pbs/b.jpg', width: 1200, height: 900 },
+        ],
+        quotedTweet: {
+          id: 'quoted9',
+          text: 'quoted image',
+          authorHandle: 'bob',
+          mediaObjects: [
+            { type: 'photo', url: 'https://pbs/q.jpg', width: 640, height: 640 },
+          ],
+        },
+      }) + '\n',
+    );
+
+    const mgr = new BookmarksManager();
+    const snap = mgr.getSnapshot();
+
+    expect(snap.bookmarks).toHaveLength(1);
+    expect(snap.bookmarks[0].images.map((img) => img.localFilename)).toEqual(['outer1-a.jpg', 'outer1-b.jpg']);
+    expect(snap.bookmarks[0].quotedTweet?.images.map((img) => img.localFilename)).toEqual(['quoted9-q.jpg']);
+  });
+
+  it('routes profile_images to localAvatarFilename and never leaks them into tweet media', () => {
+    fs.mkdirSync(path.join(tmpDir, 'media'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'media-manifest.json'),
+      JSON.stringify({
+        entries: [
+          // Profile image listed BEFORE the tweet's own media — this is the order
+          // that used to "win" the fallback slot and show up as a bogus grid tile.
+          {
+            tweetId: 'p1',
+            sourceUrl: 'https://pbs.twimg.com/profile_images/123/avatar.jpg',
+            localPath: path.join(tmpDir, 'media', 'avatar-hash.jpg'),
+            status: 'downloaded',
+            authorHandle: 'alice',
+          },
+          {
+            tweetId: 'p1',
+            sourceUrl: 'https://pbs/photo-variant-that-differs.jpg',
+            localPath: path.join(tmpDir, 'media', 'p1-photo.jpg'),
+            status: 'downloaded',
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'bookmarks.jsonl'),
+      JSON.stringify({
+        tweetId: 'p1',
+        text: 'single image tweet',
+        authorHandle: 'alice',
+        authorProfileImageUrl: 'https://pbs.twimg.com/profile_images/123/avatar.jpg',
+        mediaObjects: [
+          // URL deliberately differs from the manifest entry so the fallback path kicks in.
+          { type: 'photo', url: 'https://pbs/photo-original.jpg', width: 800, height: 600 },
+        ],
+      }) + '\n',
+    );
+
+    const mgr = new BookmarksManager();
+    const snap = mgr.getSnapshot();
+
+    expect(snap.bookmarks).toHaveLength(1);
+    expect(snap.bookmarks[0].localAvatarFilename).toBe('avatar-hash.jpg');
+    // Fallback now picks the real tweet media, not the profile image.
+    expect(snap.bookmarks[0].images[0].localFilename).toBe('p1-photo.jpg');
+  });
+
+  it('does not attach mp4 files as image previews', () => {
+    fs.mkdirSync(path.join(tmpDir, 'media'));
+    fs.writeFileSync(
+      path.join(tmpDir, 'media-manifest.json'),
+      JSON.stringify({
+        entries: [
+          {
+            tweetId: 'vid1',
+            sourceUrl: 'https://video.example/vid1.mp4',
+            localPath: path.join(tmpDir, 'media', 'vid1-video.mp4'),
+            status: 'downloaded',
+          },
+        ],
+      }),
+    );
+    fs.writeFileSync(
+      path.join(tmpDir, 'bookmarks.jsonl'),
+      JSON.stringify({
+        tweetId: 'vid1',
+        text: 'video only',
+        authorHandle: 'alice',
+        mediaObjects: [
+          {
+            type: 'video',
+            url: 'https://pbs/thumb.jpg',
+            width: 1280,
+            height: 720,
+            videoVariants: [{ url: 'https://video.example/vid1.mp4', bitrate: 1000 }],
+          },
+        ],
+      }) + '\n',
+    );
+
+    const mgr = new BookmarksManager();
+    const snap = mgr.getSnapshot();
+
+    expect(snap.bookmarks).toHaveLength(1);
+    expect(snap.bookmarks[0].images[0].localFilename).toBeUndefined();
+    expect(snap.bookmarks[0].images[0].localVideoFilename).toBe('vid1-video.mp4');
+  });
 });

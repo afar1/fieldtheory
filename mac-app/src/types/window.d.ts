@@ -1547,6 +1547,7 @@ declare global {
     type: string;
     videoUrl?: string;
     localFilename?: string;
+    localVideoFilename?: string;
   }
   interface QuotedTweet {
     id: string;
@@ -1554,6 +1555,7 @@ declare global {
     authorHandle: string;
     authorName: string;
     authorAvatar: string;
+    localAvatarFilename?: string;
     postedAt: string;
     url: string;
     images: BookmarkImage[];
@@ -1565,6 +1567,7 @@ declare global {
     authorHandle: string;
     authorName: string;
     authorAvatar: string;
+    localAvatarFilename?: string;
     postedAt: string;
     images: BookmarkImage[];
     mediaCount: number;
