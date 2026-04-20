@@ -41,6 +41,7 @@
     "@excalidraw/excalidraw": "^0.18.0",
     "@supabase/supabase-js": "^2.84.0",
     "@types/better-sqlite3": "^7.6.13",
+    "@types/react-window": "^1.8.8",
     "agentmail": "^0.4.9",
     "baseline-browser-mapping": "^2.9.19",
     "better-sqlite3": "^12.5.0",
@@ -54,6 +55,7 @@
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
+    "react-window": "^2.2.7",
     "ws": "^8.18.3"
   },
   "devDependencies": {

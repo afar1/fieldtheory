@@ -133,6 +133,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   });
   // Start in fullscreen if initialFullScreen prop is true (auto-open flow)
   const [isFullScreen, setIsFullScreen] = useState(initialFullScreen ?? false);
+  // Fire the IPC synchronously so the window animation starts on the click
+  // frame instead of after two React-state / useEffect hops.
+  const toggleImmersive = () => {
+    const next = !isFullScreen;
+    window.librarianAPI?.setImmersiveMode?.(next);
+    setIsFullScreen(next);
+  };
   const [headerHovered, setHeaderHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
@@ -310,10 +317,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return () => window.librarianAPI?.setImmersiveDismissable?.(false);
   }, [isFullScreen, selectedItemType]);
 
-  // Push size-key for non-bookmarks librarian views. BookmarksPane handles
-  // 'canvas'/'library' for the bookmarks case based on its list/canvas mode.
+  // Push 'library' size-key for every librarian section (wikis, artifacts,
+  // bookmarks). Bookmarks list/canvas modes share this size so toggling
+  // between them no longer triggers a 150ms window animation + repaint.
   useEffect(() => {
-    if (selectedItemType === 'bookmarks') return;
     window.librarianAPI?.setSizeKey?.('library');
   }, [selectedItemType]);
 
@@ -1202,7 +1209,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           >
             <BookmarksPane
               isFullScreen={isFullScreen}
-              onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
+              onToggleFullScreen={toggleImmersive}
             />
           </div>
         )}
@@ -1286,7 +1293,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               <ContentToolbar
                 filePath={activeReading?.path || undefined}
                 isFullScreen={isFullScreen}
-                onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
+                onToggleFullScreen={toggleImmersive}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={true}

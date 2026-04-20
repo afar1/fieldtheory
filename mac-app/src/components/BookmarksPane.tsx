@@ -27,6 +27,10 @@ interface BookmarksPaneProps {
 export default function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
+  // Lazy keep-alive: mount each view on first visit, then toggle via display
+  // so switching list↔canvas doesn't rebuild the 500-pool or lose scroll state.
+  const [listEverShown, setListEverShown] = useState<boolean>(() => loadMode() === 'list');
+  const [canvasEverShown, setCanvasEverShown] = useState<boolean>(() => loadMode() === 'canvas');
   const [snapshot, setSnapshot] = useState<BookmarksSnapshot | null>(() => peekBookmarks());
   const [folder, setFolder] = useState<string>('All');
   const [folderMenuOpen, setFolderMenuOpen] = useState(false);
@@ -38,10 +42,13 @@ export default function BookmarksPane({ isFullScreen, onToggleFullScreen }: Book
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
-    // Push the right size-key so the window resizes to the canvas or library
-    // profile depending on which bookmarks view is active.
-    window.librarianAPI?.setSizeKey?.(mode === 'canvas' ? 'canvas' : 'library');
-  }, [mode]);
+    // List/canvas both share the 'library' window size — LibrarianView pushes
+    // that key when bookmarks is selected. Forcing a window resize on every
+    // mode toggle was adding ~150ms animateBounds + downstream paint on each
+    // click, so we no longer push a size-key from here.
+    if (mode === 'list' && !listEverShown) setListEverShown(true);
+    if (mode === 'canvas' && !canvasEverShown) setCanvasEverShown(true);
+  }, [mode, listEverShown, canvasEverShown]);
 
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
@@ -267,10 +274,19 @@ export default function BookmarksPane({ isFullScreen, onToggleFullScreen }: Book
               ? <>No bookmarks synced yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync</code> in your terminal.</>
               : 'No bookmarks in this folder.'}
           </div>
-        ) : mode === 'list' ? (
-          <BookmarksList bookmarks={filtered} />
         ) : (
-          <BookmarksCanvas bookmarks={filtered} />
+          <>
+            {listEverShown && (
+              <div style={{ position: 'absolute', inset: 0, display: mode === 'list' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
+                <BookmarksList bookmarks={filtered} />
+              </div>
+            )}
+            {canvasEverShown && (
+              <div style={{ position: 'absolute', inset: 0, display: mode === 'canvas' ? 'flex' : 'none', flexDirection: 'column', minHeight: 0 }}>
+                <BookmarksCanvas bookmarks={filtered} />
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

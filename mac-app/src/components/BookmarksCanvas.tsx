@@ -2,6 +2,8 @@
 // Keeps the vanilla DOM-pool masonry + imperative lightbox — battle-tested for 1000+ items.
 import { useEffect, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { localMediaUrl } from '../utils/bookmarkMedia';
+import { estimateTextCardHeight } from '../utils/bookmarkCardHeight';
 
 const CONFIG = {
   COLS: 5,
@@ -10,13 +12,6 @@ const CONFIG = {
   POOL_SIZE: 500,
   BUFFER: 600,
 };
-
-function twitterImageUrl(url: string, size: string = 'small'): string {
-  const base = url.split('?')[0];
-  const ext = base.match(/\.(jpg|jpeg|png)$/i);
-  const format = ext ? ext[1].toLowerCase() : 'jpg';
-  return `${base}?format=${format}&name=${size}`;
-}
 
 const easeInOutQuart = (t: number) =>
   t < 0.5 ? 8 * t * t * t * t : 1 - Math.pow(-2 * t + 2, 4) / 2;
@@ -127,66 +122,24 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     let totalWidth = 0;
     let maxColHeight = 0;
 
-    // Offscreen measurement node: same class tree as real cards so computed
-    // styles match. Used to derive each text-only card's natural height.
-    const measureRoot = document.createElement('div');
-    measureRoot.style.cssText = 'position:absolute;left:-99999px;top:0;visibility:hidden;pointer-events:none;';
-    // Copy the card CSS vars so var() references resolve.
-    for (const v of ['--bm-card-bg', '--bm-card-border', '--bm-card-text', '--bm-card-secondary', '--bm-card-quoted-bg']) {
-      const val = viewport.style.getPropertyValue(v);
-      if (val) measureRoot.style.setProperty(v, val);
-    }
-    const measureCard = document.createElement('div');
-    measureCard.className = 'bm-text-card';
-    measureCard.style.position = 'static';
-    measureCard.style.display = 'flex';
-    measureCard.style.inset = 'auto';
-    const measureHandle = document.createElement('div');
-    measureHandle.className = 'bm-text-handle';
-    const measureBody = document.createElement('div');
-    measureBody.className = 'bm-text-body';
-    const measureQuoted = document.createElement('div');
-    measureQuoted.className = 'bm-text-quoted';
-    const measureQuotedHandle = document.createElement('div');
-    measureQuotedHandle.className = 'bm-text-quoted-handle';
-    const measureQuotedBody = document.createElement('div');
-    measureQuotedBody.className = 'bm-text-quoted-body';
-    measureQuoted.appendChild(measureQuotedHandle);
-    measureQuoted.appendChild(measureQuotedBody);
-    measureCard.appendChild(measureHandle);
-    measureCard.appendChild(measureBody);
-    measureCard.appendChild(measureQuoted);
-    measureRoot.appendChild(measureCard);
-    document.body.appendChild(measureRoot);
-
-    const heightCache = new Map<string, number>();
-
-    const measureTextCardHeight = (bm: Bookmark, width: number): number => {
-      const key = `${bm.id}:${width}`;
-      const cached = heightCache.get(key);
-      if (cached !== undefined) return cached;
-      measureCard.style.width = `${width}px`;
-      measureHandle.textContent = bm.authorHandle ? `@${bm.authorHandle}` : (bm.authorName || '');
-      measureBody.textContent = bm.text;
-      measureBody.style.display = bm.text ? 'block' : 'none';
-      if (bm.quotedTweet) {
-        measureQuotedHandle.textContent = bm.quotedTweet.authorHandle
-          ? `@${bm.quotedTweet.authorHandle}`
-          : (bm.quotedTweet.authorName || '');
-        measureQuotedBody.textContent = bm.quotedTweet.text;
-        measureQuoted.style.display = 'flex';
-      } else {
-        measureQuoted.style.display = 'none';
-      }
-      const h = measureCard.offsetHeight;
-      heightCache.set(key, h);
-      return h;
-    };
+    // Short-circuit key for buildLayout — if neither colWidth nor the bookmarks
+    // array identity changed since last build, the existing layoutItems are
+    // still correct. Avoids re-running 7k measurements on every resize tick
+    // and on StrictMode double-mount.
+    let lastBuildColWidth = 0;
+    let lastBuildCurrent: Bookmark[] | null = null;
 
     const buildLayout = () => {
       const vw = viewport.clientWidth;
+      if (vw === 0) return; // canvas is hidden; don't waste a layout pass.
       const gap = CONFIG.GAP;
-      colWidth = Math.max(1, Math.floor((vw - gap) / CONFIG.COLS));
+      const newColWidth = Math.max(1, Math.floor((vw - gap) / CONFIG.COLS));
+      if (newColWidth === lastBuildColWidth && current === lastBuildCurrent && layoutItems.length > 0) {
+        return;
+      }
+      lastBuildColWidth = newColWidth;
+      lastBuildCurrent = current;
+      colWidth = newColWidth;
       totalWidth = colWidth * CONFIG.COLS;
 
       const colHeights = new Array(CONFIG.COLS).fill(0);
@@ -199,14 +152,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           if (colHeights[c] < colHeights[minCol]) minCol = c;
         }
         let itemH: number;
-        if (bm.images && bm.images.length > 0) {
-          const img = bm.images[0];
-          const aspect = (img.width || 1) / (img.height || 1);
+        // Only treat as an image card when we have the file locally. Image
+        // bookmarks without a local file render as text-style — the viewer
+        // makes zero network calls, so remote-only media would just be empty.
+        const primaryImage = bm.images?.[0];
+        if (primaryImage?.localFilename) {
+          const aspect = (primaryImage.width || 1) / (primaryImage.height || 1);
           itemH = itemW / aspect;
         } else {
-          // Text-only card: measure actual rendered height so the card fits
-          // its content exactly (including quoted-tweet block).
-          itemH = measureTextCardHeight(bm, itemW);
+          itemH = estimateTextCardHeight(bm, itemW);
         }
         const x = minCol * colWidth + gap / 2;
         const y = colHeights[minCol] + gap / 2;
@@ -352,11 +306,11 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
               if (!el) continue;
               const img = el.querySelector('img') as HTMLImageElement;
               const textEl = el.querySelector('.bm-text-card') as HTMLDivElement;
-              const hasImage = !!(item.bookmark.images && item.bookmark.images.length > 0);
+              const localSrc = localMediaUrl(item.bookmark.images?.[0]);
+              const hasImage = !!localSrc;
               if (hasImage) {
-                const src = twitterImageUrl(item.bookmark.images[0].url, 'medium');
-                if (img.src !== src) {
-                  img.src = src;
+                if (img.src !== localSrc) {
+                  img.src = localSrc!;
                   img.alt = item.bookmark.text.substring(0, 60);
                 }
                 img.style.display = 'block';
@@ -414,7 +368,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const vh = window.innerHeight;
       const maxW = vw * 0.7;
       const maxH = vh * 0.7;
-      const hasImage = !!(bookmark.images && bookmark.images.length > 0);
+      const hasImage = !!localMediaUrl(bookmark.images?.[0]);
       let targetW: number;
       let targetH: number;
       if (hasImage) {
@@ -430,7 +384,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         // measure actual content at a readable width and clamp to [min, maxH].
         const MIN_TEXT_H = 160;
         targetW = Math.min(maxW, 560);
-        const measured = measureTextCardHeight(bookmark, targetW);
+        const measured = estimateTextCardHeight(bookmark, targetW);
         targetH = Math.min(maxH, Math.max(MIN_TEXT_H, measured));
       }
 
@@ -460,15 +414,6 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       for (const v of ['--bm-card-bg', '--bm-card-border', '--bm-card-text', '--bm-card-secondary']) {
         const val = viewport.style.getPropertyValue(v);
         if (val) clone.style.setProperty(v, val);
-      }
-
-      if (hasImage) {
-        const hiRes = document.createElement('img');
-        hiRes.src = twitterImageUrl(bookmark.images[0].url, '4096x4096');
-        hiRes.alt = '';
-        hiRes.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:24px;opacity:0;transition:opacity 0.3s ease;';
-        hiRes.onload = () => { hiRes.style.opacity = '1'; };
-        clone.appendChild(hiRes);
       }
 
       document.body.appendChild(clone);
@@ -503,6 +448,12 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         clone.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       }, () => {
         state.lightboxAnimating = false;
+        // Text cards can exceed maxH — enable scroll + pointer events once the
+        // card has reached its final size so the scrollbar doesn't flicker mid-grow.
+        if (!hasImage) {
+          clone.style.overflowY = 'auto';
+          clone.style.pointerEvents = 'auto';
+        }
       });
     };
 
@@ -602,6 +553,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     };
 
     const onResize = () => {
+      if (viewport.clientWidth === 0) return;
       buildLayout();
       clearActive();
       renderVisible();
@@ -649,17 +601,12 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         if (el !== cloneImg) el.remove();
       });
 
-      const hasImage = !!(nextBm.images && nextBm.images.length > 0);
+      const localSrc = localMediaUrl(nextBm.images?.[0]);
+      const hasImage = !!localSrc;
       if (hasImage) {
-        cloneImg.src = twitterImageUrl(nextBm.images[0].url, 'medium');
+        cloneImg.src = localSrc!;
         cloneImg.style.display = 'block';
         cloneText.style.display = 'none';
-        const hiRes = document.createElement('img');
-        hiRes.src = twitterImageUrl(nextBm.images[0].url, '4096x4096');
-        hiRes.alt = '';
-        hiRes.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:24px;opacity:0;transition:opacity 0.3s ease;';
-        hiRes.onload = () => { hiRes.style.opacity = '1'; };
-        clone.appendChild(hiRes);
       } else {
         cloneImg.removeAttribute('src');
         cloneImg.style.display = 'none';
@@ -689,6 +636,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       linkEl.textContent = nextBm.authorHandle ? `@${nextBm.authorHandle}` : '';
       linkEl.href = nextBm.url;
       copyBtn.style.display = hasImage ? 'flex' : 'none';
+
+      // Text cards scroll; images fall back to the default non-interactive clone.
+      clone.style.overflowY = hasImage ? '' : 'auto';
+      clone.style.pointerEvents = hasImage ? 'none' : 'auto';
 
       nextEl.style.visibility = 'hidden';
       state.lightbox.sourceEl = nextEl;
@@ -724,8 +675,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       if (!bm) return;
       const img = bm.images[0];
       if (img.type === 'video' || img.type === 'animated_gif') return;
+      const src = localMediaUrl(img);
+      if (!src) return;
       try {
-        const resp = await fetch(twitterImageUrl(img.url, '4096x4096'));
+        const resp = await fetch(src);
         const blob = await resp.blob();
         const image = new Image();
         image.crossOrigin = 'anonymous';
@@ -791,13 +744,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     openBtn.addEventListener('click', onOpenClick);
     linkEl.addEventListener('click', onLinkClick);
 
-    // Reflow when the viewport itself resizes (includes sidebar drags, immersive toggle, window resize).
+    // Reflow immediately on width change. buildLayout is char-count math
+    // behind a per-bucket cache (~5ms cold, ~0ms warm), so we no longer need
+    // a debounce — firing on every ResizeObserver tick makes canvas-become-
+    // visible transitions paint in the current frame instead of 120ms later.
     let lastW = viewport.clientWidth;
     const resizeObserver = new ResizeObserver(() => {
-      if (viewport.clientWidth !== lastW) {
-        lastW = viewport.clientWidth;
-        onResize();
-      }
+      if (viewport.clientWidth === lastW) return;
+      lastW = viewport.clientWidth;
+      onResize();
     });
     resizeObserver.observe(viewport);
 
@@ -838,7 +793,6 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           state.lightbox = null;
         }
         grid.innerHTML = '';
-        measureRoot.remove();
       },
     };
 

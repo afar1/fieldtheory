@@ -13,6 +13,9 @@ export interface BookmarkImage {
   height: number;
   type: 'photo' | 'video' | 'animated_gif' | string;
   videoUrl?: string;
+  /** Filename in ~/.ft-bookmarks/media/. Set when `ft fetch-media` has
+   * downloaded this asset. Renderer loads it via ftmedia://media/<filename>. */
+  localFilename?: string;
 }
 
 export interface QuotedTweet {
@@ -102,6 +105,28 @@ function jsonlPath(): string {
 
 function foldersPath(): string {
   return path.join(bookmarksDir(), 'folders-data.json');
+}
+
+export function mediaDir(): string {
+  return path.join(bookmarksDir(), 'media');
+}
+
+/** Scan `~/.ft-bookmarks/media/` and build tweetId → first-matching-filename.
+ * `ft fetch-media` writes `${tweetId}-${hash}.${ext}` for tweet media; a tweet
+ * with multiple images produces multiple files with the same prefix, so
+ * first-match is deterministic-enough for a primary image. */
+function indexMediaByTweetId(): Map<string, string> {
+  const m = new Map<string, string>();
+  const dir = mediaDir();
+  if (!fs.existsSync(dir)) return m;
+  for (const name of fs.readdirSync(dir)) {
+    const dash = name.indexOf('-');
+    if (dash <= 0) continue; // profile images have no tweetId prefix
+    const tweetId = name.slice(0, dash);
+    if (!/^\d{15,}$/.test(tweetId)) continue;
+    if (!m.has(tweetId)) m.set(tweetId, name);
+  }
+  return m;
 }
 
 function extractImages(raw: { mediaObjects?: RawMediaObject[] }): BookmarkImage[] {
@@ -196,6 +221,7 @@ export class BookmarksManager extends EventEmitter {
     }
 
     const { folders, folderMap } = loadFolders();
+    const mediaIndex = indexMediaByTweetId();
 
     const bookmarks: Bookmark[] = [];
     const text = fs.readFileSync(p, 'utf-8');
@@ -207,6 +233,10 @@ export class BookmarksManager extends EventEmitter {
         const bm = parseRawBookmark(raw);
         if (bm) {
           bm.folders = folderMap[bm.id] ?? [];
+          const localFilename = mediaIndex.get(bm.id);
+          if (localFilename && bm.images.length > 0) {
+            bm.images[0].localFilename = localFilename;
+          }
           bookmarks.push(bm);
         }
       } catch {
