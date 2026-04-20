@@ -1,6 +1,6 @@
 import { useTheme } from '../contexts/ThemeContext';
 import { List } from 'react-window';
-import { localMediaUrl } from '../utils/bookmarkMedia';
+import { localAvatarUrl, localMediaUrls } from '../utils/bookmarkMedia';
 
 function formatPostedAt(raw: string): string {
   if (!raw) return '';
@@ -30,7 +30,7 @@ const GAP_BELOW = 8;
 function estimateRowHeight(bm: Bookmark): number {
   const bodyLines = bm.text ? Math.max(1, Math.ceil(bm.text.length * AVG_CHAR / BODY_WIDTH_ESTIMATE)) : 0;
   const bodyHeight = bodyLines * BODY_LINE_HEIGHT + (bm.text ? 4 : 0);
-  const imageHeight = bm.images.length > 0 && bm.images.some((img) => img.localFilename) ? IMAGE_BLOCK : 0;
+  const imageHeight = localMediaUrls(bm.images).length > 0 ? IMAGE_BLOCK : 0;
   return Math.round(CARD_PAD * 2 + CARD_BORDER * 2 + HEADER_ROW + bodyHeight + imageHeight + GAP_BELOW);
 }
 
@@ -41,6 +41,8 @@ interface RowProps {
 
 function Row({ index, style, bookmarks, theme }: { index: number; style: React.CSSProperties } & RowProps) {
   const bm = bookmarks[index];
+  const mediaUrls = localMediaUrls(bm.images).slice(0, 4);
+  const avatarUrl = localAvatarUrl(bm);
   return (
     <div style={style}>
       <a
@@ -68,7 +70,14 @@ function Row({ index, style, bookmarks, theme }: { index: number; style: React.C
         }}
       >
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '4px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px', flexWrap: 'wrap' }}>
+            {avatarUrl && (
+              <img
+                src={avatarUrl}
+                alt=""
+                style={{ width: '16px', height: '16px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
+              />
+            )}
             <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>{bm.authorName || bm.authorHandle}</span>
             {bm.authorHandle && (
               <span style={{ fontSize: '11px', color: theme.textSecondary }}>@{bm.authorHandle}</span>
@@ -78,26 +87,34 @@ function Row({ index, style, bookmarks, theme }: { index: number; style: React.C
           <div style={{ fontSize: '13px', color: theme.text, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
             {bm.text}
           </div>
-          {bm.images.length > 0 && bm.images.some((img) => img.localFilename) && (
-            <div style={{ marginTop: '8px', display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-              {bm.images.slice(0, 4).map((img, idx) => {
-                const src = localMediaUrl(img);
-                if (!src) return null;
-                return (
-                  <img
-                    key={idx}
-                    src={src}
-                    alt=""
-                    style={{
-                      maxWidth: '140px',
-                      maxHeight: '140px',
-                      borderRadius: '8px',
-                      objectFit: 'cover',
-                      border: `1px solid ${theme.border}`,
-                    }}
-                  />
-                );
-              })}
+          {mediaUrls.length > 0 && (
+            <div
+              style={{
+                marginTop: '8px',
+                display: 'grid',
+                gap: '6px',
+                width: '140px',
+                height: '140px',
+                gridTemplateColumns: mediaUrls.length === 1 ? '1fr' : '1fr 1fr',
+                gridTemplateRows: mediaUrls.length <= 2 ? '1fr' : '1fr 1fr',
+              }}
+            >
+              {mediaUrls.map((src, idx) => (
+                <img
+                  key={idx}
+                  src={src}
+                  alt=""
+                  style={{
+                    width: '100%',
+                    height: '100%',
+                    borderRadius: '8px',
+                    objectFit: 'cover',
+                    border: `1px solid ${theme.border}`,
+                    gridColumn: mediaUrls.length === 3 && idx === 0 ? '1' : undefined,
+                    gridRow: mediaUrls.length === 3 && idx === 0 ? '1 / span 2' : undefined,
+                  }}
+                />
+              ))}
             </div>
           )}
         </div>

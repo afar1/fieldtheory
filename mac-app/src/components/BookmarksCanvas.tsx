@@ -2,7 +2,7 @@
 // Keeps the vanilla DOM-pool masonry + imperative lightbox — battle-tested for 1000+ items.
 import { useEffect, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { localMediaUrl } from '../utils/bookmarkMedia';
+import { localAvatarUrl, localMediaUrl, localMediaUrls, localVideoUrl } from '../utils/bookmarkMedia';
 import { estimateTextCardHeight } from '../utils/bookmarkCardHeight';
 
 const CONFIG = {
@@ -35,6 +35,99 @@ function animateValue(
   };
   requestAnimationFrame(tick);
   return () => { cancelled = true; };
+}
+
+function applyImageGrid(gridEl: HTMLDivElement, sources: string[], alt: string): void {
+  const cells = Array.from(gridEl.querySelectorAll('img')) as HTMLImageElement[];
+  if (sources.length === 0) {
+    gridEl.style.display = 'none';
+    for (const img of cells) {
+      img.removeAttribute('src');
+      img.alt = '';
+      img.style.display = 'none';
+      img.style.gridColumn = '';
+      img.style.gridRow = '';
+    }
+    return;
+  }
+
+  gridEl.style.display = 'grid';
+  gridEl.style.gridTemplateColumns = sources.length === 1 ? '1fr' : '1fr 1fr';
+  gridEl.style.gridTemplateRows = sources.length <= 2 ? '1fr' : '1fr 1fr';
+
+  for (let i = 0; i < cells.length; i++) {
+    const img = cells[i];
+    const src = sources[i];
+    if (!src) {
+      img.removeAttribute('src');
+      img.alt = '';
+      img.style.display = 'none';
+      img.style.gridColumn = '';
+      img.style.gridRow = '';
+      continue;
+    }
+    if (img.src !== src) img.src = src;
+    img.alt = alt;
+    img.style.display = 'block';
+    img.style.gridColumn = sources.length === 3 && i === 0 ? '1' : '';
+    img.style.gridRow = sources.length === 3 && i === 0 ? '1 / span 2' : '';
+  }
+}
+
+function localVideoImage(bookmark: Bookmark): BookmarkImage | undefined {
+  if (bookmark.images.length !== 1) return undefined;
+  return bookmark.images.find(
+    (img) => (img.type === 'video' || img.type === 'animated_gif') && !!img.localVideoFilename,
+  );
+}
+
+function copyableLocalImage(bookmark: Bookmark): BookmarkImage | undefined {
+  return bookmark.images.find(
+    (img) => !!img.localFilename && img.type !== 'video' && img.type !== 'animated_gif',
+  );
+}
+
+function resetLightboxVideo(video: HTMLVideoElement): void {
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  video.style.display = 'none';
+}
+
+function applyAvatar(img: HTMLImageElement, url: string | null): void {
+  if (url) {
+    if (img.src !== url) img.src = url;
+    img.style.display = 'block';
+  } else {
+    img.removeAttribute('src');
+    img.style.display = 'none';
+  }
+}
+
+interface HandleSource {
+  authorHandle: string;
+  authorName: string;
+  localAvatarFilename?: string;
+}
+
+/** Populate a `.bm-text-handle` / `.bm-text-quoted-handle` div with the author's
+ * avatar (when downloaded) and `@handle` text, falling back to display name. */
+function setHandleContent(handleEl: HTMLDivElement, source: HandleSource): void {
+  const avatarEl = handleEl.querySelector('.bm-text-avatar') as HTMLImageElement;
+  const textEl = handleEl.querySelector('.bm-text-handle-text') as HTMLSpanElement;
+  applyAvatar(avatarEl, localAvatarUrl(source));
+  textEl.textContent = source.authorHandle ? `@${source.authorHandle}` : (source.authorName || '');
+}
+
+/** Enable vertical scroll on the inner text card only when its content
+ * genuinely overflows — the estimator drifts by ~20px, so `overflow:auto`
+ * applied unconditionally would show a scrollbar on cards that visually fit. */
+function enableScrollIfOverflowing(cloneText: HTMLDivElement): void {
+  cloneText.style.overflowY = '';
+  cloneText.scrollTop = 0;
+  if (cloneText.scrollHeight > cloneText.clientHeight + 1) {
+    cloneText.style.overflowY = 'auto';
+  }
 }
 
 type LayoutItem = {
@@ -78,6 +171,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
   const infoRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLDivElement | null>(null);
   const linkRef = useRef<HTMLAnchorElement | null>(null);
+  const lightboxAvatarRef = useRef<HTMLImageElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const copyBtnRef = useRef<HTMLButtonElement | null>(null);
   const openBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -91,10 +185,11 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     const info = infoRef.current;
     const titleEl = titleRef.current;
     const linkEl = linkRef.current;
+    const lightboxAvatarEl = lightboxAvatarRef.current;
     const closeBtn = closeBtnRef.current;
     const copyBtn = copyBtnRef.current;
     const openBtn = openBtnRef.current;
-    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !closeBtn || !copyBtn || !openBtn) return;
+    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn) return;
 
     const openExternalUrl = (url: string) => {
       if (window.shellAPI?.openExternal) {
@@ -155,10 +250,11 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         // Only treat as an image card when we have the file locally. Image
         // bookmarks without a local file render as text-style — the viewer
         // makes zero network calls, so remote-only media would just be empty.
-        const primaryImage = bm.images?.[0];
-        if (primaryImage?.localFilename) {
+        const localImages = bm.images?.filter((img) => !!img.localFilename) ?? [];
+        const primaryImage = localImages[0];
+        if (localImages.length > 0) {
           const aspect = (primaryImage.width || 1) / (primaryImage.height || 1);
-          itemH = itemW / aspect;
+          itemH = localImages.length === 1 ? itemW / aspect : itemW;
         } else {
           itemH = estimateTextCardHeight(bm, itemW);
         }
@@ -197,23 +293,49 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const el = document.createElement('div');
         el.className = 'bm-grid-item';
         el.style.cssText = 'position:absolute;overflow:hidden;will-change:transform;user-select:none;backface-visibility:hidden;border-radius:24px;display:none;';
-        const img = document.createElement('img');
-        img.alt = '';
-        img.loading = 'lazy';
-        img.decoding = 'async';
-        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block;pointer-events:none;border-radius:24px;transition:filter 0.3s ease;';
-        el.appendChild(img);
+        const imageGrid = document.createElement('div');
+        imageGrid.className = 'bm-image-grid';
+        imageGrid.style.cssText = 'position:absolute;inset:0;display:none;gap:4px;padding:0;box-sizing:border-box;pointer-events:none;';
+        for (let j = 0; j < 4; j++) {
+          const img = document.createElement('img');
+          img.alt = '';
+          img.loading = 'lazy';
+          img.decoding = 'async';
+          img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:none;pointer-events:none;border-radius:24px;transition:filter 0.3s ease;';
+          imageGrid.appendChild(img);
+        }
+        el.appendChild(imageGrid);
 
         const textEl = document.createElement('div');
         textEl.className = 'bm-text-card';
         const handleEl = document.createElement('div');
         handleEl.className = 'bm-text-handle';
+        const handleAvatar = document.createElement('img');
+        handleAvatar.className = 'bm-text-avatar';
+        handleAvatar.alt = '';
+        handleAvatar.loading = 'lazy';
+        handleAvatar.decoding = 'async';
+        handleAvatar.style.display = 'none';
+        const handleText = document.createElement('span');
+        handleText.className = 'bm-text-handle-text';
+        handleEl.appendChild(handleAvatar);
+        handleEl.appendChild(handleText);
         const bodyEl = document.createElement('div');
         bodyEl.className = 'bm-text-body';
         const quotedEl = document.createElement('div');
         quotedEl.className = 'bm-text-quoted';
         const quotedHandle = document.createElement('div');
         quotedHandle.className = 'bm-text-quoted-handle';
+        const quotedAvatar = document.createElement('img');
+        quotedAvatar.className = 'bm-text-avatar';
+        quotedAvatar.alt = '';
+        quotedAvatar.loading = 'lazy';
+        quotedAvatar.decoding = 'async';
+        quotedAvatar.style.display = 'none';
+        const quotedHandleText = document.createElement('span');
+        quotedHandleText.className = 'bm-text-handle-text';
+        quotedHandle.appendChild(quotedAvatar);
+        quotedHandle.appendChild(quotedHandleText);
         const quotedBody = document.createElement('div');
         quotedBody.className = 'bm-text-quoted-body';
         quotedEl.appendChild(quotedHandle);
@@ -304,32 +426,25 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
             } else {
               const el = acquireEl();
               if (!el) continue;
-              const img = el.querySelector('img') as HTMLImageElement;
+              const imageGrid = el.querySelector('.bm-image-grid') as HTMLDivElement;
               const textEl = el.querySelector('.bm-text-card') as HTMLDivElement;
-              const localSrc = localMediaUrl(item.bookmark.images?.[0]);
-              const hasImage = !!localSrc;
+              const localSources = localMediaUrls(item.bookmark.images).slice(0, 4);
+              const hasImage = localSources.length > 0;
               if (hasImage) {
-                if (img.src !== localSrc) {
-                  img.src = localSrc!;
-                  img.alt = item.bookmark.text.substring(0, 60);
-                }
-                img.style.display = 'block';
+                applyImageGrid(imageGrid, localSources, item.bookmark.text.substring(0, 60));
                 textEl.style.display = 'none';
               } else {
-                img.removeAttribute('src');
-                img.style.display = 'none';
+                applyImageGrid(imageGrid, [], '');
                 const handleEl = textEl.querySelector('.bm-text-handle') as HTMLDivElement;
                 const bodyEl = textEl.querySelector('.bm-text-body') as HTMLDivElement;
                 const quotedEl = textEl.querySelector('.bm-text-quoted') as HTMLDivElement;
-                handleEl.textContent = item.bookmark.authorHandle ? `@${item.bookmark.authorHandle}` : (item.bookmark.authorName || '');
+                setHandleContent(handleEl, item.bookmark);
                 bodyEl.textContent = item.bookmark.text;
                 bodyEl.style.display = item.bookmark.text ? 'block' : 'none';
                 if (item.bookmark.quotedTweet) {
                   const qHandle = quotedEl.querySelector('.bm-text-quoted-handle') as HTMLDivElement;
                   const qBody = quotedEl.querySelector('.bm-text-quoted-body') as HTMLDivElement;
-                  qHandle.textContent = item.bookmark.quotedTweet.authorHandle
-                    ? `@${item.bookmark.quotedTweet.authorHandle}`
-                    : (item.bookmark.quotedTweet.authorName || '');
+                  setHandleContent(qHandle, item.bookmark.quotedTweet);
                   qBody.textContent = item.bookmark.quotedTweet.text;
                   quotedEl.style.display = 'flex';
                 } else {
@@ -368,7 +483,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const vh = window.innerHeight;
       const maxW = vw * 0.7;
       const maxH = vh * 0.7;
-      const hasImage = !!localMediaUrl(bookmark.images?.[0]);
+      const hasImage = localMediaUrls(bookmark.images).length > 0;
+      const hasCopyableImage = !!copyableLocalImage(bookmark);
       let targetW: number;
       let targetH: number;
       if (hasImage) {
@@ -415,11 +531,21 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const val = viewport.style.getPropertyValue(v);
         if (val) clone.style.setProperty(v, val);
       }
+      const cloneVideo = document.createElement('video');
+      cloneVideo.className = 'bm-lightbox-video';
+      cloneVideo.controls = true;
+      cloneVideo.preload = 'metadata';
+      cloneVideo.playsInline = true;
+      cloneVideo.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:none;background:#000;border-radius:24px;';
+      clone.appendChild(cloneVideo);
 
       document.body.appendChild(clone);
       overlay.style.opacity = '1';
       overlay.style.pointerEvents = 'auto';
 
+      const videoImage = localVideoImage(bookmark);
+      const videoSrc = localVideoUrl(videoImage);
+      const hasPlayableVideo = !!videoSrc;
       // For images, show a truncated preview of the caption in the info
       // block below the media. For text-only the card already contains the
       // full text — don't duplicate it in the info block.
@@ -428,9 +554,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         : '';
       linkEl.textContent = bookmark.authorHandle ? `@${bookmark.authorHandle}` : '';
       linkEl.href = bookmark.url;
+      applyAvatar(lightboxAvatarEl, localAvatarUrl(bookmark));
       info.style.top = `${endY + targetH + 20}px`;
       info.style.opacity = '1';
-      copyBtn.style.display = hasImage ? 'flex' : 'none';
+      copyBtn.style.display = hasCopyableImage ? 'flex' : 'none';
 
       state.lightbox = { clone, bookmark, sourceEl: el, endX, endY, endW: targetW, endH: targetH };
 
@@ -448,10 +575,21 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         clone.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       }, () => {
         state.lightboxAnimating = false;
-        // Text cards can exceed maxH — enable scroll + pointer events once the
-        // card has reached its final size so the scrollbar doesn't flicker mid-grow.
+        const cloneGrid = clone.querySelector('.bm-image-grid') as HTMLDivElement;
+        const cloneVideoEl = clone.querySelector('.bm-lightbox-video') as HTMLVideoElement;
+        if (hasPlayableVideo) {
+          applyImageGrid(cloneGrid, [], '');
+          cloneVideoEl.poster = localMediaUrl(videoImage) ?? '';
+          cloneVideoEl.src = videoSrc!;
+          cloneVideoEl.style.display = 'block';
+          clone.style.pointerEvents = 'auto';
+          return;
+        }
+        // Scroll lives on the inner .bm-text-card (outer clone just sizes; inner
+        // card is position:absolute; inset:0 and clips its own overflow).
         if (!hasImage) {
-          clone.style.overflowY = 'auto';
+          const cloneText = clone.querySelector('.bm-text-card') as HTMLDivElement | null;
+          if (cloneText) enableScrollIfOverflowing(cloneText);
           clone.style.pointerEvents = 'auto';
         }
       });
@@ -482,6 +620,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         lb.clone.style.height = `${h}px`;
         lb.clone.style.transform = `translate3d(${x}px, ${y}px, 0)`;
       }, () => {
+        const video = lb.clone.querySelector('.bm-lightbox-video') as HTMLVideoElement | null;
+        if (video) resetLightboxVideo(video);
         lb.clone.remove();
         lb.sourceEl.style.visibility = '';
         state.lightbox = null;
@@ -595,34 +735,39 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
 
       // Drop any hi-res overlays from the previous bookmark.
       const clone = state.lightbox.clone;
-      const cloneImg = clone.querySelector('img') as HTMLImageElement;
+      const cloneGrid = clone.querySelector('.bm-image-grid') as HTMLDivElement;
+      const cloneVideo = clone.querySelector('.bm-lightbox-video') as HTMLVideoElement;
       const cloneText = clone.querySelector('.bm-text-card') as HTMLDivElement;
-      Array.from(clone.querySelectorAll('img')).forEach((el) => {
-        if (el !== cloneImg) el.remove();
-      });
-
-      const localSrc = localMediaUrl(nextBm.images?.[0]);
-      const hasImage = !!localSrc;
-      if (hasImage) {
-        cloneImg.src = localSrc!;
-        cloneImg.style.display = 'block';
+      const localSources = localMediaUrls(nextBm.images).slice(0, 4);
+      const hasImage = localSources.length > 0;
+      const videoImage = localVideoImage(nextBm);
+      const videoSrc = localVideoUrl(videoImage);
+      const hasPlayableVideo = !!videoSrc;
+      const hasCopyableImage = !!copyableLocalImage(nextBm);
+      if (hasPlayableVideo) {
+        applyImageGrid(cloneGrid, [], '');
         cloneText.style.display = 'none';
+        cloneVideo.poster = localMediaUrl(videoImage) ?? '';
+        cloneVideo.src = videoSrc!;
+        cloneVideo.style.display = 'block';
+      } else if (hasImage) {
+        applyImageGrid(cloneGrid, localSources, nextBm.text.substring(0, 60));
+        cloneText.style.display = 'none';
+        resetLightboxVideo(cloneVideo);
       } else {
-        cloneImg.removeAttribute('src');
-        cloneImg.style.display = 'none';
+        applyImageGrid(cloneGrid, [], '');
         cloneText.style.display = 'flex';
+        resetLightboxVideo(cloneVideo);
         const handleEl = cloneText.querySelector('.bm-text-handle') as HTMLDivElement;
         const bodyEl = cloneText.querySelector('.bm-text-body') as HTMLDivElement;
         const quotedEl = cloneText.querySelector('.bm-text-quoted') as HTMLDivElement;
-        handleEl.textContent = nextBm.authorHandle ? `@${nextBm.authorHandle}` : (nextBm.authorName || '');
+        setHandleContent(handleEl, nextBm);
         bodyEl.textContent = nextBm.text;
         bodyEl.style.display = nextBm.text ? 'block' : 'none';
         if (nextBm.quotedTweet) {
           const qHandle = quotedEl.querySelector('.bm-text-quoted-handle') as HTMLDivElement;
           const qBody = quotedEl.querySelector('.bm-text-quoted-body') as HTMLDivElement;
-          qHandle.textContent = nextBm.quotedTweet.authorHandle
-            ? `@${nextBm.quotedTweet.authorHandle}`
-            : (nextBm.quotedTweet.authorName || '');
+          setHandleContent(qHandle, nextBm.quotedTweet);
           qBody.textContent = nextBm.quotedTweet.text;
           quotedEl.style.display = 'flex';
         } else {
@@ -635,11 +780,18 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         : '';
       linkEl.textContent = nextBm.authorHandle ? `@${nextBm.authorHandle}` : '';
       linkEl.href = nextBm.url;
-      copyBtn.style.display = hasImage ? 'flex' : 'none';
+      applyAvatar(lightboxAvatarEl, localAvatarUrl(nextBm));
+      copyBtn.style.display = hasCopyableImage ? 'flex' : 'none';
 
-      // Text cards scroll; images fall back to the default non-interactive clone.
-      clone.style.overflowY = hasImage ? '' : 'auto';
-      clone.style.pointerEvents = hasImage ? 'none' : 'auto';
+      // Text cards scroll on the inner .bm-text-card (see openLightbox); images
+      // fall back to the default non-interactive clone.
+      if (!hasImage && !hasPlayableVideo) {
+        enableScrollIfOverflowing(cloneText);
+      } else {
+        cloneText.style.overflowY = '';
+        cloneText.scrollTop = 0;
+      }
+      clone.style.pointerEvents = hasPlayableVideo || !hasImage ? 'auto' : 'none';
 
       nextEl.style.visibility = 'hidden';
       state.lightbox.sourceEl = nextEl;
@@ -673,8 +825,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       e.stopPropagation();
       const bm = state.lightbox?.bookmark;
       if (!bm) return;
-      const img = bm.images[0];
-      if (img.type === 'video' || img.type === 'animated_gif') return;
+      const img = copyableLocalImage(bm);
+      if (!img) return;
       const src = localMediaUrl(img);
       if (!src) return;
       try {
@@ -861,10 +1013,20 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
         }
         .bm-text-handle {
+          display: flex;
+          align-items: center;
+          gap: 6px;
           font-size: 12px;
           font-weight: 600;
           color: var(--bm-card-secondary);
           letter-spacing: 0.01em;
+          flex-shrink: 0;
+        }
+        .bm-text-avatar {
+          width: 16px;
+          height: 16px;
+          border-radius: 50%;
+          object-fit: cover;
           flex-shrink: 0;
         }
         .bm-text-body {
@@ -889,6 +1051,9 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           color: var(--bm-card-text);
         }
         .bm-text-quoted-handle {
+          display: flex;
+          align-items: center;
+          gap: 6px;
           font-size: 11px;
           font-weight: 600;
           color: var(--bm-card-secondary);
@@ -1002,12 +1167,19 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
             ref={titleRef}
             style={{ fontSize: '16px', fontWeight: 500, margin: '0 0 6px', letterSpacing: '-0.01em', lineHeight: 1.4 }}
           />
-          <a
-            ref={linkRef}
-            target="_blank"
-            rel="noreferrer noopener"
-            style={{ fontSize: '14px', color: theme.textSecondary, textDecoration: 'none', cursor: 'pointer' }}
-          />
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+            <img
+              ref={lightboxAvatarRef}
+              alt=""
+              style={{ width: '18px', height: '18px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0, display: 'none' }}
+            />
+            <a
+              ref={linkRef}
+              target="_blank"
+              rel="noreferrer noopener"
+              style={{ fontSize: '14px', color: theme.textSecondary, textDecoration: 'none', cursor: 'pointer' }}
+            />
+          </div>
           <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'center' }}>
             <button
               ref={openBtnRef}
