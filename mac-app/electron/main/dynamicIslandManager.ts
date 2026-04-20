@@ -5,6 +5,7 @@ import os from 'os';
 import path from 'path';
 import { createLogger } from './logger';
 import type { WaitingAgent } from './types/agentAttention';
+import type { AgentLayout } from './agentLayout';
 
 const log = createLogger('DynamicIsland');
 
@@ -180,6 +181,10 @@ export class DynamicIslandManager extends EventEmitter {
 
   // Agents currently waiting for user attention (hook-driven).
   private waitingAgents: WaitingAgent[] = [];
+  // Spatial arrangement of the waiting-agent dots. Null when fewer than 2
+  // agents are waiting (simple ordering is enough) or when the layout
+  // provider isn't attached. Renderer falls back to the legacy row of dots.
+  private agentLayout: AgentLayout | null = null;
 
   // Hot-mic state tracked for the right pill.
   private hotMicActive: boolean = false;
@@ -448,9 +453,13 @@ export class DynamicIslandManager extends EventEmitter {
     const prevCount = this.waitingAgents.length;
     const nextCount = agents.length;
     this.waitingAgents = agents;
+    if (nextCount < 2) this.agentLayout = null; // layout only meaningful with ≥2
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-agents', agents);
+      if (nextCount < 2) {
+        this.window.webContents.send('dynamic-island-agent-layout', null);
+      }
     }
     // Pill width is granular per agent count (see getPillWidth), so resize on
     // every count change. Auto-hide only ticks on the 0↔non-zero transition
@@ -460,6 +469,14 @@ export class DynamicIslandManager extends EventEmitter {
       if ((prevCount === 0) !== (nextCount === 0)) {
         this.tickAutoHide();
       }
+    }
+  }
+
+  setAgentLayout(layout: AgentLayout | null): void {
+    this.agentLayout = layout;
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-agent-layout', layout);
     }
   }
 
@@ -736,6 +753,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.window.webContents.send('dynamic-island-resize', { leftWidth, rightWidth: this.getRightPillWidth() });
         this.window.webContents.send('dynamic-island-stack-changed', this.stackCount);
         this.window.webContents.send('dynamic-island-agents', this.waitingAgents);
+        this.window.webContents.send('dynamic-island-agent-layout', this.agentLayout);
         this.sendHistory();
         this.sendHotMicRuntimeStatusToLeft();
 
@@ -1421,9 +1439,13 @@ export class DynamicIslandManager extends EventEmitter {
   private readonly PILL_HAMBURGER = 22;
   private readonly PILL_CANCEL_X = 30;   // X cancel slot (22) + 8 gap
   private readonly PILL_WAVEFORM = 88;   // waveform slot (80) + 8 gap
+  // Renderer currently shows a single green breathing star whenever any
+  // agent is waiting (see AgentAttention.tsx), regardless of count — so the
+  // window only needs room for one slot. When we light up the spatial
+  // layout (1x4 / 2x2), bump these back up to cover the wider worst case.
   private readonly PILL_AGENT_SLOT = 28;
-  private readonly PILL_AGENT_OVERFLOW = 30;
-  private readonly PILL_AGENT_MAX_VISIBLE = 3;
+  private readonly PILL_AGENT_OVERFLOW = 0;
+  private readonly PILL_AGENT_MAX_VISIBLE = 1;
 
   private pipeSlotWidth(pipeCount: number): number {
     if (pipeCount >= 10) return 38;
