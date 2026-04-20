@@ -6180,8 +6180,21 @@ async function initTranscriberSystem(): Promise<void> {
   // surface them as glyphs in the Dynamic Island.
   agentAttentionManager = new AgentAttentionManager();
   agentAttentionManager.setToolFilter(agentHookInstaller.getStatus());
+  agentAttentionManager.setLayoutProvider({
+    listWindows: () => nativeHelper?.getWindowList() ?? Promise.resolve([]),
+    listDisplays: () =>
+      screen.getAllDisplays().map(d => ({
+        x: d.bounds.x,
+        y: d.bounds.y,
+        width: d.bounds.width,
+        height: d.bounds.height,
+      })),
+  });
   agentAttentionManager.on('change', (agents) => {
     dynamicIslandManager?.setWaitingAgents(agents);
+  });
+  agentAttentionManager.on('layout', (layout) => {
+    dynamicIslandManager?.setAgentLayout(layout);
   });
   agentAttentionManager.start();
   dynamicIslandManager.setWaitingAgents(agentAttentionManager.getWaiting());

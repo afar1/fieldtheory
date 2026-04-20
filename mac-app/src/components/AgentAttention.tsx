@@ -3,13 +3,23 @@ import {
   AGENT_GLYPHS,
   AGENT_PULSE_DURATION_MS,
   AGENT_PULSE_MIN_OPACITY,
-  type AgentTool,
 } from '../assets/agentSpinners';
 import { PillSlot } from './PillSlot';
 
+// =============================================================================
+// AgentAttention — one green breathing star whenever any Claude or Codex
+// session is waiting on the user.
+//
+// The main process still polls window positions and computes a 1x4 / 2x2
+// spatial layout (see agentLayout.ts + agentAttentionManager.ts). That
+// plumbing is intentionally kept in place; this component just doesn't render
+// it yet. To light it up, subscribe to window.dynamicIslandAPI.onAgentLayout
+// here and branch the render by layout.kind.
+// =============================================================================
+
 interface WaitingAgent {
   agentId: string;
-  tool: AgentTool;
+  tool: 'claude' | 'codex';
   pid: number;
   cwd: string;
   ttyTitle: string;
@@ -40,15 +50,15 @@ if (typeof document !== 'undefined' && !document.getElementById(KEYFRAMES_ID)) {
   document.head.appendChild(sheet);
 }
 
-const MAX_VISIBLE = 3;
-const GLYPH_SLOT_WIDTH = 22;
-const OVERFLOW_SLOT_WIDTH = 24;
+const SLOT_WIDTH = 22;
+const SLOT_GAP = 6;
 
 interface AgentAttentionProps {
   onCountChanged?: (count: number) => void;
+  onSlotSumChange?: (sum: number) => void;
 }
 
-export function AgentAttention({ onCountChanged }: AgentAttentionProps = {}) {
+export function AgentAttention({ onCountChanged, onSlotSumChange }: AgentAttentionProps = {}) {
   const [agents, setAgents] = useState<WaitingAgent[]>([]);
 
   useEffect(() => {
@@ -60,51 +70,41 @@ export function AgentAttention({ onCountChanged }: AgentAttentionProps = {}) {
     onCountChanged?.(agents.length);
   }, [agents.length, onCountChanged]);
 
-  const slots: Array<WaitingAgent | null> = Array.from(
-    { length: MAX_VISIBLE },
-    (_, i) => agents[i] ?? null
-  );
-  const overflow = Math.max(0, agents.length - MAX_VISIBLE);
+  const visible = agents.length > 0;
+  useEffect(() => {
+    onSlotSumChange?.(visible ? SLOT_WIDTH + SLOT_GAP : 0);
+  }, [visible, onSlotSumChange]);
+
+  const primary = agents[0];
+  const glyph = AGENT_GLYPHS.claude; // claude's ✶ is the canonical star shape
 
   return (
-    <>
-      {slots.map((agent, i) => {
-        const config = agent ? AGENT_GLYPHS[agent.tool] : null;
-        return (
-          <PillSlot
-            key={`agent-${i}`}
-            visible={!!agent}
-            width={GLYPH_SLOT_WIDTH}
-            marginRight={6}
-            onClick={
-              agent
-                ? () => (window as any).dynamicIslandAPI?.focusAgent?.(agent.agentId)
-                : undefined
-            }
-            title={
-              agent
-                ? `${agent.tool} waiting in ${agent.terminalApp} — ${agent.ttyTitle || agent.cwd}`
-                : undefined
-            }
-          >
-            {config && (
-              <span
-                className="agent-attention-glyph"
-                style={{ color: config.color, fontSize: config.fontSize }}
-              >
-                {config.glyph}
-              </span>
-            )}
-          </PillSlot>
-        );
-      })}
-      <PillSlot visible={overflow > 0} width={OVERFLOW_SLOT_WIDTH} marginRight={6}>
-        {overflow > 0 && (
-          <span style={{ color: '#10b981', fontSize: 10, fontWeight: 500 }}>
-            +{overflow}
-          </span>
-        )}
-      </PillSlot>
-    </>
+    <PillSlot
+      visible={visible}
+      width={SLOT_WIDTH}
+      marginRight={SLOT_GAP}
+      onClick={
+        primary
+          ? () => (window as any).dynamicIslandAPI?.focusAgent?.(primary.agentId)
+          : undefined
+      }
+      title={agentsTitle(agents)}
+    >
+      <span
+        className="agent-attention-glyph"
+        style={{ color: glyph.color, fontSize: glyph.fontSize }}
+      >
+        {glyph.glyph}
+      </span>
+    </PillSlot>
   );
+}
+
+function agentsTitle(agents: WaitingAgent[]): string | undefined {
+  if (agents.length === 0) return undefined;
+  if (agents.length === 1) {
+    const a = agents[0];
+    return `${a.tool} waiting in ${a.terminalApp} — ${a.ttyTitle || a.cwd}`;
+  }
+  return `${agents.length} agents waiting`;
 }
