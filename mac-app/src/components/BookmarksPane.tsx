@@ -1,4 +1,4 @@
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { memo, useEffect, useState, useMemo, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import BookmarksList from './BookmarksList';
 import BookmarksCanvas from './BookmarksCanvas';
@@ -24,7 +24,9 @@ interface BookmarksPaneProps {
   onToggleFullScreen?: () => void;
 }
 
-export default function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
+// memo so parent re-renders (e.g. textarea keystrokes in the librarian
+// editor) don't reconcile the bookmarks canvas while it's hidden.
+function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -292,3 +294,5 @@ export default function BookmarksPane({ isFullScreen, onToggleFullScreen }: Book
     </div>
   );
 }
+
+export default memo(BookmarksPane);

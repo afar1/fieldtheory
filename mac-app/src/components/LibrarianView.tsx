@@ -6,8 +6,10 @@
 import { useEffect, useState, useRef, useCallback, useMemo, Fragment } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ReactMarkdown from 'react-markdown';
+import remarkBreaks from 'remark-breaks';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
+import ImmersiveToggle from './ImmersiveToggle';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem, type WikiCreationController } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
@@ -78,7 +80,7 @@ export function persistLibrarianSelection(
 
 export function resolveWikiCreateFolder(
   requestedFolderName: string,
-  selectedItemType: 'wiki' | 'artifact' | 'bookmarks' | null,
+  selectedItemType: 'wiki' | 'artifact' | 'bookmarks' | 'external' | null,
   wikiSelectedRelPath: string | null
 ): string {
   if (requestedFolderName && requestedFolderName !== 'artifacts') {
@@ -106,13 +108,16 @@ interface LibrarianViewProps {
   // navigates away from it.
   autoPopArtifactPath?: string | null;
   onAutoPopArtifactSuperseded?: () => void;
+  // Sidebar collapse state is owned by ClipboardHistory so the footer
+  // toggle can drive it regardless of which view is active.
+  sidebarCollapsed: boolean;
 }
 
 function isArtifactModelSignatureText(text: string): boolean {
   return /^(Model|Signed by):\s+.+$/i.test(text.trim());
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded }: LibrarianViewProps) {
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
 
@@ -124,9 +129,18 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [loading, setLoading] = useState(true);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null); // null = loading
 
-  // Edit state
+  // Edit state. Auto-save keeps disk in sync; `saveStatus` drives the tiny
+  // inline indicator that replaced the Save button.
   const [editContent, setEditContent] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  // Populated when there's unsaved content pending — call to flush the
+  // pending debounced save synchronously (Esc, Cmd+S, switching files).
+  const flushSaveRef = useRef<(() => Promise<void>) | null>(null);
+  // Tracks what's actually on disk. activeReading.content goes stale after
+  // the first save (we intentionally don't re-fetch to preserve the
+  // textarea's native undo stack), so comparing against it would miss the
+  // "typed a char then deleted it" case.
+  const lastSavedContentRef = useRef<string | null>(null);
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
@@ -134,12 +148,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Start in fullscreen if initialFullScreen prop is true (auto-open flow)
   const [isFullScreen, setIsFullScreen] = useState(initialFullScreen ?? false);
   // Fire the IPC synchronously so the window animation starts on the click
-  // frame instead of after two React-state / useEffect hops.
-  const toggleImmersive = () => {
-    const next = !isFullScreen;
-    window.librarianAPI?.setImmersiveMode?.(next);
-    setIsFullScreen(next);
-  };
+  // frame instead of after two React-state / useEffect hops. useCallback so
+  // BookmarksPane's prop stays stable and React.memo can skip re-renders
+  // while the user is typing in the markdown editor.
+  const toggleImmersive = useCallback(() => {
+    setIsFullScreen((prev) => {
+      const next = !prev;
+      window.librarianAPI?.setImmersiveMode?.(next);
+      return next;
+    });
+  }, []);
   const [headerHovered, setHeaderHovered] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
@@ -154,12 +172,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const flatItemsRef = useRef<import('./WikiSidebar').UnifiedItem[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    return localStorage.getItem('librarian-sidebar-collapsed') === '1';
-  });
-  useEffect(() => {
-    localStorage.setItem('librarian-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
-  }, [sidebarCollapsed]);
+  const readerPaneRef = useRef<HTMLDivElement | null>(null);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
@@ -189,20 +202,52 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
     return BOOKMARKS_ITEM_ID;
   });
-  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | null>(() => restoredSelection?.type ?? null);
+  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
   const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => restoredSelection?.type === 'bookmarks');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
+  // External markdown files opened via macOS file-association (`open-file`)
+  // whose canonical path falls outside the wiki root. Stored in Reading shape
+  // so activeReading can unify over it; save branches on selectedItemType.
+  const [externalOpenFile, setExternalOpenFile] = useState<Reading | null>(null);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
     setSelectedItemId(`artifact:${artifactPath}`);
     setSelectedItemType('artifact');
     setSelectedPath(artifactPath);
     setWikiSelectedRelPath(null);
+    setExternalOpenFile(null);
   }, []);
+
+  // Load an external markdown file (outside wiki root) into the editor.
+  // Deduped against the current external selection so re-opening the same
+  // file is a no-op — preserves the native textarea undo stack.
+  const selectExternalFile = useCallback(async (absPath: string): Promise<void> => {
+    if (externalOpenFile?.path === absPath && selectedItemType === 'external') {
+      return;
+    }
+    await flushSaveRef.current?.();
+    const file = await window.externalAPI?.open(absPath);
+    if (!file) return;
+    setExternalOpenFile({
+      path: file.path,
+      title: file.name.replace(/\.(md|markdown|mdx)$/i, ''),
+      content: file.content,
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: file.mtime,
+      mtime: file.mtime,
+    });
+    setSelectedItemId(`external:${file.path}`);
+    setSelectedItemType('external');
+    setSelectedPath(null);
+    setWikiSelectedRelPath(null);
+    setContentMode('rendered');
+  }, [externalOpenFile?.path, selectedItemType]);
 
   const openWikiPage = useCallback((relPath: string) => {
     const normalized = relPath
@@ -214,6 +259,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     setSelectedItemType('wiki');
     setWikiSelectedRelPath(normalized);
     setSelectedPath(null);
+    setExternalOpenFile(null);
   }, []);
 
   const openWikiHref = useCallback((href: string) => {
@@ -271,6 +317,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
     if (selectedItemType === 'bookmarks') {
       persistLibrarianSelection(localStorage, { type: 'bookmarks' });
+      return;
+    }
+    if (selectedItemType === 'external') {
+      // External files are transient — don't overwrite the stored wiki/
+      // artifact/bookmarks selection, so closing and reopening the library
+      // restores the durable view.
       return;
     }
     if (selectedPath) {
@@ -388,7 +440,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   };
 
   
-  const activeReading: Reading | null = selectedItemType === 'wiki' ? wikiSelectedPage : selectedReading;
+  const activeReading: Reading | null =
+    selectedItemType === 'wiki' ? wikiSelectedPage :
+    selectedItemType === 'external' ? externalOpenFile :
+    selectedReading;
 
   const wikiDisplay = useMemo(() => {
     if (selectedItemType !== 'wiki' || !activeReading) return null;
@@ -397,57 +452,77 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   const displayContent = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
 
-  // isDirty: in markdown mode, check if editContent differs from source
-  const isDirty = contentMode === 'markdown' && editContent !== (activeReading?.content ?? '');
-
-  // Enter markdown edit mode
+  // Enter/exit edit mode are just view-mode flips now that auto-save handles
+  // persistence — no dirty tracking, no discard prompts. The existing effect
+  // below seeds editContent from activeReading when entering markdown mode.
   const enterEditMode = useCallback(() => {
-    if (activeReading) {
-      setEditContent(activeReading.content);
-      setContentMode('markdown');
-    }
-  }, [activeReading]);
-
-  // Exit edit mode (switch back to rendered)
-  const exitEditMode = useCallback(() => {
-    setContentMode('rendered');
-    setEditContent('');
+    setContentMode('markdown');
   }, []);
 
-  // Save changes
-  const saveChanges = useCallback(async () => {
-    if (!activeReading || !isDirty) return;
+  const exitEditMode = useCallback(async () => {
+    await flushSaveRef.current?.();
+    setContentMode('rendered');
+  }, []);
 
-    setIsSaving(true);
-    try {
-      let success = false;
-      if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
-        success = (await window.wikiAPI?.save(wikiSelectedRelPath, editContent)) ?? false;
-        if (success) {
-          const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
-          if (page) {
-            setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
-          }
+  // Debounced auto-save. Fires ~400ms after the last keystroke and doesn't
+  // round-trip the saved content back into React state, so the textarea's
+  // native undo stack stays intact for Cmd+Z within the session.
+  useEffect(() => {
+    // Nothing pending unless/until a matching save is scheduled below.
+    flushSaveRef.current = null;
+    if (contentMode !== 'markdown' || !activeReading) return;
+    // Compare against what's actually on disk, not activeReading.content —
+    // the latter is frozen at load time. Otherwise "type a char, delete it"
+    // would leave the typed char persisted.
+    if (editContent === lastSavedContentRef.current) return;
+    // Capture target ids so a mid-debounce file switch still writes pending
+    // content to the correct path.
+    const targetType = selectedItemType;
+    const targetWikiPath = wikiSelectedRelPath;
+    const targetReadingPath = activeReading.path;
+    const targetContent = editContent;
+    let done = false;
+    const doSave = async () => {
+      if (done) return;
+      done = true;
+      setSaveStatus('saving');
+      try {
+        if (targetType === 'wiki' && targetWikiPath) {
+          await window.wikiAPI?.save(targetWikiPath, targetContent);
+          // Update activeReading so the rendered view reflects the fresh
+          // content as soon as the user clicks away. The sync effect below
+          // is guarded by path so this won't clobber editContent.
+          setWikiSelectedPage((prev) => (prev ? { ...prev, content: targetContent } : prev));
+        } else if (targetType === 'external' && targetReadingPath) {
+          await window.externalAPI?.save(targetReadingPath, targetContent);
+          setExternalOpenFile((prev) => (prev ? { ...prev, content: targetContent } : prev));
+        } else if (targetReadingPath) {
+          await window.librarianAPI?.saveReading(targetReadingPath, targetContent);
+          setSelectedReading((prev) => (prev ? { ...prev, content: targetContent } : prev));
         }
-      } else {
-        success = (await window.librarianAPI?.saveReading(activeReading.path, editContent)) ?? false;
-        if (success && selectedReading) {
-          const updated = await window.librarianAPI?.getReading(selectedReading.path);
-          if (updated) {
-            setSelectedReading(updated);
-            if (shareStatus?.shared) {
-              await window.librarianAPI?.updateSharedReading(selectedReading.path, editContent, updated.title);
-            }
-          }
-        }
+        lastSavedContentRef.current = targetContent;
+        setSaveStatus('saved');
+      } catch {
+        setSaveStatus('idle');
+      } finally {
+        // Only clear the ref if it still points at this save — a newer
+        // effect run may have replaced it while we were awaiting disk.
+        if (flushSaveRef.current === doSave) flushSaveRef.current = null;
       }
-      if (success) {
-        setEditContent(editContent);
-      }
-    } finally {
-      setIsSaving(false);
-    }
-  }, [activeReading, editContent, isDirty, selectedItemType, wikiSelectedRelPath, selectedReading, shareStatus?.shared]);
+    };
+    flushSaveRef.current = doSave;
+    const timer = setTimeout(() => { void doSave(); }, 400);
+    return () => clearTimeout(timer);
+  }, [editContent, contentMode, activeReading, selectedItemType, wikiSelectedRelPath]);
+
+  // Fade the "Saved" chip back to idle after a moment so the toolbar settles.
+  // 2.5s is long enough to notice when clicking away to another file without
+  // being obtrusive.
+  useEffect(() => {
+    if (saveStatus !== 'saved') return;
+    const t = setTimeout(() => setSaveStatus('idle'), 2500);
+    return () => clearTimeout(t);
+  }, [saveStatus]);
 
   // Create new wiki file. Name comes from the sidebar's inline input because
   // Electron silently disables window.prompt().
@@ -467,6 +542,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     await window.wikiAPI?.createDir(dirName.trim());
   }, []);
 
+  // Scratchpad default create — used by the sidebar "+" button and Cmd+N
+  // from anywhere. Same backend as the Ctrl+Opt+Cmd+Space hotkey.
+  const handleCreateScratchpadDefault = useCallback(async () => {
+    const page = await window.wikiAPI?.createScratchpadDefault();
+    if (page) {
+      openWikiPage(page.relPath);
+      setContentMode('markdown');
+    }
+  }, [openWikiPage]);
+
   // Unified item selection handler
   // True while the currently-selected item is the artifact the librarian
   // just auto-popped. Escape should close the window in that case.
@@ -475,12 +560,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'artifact' &&
     selectedPath === autoPopArtifactPath;
 
-  const handleSelectItem = useCallback((item: UnifiedItem) => {
-    if (isDirty) {
-      const confirmed = window.confirm('You have unsaved changes. Discard them?');
-      if (!confirmed) return;
-      exitEditMode();
-    }
+  const handleSelectItem = useCallback(async (item: UnifiedItem) => {
+    // Flush any pending auto-save against the current file before we
+    // redirect editContent to the new one.
+    await flushSaveRef.current?.();
     if (item.type === 'wiki' && item.relPath) {
       openWikiPage(item.relPath);
     } else if (item.type === 'artifact') {
@@ -490,6 +573,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       setSelectedItemType('bookmarks');
       setSelectedPath(null);
       setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
     }
     setContentMode('rendered');
     // Any navigation other than reselecting the same auto-popped artifact
@@ -498,13 +582,23 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [isDirty, exitEditMode, openWikiPage, selectArtifactPath, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+  }, [openWikiPage, selectArtifactPath, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
 
-  // Sync editContent when entering markdown mode
+  // Seed editContent when the user enters markdown mode on a file, or when
+  // they switch to a different file while editing. Guarded by path so that
+  // activeReading updates caused by our own save don't clobber in-progress
+  // edits (setWikiSelectedPage after a write produces a new object but the
+  // path is unchanged).
+  const lastSeededPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (contentMode === 'markdown' && activeReading) {
-      setEditContent(activeReading.content);
+    if (contentMode !== 'markdown' || !activeReading) {
+      lastSeededPathRef.current = null;
+      return;
     }
+    if (lastSeededPathRef.current === activeReading.path) return;
+    setEditContent(activeReading.content);
+    lastSavedContentRef.current = activeReading.content;
+    lastSeededPathRef.current = activeReading.path;
   }, [contentMode, activeReading]);
 
   // Handle share/unshare
@@ -740,21 +834,17 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       if (e.key === 'e' && e.metaKey && !e.shiftKey) {
         e.preventDefault();
         if (contentMode === 'markdown') {
-          if (isDirty) {
-            const confirmed = window.confirm('You have unsaved changes. Discard them?');
-            if (!confirmed) return;
-          }
-          exitEditMode();
+          void exitEditMode();
         } else if (activeReading) {
           enterEditMode();
         }
         return;
       }
 
-      // Cmd+S - save while in markdown mode
+      // Cmd+S - flush the pending auto-save and drop back to rendered.
       if (e.key === 's' && e.metaKey && contentMode === 'markdown') {
         e.preventDefault();
-        saveChanges();
+        void exitEditMode();
         return;
       }
 
@@ -814,34 +904,21 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Toggle immersive/fullscreen mode with 'f' (not in markdown mode)
-      if (e.key === 'f' && !e.metaKey && !e.ctrlKey && contentMode !== 'markdown') {
-        e.preventDefault();
-        setIsFullScreen((prev) => !prev);
-        return;
-      }
-
-      // Cmd+W - close window (same as red close button)
+      // Cmd+W - close window (same as red close button). Flush pending save
+      // first so an in-flight debounce doesn't lose the last keystrokes.
       if (e.key === 'w' && e.metaKey) {
         e.preventDefault();
-        if (contentMode === 'markdown' && isDirty) {
-          const confirmed = window.confirm('You have unsaved changes. Discard them?');
-          if (!confirmed) return;
-        }
-        window.clipboardAPI?.closeWindow();
+        const pending = flushSaveRef.current?.() ?? Promise.resolve();
+        void pending.then(() => window.clipboardAPI?.closeWindow());
         return;
       }
 
       // Escape hierarchy: edit-mode → auto-popped artifact → immersive-exit → close window.
-      // The auto-pop exception preserves the "dismiss window to go back to what
-      // you were doing" feel when the librarian interrupts you with a new artifact.
+      // In markdown mode, Esc just drops back to rendered without closing the
+      // window — auto-save already persisted the content.
       if (e.key === 'Escape') {
         if (contentMode === 'markdown') {
-          if (isDirty) {
-            const confirmed = window.confirm('You have unsaved changes. Discard them?');
-            if (!confirmed) return;
-          }
-          exitEditMode();
+          void exitEditMode();
         } else if (isFullScreen && isOnAutoPopArtifact) {
           window.clipboardAPI?.closeWindow();
         } else if (isFullScreen) {
@@ -881,7 +958,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedPath, isFullScreen, contentMode, isDirty, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact]);
+  }, [readings, selectedPath, isFullScreen, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact]);
 
   // Focus container on mount
   useEffect(() => {
@@ -904,6 +981,24 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(relPath);
     });
 
+    return () => unsubscribe?.();
+  }, [openWikiPage]);
+
+  // macOS `open-file` for paths outside the wiki root.
+  useEffect(() => {
+    const unsubscribe = window.externalAPI?.onOpenExternal((absPath) => {
+      void selectExternalFile(absPath);
+    });
+    return () => unsubscribe?.();
+  }, [selectExternalFile]);
+
+  // Hotkey-driven scratchpad flow: main creates the file, we land on it in
+  // edit mode so the user can start typing immediately.
+  useEffect(() => {
+    const unsubscribe = window.wikiAPI?.onOpenScratchpad((relPath) => {
+      openWikiPage(relPath);
+      setContentMode('markdown');
+    });
     return () => unsubscribe?.();
   }, [openWikiPage]);
 
@@ -1171,6 +1266,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           onSelectItem={handleSelectItem}
           onCreateFile={handleCreateFile}
           onCreateDir={handleCreateDir}
+          onCreateScratchpadDefault={handleCreateScratchpadDefault}
           flatItemsRef={flatItemsRef}
           searchQuery={searchQuery}
           onSearchQueryChange={setSearchQuery}
@@ -1178,46 +1274,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           creationControllerRef={wikiCreationRef}
         />
       </div>
-      {/* Sidebar toggle — floats at the sidebar/reader boundary. */}
-      {!isFullScreen && (
-        <button
-          onClick={() => setSidebarCollapsed((v) => !v)}
-          title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
-          style={{
-            position: 'absolute',
-            top: '12px',
-            left: sidebarCollapsed ? '8px' : `${sidebarWidth - 12}px`,
-            zIndex: 3,
-            width: '22px',
-            height: '22px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            padding: 0,
-            background: theme.bg,
-            color: theme.textSecondary,
-            border: `1px solid ${theme.border}`,
-            borderRadius: '4px',
-            cursor: 'pointer',
-            transition: 'left 0.18s ease, background 0.15s ease',
-          }}
-        >
-          <svg
-            width="12"
-            height="12"
-            viewBox="0 0 16 16"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.75"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            style={{ transform: sidebarCollapsed ? 'rotate(180deg)' : 'none' }}
-          >
-            <path d="M10 4L6 8l4 4" />
-          </svg>
-        </button>
-      )}
       {/* Resize handle - hidden in full-screen mode but kept in DOM */}
       <div
         onMouseDown={handleResizeMouseDown}
@@ -1246,6 +1302,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
       {/* Reader pane */}
       <div
+        ref={readerPaneRef}
         style={{
           flex: 1,
           display: 'flex',
@@ -1349,22 +1406,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               <ContentToolbar
                 filePath={activeReading?.path || undefined}
                 isFullScreen={isFullScreen}
-                onToggleFullScreen={toggleImmersive}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={true}
                 isEditing={contentMode === 'markdown'}
-                isDirty={isDirty}
-                isSaving={isSaving}
-                onEdit={enterEditMode}
-                onSave={saveChanges}
-                onCancel={() => {
-                  if (isDirty) {
-                    const confirmed = window.confirm('Discard changes?');
-                    if (!confirmed) return;
-                  }
-                  exitEditMode();
-                }}
                 onDelete={handleDelete}
                 showDelete={true}
                 onShowInFolder={() => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path)}
@@ -1437,7 +1482,34 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               {/* Spacer */}
               <div style={{ flex: 1 }} />
 
-              {/* Content mode toggle - Rendered / Markdown */}
+              {/* Auto-save status — replaces the old Save button. Shows
+                  briefly while a write is in flight and dwells after one
+                  lands so click-away feedback is actually noticeable. */}
+              {saveStatus !== 'idle' && (
+                <span
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    color: saveStatus === 'saved' ? theme.accent : theme.textSecondary,
+                    opacity: isFullScreen && !headerHovered ? 0 : 1,
+                    transition: 'opacity 0.2s ease, color 0.2s ease',
+                    marginRight: '8px',
+                    userSelect: 'none',
+                  }}
+                >
+                  {saveStatus === 'saved' && (
+                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <polyline points="3 8 7 12 13 4" />
+                    </svg>
+                  )}
+                  {saveStatus === 'saving' ? 'Saving…' : 'Saved'}
+                </span>
+              )}
+
+              {/* Content mode toggle - rendered view / raw markdown */}
               <div
                 style={{
                   display: 'flex',
@@ -1451,10 +1523,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               >
                 <button
                   onClick={() => setContentMode('rendered')}
+                  title="Rendered"
+                  aria-label="Rendered"
                   style={{
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 500,
+                    width: '26px',
+                    height: '22px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
                     color: contentMode === 'rendered' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
                     backgroundColor: contentMode === 'rendered'
                       ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
@@ -1465,14 +1542,21 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     transition: 'all 0.15s ease',
                   }}
                 >
-                  Rendered
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M2 4h12M2 8h12M2 12h8" />
+                  </svg>
                 </button>
                 <button
                   onClick={() => setContentMode('markdown')}
+                  title="Markdown source"
+                  aria-label="Markdown source"
                   style={{
-                    padding: '4px 10px',
-                    fontSize: '11px',
-                    fontWeight: 500,
+                    width: '26px',
+                    height: '22px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
                     color: contentMode === 'markdown' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
                     backgroundColor: contentMode === 'markdown'
                       ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
@@ -1483,9 +1567,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     transition: 'all 0.15s ease',
                   }}
                 >
-                  Markdown
+                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="5 4 2 8 5 12" />
+                    <polyline points="11 4 14 8 11 12" />
+                  </svg>
                 </button>
               </div>
+
+              {/* Immersive/fullscreen toggle sits to the right of the mode
+                  toggle so the editor controls stay grouped together. */}
+              <ImmersiveToggle isFullScreen={isFullScreen} onToggle={toggleImmersive} />
             </div>
           </div>
         )}
@@ -1517,6 +1608,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               <textarea
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
+                onBlur={(e) => {
+                  // Clicking away flips back to rendered. Ignore focus moves
+                  // that stay inside the reader pane (toolbar buttons, mode
+                  // toggle) — those have their own handlers and would cause
+                  // mode bouncing if we flipped here.
+                  const next = e.relatedTarget as Node | null;
+                  if (next && readerPaneRef.current?.contains(next)) return;
+                  void exitEditMode();
+                }}
                 style={{
                   flex: 1,
                   minHeight: '400px',
@@ -1589,18 +1689,32 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 )}
               </div>
             )}
-            {/* Content - markdown renders the title */}
+            {/* Content - markdown renders the title. Clicking anywhere that
+                isn't a link / selection enters edit mode so markdown pages
+                feel like editable docs instead of read-only previews. */}
             <div
               className="librarian-content"
+              onClick={(e) => {
+                if (!activeReading) return;
+                const target = e.target as HTMLElement;
+                if (target.closest('a, button, input, textarea, select, img, code')) return;
+                if ((window.getSelection()?.toString() ?? '').trim() !== '') return;
+                enterEditMode();
+              }}
               style={{
                 fontSize: textSizes[textSize].base,
                 lineHeight: 1.5,
                 color: theme.text,
                 fontFamily: fonts.serif,
                 userSelect: 'text',
+                cursor: activeReading ? 'text' : 'default',
               }}
             >
               <ReactMarkdown
+                // remarkBreaks turns single newlines into <br> so the
+                // rendered view matches what the user typed, iA-Writer style
+                // — standard CommonMark would collapse them into spaces.
+                remarkPlugins={[remarkBreaks]}
                 components={{
                   h1: ({ children }) => (
                     <h1

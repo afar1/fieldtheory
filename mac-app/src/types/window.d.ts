@@ -1535,9 +1535,26 @@ declare global {
     getPage: (relPath: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string) => Promise<boolean>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
+    createScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
+    onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
+  }
+
+  // External markdown files opened via macOS `open-file` for paths that fall
+  // outside the wiki root. Read/write happens in place — no copy, no watcher.
+  interface ExternalMarkdownFile {
+    path: string;    // canonical absolute path
+    name: string;    // basename (e.g. "README.md")
+    content: string;
+    mtime: number;
+  }
+
+  interface ExternalAPI {
+    open: (absPath: string) => Promise<ExternalMarkdownFile | null>;
+    save: (absPath: string, content: string) => Promise<boolean>;
+    onOpenExternal: (callback: (absPath: string) => void) => () => void;
   }
 
   interface BookmarkImage {
@@ -1917,6 +1934,7 @@ declare global {
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
     wikiAPI?: WikiAPI;
+    externalAPI?: ExternalAPI;
     bookmarksAPI?: BookmarksAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
