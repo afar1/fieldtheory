@@ -199,6 +199,7 @@ export class AgentHookInstaller {
   private readonly claudeSettingsPath: string;
   private readonly codexHooksPath: string;
   private readonly hooksDir: string;
+  private readonly stateDir: string;
 
   constructor(options?: { home?: string }) {
     const home = options?.home ?? os.homedir();
@@ -207,6 +208,9 @@ export class AgentHookInstaller {
     this.hooksDir = options?.home
       ? path.join(options.home, '.fieldtheory', 'agents', 'hooks')
       : HOOKS_DIR;
+    this.stateDir = options?.home
+      ? path.join(options.home, '.fieldtheory', 'agents', 'state')
+      : STATE_DIR;
   }
 
   install(targets: InstallTargets): InstallResult {
@@ -279,7 +283,7 @@ export class AgentHookInstaller {
 
   writeScripts(): void {
     fs.mkdirSync(this.hooksDir, { recursive: true });
-    fs.mkdirSync(STATE_DIR, { recursive: true });
+    fs.mkdirSync(this.stateDir, { recursive: true });
     const scripts: Array<[string, string]> = [
       ['claude-stop.py', generateAgentStopScript('claude')],
       ['claude-clear.py', generateAgentClearScript('claude')],
@@ -307,13 +311,25 @@ export class AgentHookInstaller {
 
   private unregisterForTool(tool: AgentTool): void {
     const configPath = tool === 'claude' ? this.claudeSettingsPath : this.codexHooksPath;
-    if (!fs.existsSync(configPath)) return;
+    if (fs.existsSync(configPath)) {
+      const config = this.readConfig(configPath);
+      removeHook(config, 'Stop', `${tool}-stop.py`);
+      removeHook(config, 'UserPromptSubmit', `${tool}-clear.py`);
+      removeHook(config, 'SessionEnd', `${tool}-clear.py`);
+      this.writeConfig(configPath, config);
+    }
+    this.clearToolState(tool);
+  }
 
-    const config = this.readConfig(configPath);
-    removeHook(config, 'Stop', `${tool}-stop.py`);
-    removeHook(config, 'UserPromptSubmit', `${tool}-clear.py`);
-    removeHook(config, 'SessionEnd', `${tool}-clear.py`);
-    this.writeConfig(configPath, config);
+  // Delete any stale per-session snapshots so dots vanish the moment the
+  // hook is disabled, not on next resume/SessionEnd.
+  private clearToolState(tool: AgentTool): void {
+    if (!fs.existsSync(this.stateDir)) return;
+    for (const f of fs.readdirSync(this.stateDir)) {
+      if (f.startsWith(`${tool}-`) && f.endsWith('.json')) {
+        fs.unlinkSync(path.join(this.stateDir, f));
+      }
+    }
   }
 
   private isToolInstalled(tool: AgentTool): boolean {
