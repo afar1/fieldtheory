@@ -56,6 +56,7 @@
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "react-window": "^2.2.7",
+    "remark-breaks": "^4.0.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {
@@ -83,6 +84,29 @@
     "productName": "Field Theory",
     "beforeBuild": "scripts/electron-builder-before-build.js",
     "afterSign": "scripts/notarize.js",
+    "fileAssociations": [
+      {
+        "ext": "md",
+        "name": "Markdown",
+        "description": "Markdown document",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": "markdown",
+        "name": "Markdown",
+        "description": "Markdown document",
+        "role": "Editor",
+        "rank": "Alternate"
+      },
+      {
+        "ext": "mdx",
+        "name": "MDX",
+        "description": "MDX document",
+        "role": "Editor",
+        "rank": "Alternate"
+      }
+    ],
     "publish": {
       "provider": "github",
       "owner": "afar1",

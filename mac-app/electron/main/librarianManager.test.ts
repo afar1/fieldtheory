@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildEffectiveArtifactRuleContent,
+  defaultScratchpadName,
+  defaultScratchpadNameWithTime,
   extractArtifactModelSignature,
   hasArtifactStructureInstruction,
   hasArtifactTitleInstruction,
@@ -9,6 +11,35 @@ import {
   isHiddenWikiFolderName,
   parseMarkdownHeader,
 } from './librarianManager';
+
+describe('defaultScratchpadName', () => {
+  it('formats as "<Day> <Mon> <Nth>" with correct ordinal suffix', () => {
+    // Monday, April 20th, 2026 — "th" suffix (regular case)
+    expect(defaultScratchpadName(new Date(2026, 3, 20))).toBe('Monday Apr 20th');
+    // 1st / 2nd / 3rd special cases
+    expect(defaultScratchpadName(new Date(2026, 0, 1))).toBe('Thursday Jan 1st');
+    expect(defaultScratchpadName(new Date(2026, 0, 2))).toBe('Friday Jan 2nd');
+    expect(defaultScratchpadName(new Date(2026, 0, 3))).toBe('Saturday Jan 3rd');
+    // 11th / 12th / 13th stay "th" — don't incorrectly map to st/nd/rd.
+    expect(defaultScratchpadName(new Date(2026, 0, 11))).toBe('Sunday Jan 11th');
+    expect(defaultScratchpadName(new Date(2026, 0, 12))).toBe('Monday Jan 12th');
+    expect(defaultScratchpadName(new Date(2026, 0, 13))).toBe('Tuesday Jan 13th');
+    // 21st, 22nd, 23rd go back to st/nd/rd.
+    expect(defaultScratchpadName(new Date(2026, 0, 21))).toBe('Wednesday Jan 21st');
+    expect(defaultScratchpadName(new Date(2026, 0, 22))).toBe('Thursday Jan 22nd');
+    expect(defaultScratchpadName(new Date(2026, 0, 23))).toBe('Friday Jan 23rd');
+  });
+});
+
+describe('defaultScratchpadNameWithTime', () => {
+  it('appends 12-hour clock time as a collision fallback', () => {
+    expect(defaultScratchpadNameWithTime(new Date(2026, 3, 20, 9, 5))).toBe('Monday Apr 20th at 9:05am');
+    expect(defaultScratchpadNameWithTime(new Date(2026, 3, 20, 13, 45))).toBe('Monday Apr 20th at 1:45pm');
+    // Noon and midnight edge cases — both render as 12.
+    expect(defaultScratchpadNameWithTime(new Date(2026, 3, 20, 0, 0))).toBe('Monday Apr 20th at 12:00am');
+    expect(defaultScratchpadNameWithTime(new Date(2026, 3, 20, 12, 0))).toBe('Monday Apr 20th at 12:00pm');
+  });
+});
 
 describe('parseMarkdownHeader', () => {
   it('extracts H1 title', () => {

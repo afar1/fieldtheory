@@ -297,7 +297,9 @@ export default function ContentToolbar({
         </button>
       )}
 
-      {/* Edit controls */}
+      {/* Edit controls. Save/Cancel only render when their callbacks are
+          provided — LibrarianView dropped them in favor of auto-save, but
+          CommandsView still uses the manual save model. */}
       {isEditing ? (
         <>
           {isDirty && (
@@ -312,44 +314,48 @@ export default function ContentToolbar({
               title="Unsaved changes"
             />
           )}
-          <button
-            onClick={onSave}
-            disabled={!isDirty || isSaving}
-            style={{
-              padding: '3px 8px',
-              fontSize: '11px',
-              color: isDirty ? '#fff' : theme.textSecondary,
-              backgroundColor: isDirty ? theme.accent : 'transparent',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: isDirty ? 'pointer' : 'default',
-              opacity: isSaving ? 0.6 : 1,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '24px',
-            }}
-          >
-            {isSaving ? 'Saving...' : 'Save'}
-          </button>
-          <button
-            onClick={onCancel}
-            style={{
-              padding: '3px 8px',
-              fontSize: '11px',
-              color: theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '24px',
-            }}
-          >
-            Cancel
-          </button>
+          {onSave && (
+            <button
+              onClick={onSave}
+              disabled={!isDirty || isSaving}
+              style={{
+                padding: '3px 8px',
+                fontSize: '11px',
+                color: isDirty ? '#fff' : theme.textSecondary,
+                backgroundColor: isDirty ? theme.accent : 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: isDirty ? 'pointer' : 'default',
+                opacity: isSaving ? 0.6 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+            >
+              {isSaving ? 'Saving...' : 'Save'}
+            </button>
+          )}
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              style={{
+                padding: '3px 8px',
+                fontSize: '11px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+            >
+              Cancel
+            </button>
+          )}
         </>
       ) : onEdit && (
         <button

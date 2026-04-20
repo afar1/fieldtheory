@@ -46,6 +46,7 @@ import {
   ClipboardQueryOptions,
   RunningApp,
   TAB_LABELS,
+  nextTopNavViewMode,
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
@@ -279,6 +280,14 @@ export default function ClipboardHistory() {
   const [librarianImmersive, setLibrarianImmersive] = useState(
     () => localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
   );
+  // Sidebar collapse state lives here so the footer toggle can drive it
+  // regardless of which view is currently active.
+  const [librarianSidebarCollapsed, setLibrarianSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem('librarian-sidebar-collapsed') === '1'
+  );
+  useEffect(() => {
+    localStorage.setItem('librarian-sidebar-collapsed', librarianSidebarCollapsed ? '1' : '0');
+  }, [librarianSidebarCollapsed]);
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -1685,6 +1694,16 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
+  // Hotkey-driven scratchpad create → jump straight into Library so
+  // LibrarianView's own onOpenScratchpad listener can open the new page.
+  useEffect(() => {
+    const unsubscribe = window.wikiAPI?.onOpenScratchpad(() => {
+      setShowSettings(false);
+      setViewMode('librarian');
+    });
+    return () => unsubscribe?.();
+  }, []);
+
   // Poll for pending readings and handle immersive librarian handoff.
   useEffect(() => {
     if (!isWindowVisible) return;
@@ -2052,13 +2071,10 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else {
-          // Tab key: toggle between Fields and Library when not editing a control.
+          // Tab / Shift+Tab carousels through the left-group top-nav tabs.
           setShowSettings(false);
-          setViewMode((prev) => {
-            if (prev === 'clipboard' && librarianEnabled) return 'librarian';
-            if (prev === 'librarian') return 'clipboard';
-            return 'clipboard';
-          });
+          const delta = hasShift ? -1 : 1;
+          setViewMode((prev) => nextTopNavViewMode(prev, delta, librarianEnabled));
         }
         return;
       }
@@ -2752,13 +2768,10 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else {
-          // Tab key: toggle between Fields and Library when not editing a control.
+          // Tab / Shift+Tab carousels through the left-group top-nav tabs.
           setShowSettings(false);
-          setViewMode((prev) => {
-            if (prev === 'clipboard' && librarianEnabled) return 'librarian';
-            if (prev === 'librarian') return 'clipboard';
-            return 'clipboard';
-          });
+          const delta = hasShift ? -1 : 1;
+          setViewMode((prev) => nextTopNavViewMode(prev, delta, librarianEnabled));
         }
         return;
       }
@@ -3503,24 +3516,24 @@ export default function ClipboardHistory() {
               }}
               tabIndex={0}
               style={{
-                padding: '5px 6px',
-                fontSize: '9px',
-                fontWeight: 500,
+                padding: '6px 8px',
+                fontSize: '11px',
+                fontWeight: 400,
                 backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
                 color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
                 border: 'none',
-                borderRadius: '3px',
+                borderRadius: '4px',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
                 outline: 'none',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '3px',
+                gap: '4px',
                 position: 'relative',
               }}
               onMouseEnter={(e) => {
                 if (viewMode !== 'librarian' || showSettings) {
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
                 }
               }}
               onMouseLeave={(e) => {
@@ -3545,6 +3558,44 @@ export default function ClipboardHistory() {
               )}
             </button>
           )}
+
+          {/* Commands button — sits alongside Fields / Library in the left
+              group. Matches their typography so the three read as peers. */}
+          <button
+            onClick={() => {
+              setViewMode('commands');
+              setShowSettings(false);
+            }}
+            tabIndex={0}
+            style={{
+              padding: '6px 8px',
+              fontSize: '11px',
+              fontWeight: 400,
+              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Portable commands"
+          >
+            Commands
+          </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {actionFeedback && (
@@ -3627,47 +3678,6 @@ export default function ClipboardHistory() {
               )}
             </div>
           )}
-
-          {/* Commands button */}
-          <button
-            onClick={() => {
-              setViewMode('commands');
-              setShowSettings(false);
-            }}
-            tabIndex={0}
-            style={{
-              padding: '5px 6px',
-              fontSize: '9px',
-              fontWeight: 500,
-              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '3px',
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '3px',
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Portable commands"
-          >
-            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
-            </svg>
-            Commands
-          </button>
 
           {/* Draw button — this button only renders when viewMode !== 'sketch'
               (outer guard), so no active-state styling is needed. */}
@@ -3993,6 +4003,7 @@ export default function ClipboardHistory() {
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
           autoPopArtifactPath={autoPopArtifactPath}
           onAutoPopArtifactSuperseded={() => setAutoPopArtifactPath(null)}
+          sidebarCollapsed={librarianSidebarCollapsed}
         />
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
@@ -4051,13 +4062,7 @@ export default function ClipboardHistory() {
           </div>
         )
       ) : viewMode === 'commands' ? (
-        <CommandsView
-          onSwitchToClipboard={() => setViewMode('clipboard')}
-          onSwitchToSettings={() => {
-            setSettingsSection('commands');
-            setShowSettings(true);
-          }}
-        />
+        <CommandsView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
           <SketchView
@@ -6065,7 +6070,7 @@ export default function ClipboardHistory() {
           transition: 'height 0.3s ease, padding 0.3s ease',
         }}
       >
-        {/* Left side: Plan info (quotas or stats) */}
+        {/* Left side: sidebar toggle + plan info (quotas or stats) */}
         <div
           style={{
             display: 'flex',
@@ -6077,6 +6082,57 @@ export default function ClipboardHistory() {
             flex: 1,
           }}
         >
+          {/* Sidebar collapse toggle — only actionable in Library view
+              (non-immersive). In other views it stays visible but
+              disabled so the footer layout doesn't jump. */}
+          {(() => {
+            const collapseEnabled = viewMode === 'librarian' && !librarianImmersive && !showSettings;
+            return (
+              <button
+                onClick={() => setLibrarianSidebarCollapsed((v) => !v)}
+                disabled={!collapseEnabled}
+                title={collapseEnabled ? (librarianSidebarCollapsed ? 'Show Library sidebar' : 'Hide Library sidebar') : 'Library sidebar toggle'}
+                aria-label="Toggle Library sidebar"
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                  background: 'transparent',
+                  color: theme.textSecondary,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  cursor: collapseEnabled ? 'pointer' : 'default',
+                  opacity: collapseEnabled ? 1 : 0.5,
+                  transition: 'background 0.15s ease, opacity 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (!collapseEnabled) return;
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+              >
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    transform: collapseEnabled && librarianSidebarCollapsed ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 0.15s ease',
+                  }}
+                >
+                  <path d="M10 4L6 8l4 4" />
+                </svg>
+              </button>
+            );
+          })()}
           {/* Plan info - always show for logged in users */}
           {authSession && cachedTier === 'pro' ? (
                 // Pro Plan: show cycling stats on click

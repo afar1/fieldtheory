@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
+import { memo, useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 type SortMode = 'alpha' | 'time';
@@ -34,6 +34,9 @@ interface WikiSidebarProps {
   selectedId: string | null;
   onCreateFile: (folderName: string, fileName: string) => void | Promise<void>;
   onCreateDir: (dirName: string) => void | Promise<void>;
+  // Scratchpad's "+" creates an entry titled with the current date (e.g.
+  // "Monday Apr 20th") so the user doesn't have to name quick captures.
+  onCreateScratchpadDefault?: () => void | Promise<void>;
   flatItemsRef?: MutableRefObject<UnifiedItem[]>;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
@@ -102,11 +105,14 @@ export function ensureScratchpadPinned(folders: UnifiedFolder[]): UnifiedFolder[
   ];
 }
 
-export default function WikiSidebar({
+// memo so textarea keystrokes in the librarian editor don't re-render the
+// entire sidebar tree on every character.
+function WikiSidebar({
   onSelectItem,
   selectedId,
   onCreateFile,
   onCreateDir,
+  onCreateScratchpadDefault,
   flatItemsRef,
   searchQuery,
   onSearchQueryChange,
@@ -188,6 +194,12 @@ export default function WikiSidebar({
 
   const beginCreateFile = useCallback((folder?: string) => {
     const target = folder ?? SCRATCHPAD_FOLDER_NAME;
+    // Scratchpad has a default-name flow (today's date) — skip the naming
+    // input so quick captures stay one click / shortcut away.
+    if (target === SCRATCHPAD_FOLDER_NAME && onCreateScratchpadDefault) {
+      void onCreateScratchpadDefault();
+      return;
+    }
     setExpandedFolders((prev) => {
       if (prev.has(target)) return prev;
       const next = new Set(prev);
@@ -196,7 +208,7 @@ export default function WikiSidebar({
     });
     setCreating({ kind: 'file', folder: target });
     setNewName('');
-  }, []);
+  }, [onCreateScratchpadDefault]);
 
   const beginCreateDir = useCallback(() => {
     setCreating({ kind: 'dir' });
@@ -282,6 +294,10 @@ export default function WikiSidebar({
 
   return (
     <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+      <style>{`
+        .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
+        .bm-new-file-btn:hover { opacity: 1 !important; }
+      `}</style>
       {/* Header */}
       <div style={{ padding: '0 12px 4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <span style={{ fontSize: '11px', fontWeight: 600, color: theme.textSecondary, letterSpacing: '0.3px' }}>
@@ -406,7 +422,10 @@ export default function WikiSidebar({
           <div key={folder.name}>
             {/* Folder header */}
             <div
+              className="bm-folder-header"
               onClick={() => toggleFolder(folder.name)}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -418,8 +437,6 @@ export default function WikiSidebar({
                 color: theme.text,
                 userSelect: 'none',
               }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
             >
               <svg
                 width="8"
@@ -439,60 +456,73 @@ export default function WikiSidebar({
               <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
                 {folder.items.length}
               </span>
+              {folder.canCreateFile !== false && (
+                <button
+                  className="bm-new-file-btn"
+                  onClick={(e) => { e.stopPropagation(); beginCreateFile(folder.name); }}
+                  title={folder.name === SCRATCHPAD_FOLDER_NAME ? "New scratchpad entry" : "New file"}
+                  aria-label={`New file in ${folder.label}`}
+                  style={{
+                    marginLeft: 'auto',
+                    width: '18px',
+                    height: '18px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    padding: 0,
+                    background: 'transparent',
+                    border: 'none',
+                    borderRadius: '3px',
+                    color: theme.textSecondary,
+                    cursor: 'pointer',
+                    opacity: 0,
+                    transition: 'opacity 0.12s ease, background 0.12s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                  }}
+                >
+                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+                    <path d="M8 3v10M3 8h10" />
+                  </svg>
+                </button>
+              )}
             </div>
+
+            {/* Inline create input — appears just below the folder header so
+                the user sees it even before the folder finishes expanding. */}
+            {folder.canCreateFile !== false && creating?.kind === 'file' && creating.folder === folder.name && (
+              <div style={{ padding: '4px 12px 4px 28px' }}>
+                <input
+                  ref={createInputRef}
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); void submitCreate(); }
+                    else if (e.key === 'Escape') { e.preventDefault(); cancelCreate(); }
+                  }}
+                  onBlur={cancelCreate}
+                  placeholder="Untitled"
+                  style={{
+                    width: '100%',
+                    padding: '4px 6px',
+                    fontSize: '11px',
+                    color: theme.text,
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '4px',
+                    outline: 'none',
+                  }}
+                />
+              </div>
+            )}
 
             {/* Expanded file list */}
             {isExpanded && (
               <div>
-                {/* New file button — swaps to an inline input while creating,
-                    since Electron silently disables window.prompt(). */}
-                {folder.canCreateFile !== false && (
-                  creating?.kind === 'file' && creating.folder === folder.name ? (
-                    <div style={{ padding: '4px 12px 4px 28px' }}>
-                      <input
-                        ref={createInputRef}
-                        value={newName}
-                        onChange={(e) => setNewName(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); void submitCreate(); }
-                          else if (e.key === 'Escape') { e.preventDefault(); cancelCreate(); }
-                        }}
-                        onBlur={cancelCreate}
-                        placeholder="Untitled"
-                        style={{
-                          width: '100%',
-                          padding: '4px 6px',
-                          fontSize: '11px',
-                          color: theme.text,
-                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                          border: `1px solid ${theme.border}`,
-                          borderRadius: '4px',
-                          outline: 'none',
-                        }}
-                      />
-                    </div>
-                  ) : (
-                    <div
-                      onClick={() => beginCreateFile(folder.name)}
-                      style={{
-                        padding: '5px 12px 5px 28px',
-                        fontSize: '11px',
-                        cursor: 'pointer',
-                        color: theme.textSecondary,
-                        opacity: 0.5,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                      }}
-                      onMouseEnter={(e) => { e.currentTarget.style.opacity = '0.8'; e.currentTarget.style.backgroundColor = theme.hoverBg; }}
-                      onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.5'; e.currentTarget.style.backgroundColor = 'transparent'; }}
-                    >
-                      <span style={{ fontSize: '13px', lineHeight: 1 }}>+</span>
-                      <span>New file</span>
-                    </div>
-                  )
-                )}
-
                 {sortMode === 'time' && dateGroups ? (
                   Array.from(dateGroups.entries()).map(([dateLabel, items]) => (
                     <div key={dateLabel}>
@@ -545,6 +575,8 @@ export default function WikiSidebar({
     </div>
   );
 }
+
+export default memo(WikiSidebar);
 
 function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover }: {
   item: UnifiedItem;
