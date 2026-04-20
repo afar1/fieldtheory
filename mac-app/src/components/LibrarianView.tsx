@@ -94,6 +94,25 @@ export function resolveWikiCreateFolder(
   return 'entries';
 }
 
+/** Render "folder / filename" for the header. Wiki uses the folder from the
+ *  relPath since it's already normalized to slashes; external uses the parent
+ *  directory basename so long absolute paths don't blow out the layout. */
+export function formatBreadcrumb(
+  itemType: 'wiki' | 'external',
+  reading: { path: string; title: string } | null,
+  wikiRelPath: string | null,
+): string {
+  if (!reading) return '';
+  if (itemType === 'wiki') {
+    const folder = wikiRelPath?.includes('/') ? wikiRelPath.split('/')[0] : '';
+    return folder ? `${folder} / ${reading.title}` : reading.title;
+  }
+  const parts = reading.path.split('/').filter(Boolean);
+  const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
+  const name = parts[parts.length - 1] ?? reading.title;
+  return parent ? `${parent} / ${name}` : name;
+}
+
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
@@ -232,9 +251,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     await flushSaveRef.current?.();
     const file = await window.externalAPI?.open(absPath);
     if (!file) return;
+    const title = file.name.replace(/\.(md|markdown|mdx)$/i, '');
     setExternalOpenFile({
       path: file.path,
-      title: file.name.replace(/\.(md|markdown|mdx)$/i, ''),
+      title,
       content: file.content,
       context: null,
       readingTime: null,
@@ -247,6 +267,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     setSelectedPath(null);
     setWikiSelectedRelPath(null);
     setContentMode('rendered');
+    void window.recentAPI?.visit({
+      kind: 'external',
+      path: file.path,
+      title,
+      lastOpenedAt: Date.now(),
+    });
   }, [externalOpenFile?.path, selectedItemType]);
 
   const openWikiPage = useCallback((relPath: string) => {
@@ -568,6 +594,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(item.relPath);
     } else if (item.type === 'artifact') {
       selectArtifactPath(item.absPath);
+    } else if (item.type === 'external') {
+      await selectExternalFile(item.absPath);
     } else if (item.type === 'bookmarks') {
       setSelectedItemId(BOOKMARKS_ITEM_ID);
       setSelectedItemType('bookmarks');
@@ -582,7 +610,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [openWikiPage, selectArtifactPath, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+  }, [openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
 
   // Seed editContent when the user enters markdown mode on a file, or when
   // they switch to a different file while editing. Guarded by path so that
@@ -685,6 +713,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
       if (page) {
         setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
+        void window.recentAPI?.visit({
+          kind: 'wiki',
+          path: wikiSelectedRelPath,
+          title: page.title,
+          lastOpenedAt: Date.now(),
+        });
       }
     })();
   }, [wikiSelectedRelPath]);
@@ -991,6 +1025,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     });
     return () => unsubscribe?.();
   }, [selectExternalFile]);
+
+  // Mirror the current file into the native macOS title bar (proxy icon +
+  // Cmd-click menu showing the full path). Only external files get this —
+  // wiki/artifacts live under our private data dir so the proxy icon would
+  // point users to an opaque internal path.
+  useEffect(() => {
+    const path = selectedItemType === 'external' ? activeReading?.path ?? '' : '';
+    void window.shellAPI?.setRepresentedFilename(path);
+  }, [selectedItemType, activeReading?.path]);
 
   // Hotkey-driven scratchpad flow: main creates the file, we land on it in
   // edit mode so the user can start typing immediately.
@@ -1403,6 +1446,54 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   title="Copy file path (⌘C)"
                 >⌘C</button>
               </div>
+              {/* Breadcrumb — "folder / filename" for wiki, "parent / filename"
+                  + External chip for external. Artifacts skip this (title
+                  already renders prominently in the content area). */}
+              {(selectedItemType === 'wiki' || selectedItemType === 'external') && activeReading && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    minWidth: 0,
+                    flexShrink: 1,
+                    // @ts-ignore - opt the breadcrumb out of the drag region so
+                    // clicks on the External chip's title tooltip land.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  title={activeReading.path}
+                >
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      color: theme.textSecondary,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontFamily: 'system-ui, sans-serif',
+                    }}
+                  >
+                    {formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)}
+                  </span>
+                  {selectedItemType === 'external' && (
+                    <span
+                      style={{
+                        fontSize: '9px',
+                        fontWeight: 600,
+                        letterSpacing: '0.4px',
+                        textTransform: 'uppercase',
+                        color: theme.isDark ? 'rgba(255,255,255,0.75)' : 'rgba(0,0,0,0.65)',
+                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+                        padding: '2px 6px',
+                        borderRadius: '10px',
+                        flexShrink: 0,
+                      }}
+                    >
+                      External
+                    </span>
+                  )}
+                </div>
+              )}
               <ContentToolbar
                 filePath={activeReading?.path || undefined}
                 isFullScreen={isFullScreen}

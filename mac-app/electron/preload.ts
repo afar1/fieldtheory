@@ -2659,6 +2659,10 @@ const shellAPI = {
     ipcRenderer.invoke('shell:openExternal', url),
   showItemInFolder: (fullPath: string): Promise<void> =>
     ipcRenderer.invoke('shell:showItemInFolder', fullPath),
+  /** macOS proxy-icon + Cmd-click-title menu for the current window. Pass
+   *  "" to clear. */
+  setRepresentedFilename: (fullPath: string): Promise<void> =>
+    ipcRenderer.invoke('shell:setRepresentedFilename', fullPath),
 };
 
 type ShellAPI = typeof shellAPI;
@@ -3530,6 +3534,7 @@ const wikiAPI = {
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
   save: (relPath: string, content: string): Promise<boolean> => ipcRenderer.invoke('wiki:save', relPath, content),
   createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
+  deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
   createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
   onPageChanged: (callback: () => void): (() => void) => {
@@ -3571,6 +3576,21 @@ const externalAPI = {
   },
 };
 contextBridge.exposeInMainWorld('externalAPI', externalAPI);
+
+interface RecentEntry {
+  kind: 'wiki' | 'external';
+  path: string;
+  title: string;
+  lastOpenedAt: number;
+}
+
+const recentAPI = {
+  list: (): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:list'),
+  visit: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:visit', entry),
+  remove: (kind: 'wiki' | 'external', entryPath: string): Promise<RecentEntry[]> =>
+    ipcRenderer.invoke('recent:remove', kind, entryPath),
+};
+contextBridge.exposeInMainWorld('recentAPI', recentAPI);
 
 interface BookmarkImage {
   url: string;
