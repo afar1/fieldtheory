@@ -9,7 +9,7 @@ import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
-import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem } from './WikiSidebar';
+import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem, type WikiCreationController } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
@@ -153,6 +153,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const containerRef = useRef<HTMLDivElement>(null);
   const flatItemsRef = useRef<import('./WikiSidebar').UnifiedItem[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const wikiCreationRef = useRef<WikiCreationController | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
+    return localStorage.getItem('librarian-sidebar-collapsed') === '1';
+  });
+  useEffect(() => {
+    localStorage.setItem('librarian-sidebar-collapsed', sidebarCollapsed ? '1' : '0');
+  }, [sidebarCollapsed]);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
@@ -442,10 +449,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [activeReading, editContent, isDirty, selectedItemType, wikiSelectedRelPath, selectedReading, shareStatus?.shared]);
 
-  // Create new wiki file
-  const handleCreateFile = useCallback(async (folderName: string) => {
-    const fileName = window.prompt('New file name:');
-    if (!fileName?.trim()) return;
+  // Create new wiki file. Name comes from the sidebar's inline input because
+  // Electron silently disables window.prompt().
+  const handleCreateFile = useCallback(async (folderName: string, fileName: string) => {
+    if (!fileName.trim()) return;
     const realFolder = resolveWikiCreateFolder(folderName, selectedItemType, wikiSelectedRelPath);
     const page = await window.wikiAPI?.createFile(realFolder, fileName.trim());
     if (page) {
@@ -455,9 +462,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [openWikiPage, selectedItemType, wikiSelectedRelPath]);
 
   // Create new wiki directory
-  const handleCreateDir = useCallback(async () => {
-    const dirName = window.prompt('New directory name:');
-    if (!dirName?.trim()) return;
+  const handleCreateDir = useCallback(async (dirName: string) => {
+    if (!dirName.trim()) return;
     await window.wikiAPI?.createDir(dirName.trim());
   }, []);
 
@@ -606,7 +612,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
         if (preferredArtifactPath && result.some((reading) => reading.path === preferredArtifactPath)) {
           selectArtifactPath(preferredArtifactPath);
-        } else if (result.length > 0 && restoredSelection?.type !== 'wiki') {
+        } else if (result.length > 0 && !restoredSelection) {
+          // Only default to the first artifact on a fresh session. Any
+          // restoredSelection (wiki, bookmarks, or an artifact that's since
+          // been deleted) takes precedence and should not be clobbered.
           selectArtifactPath(result[0].path);
         }
       }
@@ -766,17 +775,20 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         }
       }
 
-      // Cmd+N - create new file
+      // Cmd+N - create new file (inline input in sidebar)
       if (e.key === 'n' && e.metaKey && !e.shiftKey) {
         e.preventDefault();
-        handleCreateFile(selectedItemType === 'wiki' ? resolveWikiCreateFolder('', selectedItemType, wikiSelectedRelPath) : 'entries');
+        const folder = selectedItemType === 'wiki'
+          ? resolveWikiCreateFolder('', selectedItemType, wikiSelectedRelPath)
+          : undefined;
+        wikiCreationRef.current?.beginCreateFile(folder);
         return;
       }
 
-      // Cmd+Shift+N - create new directory
+      // Cmd+Shift+N - create new directory (inline input in sidebar)
       if (e.key === 'n' && e.metaKey && e.shiftKey) {
         e.preventDefault();
-        handleCreateDir();
+        wikiCreationRef.current?.beginCreateDir();
         return;
       }
 
@@ -1137,18 +1149,21 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         flex: 1,
         minHeight: 0,
         outline: 'none',
+        position: 'relative',
         backgroundColor: theme.bg,
       }}
     >
       {/* Sidebar - hidden in full-screen mode but kept in DOM for instant collapse */}
       <div
         style={{
-          width: `${sidebarWidth}px`,
-          minWidth: `${sidebarWidth}px`,
+          width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
           display: isFullScreen ? 'none' : 'flex',
           flexDirection: 'column',
-          padding: '12px 0',
+          padding: sidebarCollapsed ? '0' : '12px 0',
+          overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
+          transition: 'width 0.18s ease, min-width 0.18s ease, padding 0.18s ease',
         }}
       >
         <WikiSidebar
@@ -1160,8 +1175,49 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           searchQuery={searchQuery}
           onSearchQueryChange={setSearchQuery}
           searchInputRef={searchInputRef}
+          creationControllerRef={wikiCreationRef}
         />
       </div>
+      {/* Sidebar toggle — floats at the sidebar/reader boundary. */}
+      {!isFullScreen && (
+        <button
+          onClick={() => setSidebarCollapsed((v) => !v)}
+          title={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          aria-label={sidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'}
+          style={{
+            position: 'absolute',
+            top: '12px',
+            left: sidebarCollapsed ? '8px' : `${sidebarWidth - 12}px`,
+            zIndex: 3,
+            width: '22px',
+            height: '22px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+            background: theme.bg,
+            color: theme.textSecondary,
+            border: `1px solid ${theme.border}`,
+            borderRadius: '4px',
+            cursor: 'pointer',
+            transition: 'left 0.18s ease, background 0.15s ease',
+          }}
+        >
+          <svg
+            width="12"
+            height="12"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            style={{ transform: sidebarCollapsed ? 'rotate(180deg)' : 'none' }}
+          >
+            <path d="M10 4L6 8l4 4" />
+          </svg>
+        </button>
+      )}
       {/* Resize handle - hidden in full-screen mode but kept in DOM */}
       <div
         onMouseDown={handleResizeMouseDown}
@@ -1172,7 +1228,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           borderRight: `1px solid ${theme.border}`,
           transition: 'background-color 0.15s ease',
           flexShrink: 0,
-          display: isFullScreen ? 'none' : 'block',
+          display: isFullScreen || sidebarCollapsed ? 'none' : 'block',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {

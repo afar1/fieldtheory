@@ -5,7 +5,7 @@ import {
   restoreLibrarianSelection,
   splitFrontmatter,
 } from '../components/LibrarianView';
-import { filterUnifiedFolders } from '../components/WikiSidebar';
+import { ensureScratchpadPinned, filterUnifiedFolders } from '../components/WikiSidebar';
 
 describe('splitFrontmatter', () => {
   it('strips YAML frontmatter and returns body + metadata', () => {
@@ -152,6 +152,39 @@ describe('librarian selection persistence', () => {
 
     persistLibrarianSelection(storage, null);
     expect(state['librarian-last-selection']).toBeUndefined();
+  });
+});
+
+describe('ensureScratchpadPinned', () => {
+  it('prepends a scratchpad folder when the tree lacks one', () => {
+    const result = ensureScratchpadPinned([
+      { name: 'debates', label: 'Debates', items: [], canCreateFile: true },
+    ]);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ name: 'scratchpad', label: 'Scratchpad', canCreateFile: true });
+    expect(result[0].items).toEqual([]);
+    expect(result[1].name).toBe('debates');
+  });
+
+  it('leaves an existing scratchpad folder untouched so persisted pages are preserved', () => {
+    const existing = {
+      name: 'scratchpad',
+      label: 'Scratchpad',
+      canCreateFile: true,
+      items: [
+        {
+          id: 'wiki:scratchpad/idea',
+          title: 'idea',
+          type: 'wiki' as const,
+          absPath: '/tmp/scratchpad/idea.md',
+          relPath: 'scratchpad/idea',
+          timestamp: 1,
+        },
+      ],
+    };
+    const result = ensureScratchpadPinned([existing]);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toBe(existing);
   });
 });
 

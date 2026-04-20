@@ -6,7 +6,11 @@ import { localAvatarUrl, localMediaUrl, localMediaUrls, localVideoUrl } from '..
 import { estimateTextCardHeight } from '../utils/bookmarkCardHeight';
 
 const CONFIG = {
-  COLS: 5,
+  MIN_COLS: 2,
+  MAX_COLS: 6,
+  // Target card width before gap — the column count flexes to keep cards at
+  // least this wide so the grid doesn't feel cramped at narrower viewports.
+  TARGET_COL_WIDTH: 260,
   GAP: 18,
   easingFactor: 0.1,
   POOL_SIZE: 500,
@@ -192,11 +196,9 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn) return;
 
     const openExternalUrl = (url: string) => {
-      if (window.shellAPI?.openExternal) {
-        void window.shellAPI.openExternal(url);
-      } else {
-        window.open(url, '_blank', 'noopener');
-      }
+      // Always route through shell.openExternal so URLs open in the user's
+      // default browser instead of an Electron BrowserWindow.
+      void window.shellAPI?.openExternal(url);
     };
 
     const state = {
@@ -216,34 +218,47 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     let colWidth = 0;
     let totalWidth = 0;
     let maxColHeight = 0;
+    let cols = CONFIG.MIN_COLS;
 
-    // Short-circuit key for buildLayout — if neither colWidth nor the bookmarks
-    // array identity changed since last build, the existing layoutItems are
-    // still correct. Avoids re-running 7k measurements on every resize tick
-    // and on StrictMode double-mount.
+    // Short-circuit key for buildLayout — if neither colWidth/cols nor the
+    // bookmarks array identity changed since last build, the existing
+    // layoutItems are still correct. Avoids re-running 7k measurements on
+    // every resize tick and on StrictMode double-mount.
     let lastBuildColWidth = 0;
+    let lastBuildCols = 0;
     let lastBuildCurrent: Bookmark[] | null = null;
 
     const buildLayout = () => {
       const vw = viewport.clientWidth;
       if (vw === 0) return; // canvas is hidden; don't waste a layout pass.
       const gap = CONFIG.GAP;
-      const newColWidth = Math.max(1, Math.floor((vw - gap) / CONFIG.COLS));
-      if (newColWidth === lastBuildColWidth && current === lastBuildCurrent && layoutItems.length > 0) {
+      const newCols = Math.max(
+        CONFIG.MIN_COLS,
+        Math.min(CONFIG.MAX_COLS, Math.floor((vw - gap) / CONFIG.TARGET_COL_WIDTH)),
+      );
+      const newColWidth = Math.max(1, Math.floor((vw - gap) / newCols));
+      if (
+        newColWidth === lastBuildColWidth &&
+        newCols === lastBuildCols &&
+        current === lastBuildCurrent &&
+        layoutItems.length > 0
+      ) {
         return;
       }
       lastBuildColWidth = newColWidth;
+      lastBuildCols = newCols;
       lastBuildCurrent = current;
       colWidth = newColWidth;
-      totalWidth = colWidth * CONFIG.COLS;
+      cols = newCols;
+      totalWidth = colWidth * cols;
 
-      const colHeights = new Array(CONFIG.COLS).fill(0);
-      const columns: LayoutItem[][] = Array.from({ length: CONFIG.COLS }, () => []);
+      const colHeights = new Array(cols).fill(0);
+      const columns: LayoutItem[][] = Array.from({ length: cols }, () => []);
       const itemW = colWidth - gap;
 
       for (const bm of current) {
         let minCol = 0;
-        for (let c = 1; c < CONFIG.COLS; c++) {
+        for (let c = 1; c < cols; c++) {
           if (colHeights[c] < colHeights[minCol]) minCol = c;
         }
         let itemH: number;
@@ -267,7 +282,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       maxColHeight = Math.max(1, ...colHeights);
 
       layoutItems = [];
-      for (let col = 0; col < CONFIG.COLS; col++) {
+      for (let col = 0; col < cols; col++) {
         for (let row = 0; row < columns[col].length; row++) {
           const item = columns[col][row];
           item.key = `${col}-${row}`;
