@@ -1156,6 +1156,33 @@ export function hasArtifactStructureInstruction(content: string): boolean {
   return hasArtifactTitleInstruction(content) && hasArtifactModelSignatureInstruction(content);
 }
 
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTH_ABBREVS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function ordinalSuffix(n: number): string {
+  const v = n % 100;
+  if (v >= 11 && v <= 13) return 'th';
+  switch (n % 10) {
+    case 1: return 'st';
+    case 2: return 'nd';
+    case 3: return 'rd';
+    default: return 'th';
+  }
+}
+
+export function defaultScratchpadName(date: Date): string {
+  const day = date.getDate();
+  return `${DAY_NAMES[date.getDay()]} ${MONTH_ABBREVS[date.getMonth()]} ${day}${ordinalSuffix(day)}`;
+}
+
+export function defaultScratchpadNameWithTime(date: Date): string {
+  const base = defaultScratchpadName(date);
+  const hr12 = ((date.getHours() + 11) % 12) + 1;
+  const min = String(date.getMinutes()).padStart(2, '0');
+  const ampm = date.getHours() < 12 ? 'am' : 'pm';
+  return `${base} at ${hr12}:${min}${ampm}`;
+}
+
 export function isHiddenWikiFolderName(name: string): boolean {
   return name.startsWith('.') || name.startsWith('_');
 }
@@ -2094,6 +2121,16 @@ export class LibrarianManager extends EventEmitter {
     return path.join(ftDataDir ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
   }
 
+  /** Canonical wiki root for substring comparisons against realpath'd paths. */
+  getWikiRoot(): string {
+    const dir = this.wikiDir;
+    try {
+      return fs.realpathSync(dir);
+    } catch {
+      return dir;
+    }
+  }
+
   private wikiWatcher: chokidar.FSWatcher | null = null;
   private wikiWatcherPending = false;
 
@@ -2238,11 +2275,27 @@ export class LibrarianManager extends EventEmitter {
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
+      // Emit synchronously — chokidar's `${wikiRoot}/*/*.md` glob can lag
+      // several seconds when the folder didn't exist at watcher setup,
+      // which leaves the sidebar stale until the next FS tick.
+      this.emit('wiki:changed');
       return { relPath, absPath, name: slug, title: fileName.replace(/\.md$/, ''), lastUpdated: Math.floor(stats.mtimeMs), content };
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
     }
+  }
+
+  // Friendly default name for a scratchpad entry, e.g. "Monday Apr 20th".
+  // Collision fallback appends " at 11:30am" so rapid repeat creations still
+  // succeed without users having to type a name. Capture `now` once so the
+  // fallback's time matches the first attempt's date even if the clock ticks
+  // mid-write.
+  createScratchpadDefault(): WikiPage | null {
+    const now = new Date();
+    const first = this.createWikiFile('scratchpad', defaultScratchpadName(now));
+    if (first) return first;
+    return this.createWikiFile('scratchpad', defaultScratchpadNameWithTime(now));
   }
 
   createWikiDir(dirName: string): boolean {
@@ -2251,6 +2304,7 @@ export class LibrarianManager extends EventEmitter {
     if (fs.existsSync(dirPath)) return false;
     try {
       fs.mkdirSync(dirPath, { recursive: true });
+      this.emit('wiki:changed');
       return true;
     } catch (error) {
       log.error(`Error creating wiki dir ${slug}:`, error);

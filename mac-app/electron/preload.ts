@@ -3530,6 +3530,7 @@ const wikiAPI = {
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
   save: (relPath: string, content: string): Promise<boolean> => ipcRenderer.invoke('wiki:save', relPath, content),
   createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
+  createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
   onPageChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
@@ -3541,8 +3542,35 @@ const wikiAPI = {
     ipcRenderer.on('wiki:openPage', handler);
     return () => ipcRenderer.removeListener('wiki:openPage', handler);
   },
+  // Hotkey-driven "new scratchpad" flow — main process has already created
+  // the file and wants us to switch to Library, open it, and start editing.
+  onOpenScratchpad: (callback: (relPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
+    ipcRenderer.on('wiki:openScratchpad', handler);
+    return () => ipcRenderer.removeListener('wiki:openScratchpad', handler);
+  },
 };
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
+
+interface ExternalMarkdownFile {
+  path: string;
+  name: string;
+  content: string;
+  mtime: number;
+}
+
+const externalAPI = {
+  open: (absPath: string): Promise<ExternalMarkdownFile | null> =>
+    ipcRenderer.invoke('external:open', absPath),
+  save: (absPath: string, content: string): Promise<boolean> =>
+    ipcRenderer.invoke('external:save', absPath, content),
+  onOpenExternal: (callback: (absPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, absPath: string) => callback(absPath);
+    ipcRenderer.on('external:openPage', handler);
+    return () => ipcRenderer.removeListener('external:openPage', handler);
+  },
+};
+contextBridge.exposeInMainWorld('externalAPI', externalAPI);
 
 interface BookmarkImage {
   url: string;

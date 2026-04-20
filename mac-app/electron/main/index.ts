@@ -68,6 +68,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -990,6 +991,23 @@ function registerHotkeysAfterOnboarding(): void {
       }
   });
 
+  // Control+Option+Command+Space: show Field Theory, jump to Library, create
+  // a new scratchpad doc, and drop into edit mode. One keystroke → ready to
+  // type an ad-hoc thought.
+  const scratchpadHotkey = 'Control+Option+Command+Space';
+  const scratchpadRegistered = globalShortcut.register(scratchpadHotkey, () => {
+    if (!librarianManager) return;
+    const page = librarianManager.createScratchpadDefault();
+    if (!page || !clipboardHistoryWindow) return;
+    const boundsToUse = restoreClipboardHistoryBounds();
+    suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
+    clipboardHistoryWindow.show(boundsToUse);
+    clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', page.relPath);
+  });
+  if (!scratchpadRegistered) {
+    log.warn(`Scratchpad hotkey (${scratchpadHotkey}) registration failed — likely claimed by another app.`);
+  }
+
 }
 
 /**
@@ -1388,6 +1406,35 @@ function showClipboardHistoryOnActivate(): void {
   dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
 }
 
+/** Route an incoming markdown path to the library view. Called from `open-file`
+ *  (macOS) and also deferred until the main window exists for cold starts. */
+function routeOpenMarkdown(inputPath: string): void {
+  const resolved = resolveIncomingMarkdownPath(inputPath, librarianManager?.getWikiRoot() ?? null);
+  if (!resolved) {
+    log.info(`open-file: ignoring non-markdown or unreadable path: ${inputPath}`);
+    return;
+  }
+  if (!clipboardHistoryWindow) {
+    log.info('open-file: main window not ready, queueing');
+    pendingOpenMarkdownPath = inputPath;
+    return;
+  }
+  const boundsToUse = restoreClipboardHistoryBounds();
+  suspendDynamicIslandFocusForClipboardHistory('show-reading');
+  clipboardHistoryWindow.show(boundsToUse);
+  const webContents = clipboardHistoryWindow.getWindow()?.webContents;
+  if (!webContents) return;
+  if (resolved.kind === 'wiki') {
+    webContents.send('wiki:openPage', resolved.relPath);
+  } else {
+    webContents.send('external:openPage', resolved.absPath);
+  }
+}
+
+// Cold-start queue — macOS fires `open-file` before windows exist. Last-wins
+// (batch multi-select also ends up here; we only show one file at a time).
+let pendingOpenMarkdownPath: string | null = null;
+
 /**
  * Set up all IPC handlers for audio-related communication.
  */
@@ -1535,9 +1582,50 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.createWikiFile(folderName, fileName);
   });
 
+  ipcMain.handle('wiki:createScratchpadDefault', (): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.createScratchpadDefault();
+  });
+
   ipcMain.handle('wiki:createDir', (_event, dirName: string): boolean => {
     if (!librarianManager) return false;
     return librarianManager.createWikiDir(dirName);
+  });
+
+  // External markdown files — used when macOS opens a .md file "With Field
+  // Theory" and the canonical path falls outside the wiki root. The app
+  // reads/writes the file in place; no copy, no watcher.
+  ipcMain.handle(
+    'external:open',
+    (_event, absPath: string): { path: string; name: string; content: string; mtime: number } | null => {
+      try {
+        const canonical = fs.realpathSync(absPath);
+        if (!isAllowedMarkdownExt(canonical)) return null;
+        const content = fs.readFileSync(canonical, 'utf-8');
+        const stats = fs.statSync(canonical);
+        return {
+          path: canonical,
+          name: path.basename(canonical),
+          content,
+          mtime: Math.floor(stats.mtimeMs),
+        };
+      } catch (error) {
+        log.error(`external:open failed for ${absPath}:`, error);
+        return null;
+      }
+    },
+  );
+
+  ipcMain.handle('external:save', (_event, absPath: string, content: string): boolean => {
+    try {
+      const canonical = fs.realpathSync(absPath);
+      if (!isAllowedMarkdownExt(canonical)) return false;
+      fs.writeFileSync(canonical, content, 'utf-8');
+      return true;
+    } catch (error) {
+      log.error(`external:save failed for ${absPath}:`, error);
+      return false;
+    }
   });
 
   if (librarianManager) {
@@ -6947,6 +7035,12 @@ if (!gotTheLock) {
     handleProtocolUrl(url);
   });
 
+  // Batch multi-select fires this once per file; we only show one at a time.
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    routeOpenMarkdown(filePath);
+  });
+
   app.on('second-instance', (_event, argv) => {
     // Handle URL from second instance (Windows/Linux)
     const url = argv.find(arg => arg.startsWith('fieldtheory://'));
@@ -7628,6 +7722,24 @@ if (!gotTheLock) {
     clipboardHistoryWindow = initClipboardHistoryWindow();
     const boundsToUse = restoreClipboardHistoryBounds();
     clipboardHistoryWindow.preload(boundsToUse);
+
+    // If the app cold-started via `open-file`, the pending path was queued
+    // before the window existed. Flush it once the renderer finishes loading
+    // so wiki:openPage / external:openPage have a listener on the other end.
+    const pendingFlushContents = clipboardHistoryWindow.getWindow()?.webContents;
+    if (pendingFlushContents) {
+      const flushPendingOpen = () => {
+        if (!pendingOpenMarkdownPath) return;
+        const queued = pendingOpenMarkdownPath;
+        pendingOpenMarkdownPath = null;
+        routeOpenMarkdown(queued);
+      };
+      if (pendingFlushContents.isLoading()) {
+        pendingFlushContents.once('did-finish-load', flushPendingOpen);
+      } else {
+        flushPendingOpen();
+      }
+    }
 
     // Update tray manager with current hotkeys for menu display
     if (trayManager && clipboardManager && transcriberManager) {
