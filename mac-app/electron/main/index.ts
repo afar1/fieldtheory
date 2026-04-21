@@ -67,7 +67,7 @@ import { CommandSyncService } from './commandSyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
@@ -1569,6 +1569,29 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getWikiTree();
   });
 
+  ipcMain.handle('library:getRoots', (): LibraryRoot[] => {
+    if (!librarianManager) return [];
+    return librarianManager.getLibraryRoots();
+  });
+
+  ipcMain.handle('library:addRoot', (_event, dirPath: string): LibraryRoot | null => {
+    if (!librarianManager) return null;
+    return librarianManager.addLibraryRoot(dirPath);
+  });
+
+  ipcMain.handle('library:removeRoot', (_event, dirPath: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.removeLibraryRoot(dirPath);
+  });
+
+  ipcMain.handle('library:pickFolder', async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (result.canceled) return null;
+    return result.filePaths[0] ?? null;
+  });
+
   ipcMain.handle('wiki:getPage', (_event, relPath: string): WikiPage | null => {
     if (!librarianManager) return null;
     return librarianManager.getWikiPage(relPath);
@@ -1667,7 +1690,15 @@ function setupLibrarianIPCHandlers(): void {
     librarianManager.startWikiWatcher();
     librarianManager.on('wiki:changed', () => {
       BrowserWindow.getAllWindows().forEach((w) => {
-        if (!w.isDestroyed()) w.webContents.send('wiki:changed');
+        if (!w.isDestroyed()) {
+          w.webContents.send('wiki:changed');
+          w.webContents.send('library:changed');
+        }
+      });
+    });
+    librarianManager.on('library:changed', () => {
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('library:changed');
       });
     });
     // Auto-prune recent when a wiki page is trashed so stale entries drop

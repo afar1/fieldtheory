@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   buildEffectiveArtifactRuleContent,
   defaultScratchpadName,
@@ -9,8 +12,18 @@ import {
   hasArtifactModelSignatureInstruction,
   isHiddenWikiFileName,
   isHiddenWikiFolderName,
+  LibrarianManager,
   parseMarkdownHeader,
+  type WikiNode,
 } from './librarianManager';
+
+const tempDirs: string[] = [];
+
+afterEach(() => {
+  for (const dir of tempDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
 
 describe('defaultScratchpadName', () => {
   it('formats as "<Day> <Mon> <Nth>" with correct ordinal suffix', () => {
@@ -159,5 +172,67 @@ describe('wiki tree visibility helpers', () => {
     expect(isHiddenWikiFolderName('_transcripts')).toBe(true);
     expect(isHiddenWikiFolderName('.system')).toBe(true);
     expect(isHiddenWikiFolderName('debates')).toBe(false);
+  });
+});
+
+describe('recursive wiki tree scan', () => {
+  function makeTempDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-wiki-tree-'));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  function scan(rootPath: string): WikiNode[] {
+    const manager = Object.create(LibrarianManager.prototype) as {
+      scanMarkdownTree: (rootPath: string) => WikiNode[];
+    };
+    return manager.scanMarkdownTree(rootPath);
+  }
+
+  function flatten(nodes: WikiNode[]): string[] {
+    return nodes.flatMap((node) => node.kind === 'file' ? [node.relPath] : flatten(node.children));
+  }
+
+  it('recurses through nested folders, keeps empty dirs, sorts siblings, and filters hidden/system files', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries', 'nested'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'empty'), { recursive: true });
+    fs.mkdirSync(path.join(root, '_drafts'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'zeta.md'), '# Zeta\n');
+    fs.writeFileSync(path.join(root, 'entries', 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(root, 'entries', 'nested', 'beta.md'), '# Beta\n');
+    fs.writeFileSync(path.join(root, 'entries', 'index.md'), '# Index\n');
+    fs.writeFileSync(path.join(root, 'entries', '_secret.md'), '# Secret\n');
+    fs.writeFileSync(path.join(root, '_drafts', 'hidden.md'), '# Hidden\n');
+
+    const tree = scan(root);
+    expect(tree.map((node) => node.name)).toEqual(['empty', 'entries']);
+
+    const entries = tree.find((node) => node.kind === 'dir' && node.name === 'entries');
+    expect(entries?.kind).toBe('dir');
+    if (entries?.kind !== 'dir') return;
+    expect(entries.children.map((node) => node.name)).toEqual(['alpha', 'nested', 'zeta']);
+    expect(flatten(tree)).toEqual(['entries/alpha', 'entries/nested/beta', 'entries/zeta']);
+  });
+});
+
+describe('librarian watcher cleanup', () => {
+  it('closes both reading watchers and library root watchers on destroy', () => {
+    const readingClose = vi.fn();
+    const libraryClose = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      watchers: Map<string, { close: () => void }>;
+      libraryRootWatchers: Map<string, { close: () => void }>;
+      destroy: () => void;
+    };
+    manager.watchers = new Map([['/readings', { close: readingClose }]]);
+    manager.libraryRootWatchers = new Map([['/library', { close: libraryClose }]]);
+
+    manager.destroy();
+
+    expect(readingClose).toHaveBeenCalledTimes(1);
+    expect(libraryClose).toHaveBeenCalledTimes(1);
+    expect(manager.watchers.size).toBe(0);
+    expect(manager.libraryRootWatchers.size).toBe(0);
   });
 });

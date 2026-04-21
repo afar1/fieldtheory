@@ -1,5 +1,5 @@
 // =============================================================================
-// LibrarianView - iA Writer-style reading experience for collected readings.
+// LibrarianView - reading and writing experience for collected readings.
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
@@ -103,9 +103,6 @@ export function resolveWikiCreateFolder(
   return 'entries';
 }
 
-/** Header title — just the filename/page title for both wiki and external.
- *  We used to prepend the folder/parent dir but that adds visual noise when
- *  the sidebar already shows the folder tree. */
 export function formatBreadcrumb(
   itemType: 'wiki' | 'external',
   reading: { path: string; title: string } | null,
@@ -115,6 +112,26 @@ export function formatBreadcrumb(
   const parts = reading.path.split('/').filter(Boolean);
   return parts[parts.length - 1] ?? reading.title;
 }
+
+function clampScrollRatio(ratio: number): number {
+  if (!Number.isFinite(ratio)) return 0;
+  return Math.min(1, Math.max(0, ratio));
+}
+
+export function getScrollRatio(scrollTop: number, scrollHeight: number, clientHeight: number): number {
+  const maxScrollTop = scrollHeight - clientHeight;
+  if (maxScrollTop <= 0) return 0;
+  return clampScrollRatio(scrollTop / maxScrollTop);
+}
+
+export function getScrollTopForRatio(scrollHeight: number, clientHeight: number, ratio: number): number {
+  const maxScrollTop = scrollHeight - clientHeight;
+  if (maxScrollTop <= 0) return 0;
+  return maxScrollTop * clampScrollRatio(ratio);
+}
+
+const READING_CONTENT_MAX_WIDTH = 'min(720px, 70ch)';
+const READING_LINE_HEIGHT = 1.62;
 
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
@@ -139,12 +156,24 @@ function isArtifactModelSignatureText(text: string): boolean {
   return /^(Model|Signed by):\s+.+$/i.test(text.trim());
 }
 
+type MarkdownRenderNode = {
+  type?: string;
+  value?: unknown;
+  children?: unknown;
+};
+
+function extractMarkdownText(node: unknown): string {
+  if (!node || typeof node !== 'object') return '';
+  const renderNode = node as MarkdownRenderNode;
+  if (renderNode.type === 'text' && typeof renderNode.value === 'string') return renderNode.value;
+  if (Array.isArray(renderNode.children)) return renderNode.children.map(extractMarkdownText).join('');
+  return '';
+}
+
 export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
 
-  // State
-  // Path is now the identity - no numeric IDs
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(() => restoredSelection?.type === 'artifact' ? restoredSelection.path : null);
   const [selectedReading, setSelectedReading] = useState<Reading | null>(null);
@@ -167,12 +196,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
-  // Start in fullscreen if initialFullScreen prop is true (auto-open flow)
   const [isFullScreen, setIsFullScreen] = useState(initialFullScreen ?? false);
-  // Fire the IPC synchronously so the window animation starts on the click
-  // frame instead of after two React-state / useEffect hops. useCallback so
-  // BookmarksPane's prop stays stable and React.memo can skip re-renders
-  // while the user is typing in the markdown editor.
   const toggleImmersive = useCallback(() => {
     setIsFullScreen((prev) => {
       const next = !prev;
@@ -195,6 +219,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
+  const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const markdownEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingScrollRatioRef = useRef<number | null>(null);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
@@ -323,7 +350,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     });
   }, []);
 
-  // Prefetch bookmarks snapshot in the background so the first click is instant
   useEffect(() => { prefetchBookmarks(); }, []);
 
   // Persist sidebar width
@@ -463,18 +489,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     };
   }, []);
 
-  // Text size values
   const textSizes = {
     small: { base: '14px', h1: '24px', h2: '18px', h3: '15px' },
     normal: { base: '16px', h1: '28px', h2: '20px', h3: '17px' },
     large: { base: '18px', h1: '32px', h2: '24px', h3: '20px' },
   };
 
-  
   const activeReading: Reading | null =
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+  const documentTextStyle = {
+    fontSize: textSizes[textSize].base,
+    lineHeight: READING_LINE_HEIGHT,
+    fontFamily: fonts.serif,
+    color: theme.text,
+  };
 
   const wikiDisplay = useMemo(() => {
     if (selectedItemType !== 'wiki' || !activeReading) return null;
@@ -489,17 +519,57 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return transformWikiLinks(raw, wikiIndex);
   }, [wikiDisplay, activeReading?.content, wikiIndex]);
 
-  // Enter/exit edit mode are just view-mode flips now that auto-save handles
-  // persistence — no dirty tracking, no discard prompts. The existing effect
-  // below seeds editContent from activeReading when entering markdown mode.
-  const enterEditMode = useCallback(() => {
-    setContentMode('markdown');
+  const captureContentScrollRatio = useCallback(() => {
+    const scrollEl = contentScrollRef.current;
+    if (!scrollEl) return;
+    pendingScrollRatioRef.current = getScrollRatio(
+      scrollEl.scrollTop,
+      scrollEl.scrollHeight,
+      scrollEl.clientHeight,
+    );
   }, []);
 
+  useEffect(() => {
+    const ratio = pendingScrollRatioRef.current;
+    if (ratio === null) return;
+    pendingScrollRatioRef.current = null;
+
+    const frame = requestAnimationFrame(() => {
+      const scrollEl = contentScrollRef.current;
+      if (!scrollEl) return;
+      scrollEl.scrollTop = getScrollTopForRatio(
+        scrollEl.scrollHeight,
+        scrollEl.clientHeight,
+        ratio,
+      );
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode, activeReading?.path]);
+
+  useEffect(() => {
+    if (contentMode !== 'markdown') return;
+    const editor = markdownEditorRef.current;
+    if (!editor) return;
+
+    const frame = requestAnimationFrame(() => {
+      editor.style.height = 'auto';
+      editor.style.height = `${editor.scrollHeight}px`;
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode, editContent, textSize, isFullScreen]);
+
+  const enterEditMode = useCallback(() => {
+    captureContentScrollRatio();
+    setContentMode('markdown');
+  }, [captureContentScrollRatio]);
+
   const exitEditMode = useCallback(async () => {
+    captureContentScrollRatio();
     await flushSaveRef.current?.();
     setContentMode('rendered');
-  }, []);
+  }, [captureContentScrollRatio]);
 
   // Debounced auto-save. Fires ~400ms after the last keystroke and doesn't
   // round-trip the saved content back into React state, so the textarea's
@@ -573,7 +643,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [openWikiPage, selectedItemType, wikiSelectedRelPath]);
 
-  // Create new wiki directory
   const handleCreateDir = useCallback(async (dirName: string) => {
     if (!dirName.trim()) return;
     await window.wikiAPI?.createDir(dirName.trim());
@@ -589,7 +658,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [openWikiPage]);
 
-  // Unified item selection handler
   // True while the currently-selected item is the artifact the librarian
   // just auto-popped. Escape should close the window in that case.
   const isOnAutoPopArtifact =
@@ -640,7 +708,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     lastSeededPathRef.current = activeReading.path;
   }, [contentMode, activeReading]);
 
-  // Handle share/unshare
   const handleShare = useCallback(async () => {
     if (!selectedPath || !selectedReading) return;
 
@@ -674,7 +741,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
-  // Copy share link
   const copyShareLink = useCallback(async () => {
     if (!shareStatus?.url) return;
     await navigator.clipboard.writeText(shareStatus.url);
@@ -1457,10 +1523,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               flexShrink: 0,
             }}
           >
-            {/* Inner container - always matches reading content width (600px centered) */}
+            {/* Inner container - always matches the centered document width. */}
             <div
               style={{
-                maxWidth: '600px',
+                maxWidth: READING_CONTENT_MAX_WIDTH,
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
@@ -1642,7 +1708,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 }}
               >
                 <button
-                  onClick={() => setContentMode('rendered')}
+                  onClick={() => {
+                    if (contentMode === 'markdown') void exitEditMode();
+                  }}
                   title="Rendered"
                   aria-label="Rendered"
                   style={{
@@ -1667,7 +1735,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   </svg>
                 </button>
                 <button
-                  onClick={() => setContentMode('markdown')}
+                  onClick={() => {
+                    if (contentMode !== 'markdown' && activeReading) enterEditMode();
+                  }}
                   title="Markdown source"
                   aria-label="Markdown source"
                   style={{
@@ -1703,11 +1773,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
         {/* Scrollable content area */}
         <div
+          ref={contentScrollRef}
           style={{
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: isFullScreen ? '8px 32px 16px 32px' : '24px 32px',
+            padding: isFullScreen ? '16px 32px 28px 32px' : '28px 32px',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -1715,17 +1786,18 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {activeReading ? (
           <div
             style={{
-              maxWidth: '600px',
+              maxWidth: READING_CONTENT_MAX_WIDTH,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',
-              flex: contentMode === 'markdown' ? 1 : 'none',
-              minHeight: contentMode === 'markdown' ? 0 : 'auto',
+              flex: contentMode === 'markdown' ? '1 1 auto' : '0 1 auto',
+              minHeight: contentMode === 'markdown' ? '100%' : 'auto',
             }}
           >
             {contentMode === 'markdown' ? (
               /* Markdown edit mode - textarea */
               <textarea
+                ref={markdownEditorRef}
                 value={editContent}
                 onChange={(e) => setEditContent(e.target.value)}
                 onBlur={(e) => {
@@ -1737,22 +1809,26 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   if (next && readerPaneRef.current?.contains(next)) return;
                   void exitEditMode();
                 }}
+                spellCheck={true}
                 style={{
-                  flex: 1,
+                  display: 'block',
+                  width: '100%',
                   minHeight: '400px',
-                  padding: '16px',
+                  padding: 0,
                   // Match the rendered view's base size so toggling between
                   // edit and rendered doesn't visually jump. The A/A/A
                   // controls feed textSize, so the editor scales with them.
-                  fontSize: textSizes[textSize].base,
-                  lineHeight: 1.5,
-                  fontFamily: fonts.serif,
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '8px',
-                  color: theme.text,
+                  ...documentTextStyle,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderRadius: 0,
                   resize: 'none',
                   outline: 'none',
+                  boxShadow: 'none',
+                  caretColor: theme.accent,
+                  overflow: 'hidden',
+                  overflowWrap: 'break-word',
+                  tabSize: 2,
                 }}
                 placeholder="Write your markdown here..."
                 autoFocus
@@ -1823,10 +1899,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 enterEditMode();
               }}
               style={{
-                fontSize: textSizes[textSize].base,
-                lineHeight: 1.5,
-                color: theme.text,
-                fontFamily: fonts.serif,
+                ...documentTextStyle,
                 userSelect: 'text',
                 cursor: activeReading ? 'text' : 'default',
               }}
@@ -1879,18 +1952,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     </h3>
                   ),
                   p: ({ children, node }) => {
-                    // Check if this paragraph contains braille art (U+2800-U+28FF)
-                    // Extract text from the AST node for reliable detection
-                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                    const extractText = (n: any): string => {
-                      if (!n) return '';
-                      if (n.type === 'text' && 'value' in n) return n.value as string;
-                      if ('children' in n && Array.isArray(n.children)) {
-                        return n.children.map(extractText).join('');
-                      }
-                      return '';
-                    };
-                    const textContent = extractText(node);
+                    const textContent = extractMarkdownText(node);
                     const normalizedText = textContent.trim();
                     const hasBraille = /[\u2800-\u28FF]/.test(textContent);
                     const isModelSignatureLine = isArtifactModelSignatureText(normalizedText);
@@ -1921,7 +1983,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     return (
                       <p
                         style={{
-                          marginBottom: '8px',
+                          marginTop: 0,
+                          marginBottom: '0.75em',
                         }}
                       >
                         {children}
