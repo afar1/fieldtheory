@@ -15,6 +15,15 @@ import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem, type WikiCreationCont
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import {
+  buildWikiIndex,
+  classifyLinkHref,
+  isUnresolvedWikiHref,
+  normalizeWikiRelPath,
+  transformWikiLinks,
+  type WikiIndexInput,
+} from '../utils/wikiLinks';
 
 /** Strip YAML frontmatter from wiki page content for display.
  *  Returns the body (everything after the closing ---) and parsed
@@ -47,7 +56,7 @@ export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): Li
     if (parsed?.type === 'wiki' && typeof parsed.relPath === 'string' && parsed.relPath.trim()) {
       return {
         type: 'wiki',
-        relPath: parsed.relPath.trim().replace(/^\/+/, '').replace(/\.md$/i, ''),
+        relPath: normalizeWikiRelPath(parsed.relPath),
       };
     }
     if (parsed?.type === 'artifact' && typeof parsed.path === 'string' && parsed.path.trim()) {
@@ -94,23 +103,17 @@ export function resolveWikiCreateFolder(
   return 'entries';
 }
 
-/** Render "folder / filename" for the header. Wiki uses the folder from the
- *  relPath since it's already normalized to slashes; external uses the parent
- *  directory basename so long absolute paths don't blow out the layout. */
+/** Header title — just the filename/page title for both wiki and external.
+ *  We used to prepend the folder/parent dir but that adds visual noise when
+ *  the sidebar already shows the folder tree. */
 export function formatBreadcrumb(
   itemType: 'wiki' | 'external',
   reading: { path: string; title: string } | null,
-  wikiRelPath: string | null,
 ): string {
   if (!reading) return '';
-  if (itemType === 'wiki') {
-    const folder = wikiRelPath?.includes('/') ? wikiRelPath.split('/')[0] : '';
-    return folder ? `${folder} / ${reading.title}` : reading.title;
-  }
+  if (itemType === 'wiki') return reading.title;
   const parts = reading.path.split('/').filter(Boolean);
-  const parent = parts.length >= 2 ? parts[parts.length - 2] : '';
-  const name = parts[parts.length - 1] ?? reading.title;
-  return parent ? `${parent} / ${name}` : name;
+  return parts[parts.length - 1] ?? reading.title;
 }
 
 interface LibrarianViewProps {
@@ -232,6 +235,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
   const [externalOpenFile, setExternalOpenFile] = useState<Reading | null>(null);
+  // Flat list of every wiki page for resolving [[wikilinks]] by title or
+  // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
+  const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
     setSelectedItemId(`artifact:${artifactPath}`);
@@ -276,10 +282,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [externalOpenFile?.path, selectedItemType]);
 
   const openWikiPage = useCallback((relPath: string) => {
-    const normalized = relPath
-      .trim()
-      .replace(/^\/+/, '')
-      .replace(/\.md$/i, '');
+    const normalized = normalizeWikiRelPath(relPath);
     if (!normalized) return;
     setSelectedItemId(`wiki:${normalized}`);
     setSelectedItemType('wiki');
@@ -288,11 +291,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     setExternalOpenFile(null);
   }, []);
 
-  const openWikiHref = useCallback((href: string) => {
-    const match = href.match(/^wiki:\/\/(.+)$/i);
-    if (!match) return;
-    const relPath = decodeURIComponent(match[1].split(/[?#]/, 1)[0] ?? '');
-    openWikiPage(relPath);
+  // Click on an unresolved [[wikilink]] — create the page in scratchpad using
+  // the target text as the filename / heading, then open it.
+  const createUnresolvedWikiLink = useCallback(async (title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const page = await window.wikiAPI?.createFile('scratchpad', trimmed);
+    if (page?.relPath) openWikiPage(page.relPath);
   }, [openWikiPage]);
 
   // Handle initial reading path and fullscreen from parent (auto-open flow)
@@ -476,7 +481,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return splitFrontmatter(activeReading.content);
   }, [selectedItemType, activeReading]);
 
-  const displayContent = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
+  const wikiIndex = useMemo(() => buildWikiIndex(wikiIndexPages), [wikiIndexPages]);
+
+  const displayContent = useMemo(() => {
+    const raw = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
+    if (!wikiDisplay) return raw;
+    return transformWikiLinks(raw, wikiIndex);
+  }, [wikiDisplay, activeReading?.content, wikiIndex]);
 
   // Enter/exit edit mode are just view-mode flips now that auto-save handles
   // persistence — no dirty tracking, no discard prompts. The existing effect
@@ -729,6 +740,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           title: page.title,
           lastOpenedAt: Date.now(),
         });
+      } else {
+        // Target relPath disappeared between index refresh and navigation —
+        // clear the stale render so the reader sees empty state instead of
+        // the previous page, which would look like "the link did nothing".
+        setWikiSelectedPage(null);
       }
     })();
   }, [wikiSelectedRelPath]);
@@ -892,8 +908,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Cmd+F - focus library search
-      if (e.key === 'f' && e.metaKey && contentMode !== 'markdown') {
+      // Cmd+F or / — focus library search. Firing is gated on the active
+      // element (not the view mode), so `/` still works while the editor
+      // textarea is on screen, just not when it's focused.
+      if (isSearchFocusShortcut(e)) {
         e.preventDefault();
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
@@ -1027,6 +1045,22 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     return () => unsubscribe?.();
   }, [openWikiPage]);
+
+  // Keep a flat list of all wiki pages for resolving [[wikilinks]]. Reloaded
+  // on mount and whenever the wiki tree changes so links to newly created
+  // pages resolve without a reopen.
+  useEffect(() => {
+    const load = async () => {
+      const folders = await window.wikiAPI?.getTree();
+      if (!folders) return;
+      setWikiIndexPages(
+        folders.flatMap((f) => f.files.map((p) => ({ relPath: p.relPath, title: p.title }))),
+      );
+    };
+    void load();
+    const unsubscribe = window.wikiAPI?.onPageChanged(() => { void load(); });
+    return () => unsubscribe?.();
+  }, []);
 
   // macOS `open-file` for paths outside the wiki root.
   useEffect(() => {
@@ -1433,9 +1467,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 gap: '8px',
               }}
             >
-              {/* Nav: back (fullscreen), copy path */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginRight: '8px' }}>
-                {isFullScreen && (
+              {/* Nav: back (only visible in fullscreen). Copy-path moved to
+                  the right of the immersive toggle inside ContentToolbar. */}
+              {isFullScreen && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginRight: '8px' }}>
                   <button
                     onClick={() => setIsFullScreen(false)}
                     style={{ padding: '3px 6px', fontSize: '11px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px' }}
@@ -1443,19 +1478,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
                     title="Back to standard view"
                   >←</button>
-                )}
-                <button
-                  onClick={() => {
-                    if (activeReading?.path) {
-                      navigator.clipboard.writeText(activeReading.path);
-                    }
-                  }}
-                  style={{ padding: '3px 6px', fontSize: '10px', color: theme.textSecondary, backgroundColor: 'transparent', border: 'none', cursor: 'pointer', borderRadius: '4px', fontFamily: 'system-ui, sans-serif' }}
-                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
-                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-                  title="Copy file path (⌘C)"
-                >⌘C</button>
-              </div>
+                </div>
+              )}
               {/* Breadcrumb — "folder / filename" for wiki, "parent / filename"
                   + External chip for external. Artifacts skip this (title
                   already renders prominently in the content area). */}
@@ -1483,7 +1507,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       fontFamily: 'system-ui, sans-serif',
                     }}
                   >
-                    {formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)}
+                    {formatBreadcrumb(selectedItemType, activeReading)}
                   </span>
                   {selectedItemType === 'external' && (
                     <span
@@ -1521,6 +1545,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 isSharing={isSharing}
                 onToggleShare={handleShare}
                 showShare={true}
+                onCopyPath={activeReading?.path ? () => navigator.clipboard.writeText(activeReading.path) : undefined}
                 headerHovered={headerHovered}
               />
 
@@ -1583,10 +1608,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               {/* Spacer */}
               <div style={{ flex: 1 }} />
 
-              {/* Auto-save status — replaces the old Save button. Shows
-                  briefly while a write is in flight and dwells after one
-                  lands so click-away feedback is actually noticeable. */}
-              {saveStatus !== 'idle' && (
+              {/* Auto-save status: only surface the in-flight "Saving…"
+                  state. The "Saved ✓" dwell was visual noise. */}
+              {saveStatus === 'saving' && (
                 <span
                   style={{
                     display: 'inline-flex',
@@ -1594,19 +1618,14 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     gap: '4px',
                     fontSize: '11px',
                     fontWeight: 500,
-                    color: saveStatus === 'saved' ? theme.accent : theme.textSecondary,
+                    color: theme.textSecondary,
                     opacity: isFullScreen && !headerHovered ? 0 : 1,
-                    transition: 'opacity 0.2s ease, color 0.2s ease',
+                    transition: 'opacity 0.2s ease',
                     marginRight: '8px',
                     userSelect: 'none',
                   }}
                 >
-                  {saveStatus === 'saved' && (
-                    <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <polyline points="3 8 7 12 13 4" />
-                    </svg>
-                  )}
-                  {saveStatus === 'saving' ? 'Saving…' : 'Saved'}
+                  Saving…
                 </span>
               )}
 
@@ -1722,9 +1741,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   flex: 1,
                   minHeight: '400px',
                   padding: '16px',
-                  fontSize: '14px',
-                  lineHeight: 1.6,
-                  fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
+                  // Match the rendered view's base size so toggling between
+                  // edit and rendered doesn't visually jump. The A/A/A
+                  // controls feed textSize, so the editor scales with them.
+                  fontSize: textSizes[textSize].base,
+                  lineHeight: 1.5,
+                  fontFamily: fonts.serif,
                   backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
                   border: `1px solid ${theme.border}`,
                   borderRadius: '8px',
@@ -1797,9 +1819,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               className="librarian-content"
               onClick={(e) => {
                 if (!activeReading) return;
-                const target = e.target as HTMLElement;
-                if (target.closest('a, button, input, textarea, select, img, code')) return;
-                if ((window.getSelection()?.toString() ?? '').trim() !== '') return;
+                if (!shouldEnterEditOnClick(e)) return;
                 enterEditMode();
               }}
               style={{
@@ -2018,26 +2038,46 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       {children}
                     </li>
                   ),
-                  a: ({ href, children }) => (
-                    <a
-                      href={href}
-                      style={{
-                        color: theme.accent,
-                        textDecoration: 'none',
-                      }}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (!href) return;
-                        if (href.startsWith('wiki://')) {
-                          openWikiHref(href);
-                          return;
-                        }
-                        window.shellAPI?.openExternal(href);
-                      }}
-                    >
-                      {children}
-                    </a>
-                  ),
+                  a: ({ href, children }) => {
+                    const unresolved = isUnresolvedWikiHref(href);
+                    return (
+                      <a
+                        href={href}
+                        style={{
+                          color: unresolved ? '#ef4444' : theme.accent,
+                          textDecoration: unresolved ? 'underline dashed' : 'none',
+                          textUnderlineOffset: unresolved ? '2px' : undefined,
+                          cursor: 'pointer',
+                        }}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          // Markdown like `[categories/tool]()` renders an
+                          // <a> with an empty href — fall back to the link
+                          // text so these still resolve through the index.
+                          const effectiveHref = href && href.trim()
+                            ? href
+                            : (e.currentTarget.textContent?.trim() ?? '');
+                          const action = classifyLinkHref(effectiveHref, wikiIndex);
+                          switch (action.kind) {
+                            case 'create':
+                              void createUnresolvedWikiLink(action.title);
+                              return;
+                            case 'wiki':
+                              openWikiPage(action.relPath);
+                              return;
+                            case 'external':
+                              window.shellAPI?.openExternal(action.href);
+                              return;
+                            case 'noop':
+                              return;
+                          }
+                        }}
+                      >
+                        {children}
+                      </a>
+                    );
+                  },
                   hr: () => (
                     <hr
                       style={{

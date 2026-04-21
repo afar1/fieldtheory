@@ -1599,6 +1599,11 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.createWikiDir(dirName);
   });
 
+  ipcMain.handle('wiki:rename', (_event, relPath: string, newName: string): string | null => {
+    if (!librarianManager) return null;
+    return librarianManager.renameWikiPage(relPath, newName);
+  });
+
   // Recent items (wiki + external). Returns the updated list so the renderer
   // can re-render without a second round-trip; also broadcasts `recent:changed`
   // so other windows/components (e.g. sidebar) drop stale entries immediately.
@@ -5147,7 +5152,7 @@ function setupClipboardIPCHandlers(): void {
       commandLauncherWindow?.hide(true);
 
       if (isTerminal || isIDE) {
-        clipboard.writeText(`[resume from handoff: ${fileName}]\n${filePath} `);
+        clipboard.writeText(`${fileName}\n${filePath} `);
         clipboardManager?.syncClipboardHash();
       } else {
         const plistData = plist.build([filePath]);
