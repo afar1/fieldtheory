@@ -89,6 +89,12 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const [newCommandName, setNewCommandName] = useState('');
   const newCommandInputRef = useRef<HTMLInputElement>(null);
 
+  // Inline rename input — replaces window.prompt(), which Electron silently
+  // disables. `renamingPath` is the filePath currently being renamed.
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+
   // Text size
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('commands-text-size');
@@ -401,13 +407,22 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     loadCommand();
   }, [selectedPath]);
 
-  // Listen for commands changes
+  // Listen for commands changes. Also refresh on window focus as a safety
+  // net — fs.watch with recursive:true is flaky on macOS for renames, so
+  // external filename changes can be missed until the user comes back.
   useEffect(() => {
     const unsubscribe = window.commandsAPI?.onCommandsChanged((updatedCommands) => {
       setCommands(updatedCommands);
     });
-
-    return () => unsubscribe?.();
+    const onFocus = async () => {
+      const fresh = await window.commandsAPI?.getCommands();
+      if (fresh) setCommands(fresh);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      unsubscribe?.();
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   // Check if selected command is already shared
@@ -627,50 +642,25 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     }
   }, []);
 
-  // Create new command handler
+  // Create new command handler — routes to the inline input per directory
+  // since Electron silently disables window.prompt(). If no directory is
+  // configured yet, auto-create the default and open its inline input.
   const handleCreateCommand = useCallback(async () => {
-    const name = window.prompt('Enter command name (without .md extension):');
-    if (!name) return;
-
-    // Auto-create default directory if no directories configured
-    let targetDir: string;
+    let targetDir: string | null = null;
     if (watchedDirs.length === 0) {
       const defaultDir = await window.commandsAPI?.createDefaultDirectory();
       if (!defaultDir) return;
       targetDir = defaultDir;
-      // Refresh watched dirs
       const dirs = await window.commandsAPI?.getWatchedDirs();
-      if (dirs) {
-        setWatchedDirs(dirs);
-      }
-    } else if (watchedDirs.length === 1) {
-      targetDir = watchedDirs[0].path;
+      if (dirs) setWatchedDirs(dirs);
     } else {
-      // Multiple directories - prompt which one
-      const dirIndex = window.prompt(
-        `Select directory (1-${watchedDirs.length}):\n${watchedDirs.map((d, i) => `${i + 1}. ${d.path}`).join('\n')}`
-      );
-      const idx = parseInt(dirIndex || '1', 10) - 1;
-      if (idx >= 0 && idx < watchedDirs.length) {
-        targetDir = watchedDirs[idx].path;
-      } else {
-        targetDir = watchedDirs[0].path;
-      }
+      // Default to the first watched directory. Users with multiple can
+      // still click the "+" on a specific folder header.
+      targetDir = watchedDirs[0].path;
     }
-
-    const initialContent = `# ${name}\n\n`;
-    const result = await window.commandsAPI?.createCommand(targetDir, name, initialContent);
-    if (result) {
-      // Refresh and select the new command
-      const updatedCommands = await window.commandsAPI?.getCommands();
-      if (updatedCommands) {
-        setCommands(updatedCommands);
-        setSelectedPath(result.path);
-        // Enter edit mode directly with the content we already know
-        setEditContent(initialContent);
-        setIsEditing(true);
-      }
-    }
+    if (!targetDir) return;
+    setCreatingInDir(targetDir);
+    setNewCommandName('');
   }, [watchedDirs]);
 
   // Create new command in a specific directory
@@ -736,24 +726,43 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     }
   }, [selectedPath]);
 
-  // Rename command handler
-  const handleRenameCommand = useCallback(async (filePath: string, currentName: string) => {
-    const newName = window.prompt('Enter new command name (without .md extension):', currentName);
-    if (!newName || newName === currentName) return;
+  // Rename command handler — kicks off the inline input in the sidebar.
+  // Actual rename happens in commitRename() when the user confirms.
+  const handleRenameCommand = useCallback((filePath: string, currentName: string) => {
+    setRenamingPath(filePath);
+    setRenameDraft(currentName);
+  }, []);
 
-    const newFilePath = await window.commandsAPI?.renameCommand(filePath, newName);
+  const cancelRename = useCallback(() => {
+    setRenamingPath(null);
+    setRenameDraft('');
+  }, []);
+
+  const commitRename = useCallback(async () => {
+    if (!renamingPath) return;
+    const trimmed = renameDraft.trim();
+    const cmd = commands.find((c) => c.filePath === renamingPath);
+    if (!trimmed || !cmd || trimmed === cmd.displayName) {
+      cancelRename();
+      return;
+    }
+    const newFilePath = await window.commandsAPI?.renameCommand(renamingPath, trimmed);
     if (newFilePath) {
-      // Refresh commands
-      const updatedCommands = await window.commandsAPI?.getCommands();
-      if (updatedCommands) {
-        setCommands(updatedCommands);
-        // Update selected path to the new file path
+      const updated = await window.commandsAPI?.getCommands();
+      if (updated) {
+        setCommands(updated);
         setSelectedPath(newFilePath);
       }
     } else {
       window.alert('Failed to rename command. A file with that name may already exist.');
     }
-  }, []);
+    cancelRename();
+  }, [renamingPath, renameDraft, commands, cancelRename]);
+
+  // Autofocus the rename input when it appears.
+  useEffect(() => {
+    if (renamingPath) renameInputRef.current?.focus();
+  }, [renamingPath]);
 
   // Close context menu on click-outside or Escape
   useEffect(() => {
@@ -1012,7 +1021,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 {items.map((cmd) => (
                   <div
                     key={cmd.filePath}
-                    onClick={() => handleSelectCommand(cmd.filePath)}
+                    onClick={() => renamingPath !== cmd.filePath && handleSelectCommand(cmd.filePath)}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setContextMenu({ x: e.clientX, y: e.clientY, filePath: cmd.filePath, name: cmd.displayName });
@@ -1033,19 +1042,44 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                       transition: 'background-color 0.1s ease',
                     }}
                   >
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: theme.text,
-                        lineHeight: 1.3,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {cmd.displayName}
-                    </div>
+                    {renamingPath === cmd.filePath ? (
+                      <input
+                        ref={renameInputRef}
+                        type="text"
+                        value={renameDraft}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
+                          else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
+                        }}
+                        onBlur={() => { void commitRename(); }}
+                        onClick={(e) => e.stopPropagation()}
+                        style={{
+                          width: '100%',
+                          padding: '2px 6px',
+                          fontSize: '12px',
+                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+                          border: `1px solid ${theme.accent}`,
+                          borderRadius: '4px',
+                          color: theme.text,
+                          outline: 'none',
+                        }}
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          color: theme.text,
+                          lineHeight: 1.3,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {cmd.displayName}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
