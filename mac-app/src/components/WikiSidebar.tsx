@@ -22,11 +22,30 @@ interface UnifiedFolder {
   canCreateFile?: boolean;
 }
 
+type SidebarNode =
+  | {
+      kind: 'dir';
+      id: string;
+      name: string;
+      label: string;
+      relPath: string;
+      rootPath: string;
+      builtin: boolean;
+      canCreateFile: boolean;
+      canRemoveRoot?: boolean;
+      children: SidebarNode[];
+    }
+  | {
+      kind: 'file';
+      id: string;
+      item: UnifiedItem;
+    };
+
 // Lets callers (keyboard shortcuts) drive the inline-create UI since
 // Electron silently returns null from window.prompt().
 export interface WikiCreationController {
   beginCreateFile: (folder?: string) => void;
-  beginCreateDir: () => void;
+  beginCreateDir: (parent?: string) => void;
 }
 
 interface WikiSidebarProps {
@@ -44,32 +63,9 @@ interface WikiSidebarProps {
   creationControllerRef?: MutableRefObject<WikiCreationController | null>;
 }
 
-function formatDateGroup(timestamp: number): string {
-  const date = new Date(timestamp);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const yesterday = new Date(today);
-  yesterday.setDate(yesterday.getDate() - 1);
-  const itemDate = new Date(date);
-  itemDate.setHours(0, 0, 0, 0);
-
-  if (itemDate.getTime() === today.getTime()) return 'Today';
-  if (itemDate.getTime() === yesterday.getTime()) return 'Yesterday';
-  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-}
-
-function groupItemsByDate(items: UnifiedItem[]): Map<string, UnifiedItem[]> {
-  const sorted = [...items].sort((a, b) => b.timestamp - a.timestamp);
-  const groups = new Map<string, UnifiedItem[]>();
-  for (const item of sorted) {
-    const group = formatDateGroup(item.timestamp);
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group)!.push(item);
-  }
-  return groups;
-}
-
 export type { UnifiedItem, UnifiedFolder, SortMode };
+
+export type { SidebarNode as LibrarySidebarNode };
 
 function matchesLibrarySearch(item: UnifiedItem, normalizedQuery: string): boolean {
   if (!normalizedQuery) return true;
@@ -146,8 +142,173 @@ export function ensureScratchpadPinned(folders: UnifiedFolder[]): UnifiedFolder[
   ];
 }
 
-// memo so textarea keystrokes in the librarian editor don't re-render the
-// entire sidebar tree on every character.
+function makeBookmarksItem(): UnifiedItem {
+  return {
+    id: BOOKMARKS_ITEM_ID,
+    title: 'View bookmarks',
+    type: 'bookmarks',
+    absPath: '',
+    timestamp: 0,
+  };
+}
+
+function sortSidebarNodes(nodes: SidebarNode[]): SidebarNode[] {
+  return [...nodes].sort((a, b) => {
+    const left = a.kind === 'dir' ? a.label : a.item.title;
+    const right = b.kind === 'dir' ? b.label : b.item.title;
+    return left.localeCompare(right, undefined, { sensitivity: 'base' });
+  });
+}
+
+function countSidebarItems(nodes: SidebarNode[]): number {
+  return nodes.reduce((total, node) => {
+    if (node.kind === 'file') return total + (node.item.type === 'bookmarks' ? 0 : 1);
+    return total + countSidebarItems(node.children);
+  }, 0);
+}
+
+function collectSidebarItems(nodes: SidebarNode[]): UnifiedItem[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === 'file') return [node.item];
+    return collectSidebarItems(node.children);
+  });
+}
+
+function matchesSidebarNode(node: SidebarNode, normalizedQuery: string): boolean {
+  if (node.kind === 'file') return matchesLibrarySearch(node.item, normalizedQuery);
+  return node.label.toLowerCase().includes(normalizedQuery) || node.relPath.toLowerCase().includes(normalizedQuery);
+}
+
+function filterSidebarNodes(nodes: SidebarNode[], searchQuery: string): SidebarNode[] {
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  if (!normalizedQuery) return nodes;
+
+  const filtered: SidebarNode[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'file') {
+      if (matchesSidebarNode(node, normalizedQuery)) filtered.push(node);
+      continue;
+    }
+    if (matchesSidebarNode(node, normalizedQuery)) {
+      filtered.push(node);
+      continue;
+    }
+    const children = filterSidebarNodes(node.children, normalizedQuery);
+    if (children.length > 0) filtered.push({ ...node, children });
+  }
+  return filtered;
+}
+
+function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot): SidebarNode {
+  if (node.kind === 'file') {
+    const type = root.builtin ? 'wiki' : 'external';
+    const id = root.builtin ? `wiki:${node.relPath}` : `external:${node.absPath}`;
+    return {
+      kind: 'file',
+      id,
+      item: {
+        id,
+        title: node.title,
+        type,
+        absPath: node.absPath,
+        relPath: root.builtin ? node.relPath : undefined,
+        timestamp: node.lastUpdated,
+      },
+    };
+  }
+
+  return {
+    kind: 'dir',
+    id: `${root.path}::${node.relPath}`,
+    name: node.name,
+    label: node.name.charAt(0).toUpperCase() + node.name.slice(1),
+    relPath: node.relPath,
+    rootPath: root.path,
+    builtin: root.builtin,
+    canCreateFile: root.builtin,
+    children: sortSidebarNodes(node.children.map((child) => wikiNodeToSidebarNode(child, root))),
+  };
+}
+
+export function ensureScratchpadNodePinned(nodes: SidebarNode[], root: LibraryRoot): SidebarNode[] {
+  const scratchpadIndex = nodes.findIndex((node) => node.kind === 'dir' && node.name === SCRATCHPAD_FOLDER_NAME);
+  if (scratchpadIndex === 0) return nodes;
+  if (scratchpadIndex > 0) {
+    const scratchpad = nodes[scratchpadIndex];
+    return [scratchpad, ...nodes.slice(0, scratchpadIndex), ...nodes.slice(scratchpadIndex + 1)];
+  }
+  return [
+    {
+      kind: 'dir',
+      id: `${root.path}::${SCRATCHPAD_FOLDER_NAME}`,
+      name: SCRATCHPAD_FOLDER_NAME,
+      label: 'Scratchpad',
+      relPath: SCRATCHPAD_FOLDER_NAME,
+      rootPath: root.path,
+      builtin: true,
+      canCreateFile: true,
+      children: [],
+    },
+    ...nodes,
+  ];
+}
+
+export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot): SidebarNode[] {
+  if (!root.builtin) return nodes;
+
+  const bookmarkFolderNames = new Set(['categories', 'domains', 'entities']);
+  const bookmarkNodes: SidebarNode[] = [];
+  const remainingNodes: SidebarNode[] = [];
+
+  for (const node of nodes) {
+    if (node.kind === 'dir' && bookmarkFolderNames.has(node.name)) {
+      bookmarkNodes.push(node);
+    } else {
+      remainingNodes.push(node);
+    }
+  }
+
+  if (bookmarkNodes.length === 0) return nodes;
+
+  return sortSidebarNodes([
+    ...remainingNodes,
+    {
+      kind: 'dir',
+      id: `${root.path}::bookmarks-from-x`,
+      name: 'bookmarks-from-x',
+      label: 'Bookmarks from x.com',
+      relPath: 'bookmarks-from-x',
+      rootPath: root.path,
+      builtin: true,
+      canCreateFile: false,
+      children: [
+        { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
+        ...sortSidebarNodes(bookmarkNodes),
+      ],
+    },
+  ]);
+}
+
+function rootToSidebarNode(root: LibraryRoot): SidebarNode {
+  let children = sortSidebarNodes(root.tree.map((node) => wikiNodeToSidebarNode(node, root)));
+  if (root.builtin) {
+    children = virtualizeBookmarksGroup(children, root);
+    children = ensureScratchpadNodePinned(children, root);
+  }
+  return {
+    kind: 'dir',
+    id: `root:${root.path}`,
+    name: root.label,
+    label: root.label,
+    relPath: '',
+    rootPath: root.path,
+    builtin: root.builtin,
+    canCreateFile: false,
+    canRemoveRoot: !root.builtin,
+    children,
+  };
+}
+
 function WikiSidebar({
   onSelectItem,
   selectedId,
@@ -162,6 +323,7 @@ function WikiSidebar({
 }: WikiSidebarProps) {
   const { theme } = useTheme();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
+  const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>(() => {
     const saved = localStorage.getItem('library-sort-mode');
@@ -178,7 +340,7 @@ function WikiSidebar({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [creating, setCreating] = useState<
     | { kind: 'file'; folder: string }
-    | { kind: 'dir' }
+    | { kind: 'dir'; parent?: string }
     | null
   >(null);
   const [newName, setNewName] = useState('');
@@ -193,6 +355,11 @@ function WikiSidebar({
     }
   });
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    x: number;
+    y: number;
+    node: SidebarNode | null;
+  } | null>(null);
 
   // Auto-expand the parent folder of the selected wiki item so programmatic
   // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
@@ -200,15 +367,19 @@ function WikiSidebar({
   useEffect(() => {
     if (!selectedId?.startsWith('wiki:')) return;
     const relPath = selectedId.slice('wiki:'.length);
-    const folder = relPath.includes('/') ? relPath.split('/')[0] : null;
-    if (!folder) return;
+    const builtinRoot = libraryRoots.find((root) => root.builtin);
+    if (!builtinRoot) return;
+    const parts = relPath.split('/').filter(Boolean);
+    if (parts.length < 2) return;
     setExpandedFolders((prev) => {
-      if (prev.has(folder)) return prev;
       const next = new Set(prev);
-      next.add(folder);
+      next.add(`root:${builtinRoot.path}`);
+      for (let index = 1; index < parts.length; index += 1) {
+        next.add(`${builtinRoot.path}::${parts.slice(0, index).join('/')}`);
+      }
       return next;
     });
-  }, [selectedId]);
+  }, [selectedId, libraryRoots]);
 
   // Scroll the selected item into view when the selection changes programmatically.
   useEffect(() => {
@@ -221,8 +392,21 @@ function WikiSidebar({
   }, [selectedId]);
 
   const loadTree = useCallback(async () => {
-    const result = await window.wikiAPI?.getTree();
-    if (result) setWikiTree(result);
+    const [treeResult, rootsResult] = await Promise.all([
+      window.wikiAPI?.getTree(),
+      window.libraryAPI?.getRoots(),
+    ]);
+    if (treeResult) setWikiTree(treeResult);
+    if (rootsResult) {
+      setLibraryRoots(rootsResult);
+      setExpandedFolders((prev) => {
+        const next = new Set(prev);
+        for (const root of rootsResult) {
+          if (root.builtin) next.add(`root:${root.path}`);
+        }
+        return next;
+      });
+    }
   }, []);
 
   const loadArtifacts = useCallback(async () => {
@@ -240,6 +424,7 @@ function WikiSidebar({
     loadArtifacts();
     loadRecent();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => loadTree());
+    const unsubLibrary = window.libraryAPI?.onRootsChanged(() => loadTree());
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
@@ -253,6 +438,7 @@ function WikiSidebar({
     window.addEventListener('focus', onFocus);
     return () => {
       unsubWiki?.();
+      unsubLibrary?.();
       unsubAdded?.();
       unsubRemoved?.();
       unsubUpdated?.();
@@ -291,17 +477,19 @@ function WikiSidebar({
       return;
     }
     setExpandedFolders((prev) => {
-      if (prev.has(target)) return prev;
+      const builtinRoot = libraryRoots.find((root) => root.builtin);
+      const targetKey = builtinRoot ? `${builtinRoot.path}::${target}` : target;
+      if (prev.has(targetKey)) return prev;
       const next = new Set(prev);
-      next.add(target);
+      next.add(targetKey);
       return next;
     });
     setCreating({ kind: 'file', folder: target });
     setNewName('');
-  }, [onCreateScratchpadDefault]);
+  }, [libraryRoots, onCreateScratchpadDefault]);
 
-  const beginCreateDir = useCallback(() => {
-    setCreating({ kind: 'dir' });
+  const beginCreateDir = useCallback((parent?: string) => {
+    setCreating({ kind: 'dir', parent });
     setNewName('');
   }, []);
 
@@ -324,15 +512,14 @@ function WikiSidebar({
     const name = newName.trim();
     if (!name || !creating) { cancelCreate(); return; }
     if (creating.kind === 'file') await onCreateFile(creating.folder, name);
-    else await onCreateDir(name);
+    else await onCreateDir(creating.parent ? `${creating.parent}/${name}` : name);
     setCreating(null);
     setNewName('');
   }, [newName, creating, onCreateFile, onCreateDir, cancelCreate]);
 
-  const unifiedFolders: UnifiedFolder[] = useMemo(() => {
-    const folders: UnifiedFolder[] = [];
+  const sidebarRoots = useMemo(() => {
+    const roots: SidebarNode[] = [];
 
-    // Artifacts as a virtual folder
     if (artifacts.length > 0) {
       const items: UnifiedItem[] = artifacts.map((r) => ({
         id: `artifact:${r.path}`,
@@ -343,56 +530,94 @@ function WikiSidebar({
       }));
       if (sortMode === 'alpha') {
         items.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+      } else {
+        items.sort((a, b) => b.timestamp - a.timestamp);
       }
-      folders.push({ name: 'artifacts', label: 'Artifacts', items, canCreateFile: false });
+      roots.push({
+        kind: 'dir',
+        id: 'artifacts',
+        name: 'artifacts',
+        label: 'Artifacts',
+        relPath: 'artifacts',
+        rootPath: 'artifacts',
+        builtin: false,
+        canCreateFile: false,
+        children: items.map((item) => ({ kind: 'file' as const, id: item.id, item })),
+      });
     }
 
-    // Wiki folders
-    for (const wf of wikiTree) {
-      const items: UnifiedItem[] = wf.files.map((p) => ({
-        id: `wiki:${p.relPath}`,
-        title: p.title,
-        type: 'wiki' as const,
-        absPath: p.absPath,
-        relPath: p.relPath,
-        timestamp: p.lastUpdated,
-      }));
-      if (sortMode === 'alpha') {
-        items.sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
-      }
-      const label = wf.name.charAt(0).toUpperCase() + wf.name.slice(1);
-      folders.push({ name: wf.name, label, items, canCreateFile: true });
-    }
+    roots.push(...libraryRoots.map(rootToSidebarNode));
+    return roots;
+  }, [artifacts, libraryRoots, sortMode]);
 
-    folders.sort((a, b) => a.label.localeCompare(b.label));
-    return ensureScratchpadPinned(folders);
-  }, [wikiTree, artifacts, sortMode]);
-
-  const filteredFolders = useMemo(
-    () => filterUnifiedFolders(unifiedFolders, searchQuery),
-    [unifiedFolders, searchQuery]
+  const filteredSidebarRoots = useMemo(
+    () => filterSidebarNodes(sidebarRoots, searchQuery),
+    [sidebarRoots, searchQuery]
   );
 
-  const flatItems = useMemo(() => filteredFolders.flatMap((f) => f.items), [filteredFolders]);
+  const flatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots), [filteredSidebarRoots]);
   if (flatItemsRef) flatItemsRef.current = flatItems;
 
-  const totalPages = unifiedFolders.flatMap((f) => f.items).length;
+  const totalPages = countSidebarItems(sidebarRoots);
   const visiblePages = flatItems.length;
   const isSearching = searchQuery.trim().length > 0;
 
-  const emptyWiki = unifiedFolders.length === 0;
+  const emptyWiki = sidebarRoots.length === 0;
+
+  const closeContextMenu = useCallback(() => setContextMenu(null), []);
+
+  const openContextMenu = useCallback((event: React.MouseEvent, node: SidebarNode | null) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({ x: event.clientX, y: event.clientY, node });
+  }, []);
+
+  useEffect(() => {
+    if (!contextMenu) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeContextMenu();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [contextMenu, closeContextMenu]);
+
+  const contextDir = contextMenu?.node?.kind === 'dir' ? contextMenu.node : null;
+  const contextCreateTarget = contextDir?.builtin && contextDir.relPath ? contextDir.relPath : undefined;
+
+  const addFolderFromPath = useCallback(async () => {
+    closeContextMenu();
+    const picked = await window.libraryAPI?.pickFolder();
+    if (!picked) return;
+    const root = await window.libraryAPI?.addRoot(picked);
+    if (!root) return;
+    await loadTree();
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      next.add(`root:${root.path}`);
+      return next;
+    });
+  }, [closeContextMenu, loadTree]);
+
+  const removeContextRoot = useCallback(async () => {
+    const target = contextDir;
+    closeContextMenu();
+    if (!target?.canRemoveRoot) return;
+    await window.libraryAPI?.removeRoot(target.rootPath);
+    await loadTree();
+  }, [closeContextMenu, contextDir, loadTree]);
 
   return (
-    <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
+    <div
+      onContextMenu={(event) => openContextMenu(event, null)}
+      onClick={closeContextMenu}
+      style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', position: 'relative' }}
+    >
       <style>{`
         .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
         .bm-new-file-btn:hover { opacity: 1 !important; }
       `}</style>
-      {/* Header — sort toggle only; the "Personal wiki" label is redundant
-          alongside the top-level Library tab. */}
       <div style={{ padding: '0 12px 4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
         <div style={{ flex: 1 }} />
-        {/* Sort toggle */}
         <button
           onClick={() => setSortMode(sortMode === 'alpha' ? 'time' : 'alpha')}
           style={{
@@ -452,227 +677,71 @@ function WikiSidebar({
         {isSearching ? `${visiblePages} of ${totalPages} pages` : `${totalPages} pages`}
       </div>
 
-      {/* Bookmarks — pinned leaf above folders */}
-      {(!isSearching || 'bookmarks'.includes(searchQuery.trim().toLowerCase())) && (
-        <div
-          onClick={() =>
-            onSelectItem({
-              id: BOOKMARKS_ITEM_ID,
-              title: 'Bookmarks',
-              type: 'bookmarks',
-              absPath: '',
-              timestamp: 0,
-            })
-          }
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            padding: '6px 12px',
-            margin: '0 0 4px',
-            cursor: 'pointer',
-            fontSize: '12px',
-            fontWeight: 500,
-            color: theme.text,
-            backgroundColor: selectedId === BOOKMARKS_ITEM_ID
-              ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
-              : 'transparent',
-            borderLeft: selectedId === BOOKMARKS_ITEM_ID ? `2px solid ${theme.accent}` : '2px solid transparent',
-            userSelect: 'none',
-          }}
-          onMouseEnter={(e) => {
-            if (selectedId !== BOOKMARKS_ITEM_ID) e.currentTarget.style.backgroundColor = theme.hoverBg;
-          }}
-          onMouseLeave={(e) => {
-            if (selectedId !== BOOKMARKS_ITEM_ID) e.currentTarget.style.backgroundColor = 'transparent';
-          }}
-        >
-          <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" style={{ color: theme.textSecondary, flexShrink: 0 }}>
-            <path d="M2 2a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v13.5a.5.5 0 0 1-.777.416L8 13.101l-5.223 2.815A.5.5 0 0 1 2 15.5V2z" />
-          </svg>
-          <span>Bookmarks</span>
-        </div>
-      )}
-
-      {/* Folder tree */}
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
         </div>
-      ) : filteredFolders.length === 0 ? (
+      ) : filteredSidebarRoots.length === 0 ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages match that search.
         </div>
-      ) : filteredFolders.map((folder) => {
-        const isExpanded = isSearching || expandedFolders.has(folder.name);
-        const dateGroups = sortMode === 'time' ? groupItemsByDate(folder.items) : null;
-        return (
-          <div key={folder.name}>
-            {/* Folder header */}
-            <div
-              className="bm-folder-header"
-              onClick={() => toggleFolder(folder.name)}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '6px 12px',
-                cursor: 'pointer',
-                fontSize: '12px',
-                fontWeight: 500,
-                color: theme.text,
-                userSelect: 'none',
-              }}
-            >
-              <svg
-                width="8"
-                height="8"
-                viewBox="0 0 8 8"
-                fill="currentColor"
-                style={{
-                  transition: 'transform 0.15s ease',
-                  transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-                  flexShrink: 0,
-                  color: theme.textSecondary,
-                }}
-              >
-                <path d="M2 1l4 3-4 3V1z" />
-              </svg>
-              <span>{folder.label}</span>
-              <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
-                {folder.items.length}
-              </span>
-              {folder.canCreateFile !== false && (
-                <button
-                  className="bm-new-file-btn"
-                  onClick={(e) => { e.stopPropagation(); beginCreateFile(folder.name); }}
-                  title={folder.name === SCRATCHPAD_FOLDER_NAME ? "New scratchpad entry" : "New file"}
-                  aria-label={`New file in ${folder.label}`}
-                  style={{
-                    marginLeft: 'auto',
-                    width: '18px',
-                    height: '18px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                    background: 'transparent',
-                    border: 'none',
-                    borderRadius: '3px',
-                    color: theme.textSecondary,
-                    cursor: 'pointer',
-                    opacity: 0,
-                    transition: 'opacity 0.12s ease, background 0.12s ease',
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'transparent';
-                  }}
-                >
-                  <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
-                    <path d="M8 3v10M3 8h10" />
-                  </svg>
-                </button>
-              )}
-            </div>
+      ) : filteredSidebarRoots.map((node) => (
+        <TreeNode
+          key={node.id}
+          node={node}
+          depth={0}
+          isSearching={isSearching}
+          expandedFolders={expandedFolders}
+          toggleFolder={toggleFolder}
+          creating={creating}
+          newName={newName}
+          setNewName={setNewName}
+          createInputRef={createInputRef}
+          submitCreate={submitCreate}
+          cancelCreate={cancelCreate}
+          beginCreateFile={beginCreateFile}
+          selectedId={selectedId}
+          selectedItemRef={selectedItemRef}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          theme={theme}
+          onSelectItem={onSelectItem}
+          onContextMenu={openContextMenu}
+        />
+      ))}
 
-            {/* Inline create input — appears just below the folder header so
-                the user sees it even before the folder finishes expanding. */}
-            {folder.canCreateFile !== false && creating?.kind === 'file' && creating.folder === folder.name && (
-              <div style={{ padding: '4px 12px 4px 28px' }}>
-                <input
-                  ref={createInputRef}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); void submitCreate(); }
-                    else if (e.key === 'Escape') { e.preventDefault(); cancelCreate(); }
-                  }}
-                  onBlur={cancelCreate}
-                  placeholder="Untitled"
-                  style={{
-                    width: '100%',
-                    padding: '4px 6px',
-                    fontSize: '11px',
-                    color: theme.text,
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '4px',
-                    outline: 'none',
-                  }}
-                />
-              </div>
-            )}
+      {creating?.kind === 'dir' && !creating.parent && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={0}
+          placeholder="New folder"
+        />
+      )}
 
-            {/* Expanded file list */}
-            {isExpanded && (
-              <div>
-                {sortMode === 'time' && dateGroups ? (
-                  Array.from(dateGroups.entries()).map(([dateLabel, items]) => (
-                    <div key={dateLabel}>
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '8px',
-                        padding: '8px 12px 4px 28px',
-                      }}>
-                        <span style={{ fontSize: '10px', fontWeight: 600, color: theme.textSecondary, flexShrink: 0, opacity: 0.6 }}>
-                          {dateLabel}
-                        </span>
-                        <div style={{
-                          flex: 1,
-                          height: '1px',
-                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-                        }} />
-                      </div>
-                      {items.map((item) => {
-                        const isSel = item.id === selectedId;
-                        return (
-                          <FileItem
-                            key={item.id}
-                            item={item}
-                            isSelected={isSel}
-                            isHovered={item.id === hoveredId}
-                            theme={theme}
-                            onSelect={() => onSelectItem(item)}
-                            onHover={setHoveredId}
-                            refProp={isSel ? selectedItemRef : undefined}
-                          />
-                        );
-                      })}
-                    </div>
-                  ))
-                ) : (
-                  folder.items.map((item) => {
-                    const isSel = item.id === selectedId;
-                    return (
-                      <FileItem
-                        key={item.id}
-                        item={item}
-                        isSelected={isSel}
-                        isHovered={item.id === hoveredId}
-                        theme={theme}
-                        onSelect={() => onSelectItem(item)}
-                        onHover={setHoveredId}
-                        refProp={isSel ? selectedItemRef : undefined}
-                      />
-                    );
-                  })
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {contextMenu && (
+        <LibraryContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          theme={theme}
+          canRemoveRoot={!!contextDir?.canRemoveRoot}
+          onNewFile={() => {
+            closeContextMenu();
+            beginCreateFile(contextCreateTarget);
+          }}
+          onNewFolder={() => {
+            closeContextMenu();
+            beginCreateDir(contextCreateTarget);
+          }}
+          onAddFolder={addFolderFromPath}
+          onRemoveRoot={removeContextRoot}
+        />
+      )}
 
-      {/* Recent block — pinned to the bottom, below the folder tree. Wiki +
-          external, each with show more/less. We filter out wiki entries that
-          no longer exist in the tree so a stale recent.json (missed FS event
-          or pre-fix entries) can't keep pointing at a trashed file. */}
       {!isSearching && recent.length > 0 && (
         <RecentBlock
           recent={filterStaleRecent(recent, wikiTree)}
@@ -711,13 +780,289 @@ function WikiSidebar({
 
 export default memo(WikiSidebar);
 
-function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refProp }: {
+function CreateInput({ inputRef, value, onChange, onSubmit, onCancel, theme, depth, placeholder }: {
+  inputRef: MutableRefObject<HTMLInputElement | null>;
+  value: string;
+  onChange: (value: string) => void;
+  onSubmit: () => void | Promise<void>;
+  onCancel: () => void;
+  theme: ReturnType<typeof useTheme>['theme'];
+  depth: number;
+  placeholder: string;
+}) {
+  return (
+    <div style={{ padding: `4px 12px 4px ${28 + depth * 12}px` }}>
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); void onSubmit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }}
+        onBlur={onCancel}
+        placeholder={placeholder}
+        style={{
+          width: '100%',
+          padding: '4px 6px',
+          fontSize: '11px',
+          color: theme.text,
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+          border: `1px solid ${theme.border}`,
+          borderRadius: '4px',
+          outline: 'none',
+        }}
+      />
+    </div>
+  );
+}
+
+function TreeNode({
+  node,
+  depth,
+  isSearching,
+  expandedFolders,
+  toggleFolder,
+  creating,
+  newName,
+  setNewName,
+  createInputRef,
+  submitCreate,
+  cancelCreate,
+  beginCreateFile,
+  selectedId,
+  selectedItemRef,
+  hoveredId,
+  setHoveredId,
+  theme,
+  onSelectItem,
+  onContextMenu,
+}: {
+  node: SidebarNode;
+  depth: number;
+  isSearching: boolean;
+  expandedFolders: Set<string>;
+  toggleFolder: (id: string) => void;
+  creating: { kind: 'file'; folder: string } | { kind: 'dir'; parent?: string } | null;
+  newName: string;
+  setNewName: (value: string) => void;
+  createInputRef: MutableRefObject<HTMLInputElement | null>;
+  submitCreate: () => void | Promise<void>;
+  cancelCreate: () => void;
+  beginCreateFile: (folder?: string) => void;
+  selectedId: string | null;
+  selectedItemRef: MutableRefObject<HTMLDivElement | null>;
+  hoveredId: string | null;
+  setHoveredId: (id: string | null) => void;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onSelectItem: (item: UnifiedItem) => void;
+  onContextMenu: (event: React.MouseEvent, node: SidebarNode | null) => void;
+}) {
+  if (node.kind === 'file') {
+    const isSel = node.item.id === selectedId;
+    return (
+      <FileItem
+        item={node.item}
+        depth={depth}
+        isSelected={isSel}
+        isHovered={node.item.id === hoveredId}
+        theme={theme}
+        onSelect={() => onSelectItem(node.item)}
+        onHover={setHoveredId}
+        onContextMenu={(event) => onContextMenu(event, node)}
+        refProp={isSel ? selectedItemRef : undefined}
+      />
+    );
+  }
+
+  const isExpanded = isSearching || expandedFolders.has(node.id);
+  const itemCount = countSidebarItems(node.children);
+
+  return (
+    <div>
+      <div
+        className="bm-folder-header"
+        onClick={() => toggleFolder(node.id)}
+        onContextMenu={(event) => onContextMenu(event, node)}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          padding: `6px 12px 6px ${12 + depth * 12}px`,
+          cursor: 'pointer',
+          fontSize: '12px',
+          fontWeight: 500,
+          color: theme.text,
+          userSelect: 'none',
+        }}
+      >
+        <svg
+          width="8"
+          height="8"
+          viewBox="0 0 8 8"
+          fill="currentColor"
+          style={{
+            transition: 'transform 0.15s ease',
+            transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
+            flexShrink: 0,
+            color: theme.textSecondary,
+          }}
+        >
+          <path d="M2 1l4 3-4 3V1z" />
+        </svg>
+        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label}</span>
+        <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
+          {itemCount}
+        </span>
+        {node.canCreateFile && (
+          <button
+            className="bm-new-file-btn"
+            onClick={(e) => { e.stopPropagation(); beginCreateFile(node.relPath); }}
+            title={node.name === SCRATCHPAD_FOLDER_NAME ? 'New scratchpad entry' : 'New file'}
+            aria-label={`New file in ${node.label}`}
+            style={{
+              marginLeft: 'auto',
+              width: '18px',
+              height: '18px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+              background: 'transparent',
+              border: 'none',
+              borderRadius: '3px',
+              color: theme.textSecondary,
+              cursor: 'pointer',
+              opacity: 0,
+              transition: 'opacity 0.12s ease, background 0.12s ease',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+          >
+            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+              <path d="M8 3v10M3 8h10" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {node.canCreateFile && creating?.kind === 'file' && creating.folder === node.relPath && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={depth}
+          placeholder="Untitled"
+        />
+      )}
+
+      {node.builtin && creating?.kind === 'dir' && creating.parent === node.relPath && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={depth}
+          placeholder="New folder"
+        />
+      )}
+
+      {isExpanded && node.children.map((child) => (
+        <TreeNode
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          isSearching={isSearching}
+          expandedFolders={expandedFolders}
+          toggleFolder={toggleFolder}
+          creating={creating}
+          newName={newName}
+          setNewName={setNewName}
+          createInputRef={createInputRef}
+          submitCreate={submitCreate}
+          cancelCreate={cancelCreate}
+          beginCreateFile={beginCreateFile}
+          selectedId={selectedId}
+          selectedItemRef={selectedItemRef}
+          hoveredId={hoveredId}
+          setHoveredId={setHoveredId}
+          theme={theme}
+          onSelectItem={onSelectItem}
+          onContextMenu={onContextMenu}
+        />
+      ))}
+    </div>
+  );
+}
+
+function LibraryContextMenu({ x, y, theme, canRemoveRoot, onNewFile, onNewFolder, onAddFolder, onRemoveRoot }: {
+  x: number;
+  y: number;
+  theme: ReturnType<typeof useTheme>['theme'];
+  canRemoveRoot: boolean;
+  onNewFile: () => void;
+  onNewFolder: () => void;
+  onAddFolder: () => void;
+  onRemoveRoot: () => void;
+}) {
+  const itemStyle: React.CSSProperties = {
+    display: 'block',
+    width: '100%',
+    padding: '6px 10px',
+    textAlign: 'left',
+    fontSize: '12px',
+    color: theme.text,
+    background: 'transparent',
+    border: 'none',
+    cursor: 'pointer',
+  };
+
+  return (
+    <div
+      onClick={(event) => event.stopPropagation()}
+      style={{
+        position: 'fixed',
+        left: x,
+        top: y,
+        zIndex: 1000,
+        minWidth: '170px',
+        padding: '4px',
+        backgroundColor: theme.surface2,
+        border: `1px solid ${theme.border}`,
+        borderRadius: '6px',
+        boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.45)' : '0 8px 24px rgba(0,0,0,0.15)',
+      }}
+    >
+      <button style={itemStyle} onClick={onNewFile}>New file</button>
+      <button style={itemStyle} onClick={onNewFolder}>New folder</button>
+      <button style={itemStyle} onClick={onAddFolder}>Add folder from path...</button>
+      {canRemoveRoot && (
+        <button style={itemStyle} onClick={onRemoveRoot}>Remove from library</button>
+      )}
+    </div>
+  );
+}
+
+function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onHover, onContextMenu, refProp }: {
   item: UnifiedItem;
+  depth?: number;
   isSelected: boolean;
   isHovered: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelect: () => void;
   onHover: (id: string | null) => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
   refProp?: MutableRefObject<HTMLDivElement | null>;
 }) {
   const [renaming, setRenaming] = useState(false);
@@ -744,6 +1089,7 @@ function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refPr
   return (
     <div
       ref={refProp}
+      onContextMenu={onContextMenu}
       onClick={(e) => {
         // Cmd-click on a wiki item enters inline rename; regular click selects.
         if (canRename && (e.metaKey || e.ctrlKey)) {
@@ -758,7 +1104,7 @@ function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refPr
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
       style={{
-        padding: '6px 8px 6px 28px',
+        padding: `6px 8px 6px ${28 + depth * 12}px`,
         cursor: 'pointer',
         backgroundColor: isSelected
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
@@ -811,7 +1157,7 @@ function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refPr
             {item.title}
           </div>
         )}
-        {isHovered && (
+        {isHovered && item.absPath && item.type !== 'bookmarks' && (
           <button
             onClick={(e) => {
               e.stopPropagation();
@@ -870,13 +1216,10 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
 
   const showBothSubheads = wikiTotal > 0 && externalTotal > 0;
   const headerStyle: React.CSSProperties = {
-    padding: '6px 12px 2px',
-    fontSize: '10px',
-    fontWeight: 600,
+    padding: '6px 12px',
+    fontSize: '12px',
+    fontWeight: 500,
     color: theme.textSecondary,
-    letterSpacing: '0.3px',
-    textTransform: 'uppercase',
-    opacity: 0.7,
     display: 'flex',
     alignItems: 'center',
     gap: '6px',
