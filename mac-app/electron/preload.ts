@@ -3528,6 +3528,27 @@ interface WikiFolder {
   name: string;
   files: WikiPageMeta[];
 }
+type WikiNode =
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+interface LibraryRoot {
+  path: string;
+  label: string;
+  builtin: boolean;
+  tree: WikiNode[];
+}
+
+const libraryAPI = {
+  getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
+  addRoot: (dirPath: string): Promise<LibraryRoot | null> => ipcRenderer.invoke('library:addRoot', dirPath),
+  removeRoot: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('library:removeRoot', dirPath),
+  pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
+  onRootsChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('library:changed', handler);
+    return () => ipcRenderer.removeListener('library:changed', handler);
+  },
+};
 
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
@@ -3557,6 +3578,7 @@ const wikiAPI = {
     return () => ipcRenderer.removeListener('wiki:openScratchpad', handler);
   },
 };
+contextBridge.exposeInMainWorld('libraryAPI', libraryAPI);
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
 
 interface ExternalMarkdownFile {

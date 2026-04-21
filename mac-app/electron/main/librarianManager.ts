@@ -14,6 +14,7 @@ const TOML_NOTIFY_LINE_RE = /^\s*notify\s*=.*$\n?/gm;
 const TOML_WRITABLE_ROOTS_BLOCK_RE = /^\s*writable_roots\s*=\s*\[[\s\S]*?\]\s*\n?/gm;
 const TOML_SANDBOX_WORKSPACE_WRITE_HEADER = '[sandbox_workspace_write]';
 const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
+const WIKI_SKIP_FILE_NAMES = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
 const LIBRARIAN_INDEX_VERSION = 2;
 const ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE = /^\*(?:Model|Signed by):\s*(.+?)\*$/i;
 const ARTIFACT_MODEL_SIGNATURE_INSTRUCTION_RE = /\*(?:model|signed by):\s*/i;
@@ -1299,6 +1300,17 @@ export interface WikiFolder {
   files: WikiPageMeta[];
 }
 
+export type WikiNode =
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+
+export interface LibraryRoot {
+  path: string;
+  label: string;
+  builtin: boolean;
+  tree: WikiNode[];
+}
+
 export interface ReadingMeta {
   path: string;
   title: string;
@@ -1330,6 +1342,7 @@ export interface WatchedDir {
  */
 interface LibrarianSettings {
   watchedDirs: string[];
+  libraryRoots?: string[];
   enabled: boolean;                    // Single master toggle
   autoShowEnabled: boolean;
   autoShowStealsFocus?: boolean;
@@ -1383,6 +1396,7 @@ export class LibrarianManager extends EventEmitter {
   private oldLibrarianDir: string;
   private cache: Map<string, ReadingMeta> = new Map();
   private watchers: Map<string, chokidar.FSWatcher> = new Map();
+  private libraryRootWatchers: Map<string, chokidar.FSWatcher> = new Map();
   private settings: LibrarianSettings;
   private scanningDirs: Set<string> = new Set();
   private userDataManager: UserDataManager | null = null;
@@ -1411,6 +1425,7 @@ export class LibrarianManager extends EventEmitter {
 
     // Start watching configured directories
     this.startWatching();
+    this.startLibraryRootWatchers();
 
     // Log current status for all projects with .librarian directories
     this.logAllProjectStatuses();
@@ -1488,6 +1503,10 @@ export class LibrarianManager extends EventEmitter {
       await watcher.close();
     }
     this.watchers.clear();
+    for (const watcher of this.libraryRootWatchers.values()) {
+      await watcher.close();
+    }
+    this.libraryRootWatchers.clear();
     this.cache.clear();
 
     // Update paths
@@ -1498,6 +1517,7 @@ export class LibrarianManager extends EventEmitter {
     this.ensureCentralArtifactsDir();
     this.loadIndex();
     this.startWatching();
+    this.startLibraryRootWatchers();
 
     // Sync user's settings to global config for hooks
     this.syncToGlobalConfig(false);
@@ -1512,6 +1532,10 @@ export class LibrarianManager extends EventEmitter {
       await watcher.close();
     }
     this.watchers.clear();
+    for (const watcher of this.libraryRootWatchers.values()) {
+      await watcher.close();
+    }
+    this.libraryRootWatchers.clear();
     this.cache.clear();
 
     // Disable hooks in global config (hooks should not fire when logged out)
@@ -1567,6 +1591,7 @@ export class LibrarianManager extends EventEmitter {
   private loadSettings(): LibrarianSettings {
     const defaults: LibrarianSettings = {
       watchedDirs: [],
+      libraryRoots: [],
       enabled: true,
       autoShowEnabled: true,
       autoShowStealsFocus: true,
@@ -1590,6 +1615,7 @@ export class LibrarianManager extends EventEmitter {
 
         return {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
+          libraryRoots: Array.isArray(data.libraryRoots) ? data.libraryRoots : defaults.libraryRoots,
           enabled: enabled ?? defaults.enabled,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           autoShowStealsFocus: data.autoShowStealsFocus ?? defaults.autoShowStealsFocus,
@@ -2029,6 +2055,41 @@ export class LibrarianManager extends EventEmitter {
     this.watchDiscoveryFile();
   }
 
+  private watchLibraryRoot(dirPath: string): void {
+    const normalizedDir = this.normalizePath(dirPath);
+    if (this.libraryRootWatchers.has(normalizedDir) || !fs.existsSync(normalizedDir)) {
+      return;
+    }
+
+    const watcher = chokidar.watch(normalizedDir, {
+      ignoreInitial: true,
+      awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
+      ignorePermissionErrors: true,
+    });
+    const emitChange = () => this.emit('library:changed', normalizedDir);
+    watcher.on('add', emitChange);
+    watcher.on('change', emitChange);
+    watcher.on('unlink', emitChange);
+    watcher.on('addDir', emitChange);
+    watcher.on('unlinkDir', emitChange);
+    watcher.on('error', (error) => log.error('Library root watcher error:', error));
+    this.libraryRootWatchers.set(normalizedDir, watcher);
+  }
+
+  private unwatchLibraryRoot(dirPath: string): void {
+    const normalizedDir = this.normalizePath(dirPath);
+    const watcher = this.libraryRootWatchers.get(normalizedDir);
+    if (!watcher) return;
+    watcher.close();
+    this.libraryRootWatchers.delete(normalizedDir);
+  }
+
+  private startLibraryRootWatchers(): void {
+    for (const dirPath of this.settings.libraryRoots ?? []) {
+      this.watchLibraryRoot(dirPath);
+    }
+  }
+
   /**
    * Watch the discovery file for auto-adding new watched directories.
    * The state-enforced hook writes project paths here when creating artifacts.
@@ -2146,56 +2207,204 @@ export class LibrarianManager extends EventEmitter {
     return path.basename(filePath, '.md');
   }
 
+  private toPortableRelPath(relPath: string): string {
+    return relPath.split(path.sep).join('/');
+  }
+
+  private isInsidePath(parentPath: string, childPath: string): boolean {
+    const rel = path.relative(parentPath, childPath);
+    return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+  }
+
+  private libraryRootKey(dirPath: string): string {
+    try {
+      return fs.realpathSync(dirPath);
+    } catch {
+      return this.normalizePath(dirPath);
+    }
+  }
+
+  private resolveExistingDirectoryPath(dirPath: string): string | null {
+    const expandedPath = this.expandPath(dirPath.trim());
+    const normalizedPath = this.normalizePath(expandedPath);
+    try {
+      if (!fs.existsSync(normalizedPath) || !fs.statSync(normalizedPath).isDirectory()) {
+        return null;
+      }
+      return fs.realpathSync(normalizedPath);
+    } catch {
+      return null;
+    }
+  }
+
+  private scanMarkdownTree(rootPath: string, currentDir = rootPath, seenRealPaths = new Set<string>()): WikiNode[] {
+    if (!fs.existsSync(currentDir)) return [];
+
+    let currentRealPath: string;
+    try {
+      currentRealPath = fs.realpathSync(currentDir);
+    } catch {
+      return [];
+    }
+
+    if (seenRealPaths.has(currentRealPath)) return [];
+    seenRealPaths.add(currentRealPath);
+
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(currentDir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+
+    const nodes: WikiNode[] = [];
+    for (const entry of entries) {
+      if (entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
+
+      const absPath = path.join(currentDir, entry.name);
+      let stats: fs.Stats;
+      try {
+        stats = fs.statSync(absPath);
+      } catch {
+        continue;
+      }
+
+      if (stats.isDirectory()) {
+        const relPath = this.toPortableRelPath(path.relative(rootPath, absPath));
+        nodes.push({
+          kind: 'dir',
+          name: entry.name,
+          relPath,
+          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths),
+        });
+        continue;
+      }
+
+      if (!stats.isFile() || !entry.name.endsWith('.md') || WIKI_SKIP_FILE_NAMES.has(entry.name)) {
+        continue;
+      }
+
+      const nameWithoutExt = entry.name.replace(/\.md$/i, '');
+      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, nameWithoutExt)));
+      nodes.push({
+        kind: 'file',
+        relPath,
+        absPath,
+        name: nameWithoutExt,
+        title: this.parseWikiTitle(absPath),
+        lastUpdated: Math.floor(stats.mtimeMs),
+      });
+    }
+
+    return nodes.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  }
+
+  private flattenWikiFiles(nodes: WikiNode[]): WikiPageMeta[] {
+    return nodes.flatMap((node) => {
+      if (node.kind === 'file') {
+        return [{
+          relPath: node.relPath,
+          absPath: node.absPath,
+          name: node.name,
+          title: node.title,
+          lastUpdated: node.lastUpdated,
+        }];
+      }
+      return this.flattenWikiFiles(node.children);
+    });
+  }
+
   getWikiTree(): WikiFolder[] {
     const wikiRoot = this.wikiDir;
     if (!fs.existsSync(wikiRoot)) return [];
 
     if (!this.wikiWatcher) this.startWikiWatcher();
 
-    const SKIP = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
-    let subdirs: string[];
-    try {
-      subdirs = fs.readdirSync(wikiRoot)
-        .filter(f => !SKIP.has(f) && !isHiddenWikiFolderName(f) && fs.statSync(path.join(wikiRoot, f)).isDirectory())
-        .sort();
-    } catch { return []; }
+    const tree = this.scanMarkdownTree(wikiRoot);
     const folders: WikiFolder[] = [];
 
-    for (const dirName of subdirs) {
-      const dirPath = path.join(wikiRoot, dirName);
-
-      let files: string[];
-      try {
-        files = fs.readdirSync(dirPath)
-          .filter((f) => f.endsWith('.md') && !isHiddenWikiFileName(f))
-          .sort();
-      } catch {
-        continue;
-      }
-
-      const pages: WikiPageMeta[] = files.map((f) => {
-        const absPath = path.join(dirPath, f);
-        const nameWithoutExt = f.replace(/\.md$/, '');
-        const stats = fs.statSync(absPath);
-        return {
-          relPath: `${dirName}/${nameWithoutExt}`,
-          absPath,
-          name: nameWithoutExt,
-          title: this.parseWikiTitle(absPath),
-          lastUpdated: Math.floor(stats.mtimeMs),
-        };
-      });
-
+    for (const node of tree) {
+      if (node.kind !== 'dir') continue;
+      const pages = this.flattenWikiFiles(node.children);
       if (pages.length > 0) {
-        folders.push({ name: dirName, files: pages });
+        folders.push({ name: node.name, files: pages });
       }
     }
 
     return folders;
   }
 
+  getLibraryRoots(): LibraryRoot[] {
+    if (!this.wikiWatcher) this.startWikiWatcher();
+
+    const roots: LibraryRoot[] = [
+      {
+        path: this.wikiDir,
+        label: 'Wiki',
+        builtin: true,
+        tree: this.scanMarkdownTree(this.wikiDir),
+      },
+    ];
+    const seen = new Set<string>([this.libraryRootKey(this.wikiDir)]);
+
+    for (const savedRoot of this.settings.libraryRoots ?? []) {
+      const normalizedRoot = this.normalizePath(savedRoot);
+      const key = this.libraryRootKey(normalizedRoot);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      roots.push({
+        path: normalizedRoot,
+        label: path.basename(normalizedRoot) || normalizedRoot,
+        builtin: false,
+        tree: this.scanMarkdownTree(normalizedRoot),
+      });
+    }
+
+    return roots;
+  }
+
+  addLibraryRoot(dirPath: string): LibraryRoot | null {
+    const canonicalPath = this.resolveExistingDirectoryPath(dirPath);
+    if (!canonicalPath) return null;
+
+    const newKey = this.libraryRootKey(canonicalPath);
+    if (newKey === this.libraryRootKey(this.wikiDir)) return null;
+    if ((this.settings.libraryRoots ?? []).some((rootPath) => this.libraryRootKey(rootPath) === newKey)) {
+      return null;
+    }
+
+    this.settings.libraryRoots = [...(this.settings.libraryRoots ?? []), canonicalPath];
+    this.saveSettings();
+    this.watchLibraryRoot(canonicalPath);
+    this.emit('library:changed', canonicalPath);
+
+    return {
+      path: canonicalPath,
+      label: path.basename(canonicalPath) || canonicalPath,
+      builtin: false,
+      tree: this.scanMarkdownTree(canonicalPath),
+    };
+  }
+
+  removeLibraryRoot(dirPath: string): boolean {
+    const expandedPath = this.expandPath(dirPath.trim());
+    const normalizedPath = this.normalizePath(expandedPath);
+    const targetKey = this.libraryRootKey(normalizedPath);
+    const roots = this.settings.libraryRoots ?? [];
+    const index = roots.findIndex((rootPath) => this.libraryRootKey(rootPath) === targetKey);
+    if (index === -1) return false;
+
+    const [removedRoot] = roots.splice(index, 1);
+    this.settings.libraryRoots = roots;
+    this.saveSettings();
+    this.unwatchLibraryRoot(removedRoot);
+    this.emit('library:changed', removedRoot);
+    return true;
+  }
+
   getWikiPage(relPath: string): WikiPage | null {
-    const absPath = path.join(this.wikiDir, `${relPath}.md`);
+    const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
+    if (!this.isInsidePath(this.wikiDir, absPath)) return null;
     if (!fs.existsSync(absPath)) return null;
 
     try {
@@ -2238,7 +2447,7 @@ export class LibrarianManager extends EventEmitter {
       return;
     }
 
-    this.wikiWatcher = chokidar.watch(`${wikiRoot}/*/*.md`, {
+    this.wikiWatcher = chokidar.watch(`${wikiRoot}/**/*.md`, {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       ignorePermissionErrors: true,
@@ -2260,7 +2469,7 @@ export class LibrarianManager extends EventEmitter {
 
   saveWikiPage(relPath: string, content: string): boolean {
     const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
-    if (!absPath.startsWith(this.wikiDir)) return false;
+    if (!this.isInsidePath(this.wikiDir, absPath)) return false;
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       return true;
@@ -2278,13 +2487,13 @@ export class LibrarianManager extends EventEmitter {
     if (!trimmed) return null;
     const slug = trimmed.replace(/\.md$/i, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
     if (!slug) return null;
-    const folder = relPath.includes('/') ? relPath.split('/')[0] : '';
-    if (!folder) return null;
+    const folder = path.posix.dirname(relPath);
+    if (!folder || folder === '.') return null;
     const newRelPath = `${folder}/${slug}`;
     if (newRelPath === relPath) return relPath;
     const oldAbs = path.resolve(this.wikiDir, `${relPath}.md`);
     const newAbs = path.resolve(this.wikiDir, `${newRelPath}.md`);
-    if (!oldAbs.startsWith(this.wikiDir) || !newAbs.startsWith(this.wikiDir)) return null;
+    if (!this.isInsidePath(this.wikiDir, oldAbs) || !this.isInsidePath(this.wikiDir, newAbs)) return null;
     if (!fs.existsSync(oldAbs)) return null;
     if (fs.existsSync(newAbs)) return null;
     try {
@@ -2301,7 +2510,7 @@ export class LibrarianManager extends EventEmitter {
 
   async deleteWikiPage(relPath: string): Promise<boolean> {
     const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
-    if (!absPath.startsWith(this.wikiDir)) return false;
+    if (!this.isInsidePath(this.wikiDir, absPath)) return false;
     if (!fs.existsSync(absPath)) return false;
     try {
       await shell.trashItem(absPath);
@@ -2316,17 +2525,23 @@ export class LibrarianManager extends EventEmitter {
 
   createWikiFile(folderName: string, fileName: string): WikiPage | null {
     const slug = fileName.replace(/\.md$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-    if (!slug || folderName === 'artifacts') return null;
-    const relPath = `${folderName}/${slug}`;
-    const absPath = path.join(this.wikiDir, folderName, `${slug}.md`);
+    const folderRelPath = folderName
+      .split('/')
+      .map((part) => part.replace(/[^a-z0-9-]/gi, '-').toLowerCase())
+      .filter(Boolean)
+      .join('/');
+    if (!slug || !folderRelPath || folderRelPath === 'artifacts' || folderRelPath.startsWith('artifacts/')) return null;
+    const relPath = `${folderRelPath}/${slug}`;
+    const absPath = path.resolve(this.wikiDir, folderRelPath, `${slug}.md`);
+    if (!this.isInsidePath(this.wikiDir, absPath)) return null;
     if (fs.existsSync(absPath)) return null;
-    const dirPath = path.join(this.wikiDir, folderName);
+    const dirPath = path.dirname(absPath);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
     const content = `# ${fileName.replace(/\.md$/, '')}\n`;
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
-      // Emit synchronously — chokidar's `${wikiRoot}/*/*.md` glob can lag
+      // Emit synchronously — chokidar can lag
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
       this.emit('wiki:changed');
@@ -2350,8 +2565,14 @@ export class LibrarianManager extends EventEmitter {
   }
 
   createWikiDir(dirName: string): boolean {
-    const slug = dirName.replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-    const dirPath = path.join(this.wikiDir, slug);
+    const slug = dirName
+      .split('/')
+      .map((part) => part.replace(/[^a-z0-9-]/gi, '-').toLowerCase())
+      .filter(Boolean)
+      .join('/');
+    if (!slug || slug === 'artifacts' || slug.startsWith('artifacts/')) return false;
+    const dirPath = path.resolve(this.wikiDir, slug);
+    if (!this.isInsidePath(this.wikiDir, dirPath)) return false;
     if (fs.existsSync(dirPath)) return false;
     try {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -5677,6 +5898,10 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
       watcher.close();
     }
     this.watchers.clear();
+    for (const [, watcher] of this.libraryRootWatchers) {
+      watcher.close();
+    }
+    this.libraryRootWatchers.clear();
   }
 
   // ===========================================================================

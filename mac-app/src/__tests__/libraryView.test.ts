@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatBreadcrumb,
+  getScrollRatio,
+  getScrollTopForRatio,
   persistLibrarianSelection,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   splitFrontmatter,
 } from '../components/LibrarianView';
-import { ensureScratchpadPinned, filterStaleRecent, filterUnifiedFolders, splitRecent } from '../components/WikiSidebar';
+import {
+  ensureScratchpadNodePinned,
+  ensureScratchpadPinned,
+  filterStaleRecent,
+  filterUnifiedFolders,
+  splitRecent,
+  virtualizeBookmarksGroup,
+  type LibrarySidebarNode,
+} from '../components/WikiSidebar';
 
 describe('splitFrontmatter', () => {
   it('strips YAML frontmatter and returns body + metadata', () => {
@@ -51,6 +61,27 @@ Body text here.`;
     expect(result.meta.tags).toBe('[test]');
     expect(result.meta.last_updated).toBe('2026-04-15');
     expect(Object.keys(result.meta)).toHaveLength(2);
+  });
+});
+
+describe('document scroll helpers', () => {
+  it('captures the current scroll as a stable ratio', () => {
+    expect(getScrollRatio(150, 1000, 500)).toBe(0.3);
+  });
+
+  it('restores the equivalent scroll position when content height changes', () => {
+    expect(getScrollTopForRatio(1600, 600, 0.3)).toBe(300);
+  });
+
+  it('clamps invalid scroll values to the document range', () => {
+    expect(getScrollRatio(1200, 1000, 500)).toBe(1);
+    expect(getScrollTopForRatio(1000, 500, -1)).toBe(0);
+    expect(getScrollTopForRatio(1000, 500, Number.NaN)).toBe(0);
+  });
+
+  it('returns the top when the document does not overflow', () => {
+    expect(getScrollRatio(30, 400, 500)).toBe(0);
+    expect(getScrollTopForRatio(400, 500, 0.5)).toBe(0);
   });
 });
 
@@ -186,6 +217,49 @@ describe('ensureScratchpadPinned', () => {
     const result = ensureScratchpadPinned([existing]);
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(existing);
+  });
+});
+
+describe('recursive sidebar tree helpers', () => {
+  const root: LibraryRoot = { path: '/wiki', label: 'Wiki', builtin: true, tree: [] };
+
+  const dir = (name: string, children: LibrarySidebarNode[] = []): LibrarySidebarNode => ({
+    kind: 'dir',
+    id: `/wiki::${name}`,
+    name,
+    label: name.charAt(0).toUpperCase() + name.slice(1),
+    relPath: name,
+    rootPath: '/wiki',
+    builtin: true,
+    canCreateFile: true,
+    children,
+  });
+
+  it('groups bookmark folders under a synthetic bookmarks directory', () => {
+    const nodes = [dir('entries'), dir('domains'), dir('categories')];
+    const result = virtualizeBookmarksGroup(nodes, root);
+    const group = result.find((node) => node.kind === 'dir' && node.name === 'bookmarks-from-x');
+    expect(group?.kind).toBe('dir');
+    if (group?.kind !== 'dir') return;
+    expect(group.children.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
+      'bookmarks:root',
+      'categories',
+      'domains',
+    ]);
+    expect(result.some((node) => node.kind === 'dir' && node.name === 'categories')).toBe(false);
+  });
+
+  it('leaves the tree reference alone when no bookmark folders exist', () => {
+    const nodes = [dir('entries')];
+    expect(virtualizeBookmarksGroup(nodes, root)).toBe(nodes);
+  });
+
+  it('pins an existing scratchpad directory before other built-in nodes', () => {
+    const entries = dir('entries');
+    const scratchpad = dir('scratchpad');
+    const result = ensureScratchpadNodePinned([entries, scratchpad], root);
+    expect(result[0]).toBe(scratchpad);
+    expect(result[1]).toBe(entries);
   });
 });
 

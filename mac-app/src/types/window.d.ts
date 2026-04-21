@@ -1531,6 +1531,25 @@ declare global {
     files: WikiPageMeta[];  // alphabetically sorted
   }
 
+  type WikiNode =
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+    | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+
+  interface LibraryRoot {
+    path: string;
+    label: string;
+    builtin: boolean;
+    tree: WikiNode[];
+  }
+
+  interface LibraryAPI {
+    getRoots: () => Promise<LibraryRoot[]>;
+    addRoot: (dirPath: string) => Promise<LibraryRoot | null>;
+    removeRoot: (dirPath: string) => Promise<boolean>;
+    pickFolder: () => Promise<string | null>;
+    onRootsChanged: (callback: () => void) => () => void;
+  }
+
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
@@ -1950,6 +1969,7 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
     externalAPI?: ExternalAPI;
     recentAPI?: RecentAPI;
