@@ -56,6 +56,8 @@ interface ContentToolbarProps {
   onToggleShare?: () => void;
   showShare?: boolean;
 
+  onCopyPath?: () => void;
+
   // Fullscreen hover state (for immersive mode opacity)
   headerHovered?: boolean;
 }
@@ -86,6 +88,7 @@ export default function ContentToolbar({
   isSharing = false,
   onToggleShare,
   showShare = false,
+  onCopyPath,
   headerHovered = true,
 }: ContentToolbarProps) {
   const { theme } = useTheme();
@@ -382,6 +385,36 @@ export default function ContentToolbar({
       {/* Immersive toggle — standardized top-right position across views. */}
       {onToggleFullScreen && (
         <ImmersiveToggle isFullScreen={isFullScreen} onToggle={onToggleFullScreen} />
+      )}
+
+      {/* Copy-path link icon — sits to the right of the immersive toggle. */}
+      {onCopyPath && (
+        <button
+          onClick={onCopyPath}
+          title="Copy file path (⌘C)"
+          aria-label="Copy file path"
+          style={{
+            padding: '4px 6px',
+            marginLeft: '2px',
+            color: theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '24px',
+            borderRadius: '4px',
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        >
+          <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M6.5 9.5l3-3" />
+            <path d="M7.5 4.5l1-1a3 3 0 0 1 4.2 4.2l-1 1" />
+            <path d="M8.5 11.5l-1 1a3 3 0 0 1-4.2-4.2l1-1" />
+          </svg>
+        </button>
       )}
     </div>
   );

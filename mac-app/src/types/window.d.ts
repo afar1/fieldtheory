@@ -1538,6 +1538,7 @@ declare global {
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
+    rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;

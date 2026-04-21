@@ -6,7 +6,7 @@ import {
   restoreLibrarianSelection,
   splitFrontmatter,
 } from '../components/LibrarianView';
-import { ensureScratchpadPinned, filterUnifiedFolders, splitRecent } from '../components/WikiSidebar';
+import { ensureScratchpadPinned, filterStaleRecent, filterUnifiedFolders, splitRecent } from '../components/WikiSidebar';
 
 describe('splitFrontmatter', () => {
   it('strips YAML frontmatter and returns body + metadata', () => {
@@ -229,28 +229,57 @@ describe('splitRecent', () => {
   });
 });
 
+describe('filterStaleRecent', () => {
+  const tree = [
+    {
+      name: 'scratchpad',
+      files: [
+        { relPath: 'scratchpad/monday-apr-20th', absPath: '/x/scratchpad/monday-apr-20th.md', name: 'monday-apr-20th', title: 'Monday Apr 20th', lastUpdated: 1 },
+      ],
+    },
+  ];
+
+  it('keeps wiki entries whose relPath is present in the tree', () => {
+    const recent = [
+      { kind: 'wiki' as const, path: 'scratchpad/monday-apr-20th', title: 'Monday Apr 20th', lastOpenedAt: 2 },
+    ];
+    expect(filterStaleRecent(recent, tree)).toEqual(recent);
+  });
+
+  it('drops wiki entries whose relPath is no longer in the tree (trashed or renamed externally)', () => {
+    const recent = [
+      { kind: 'wiki' as const, path: 'scratchpad/monday-apr-20th-at-3-03pm', title: 'Monday Apr 20th at 3:03pm', lastOpenedAt: 3 },
+      { kind: 'wiki' as const, path: 'scratchpad/monday-apr-20th', title: 'Monday Apr 20th', lastOpenedAt: 2 },
+    ];
+    const out = filterStaleRecent(recent, tree);
+    expect(out.map((e) => e.path)).toEqual(['scratchpad/monday-apr-20th']);
+  });
+
+  it('leaves external entries alone since they live outside the wiki tree', () => {
+    const recent = [
+      { kind: 'external' as const, path: '/Users/me/notes/thing.md', title: 'thing', lastOpenedAt: 4 },
+    ];
+    expect(filterStaleRecent(recent, tree)).toEqual(recent);
+  });
+});
+
 describe('formatBreadcrumb', () => {
   const reading = { path: '/Users/me/notes/journal.md', title: 'My Journal' };
 
   it('returns an empty string when no reading is provided', () => {
-    expect(formatBreadcrumb('wiki', null, 'anything')).toBe('');
-    expect(formatBreadcrumb('external', null, null)).toBe('');
+    expect(formatBreadcrumb('wiki', null)).toBe('');
+    expect(formatBreadcrumb('external', null)).toBe('');
   });
 
-  it('wiki: prefixes the top-level folder from the relPath', () => {
-    expect(formatBreadcrumb('wiki', reading, 'debates/my-journal')).toBe('debates / My Journal');
+  it('wiki: returns the title alone, no folder prefix', () => {
+    expect(formatBreadcrumb('wiki', reading)).toBe('My Journal');
   });
 
-  it('wiki: drops the prefix when relPath is flat (no folder)', () => {
-    expect(formatBreadcrumb('wiki', reading, 'my-journal')).toBe('My Journal');
-    expect(formatBreadcrumb('wiki', reading, null)).toBe('My Journal');
+  it('external: returns the basename from the absolute path', () => {
+    expect(formatBreadcrumb('external', reading)).toBe('journal.md');
   });
 
-  it('external: shows parent-dir / filename from the absolute path', () => {
-    expect(formatBreadcrumb('external', reading, null)).toBe('notes / journal.md');
-  });
-
-  it('external: falls back to the title when the path has no parent', () => {
-    expect(formatBreadcrumb('external', { path: 'loose.md', title: 'Loose' }, null)).toBe('loose.md');
+  it('external: falls back to the title when the path is just a filename', () => {
+    expect(formatBreadcrumb('external', { path: 'loose.md', title: 'Loose' })).toBe('loose.md');
   });
 });

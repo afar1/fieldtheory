@@ -4,12 +4,52 @@
 // Supports multi-directory watching, full CRUD, and Shared commands discovery.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { forwardRef, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
+import { isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+
+/** Inline text input used for both "new command" and "rename command" flows.
+ *  Both commit handlers treat empty input as a cancel, so blur just calls
+ *  onCommit unconditionally. */
+const InlineNameInput = forwardRef<HTMLInputElement, {
+  value: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+  placeholder?: string;
+  stopClickPropagation?: boolean;
+}>(function InlineNameInput({ value, onChange, onCommit, onCancel, placeholder, stopClickPropagation }, ref) {
+  const { theme } = useTheme();
+  return (
+    <input
+      ref={ref}
+      type="text"
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+      }}
+      onBlur={() => onCommit()}
+      onClick={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
+      style={{
+        width: '100%',
+        padding: '4px 8px',
+        fontSize: '12px',
+        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+        border: `1px solid ${theme.accent}`,
+        borderRadius: '4px',
+        color: theme.text,
+        outline: 'none',
+      }}
+    />
+  );
+});
 
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
@@ -533,9 +573,19 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
+      // Cmd+F or / — focus sidebar search. Gated on active element so `/`
+      // still works while the editor is on screen, just not when it's focused.
+      if (isSearchFocusShortcut(e)) {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+
       // Don't handle navigation keys when typing in any input
       const activeEl = document.activeElement;
-      if (isEditing || activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) return;
+      const inInput = activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement;
+      if (isEditing || inInput) return;
 
       if (filteredCommands.length === 0) return;
 
@@ -978,42 +1028,14 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 </div>
                 {/* Inline input for new command name */}
                 {creatingInDir === dirPath && (
-                  <div
-                    style={{
-                      padding: '4px 8px 4px 16px',
-                    }}
-                  >
-                    <input
+                  <div style={{ padding: '4px 8px 4px 16px' }}>
+                    <InlineNameInput
                       ref={newCommandInputRef}
-                      type="text"
                       value={newCommandName}
-                      onChange={(e) => setNewCommandName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleCreateCommandInDir(dirPath, newCommandName);
-                        } else if (e.key === 'Escape') {
-                          cancelCreatingCommand();
-                        }
-                      }}
-                      onBlur={() => {
-                        // Create on blur if there's a name, otherwise cancel
-                        if (newCommandName.trim()) {
-                          handleCreateCommandInDir(dirPath, newCommandName);
-                        } else {
-                          cancelCreatingCommand();
-                        }
-                      }}
+                      onChange={setNewCommandName}
+                      onCommit={() => handleCreateCommandInDir(dirPath, newCommandName)}
+                      onCancel={cancelCreatingCommand}
                       placeholder="command name..."
-                      style={{
-                        width: '100%',
-                        padding: '4px 8px',
-                        fontSize: '12px',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-                        border: `1px solid ${theme.accent}`,
-                        borderRadius: '4px',
-                        color: theme.text,
-                        outline: 'none',
-                      }}
                     />
                   </div>
                 )}
@@ -1043,27 +1065,13 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     }}
                   >
                     {renamingPath === cmd.filePath ? (
-                      <input
+                      <InlineNameInput
                         ref={renameInputRef}
-                        type="text"
                         value={renameDraft}
-                        onChange={(e) => setRenameDraft(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
-                          else if (e.key === 'Escape') { e.preventDefault(); cancelRename(); }
-                        }}
-                        onBlur={() => { void commitRename(); }}
-                        onClick={(e) => e.stopPropagation()}
-                        style={{
-                          width: '100%',
-                          padding: '2px 6px',
-                          fontSize: '12px',
-                          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-                          border: `1px solid ${theme.accent}`,
-                          borderRadius: '4px',
-                          color: theme.text,
-                          outline: 'none',
-                        }}
+                        onChange={setRenameDraft}
+                        onCommit={() => { void commitRename(); }}
+                        onCancel={cancelRename}
+                        stopClickPropagation
                       />
                     ) : (
                       <div
@@ -1300,6 +1308,10 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 <textarea
                   value={editContent}
                   onChange={(e) => setEditContent(e.target.value)}
+                  onBlur={() => {
+                    if (isDirty) void saveChanges();
+                    else exitEditMode();
+                  }}
                   style={{
                     flex: 1,
                     minHeight: '400px',
@@ -1333,11 +1345,21 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   </h1>
                   <div
                     className="command-content"
+                    // Click into the rendered body to enter edit mode — mirrors
+                    // LibrarianView so users don't need Cmd+E. Clicks on links,
+                    // buttons, form controls, or while a text selection is
+                    // active still do their normal thing.
+                    onClick={(e) => {
+                      if (viewMode !== 'mine' || !selectedCommand) return;
+                      if (!shouldEnterEditOnClick(e)) return;
+                      enterEditMode();
+                    }}
                     style={{
                       fontSize: textSizes[textSize].base,
                       lineHeight: 1.5,
                       color: theme.text,
                       fontFamily: fonts.sans,
+                      cursor: viewMode === 'mine' && selectedCommand ? 'text' : 'default',
                     }}
                   >
                     <ReactMarkdown

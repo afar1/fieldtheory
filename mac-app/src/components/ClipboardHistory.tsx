@@ -289,6 +289,21 @@ export default function ClipboardHistory() {
   useEffect(() => {
     localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
   }, [navSidebarCollapsed]);
+  // Cmd+/ toggles the sidebar from any Library/Commands context. Scoped to
+  // those view modes so the shortcut doesn't fire in Fields/Settings/etc.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== '/' || !e.metaKey || e.shiftKey || e.ctrlKey || e.altKey) return;
+      const inLibraryOrCommands =
+        (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
+        (viewMode === 'commands' && !showSettings);
+      if (!inLibraryOrCommands) return;
+      e.preventDefault();
+      setNavSidebarCollapsed((v) => !v);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [viewMode, librarianImmersive, showSettings]);
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -6097,7 +6112,7 @@ export default function ClipboardHistory() {
               <button
                 onClick={() => setNavSidebarCollapsed((v) => !v)}
                 disabled={!collapseEnabled}
-                title={collapseEnabled ? (navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar') : 'Sidebar toggle'}
+                title={collapseEnabled ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘/)` : 'Sidebar toggle'}
                 aria-label="Toggle sidebar"
                 style={{
                   width: '20px',

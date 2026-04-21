@@ -3537,6 +3537,8 @@ const wikiAPI = {
   deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
   createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
+  rename: (relPath: string, newName: string): Promise<string | null> =>
+    ipcRenderer.invoke('wiki:rename', relPath, newName),
   onPageChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('wiki:changed', handler);
