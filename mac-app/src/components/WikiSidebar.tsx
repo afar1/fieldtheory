@@ -121,6 +121,21 @@ export function splitRecent(
   };
 }
 
+/** Drop wiki entries from the Recent list whose relPath no longer appears in
+ *  the current wiki tree (file was trashed / renamed externally and we
+ *  missed the FS event). External entries are left alone since they live
+ *  outside the tree. */
+export function filterStaleRecent(
+  entries: RecentEntry[],
+  tree: WikiFolder[],
+): RecentEntry[] {
+  const live = new Set<string>();
+  for (const folder of tree) {
+    for (const page of folder.files) live.add(page.relPath);
+  }
+  return entries.filter((e) => e.kind === 'external' || live.has(e.path));
+}
+
 /** Pin Scratchpad at the top when the wiki tree doesn't already expose it, so
  * the user can create ad-hoc docs without running a backfill first. */
 export function ensureScratchpadPinned(folders: UnifiedFolder[]): UnifiedFolder[] {
@@ -373,11 +388,9 @@ function WikiSidebar({
         .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
         .bm-new-file-btn:hover { opacity: 1 !important; }
       `}</style>
-      {/* Header */}
+      {/* Header — sort toggle only; the "Personal wiki" label is redundant
+          alongside the top-level Library tab. */}
       <div style={{ padding: '0 12px 4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <span style={{ fontSize: '11px', fontWeight: 600, color: theme.textSecondary, letterSpacing: '0.3px' }}>
-          Personal wiki
-        </span>
         <div style={{ flex: 1 }} />
         {/* Sort toggle */}
         <button
@@ -657,10 +670,12 @@ function WikiSidebar({
       })}
 
       {/* Recent block — pinned to the bottom, below the folder tree. Wiki +
-          external, each with show more/less. */}
+          external, each with show more/less. We filter out wiki entries that
+          no longer exist in the tree so a stale recent.json (missed FS event
+          or pre-fix entries) can't keep pointing at a trashed file. */}
       {!isSearching && recent.length > 0 && (
         <RecentBlock
-          recent={recent}
+          recent={filterStaleRecent(recent, wikiTree)}
           expanded={recentExpanded}
           onExpand={setRecentExpanded}
           collapsed={recentCollapsed}
@@ -705,10 +720,41 @@ function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refPr
   onHover: (id: string | null) => void;
   refProp?: MutableRefObject<HTMLDivElement | null>;
 }) {
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState('');
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (renaming) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [renaming]);
+
+  const canRename = item.type === 'wiki' && !!item.relPath;
+
+  const commitRename = async () => {
+    if (!renaming) return;
+    const trimmed = draft.trim();
+    setRenaming(false);
+    if (!canRename || !item.relPath || !trimmed || trimmed === item.title) return;
+    await window.wikiAPI?.rename(item.relPath, trimmed);
+  };
+
   return (
     <div
       ref={refProp}
-      onClick={onSelect}
+      onClick={(e) => {
+        // Cmd-click on a wiki item enters inline rename; regular click selects.
+        if (canRename && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          e.stopPropagation();
+          setDraft(item.title);
+          setRenaming(true);
+          return;
+        }
+        onSelect();
+      }}
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
       style={{
@@ -726,19 +772,45 @@ function FileItem({ item, isSelected, isHovered, theme, onSelect, onHover, refPr
         alignItems: 'flex-start',
         gap: '4px',
       }}>
-        <div style={{
-          fontSize: '12px',
-          fontWeight: 500,
-          color: theme.text,
-          lineHeight: 1.3,
-          flex: 1,
-          minWidth: 0,
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          whiteSpace: 'nowrap',
-        }}>
-          {item.title}
-        </div>
+        {renaming ? (
+          <input
+            ref={inputRef}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { e.preventDefault(); void commitRename(); }
+              else if (e.key === 'Escape') { e.preventDefault(); setRenaming(false); }
+            }}
+            onBlur={() => { void commitRename(); }}
+            style={{
+              flex: 1,
+              minWidth: 0,
+              padding: '1px 4px',
+              fontSize: '12px',
+              fontWeight: 500,
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+              border: `1px solid ${theme.accent}`,
+              borderRadius: '3px',
+              color: theme.text,
+              outline: 'none',
+            }}
+          />
+        ) : (
+          <div style={{
+            fontSize: '12px',
+            fontWeight: 500,
+            color: theme.text,
+            lineHeight: 1.3,
+            flex: 1,
+            minWidth: 0,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+          }}>
+            {item.title}
+          </div>
+        )}
         {isHovered && (
           <button
             onClick={(e) => {
@@ -872,6 +944,14 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
 
   return (
     <div style={{ marginBottom: '4px' }}>
+      <hr
+        style={{
+          border: 'none',
+          height: '1px',
+          margin: '8px 12px 4px',
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+        }}
+      />
       <div style={headerStyle} onClick={onToggleCollapsed}>
         <svg
           width="8"

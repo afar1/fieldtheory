@@ -2247,7 +2247,14 @@ export class LibrarianManager extends EventEmitter {
     const emitChange = () => this.emit('wiki:changed');
     this.wikiWatcher.on('add', emitChange);
     this.wikiWatcher.on('change', emitChange);
-    this.wikiWatcher.on('unlink', emitChange);
+    // On unlink, also emit `wiki:deleted` with the relPath so downstream
+    // consumers (RecentManager) can prune stale entries when the delete
+    // happens outside the app — Finder trash, `rm`, `git checkout`, etc.
+    this.wikiWatcher.on('unlink', (absPath: string) => {
+      this.emit('wiki:changed');
+      const rel = path.relative(this.wikiDir, absPath).replace(/\.md$/i, '');
+      if (rel && !rel.startsWith('..')) this.emit('wiki:deleted', rel);
+    });
     this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
   }
 
@@ -2260,6 +2267,35 @@ export class LibrarianManager extends EventEmitter {
     } catch (error) {
       log.error(`Error saving wiki page ${relPath}:`, error);
       return false;
+    }
+  }
+
+  /** Rename a wiki page in place. Returns the new relPath on success.
+   *  Slug rules match createWikiFile so the on-disk filename stays consistent
+   *  with user-visible titles. */
+  renameWikiPage(relPath: string, newName: string): string | null {
+    const trimmed = newName.trim();
+    if (!trimmed) return null;
+    const slug = trimmed.replace(/\.md$/i, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    if (!slug) return null;
+    const folder = relPath.includes('/') ? relPath.split('/')[0] : '';
+    if (!folder) return null;
+    const newRelPath = `${folder}/${slug}`;
+    if (newRelPath === relPath) return relPath;
+    const oldAbs = path.resolve(this.wikiDir, `${relPath}.md`);
+    const newAbs = path.resolve(this.wikiDir, `${newRelPath}.md`);
+    if (!oldAbs.startsWith(this.wikiDir) || !newAbs.startsWith(this.wikiDir)) return null;
+    if (!fs.existsSync(oldAbs)) return null;
+    if (fs.existsSync(newAbs)) return null;
+    try {
+      fs.renameSync(oldAbs, newAbs);
+      this.emit('wiki:changed');
+      // Let RecentManager prune the stale entry for the old relPath.
+      this.emit('wiki:deleted', relPath);
+      return newRelPath;
+    } catch (error) {
+      log.error(`Error renaming wiki page ${relPath} -> ${newRelPath}:`, error);
+      return null;
     }
   }
 
