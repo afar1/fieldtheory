@@ -11,7 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
-import { isImmersiveToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -619,8 +619,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
-      // Cmd+E - toggle edit mode
-      if (e.key === 'e' && e.metaKey && !e.shiftKey) {
+      // Cmd+, - toggle edit mode
+      if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
         if (isEditing) {
           if (isDirty) {
@@ -1481,7 +1481,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   <div
                     className="command-content"
                     // Click into the rendered body to enter edit mode — mirrors
-                    // LibrarianView so users don't need Cmd+E. Clicks on links,
+                    // LibrarianView so users can click straight into writing. Clicks on links,
                     // buttons, form controls, or while a text selection is
                     // active still do their normal thing.
                     onClick={(e) => {
