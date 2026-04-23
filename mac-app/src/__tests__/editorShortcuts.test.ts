@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { isImmersiveToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -61,6 +61,22 @@ describe('isImmersiveToggleShortcut', () => {
 
   it('rejects bare Period', () => {
     expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
+  });
+});
+
+describe('isMarkdownModeToggleShortcut', () => {
+  it('accepts Cmd+Comma', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects Cmd+Shift+Comma and unrelated modifiers', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '<', code: 'Comma', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true, ctrlKey: true }))).toBe(false);
+  });
+
+  it('rejects bare Comma', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma' }))).toBe(false);
   });
 });
 

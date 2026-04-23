@@ -21,7 +21,7 @@ import WikiSidebar, {
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
-import { isImmersiveToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import {
   LIBRARIAN_LINE_HEIGHT_OPTIONS,
   LIBRARIAN_TYPOGRAPHY_PRESETS,
@@ -2294,8 +2294,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Cmd+E - toggle between rendered and markdown
-      if (e.key === 'e' && e.metaKey && !e.shiftKey) {
+      // Cmd+, - toggle between rendered and markdown.
+      if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
         if (contentMode === 'markdown') {
           void exitEditMode();
