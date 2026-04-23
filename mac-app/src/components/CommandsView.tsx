@@ -37,6 +37,7 @@ const InlineNameInput = forwardRef<HTMLInputElement, {
         else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
       }}
       onBlur={() => onCommit()}
+      onMouseDown={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
       onClick={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
       style={{
         width: '100%',
@@ -126,6 +127,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const sidebarKeyboardActiveRef = useRef(false);
 
   // Edit mode
   const [isEditing, setIsEditing] = useState(false);
@@ -659,34 +661,45 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       // still works while the editor is on screen, just not when it's focused.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
+        sidebarKeyboardActiveRef.current = false;
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
         return;
       }
 
       // Don't handle navigation keys when typing in any input
+      const isSidebarNavigationKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'k';
       const activeEl = document.activeElement;
-      const inInput = activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement;
-      if (isEditing || inInput) return;
+      const inInput = activeEl instanceof HTMLInputElement
+        || activeEl instanceof HTMLTextAreaElement
+        || activeEl instanceof HTMLSelectElement
+        || (activeEl instanceof HTMLElement && activeEl.isContentEditable);
+      if (inInput) return;
+      if (isEditing && (!sidebarKeyboardActiveRef.current || !isSidebarNavigationKey)) return;
+      if (!isSidebarNavigationKey) return;
 
-      if (filteredCommands.length === 0) return;
+      const navigationCommands = viewMode === 'mine' && selectedPath
+        ? Array.from(groupedCommands.values()).find((items) => items.some((command) => command.filePath === selectedPath)) ?? filteredCommands
+        : filteredCommands;
+      if (navigationCommands.length === 0) return;
 
-      const currentIndex = filteredCommands.findIndex((c) => c.filePath === selectedPath);
+      const currentIndex = navigationCommands.findIndex((c) => c.filePath === selectedPath);
+      if (currentIndex < 0) return;
 
       if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
         const newIndex = Math.max(0, currentIndex - 1);
-        handleSelectCommand(filteredCommands[newIndex].filePath);
+        handleSelectCommand(navigationCommands[newIndex].filePath);
       } else if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
-        const newIndex = Math.min(filteredCommands.length - 1, currentIndex + 1);
-        handleSelectCommand(filteredCommands[newIndex].filePath);
+        const newIndex = Math.min(navigationCommands.length - 1, currentIndex + 1);
+        handleSelectCommand(navigationCommands[newIndex].filePath);
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, isEditing, isDirty, focusImmersive, selectedCommand, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand, onFocusChromeShortcut]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, isDirty, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand, onFocusChromeShortcut]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1037,6 +1050,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               type="text"
               placeholder="Search..."
               value={searchQuery}
+              onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
@@ -1142,6 +1156,12 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 {items.map((cmd) => (
                   <div
                     key={cmd.filePath}
+                    tabIndex={-1}
+                    onMouseDown={(e) => {
+                      if (renamingPath === cmd.filePath) return;
+                      sidebarKeyboardActiveRef.current = true;
+                      e.currentTarget.focus({ preventScroll: true });
+                    }}
                     onClick={() => renamingPath !== cmd.filePath && handleSelectCommand(cmd.filePath)}
                     onContextMenu={(e) => {
                       e.preventDefault();
@@ -1161,6 +1181,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                           ? `2px solid ${theme.accent}`
                           : '2px solid transparent',
                       transition: 'background-color 0.1s ease',
+                      outline: 'none',
                     }}
                   >
                     {renamingPath === cmd.filePath ? (
@@ -1201,6 +1222,11 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               filteredPopularCommands.map((cmd) => (
                 <div
                   key={cmd.id}
+                  tabIndex={-1}
+                  onMouseDown={(e) => {
+                    sidebarKeyboardActiveRef.current = true;
+                    e.currentTarget.focus({ preventScroll: true });
+                  }}
                   onClick={() => setSelectedPopularId(cmd.id)}
                   style={{
                     padding: '8px 8px 8px 16px',
@@ -1216,6 +1242,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                         ? `2px solid ${theme.accent}`
                         : '2px solid transparent',
                     transition: 'background-color 0.1s ease',
+                    outline: 'none',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1414,6 +1441,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               {isEditing && selectedCommand ? (
                 <textarea
                   value={editContent}
+                  onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}
                   onBlur={() => {
                     if (isDirty) void saveChanges();

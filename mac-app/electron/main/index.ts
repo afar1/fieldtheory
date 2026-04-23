@@ -1630,6 +1630,21 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.removeLibraryRoot(dirPath);
   });
 
+  ipcMain.handle('library:createFile', (_event, rootPath: string, folderRelPath: string, fileName: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
+  });
+
+  ipcMain.handle('library:createDir', (_event, rootPath: string, dirRelPath: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.createLibraryDir(rootPath, dirRelPath);
+  });
+
+  ipcMain.handle('library:deleteDir', async (_event, rootPath: string, dirRelPath: string): Promise<boolean> => {
+    if (!librarianManager) return false;
+    return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
+  });
+
   ipcMain.handle('library:pickFolder', async (): Promise<string | null> => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
@@ -3218,6 +3233,17 @@ function setupClipboardIPCHandlers(): void {
       return null;
     }
     return clipboardManager.exportCurrentClipboardImageToCache();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, async (_event, id: number): Promise<string | null> => {
+    if (!clipboardManager) {
+      return null;
+    }
+    const item = clipboardManager.getItem(id);
+    if (!item) {
+      return null;
+    }
+    return clipboardManager.exportImageToCache(item);
   });
 
   ipcMain.handle(ClipboardIPCChannels.SAVE_SKETCH, async (_event, imageData: string, width: number, height: number) => {

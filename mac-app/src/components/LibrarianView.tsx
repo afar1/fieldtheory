@@ -12,7 +12,12 @@ import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
-import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem, type WikiCreationController } from './WikiSidebar';
+import WikiSidebar, {
+  BOOKMARKS_ITEM_ID,
+  type LibraryCreateLocation,
+  type UnifiedItem,
+  type WikiCreationController,
+} from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
@@ -40,18 +45,46 @@ import {
 import {
   buildWikiIndex,
   classifyLinkHref,
+  getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
+  getMarkdownEditorLinkHits,
+  getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionReplacement,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   type LinkAction,
+  type MarkdownEditorLinkHit,
+  type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
 } from '../utils/wikiLinks';
 
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command';
   path: string;
+  contentMode?: 'rendered' | 'markdown';
 };
+
+type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+
+export function deletedLibraryItemMatchesSelection(
+  item: Pick<UnifiedItem, 'id' | 'type' | 'relPath' | 'absPath'>,
+  selection: {
+    selectedItemId: string | null;
+    selectedItemType: LibrarianSelectedItemType;
+    wikiSelectedRelPath: string | null;
+    selectedPath: string | null;
+  },
+): boolean {
+  if (item.id === selection.selectedItemId) return true;
+  if (item.type === 'wiki') {
+    return selection.selectedItemType === 'wiki' && item.relPath === selection.wikiSelectedRelPath;
+  }
+  if (item.type === 'artifact') {
+    return selection.selectedItemType === 'artifact' && item.absPath === selection.selectedPath;
+  }
+  return false;
+}
 
 /** Strip YAML frontmatter from wiki page content for display.
  *  Returns the body (everything after the closing ---) and parsed
@@ -310,6 +343,37 @@ function clampScrollRatio(ratio: number): number {
 
 const MARKDOWN_CARET_SCROLL_ROOM_PX = 96;
 
+type MarkdownEditorLinkHighlightRect = {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+};
+
+type MarkdownEditorLinkOverlay = {
+  top: number;
+  left: number;
+  maxWidth: number;
+  text: string;
+};
+
+type MarkdownEditorLinkHover = {
+  action: LinkAction;
+  overlays: MarkdownEditorLinkOverlay[];
+  unresolved: boolean;
+};
+
+type MarkdownWikiLinkCompletionState = MarkdownWikiLinkCompletion & {
+  top: number;
+  left: number;
+};
+
+type MarkdownWikiLinkSuggestion = {
+  title: string;
+  detail: string;
+  kind: 'wiki' | 'artifact' | 'command';
+};
+
 export function getScrollRatio(scrollTop: number, scrollHeight: number, clientHeight: number): number {
   const maxScrollTop = scrollHeight - clientHeight;
   if (maxScrollTop <= 0) return 0;
@@ -360,36 +424,36 @@ function getComputedLineHeightPx(editor: HTMLTextAreaElement): number {
   return Number.isFinite(fontSize) ? fontSize * 1.4 : 22;
 }
 
-function getTextareaCaretTop(editor: HTMLTextAreaElement): number | null {
+const TEXTAREA_MIRRORED_PROPERTIES = [
+  'box-sizing',
+  'font-family',
+  'font-size',
+  'font-style',
+  'font-weight',
+  'letter-spacing',
+  'line-height',
+  'overflow-wrap',
+  'padding-bottom',
+  'padding-left',
+  'padding-right',
+  'padding-top',
+  'tab-size',
+  'text-align',
+  'text-indent',
+  'text-transform',
+  'white-space',
+  'word-break',
+  'word-spacing',
+];
+
+function createTextareaMirror(editor: HTMLTextAreaElement): HTMLDivElement | null {
   const doc = editor.ownerDocument;
   const win = doc.defaultView;
   if (!doc.body || !win) return null;
 
   const style = win.getComputedStyle(editor);
   const mirror = doc.createElement('div');
-  const mirroredProperties = [
-    'box-sizing',
-    'font-family',
-    'font-size',
-    'font-style',
-    'font-weight',
-    'letter-spacing',
-    'line-height',
-    'overflow-wrap',
-    'padding-bottom',
-    'padding-left',
-    'padding-right',
-    'padding-top',
-    'tab-size',
-    'text-align',
-    'text-indent',
-    'text-transform',
-    'white-space',
-    'word-break',
-    'word-spacing',
-  ];
-
-  for (const property of mirroredProperties) {
+  for (const property of TEXTAREA_MIRRORED_PROPERTIES) {
     mirror.style.setProperty(property, style.getPropertyValue(property));
   }
   mirror.style.position = 'absolute';
@@ -402,15 +466,143 @@ function getTextareaCaretTop(editor: HTMLTextAreaElement): number | null {
   mirror.style.minHeight = '0';
   mirror.style.overflow = 'hidden';
   mirror.style.whiteSpace = 'pre-wrap';
+  doc.body.appendChild(mirror);
+  return mirror;
+}
 
-  mirror.textContent = editor.value.slice(0, editor.selectionStart);
+function measureTextareaOffset(mirror: HTMLDivElement, value: string, offset: number): { top: number; left: number } {
+  const doc = mirror.ownerDocument;
+  mirror.textContent = value.slice(0, Math.max(0, Math.min(offset, value.length)));
   const marker = doc.createElement('span');
   marker.textContent = '\u200B';
   mirror.appendChild(marker);
-  doc.body.appendChild(mirror);
-  const caretTop = marker.offsetTop;
+  const position = { top: marker.offsetTop, left: marker.offsetLeft };
+  marker.remove();
+  return position;
+}
+
+function getTextareaCaretTop(editor: HTMLTextAreaElement): number | null {
+  const mirror = createTextareaMirror(editor);
+  if (!mirror) return null;
+  const caretTop = measureTextareaOffset(mirror, editor.value, editor.selectionStart).top;
   mirror.remove();
   return caretTop;
+}
+
+function getMarkdownEditorRangeRects(
+  editor: HTMLTextAreaElement,
+  mirror: HTMLDivElement,
+  startOffset: number,
+  endOffset: number,
+): MarkdownEditorLinkHighlightRect[] {
+  const lineHeight = getComputedLineHeightPx(editor);
+  const start = measureTextareaOffset(mirror, editor.value, startOffset);
+  const end = measureTextareaOffset(mirror, editor.value, endOffset);
+  const width = editor.clientWidth;
+  const sameLine = Math.abs(start.top - end.top) < lineHeight / 2;
+
+  if (sameLine) {
+    return [{
+      top: start.top - editor.scrollTop,
+      left: start.left - editor.scrollLeft,
+      width: Math.max(2, end.left - start.left),
+      height: lineHeight,
+    }];
+  }
+
+  const rects: MarkdownEditorLinkHighlightRect[] = [{
+    top: start.top - editor.scrollTop,
+    left: start.left - editor.scrollLeft,
+    width: Math.max(2, width - start.left),
+    height: lineHeight,
+  }];
+
+  for (let top = start.top + lineHeight; top < end.top - lineHeight / 2; top += lineHeight) {
+    rects.push({
+      top: top - editor.scrollTop,
+      left: -editor.scrollLeft,
+      width,
+      height: lineHeight,
+    });
+  }
+
+  rects.push({
+    top: end.top - editor.scrollTop,
+    left: -editor.scrollLeft,
+    width: Math.max(2, end.left),
+    height: lineHeight,
+  });
+  return rects;
+}
+
+function getMarkdownEditorLinkOverlays(
+  editor: HTMLTextAreaElement,
+  mirror: HTMLDivElement,
+  hit: MarkdownEditorLinkHit,
+): MarkdownEditorLinkOverlay[] {
+  if (!hit.displayText) return [];
+  const start = measureTextareaOffset(mirror, editor.value, hit.displayStart);
+  return [{
+    top: start.top - editor.scrollTop,
+    left: start.left - editor.scrollLeft,
+    maxWidth: Math.max(32, editor.clientWidth - start.left),
+    text: hit.displayText,
+  }];
+}
+
+function getMarkdownEditorLinkHoverAtPoint(
+  editor: HTMLTextAreaElement,
+  clientX: number,
+  clientY: number,
+  hits: MarkdownEditorLinkHit[],
+): MarkdownEditorLinkHover | null {
+  if (hits.length === 0) return null;
+  const mirror = createTextareaMirror(editor);
+  if (!mirror) return null;
+  const editorRect = editor.getBoundingClientRect();
+  const localX = clientX - editorRect.left;
+  const localY = clientY - editorRect.top;
+
+  try {
+    for (const hit of hits) {
+      const rects = getMarkdownEditorRangeRects(editor, mirror, hit.start, hit.end);
+      const hovered = rects.some((rect) => (
+        localX >= rect.left &&
+        localX <= rect.left + rect.width &&
+        localY >= rect.top &&
+        localY <= rect.top + rect.height
+      ));
+      if (hovered) {
+        return {
+          action: hit.action,
+          overlays: getMarkdownEditorLinkOverlays(editor, mirror, hit),
+          unresolved: hit.action.kind === 'create',
+        };
+      }
+    }
+  } finally {
+    mirror.remove();
+  }
+
+  return null;
+}
+
+function getMarkdownWikiLinkCompletionPosition(
+  editor: HTMLTextAreaElement,
+  completion: MarkdownWikiLinkCompletion,
+): { top: number; left: number } | null {
+  const mirror = createTextareaMirror(editor);
+  if (!mirror) return null;
+  try {
+    const lineHeight = getComputedLineHeightPx(editor);
+    const caret = measureTextareaOffset(mirror, editor.value, completion.queryEnd);
+    return {
+      top: caret.top - editor.scrollTop + lineHeight + 6,
+      left: Math.max(0, Math.min(caret.left - editor.scrollLeft, editor.clientWidth - 260)),
+    };
+  } finally {
+    mirror.remove();
+  }
 }
 
 function smoothScrollMarkdownCaretIntoComfortView(editor: HTMLTextAreaElement): void {
@@ -534,6 +726,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const markdownEditorEdgeFadesRef = useRef(markdownEditorEdgeFades);
   const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
   const [markdownEditorCommandActive, setMarkdownEditorCommandActive] = useState(false);
+  const [markdownEditorLinkHover, setMarkdownEditorLinkHover] = useState<MarkdownEditorLinkHover | null>(null);
+  const [markdownWikiLinkCompletion, setMarkdownWikiLinkCompletion] = useState<MarkdownWikiLinkCompletionState | null>(null);
+  const [markdownWikiLinkSuggestionIndex, setMarkdownWikiLinkSuggestionIndex] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
     return saved ? parseInt(saved, 10) : 180;
@@ -549,6 +744,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const flatItemsRef = useRef<import('./WikiSidebar').UnifiedItem[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const sidebarKeyboardActiveRef = useRef(false);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
@@ -556,6 +752,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const focusMarkdownEditorOnOpenRef = useRef(false);
   const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
+
+  const activateSidebarKeyboard = useCallback(() => {
+    sidebarKeyboardActiveRef.current = true;
+  }, []);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
@@ -799,7 +999,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!initialOpenTarget) return;
     if (initialOpenTarget.kind === 'wiki') {
+      setSearchQuery('');
       openWikiPage(initialOpenTarget.path);
+      if (initialOpenTarget.contentMode === 'markdown') {
+        setContentMode('markdown');
+      }
     } else if (initialOpenTarget.kind === 'artifact') {
       selectArtifactPath(initialOpenTarget.path);
     }
@@ -1063,6 +1267,21 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+
+  const clearSelectedLibraryItem = useCallback(() => {
+    setSelectedItemId(null);
+    setSelectedItemType(null);
+    setSelectedPath(null);
+    setSelectedReading(null);
+    setWikiSelectedRelPath(null);
+    setWikiSelectedPage(null);
+    setExternalOpenFile(null);
+    setShareStatus(null);
+    setLinkCopied(false);
+    setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
+  }, []);
+
   const getEditorSessionTarget = useCallback((): Pick<LibrarianEditorSession, 'itemType' | 'itemPath'> | null => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
       return { itemType: 'wiki', itemPath: wikiSelectedRelPath };
@@ -1100,6 +1319,58 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     })),
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
+
+  const markdownWikiLinkSuggestionItems = useMemo(() => {
+    const seen = new Set<string>();
+    const items: MarkdownWikiLinkSuggestion[] = [];
+    const addItem = (title: string, detail: string, kind: MarkdownWikiLinkSuggestion['kind']) => {
+      const cleanTitle = title.trim();
+      if (!cleanTitle) return;
+      const key = cleanTitle.toLowerCase();
+      if (seen.has(key)) return;
+      seen.add(key);
+      items.push({ title: cleanTitle, detail, kind });
+    };
+
+    for (const page of wikiIndexPages) {
+      addItem(page.title, page.relPath, 'wiki');
+    }
+    for (const reading of readings) {
+      addItem(reading.title, reading.path, 'artifact');
+    }
+    for (const command of commandIndexPages) {
+      addItem(command.title, command.commandPath ?? command.relPath, 'command');
+    }
+
+    return items.sort((a, b) => a.title.localeCompare(b.title));
+  }, [commandIndexPages, readings, wikiIndexPages]);
+
+  const markdownWikiLinkSuggestions = useMemo(() => {
+    if (!markdownWikiLinkCompletion) return [];
+    const query = markdownWikiLinkCompletion.query.trim().toLowerCase();
+    return markdownWikiLinkSuggestionItems
+      .map((item) => {
+        const title = item.title.toLowerCase();
+        const detail = item.detail.toLowerCase();
+        const titleIndex = query ? title.indexOf(query) : 0;
+        const detailIndex = query ? detail.indexOf(query) : 0;
+        if (query && titleIndex < 0 && detailIndex < 0) return null;
+        const score = !query
+          ? 4
+          : title === query
+            ? 0
+            : title.startsWith(query)
+              ? 1
+              : titleIndex >= 0
+                ? 2
+                : 3;
+        return { item, score };
+      })
+      .filter((entry): entry is { item: MarkdownWikiLinkSuggestion; score: number } => !!entry)
+      .sort((a, b) => a.score - b.score || a.item.title.localeCompare(b.item.title))
+      .slice(0, 8)
+      .map((entry) => entry.item);
+  }, [markdownWikiLinkCompletion, markdownWikiLinkSuggestionItems]);
 
   const displayContent = useMemo(() => {
     const raw = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
@@ -1156,10 +1427,66 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     persistEditorSession();
   }, [persistEditorSession]);
 
+  const updateMarkdownWikiLinkCompletion = useCallback((
+    editor: HTMLTextAreaElement,
+    valueOverride?: string,
+  ) => {
+    const value = valueOverride ?? editor.value;
+    const completion = getActiveMarkdownWikiLinkCompletion(
+      value,
+      editor.selectionStart,
+      editor.selectionEnd,
+    );
+    if (!completion) {
+      setMarkdownWikiLinkCompletion(null);
+      return;
+    }
+
+    const position = getMarkdownWikiLinkCompletionPosition(editor, completion);
+    if (!position) {
+      setMarkdownWikiLinkCompletion(null);
+      return;
+    }
+
+    setMarkdownWikiLinkCompletion({ ...completion, ...position });
+  }, []);
+
+  const applyMarkdownWikiLinkSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownWikiLinkCompletion | null,
+  ) => {
+    const editor = markdownEditorRef.current;
+    const currentValue = editor?.value ?? editContent;
+    const liveCompletion = editor
+      ? getActiveMarkdownWikiLinkCompletion(currentValue, editor.selectionStart, editor.selectionEnd)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownWikiLinkCompletionReplacement(currentValue, completion, suggestion.title);
+    if (!edit) return;
+
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownWikiLinkCompletion(null);
+    setMarkdownEditorLinkHover(null);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextEditor = markdownEditorRef.current;
+      if (!nextEditor || nextEditor.value !== edit.nextValue) return;
+      nextEditor.focus({ preventScroll: true });
+      nextEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      updateMarkdownEditorFades(nextEditor);
+      smoothScrollMarkdownCaretIntoComfortView(nextEditor);
+    });
+  }, [editContent, markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+
   const applyMarkdownTextInsertion = useCallback((text: string) => {
     if (!text) return;
     markWritingActive();
     setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
 
     const editor = markdownEditorRef.current;
     const currentValue = editor?.value ?? editContent;
@@ -1199,6 +1526,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     markWritingActive();
     setEditContent(pasteEdit.nextValue);
     setMarkdownUrlPasteChoice(pasteEdit);
+    setMarkdownWikiLinkCompletion(null);
     scheduleEditorSessionPersist();
 
     requestAnimationFrame(() => {
@@ -1243,6 +1571,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   const handleMarkdownEditorSelect = useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
     scheduleEditorSessionPersist();
+    updateMarkdownWikiLinkCompletion(e.currentTarget);
     if (!markdownUrlPasteChoice) return;
 
     const editor = e.currentTarget;
@@ -1252,21 +1581,78 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     ) {
       setMarkdownUrlPasteChoice(null);
     }
-  }, [markdownUrlPasteChoice, scheduleEditorSessionPersist]);
+  }, [markdownUrlPasteChoice, scheduleEditorSessionPersist, updateMarkdownWikiLinkCompletion]);
+
+  const handleMarkdownEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const completion = markdownWikiLinkCompletion;
+    if (!completion) return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+      setMarkdownWikiLinkCompletion(null);
+      return;
+    }
+
+    if (markdownWikiLinkSuggestions.length === 0) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setMarkdownWikiLinkSuggestionIndex((index) => (
+        (index + 1) % markdownWikiLinkSuggestions.length
+      ));
+      return;
+    }
+
+    if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setMarkdownWikiLinkSuggestionIndex((index) => (
+        (index - 1 + markdownWikiLinkSuggestions.length) % markdownWikiLinkSuggestions.length
+      ));
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const suggestion = markdownWikiLinkSuggestions[
+        Math.min(markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length - 1)
+      ];
+      applyMarkdownWikiLinkSuggestion(suggestion, completion);
+    }
+  }, [
+    applyMarkdownWikiLinkSuggestion,
+    markdownWikiLinkCompletion,
+    markdownWikiLinkSuggestionIndex,
+    markdownWikiLinkSuggestions,
+  ]);
 
   const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const editor = e.currentTarget;
     scheduleEditorSessionPersist();
+    updateMarkdownWikiLinkCompletion(editor);
     if (e.key === 'ArrowDown' || e.key === 'Enter') {
       requestAnimationFrame(() => smoothScrollMarkdownCaretIntoComfortView(editor));
     }
-  }, [scheduleEditorSessionPersist]);
+  }, [scheduleEditorSessionPersist, updateMarkdownWikiLinkCompletion]);
 
   const handleMarkdownEditorClick = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
-    if (!e.metaKey) return;
+    if (!e.metaKey) {
+      updateMarkdownWikiLinkCompletion(e.currentTarget);
+      return;
+    }
 
     const editor = e.currentTarget;
-    const action = getMarkdownEditorLinkActionAtOffset(editor.value, editor.selectionStart, wikiIndex);
+    const hover = getMarkdownEditorLinkHoverAtPoint(
+      editor,
+      e.clientX,
+      e.clientY,
+      getMarkdownEditorLinkHits(editor.value, wikiIndex),
+    );
+    if (hover) setMarkdownEditorLinkHover(hover);
+
+    const action = hover?.action
+      ?? getMarkdownEditorLinkActionAtOffset(editor.value, editor.selectionStart, wikiIndex);
     if (action.kind === 'noop') return;
 
     e.preventDefault();
@@ -1275,7 +1661,28 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       await flushCurrentEdit();
       openLinkAction(action);
     })();
-  }, [flushCurrentEdit, openLinkAction, wikiIndex]);
+  }, [flushCurrentEdit, openLinkAction, updateMarkdownWikiLinkCompletion, wikiIndex]);
+
+  const handleMarkdownEditorMouseMove = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+    if (!e.metaKey) {
+      setMarkdownEditorLinkHover(null);
+      return;
+    }
+    setMarkdownEditorCommandActive(true);
+
+    const editor = e.currentTarget;
+    const hover = getMarkdownEditorLinkHoverAtPoint(
+      editor,
+      e.clientX,
+      e.clientY,
+      getMarkdownEditorLinkHits(editor.value, wikiIndex),
+    );
+    setMarkdownEditorLinkHover(hover);
+  }, [wikiIndex]);
+
+  const handleMarkdownEditorMouseLeave = useCallback(() => {
+    setMarkdownEditorLinkHover(null);
+  }, []);
 
   const restoreEditorSession = useCallback((session: LibrarianEditorSession | null) => {
     if (!session || contentMode !== 'markdown' || !editorSessionMatchesCurrent(session)) return;
@@ -1332,8 +1739,18 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [markdownUrlPasteChoice]);
 
   useEffect(() => {
+    setMarkdownWikiLinkSuggestionIndex(0);
+  }, [markdownWikiLinkCompletion?.query, markdownWikiLinkCompletion?.queryStart]);
+
+  useEffect(() => {
+    if (markdownWikiLinkSuggestionIndex < markdownWikiLinkSuggestions.length) return;
+    setMarkdownWikiLinkSuggestionIndex(0);
+  }, [markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length]);
+
+  useEffect(() => {
     if (contentMode !== 'markdown') {
       setMarkdownEditorCommandActive(false);
+      setMarkdownEditorLinkHover(null);
       return;
     }
 
@@ -1341,9 +1758,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       if (event.key === 'Meta' || event.metaKey) setMarkdownEditorCommandActive(true);
     };
     const handleKeyUp = (event: KeyboardEvent) => {
-      if (event.key === 'Meta' || !event.metaKey) setMarkdownEditorCommandActive(false);
+      if (event.key === 'Meta' || !event.metaKey) {
+        setMarkdownEditorCommandActive(false);
+        setMarkdownEditorLinkHover(null);
+      }
     };
-    const handleBlur = () => setMarkdownEditorCommandActive(false);
+    const handleBlur = () => {
+      setMarkdownEditorCommandActive(false);
+      setMarkdownEditorLinkHover(null);
+    };
 
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
@@ -1357,6 +1780,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
   }, [activeReading?.path, contentMode]);
 
   useEffect(() => {
@@ -1453,19 +1877,33 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   // Create new wiki file. Name comes from the sidebar's inline input because
   // Electron silently disables window.prompt().
-  const handleCreateFile = useCallback(async (folderName: string, fileName: string) => {
-    if (!fileName.trim()) return;
-    const realFolder = resolveWikiCreateFolder(folderName, selectedItemType, wikiSelectedRelPath);
-    const page = await window.wikiAPI?.createFile(realFolder, fileName.trim());
+  const handleCreateFile = useCallback(async (location: LibraryCreateLocation, fileName: string) => {
+    if (!fileName.trim()) return false;
+    if (!location.builtin) {
+      const page = await window.libraryAPI?.createFile(location.rootPath, location.relPath, fileName.trim());
+      if (page?.absPath) {
+        await selectExternalFile(page.absPath);
+        setContentMode('markdown');
+        return true;
+      }
+      return false;
+    }
+
+    const page = await window.wikiAPI?.createFile(location.relPath, fileName.trim());
     if (page) {
       openWikiPage(page.relPath);
       setContentMode('markdown');
+      return true;
     }
-  }, [openWikiPage, selectedItemType, wikiSelectedRelPath]);
+    return false;
+  }, [openWikiPage, selectExternalFile]);
 
-  const handleCreateDir = useCallback(async (dirName: string) => {
-    if (!dirName.trim()) return;
-    await window.wikiAPI?.createDir(dirName.trim());
+  const handleCreateDir = useCallback(async (location: LibraryCreateLocation) => {
+    if (!location.relPath.trim()) return false;
+    if (!location.builtin) {
+      return await window.libraryAPI?.createDir(location.rootPath, location.relPath) ?? false;
+    }
+    return await window.wikiAPI?.createDir(location.relPath) ?? false;
   }, []);
 
   // Scratchpad default create — used by the sidebar "+" button and Cmd+N
@@ -1475,7 +1913,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     if (page) {
       openWikiPage(page.relPath);
       setContentMode('markdown');
+      return true;
     }
+    return false;
   }, [openWikiPage]);
 
   // True while the currently-selected item is the artifact the librarian
@@ -1510,6 +1950,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       onAutoPopArtifactSuperseded?.();
     }
   }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+
+  const handleDeletedLibraryItem = useCallback((item: UnifiedItem) => {
+    const deletedSelection = deletedLibraryItemMatchesSelection(item, {
+      selectedItemId,
+      selectedItemType,
+      wikiSelectedRelPath,
+      selectedPath,
+    });
+    if (deletedSelection) clearSelectedLibraryItem();
+  }, [clearSelectedLibraryItem, selectedItemId, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
   // Seed editContent when the user enters markdown mode on a file, or when
   // they switch to a different file while editing. Guarded by path so that
@@ -1615,10 +2065,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         confirmLabel: 'Move to Trash',
         onConfirm: async () => {
           const success = await window.wikiAPI?.deletePage(wikiSelectedRelPath);
-          if (success) {
-            setWikiSelectedRelPath(null);
-            setWikiSelectedPage(null);
-          }
+          if (success) clearSelectedLibraryItem();
         },
       });
       return;
@@ -1633,12 +2080,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           if (shareStatus?.shared) {
             await window.librarianAPI?.unshareReading(selectedPath);
           }
-          await window.librarianAPI?.deleteReading(selectedPath);
-          // The onReadingRemoved listener will handle updating state and selecting next item
+          const success = await window.librarianAPI?.deleteReading(selectedPath);
+          if (success) clearSelectedLibraryItem();
         },
       });
     }
-  }, [activeReading, confirmDelete, selectedItemType, selectedPath, selectedReading, shareStatus?.shared, wikiSelectedRelPath]);
+  }, [activeReading, clearSelectedLibraryItem, confirmDelete, selectedItemType, selectedPath, selectedReading, shareStatus?.shared, wikiSelectedRelPath]);
 
   // Play narration for current reading
   const handlePlayNarration = useCallback(async () => {
@@ -1870,6 +2317,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       // textarea is on screen, just not when it's focused.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
+        sidebarKeyboardActiveRef.current = false;
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
         return;
@@ -1972,13 +2420,23 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Don't handle navigation keys in markdown mode (textarea needs them)
-      if (contentMode === 'markdown') return;
+      const isSidebarNavigationKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'k';
+      const activeEl = document.activeElement;
+      const inTextInput = activeEl instanceof HTMLInputElement
+        || activeEl instanceof HTMLTextAreaElement
+        || activeEl instanceof HTMLSelectElement
+        || (activeEl instanceof HTMLElement && activeEl.isContentEditable);
+      if (inTextInput) return;
 
-      // Arrow key / j/k navigation through flat item list
+      // Markdown mode owns text input, but a clicked sidebar item owns sidebar navigation.
+      if (contentMode === 'markdown' && (!sidebarKeyboardActiveRef.current || !isSidebarNavigationKey)) return;
+      if (!isSidebarNavigationKey) return;
+
+      // Arrow key / j/k navigation through the current sidebar folder.
       const items = flatItemsRef.current;
       if (items.length > 0) {
         const currentIdx = items.findIndex((i) => i.id === selectedItemId);
+        if (currentIdx < 0) return;
         if (e.key === 'ArrowUp' || e.key === 'k') {
           e.preventDefault();
           const newIdx = Math.max(0, currentIdx - 1);
@@ -2363,6 +2821,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             onSearchQueryChange={setSearchQuery}
             searchInputRef={searchInputRef}
             creationControllerRef={wikiCreationRef}
+            onDeletedItem={handleDeletedLibraryItem}
+            onKeyboardScopeActive={activateSidebarKeyboard}
           />
         </div>
       </div>
@@ -2786,35 +3246,54 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     const nextSelectionEnd = e.currentTarget.selectionEnd;
                     const nextScrollTop = e.currentTarget.scrollTop;
                     const nativeEvent = e.nativeEvent as InputEvent;
+                    const autoCloseEdit = nativeEvent.inputType === 'insertText' && nativeEvent.data === '['
+                      ? getMarkdownWikiLinkAutoCloseEdit(nextValue, nextSelectionStart, nextSelectionEnd)
+                      : null;
+                    const committedValue = autoCloseEdit?.nextValue ?? nextValue;
                     markWritingActive();
-                    setEditContent(nextValue);
+                    setEditContent(committedValue);
                     if (nativeEvent.inputType !== 'insertFromPaste') {
                       setMarkdownUrlPasteChoice(null);
                     }
+                    updateMarkdownWikiLinkCompletion(e.currentTarget, committedValue);
                     scheduleEditorSessionPersist();
-                    if (nativeEvent.inputType === 'insertLineBreak' || nativeEvent.inputType === 'insertParagraph') {
+                    if (autoCloseEdit || nativeEvent.inputType === 'insertLineBreak' || nativeEvent.inputType === 'insertParagraph') {
                       requestAnimationFrame(() => {
                         const editor = markdownEditorRef.current;
-                        if (!editor || editor.value !== nextValue) return;
+                        if (!editor || editor.value !== committedValue) return;
+                        const selectionStart = autoCloseEdit?.selectionStart ?? nextSelectionStart;
+                        const selectionEnd = autoCloseEdit?.selectionEnd ?? nextSelectionEnd;
                         editor.setSelectionRange(
-                          Math.min(nextSelectionStart, editor.value.length),
-                          Math.min(nextSelectionEnd, editor.value.length),
+                          Math.min(selectionStart, editor.value.length),
+                          Math.min(selectionEnd, editor.value.length),
                         );
                         editor.scrollTop = nextScrollTop;
+                        updateMarkdownWikiLinkCompletion(editor);
                         updateMarkdownEditorFades(editor);
-                        smoothScrollMarkdownCaretIntoComfortView(editor);
+                        if (!autoCloseEdit) smoothScrollMarkdownCaretIntoComfortView(editor);
                       });
                     }
                   }}
                   onPaste={handleMarkdownEditorPaste}
                   onClick={handleMarkdownEditorClick}
-                  onFocus={() => window.librarianAPI?.setMarkdownEditorFocused(true)}
-                  onBlur={() => window.librarianAPI?.setMarkdownEditorFocused(false)}
+                  onFocus={(e) => {
+                    sidebarKeyboardActiveRef.current = false;
+                    window.librarianAPI?.setMarkdownEditorFocused(true);
+                    updateMarkdownWikiLinkCompletion(e.currentTarget);
+                  }}
+                  onBlur={() => {
+                    window.librarianAPI?.setMarkdownEditorFocused(false);
+                    setMarkdownWikiLinkCompletion(null);
+                  }}
+                  onKeyDown={handleMarkdownEditorKeyDown}
                   onKeyUp={handleMarkdownEditorKeyUp}
                   onMouseUp={scheduleEditorSessionPersist}
+                  onMouseMove={handleMarkdownEditorMouseMove}
+                  onMouseLeave={handleMarkdownEditorMouseLeave}
                   onSelect={handleMarkdownEditorSelect}
                   onScroll={(e) => {
                     updateMarkdownEditorFades(e.currentTarget);
+                    updateMarkdownWikiLinkCompletion(e.currentTarget);
                     scheduleEditorSessionPersist();
                   }}
                   spellCheck={true}
@@ -2843,10 +3322,109 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     overflowAnchor: 'none',
                     overscrollBehavior: 'contain',
                     tabSize: 2,
-                    cursor: markdownEditorCommandActive ? 'pointer' : 'text',
+                    cursor: markdownEditorCommandActive && markdownEditorLinkHover ? 'pointer' : 'text',
                   }}
                   placeholder="Write your markdown here..."
                 />
+                {markdownEditorCommandActive && markdownEditorLinkHover && markdownEditorLinkHover.overlays.map((overlay, index) => (
+                  <span
+                    key={`${overlay.top}:${overlay.left}:${index}`}
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      top: `${overlay.top}px`,
+                      left: `${overlay.left}px`,
+                      maxWidth: `${overlay.maxWidth}px`,
+                      pointerEvents: 'none',
+                      zIndex: 2,
+                      ...documentTextStyle,
+                      backgroundColor: theme.bg,
+                      color: markdownEditorLinkHover.unresolved ? '#ef4444' : theme.accent,
+                      textDecoration: markdownEditorLinkHover.unresolved ? 'underline dashed' : 'none',
+                      textUnderlineOffset: markdownEditorLinkHover.unresolved ? '2px' : undefined,
+                      whiteSpace: 'pre-wrap',
+                      overflowWrap: 'break-word',
+                    }}
+                  >
+                    {overlay.text}
+                  </span>
+                ))}
+                {markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
+                  <div
+                    role="listbox"
+                    aria-label="Wiki link suggestions"
+                    onMouseDown={(e) => e.preventDefault()}
+                    style={{
+                      position: 'absolute',
+                      top: `${markdownWikiLinkCompletion.top}px`,
+                      left: `${markdownWikiLinkCompletion.left}px`,
+                      width: '260px',
+                      maxHeight: '176px',
+                      overflowY: 'auto',
+                      zIndex: 4,
+                      padding: '4px',
+                      borderRadius: '6px',
+                      backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
+                      border: `1px solid ${theme.border}`,
+                      boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
+                      backdropFilter: 'blur(10px)',
+                    }}
+                  >
+                    {markdownWikiLinkSuggestions.map((suggestion, index) => {
+                      const selected = index === markdownWikiLinkSuggestionIndex;
+                      return (
+                        <button
+                          key={`${suggestion.kind}:${suggestion.detail}:${suggestion.title}`}
+                          type="button"
+                          role="option"
+                          aria-selected={selected}
+                          onMouseEnter={() => setMarkdownWikiLinkSuggestionIndex(index)}
+                          onClick={() => applyMarkdownWikiLinkSuggestion(suggestion, markdownWikiLinkCompletion)}
+                          style={{
+                            display: 'block',
+                            width: '100%',
+                            border: 'none',
+                            borderRadius: '4px',
+                            padding: '6px 7px',
+                            textAlign: 'left',
+                            backgroundColor: selected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
+                              : 'transparent',
+                            color: theme.text,
+                            cursor: 'pointer',
+                            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+                          }}
+                        >
+                          <span
+                            style={{
+                              display: 'block',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              fontSize: '12px',
+                              lineHeight: '16px',
+                            }}
+                          >
+                            {suggestion.title}
+                          </span>
+                          <span
+                            style={{
+                              display: 'block',
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                              fontSize: '10px',
+                              lineHeight: '13px',
+                              color: theme.textSecondary,
+                            }}
+                          >
+                            {suggestion.kind} - {suggestion.detail}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
