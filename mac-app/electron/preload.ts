@@ -3657,6 +3657,9 @@ interface LibraryRoot {
 
 const libraryAPI = {
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
+  getHiddenFolders: (): Promise<string[]> => ipcRenderer.invoke('library:getHiddenFolders'),
+  setFolderHidden: (folderId: string, hidden: boolean): Promise<string[]> =>
+    ipcRenderer.invoke('library:setFolderHidden', folderId, hidden),
   addRoot: (dirPath: string): Promise<LibraryRoot | null> => ipcRenderer.invoke('library:addRoot', dirPath),
   removeRoot: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('library:removeRoot', dirPath),
   createFile: (rootPath: string, folderRelPath: string, fileName: string): Promise<WikiPage | null> =>
