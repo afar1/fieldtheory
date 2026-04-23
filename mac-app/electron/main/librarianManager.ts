@@ -2472,6 +2472,7 @@ export class LibrarianManager extends EventEmitter {
     if (!this.isInsidePath(this.wikiDir, absPath)) return false;
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
+      this.emit('wiki:changed');
       return true;
     } catch (error) {
       log.error(`Error saving wiki page ${relPath}:`, error);

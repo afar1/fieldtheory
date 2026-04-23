@@ -3,6 +3,7 @@ import {
   buildWikiIndex,
   classifyLinkHref,
   decodeUnresolvedWikiHref,
+  getMarkdownEditorLinkActionAtOffset,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   resolveWikiLink,
@@ -39,7 +40,7 @@ describe('buildWikiIndex', () => {
       { relPath: 'entries/a', title: 'Shared Title' },
       { relPath: 'debates/b', title: 'Shared Title' },
     ]);
-    expect(idx.byTitle.get('shared title')).toBe('entries/a');
+    expect(idx.byTitle.get('shared title')).toEqual({ kind: 'wiki', relPath: 'entries/a' });
     expect(idx.byRelPath.has('entries/a')).toBe(true);
     expect(idx.byRelPath.has('debates/b')).toBe(true);
   });
@@ -88,6 +89,24 @@ describe('transformWikiLinks', () => {
   it('emits an unresolved sentinel href for missing targets', () => {
     const out = transformWikiLinks('Link to [[Brand New]] page.', index);
     expect(out).toBe('Link to [Brand New](wiki://!/Brand%20New) page.');
+  });
+
+  it('rewrites artifact title links to artifact hrefs', () => {
+    const artifactIndex = buildWikiIndex([
+      { relPath: 'entries/my-page', title: 'My Page' },
+      { relPath: '/tmp/artifact.md', title: 'Artifact One', artifactPath: '/tmp/artifact.md' },
+    ]);
+    const out = transformWikiLinks('See [[Artifact One]].', artifactIndex);
+    expect(out).toBe('See [Artifact One](artifact://%2Ftmp%2Fartifact.md).');
+  });
+
+  it('rewrites command title links to command hrefs', () => {
+    const commandIndex = buildWikiIndex([
+      { relPath: 'entries/my-page', title: 'My Page' },
+      { relPath: '/tmp/refactor.md', title: 'refactor', commandPath: '/tmp/refactor.md' },
+    ]);
+    const out = transformWikiLinks('Run [[refactor]].', commandIndex);
+    expect(out).toBe('Run [refactor](command://%2Ftmp%2Frefactor.md).');
   });
 
   it('leaves wikilink syntax inside fenced code blocks untouched', () => {
@@ -149,6 +168,20 @@ describe('classifyLinkHref', () => {
     });
   });
 
+  it('routes artifact:// hrefs to artifacts with the decoded path', () => {
+    expect(classifyLinkHref('artifact://%2Ftmp%2Fartifact.md', index)).toEqual({
+      kind: 'artifact',
+      path: '/tmp/artifact.md',
+    });
+  });
+
+  it('routes command:// hrefs to commands with the decoded path', () => {
+    expect(classifyLinkHref('command://%2Ftmp%2Frefactor.md', index)).toEqual({
+      kind: 'command',
+      path: '/tmp/refactor.md',
+    });
+  });
+
   it('treats bare relative hrefs that match the index as wiki links', () => {
     expect(classifyLinkHref('debates/consensus', index)).toEqual({
       kind: 'wiki',
@@ -178,6 +211,58 @@ describe('classifyLinkHref', () => {
     expect(classifyLinkHref('#section', index)).toEqual({ kind: 'external', href: '#section' });
     expect(classifyLinkHref('/abs/path', index)).toEqual({ kind: 'external', href: '/abs/path' });
     expect(classifyLinkHref('?q=1', index)).toEqual({ kind: 'external', href: '?q=1' });
+  });
+});
+
+describe('getMarkdownEditorLinkActionAtOffset', () => {
+  it('activates resolved wikilinks from edit mode', () => {
+    const input = 'See [[My Page|this page]] now.';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('this'), index)).toEqual({
+      kind: 'wiki',
+      relPath: 'entries/my-page',
+    });
+  });
+
+  it('activates unresolved wikilinks as create actions', () => {
+    const input = 'See [[New Thing]] now.';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('New'), index)).toEqual({
+      kind: 'create',
+      title: 'New Thing',
+    });
+  });
+
+  it('activates markdown links using the href', () => {
+    const input = 'Read [the docs](https://example.com/docs).';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('docs'), index)).toEqual({
+      kind: 'external',
+      href: 'https://example.com/docs',
+    });
+  });
+
+  it('activates empty markdown hrefs using the label as an index lookup', () => {
+    const input = 'Read [Consensus]().';
+    expect(getMarkdownEditorLinkActionAtOffset(input, input.indexOf('Consensus'), index)).toEqual({
+      kind: 'wiki',
+      relPath: 'debates/consensus',
+    });
+  });
+
+  it('activates autolinks and bare urls', () => {
+    const autolink = 'Open <mailto:a@b.com>.';
+    expect(getMarkdownEditorLinkActionAtOffset(autolink, autolink.indexOf('mailto'), index)).toEqual({
+      kind: 'external',
+      href: 'mailto:a@b.com',
+    });
+
+    const bare = 'Open https://example.com/path.';
+    expect(getMarkdownEditorLinkActionAtOffset(bare, bare.indexOf('example'), index)).toEqual({
+      kind: 'external',
+      href: 'https://example.com/path',
+    });
+  });
+
+  it('returns noop when the offset is not on a link', () => {
+    expect(getMarkdownEditorLinkActionAtOffset('plain text', 2, index)).toEqual({ kind: 'noop' });
   });
 });
 

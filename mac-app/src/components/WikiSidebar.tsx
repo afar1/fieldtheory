@@ -1,5 +1,6 @@
 import { memo, useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 
 type SortMode = 'alpha' | 'time';
 
@@ -152,8 +153,17 @@ function makeBookmarksItem(): UnifiedItem {
   };
 }
 
-function sortSidebarNodes(nodes: SidebarNode[]): SidebarNode[] {
+function sidebarNodeSortTimestamp(node: SidebarNode): number {
+  if (node.kind === 'file') return node.item.timestamp;
+  return node.children.reduce((latest, child) => Math.max(latest, sidebarNodeSortTimestamp(child)), 0);
+}
+
+export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alpha'): SidebarNode[] {
   return [...nodes].sort((a, b) => {
+    if (sortMode === 'time') {
+      const byTimestamp = sidebarNodeSortTimestamp(b) - sidebarNodeSortTimestamp(a);
+      if (byTimestamp !== 0) return byTimestamp;
+    }
     const left = a.kind === 'dir' ? a.label : a.item.title;
     const right = b.kind === 'dir' ? b.label : b.item.title;
     return left.localeCompare(right, undefined, { sensitivity: 'base' });
@@ -199,7 +209,7 @@ function filterSidebarNodes(nodes: SidebarNode[], searchQuery: string): SidebarN
   return filtered;
 }
 
-function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot): SidebarNode {
+function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: SortMode): SidebarNode {
   if (node.kind === 'file') {
     const type = root.builtin ? 'wiki' : 'external';
     const id = root.builtin ? `wiki:${node.relPath}` : `external:${node.absPath}`;
@@ -226,7 +236,7 @@ function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot): SidebarNode {
     rootPath: root.path,
     builtin: root.builtin,
     canCreateFile: root.builtin,
-    children: sortSidebarNodes(node.children.map((child) => wikiNodeToSidebarNode(child, root))),
+    children: sortSidebarNodes(node.children.map((child) => wikiNodeToSidebarNode(child, root, sortMode)), sortMode),
   };
 }
 
@@ -253,7 +263,7 @@ export function ensureScratchpadNodePinned(nodes: SidebarNode[], root: LibraryRo
   ];
 }
 
-export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot): SidebarNode[] {
+export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot, sortMode: SortMode = 'alpha'): SidebarNode[] {
   if (!root.builtin) return nodes;
 
   const bookmarkFolderNames = new Set(['categories', 'domains', 'entities']);
@@ -283,16 +293,16 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
       canCreateFile: false,
       children: [
         { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
-        ...sortSidebarNodes(bookmarkNodes),
+        ...sortSidebarNodes(bookmarkNodes, sortMode),
       ],
     },
-  ]);
+  ], sortMode);
 }
 
-function rootToSidebarNode(root: LibraryRoot): SidebarNode {
-  let children = sortSidebarNodes(root.tree.map((node) => wikiNodeToSidebarNode(node, root)));
+function rootToSidebarNode(root: LibraryRoot, sortMode: SortMode): SidebarNode {
+  let children = sortSidebarNodes(root.tree.map((node) => wikiNodeToSidebarNode(node, root, sortMode)), sortMode);
   if (root.builtin) {
-    children = virtualizeBookmarksGroup(children, root);
+    children = virtualizeBookmarksGroup(children, root, sortMode);
     children = ensureScratchpadNodePinned(children, root);
   }
   return {
@@ -322,6 +332,7 @@ function WikiSidebar({
   creationControllerRef,
 }: WikiSidebarProps) {
   const { theme } = useTheme();
+  const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
   const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
@@ -546,7 +557,7 @@ function WikiSidebar({
       });
     }
 
-    roots.push(...libraryRoots.map(rootToSidebarNode));
+    roots.push(...libraryRoots.map((root) => rootToSidebarNode(root, sortMode)));
     return roots;
   }, [artifacts, libraryRoots, sortMode]);
 
@@ -577,12 +588,19 @@ function WikiSidebar({
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') closeContextMenu();
     };
+    const onPointerDown = () => closeContextMenu();
     window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    window.addEventListener('mousedown', onPointerDown);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('mousedown', onPointerDown);
+    };
   }, [contextMenu, closeContextMenu]);
 
   const contextDir = contextMenu?.node?.kind === 'dir' ? contextMenu.node : null;
+  const contextFile = contextMenu?.node?.kind === 'file' ? contextMenu.node.item : null;
   const contextCreateTarget = contextDir?.builtin && contextDir.relPath ? contextDir.relPath : undefined;
+  const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact';
 
   const addFolderFromPath = useCallback(async () => {
     closeContextMenu();
@@ -605,6 +623,37 @@ function WikiSidebar({
     await window.libraryAPI?.removeRoot(target.rootPath);
     await loadTree();
   }, [closeContextMenu, contextDir, loadTree]);
+
+  const deleteContextFile = useCallback(() => {
+    const target = contextFile;
+    closeContextMenu();
+    if (!target || (target.type !== 'wiki' && target.type !== 'artifact')) return;
+
+    if (target.type === 'wiki') {
+      if (!target.relPath) return;
+      confirmDelete({
+        title: 'Delete page?',
+        message: `Move "${target.title}" to Trash?`,
+        confirmLabel: 'Move to Trash',
+        onConfirm: async () => {
+          await window.wikiAPI?.deletePage(target.relPath!);
+        },
+      });
+      return;
+    }
+
+    confirmDelete({
+      title: 'Delete artifact?',
+      message: `Delete "${target.title}"? This cannot be undone.`,
+      onConfirm: async () => {
+        const shareStatus = await window.librarianAPI?.getShareStatus(target.absPath);
+        if (shareStatus?.shared) {
+          await window.librarianAPI?.unshareReading(target.absPath);
+        }
+        await window.librarianAPI?.deleteReading(target.absPath);
+      },
+    });
+  }, [closeContextMenu, confirmDelete, contextFile]);
 
   return (
     <div
@@ -729,6 +778,7 @@ function WikiSidebar({
           y={contextMenu.y}
           theme={theme}
           canRemoveRoot={!!contextDir?.canRemoveRoot}
+          canDelete={canDeleteContextFile}
           onNewFile={() => {
             closeContextMenu();
             beginCreateFile(contextCreateTarget);
@@ -739,8 +789,10 @@ function WikiSidebar({
           }}
           onAddFolder={addFolderFromPath}
           onRemoveRoot={removeContextRoot}
+          onDelete={deleteContextFile}
         />
       )}
+      {deleteConfirmationDialog}
 
       {!isSearching && recent.length > 0 && (
         <RecentBlock
@@ -1006,15 +1058,17 @@ function TreeNode({
   );
 }
 
-function LibraryContextMenu({ x, y, theme, canRemoveRoot, onNewFile, onNewFolder, onAddFolder, onRemoveRoot }: {
+function LibraryContextMenu({ x, y, theme, canRemoveRoot, canDelete, onNewFile, onNewFolder, onAddFolder, onRemoveRoot, onDelete }: {
   x: number;
   y: number;
   theme: ReturnType<typeof useTheme>['theme'];
   canRemoveRoot: boolean;
+  canDelete: boolean;
   onNewFile: () => void;
   onNewFolder: () => void;
   onAddFolder: () => void;
   onRemoveRoot: () => void;
+  onDelete: () => void;
 }) {
   const itemStyle: React.CSSProperties = {
     display: 'block',
@@ -1025,12 +1079,22 @@ function LibraryContextMenu({ x, y, theme, canRemoveRoot, onNewFile, onNewFolder
     color: theme.text,
     background: 'transparent',
     border: 'none',
+    borderRadius: '4px',
     cursor: 'pointer',
+  };
+  const setHover = (event: React.MouseEvent<HTMLButtonElement>, danger = false) => {
+    event.currentTarget.style.backgroundColor = danger
+      ? (theme.isDark ? 'rgba(239,68,68,0.14)' : 'rgba(239,68,68,0.1)')
+      : theme.hoverBg;
+  };
+  const clearHover = (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.currentTarget.style.backgroundColor = 'transparent';
   };
 
   return (
     <div
       onClick={(event) => event.stopPropagation()}
+      onMouseDown={(event) => event.stopPropagation()}
       style={{
         position: 'fixed',
         left: x,
@@ -1044,11 +1108,21 @@ function LibraryContextMenu({ x, y, theme, canRemoveRoot, onNewFile, onNewFolder
         boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.45)' : '0 8px 24px rgba(0,0,0,0.15)',
       }}
     >
-      <button style={itemStyle} onClick={onNewFile}>New file</button>
-      <button style={itemStyle} onClick={onNewFolder}>New folder</button>
-      <button style={itemStyle} onClick={onAddFolder}>Add folder from path...</button>
+      <button style={itemStyle} onClick={onNewFile} onMouseEnter={setHover} onMouseLeave={clearHover}>New file</button>
+      <button style={itemStyle} onClick={onNewFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>New folder</button>
+      <button style={itemStyle} onClick={onAddFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
       {canRemoveRoot && (
-        <button style={itemStyle} onClick={onRemoveRoot}>Remove from library</button>
+        <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from library</button>
+      )}
+      {canDelete && (
+        <button
+          style={{ ...itemStyle, color: '#dc2626' }}
+          onClick={onDelete}
+          onMouseEnter={(event) => setHover(event, true)}
+          onMouseLeave={clearHover}
+        >
+          Delete
+        </button>
       )}
     </div>
   );

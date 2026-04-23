@@ -16,10 +16,10 @@ vi.mock('electron', () => ({
     getFocusedWindow: vi.fn(() => null),
   }),
   screen: {
-    getAllDisplays: vi.fn(() => [{ bounds: { x: 0, y: 0, width: 1920, height: 1080 } }]),
-    getPrimaryDisplay: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })),
+    getAllDisplays: vi.fn(() => [{ bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1080 } }]),
+    getPrimaryDisplay: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1080 } })),
     getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
-    getDisplayNearestPoint: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })),
+    getDisplayNearestPoint: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 }, workArea: { x: 0, y: 0, width: 1920, height: 1080 } })),
   },
   Menu: {
     buildFromTemplate: vi.fn(() => ({ popup: vi.fn() })),
@@ -46,7 +46,7 @@ vi.mock('./clipboardManager', () => ({
   isFinder: vi.fn(() => false),
 }));
 
-import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import { buildClipboardContextMenuTemplate, ClipboardHistoryWindow } from './clipboardHistoryWindow';
 
 function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<typeof vi.fn>) {
   (window as any).window = {
@@ -94,6 +94,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window = new ClipboardHistoryWindow({
+      get: vi.fn(() => ({})),
       getPreference: vi.fn(() => false),
     } as any);
   });
@@ -170,6 +171,12 @@ describe('ClipboardHistoryWindow helper methods', () => {
   it('expands vertically in immersive mode and restores the original bounds on exit', () => {
     const { windowRef } = attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
     const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
+    (window as any).currentSizeKey = 'library';
+    (window as any).preferencesManager.get.mockReturnValue({
+      clipboardHistoryBoundsByView: {
+        library: { x: 100, y: 100, width: 900, height: 600 },
+      },
+    });
 
     window.setImmersiveMode(true);
 
@@ -207,6 +214,22 @@ describe('ClipboardHistoryWindow helper methods', () => {
       width: 972,
       height: 972,
     });
+  });
+
+  it('persists the active size key when switching view sizes', () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    window = new ClipboardHistoryWindow({
+      get: vi.fn(() => ({})),
+      getPreference: vi.fn(() => false),
+      save,
+    } as any);
+    attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
+    vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
+
+    window.setSizeKey('library');
+
+    expect(window.getCurrentSizeKey()).toBe('library');
+    expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'library' });
   });
 
   it('hides the window and restores the previous app when one is known', async () => {
@@ -347,5 +370,72 @@ describe('ClipboardHistoryWindow helper methods', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe('buildClipboardContextMenuTemplate', () => {
+  const editFlags = {
+    canUndo: false,
+    canRedo: false,
+    canCut: true,
+    canCopy: true,
+    canPaste: true,
+    canDelete: false,
+    canSelectAll: true,
+    canEditRichly: false,
+  };
+
+  it('adds spelling suggestions and add-to-dictionary for editable misspellings', () => {
+    const replaceMisspelling = vi.fn();
+    const addWordToDictionary = vi.fn();
+    const menu = buildClipboardContextMenuTemplate({
+      selectionText: '',
+      isEditable: true,
+      editFlags,
+      misspelledWord: 'somehting',
+      dictionarySuggestions: ['something', 'smoothing'],
+    }, {
+      lookUpSelection: vi.fn(),
+      replaceMisspelling,
+      addWordToDictionary,
+    });
+
+    expect(menu.map((item) => item.label ?? item.type)).toEqual([
+      'something',
+      'smoothing',
+      'separator',
+      'Add "somehting" to Dictionary',
+      'separator',
+      'Cut',
+      'Copy',
+      'Paste',
+      'separator',
+      'Select All',
+    ]);
+
+    (menu[0].click as () => void)();
+    (menu[3].click as () => void)();
+
+    expect(replaceMisspelling).toHaveBeenCalledWith('something');
+    expect(addWordToDictionary).toHaveBeenCalledWith('somehting');
+  });
+
+  it('keeps add-to-dictionary available when there are no suggestions', () => {
+    const addWordToDictionary = vi.fn();
+    const menu = buildClipboardContextMenuTemplate({
+      selectionText: '',
+      isEditable: true,
+      editFlags,
+      misspelledWord: 'fieldtheory',
+      dictionarySuggestions: [],
+    }, {
+      lookUpSelection: vi.fn(),
+      replaceMisspelling: vi.fn(),
+      addWordToDictionary,
+    });
+
+    expect(menu[0].label).toBe('Add "fieldtheory" to Dictionary');
+    (menu[0].click as () => void)();
+    expect(addWordToDictionary).toHaveBeenCalledWith('fieldtheory');
   });
 });

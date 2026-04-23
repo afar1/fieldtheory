@@ -13,6 +13,69 @@ const log = createLogger('ClipboardHistory');
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
+type ClipboardContextMenuParams = Pick<
+  Electron.ContextMenuParams,
+  'selectionText' | 'isEditable' | 'editFlags' | 'misspelledWord' | 'dictionarySuggestions'
+>;
+
+type ClipboardContextMenuActions = {
+  lookUpSelection: (selectionText: string) => void;
+  replaceMisspelling: (suggestion: string) => void;
+  addWordToDictionary: (word: string) => void;
+};
+
+export function buildClipboardContextMenuTemplate(
+  params: ClipboardContextMenuParams,
+  actions: ClipboardContextMenuActions
+): Electron.MenuItemConstructorOptions[] {
+  const { selectionText, isEditable, editFlags } = params;
+  const misspelledWord = params.misspelledWord?.trim() ?? '';
+  const dictionarySuggestions = params.dictionarySuggestions?.filter(Boolean) ?? [];
+  const menuItems: Electron.MenuItemConstructorOptions[] = [];
+
+  if (isEditable && misspelledWord) {
+    for (const suggestion of dictionarySuggestions.slice(0, 5)) {
+      menuItems.push({
+        label: suggestion,
+        click: () => actions.replaceMisspelling(suggestion),
+      });
+    }
+
+    if (dictionarySuggestions.length > 0) {
+      menuItems.push({ type: 'separator' });
+    }
+
+    menuItems.push({
+      label: `Add "${misspelledWord}" to Dictionary`,
+      click: () => actions.addWordToDictionary(misspelledWord),
+    });
+    menuItems.push({ type: 'separator' });
+  }
+
+  if (selectionText) {
+    menuItems.push(
+      { label: 'Copy', role: 'copy', enabled: editFlags.canCopy },
+      { type: 'separator' },
+      {
+        label: 'Look Up "%s"'.replace('%s', selectionText.slice(0, 20) + (selectionText.length > 20 ? '...' : '')),
+        click: () => actions.lookUpSelection(selectionText),
+      },
+    );
+  }
+
+  if (isEditable) {
+    menuItems.push(
+      { label: 'Cut', role: 'cut', enabled: editFlags.canCut },
+      { label: 'Copy', role: 'copy', enabled: editFlags.canCopy },
+      { label: 'Paste', role: 'paste', enabled: editFlags.canPaste },
+      { type: 'separator' },
+      { label: 'Select All', role: 'selectAll', enabled: editFlags.canSelectAll },
+    );
+  }
+
+  return menuItems;
+}
+
 // Helper to run execFile with timeout to prevent hangs (especially with Finder)
 function execFileWithTimeout(
   file: string,
@@ -439,6 +502,9 @@ export class ClipboardHistoryWindow {
     }
 
     this.currentSizeKey = key;
+    this.preferencesManager.save({ clipboardHistoryLastSizeKey: key }).catch((err) => {
+      log.error('Failed to save clipboard history size key:', err);
+    });
 
     // While immersive, don't change visible dims; the exit path reads the key.
     if (this.isImmersiveMode) return;
@@ -815,36 +881,19 @@ export class ClipboardHistoryWindow {
       log.error('Load failed:', errorCode, errorDescription);
     });
 
-    // Enable native context menu for text selection (Copy, Look Up, etc.)
+    // Enable native context menu for text selection and editable fields.
     this.window.webContents.on('context-menu', (event, params) => {
-      const { selectionText, isEditable, editFlags } = params;
-
-      const menuItems: Electron.MenuItemConstructorOptions[] = [];
-
-      if (selectionText) {
-        menuItems.push(
-          { label: 'Copy', role: 'copy', enabled: editFlags.canCopy },
-          { type: 'separator' },
-          { label: 'Look Up "%s"'.replace('%s', selectionText.slice(0, 20) + (selectionText.length > 20 ? '...' : '')), click: () => {
-            // Use macOS dictionary lookup
-            this.window?.webContents.executeJavaScript(`window.getSelection()?.toString()`).then((text) => {
-              if (text) {
-                require('child_process').execFile('open', [`dict://${encodeURIComponent(text)}`]);
-              }
-            });
-          }},
-        );
-      }
-
-      if (isEditable) {
-        menuItems.push(
-          { label: 'Cut', role: 'cut', enabled: editFlags.canCut },
-          { label: 'Copy', role: 'copy', enabled: editFlags.canCopy },
-          { label: 'Paste', role: 'paste', enabled: editFlags.canPaste },
-          { type: 'separator' },
-          { label: 'Select All', role: 'selectAll', enabled: editFlags.canSelectAll },
-        );
-      }
+      const menuItems = buildClipboardContextMenuTemplate(params, {
+        lookUpSelection: (selectionText) => {
+          execFile('open', [`dict://${encodeURIComponent(selectionText)}`]);
+        },
+        replaceMisspelling: (suggestion) => {
+          this.window?.webContents.replaceMisspelling(suggestion);
+        },
+        addWordToDictionary: (word) => {
+          this.window?.webContents.session.addWordToSpellCheckerDictionary(word);
+        },
+      });
 
       if (menuItems.length > 0) {
         const menu = Menu.buildFromTemplate(menuItems);

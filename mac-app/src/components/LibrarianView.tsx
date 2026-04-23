@@ -5,6 +5,7 @@
 
 import { useEffect, useState, useRef, useCallback, useMemo, Fragment } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import ReactMarkdown from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import { fonts } from '../design/tokens';
@@ -15,15 +16,42 @@ import WikiSidebar, { BOOKMARKS_ITEM_ID, type UnifiedItem, type WikiCreationCont
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
-import { isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import {
+  LIBRARIAN_LINE_HEIGHT_OPTIONS,
+  LIBRARIAN_TYPOGRAPHY_PRESETS,
+  isLibrarianLineHeightId,
+  isLibrarianTypographyPresetId,
+  persistLibrarianLineHeight,
+  persistLibrarianTypographyPreset,
+  resolveLibrarianLineHeight,
+  restoreLibrarianLineHeight,
+  restoreLibrarianTypographyPreset,
+  type LibrarianLineHeightId,
+  type LibrarianTypographyPresetId,
+} from '../utils/librarianTypography';
+import {
+  MARKDOWN_URL_PASTE_OPTIONS,
+  getMarkdownUrlPasteEdit,
+  getMarkdownUrlPasteReplacement,
+  type MarkdownUrlPasteEdit,
+  type MarkdownUrlPasteKind,
+} from '../utils/markdownUrlPaste';
 import {
   buildWikiIndex,
   classifyLinkHref,
+  getMarkdownEditorLinkActionAtOffset,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
+  type LinkAction,
   type WikiIndexInput,
 } from '../utils/wikiLinks';
+
+type FieldTheoryMarkdownTarget = {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
+};
 
 /** Strip YAML frontmatter from wiki page content for display.
  *  Returns the body (everything after the closing ---) and parsed
@@ -39,13 +67,131 @@ export function splitFrontmatter(content: string): { body: string; meta: Record<
   return { body: match[2].replace(/^\n+/, ''), meta };
 }
 
+export function extractMarkdownH1Title(content: string, fallback: string): string {
+  for (const line of content.split('\n').slice(0, 40)) {
+    const match = line.match(/^#\s+(.+)/);
+    if (match?.[1].trim()) return match[1].trim();
+  }
+  return fallback;
+}
+
+const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
+
+export function preserveMarkdownBlankLines(content: string): string {
+  if (!content || !content.trim()) return content;
+
+  const output: string[] = [];
+  let inFence = false;
+  for (const line of content.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      output.push(line);
+      inFence = !inFence;
+      continue;
+    }
+
+    if (!inFence && line.trim() === '') {
+      output.push('', PRESERVED_BLANK_MARKDOWN_LINE, '');
+      continue;
+    }
+
+    output.push(line);
+  }
+
+  return output.join('\n');
+}
+
+function clipboardDataHasImage(data: DataTransfer): boolean {
+  if (Array.from(data.files).some((file) => file.type.startsWith('image/'))) {
+    return true;
+  }
+  return Array.from(data.items).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
+}
+
 export const LIBRARIAN_SELECTION_STORAGE_KEY = 'librarian-last-selection';
 export const LIBRARIAN_IMMERSIVE_STORAGE_KEY = 'librarian-immersive';
+export const LIBRARIAN_EDITOR_SESSION_STORAGE_KEY = 'librarian-editor-session';
 
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
   | { type: 'artifact'; path: string }
   | { type: 'bookmarks' };
+
+export type LibrarianEditorSession = {
+  itemType: 'wiki' | 'artifact' | 'external';
+  itemPath: string;
+  contentMode: 'rendered' | 'markdown';
+  selectionStart: number;
+  selectionEnd: number;
+  scrollTop: number;
+};
+
+export type LibrarianNavigationEntry = {
+  itemType: 'wiki' | 'artifact' | 'external';
+  itemPath: string;
+};
+
+export type LibrarianNavigationHistory = {
+  entries: LibrarianNavigationEntry[];
+  index: number;
+};
+
+export const EMPTY_LIBRARIAN_NAVIGATION_HISTORY: LibrarianNavigationHistory = {
+  entries: [],
+  index: -1,
+};
+
+const LIBRARIAN_NAVIGATION_HISTORY_LIMIT = 50;
+
+function sameLibrarianNavigationEntry(
+  a: LibrarianNavigationEntry | null,
+  b: LibrarianNavigationEntry | null,
+): boolean {
+  return !!a && !!b && a.itemType === b.itemType && a.itemPath === b.itemPath;
+}
+
+export function pushLibrarianNavigationEntry(
+  history: LibrarianNavigationHistory,
+  entry: LibrarianNavigationEntry,
+  limit: number = LIBRARIAN_NAVIGATION_HISTORY_LIMIT,
+): LibrarianNavigationHistory {
+  if (sameLibrarianNavigationEntry(history.entries[history.index] ?? null, entry)) {
+    return history;
+  }
+
+  const entries = [...history.entries.slice(0, history.index + 1), entry];
+  const overflow = Math.max(0, entries.length - Math.max(1, limit));
+  const cappedEntries = overflow > 0 ? entries.slice(overflow) : entries;
+  return {
+    entries: cappedEntries,
+    index: cappedEntries.length - 1,
+  };
+}
+
+export function moveLibrarianNavigationHistory(
+  history: LibrarianNavigationHistory,
+  delta: -1 | 1,
+): { history: LibrarianNavigationHistory; entry: LibrarianNavigationEntry } | null {
+  const nextIndex = history.index + delta;
+  if (nextIndex < 0 || nextIndex >= history.entries.length) return null;
+  return {
+    history: {
+      entries: history.entries,
+      index: nextIndex,
+    },
+    entry: history.entries[nextIndex],
+  };
+}
+
+export function replaceLibrarianNavigationEntry(
+  history: LibrarianNavigationHistory,
+  from: LibrarianNavigationEntry,
+  to: LibrarianNavigationEntry,
+): LibrarianNavigationHistory {
+  const entries = history.entries.map((entry) => (
+    sameLibrarianNavigationEntry(entry, from) ? to : entry
+  ));
+  return { ...history, entries };
+}
 
 export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): LibrarianStoredSelection | null {
   const raw = storage.getItem(LIBRARIAN_SELECTION_STORAGE_KEY);
@@ -87,6 +233,50 @@ export function persistLibrarianSelection(
   storage.setItem(LIBRARIAN_SELECTION_STORAGE_KEY, JSON.stringify(selection));
 }
 
+export function restoreLibrarianEditorSession(storage: Pick<Storage, 'getItem'>): LibrarianEditorSession | null {
+  const raw = storage.getItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY);
+  if (!raw) return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (
+      (parsed?.itemType === 'wiki' || parsed?.itemType === 'artifact' || parsed?.itemType === 'external') &&
+      typeof parsed.itemPath === 'string' &&
+      (parsed.contentMode === 'rendered' || parsed.contentMode === 'markdown')
+    ) {
+      return {
+        itemType: parsed.itemType,
+        itemPath: parsed.itemPath,
+        contentMode: parsed.contentMode,
+        selectionStart: Number.isFinite(parsed.selectionStart) ? Math.max(0, parsed.selectionStart) : 0,
+        selectionEnd: Number.isFinite(parsed.selectionEnd) ? Math.max(0, parsed.selectionEnd) : 0,
+        scrollTop: Number.isFinite(parsed.scrollTop) ? Math.max(0, parsed.scrollTop) : 0,
+      };
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function persistLibrarianEditorSession(
+  storage: Pick<Storage, 'setItem'>,
+  session: LibrarianEditorSession
+): void {
+  storage.setItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+export function editorSessionMatchesSelection(
+  session: LibrarianEditorSession | null,
+  selection: LibrarianStoredSelection | null
+): boolean {
+  if (!session || !selection) return false;
+  if (selection.type === 'wiki') return session.itemType === 'wiki' && session.itemPath === selection.relPath;
+  if (selection.type === 'artifact') return session.itemType === 'artifact' && session.itemPath === selection.path;
+  return false;
+}
+
 export function resolveWikiCreateFolder(
   requestedFolderName: string,
   selectedItemType: 'wiki' | 'artifact' | 'bookmarks' | 'external' | null,
@@ -118,6 +308,8 @@ function clampScrollRatio(ratio: number): number {
   return Math.min(1, Math.max(0, ratio));
 }
 
+const MARKDOWN_CARET_SCROLL_ROOM_PX = 96;
+
 export function getScrollRatio(scrollTop: number, scrollHeight: number, clientHeight: number): number {
   const maxScrollTop = scrollHeight - clientHeight;
   if (maxScrollTop <= 0) return 0;
@@ -130,23 +322,133 @@ export function getScrollTopForRatio(scrollHeight: number, clientHeight: number,
   return maxScrollTop * clampScrollRatio(ratio);
 }
 
-const READING_CONTENT_MAX_WIDTH = 'min(720px, 70ch)';
-const READING_LINE_HEIGHT = 1.62;
+export function getScrollTopForCaretVisibility(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+  caretTop: number,
+  caretHeight: number,
+  bottomRoom: number,
+): number {
+  const maxScrollTop = Math.max(0, scrollHeight - clientHeight);
+  if (maxScrollTop <= 0) return 0;
+  const visibleBottomWithRoom = scrollTop + clientHeight - Math.max(0, bottomRoom);
+  const caretBottom = caretTop + Math.max(0, caretHeight);
+  if (caretBottom <= visibleBottomWithRoom) return scrollTop;
+  return Math.min(maxScrollTop, caretBottom - clientHeight + Math.max(0, bottomRoom));
+}
+
+export function getMarkdownEditorEdgeFades(
+  scrollTop: number,
+  scrollHeight: number,
+  clientHeight: number,
+): { top: boolean; bottom: boolean } {
+  const maxScrollTop = scrollHeight - clientHeight;
+  if (maxScrollTop <= 1) return { top: false, bottom: false };
+  const clampedScrollTop = Math.min(maxScrollTop, Math.max(0, scrollTop));
+  return {
+    top: clampedScrollTop > 1,
+    bottom: clampedScrollTop < maxScrollTop - 1,
+  };
+}
+
+function getComputedLineHeightPx(editor: HTMLTextAreaElement): number {
+  const style = editor.ownerDocument.defaultView?.getComputedStyle(editor);
+  const lineHeight = style ? parseFloat(style.lineHeight) : Number.NaN;
+  if (Number.isFinite(lineHeight)) return lineHeight;
+  const fontSize = style ? parseFloat(style.fontSize) : Number.NaN;
+  return Number.isFinite(fontSize) ? fontSize * 1.4 : 22;
+}
+
+function getTextareaCaretTop(editor: HTMLTextAreaElement): number | null {
+  const doc = editor.ownerDocument;
+  const win = doc.defaultView;
+  if (!doc.body || !win) return null;
+
+  const style = win.getComputedStyle(editor);
+  const mirror = doc.createElement('div');
+  const mirroredProperties = [
+    'box-sizing',
+    'font-family',
+    'font-size',
+    'font-style',
+    'font-weight',
+    'letter-spacing',
+    'line-height',
+    'overflow-wrap',
+    'padding-bottom',
+    'padding-left',
+    'padding-right',
+    'padding-top',
+    'tab-size',
+    'text-align',
+    'text-indent',
+    'text-transform',
+    'white-space',
+    'word-break',
+    'word-spacing',
+  ];
+
+  for (const property of mirroredProperties) {
+    mirror.style.setProperty(property, style.getPropertyValue(property));
+  }
+  mirror.style.position = 'absolute';
+  mirror.style.visibility = 'hidden';
+  mirror.style.pointerEvents = 'none';
+  mirror.style.left = '-10000px';
+  mirror.style.top = '0';
+  mirror.style.width = `${editor.clientWidth}px`;
+  mirror.style.height = 'auto';
+  mirror.style.minHeight = '0';
+  mirror.style.overflow = 'hidden';
+  mirror.style.whiteSpace = 'pre-wrap';
+
+  mirror.textContent = editor.value.slice(0, editor.selectionStart);
+  const marker = doc.createElement('span');
+  marker.textContent = '\u200B';
+  mirror.appendChild(marker);
+  doc.body.appendChild(mirror);
+  const caretTop = marker.offsetTop;
+  mirror.remove();
+  return caretTop;
+}
+
+function smoothScrollMarkdownCaretIntoComfortView(editor: HTMLTextAreaElement): void {
+  const caretTop = getTextareaCaretTop(editor);
+  if (caretTop === null) return;
+
+  const nextScrollTop = getScrollTopForCaretVisibility(
+    editor.scrollTop,
+    editor.scrollHeight,
+    editor.clientHeight,
+    caretTop,
+    getComputedLineHeightPx(editor),
+    MARKDOWN_CARET_SCROLL_ROOM_PX,
+  );
+  if (Math.abs(nextScrollTop - editor.scrollTop) < 1) return;
+  editor.scrollTo({ top: nextScrollTop, behavior: 'smooth' });
+}
 
 interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   externalHeaderHover?: boolean; // Passed from parent when top edge is hovered
+  onFocusChromeActiveChange?: (active: boolean) => void;
+  onFocusChromeTopChange?: (top: number | null) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
+  initialOpenTarget?: FieldTheoryMarkdownTarget | null;
   initialFullScreen?: boolean; // Start in fullscreen/immersive mode (for auto-open)
   onInitialReadingConsumed?: () => void; // Called after initial reading is consumed
+  onInitialOpenTargetConsumed?: () => void;
   // Path of an artifact the librarian just auto-popped. While the user is
   // still on this artifact, Escape closes the window instead of merely
   // exiting immersive. Call onAutoPopArtifactSuperseded when the user
   // navigates away from it.
   autoPopArtifactPath?: string | null;
   onAutoPopArtifactSuperseded?: () => void;
+  onOpenCommandPath?: (path: string) => void;
+  onFocusChromeShortcut?: () => void;
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
   sidebarCollapsed: boolean;
@@ -170,9 +472,12 @@ function extractMarkdownText(node: unknown): string {
   return '';
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, initialReadingPath, initialFullScreen, onInitialReadingConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, sidebarCollapsed }: LibrarianViewProps) {
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, onFocusChromeActiveChange, onFocusChromeTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
+  const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
+  const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
+  const restoredEditorSessionRef = useRef<LibrarianEditorSession | null>(restoredEditorSession);
 
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [selectedPath, setSelectedPath] = useState<string | null>(() => restoredSelection?.type === 'artifact' ? restoredSelection.path : null);
@@ -196,31 +501,60 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
+  const [typographyPresetId, setTypographyPresetId] = useState<LibrarianTypographyPresetId>(() => (
+    restoreLibrarianTypographyPreset(localStorage)
+  ));
+  const [lineHeightId, setLineHeightId] = useState<LibrarianLineHeightId>(() => (
+    restoreLibrarianLineHeight(localStorage)
+  ));
+  const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
+    if (!restoredSelection) return null;
+    if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
+    if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
+    return BOOKMARKS_ITEM_ID;
+  });
+  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
+  const selectedItemUsesLegacyImmersive = selectedItemType === 'artifact' || selectedItemType === 'bookmarks';
   const [isFullScreen, setIsFullScreen] = useState(initialFullScreen ?? false);
+  const [focusImmersive, setFocusImmersive] = useState(false);
   const toggleImmersive = useCallback(() => {
-    setIsFullScreen((prev) => {
-      const next = !prev;
-      window.librarianAPI?.setImmersiveMode?.(next);
-      return next;
-    });
-  }, []);
+    if (selectedItemUsesLegacyImmersive) {
+      setIsFullScreen((prev) => {
+        const next = !prev;
+        window.librarianAPI?.setImmersiveMode?.(next);
+        return next;
+      });
+      return;
+    }
+    setFocusImmersive((prev) => !prev);
+  }, [selectedItemUsesLegacyImmersive]);
   const [headerHovered, setHeaderHovered] = useState(false);
+  const [writingChromeHidden, setWritingChromeHidden] = useState(false);
+  const [markdownEditorEdgeFades, setMarkdownEditorEdgeFades] = useState({ top: false, bottom: false });
+  const markdownEditorEdgeFadesRef = useRef(markdownEditorEdgeFades);
+  const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
+  const [markdownEditorCommandActive, setMarkdownEditorCommandActive] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
     return saved ? parseInt(saved, 10) : 180;
   });
+  const sidebarWidthRef = useRef(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const [discoveredDirs, setDiscoveredDirs] = useState<string[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [addingDir, setAddingDir] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
+  const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
+  const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const flatItemsRef = useRef<import('./WikiSidebar').UnifiedItem[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const focusMarkdownEditorOnOpenRef = useRef(false);
+  const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
 
   // Sharing state
@@ -243,15 +577,37 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [isMuting, setIsMuting] = useState(false);
 
   // Content mode: 'rendered' shows ReactMarkdown, 'markdown' shows editable raw source
-  const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>('rendered');
+  const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>(() => (
+    editorSessionMatchesSelection(restoredEditorSession, restoredSelection)
+      ? restoredEditorSession?.contentMode ?? 'rendered'
+      : 'rendered'
+  ));
+  const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'external';
+  const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
+  const focusChromeActive = canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden));
+  const readerControlsVisible = isFullScreen ? headerHovered : !(focusChromeActive && !headerHovered);
 
-  const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
-    if (!restoredSelection) return null;
-    if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
-    if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
-    return BOOKMARKS_ITEM_ID;
-  });
-  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
+  const revealWritingChrome = useCallback(() => {
+    setHeaderHovered(true);
+  }, []);
+
+  const markWritingActive = useCallback(() => {
+    if (isFocusedWritingMode) setWritingChromeHidden(true);
+  }, [isFocusedWritingMode]);
+
+  const setMarkdownEditorFades = useCallback((next: { top: boolean; bottom: boolean }) => {
+    const current = markdownEditorEdgeFadesRef.current;
+    if (current.top === next.top && current.bottom === next.bottom) return;
+    markdownEditorEdgeFadesRef.current = next;
+    setMarkdownEditorEdgeFades(next);
+  }, []);
+
+  const updateMarkdownEditorFades = useCallback((editor: Pick<HTMLTextAreaElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'> | null) => {
+    setMarkdownEditorFades(editor
+      ? getMarkdownEditorEdgeFades(editor.scrollTop, editor.scrollHeight, editor.clientHeight)
+      : { top: false, bottom: false });
+  }, [setMarkdownEditorFades]);
+
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
@@ -265,6 +621,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
+  const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
+  const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
+  const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
 
   const selectArtifactPath = useCallback((artifactPath: string) => {
     setSelectedItemId(`artifact:${artifactPath}`);
@@ -327,6 +686,105 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     if (page?.relPath) openWikiPage(page.relPath);
   }, [openWikiPage]);
 
+  const openLinkAction = useCallback((action: LinkAction) => {
+    switch (action.kind) {
+      case 'create':
+        void createUnresolvedWikiLink(action.title);
+        return;
+      case 'wiki':
+        openWikiPage(action.relPath);
+        return;
+      case 'artifact':
+        selectArtifactPath(action.path);
+        return;
+      case 'command':
+        onOpenCommandPath?.(action.path);
+        return;
+      case 'external':
+        window.shellAPI?.openExternal(action.href);
+        return;
+      case 'noop':
+        return;
+    }
+  }, [createUnresolvedWikiLink, onOpenCommandPath, openWikiPage, selectArtifactPath]);
+
+  const currentNavigationEntry = useMemo((): LibrarianNavigationEntry | null => {
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      return { itemType: 'wiki', itemPath: wikiSelectedRelPath };
+    }
+    if (selectedItemType === 'artifact' && selectedPath) {
+      return { itemType: 'artifact', itemPath: selectedPath };
+    }
+    if (selectedItemType === 'external' && externalOpenFile?.path) {
+      return { itemType: 'external', itemPath: externalOpenFile.path };
+    }
+    return null;
+  }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
+
+  const syncWikiFilenameWithContentTitle = useCallback(async () => {
+    if (contentMode !== 'markdown' || selectedItemType !== 'wiki' || !wikiSelectedRelPath) return;
+    const nextTitle = extractMarkdownH1Title(editContent, '').trim();
+    if (!nextTitle) return;
+
+    const oldRelPath = wikiSelectedRelPath;
+    const nextRelPath = await window.wikiAPI?.rename(oldRelPath, nextTitle);
+    if (!nextRelPath || nextRelPath === oldRelPath) return;
+
+    const from = { itemType: 'wiki' as const, itemPath: oldRelPath };
+    const to = { itemType: 'wiki' as const, itemPath: nextRelPath };
+    historyNavigationTargetRef.current = to;
+    setNavigationHistory((prev) => replaceLibrarianNavigationEntry(prev, from, to));
+    setSelectedItemId(`wiki:${nextRelPath}`);
+    setWikiSelectedRelPath(nextRelPath);
+
+    const page = await window.wikiAPI?.getPage(nextRelPath);
+    if (page) {
+      setWikiSelectedPage({
+        path: page.absPath,
+        title: page.title,
+        content: page.content,
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: page.lastUpdated,
+        mtime: page.lastUpdated,
+      });
+      void window.recentAPI?.visit({
+        kind: 'wiki',
+        path: nextRelPath,
+        title: page.title,
+        lastOpenedAt: Date.now(),
+      });
+    }
+  }, [contentMode, editContent, selectedItemType, wikiSelectedRelPath]);
+
+  const flushCurrentEdit = useCallback(async () => {
+    await flushSaveRef.current?.();
+    await syncWikiFilenameWithContentTitle();
+  }, [syncWikiFilenameWithContentTitle]);
+
+  const openNavigationEntry = useCallback(async (entry: LibrarianNavigationEntry) => {
+    await flushCurrentEdit();
+    if (entry.itemType === 'wiki') {
+      openWikiPage(entry.itemPath);
+    } else if (entry.itemType === 'artifact') {
+      selectArtifactPath(entry.itemPath);
+    } else {
+      await selectExternalFile(entry.itemPath);
+    }
+  }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile]);
+
+  const navigateHistory = useCallback((delta: -1 | 1) => {
+    const next = moveLibrarianNavigationHistory(navigationHistory, delta);
+    if (!next) return;
+    historyNavigationTargetRef.current = next.entry;
+    setNavigationHistory(next.history);
+    void openNavigationEntry(next.entry);
+  }, [navigationHistory, openNavigationEntry]);
+
+  const canNavigateBack = navigationHistory.index > 0;
+  const canNavigateForward = navigationHistory.index >= 0 && navigationHistory.index < navigationHistory.entries.length - 1;
+
   // Handle initial reading path and fullscreen from parent (auto-open flow)
   useEffect(() => {
     if (initialReadingPath) {
@@ -338,10 +796,28 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [initialReadingPath, initialFullScreen, onInitialReadingConsumed, selectArtifactPath]);
 
+  useEffect(() => {
+    if (!initialOpenTarget) return;
+    if (initialOpenTarget.kind === 'wiki') {
+      openWikiPage(initialOpenTarget.path);
+    } else if (initialOpenTarget.kind === 'artifact') {
+      selectArtifactPath(initialOpenTarget.path);
+    }
+    onInitialOpenTargetConsumed?.();
+  }, [initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath]);
+
   // Persist text size preference
   useEffect(() => {
     localStorage.setItem('librarian-text-size', textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    persistLibrarianTypographyPreset(localStorage, typographyPresetId);
+  }, [typographyPresetId]);
+
+  useEffect(() => {
+    persistLibrarianLineHeight(localStorage, lineHeightId);
+  }, [lineHeightId]);
 
   // Check mute status on mount
   useEffect(() => {
@@ -352,10 +828,23 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => { prefetchBookmarks(); }, []);
 
+  const applySidebarWidth = useCallback((width: number) => {
+    const nextWidth = `${width}px`;
+    if (sidebarPaneRef.current) {
+      sidebarPaneRef.current.style.width = nextWidth;
+      sidebarPaneRef.current.style.minWidth = nextWidth;
+    }
+    if (sidebarInnerRef.current) {
+      sidebarInnerRef.current.style.width = nextWidth;
+    }
+  }, []);
+
   // Persist sidebar width
   useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+    if (isResizing) return;
     localStorage.setItem('librarian-sidebar-width', String(sidebarWidth));
-  }, [sidebarWidth]);
+  }, [isResizing, sidebarWidth]);
 
   useEffect(() => {
     if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
@@ -389,11 +878,23 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     persistLibrarianSelection(localStorage, null);
   }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
 
+  useEffect(() => {
+    if (!currentNavigationEntry) return;
+
+    if (sameLibrarianNavigationEntry(historyNavigationTargetRef.current, currentNavigationEntry)) {
+      historyNavigationTargetRef.current = null;
+      return;
+    }
+
+    setNavigationHistory((prev) => pushLibrarianNavigationEntry(prev, currentNavigationEntry));
+  }, [currentNavigationEntry]);
+
   // Handle resize drag
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    sidebarWidthRef.current = sidebarWidth;
     setIsResizing(true);
-  }, []);
+  }, [sidebarWidth]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -404,10 +905,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
       const newWidth = e.clientX - containerRect.left;
       // Clamp between 120px and 400px
-      setSidebarWidth(Math.max(120, Math.min(400, newWidth)));
+      const clampedWidth = Math.max(120, Math.min(400, newWidth));
+      sidebarWidthRef.current = clampedWidth;
+      applySidebarWidth(clampedWidth);
     };
 
     const handleMouseUp = () => {
+      setSidebarWidth(sidebarWidthRef.current);
       setIsResizing(false);
     };
 
@@ -418,12 +922,67 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isResizing]);
+  }, [applySidebarWidth, isResizing]);
 
   // Notify parent of full-screen state (including initial state on mount)
   useEffect(() => {
     onFullScreenChange?.(isFullScreen);
   }, [isFullScreen, onFullScreenChange]);
+
+  useEffect(() => {
+    if (selectedItemType && !selectedItemUsesLegacyImmersive && isFullScreen) {
+      setIsFullScreen(false);
+    }
+  }, [isFullScreen, selectedItemType, selectedItemUsesLegacyImmersive]);
+
+  useEffect(() => {
+    if (externalHeaderHover) {
+      revealWritingChrome();
+    } else if (!isFullScreen) {
+      setHeaderHovered(false);
+    }
+  }, [externalHeaderHover, isFullScreen, revealWritingChrome]);
+
+  useEffect(() => {
+    if (!isFocusedWritingMode) setWritingChromeHidden(false);
+  }, [isFocusedWritingMode]);
+
+  useEffect(() => {
+    if (!canUseFocusImmersive) setFocusImmersive(false);
+  }, [canUseFocusImmersive]);
+
+  useEffect(() => {
+    onFocusChromeActiveChange?.(focusChromeActive);
+  }, [focusChromeActive, onFocusChromeActiveChange]);
+
+  useEffect(() => {
+    if (!focusChromeActive) {
+      onFocusChromeTopChange?.(null);
+      return;
+    }
+
+    let frame: number | null = null;
+    const reportEditorTop = () => {
+      frame = null;
+      onFocusChromeTopChange?.(markdownEditorRef.current?.getBoundingClientRect().top ?? contentScrollRef.current?.getBoundingClientRect().top ?? null);
+    };
+    const scheduleReport = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(reportEditorTop);
+    };
+
+    scheduleReport();
+    window.addEventListener('resize', scheduleReport);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', scheduleReport);
+      onFocusChromeTopChange?.(null);
+    };
+  }, [focusChromeActive, lineHeightId, onFocusChromeTopChange, textSize, typographyPresetId]);
+
+  useEffect(() => {
+    return () => onFocusChromeActiveChange?.(false);
+  }, [onFocusChromeActiveChange]);
 
   // Bookmarks immersive dismisses on blur (panel-like); artifact/wiki immersive
   // stays put so users can reference other apps while reading.
@@ -495,14 +1054,35 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     large: { base: '18px', h1: '32px', h2: '24px', h3: '20px' },
   };
 
+  const typographyPreset = useMemo(
+    () => LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === typographyPresetId) ?? LIBRARIAN_TYPOGRAPHY_PRESETS[0],
+    [typographyPresetId],
+  );
+
   const activeReading: Reading | null =
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+  const getEditorSessionTarget = useCallback((): Pick<LibrarianEditorSession, 'itemType' | 'itemPath'> | null => {
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      return { itemType: 'wiki', itemPath: wikiSelectedRelPath };
+    }
+    if (selectedItemType === 'artifact' && selectedPath) {
+      return { itemType: 'artifact', itemPath: selectedPath };
+    }
+    if (selectedItemType === 'external' && activeReading?.path) {
+      return { itemType: 'external', itemPath: activeReading.path };
+    }
+    return null;
+  }, [activeReading?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
+  const editorSessionMatchesCurrent = useCallback((session: LibrarianEditorSession | null): boolean => {
+    const target = getEditorSessionTarget();
+    return !!session && !!target && session.itemType === target.itemType && session.itemPath === target.itemPath;
+  }, [getEditorSessionTarget]);
   const documentTextStyle = {
     fontSize: textSizes[textSize].base,
-    lineHeight: READING_LINE_HEIGHT,
-    fontFamily: fonts.serif,
+    lineHeight: resolveLibrarianLineHeight(lineHeightId, typographyPreset),
+    fontFamily: typographyPreset.fontFamily,
     color: theme.text,
   };
 
@@ -511,23 +1091,208 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return splitFrontmatter(activeReading.content);
   }, [selectedItemType, activeReading]);
 
-  const wikiIndex = useMemo(() => buildWikiIndex(wikiIndexPages), [wikiIndexPages]);
+  const wikiIndex = useMemo(() => buildWikiIndex([
+    ...wikiIndexPages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings, wikiIndexPages]);
 
   const displayContent = useMemo(() => {
     const raw = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
-    if (!wikiDisplay) return raw;
-    return transformWikiLinks(raw, wikiIndex);
+    const linked = transformWikiLinks(raw, wikiIndex);
+    return preserveMarkdownBlankLines(linked);
   }, [wikiDisplay, activeReading?.content, wikiIndex]);
 
   const captureContentScrollRatio = useCallback(() => {
-    const scrollEl = contentScrollRef.current;
+    const scrollEl = contentMode === 'markdown' ? markdownEditorRef.current : contentScrollRef.current;
     if (!scrollEl) return;
     pendingScrollRatioRef.current = getScrollRatio(
       scrollEl.scrollTop,
       scrollEl.scrollHeight,
       scrollEl.clientHeight,
     );
-  }, []);
+  }, [contentMode]);
+
+  const captureEditorSession = useCallback((): LibrarianEditorSession | null => {
+    const target = getEditorSessionTarget();
+    if (!target) return null;
+
+    const editor = markdownEditorRef.current;
+    const scrollEl = contentMode === 'markdown' ? editor : contentScrollRef.current;
+    return {
+      ...target,
+      contentMode,
+      selectionStart: editor?.selectionStart ?? 0,
+      selectionEnd: editor?.selectionEnd ?? editor?.selectionStart ?? 0,
+      scrollTop: scrollEl?.scrollTop ?? 0,
+    };
+  }, [contentMode, getEditorSessionTarget]);
+
+  const persistEditorSession = useCallback(() => {
+    const session = captureEditorSession();
+    if (!session) return;
+    persistLibrarianEditorSession(localStorage, session);
+  }, [captureEditorSession]);
+
+  const scheduleEditorSessionPersist = useCallback(() => {
+    if (editorSessionPersistTimerRef.current !== null) {
+      window.clearTimeout(editorSessionPersistTimerRef.current);
+    }
+    editorSessionPersistTimerRef.current = window.setTimeout(() => {
+      editorSessionPersistTimerRef.current = null;
+      persistEditorSession();
+    }, 160);
+  }, [persistEditorSession]);
+
+  const flushEditorSessionPersist = useCallback(() => {
+    if (editorSessionPersistTimerRef.current !== null) {
+      window.clearTimeout(editorSessionPersistTimerRef.current);
+      editorSessionPersistTimerRef.current = null;
+    }
+    persistEditorSession();
+  }, [persistEditorSession]);
+
+  const applyMarkdownTextInsertion = useCallback((text: string) => {
+    if (!text) return;
+    markWritingActive();
+    setMarkdownUrlPasteChoice(null);
+
+    const editor = markdownEditorRef.current;
+    const currentValue = editor?.value ?? editContent;
+    const selectionStart = editor?.selectionStart ?? currentValue.length;
+    const selectionEnd = editor?.selectionEnd ?? selectionStart;
+    const nextValue = `${currentValue.slice(0, selectionStart)}${text}${currentValue.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + text.length;
+
+    setEditContent(nextValue);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const nextEditor = markdownEditorRef.current;
+      if (!nextEditor || nextEditor.value !== nextValue) return;
+      nextEditor.focus({ preventScroll: true });
+      nextEditor.setSelectionRange(nextSelection, nextSelection);
+      updateMarkdownEditorFades(nextEditor);
+      smoothScrollMarkdownCaretIntoComfortView(nextEditor);
+    });
+  }, [editContent, markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+
+  const insertMarkdownText = useCallback((text: string) => {
+    if (contentMode !== 'markdown') {
+      setContentMode('markdown');
+      requestAnimationFrame(() => applyMarkdownTextInsertion(text));
+      return;
+    }
+    applyMarkdownTextInsertion(text);
+  }, [applyMarkdownTextInsertion, contentMode]);
+
+  const insertCurrentClipboardImagePath = useCallback(async () => {
+    const imagePath = await window.clipboardAPI?.getClipboardImagePath?.();
+    if (imagePath) insertMarkdownText(imagePath);
+  }, [insertMarkdownText]);
+
+  const applyMarkdownUrlPasteEdit = useCallback((pasteEdit: MarkdownUrlPasteEdit) => {
+    markWritingActive();
+    setEditContent(pasteEdit.nextValue);
+    setMarkdownUrlPasteChoice(pasteEdit);
+    scheduleEditorSessionPersist();
+
+    requestAnimationFrame(() => {
+      const editor = markdownEditorRef.current;
+      if (!editor || editor.value !== pasteEdit.nextValue) return;
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(pasteEdit.selectionStart, pasteEdit.selectionEnd);
+      updateMarkdownEditorFades(editor);
+      smoothScrollMarkdownCaretIntoComfortView(editor);
+    });
+  }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+
+  const handleMarkdownEditorPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const pastedText = e.clipboardData.getData('text/plain');
+    if (!pastedText || clipboardDataHasImage(e.clipboardData)) {
+      e.preventDefault();
+      void insertCurrentClipboardImagePath();
+      return;
+    }
+
+    const editor = e.currentTarget;
+    const pasteEdit = getMarkdownUrlPasteEdit(
+      editor.value,
+      editor.selectionStart,
+      editor.selectionEnd,
+      pastedText,
+    );
+    if (!pasteEdit) {
+      setMarkdownUrlPasteChoice(null);
+      return;
+    }
+
+    e.preventDefault();
+    applyMarkdownUrlPasteEdit(pasteEdit);
+  }, [applyMarkdownUrlPasteEdit, insertCurrentClipboardImagePath]);
+
+  const applyMarkdownUrlPasteKind = useCallback((kind: MarkdownUrlPasteKind) => {
+    if (!markdownUrlPasteChoice) return;
+    const pasteEdit = getMarkdownUrlPasteReplacement(editContent, markdownUrlPasteChoice, kind);
+    applyMarkdownUrlPasteEdit(pasteEdit);
+  }, [applyMarkdownUrlPasteEdit, editContent, markdownUrlPasteChoice]);
+
+  const handleMarkdownEditorSelect = useCallback((e: React.SyntheticEvent<HTMLTextAreaElement>) => {
+    scheduleEditorSessionPersist();
+    if (!markdownUrlPasteChoice) return;
+
+    const editor = e.currentTarget;
+    if (
+      editor.selectionStart < markdownUrlPasteChoice.insertedStart ||
+      editor.selectionEnd > markdownUrlPasteChoice.insertedEnd
+    ) {
+      setMarkdownUrlPasteChoice(null);
+    }
+  }, [markdownUrlPasteChoice, scheduleEditorSessionPersist]);
+
+  const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const editor = e.currentTarget;
+    scheduleEditorSessionPersist();
+    if (e.key === 'ArrowDown' || e.key === 'Enter') {
+      requestAnimationFrame(() => smoothScrollMarkdownCaretIntoComfortView(editor));
+    }
+  }, [scheduleEditorSessionPersist]);
+
+  const handleMarkdownEditorClick = useCallback((e: React.MouseEvent<HTMLTextAreaElement>) => {
+    if (!e.metaKey) return;
+
+    const editor = e.currentTarget;
+    const action = getMarkdownEditorLinkActionAtOffset(editor.value, editor.selectionStart, wikiIndex);
+    if (action.kind === 'noop') return;
+
+    e.preventDefault();
+    e.stopPropagation();
+    void (async () => {
+      await flushCurrentEdit();
+      openLinkAction(action);
+    })();
+  }, [flushCurrentEdit, openLinkAction, wikiIndex]);
+
+  const restoreEditorSession = useCallback((session: LibrarianEditorSession | null) => {
+    if (!session || contentMode !== 'markdown' || !editorSessionMatchesCurrent(session)) return;
+
+    const frame = requestAnimationFrame(() => {
+      const editor = markdownEditorRef.current;
+      if (!editor) return;
+
+      const selectionStart = Math.min(session.selectionStart, editor.value.length);
+      const selectionEnd = Math.min(session.selectionEnd, editor.value.length);
+      editor.setSelectionRange(selectionStart, selectionEnd);
+      editor.scrollTop = session.scrollTop;
+      updateMarkdownEditorFades(editor);
+    });
+
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode, editorSessionMatchesCurrent, updateMarkdownEditorFades]);
 
   useEffect(() => {
     const ratio = pendingScrollRatioRef.current;
@@ -535,41 +1300,94 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     pendingScrollRatioRef.current = null;
 
     const frame = requestAnimationFrame(() => {
-      const scrollEl = contentScrollRef.current;
+      const scrollEl = contentMode === 'markdown' ? markdownEditorRef.current : contentScrollRef.current;
       if (!scrollEl) return;
       scrollEl.scrollTop = getScrollTopForRatio(
         scrollEl.scrollHeight,
         scrollEl.clientHeight,
         ratio,
       );
+      if (contentMode === 'markdown') {
+        updateMarkdownEditorFades(scrollEl);
+      }
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [contentMode, activeReading?.path]);
+  }, [contentMode, activeReading?.path, updateMarkdownEditorFades]);
+
+  useEffect(() => {
+    if (contentMode !== 'markdown') updateMarkdownEditorFades(null);
+  }, [contentMode, updateMarkdownEditorFades]);
 
   useEffect(() => {
     if (contentMode !== 'markdown') return;
-    const editor = markdownEditorRef.current;
-    if (!editor) return;
-
-    const frame = requestAnimationFrame(() => {
-      editor.style.height = 'auto';
-      editor.style.height = `${editor.scrollHeight}px`;
-    });
-
+    const frame = requestAnimationFrame(() => updateMarkdownEditorFades(markdownEditorRef.current));
     return () => cancelAnimationFrame(frame);
-  }, [contentMode, editContent, textSize, isFullScreen]);
+  }, [contentMode, editContent, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
+
+  useEffect(() => {
+    if (!markdownUrlPasteChoice) return;
+    const timer = window.setTimeout(() => setMarkdownUrlPasteChoice(null), 8000);
+    return () => window.clearTimeout(timer);
+  }, [markdownUrlPasteChoice]);
+
+  useEffect(() => {
+    if (contentMode !== 'markdown') {
+      setMarkdownEditorCommandActive(false);
+      return;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Meta' || event.metaKey) setMarkdownEditorCommandActive(true);
+    };
+    const handleKeyUp = (event: KeyboardEvent) => {
+      if (event.key === 'Meta' || !event.metaKey) setMarkdownEditorCommandActive(false);
+    };
+    const handleBlur = () => setMarkdownEditorCommandActive(false);
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [contentMode]);
+
+  useEffect(() => {
+    setMarkdownUrlPasteChoice(null);
+  }, [activeReading?.path, contentMode]);
+
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onInsertMarkdownText(insertMarkdownText);
+    return () => unsubscribe?.();
+  }, [insertMarkdownText]);
+
+  useEffect(() => {
+    return () => window.librarianAPI?.setMarkdownEditorFocused(false);
+  }, []);
 
   const enterEditMode = useCallback(() => {
     captureContentScrollRatio();
+    focusMarkdownEditorOnOpenRef.current = true;
     setContentMode('markdown');
   }, [captureContentScrollRatio]);
 
+  useEffect(() => {
+    if (contentMode !== 'markdown' || !focusMarkdownEditorOnOpenRef.current) return;
+    focusMarkdownEditorOnOpenRef.current = false;
+    const frame = requestAnimationFrame(() => {
+      markdownEditorRef.current?.focus({ preventScroll: true });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode]);
+
   const exitEditMode = useCallback(async () => {
     captureContentScrollRatio();
-    await flushSaveRef.current?.();
+    await flushCurrentEdit();
     setContentMode('rendered');
-  }, [captureContentScrollRatio]);
+  }, [captureContentScrollRatio, flushCurrentEdit]);
 
   // Debounced auto-save. Fires ~400ms after the last keystroke and doesn't
   // round-trip the saved content back into React state, so the textarea's
@@ -587,6 +1405,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     const targetType = selectedItemType;
     const targetWikiPath = wikiSelectedRelPath;
     const targetReadingPath = activeReading.path;
+    const targetTitle = activeReading.title;
     const targetContent = editContent;
     let done = false;
     const doSave = async () => {
@@ -596,10 +1415,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       try {
         if (targetType === 'wiki' && targetWikiPath) {
           await window.wikiAPI?.save(targetWikiPath, targetContent);
+          const nextTitle = extractMarkdownH1Title(targetContent, targetTitle);
           // Update activeReading so the rendered view reflects the fresh
           // content as soon as the user clicks away. The sync effect below
           // is guarded by path so this won't clobber editContent.
-          setWikiSelectedPage((prev) => (prev ? { ...prev, content: targetContent } : prev));
+          setWikiSelectedPage((prev) => (prev ? { ...prev, title: nextTitle, content: targetContent } : prev));
         } else if (targetType === 'external' && targetReadingPath) {
           await window.externalAPI?.save(targetReadingPath, targetContent);
           setExternalOpenFile((prev) => (prev ? { ...prev, content: targetContent } : prev));
@@ -668,7 +1488,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const handleSelectItem = useCallback(async (item: UnifiedItem) => {
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
-    await flushSaveRef.current?.();
+    await flushCurrentEdit();
     if (item.type === 'wiki' && item.relPath) {
       openWikiPage(item.relPath);
     } else if (item.type === 'artifact') {
@@ -681,15 +1501,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       setSelectedPath(null);
       setWikiSelectedRelPath(null);
       setExternalOpenFile(null);
+      setContentMode('rendered');
     }
-    setContentMode('rendered');
     // Any navigation other than reselecting the same auto-popped artifact
     // dismisses the auto-pop exception.
     const stayingOnAutoPop = item.type === 'artifact' && item.absPath === autoPopArtifactPath;
     if (autoPopArtifactPath && !stayingOnAutoPop) {
       onAutoPopArtifactSuperseded?.();
     }
-  }, [openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+  }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
 
   // Seed editContent when the user enters markdown mode on a file, or when
   // they switch to a different file while editing. Guarded by path so that
@@ -707,6 +1527,40 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     lastSavedContentRef.current = activeReading.content;
     lastSeededPathRef.current = activeReading.path;
   }, [contentMode, activeReading]);
+
+  useEffect(() => {
+    const session = restoredEditorSessionRef.current;
+    if (!session) return;
+
+    const cancelRestore = restoreEditorSession(session);
+    if (cancelRestore) {
+      restoredEditorSessionRef.current = null;
+    }
+    return cancelRestore;
+  }, [activeReading?.path, restoreEditorSession]);
+
+  useEffect(() => {
+    const restorePersistedSession = () => {
+      const session = restoreLibrarianEditorSession(localStorage);
+      restoreEditorSession(session);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        flushEditorSessionPersist();
+      } else {
+        restorePersistedSession();
+      }
+    };
+
+    window.addEventListener('focus', restorePersistedSession);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      flushEditorSessionPersist();
+      window.removeEventListener('focus', restorePersistedSession);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [flushEditorSessionPersist, restoreEditorSession]);
 
   const handleShare = useCallback(async () => {
     if (!selectedPath || !selectedReading) return;
@@ -752,30 +1606,39 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // macOS Trash via shell.trashItem (recoverable) and the main process
   // auto-prunes any matching Recent entry; artifacts use the existing
   // librarian delete flow.
-  const handleDelete = useCallback(async () => {
+  const handleDelete = useCallback(() => {
     if (selectedItemType === 'wiki') {
       if (!wikiSelectedRelPath || !activeReading) return;
-      const confirmed = window.confirm(`Move "${activeReading.title}" to Trash?`);
-      if (!confirmed) return;
-      const success = await window.wikiAPI?.deletePage(wikiSelectedRelPath);
-      if (success) {
-        setWikiSelectedRelPath(null);
-        setWikiSelectedPage(null);
-      }
+      confirmDelete({
+        title: 'Delete page?',
+        message: `Move "${activeReading.title}" to Trash?`,
+        confirmLabel: 'Move to Trash',
+        onConfirm: async () => {
+          const success = await window.wikiAPI?.deletePage(wikiSelectedRelPath);
+          if (success) {
+            setWikiSelectedRelPath(null);
+            setWikiSelectedPage(null);
+          }
+        },
+      });
       return;
     }
 
     if (selectedItemType === 'artifact') {
       if (!selectedPath || !selectedReading) return;
-      const confirmed = window.confirm(`Delete "${selectedReading.title}"? This cannot be undone.`);
-      if (!confirmed) return;
-      if (shareStatus?.shared) {
-        await window.librarianAPI?.unshareReading(selectedPath);
-      }
-      await window.librarianAPI?.deleteReading(selectedPath);
-      // The onReadingRemoved listener will handle updating state and selecting next item
+      confirmDelete({
+        title: 'Delete artifact?',
+        message: `Delete "${selectedReading.title}"? This cannot be undone.`,
+        onConfirm: async () => {
+          if (shareStatus?.shared) {
+            await window.librarianAPI?.unshareReading(selectedPath);
+          }
+          await window.librarianAPI?.deleteReading(selectedPath);
+          // The onReadingRemoved listener will handle updating state and selecting next item
+        },
+      });
     }
-  }, [selectedItemType, selectedPath, selectedReading, wikiSelectedRelPath, activeReading, shareStatus?.shared]);
+  }, [activeReading, confirmDelete, selectedItemType, selectedPath, selectedReading, shareStatus?.shared, wikiSelectedRelPath]);
 
   // Play narration for current reading
   const handlePlayNarration = useCallback(async () => {
@@ -813,6 +1676,19 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         setWikiSelectedPage(null);
       }
     })();
+  }, [wikiSelectedRelPath]);
+
+  useEffect(() => {
+    if (!wikiSelectedRelPath) return;
+    const unsubscribe = window.wikiAPI?.onPageChanged(async () => {
+      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (page) return;
+      setWikiSelectedRelPath(null);
+      setWikiSelectedPage(null);
+      setSelectedItemId(null);
+      setSelectedItemType(null);
+    });
+    return () => unsubscribe?.();
   }, [wikiSelectedRelPath]);
 
   // Load readings on mount and check setup completion
@@ -898,12 +1774,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         },
         ...prev,
       ]);
-      // Auto-select the new reading
-      selectArtifactPath(reading.path);
     });
 
     return () => unsubscribe?.();
-  }, [selectArtifactPath]);
+  }, []);
 
   // Listen for reading updates (file content changed)
   useEffect(() => {
@@ -925,6 +1799,14 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Listen for reading removals (file deleted)
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingRemoved((filePath) => {
+      setNavigationHistory((prev) => {
+        const entries = prev.entries.filter((entry) => !(entry.itemType === 'artifact' && entry.itemPath === filePath));
+        if (entries.length === prev.entries.length) return prev;
+        return {
+          entries,
+          index: Math.min(prev.index, entries.length - 1),
+        };
+      });
       setReadings((prev) => {
         const newReadings = prev.filter((r) => r.path !== filePath);
         // If removed reading was selected, select next one
@@ -956,6 +1838,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
+      if (isImmersiveToggleShortcut(e)) {
+        e.preventDefault();
+        if (!isFullScreen && !focusImmersive) {
+          onFocusChromeShortcut?.();
+        }
+        toggleImmersive();
+        return;
+      }
+
       // Cmd+E - toggle between rendered and markdown
       if (e.key === 'e' && e.metaKey && !e.shiftKey) {
         e.preventDefault();
@@ -1036,9 +1927,23 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       // first so an in-flight debounce doesn't lose the last keystrokes.
       if (e.key === 'w' && e.metaKey) {
         e.preventDefault();
-        const pending = flushSaveRef.current?.() ?? Promise.resolve();
+        const pending = flushCurrentEdit();
         void pending.then(() => window.clipboardAPI?.closeWindow());
         return;
+      }
+
+      // Cmd+[ / Cmd+] - match the toolbar back and forward controls.
+      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey) {
+        if (e.key === '[' && canNavigateBack) {
+          e.preventDefault();
+          navigateHistory(-1);
+          return;
+        }
+        if (e.key === ']' && canNavigateForward) {
+          e.preventDefault();
+          navigateHistory(1);
+          return;
+        }
       }
 
       // Escape hierarchy: edit-mode → auto-popped artifact → immersive-exit → close window.
@@ -1047,6 +1952,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       if (e.key === 'Escape') {
         if (contentMode === 'markdown') {
           void exitEditMode();
+        } else if (focusImmersive) {
+          setFocusImmersive(false);
         } else if (isFullScreen && isOnAutoPopArtifact) {
           window.clipboardAPI?.closeWindow();
         } else if (isFullScreen) {
@@ -1086,12 +1993,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedPath, isFullScreen, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact]);
-
-  // Focus container on mount
-  useEffect(() => {
-    containerRef.current?.focus();
-  }, []);
+  }, [readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, onFocusChromeShortcut]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -1125,6 +2027,31 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     };
     void load();
     const unsubscribe = window.wikiAPI?.onPageChanged(() => { void load(); });
+    return () => unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
+    const toIndexPages = (commands: Array<{ name: string; displayName: string; filePath: string }> | undefined): WikiIndexInput[] => (
+      commands ?? []
+    ).flatMap((command) => {
+      const displayTitle = command.displayName || command.name;
+      const base = {
+        relPath: command.filePath,
+        commandPath: command.filePath,
+      };
+      return displayTitle === command.name
+        ? [{ ...base, title: command.name }]
+        : [{ ...base, title: displayTitle }, { ...base, title: command.name }];
+    });
+
+    const load = async () => {
+      const commands = await window.commandsAPI?.getCommands();
+      setCommandIndexPages(toIndexPages(commands));
+    };
+    void load();
+    const unsubscribe = window.commandsAPI?.onCommandsChanged((commands) => {
+      setCommandIndexPages(toIndexPages(commands));
+    });
     return () => unsubscribe?.();
   }, []);
 
@@ -1403,41 +2330,55 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     >
       {/* Sidebar - hidden in full-screen mode but kept in DOM for instant collapse */}
       <div
+        ref={sidebarPaneRef}
         style={{
           width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
           minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
-          display: isFullScreen ? 'none' : 'flex',
-          flexDirection: 'column',
-          padding: sidebarCollapsed ? '0' : '12px 0',
+          display: isFullScreen ? 'none' : 'block',
           overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
-          transition: 'width 0.18s ease, min-width 0.18s ease, padding 0.18s ease',
+          flexShrink: 0,
+          transition: isResizing ? 'none' : 'width 0.18s ease, min-width 0.18s ease',
         }}
       >
-        <WikiSidebar
-          selectedId={selectedItemId}
-          onSelectItem={handleSelectItem}
-          onCreateFile={handleCreateFile}
-          onCreateDir={handleCreateDir}
-          onCreateScratchpadDefault={handleCreateScratchpadDefault}
-          flatItemsRef={flatItemsRef}
-          searchQuery={searchQuery}
-          onSearchQueryChange={setSearchQuery}
-          searchInputRef={searchInputRef}
-          creationControllerRef={wikiCreationRef}
-        />
+        <div
+          ref={sidebarInnerRef}
+          style={{
+            width: `${sidebarWidth}px`,
+            height: '100%',
+            display: 'flex',
+            flexDirection: 'column',
+            padding: '12px 0',
+            pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+          }}
+        >
+          <WikiSidebar
+            selectedId={selectedItemId}
+            onSelectItem={handleSelectItem}
+            onCreateFile={handleCreateFile}
+            onCreateDir={handleCreateDir}
+            onCreateScratchpadDefault={handleCreateScratchpadDefault}
+            flatItemsRef={flatItemsRef}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            searchInputRef={searchInputRef}
+            creationControllerRef={wikiCreationRef}
+          />
+        </div>
       </div>
       {/* Resize handle - hidden in full-screen mode but kept in DOM */}
       <div
         onMouseDown={handleResizeMouseDown}
         style={{
-          width: '4px',
+          width: sidebarCollapsed ? '0px' : '4px',
+          minWidth: sidebarCollapsed ? '0px' : '4px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: `1px solid ${theme.border}`,
-          transition: 'background-color 0.15s ease',
+          borderRight: sidebarCollapsed ? '0 solid transparent' : `1px solid ${theme.border}`,
+          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
-          display: isFullScreen || sidebarCollapsed ? 'none' : 'block',
+          display: isFullScreen ? 'none' : 'block',
+          pointerEvents: sidebarCollapsed ? 'none' : 'auto',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -1482,7 +2423,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {selectedItemType !== 'bookmarks' && (<Fragment>
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
-          onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+          onMouseEnter={() => {
+            if (!isFullScreen) return;
+            setHeaderHovered(true);
+            revealWritingChrome();
+          }}
           onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
           style={{
             height: isFullScreen ? '20px' : '0px',
@@ -1504,6 +2449,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 height: '4px',
                 borderRadius: '2px',
                 backgroundColor: theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
+                opacity: readerControlsVisible ? 1 : 0,
+                transition: 'opacity 0.18s ease',
               }}
             />
           )}
@@ -1512,7 +2459,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {/* Toolbar - includes draggable region for window movement */}
         {activeReading && (
           <div
-            onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
+            onMouseEnter={() => {
+              if (!isFullScreen) return;
+              setHeaderHovered(true);
+              revealWritingChrome();
+            }}
             onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
             style={{
               display: 'flex',
@@ -1521,12 +2472,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
+              opacity: readerControlsVisible ? 1 : 0,
+              pointerEvents: readerControlsVisible ? 'auto' : 'none',
+              transition: 'opacity 0.18s ease',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
             <div
               style={{
-                maxWidth: READING_CONTENT_MAX_WIDTH,
+                maxWidth: typographyPreset.maxWidth,
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
@@ -1596,10 +2550,28 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               )}
               <ContentToolbar
                 filePath={activeReading?.path || undefined}
-                isFullScreen={isFullScreen}
+                isFullScreen={isFullScreen || focusImmersive}
+                canNavigateBack={canNavigateBack}
+                canNavigateForward={canNavigateForward}
+                onNavigateBack={() => navigateHistory(-1)}
+                onNavigateForward={() => navigateHistory(1)}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={true}
+                typographyPreset={typographyPresetId}
+                typographyPresetOptions={LIBRARIAN_TYPOGRAPHY_PRESETS}
+                onTypographyPresetChange={(preset) => {
+                  if (isLibrarianTypographyPresetId(preset)) {
+                    setTypographyPresetId(preset);
+                  }
+                }}
+                lineHeight={lineHeightId}
+                lineHeightOptions={LIBRARIAN_LINE_HEIGHT_OPTIONS}
+                onLineHeightChange={(lineHeight) => {
+                  if (isLibrarianLineHeightId(lineHeight)) {
+                    setLineHeightId(lineHeight);
+                  }
+                }}
                 isEditing={contentMode === 'markdown'}
                 onDelete={handleDelete}
                 showDelete={true}
@@ -1612,7 +2584,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 onToggleShare={handleShare}
                 showShare={true}
                 onCopyPath={activeReading?.path ? () => navigator.clipboard.writeText(activeReading.path) : undefined}
-                headerHovered={headerHovered}
+                headerHovered={readerControlsVisible}
               />
 
               {/* Narration Play/Stop button (feature flagged) */}
@@ -1634,7 +2606,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     alignItems: 'center',
                     gap: '4px',
                     transition: 'background-color 0.15s ease, color 0.15s ease',
-                    opacity: isFullScreen && !headerHovered ? 0 : 1,
+                    opacity: readerControlsVisible ? 1 : 0,
                   }}
                   onMouseEnter={(e) => {
                     if (!isPlaying && !isGenerating) {
@@ -1671,9 +2643,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 </button>
               )}
 
-              {/* Spacer */}
-              <div style={{ flex: 1 }} />
-
               {/* Auto-save status: only surface the in-flight "Saving…"
                   state. The "Saved ✓" dwell was visual noise. */}
               {saveStatus === 'saving' && (
@@ -1685,7 +2654,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     fontSize: '11px',
                     fontWeight: 500,
                     color: theme.textSecondary,
-                    opacity: isFullScreen && !headerHovered ? 0 : 1,
+                    opacity: readerControlsVisible ? 1 : 0,
                     transition: 'opacity 0.2s ease',
                     marginRight: '8px',
                     userSelect: 'none',
@@ -1703,7 +2672,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
                   borderRadius: '6px',
                   padding: '2px',
-                  opacity: isFullScreen && !headerHovered ? 0 : 1,
+                  opacity: readerControlsVisible ? 1 : 0,
                   transition: 'opacity 0.15s ease',
                 }}
               >
@@ -1766,7 +2735,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
               {/* Immersive/fullscreen toggle sits to the right of the mode
                   toggle so the editor controls stay grouped together. */}
-              <ImmersiveToggle isFullScreen={isFullScreen} onToggle={toggleImmersive} />
+              <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleImmersive} />
             </div>
           </div>
         )}
@@ -1777,7 +2746,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           style={{
             flex: 1,
             minHeight: 0,
-            overflowY: 'auto',
+            overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
             padding: isFullScreen ? '16px 32px 28px 32px' : '28px 32px',
             display: 'flex',
             justifyContent: 'center',
@@ -1786,53 +2755,179 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {activeReading ? (
           <div
             style={{
-              maxWidth: READING_CONTENT_MAX_WIDTH,
+              maxWidth: typographyPreset.maxWidth,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',
               flex: contentMode === 'markdown' ? '1 1 auto' : '0 1 auto',
-              minHeight: contentMode === 'markdown' ? '100%' : 'auto',
+              height: contentMode === 'markdown' ? '100%' : 'auto',
+              minHeight: 0,
+              overflow: contentMode === 'markdown' ? 'hidden' : 'visible',
+              position: 'relative',
             }}
           >
             {contentMode === 'markdown' ? (
               /* Markdown edit mode - textarea */
-              <textarea
-                ref={markdownEditorRef}
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                onBlur={(e) => {
-                  // Clicking away flips back to rendered. Ignore focus moves
-                  // that stay inside the reader pane (toolbar buttons, mode
-                  // toggle) — those have their own handlers and would cause
-                  // mode bouncing if we flipped here.
-                  const next = e.relatedTarget as Node | null;
-                  if (next && readerPaneRef.current?.contains(next)) return;
-                  void exitEditMode();
-                }}
-                spellCheck={true}
+              <div
                 style={{
-                  display: 'block',
+                  position: 'relative',
+                  flex: '1 1 0',
+                  minHeight: 0,
                   width: '100%',
-                  minHeight: '400px',
-                  padding: 0,
-                  // Match the rendered view's base size so toggling between
-                  // edit and rendered doesn't visually jump. The A/A/A
-                  // controls feed textSize, so the editor scales with them.
-                  ...documentTextStyle,
-                  backgroundColor: 'transparent',
-                  border: 'none',
-                  borderRadius: 0,
-                  resize: 'none',
-                  outline: 'none',
-                  boxShadow: 'none',
-                  caretColor: theme.accent,
                   overflow: 'hidden',
-                  overflowWrap: 'break-word',
-                  tabSize: 2,
                 }}
-                placeholder="Write your markdown here..."
-                autoFocus
-              />
+              >
+                <textarea
+                  ref={markdownEditorRef}
+                  value={editContent}
+                  onChange={(e) => {
+                    const nextValue = e.currentTarget.value;
+                    const nextSelectionStart = e.currentTarget.selectionStart;
+                    const nextSelectionEnd = e.currentTarget.selectionEnd;
+                    const nextScrollTop = e.currentTarget.scrollTop;
+                    const nativeEvent = e.nativeEvent as InputEvent;
+                    markWritingActive();
+                    setEditContent(nextValue);
+                    if (nativeEvent.inputType !== 'insertFromPaste') {
+                      setMarkdownUrlPasteChoice(null);
+                    }
+                    scheduleEditorSessionPersist();
+                    if (nativeEvent.inputType === 'insertLineBreak' || nativeEvent.inputType === 'insertParagraph') {
+                      requestAnimationFrame(() => {
+                        const editor = markdownEditorRef.current;
+                        if (!editor || editor.value !== nextValue) return;
+                        editor.setSelectionRange(
+                          Math.min(nextSelectionStart, editor.value.length),
+                          Math.min(nextSelectionEnd, editor.value.length),
+                        );
+                        editor.scrollTop = nextScrollTop;
+                        updateMarkdownEditorFades(editor);
+                        smoothScrollMarkdownCaretIntoComfortView(editor);
+                      });
+                    }
+                  }}
+                  onPaste={handleMarkdownEditorPaste}
+                  onClick={handleMarkdownEditorClick}
+                  onFocus={() => window.librarianAPI?.setMarkdownEditorFocused(true)}
+                  onBlur={() => window.librarianAPI?.setMarkdownEditorFocused(false)}
+                  onKeyUp={handleMarkdownEditorKeyUp}
+                  onMouseUp={scheduleEditorSessionPersist}
+                  onSelect={handleMarkdownEditorSelect}
+                  onScroll={(e) => {
+                    updateMarkdownEditorFades(e.currentTarget);
+                    scheduleEditorSessionPersist();
+                  }}
+                  spellCheck={true}
+                  style={{
+                    display: 'block',
+                    position: 'absolute',
+                    inset: 0,
+                    width: '100%',
+                    height: '100%',
+                    boxSizing: 'border-box',
+                    padding: 0,
+                    // Match the rendered view's base size so toggling between
+                    // edit and rendered doesn't visually jump. The A/A/A
+                    // controls feed textSize, so the editor scales with them.
+                    ...documentTextStyle,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: 0,
+                    resize: 'none',
+                    outline: 'none',
+                    boxShadow: 'none',
+                    caretColor: theme.accent,
+                    overflowX: 'hidden',
+                    overflowY: 'auto',
+                    overflowWrap: 'break-word',
+                    overflowAnchor: 'none',
+                    overscrollBehavior: 'contain',
+                    tabSize: 2,
+                    cursor: markdownEditorCommandActive ? 'pointer' : 'text',
+                  }}
+                  placeholder="Write your markdown here..."
+                />
+                {markdownUrlPasteChoice && (
+                  <div
+                    onMouseDown={(e) => e.preventDefault()}
+                    style={{
+                      position: 'absolute',
+                      right: '8px',
+                      bottom: '8px',
+                      zIndex: 2,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '2px',
+                      padding: '3px',
+                      borderRadius: '6px',
+                      backgroundColor: theme.isDark ? 'rgba(22,22,22,0.86)' : 'rgba(255,255,255,0.88)',
+                      border: `1px solid ${theme.border}`,
+                      boxShadow: theme.isDark ? '0 4px 14px rgba(0,0,0,0.22)' : '0 4px 14px rgba(0,0,0,0.08)',
+                      backdropFilter: 'blur(10px)',
+                    }}
+                  >
+                    {MARKDOWN_URL_PASTE_OPTIONS.map((option) => {
+                      const selected = markdownUrlPasteChoice.kind === option.kind;
+                      return (
+                        <button
+                          key={option.kind}
+                          type="button"
+                          onClick={() => applyMarkdownUrlPasteKind(option.kind)}
+                          title={option.title}
+                          aria-label={option.title}
+                          style={{
+                            height: '22px',
+                            minWidth: '42px',
+                            padding: '0 7px',
+                            border: 'none',
+                            borderRadius: '4px',
+                            color: selected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: selected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            lineHeight: 1,
+                            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    height: '28px',
+                    pointerEvents: 'none',
+                    background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 18%, transparent 100%)`,
+                    opacity: markdownEditorEdgeFades.top ? 1 : 0,
+                    zIndex: 1,
+                    transition: 'opacity 0.12s ease',
+                  }}
+                />
+                <div
+                  aria-hidden="true"
+                  style={{
+                    position: 'absolute',
+                    bottom: 0,
+                    left: 0,
+                    right: 0,
+                    height: '28px',
+                    pointerEvents: 'none',
+                    background: `linear-gradient(to top, ${theme.bg} 0%, ${theme.bg} 18%, transparent 100%)`,
+                    opacity: markdownEditorEdgeFades.bottom ? 1 : 0,
+                    zIndex: 1,
+                    transition: 'opacity 0.12s ease',
+                  }}
+                />
+              </div>
             ) : (
               /* View mode - markdown renderer */
               <>
@@ -1919,7 +3014,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         marginBottom: '10px',
                         lineHeight: 1.2,
                         color: theme.text,
-                        fontFamily: fonts.serif,
+                        fontFamily: typographyPreset.headingFontFamily,
                       }}
                     >
                       {children}
@@ -1956,6 +3051,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     const normalizedText = textContent.trim();
                     const hasBraille = /[\u2800-\u28FF]/.test(textContent);
                     const isModelSignatureLine = isArtifactModelSignatureText(normalizedText);
+                    const isPreservedBlankLine = textContent === PRESERVED_BLANK_MARKDOWN_LINE;
 
                     if (hasBraille) {
                       return (
@@ -1980,11 +3076,25 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       return null;
                     }
 
+                    if (isPreservedBlankLine) {
+                      return (
+                        <p
+                          aria-hidden="true"
+                          style={{
+                            margin: 0,
+                            lineHeight: 'inherit',
+                          }}
+                        >
+                          {children}
+                        </p>
+                      );
+                    }
+
                     return (
                       <p
                         style={{
-                          marginTop: 0,
-                          marginBottom: '0.75em',
+                          margin: 0,
+                          lineHeight: 'inherit',
                         }}
                       >
                         {children}
@@ -2122,19 +3232,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                             ? href
                             : (e.currentTarget.textContent?.trim() ?? '');
                           const action = classifyLinkHref(effectiveHref, wikiIndex);
-                          switch (action.kind) {
-                            case 'create':
-                              void createUnresolvedWikiLink(action.title);
-                              return;
-                            case 'wiki':
-                              openWikiPage(action.relPath);
-                              return;
-                            case 'external':
-                              window.shellAPI?.openExternal(action.href);
-                              return;
-                            case 'noop':
-                              return;
-                          }
+                          openLinkAction(action);
                         }}
                       >
                         {children}
@@ -2306,6 +3404,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         )}
       </div>
 
+      {deleteConfirmationDialog}
     </div>
   );
 }

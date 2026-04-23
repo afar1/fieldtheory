@@ -67,6 +67,24 @@ import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 
+type FieldTheoryMarkdownTarget = {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
+};
+
+const FOCUS_CHROME_TOP_REVEAL_PX = 96;
+const FOCUS_CHROME_BOTTOM_REVEAL_PX = 72;
+const FOCUS_CHROME_ICON_SIZE_PX = 32;
+const FOCUS_CHROME_ICON_MIN_TOP_PX = 12;
+
+function getFocusChromeIconTop(editorTop: number | null, showInDock: boolean): number {
+  if (typeof editorTop !== 'number' || !Number.isFinite(editorTop)) return showInDock ? 84 : 64;
+  return Math.max(
+    FOCUS_CHROME_ICON_MIN_TOP_PX,
+    (editorTop - FOCUS_CHROME_ICON_SIZE_PX) / 2,
+  );
+}
+
 /**
  * Check if any items in a stack have improved content.
  */
@@ -311,11 +329,37 @@ export default function ClipboardHistory() {
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
+  const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(null);
+  const [pendingCommandPath, setPendingCommandPath] = useState<string | null>(null);
   // Path of an artifact the librarian auto-popped that the user hasn't navigated
   // away from yet. While this is set, Escape dismisses the window (preserving
   // the artifact-popup UX) rather than merely exiting immersive.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [headerHovered, setHeaderHovered] = useState(false);
+  const [focusChromeActive, setFocusChromeActive] = useState(false);
+  const [focusChromeContentTop, setFocusChromeContentTop] = useState<number | null>(null);
+  const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
+  const isLibrarianSurface = viewMode === 'librarian' && !showSettings;
+  const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
+  const librarianChromeCollapsed = isLibrarianSurface && librarianImmersive && !headerHovered;
+  const appChromeHidden = librarianChromeCollapsed || (isFocusChromeSurface && focusChromeActive && !headerHovered);
+  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !headerHovered && !librarianChromeCollapsed;
+  const revealAppChrome = useCallback(() => {
+    setHeaderHovered(true);
+  }, []);
+  const collapseSidebarForFocusChrome = useCallback(() => {
+    focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
+    setNavSidebarCollapsed(true);
+  }, [navSidebarCollapsed]);
+  const handleFocusChromeActiveChange = useCallback((active: boolean) => {
+    setFocusChromeActive(active);
+    if (active) return;
+
+    const previous = focusChromePreviousSidebarCollapsedRef.current;
+    if (previous === null) return;
+    focusChromePreviousSidebarCollapsedRef.current = null;
+    setNavSidebarCollapsed(previous);
+  }, []);
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -1455,6 +1499,31 @@ export default function ClipboardHistory() {
     }
   }, [librarianImmersive, showSettings, viewMode]);
 
+  useEffect(() => {
+    const shouldTrackChromeReveal =
+      (isLibrarianSurface && librarianImmersive) ||
+      (isFocusChromeSurface && focusChromeActive);
+
+    if (!shouldTrackChromeReveal) {
+      if (!isFocusChromeSurface) {
+        setFocusChromeActive(false);
+        setFocusChromeContentTop(null);
+      }
+      setHeaderHovered(false);
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const nearToolArea =
+        event.clientY <= FOCUS_CHROME_TOP_REVEAL_PX ||
+        event.clientY >= window.innerHeight - FOCUS_CHROME_BOTTOM_REVEAL_PX;
+      setHeaderHovered(nearToolArea);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [focusChromeActive, isFocusChromeSurface, isLibrarianSurface, librarianImmersive]);
+
   // Clear section override when settings closes.
   useEffect(() => {
     if (!showSettings) {
@@ -1701,9 +1770,26 @@ export default function ClipboardHistory() {
     };
   }, [isMacOS, loadItems]);
 
-  // Auto-switch to Librarian tab when a new reading is added
+  // Keep the user's current surface stable when a new artifact appears.
+  // Auto-open flows use pendingReadingPath; visible-window flows only show
+  // the Library indicator.
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingAdded(() => {
+      if (viewMode !== 'librarian') setHasNewReading(true);
+    });
+
+    return () => unsubscribe?.();
+  }, [viewMode]);
+
+  useEffect(() => {
+    const unsubscribe = window.commandsAPI?.onOpenMarkdownFromLauncher?.((target) => {
+      setShowSettings(false);
+      if (target.kind === 'command') {
+        setPendingCommandPath(target.path);
+        setViewMode('commands');
+        return;
+      }
+      setPendingLibraryOpenTarget(target);
       setViewMode('librarian');
     });
 
@@ -1751,11 +1837,11 @@ export default function ClipboardHistory() {
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onNewReadingAvailable(() => {
       // Don't switch views - just show indicator
-      setHasNewReading(true);
+      if (viewMode !== 'librarian') setHasNewReading(true);
     });
 
     return () => unsubscribe?.();
-  }, []);
+  }, [viewMode]);
 
   // Handle new reading to show immediately (when already in immersive mode)
   useEffect(() => {
@@ -3205,6 +3291,7 @@ export default function ClipboardHistory() {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          position: 'relative',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           cursor: 'default',
         }}
@@ -3212,6 +3299,7 @@ export default function ClipboardHistory() {
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
+          onMouseEnter={revealAppChrome}
           style={{
             height: '8px',
             minHeight: '8px',
@@ -3237,23 +3325,25 @@ export default function ClipboardHistory() {
       
       {/* Draggable header area - collapses in Librarian immersive mode */}
       <div
-        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseEnter={revealAppChrome}
         onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
-          minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
+          height: librarianChromeCollapsed ? '0px' : '52px',
+          minHeight: librarianChromeCollapsed ? '0px' : '52px',
           overflow: showMicDropdown ? 'visible' : 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
-          paddingTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
+          paddingTop: librarianChromeCollapsed ? '0px' : '8px',
           paddingLeft: '16px',
           paddingRight: '16px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
           borderBottom: 'none',
-          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease',
+          opacity: appChromeHidden ? 0 : 1,
+          pointerEvents: appChromeHidden ? 'none' : 'auto',
+          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease, opacity 0.18s ease',
         }}
       >
         <img
@@ -3450,23 +3540,55 @@ export default function ClipboardHistory() {
 
       </div>
 
+      {showFocusChromeIcon && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: getFocusChromeIconTop(focusChromeContentTop, showInDock),
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 20,
+            height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+            opacity: 0.62,
+            transition: 'opacity 0.18s ease',
+          }}
+        >
+          <img
+            src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
+            alt=""
+            style={{
+              height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
+              width: 'auto',
+              display: 'block',
+            }}
+          />
+        </div>
+      )}
+
       {/* View mode tabs - collapses in Librarian immersive mode */}
       {viewMode !== 'sketch' && (
         <div
           ref={tabsRef}
-          onMouseEnter={() => setHeaderHovered(true)}
+          onMouseEnter={revealAppChrome}
           onMouseLeave={() => setHeaderHovered(false)}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '2px',
             padding: '0 16px',
-            marginTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '4px',
-            marginBottom: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
-            height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
-            minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '28px',
+            marginTop: librarianChromeCollapsed ? '0px' : '4px',
+            marginBottom: librarianChromeCollapsed ? '0px' : '8px',
+            height: librarianChromeCollapsed ? '0px' : 'auto',
+            minHeight: librarianChromeCollapsed ? '0px' : '28px',
             overflow: 'hidden',
-            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
+            opacity: appChromeHidden ? 0 : 1,
+            pointerEvents: appChromeHidden ? 'none' : 'auto',
+            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease, opacity 0.18s ease',
           }}>
           {(['clipboard'] as ViewMode[]).map((mode) => {
             const isSelected = viewMode === mode && !showSettings;
@@ -4013,12 +4135,21 @@ export default function ClipboardHistory() {
           onSwitchToClipboard={() => setViewMode('clipboard')}
           onSwitchToSettings={() => setShowSettings(true)}
           onFullScreenChange={setLibrarianImmersive}
-          externalHeaderHover={librarianImmersive && headerHovered}
+          externalHeaderHover={headerHovered}
+          onFocusChromeActiveChange={handleFocusChromeActiveChange}
+          onFocusChromeTopChange={setFocusChromeContentTop}
           initialReadingPath={pendingReadingPath}
+          initialOpenTarget={pendingLibraryOpenTarget}
           initialFullScreen={librarianImmersive}
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
+          onInitialOpenTargetConsumed={() => setPendingLibraryOpenTarget(null)}
           autoPopArtifactPath={autoPopArtifactPath}
           onAutoPopArtifactSuperseded={() => setAutoPopArtifactPath(null)}
+          onOpenCommandPath={(path) => {
+            setPendingCommandPath(path);
+            setViewMode('commands');
+          }}
+          onFocusChromeShortcut={collapseSidebarForFocusChrome}
           sidebarCollapsed={navSidebarCollapsed}
         />
       ) : viewMode === 'feedback' ? (
@@ -4081,6 +4212,12 @@ export default function ClipboardHistory() {
         <CommandsView
           onSwitchToClipboard={() => setViewMode('clipboard')}
           sidebarCollapsed={navSidebarCollapsed}
+          externalHeaderHover={headerHovered}
+          onFocusChromeActiveChange={handleFocusChromeActiveChange}
+          onFocusChromeTopChange={setFocusChromeContentTop}
+          initialCommandPath={pendingCommandPath}
+          onInitialCommandConsumed={() => setPendingCommandPath(null)}
+          onFocusChromeShortcut={collapseSidebarForFocusChrome}
         />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
@@ -6070,13 +6207,13 @@ export default function ClipboardHistory() {
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
       {/* Collapses in Librarian immersive mode */}
       <div
-        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseEnter={revealAppChrome}
         onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          padding: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0 16px' : '8px 16px',
-          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
+          padding: librarianChromeCollapsed ? '0 16px' : '8px 16px',
+          height: librarianChromeCollapsed ? '0px' : 'auto',
           overflow: 'hidden',
-          borderTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? 'none' : `1px solid ${theme.border}`,
+          borderTop: librarianChromeCollapsed ? 'none' : `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
           display: 'flex',
@@ -6086,7 +6223,9 @@ export default function ClipboardHistory() {
           color: theme.textSecondary,
           userSelect: 'none',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          transition: 'height 0.3s ease, padding 0.3s ease',
+          opacity: appChromeHidden ? 0 : 1,
+          pointerEvents: appChromeHidden ? 'none' : 'auto',
+          transition: 'height 0.3s ease, padding 0.3s ease, opacity 0.18s ease',
         }}
       >
         {/* Left side: sidebar toggle + plan info (quotas or stats) */}

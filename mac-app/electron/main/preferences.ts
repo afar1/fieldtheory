@@ -86,6 +86,8 @@ interface Preferences {
   clipboardHistoryBounds?: ClipboardHistoryBounds;
   /** Per-view-kind bounds. Takes precedence over clipboardHistoryBounds. */
   clipboardHistoryBoundsByView?: ClipboardHistoryBoundsByView;
+  /** Last active size profile, so reopen starts at the same view size. */
+  clipboardHistoryLastSizeKey?: ClipboardHistorySizeKey;
 
   // Onboarding state - tracks whether user has completed first-run setup.
   onboardingComplete?: boolean;
@@ -258,6 +260,7 @@ interface Preferences {
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Option+/',
   selectedModel: 'small',
+  clipboardHistoryLastSizeKey: 'fields',
   transcriptionInputSource: 'microphone',
   clipboardScreenshotHotkey: 'Alt+4',
   clipboardDesktopScreenshotHotkey: 'Alt+3',
