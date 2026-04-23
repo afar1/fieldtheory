@@ -3,13 +3,23 @@
  * Provides consistent UI for editing, sharing, and navigation controls.
  */
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ImmersiveToggle from './ImmersiveToggle';
 
 // Icon sizes - 22% larger than the original 13px base
 const ICON_SIZE = 16; // ~22% larger than 13px
 const ICON_SIZE_SMALL = 13; // Standard size for less prominent icons
+
+const TEXT_SIZE_OPTIONS: Array<{
+  id: 'small' | 'normal' | 'large';
+  label: string;
+  title: string;
+}> = [
+  { id: 'small', label: 'Small', title: 'Small text' },
+  { id: 'normal', label: 'Normal', title: 'Normal text' },
+  { id: 'large', label: 'Large', title: 'Large text' },
+];
 
 interface ContentToolbarProps {
   // Content info
@@ -19,11 +29,33 @@ interface ContentToolbarProps {
   // View state
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
 
   // Text size (for reading views)
   textSize?: 'small' | 'normal' | 'large';
   onTextSizeChange?: (size: 'small' | 'normal' | 'large') => void;
   showTextSize?: boolean;
+
+  // Curated typography presets (for reading/writing views)
+  typographyPreset?: string;
+  typographyPresetOptions?: Array<{
+    id: string;
+    label: string;
+    title: string;
+    fontFamily: string;
+  }>;
+  onTypographyPresetChange?: (preset: string) => void;
+
+  lineHeight?: string;
+  lineHeightOptions?: Array<{
+    id: string;
+    label: string;
+    title: string;
+  }>;
+  onLineHeightChange?: (lineHeight: string) => void;
 
   // Edit state
   isEditing?: boolean;
@@ -66,9 +98,19 @@ export default function ContentToolbar({
   filePath,
   isFullScreen = false,
   onToggleFullScreen,
+  canNavigateBack = false,
+  canNavigateForward = false,
+  onNavigateBack,
+  onNavigateForward,
   textSize,
   onTextSizeChange,
   showTextSize = false,
+  typographyPreset,
+  typographyPresetOptions,
+  onTypographyPresetChange,
+  lineHeight,
+  lineHeightOptions,
+  onLineHeightChange,
   isEditing = false,
   isDirty = false,
   isSaving = false,
@@ -93,7 +135,8 @@ export default function ContentToolbar({
 }: ContentToolbarProps) {
   const { theme } = useTheme();
   const [copied, setCopied] = useState(false);
-  const [rowHovered, setRowHovered] = useState(false);
+  const [typographyMenuOpen, setTypographyMenuOpen] = useState(false);
+  const typographyMenuRef = useRef<HTMLDivElement | null>(null);
 
   // Handle copy with feedback
   const handleCopy = () => {
@@ -104,87 +147,105 @@ export default function ContentToolbar({
     }
   };
 
-  // Row background when hovered
-  const rowBg = rowHovered ? (theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.03)') : 'transparent';
+  const hasTypographyMenu = Boolean(
+    (typographyPresetOptions?.length && onTypographyPresetChange) ||
+    (showTextSize && onTextSizeChange) ||
+    (lineHeightOptions?.length && onLineHeightChange)
+  );
+
+  useEffect(() => {
+    if (!typographyMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && typographyMenuRef.current?.contains(target)) return;
+      setTypographyMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTypographyMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [typographyMenuOpen]);
 
   return (
     <div
-      onMouseEnter={() => setRowHovered(true)}
-      onMouseLeave={() => setRowHovered(false)}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: '2px',
         flex: 1,
         opacity: isFullScreen && !headerHovered ? 0 : 1,
-        transition: 'opacity 0.2s ease, background-color 0.15s ease',
-        backgroundColor: rowBg,
+        transition: 'opacity 0.2s ease',
         borderRadius: '6px',
         margin: '0 -4px',
         padding: '0 4px',
+        position: 'relative',
       }}
     >
-      {/* Text size controls */}
-      {showTextSize && onTextSizeChange && (
+      {(onNavigateBack || onNavigateForward) && (
         <div
           style={{
             display: 'flex',
             alignItems: 'center',
+            gap: '1px',
+            marginRight: '6px',
           }}
         >
           <button
-            onClick={() => onTextSizeChange('small')}
+            type="button"
+            onClick={onNavigateBack}
+            disabled={!canNavigateBack}
+            title="Back"
+            aria-label="Back"
             style={{
-              padding: '4px 6px',
-              fontSize: '11px',
-              color: textSize === 'small' ? theme.accent : theme.textSecondary,
+              width: '24px',
+              height: '24px',
+              padding: 0,
+              color: theme.textSecondary,
               backgroundColor: 'transparent',
               border: 'none',
-              cursor: 'pointer',
-              fontWeight: textSize === 'small' ? 600 : 400,
+              borderRadius: '4px',
+              cursor: canNavigateBack ? 'pointer' : 'default',
+              opacity: canNavigateBack ? 1 : 0.32,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              height: '24px',
             }}
           >
-            A
+            <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+              <path d="M10.354 3.146a.5.5 0 0 1 0 .708L6.207 8l4.147 4.146a.5.5 0 0 1-.708.708l-4.5-4.5a.5.5 0 0 1 0-.708l4.5-4.5a.5.5 0 0 1 .708 0z" />
+            </svg>
           </button>
           <button
-            onClick={() => onTextSizeChange('normal')}
+            type="button"
+            onClick={onNavigateForward}
+            disabled={!canNavigateForward}
+            title="Forward"
+            aria-label="Forward"
             style={{
-              padding: '4px 6px',
-              fontSize: '13px',
-              color: textSize === 'normal' ? theme.accent : theme.textSecondary,
+              width: '24px',
+              height: '24px',
+              padding: 0,
+              color: theme.textSecondary,
               backgroundColor: 'transparent',
               border: 'none',
-              cursor: 'pointer',
-              fontWeight: textSize === 'normal' ? 600 : 400,
+              borderRadius: '4px',
+              cursor: canNavigateForward ? 'pointer' : 'default',
+              opacity: canNavigateForward ? 1 : 0.32,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              height: '24px',
             }}
           >
-            A
-          </button>
-          <button
-            onClick={() => onTextSizeChange('large')}
-            style={{
-              padding: '4px 6px',
-              fontSize: '15px',
-              color: textSize === 'large' ? theme.accent : theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              fontWeight: textSize === 'large' ? 600 : 400,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              height: '24px',
-            }}
-          >
-            A
+            <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+              <path d="M5.646 3.146a.5.5 0 0 0 0 .708L9.793 8l-4.147 4.146a.5.5 0 0 0 .708.708l4.5-4.5a.5.5 0 0 0 0-.708l-4.5-4.5a.5.5 0 0 0-.708 0z" />
+            </svg>
           </button>
         </div>
       )}
@@ -199,6 +260,190 @@ export default function ContentToolbar({
           cursor: 'grab',
         }}
       />
+
+      {hasTypographyMenu && (
+        <div
+          ref={typographyMenuRef}
+          style={{
+            position: 'relative',
+            display: 'flex',
+            alignItems: 'center',
+            order: 20,
+            marginLeft: '2px',
+          }}
+        >
+          <button
+            type="button"
+            onClick={() => setTypographyMenuOpen((open) => !open)}
+            onMouseEnter={(event) => {
+              if (!typographyMenuOpen) {
+                event.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+              }
+            }}
+            onMouseLeave={(event) => {
+              if (!typographyMenuOpen) {
+                event.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Text style"
+            aria-label="Text style"
+            style={{
+              width: '24px',
+              height: '24px',
+              padding: 0,
+              color: typographyMenuOpen ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+              backgroundColor: typographyMenuOpen
+                ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                : 'transparent',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontSize: '13px',
+              fontWeight: 600,
+              lineHeight: 1,
+              transition: 'background-color 0.15s ease, color 0.15s ease',
+            }}
+          >
+            A
+          </button>
+
+          {typographyMenuOpen && (
+            <div
+              style={{
+                position: 'absolute',
+                top: '28px',
+                right: 0,
+                zIndex: 20,
+                width: '214px',
+                padding: '8px',
+                borderRadius: '8px',
+                border: `1px solid ${theme.border}`,
+                backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
+                boxShadow: theme.isDark ? '0 12px 30px rgba(0,0,0,0.32)' : '0 12px 30px rgba(0,0,0,0.14)',
+                backdropFilter: 'blur(14px)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '8px',
+              }}
+            >
+              {typographyPresetOptions && typographyPresetOptions.length > 0 && onTypographyPresetChange && (
+                <div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
+                    Font
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+                    {typographyPresetOptions.map((option) => {
+                      const isSelected = option.id === typographyPreset;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onTypographyPresetChange(option.id)}
+                          title={option.title}
+                          style={{
+                            height: '26px',
+                            padding: '0 6px',
+                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: isSelected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            border: 'none',
+                            borderRadius: '5px',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            fontFamily: option.fontFamily,
+                            fontWeight: isSelected ? 600 : 400,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {showTextSize && onTextSizeChange && (
+                <div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
+                    Size
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+                    {TEXT_SIZE_OPTIONS.map((option) => {
+                      const isSelected = option.id === textSize;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onTextSizeChange(option.id)}
+                          title={option.title}
+                          style={{
+                            height: '26px',
+                            padding: '0 6px',
+                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: isSelected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            border: 'none',
+                            borderRadius: '5px',
+                            cursor: 'pointer',
+                            fontSize: option.id === 'small' ? '10px' : option.id === 'large' ? '13px' : '11px',
+                            fontWeight: isSelected ? 600 : 400,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {lineHeightOptions && lineHeightOptions.length > 0 && onLineHeightChange && (
+                <div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
+                    Lines
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '4px' }}>
+                    {lineHeightOptions.map((option) => {
+                      const isSelected = option.id === lineHeight;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onLineHeightChange(option.id)}
+                          title={option.title}
+                          style={{
+                            height: '26px',
+                            padding: '0 6px',
+                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: isSelected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            border: 'none',
+                            borderRadius: '5px',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            fontWeight: isSelected ? 600 : 400,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Icon buttons group (folder, rename, delete) */}
       {(showFolder || showRename || showDelete) && !isEditing && (
@@ -387,7 +632,7 @@ export default function ContentToolbar({
         <ImmersiveToggle isFullScreen={isFullScreen} onToggle={onToggleFullScreen} />
       )}
 
-      {/* Copy-path link icon — sits to the right of the immersive toggle. */}
+      {/* Copy-path link icon — visually follows the text-style button. */}
       {onCopyPath && (
         <button
           onClick={onCopyPath}
@@ -405,6 +650,7 @@ export default function ContentToolbar({
             justifyContent: 'center',
             height: '24px',
             borderRadius: '4px',
+            order: 30,
           }}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}

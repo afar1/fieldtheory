@@ -214,6 +214,25 @@ describe('recursive wiki tree scan', () => {
     expect(entries.children.map((node) => node.name)).toEqual(['alpha', 'nested', 'zeta']);
     expect(flatten(tree)).toEqual(['entries/alpha', 'entries/nested/beta', 'entries/zeta']);
   });
+
+  it('emits wiki:changed immediately after saving a wiki page', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const filePath = path.join(root, 'entries', 'note.md');
+    fs.writeFileSync(filePath, '# Old title\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      saveWikiPage: (relPath: string, content: string) => boolean;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.saveWikiPage('entries/note', '# New title\n')).toBe(true);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+  });
 });
 
 describe('librarian watcher cleanup', () => {

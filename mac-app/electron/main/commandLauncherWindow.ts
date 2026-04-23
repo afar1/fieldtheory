@@ -33,6 +33,13 @@ export interface RunningApp {
   name: string;
 }
 
+type AnchorBounds = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
 /**
  * Check if an app is the Electron app itself (should be excluded from target apps).
  */
@@ -117,7 +124,7 @@ export class CommandLauncherWindow {
    * Fetches fresh window bounds at hotkey time (~1-5ms) for accurate positioning,
    * even when switching between windows of the same app.
    */
-  async show(): Promise<void> {
+  async show(options: { anchorBounds?: AnchorBounds | null } = {}): Promise<void> {
     // Mark as showing BEFORE any async work to close the race window.
     // This allows other code to check isShowingOrVisible() during the await.
     this._isShowing = true;
@@ -156,11 +163,12 @@ export class CommandLauncherWindow {
       let x: number;
       let y: number;
 
-      // Fetch fresh window bounds on-demand (~1-5ms).
-      // This handles switching between windows of the same app.
-      const windowBounds = await this.nativeHelper?.getFrontmostWindowBounds();
+      // Fetch fresh window bounds on-demand (~1-5ms), unless the caller
+      // already knows the Field Theory window we should anchor over.
+      const windowBounds = options.anchorBounds ?? await this.nativeHelper?.getFrontmostWindowBounds();
       appendCommandLauncherTrace('show-position-source', {
         usedWindowBounds: Boolean(windowBounds),
+        usedAnchorBounds: Boolean(options.anchorBounds),
       });
 
       if (windowBounds) {

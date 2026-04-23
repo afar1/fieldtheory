@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -45,6 +45,22 @@ describe('isSearchFocusShortcut', () => {
   it('rejects unrelated keys', () => {
     expect(isSearchFocusShortcut(mkKey({ key: 'a' }))).toBe(false);
     expect(isSearchFocusShortcut(mkKey({ key: 'f' }))).toBe(false); // no metaKey
+  });
+});
+
+describe('isImmersiveToggleShortcut', () => {
+  it('accepts Cmd+Period', () => {
+    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects Cmd+Shift+Period and unrelated modifiers', () => {
+    expect(isImmersiveToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
+    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
+  });
+
+  it('rejects bare Period', () => {
+    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
   });
 });
 
