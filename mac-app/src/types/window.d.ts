@@ -710,6 +710,37 @@ interface TodoAPI {
   onTodoDeleted?: (callback: (id: string) => void) => () => void;
 }
 
+interface TaggedDoc {
+  ulid: string;
+  path: string;
+  title: string;
+  taggedBy: string | null;
+  taggedAt: number | null;
+  frontmatterUpdatedAt: number;
+  fileHash: string;
+  readAt: number | null;
+  lastReadHash: string | null;
+  unread: boolean;
+}
+
+interface TaggedDocsScanProgress {
+  phase: 'idle' | 'scanning' | 'done' | 'error';
+  scanned: number;
+  matched: number;
+  roots: string[];
+  currentPath?: string;
+  error?: string;
+}
+
+interface TaggedDocsAPI {
+  list: () => Promise<TaggedDoc[]>;
+  markRead: (ulid: string) => Promise<TaggedDoc | null>;
+  markAllRead: () => Promise<TaggedDoc[]>;
+  rescan: () => Promise<TaggedDoc[]>;
+  onUpdated: (callback: (docs: TaggedDoc[]) => void) => () => void;
+  onScanProgress: (callback: (progress: TaggedDocsScanProgress) => void) => () => void;
+}
+
 /**
  * Auth API for OTP authentication via main process (avoids CORS).
  */
@@ -1558,6 +1589,8 @@ declare global {
 
   interface LibraryAPI {
     getRoots: () => Promise<LibraryRoot[]>;
+    getHiddenFolders: () => Promise<string[]>;
+    setFolderHidden: (folderId: string, hidden: boolean) => Promise<string[]>;
     addRoot: (dirPath: string) => Promise<LibraryRoot | null>;
     removeRoot: (dirPath: string) => Promise<boolean>;
     createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
@@ -1977,6 +2010,7 @@ declare global {
     updaterAPI?: UpdaterAPI;
     onboardingAPI?: OnboardingAPI;
     todoAPI?: TodoAPI;
+    taggedDocsAPI?: TaggedDocsAPI;
     authAPI?: AuthAPI;
     sharedClipboardAPI?: SharedClipboardAPI;
     socialAPI?: SocialAPI;

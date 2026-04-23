@@ -196,6 +196,15 @@ const TodoIPCChannels = {
   TODO_DELETED: 'todo:todoDeleted',
 } as const;
 
+const TaggedDocsIPCChannels = {
+  LIST: 'taggedDocs:list',
+  MARK_READ: 'taggedDocs:markRead',
+  MARK_ALL_READ: 'taggedDocs:markAllRead',
+  RESCAN: 'taggedDocs:rescan',
+  UPDATED: 'taggedDocs:updated',
+  SCAN_PROGRESS: 'taggedDocs:scanProgress',
+} as const;
+
 const UpdaterIPCChannels = {
   CHECK_FOR_UPDATES: 'updater:checkForUpdates',
   DOWNLOAD_UPDATE: 'updater:downloadUpdate',
@@ -636,6 +645,28 @@ type Todo = {
   completed: boolean;
   createdAt: number;    // client_created_at_ms
   updatedAt: number;    // Parsed from updated_at
+};
+
+type TaggedDoc = {
+  ulid: string;
+  path: string;
+  title: string;
+  taggedBy: string | null;
+  taggedAt: number | null;
+  frontmatterUpdatedAt: number;
+  fileHash: string;
+  readAt: number | null;
+  lastReadHash: string | null;
+  unread: boolean;
+};
+
+type TaggedDocsScanProgress = {
+  phase: 'idle' | 'scanning' | 'done' | 'error';
+  scanned: number;
+  matched: number;
+  roots: string[];
+  currentPath?: string;
+  error?: string;
 };
 
 type PermissionStatus = {
@@ -2202,6 +2233,46 @@ const todoAPI = {
 
 type TodoAPI = typeof todoAPI;
 
+const taggedDocsAPI = {
+  list: async (): Promise<TaggedDoc[]> => {
+    return ipcRenderer.invoke(TaggedDocsIPCChannels.LIST);
+  },
+
+  markRead: async (ulid: string): Promise<TaggedDoc | null> => {
+    return ipcRenderer.invoke(TaggedDocsIPCChannels.MARK_READ, ulid);
+  },
+
+  markAllRead: async (): Promise<TaggedDoc[]> => {
+    return ipcRenderer.invoke(TaggedDocsIPCChannels.MARK_ALL_READ);
+  },
+
+  rescan: async (): Promise<TaggedDoc[]> => {
+    return ipcRenderer.invoke(TaggedDocsIPCChannels.RESCAN);
+  },
+
+  onUpdated: (callback: (docs: TaggedDoc[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, docs: TaggedDoc[]) => {
+      callback(docs);
+    };
+    ipcRenderer.on(TaggedDocsIPCChannels.UPDATED, handler);
+    return () => {
+      ipcRenderer.removeListener(TaggedDocsIPCChannels.UPDATED, handler);
+    };
+  },
+
+  onScanProgress: (callback: (progress: TaggedDocsScanProgress) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: TaggedDocsScanProgress) => {
+      callback(progress);
+    };
+    ipcRenderer.on(TaggedDocsIPCChannels.SCAN_PROGRESS, handler);
+    return () => {
+      ipcRenderer.removeListener(TaggedDocsIPCChannels.SCAN_PROGRESS, handler);
+    };
+  },
+};
+
+type TaggedDocsAPI = typeof taggedDocsAPI;
+
 // =============================================================================
 // Auth API - Password authentication via main process
 // =============================================================================
@@ -3586,6 +3657,9 @@ interface LibraryRoot {
 
 const libraryAPI = {
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
+  getHiddenFolders: (): Promise<string[]> => ipcRenderer.invoke('library:getHiddenFolders'),
+  setFolderHidden: (folderId: string, hidden: boolean): Promise<string[]> =>
+    ipcRenderer.invoke('library:setFolderHidden', folderId, hidden),
   addRoot: (dirPath: string): Promise<LibraryRoot | null> => ipcRenderer.invoke('library:addRoot', dirPath),
   removeRoot: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('library:removeRoot', dirPath),
   createFile: (rootPath: string, folderRelPath: string, fileName: string): Promise<WikiPage | null> =>
@@ -3749,6 +3823,7 @@ contextBridge.exposeInMainWorld('permissionsAPI', permissionsAPI);
 contextBridge.exposeInMainWorld('onboardingAPI', onboardingAPI);
 contextBridge.exposeInMainWorld('updaterAPI', updaterAPI);
 contextBridge.exposeInMainWorld('todoAPI', todoAPI);
+contextBridge.exposeInMainWorld('taggedDocsAPI', taggedDocsAPI);
 contextBridge.exposeInMainWorld('authAPI', authAPI);
 contextBridge.exposeInMainWorld('sharedClipboardAPI', sharedClipboardAPI);
 contextBridge.exposeInMainWorld('socialAPI', socialAPI);
@@ -4133,6 +4208,7 @@ declare global {
     onboardingAPI: OnboardingAPI;
     updaterAPI: UpdaterAPI;
     todoAPI: TodoAPI;
+    taggedDocsAPI: TaggedDocsAPI;
     authAPI: AuthAPI;
     sharedClipboardAPI: SharedClipboardAPI;
     socialAPI: SocialAPI;

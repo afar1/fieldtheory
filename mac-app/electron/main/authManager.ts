@@ -15,11 +15,13 @@ import { EventEmitter } from 'events';
 import WebSocket from 'ws';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { app } from 'electron';
 import { getUserDataManager, UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 
 const log = createLogger('Auth');
+const CLI_SESSION_PATH = path.join(os.homedir(), '.fieldtheory', 'session.json');
 
 // =============================================================================
 // FileStorage - Persists session to disk for survival across app updates
@@ -254,6 +256,51 @@ export class AuthManager extends EventEmitter {
     return metadata?.callsign || null;
   }
 
+  private getDisplayNameFromSession(session: Session | null): string | undefined {
+    if (!session?.user) return undefined;
+    const metadata = session.user.user_metadata as Record<string, unknown>;
+    const displayName = metadata?.full_name || metadata?.display_name || metadata?.name;
+    return typeof displayName === 'string' && displayName.trim() ? displayName.trim() : undefined;
+  }
+
+  private writeCliSessionMirror(session: Session | null): void {
+    const userId = session?.user?.id;
+    const email = session?.user?.email;
+    if (!userId || !email) return;
+
+    const payload: {
+      user_id: string;
+      email: string;
+      display_name?: string;
+      expires_at: string;
+    } = {
+      user_id: userId,
+      email,
+      expires_at: new Date((session.expires_at ?? Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+    };
+    const displayName = this.getDisplayNameFromSession(session);
+    if (displayName) {
+      payload.display_name = displayName;
+    }
+
+    try {
+      fs.mkdirSync(path.dirname(CLI_SESSION_PATH), { recursive: true });
+      const tempPath = `${CLI_SESSION_PATH}.tmp`;
+      fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2));
+      fs.renameSync(tempPath, CLI_SESSION_PATH);
+    } catch (err) {
+      log.warn('Failed to write CLI session mirror:', err);
+    }
+  }
+
+  private clearCliSessionMirror(): void {
+    try {
+      fs.rmSync(CLI_SESSION_PATH, { force: true });
+    } catch (err) {
+      log.warn('Failed to clear CLI session mirror:', err);
+    }
+  }
+
   /**
    * Validate whether a persisted Supabase session file appears usable.
    * We require at least one auth token entry with a parseable token payload.
@@ -392,6 +439,7 @@ export class AuthManager extends EventEmitter {
           hasSession: !!session,
         }, 'warn');
         this.session = session;
+        this.writeCliSessionMirror(this.session);
         this.scheduleTokenRefresh();
         // Don't emit sessionChanged for token refresh - session user didn't change
       } else if (event === 'SIGNED_OUT') {
@@ -452,6 +500,7 @@ export class AuthManager extends EventEmitter {
       } else if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION') && isNewSession) {
         // Only emit if this is actually a new user session
         this.session = session;
+        this.writeCliSessionMirror(this.session);
         const previousUserId = this.lastEmittedUserId;
         this.lastEmittedUserId = newUserId;
 
@@ -497,6 +546,7 @@ export class AuthManager extends EventEmitter {
 
       if (data?.session) {
         this.session = data.session;
+        this.writeCliSessionMirror(this.session);
         this.hasEverAuthenticated = true;
         const userId = data.session.user?.id ?? null;
 
@@ -609,6 +659,7 @@ export class AuthManager extends EventEmitter {
                 user: currentSession.session.user.email,
               }, 'recovery');
               this.session = currentSession.session;
+              this.writeCliSessionMirror(this.session);
               this.scheduleTokenRefresh();
               return true; // Recovered!
             }
@@ -638,6 +689,7 @@ export class AuthManager extends EventEmitter {
 
       if (refreshData.session) {
         this.session = refreshData.session;
+        this.writeCliSessionMirror(this.session);
         const userId = refreshData.session.user?.id ?? null;
         const expiresAt = refreshData.session.expires_at;
         const expiresInMinutes = expiresAt ? Math.round((expiresAt * 1000 - Date.now()) / 60000) : null;
@@ -746,6 +798,7 @@ export class AuthManager extends EventEmitter {
     } else {
       this.lastFailedToken = null;
       this.session = data.session;
+      this.writeCliSessionMirror(this.session);
       this.hasEverAuthenticated = true;
       this.emit('sessionChanged', this.session);
 
@@ -877,6 +930,7 @@ export class AuthManager extends EventEmitter {
 
       if (data.session) {
         this.session = data.session;
+        this.writeCliSessionMirror(this.session);
         this.hasEverAuthenticated = true;
         log.info('Signed in for:', data.session.user?.email);
         this.emit('sessionChanged', this.session);
@@ -943,6 +997,7 @@ export class AuthManager extends EventEmitter {
 
       if (data.session) {
         this.session = data.session;
+        this.writeCliSessionMirror(this.session);
         this.hasEverAuthenticated = true;
         log.info('OTP verified for:', data.session.user?.email);
         this.emit('sessionChanged', this.session);
@@ -1056,6 +1111,7 @@ export class AuthManager extends EventEmitter {
       // Update local session with new user data
       if (data.user && this.session) {
         this.session = { ...this.session, user: data.user };
+        this.writeCliSessionMirror(this.session);
         // Emit sessionChanged so listeners (like Settings) can update
         this.emit('sessionChanged', this.session);
       }
@@ -1102,6 +1158,7 @@ export class AuthManager extends EventEmitter {
     this.session = null;
     this.lastEmittedUserId = null;
     this.lastFailedRecoveryTime = 0; // Reset cooldown for fresh login
+    this.clearCliSessionMirror();
   }
 
   async signOut(): Promise<{ error: string | null }> {
@@ -1127,6 +1184,7 @@ export class AuthManager extends EventEmitter {
       this.clearSession();
       // Explicitly clear the session file (only place this should happen)
       this.fileStorage?.clearStorage();
+      this.clearCliSessionMirror();
       this.lastFailedRecoveryTime = 0; // Reset cooldown on explicit sign out
       return { error: null };
     } catch (err) {
@@ -1170,6 +1228,7 @@ export class AuthManager extends EventEmitter {
 
       this.clearSession();
       this.fileStorage?.clearStorage();
+      this.clearCliSessionMirror();
       log.info('Account deleted');
       return { error: null };
     } catch (err) {

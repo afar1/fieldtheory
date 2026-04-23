@@ -23,6 +23,10 @@ export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEv
   return (e.key === ',' || e.code === 'Comma') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export function isSidebarToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return (e.key === '/' || e.code === 'Slash') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
 /** True when a click on the rendered markdown body should switch to edit
  *  mode. Clicks on interactive elements and clicks that terminate a text
  *  selection are excluded. */
