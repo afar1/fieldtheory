@@ -170,4 +170,53 @@ describe('PreferencesManager', () => {
     expect(reloadedSignedOutPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
     expect(reloadedSignedOutPrefs.showInDock).toBe(false);
   });
+
+  it('mirrors null hotkey tombstones to shared prefs', async () => {
+    const sharedPrefsPath = path.join(tempDir, 'preferences.json');
+    const userPrefsPath = path.join(tempDir, 'users', 'user-123', 'preferences.json');
+    await fs.mkdir(path.dirname(userPrefsPath), { recursive: true });
+    await fs.writeFile(
+      sharedPrefsPath,
+      JSON.stringify(
+        {
+          hotMicHotkey: 'F13',
+          transcriptionSecondaryHotkey: 'F14',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+    await fs.writeFile(
+      userPrefsPath,
+      JSON.stringify(
+        {
+          hotMicHotkey: null,
+          transcriptionSecondaryHotkey: null,
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const userDataManager = {
+      isLoggedIn: () => true,
+      getUserDataPath: (subpath?: string) => {
+        const userDir = path.join(tempDir, 'users', 'user-123');
+        return subpath ? path.join(userDir, subpath) : userDir;
+      },
+    };
+
+    const preferences = new PreferencesManager();
+    preferences.setUserDataManager(userDataManager as any);
+
+    const loaded = await preferences.load();
+    expect(loaded.hotMicHotkey).toBeNull();
+    expect(loaded.transcriptionSecondaryHotkey).toBeNull();
+
+    const sharedPrefs = JSON.parse(await fs.readFile(sharedPrefsPath, 'utf-8')) as Record<string, unknown>;
+    expect(sharedPrefs.hotMicHotkey).toBeNull();
+    expect(sharedPrefs.transcriptionSecondaryHotkey).toBeNull();
+  });
 });

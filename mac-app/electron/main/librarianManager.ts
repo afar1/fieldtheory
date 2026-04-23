@@ -19,10 +19,14 @@ const LIBRARIAN_INDEX_VERSION = 2;
 export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'artifacts',
   'scratchpad',
+  'Shared Markdown',
   'debates',
   'bookmarks-from-x',
   'entries',
   'concepts',
+  'categories',
+  'domains',
+  'entities',
 ] as const;
 export type LibraryDefaultFolderId = typeof DEFAULT_LIBRARY_FOLDER_IDS[number];
 const DEFAULT_LIBRARY_FOLDER_ID_SET = new Set<string>(DEFAULT_LIBRARY_FOLDER_IDS);
@@ -51,73 +55,130 @@ const DEFAULT_LIBRARIAN_RULE_CONTENT =
   buildEffectiveArtifactRuleContent(
     'Write a short reflective story (120-200 words) connecting current work to science/history.'
   );
+const DEFAULT_LIBRARY_README_HELP = `## Useful Shortcuts
+
+Invoke a portable command from any app with Command+Shift+K, type the command name, then press Enter.
+Create or edit portable commands in Field Theory's Commands tab; each one is a Markdown file in a watched commands folder such as .cursor/commands/.
+Create a scratchpad note from anywhere with Control+Option+Command+Space.
+Inside Library, use Command+N to create a page in the selected folder and Command+Shift+N to create a folder.
+Use Command+F or / to search, Command+, to switch between rendered and Markdown, and Command+S to save Markdown edits.
+`;
+
+function normalizeDefaultReadmeContent(content: string): string {
+  return content.endsWith('\n') ? content : `${content}\n`;
+}
+
+function buildDefaultReadmeWithHelp(content: string): string {
+  return `${normalizeDefaultReadmeContent(content).trimEnd()}\n\n${DEFAULT_LIBRARY_README_HELP}`;
+}
+
+function buildDefaultFolderReadme(content: string, legacyContent: string): { content: string; legacyContents: string[] } {
+  const normalizedLegacyContent = normalizeDefaultReadmeContent(legacyContent);
+  return {
+    content: buildDefaultReadmeWithHelp(content),
+    legacyContents: [
+      normalizedLegacyContent,
+      buildDefaultReadmeWithHelp(normalizedLegacyContent),
+    ],
+  };
+}
+
 const DEFAULT_FOLDER_READMES: ReadonlyArray<{
   id: LibraryReadmeFolderId;
   relPath: string;
   content: string;
+  legacyContents: string[];
 }> = [
   {
     id: 'scratchpad',
     relPath: 'scratchpad',
-    content: `# Scratchpad
+    ...buildDefaultFolderReadme(`# README: Scratchpad
 
 Drop quick notes here.
 Use this folder for rough captures before they become entries.
-`,
+`, `# Scratchpad
+
+Drop quick notes here.
+Use this folder for rough captures before they become entries.
+`),
   },
   {
     id: 'debates',
     relPath: 'debates',
-    content: `# Debates
+    ...buildDefaultFolderReadme(`# README: Debates
 
 Debates are structured notes for comparing approaches.
 Use the portable command at .cursor/commands/debate.md when you want one generated.
-`,
+`, `# Debates
+
+Debates are structured notes for comparing approaches.
+Use the portable command at .cursor/commands/debate.md when you want one generated.
+`),
   },
   {
     id: 'entries',
     relPath: 'entries',
-    content: `# Entries
+    ...buildDefaultFolderReadme(`# README: Entries
 
 Entries are durable wiki notes.
 Use portable commands from .cursor/commands/ when you want the app or an agent to create one.
-`,
+`, `# Entries
+
+Entries are durable wiki notes.
+Use portable commands from .cursor/commands/ when you want the app or an agent to create one.
+`),
   },
   {
     id: 'concepts',
     relPath: 'concepts',
-    content: `# Concepts
+    ...buildDefaultFolderReadme(`# README: Concepts
 
 Concept pages collect reusable ideas, references, and vocabulary.
 Keep them small enough to link from entries and debates.
-`,
+`, `# Concepts
+
+Concept pages collect reusable ideas, references, and vocabulary.
+Keep them small enough to link from entries and debates.
+`),
   },
   {
     id: 'categories',
     relPath: 'categories',
-    content: `# Bookmark Categories
+    ...buildDefaultFolderReadme(`# README: Bookmark Categories
 
 This folder helps power the Bookmarks from x.com view.
 It groups synced bookmarks by category.
-`,
+`, `# Bookmark Categories
+
+This folder helps power the Bookmarks from x.com view.
+It groups synced bookmarks by category.
+`),
   },
   {
     id: 'domains',
     relPath: 'domains',
-    content: `# Bookmark Domains
+    ...buildDefaultFolderReadme(`# README: Bookmark Domains
 
 This folder helps power the Bookmarks from x.com view.
 It groups synced bookmarks by source domain.
-`,
+`, `# Bookmark Domains
+
+This folder helps power the Bookmarks from x.com view.
+It groups synced bookmarks by source domain.
+`),
   },
   {
     id: 'entities',
     relPath: 'entities',
-    content: `# Bookmark Entities
+    ...buildDefaultFolderReadme(`# README: Bookmark Entities
 
 This folder helps power the Bookmarks from x.com view.
 It groups synced bookmarks by people, projects, and other named entities.
-`,
+`, `# Bookmark Entities
+
+This folder helps power the Bookmarks from x.com view.
+It groups synced bookmarks by people, projects, and other named entities.
+`),
   },
 ];
 
@@ -170,10 +231,25 @@ function tidyTomlSpacing(content: string): string {
   return trimmed ? `${trimmed}\n` : '';
 }
 
-export function normalizeHiddenDefaultFolders(value: unknown): LibraryDefaultFolderId[] {
+function normalizeHiddenLibraryFolderId(folderId: string): string | null {
+  const normalized = folderId.trim().replace(/\\/g, '/').split('/').filter(Boolean).join('/');
+  if (!normalized) return null;
+  if (normalized.split('/').some((part) => part === '.' || part === '..')) return null;
+  return normalized;
+}
+
+export function normalizeHiddenDefaultFolders(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
-  const requested = new Set(value.filter((item): item is string => typeof item === 'string'));
-  return DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => requested.has(folderId));
+  const requested = new Set(
+    value
+      .filter((item): item is string => typeof item === 'string')
+      .map(normalizeHiddenLibraryFolderId)
+      .filter((item): item is string => item !== null)
+  );
+  return [
+    ...DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => requested.has(folderId)),
+    ...[...requested].filter((folderId) => !DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)),
+  ];
 }
 
 export function normalizeSeededReadmes(value: unknown): LibraryReadmeFolderId[] {
@@ -1445,7 +1521,7 @@ export interface WatchedDir {
 interface LibrarianSettings {
   watchedDirs: string[];
   libraryRoots?: string[];
-  hiddenDefaultFolders?: LibraryDefaultFolderId[];
+  hiddenDefaultFolders?: string[];
   readmesSeeded?: LibraryReadmeFolderId[];
   enabled: boolean;                    // Single master toggle
   autoShowEnabled: boolean;
@@ -2400,15 +2476,30 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  private ensureFolderReadme(folderId: LibraryReadmeFolderId, absDir: string, content: string): boolean {
+  private ensureFolderReadme(folderId: LibraryReadmeFolderId, absDir: string, content: string, legacyContents: string[] = []): boolean {
     const seeded = normalizeSeededReadmes(this.settings.readmesSeeded);
-    if (seeded.includes(folderId)) return false;
 
     try {
-      fs.mkdirSync(absDir, { recursive: true });
       const readmePath = path.join(absDir, 'README.md');
+      if (seeded.includes(folderId)) {
+        if (legacyContents.length > 0 && fs.existsSync(readmePath)) {
+          const current = fs.readFileSync(readmePath, 'utf-8');
+          if (legacyContents.some((legacyContent) => current === normalizeDefaultReadmeContent(legacyContent))) {
+            fs.writeFileSync(readmePath, normalizeDefaultReadmeContent(content), 'utf-8');
+            return true;
+          }
+        }
+        return false;
+      }
+
+      fs.mkdirSync(absDir, { recursive: true });
       if (!fs.existsSync(readmePath)) {
-        fs.writeFileSync(readmePath, content.endsWith('\n') ? content : `${content}\n`, 'utf-8');
+        fs.writeFileSync(readmePath, normalizeDefaultReadmeContent(content), 'utf-8');
+      } else if (legacyContents.length > 0) {
+        const current = fs.readFileSync(readmePath, 'utf-8');
+        if (legacyContents.some((legacyContent) => current === normalizeDefaultReadmeContent(legacyContent))) {
+          fs.writeFileSync(readmePath, normalizeDefaultReadmeContent(content), 'utf-8');
+        }
       }
       const next = new Set([...seeded, folderId]);
       this.settings.readmesSeeded = DEFAULT_README_FOLDER_IDS.filter((id) => next.has(id));
@@ -2423,7 +2514,7 @@ export class LibrarianManager extends EventEmitter {
     let changed = false;
     for (const spec of DEFAULT_FOLDER_READMES) {
       const absDir = path.join(this.wikiDir, spec.relPath);
-      changed = this.ensureFolderReadme(spec.id, absDir, spec.content) || changed;
+      changed = this.ensureFolderReadme(spec.id, absDir, spec.content, spec.legacyContents) || changed;
     }
     if (changed) this.saveSettings();
   }
@@ -2725,6 +2816,7 @@ export class LibrarianManager extends EventEmitter {
     const root = this.resolveLibraryRootForWrite(rootPath);
     const normalizedDir = this.normalizeLibraryRelPath(dirRelPath);
     if (!root || !normalizedDir) return false;
+    if (root.builtin && DEFAULT_LIBRARY_FOLDER_ID_SET.has(normalizedDir)) return false;
 
     const dirPath = path.resolve(root.rootPath, normalizedDir);
     if (!this.isInsidePath(root.rootPath, dirPath)) return false;
@@ -2996,24 +3088,25 @@ export class LibrarianManager extends EventEmitter {
     return true;
   }
 
-  getHiddenDefaultFolders(): LibraryDefaultFolderId[] {
+  getHiddenDefaultFolders(): string[] {
     return normalizeHiddenDefaultFolders(this.settings.hiddenDefaultFolders);
   }
 
-  setDefaultFolderHidden(folderId: string, hidden: boolean): LibraryDefaultFolderId[] {
+  setDefaultFolderHidden(folderId: string, hidden: boolean): string[] {
     const current = this.getHiddenDefaultFolders();
-    if (!DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)) {
+    const normalizedFolderId = normalizeHiddenLibraryFolderId(folderId);
+    if (!normalizedFolderId) {
       return current;
     }
 
     const requested = new Set(current);
     if (hidden) {
-      requested.add(folderId as LibraryDefaultFolderId);
+      requested.add(normalizedFolderId);
     } else {
-      requested.delete(folderId as LibraryDefaultFolderId);
+      requested.delete(normalizedFolderId);
     }
 
-    const next = DEFAULT_LIBRARY_FOLDER_IDS.filter((id) => requested.has(id));
+    const next = normalizeHiddenDefaultFolders([...requested]);
     if (next.join('\0') !== current.join('\0')) {
       this.settings.hiddenDefaultFolders = next;
       this.saveSettings();

@@ -509,7 +509,7 @@ export class HotMicManager extends EventEmitter {
     hotkeyManager.unregister('hotMic');
 
     if (!hotkey) {
-      await this.preferences.save({ hotMicHotkey: undefined });
+      await this.preferences.save({ hotMicHotkey: null });
       return true;
     }
 

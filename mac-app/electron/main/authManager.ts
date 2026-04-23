@@ -530,15 +530,29 @@ export class AuthManager extends EventEmitter {
 
     try {
       // Add timeout - getSession can hang in Electron due to SDK issues with Web Locks API
+      let timedOut = false;
+      let timeout: ReturnType<typeof setTimeout> | null = null;
       const timeoutPromise = new Promise<{ data: { session: null }; error: null }>((resolve) => {
-        setTimeout(() => {
+        timeout = setTimeout(() => {
+          timedOut = true;
           log.warn('getSession timeout after 5s - continuing without session');
           resolve({ data: { session: null }, error: null });
         }, 5000);
       });
 
-      const sessionPromise = this.supabase.auth.getSession();
+      const sessionPromise = this.supabase.auth.getSession().catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        if (timedOut) {
+          log.debug('Late getSession failure after timeout:', message);
+        } else {
+          log.warn('getSession failed - continuing without session:', message);
+        }
+        return { data: { session: null }, error: null };
+      });
       const { data, error } = await Promise.race([sessionPromise, timeoutPromise]);
+      if (timeout) {
+        clearTimeout(timeout);
+      }
 
       if (error) {
         log.warn('Error getting session:', error.message);

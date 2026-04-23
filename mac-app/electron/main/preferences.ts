@@ -75,12 +75,14 @@ export function pickSavedBoundsByKey(
  */
 interface Preferences {
   transcriptionHotkey: string;
-  transcriptionSecondaryHotkey?: string;
+  transcriptionSecondaryHotkey?: string | null;
   selectedModel: ModelSize;
   windowState?: WindowState;
-  clipboardScreenshotHotkey?: string;
-  clipboardDesktopScreenshotHotkey?: string;
-  clipboardHistoryHotkey?: string;
+  clipboardScreenshotHotkey?: string | null;
+  clipboardDesktopScreenshotHotkey?: string | null;
+  clipboardFullScreenHotkey?: string | null;
+  clipboardActiveWindowHotkey?: string | null;
+  clipboardHistoryHotkey?: string | null;
   priorityDeviceId?: string | null;
   favoriteDeviceName?: string | null; // For auto-reconnect when device reappears
   clipboardHistoryBounds?: ClipboardHistoryBounds;
@@ -211,7 +213,7 @@ interface Preferences {
   hotMicDrawerTextSize?: number; // Drawer transcript text size in px
   hotMicRectangleCommands?: Record<string, string>; // Window action name → comma-separated trigger phrases
   hotMicRestartServerCommand?: string; // Terminal command to run after Ctrl+C (e.g. "npm run dev")
-  hotMicHotkey?: string; // Hotkey to toggle Hot Mic on/off (unset by default)
+  hotMicHotkey?: string | null; // Hotkey to toggle Hot Mic on/off (unset by default)
   hotMicAppAliases?: Array<{ appName: string; aliases: string }>; // Voice aliases for app switching
 
   // System voice commands — user-customizable trigger phrases
@@ -331,6 +333,8 @@ const SHARED_HOTKEY_PREFERENCE_KEYS = [
   'transcriptionSecondaryHotkey',
   'clipboardScreenshotHotkey',
   'clipboardDesktopScreenshotHotkey',
+  'clipboardFullScreenHotkey',
+  'clipboardActiveWindowHotkey',
   'clipboardHistoryHotkey',
   'continuousContextHotkey',
   'superPasteHotkey',
@@ -406,7 +410,7 @@ export class PreferencesManager {
     for (const key of SHARED_HOTKEY_PREFERENCE_KEYS) {
       const value = source[key];
       if (value !== undefined) {
-        shared[key] = value;
+        (shared as Record<string, unknown>)[key] = value;
       }
     }
 

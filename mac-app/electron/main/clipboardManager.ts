@@ -440,18 +440,18 @@ export class ClipboardManager extends EventEmitter {
   /**
    * Load hotkeys from preferences and update config.
    */
-  loadHotkeysFromPreferences(screenshotHotkey?: string, historyHotkey?: string, fullScreenHotkey?: string, activeWindowHotkey?: string): void {
-    if (screenshotHotkey) {
-      this.config.screenshotHotkey = screenshotHotkey;
+  loadHotkeysFromPreferences(screenshotHotkey?: string | null, historyHotkey?: string | null, fullScreenHotkey?: string | null, activeWindowHotkey?: string | null): void {
+    if (screenshotHotkey !== undefined) {
+      this.config.screenshotHotkey = screenshotHotkey ?? '';
     }
-    if (historyHotkey) {
-      this.config.historyHotkey = historyHotkey;
+    if (historyHotkey !== undefined) {
+      this.config.historyHotkey = historyHotkey ?? '';
     }
-    if (fullScreenHotkey) {
-      this.config.fullScreenHotkey = fullScreenHotkey;
+    if (fullScreenHotkey !== undefined) {
+      this.config.fullScreenHotkey = fullScreenHotkey ?? '';
     }
-    if (activeWindowHotkey) {
-      this.config.activeWindowHotkey = activeWindowHotkey;
+    if (activeWindowHotkey !== undefined) {
+      this.config.activeWindowHotkey = activeWindowHotkey ?? '';
     }
   }
 
@@ -1568,7 +1568,7 @@ export class ClipboardManager extends EventEmitter {
 
     const hotkey = this.config.screenshotHotkey || '';
     const result = hotkeyManager.register('screenshot', hotkey, wrappedCallback);
-    this.screenshotHotkeyRegistered = result.success;
+    this.screenshotHotkeyRegistered = result.success && !!hotkey;
 
     return result.success;
   }
@@ -1589,8 +1589,9 @@ export class ClipboardManager extends EventEmitter {
       }
     };
 
-    const result = hotkeyManager.register('fullScreenshot', this.config.fullScreenHotkey || '', wrappedCallback);
-    this.fullScreenHotkeyRegistered = result.success;
+    const hotkey = this.config.fullScreenHotkey || '';
+    const result = hotkeyManager.register('fullScreenshot', hotkey, wrappedCallback);
+    this.fullScreenHotkeyRegistered = result.success && !!hotkey;
 
     return result.success;
   }
@@ -1610,8 +1611,9 @@ export class ClipboardManager extends EventEmitter {
       }
     };
 
-    const result = hotkeyManager.register('activeWindowScreenshot', this.config.activeWindowHotkey || '', wrappedCallback);
-    this.activeWindowHotkeyRegistered = result.success;
+    const hotkey = this.config.activeWindowHotkey || '';
+    const result = hotkeyManager.register('activeWindowScreenshot', hotkey, wrappedCallback);
+    this.activeWindowHotkeyRegistered = result.success && !!hotkey;
 
     return result.success;
   }
@@ -1624,8 +1626,9 @@ export class ClipboardManager extends EventEmitter {
     this.historyCallback = callback;
 
     const hotkeyManager = getHotkeyManager();
-    const result = hotkeyManager.register('clipboardHistory', this.config.historyHotkey || '', callback);
-    this.historyHotkeyRegistered = result.success;
+    const hotkey = this.config.historyHotkey || '';
+    const result = hotkeyManager.register('clipboardHistory', hotkey, callback);
+    this.historyHotkeyRegistered = result.success && !!hotkey;
 
     return result.success;
   }

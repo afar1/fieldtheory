@@ -4,6 +4,49 @@ import { createLogger } from './logger';
 
 const log = createLogger('Quota');
 
+function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  if (error && typeof error === 'object' && 'message' in error) {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === 'string') {
+      return message;
+    }
+  }
+
+  return String(error);
+}
+
+function isNetworkError(error: unknown): boolean {
+  const cause = error && typeof error === 'object' && 'cause' in error
+    ? (error as { cause?: unknown }).cause
+    : null;
+  const details = error && typeof error === 'object' && 'details' in error
+    ? (error as { details?: unknown }).details
+    : null;
+  const code = error && typeof error === 'object' && 'code' in error
+    ? (error as { code?: unknown }).code
+    : null;
+  const text = [
+    getErrorMessage(error),
+    details,
+    code,
+    cause ? getErrorMessage(cause) : '',
+  ].join(' ').toLowerCase();
+
+  return text.includes('fetch failed') ||
+    text.includes('network') ||
+    text.includes('timeout') ||
+    text.includes('connecttimeouterror') ||
+    text.includes('und_err_connect_timeout') ||
+    text.includes('econnrefused') ||
+    text.includes('etimedout') ||
+    text.includes('enotfound') ||
+    text.includes('enetunreach');
+}
+
 // =============================================================================
 // QuotaManager - Server-backed usage tracking.
 // Server (user_usage table) is the single source of truth.
@@ -146,7 +189,11 @@ export class QuotaManager extends EventEmitter {
       this.emit('quotaChanged', this.getQuotas());
       this.emit('tierChanged', this.cache.tier);
     } catch (err) {
-      log.error('Sync error:', err);
+      if (isNetworkError(err)) {
+        log.warn('Sync skipped; network unavailable:', getErrorMessage(err));
+      } else {
+        log.error('Sync error:', err);
+      }
       // Keep using cached data if available.
     }
   }
@@ -338,13 +385,21 @@ export class QuotaManager extends EventEmitter {
         });
 
       if (error) {
-        log.error('Failed to update usage:', error);
+        if (isNetworkError(error)) {
+          log.warn('Usage update skipped; network unavailable:', getErrorMessage(error));
+        } else {
+          log.error('Failed to update usage:', error);
+        }
         // Will sync on next interval.
       } else {
         log.debug(`Updated ${feature}: +${amount} (total: ${currentValue})`);
       }
     } catch (err) {
-      log.error('Usage update error:', err);
+      if (isNetworkError(err)) {
+        log.warn('Usage update skipped; network unavailable:', getErrorMessage(err));
+      } else {
+        log.error('Usage update error:', err);
+      }
       // Offline - will sync later.
     }
   }
