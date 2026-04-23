@@ -338,6 +338,7 @@ function CommandLauncher() {
       setQuery('');
       setFiltered([]);
       setSelectedIndex(0);
+      setFieldTheoryActive(false);
       inputRef.current?.focus();
       await loadLauncherContext();
       loadCommands();
@@ -605,7 +606,8 @@ function CommandLauncher() {
 
   // Invoke the selected item.
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean } = {}) => {
-    const fieldTheoryTarget = fieldTheoryActive ? getFieldTheoryTarget(item) : null;
+    const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
+    const fieldTheoryTarget = latestContext?.fieldTheoryActive ? getFieldTheoryTarget(item) : null;
     if (fieldTheoryTarget) {
       if (options.insertWikiLink) {
         await commandsAPI.insertMarkdownText(getWikiLinkText(item));
@@ -653,7 +655,7 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose();
     }
-  }, [fieldTheoryActive, getFieldTheoryTarget, getWikiLinkText]);
+  }, [getFieldTheoryTarget, getWikiLinkText]);
 
   const hasContentBelow = filtered.length > 0 || (query.trim() !== '' && allItems.length > 0);
   // Always use dark mode styling for the launcher regardless of system theme

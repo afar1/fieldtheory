@@ -53,7 +53,7 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
   activeWindowScreenshot: {
     id: 'activeWindowScreenshot',
     defaultKey: 'Shift+Alt+3',
-    preferenceKey: null, // Not yet customizable
+    preferenceKey: 'clipboardActiveWindowHotkey',
     description: 'Take active window screenshot',
     category: 'screenshot',
   },

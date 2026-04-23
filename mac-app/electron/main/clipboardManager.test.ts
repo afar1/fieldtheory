@@ -95,6 +95,49 @@ function createManager(): any {
   return manager;
 }
 
+describe('ClipboardManager.loadHotkeysFromPreferences', () => {
+  it('treats empty strings as explicit clears', () => {
+    const manager = new ClipboardManager();
+
+    manager.loadHotkeysFromPreferences('', 'Alt+Space', '', '');
+
+    expect(manager.getHotkeys()).toMatchObject({
+      screenshot: '',
+      history: 'Alt+Space',
+      fullScreen: '',
+      activeWindow: '',
+    });
+  });
+
+  it('leaves defaults in place only when a preference is absent', () => {
+    const manager = new ClipboardManager();
+
+    manager.loadHotkeysFromPreferences(undefined, undefined, undefined, undefined);
+
+    expect(manager.getHotkeys()).toMatchObject({
+      screenshot: 'Alt+4',
+      history: 'Alt+Space',
+      fullScreen: 'Alt+3',
+      activeWindow: 'Shift+Alt+3',
+    });
+  });
+
+  it('does not mark cleared hotkeys as registered', () => {
+    const manager: any = new ClipboardManager();
+
+    manager.loadHotkeysFromPreferences('', '', '', '');
+    manager.registerScreenshotHotkey(vi.fn());
+    manager.registerFullScreenHotkey(vi.fn());
+    manager.registerActiveWindowHotkey(vi.fn());
+    manager.registerHistoryHotkey(vi.fn());
+
+    expect(manager.screenshotHotkeyRegistered).toBe(false);
+    expect(manager.fullScreenHotkeyRegistered).toBe(false);
+    expect(manager.activeWindowHotkeyRegistered).toBe(false);
+    expect(manager.historyHotkeyRegistered).toBe(false);
+  });
+});
+
 describe('ClipboardManager.checkClipboard', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let manager: any;

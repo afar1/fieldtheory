@@ -129,4 +129,20 @@ describe('NativeHelper recording command sequencing', () => {
     helper.handleMessage({ type: 'recordingStarted' });
     await expect(startPromise).resolves.toBeUndefined();
   });
+
+  it('does not ask the helper to snapshot when no recording is active', async () => {
+    const { helper, stdin } = createHelperHarness();
+
+    await expect(helper.snapshotRecording()).rejects.toThrow('No recording in progress');
+
+    expect(stdin.write).not.toHaveBeenCalled();
+  });
+
+  it('does not ask the helper to stop when no recording is active', async () => {
+    const { helper, stdin } = createHelperHarness();
+
+    await expect(helper.stopRecording()).rejects.toThrow('No recording in progress');
+
+    expect(stdin.write).not.toHaveBeenCalled();
+  });
 });

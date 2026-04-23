@@ -21,35 +21,54 @@ const InlineNameInput = forwardRef<HTMLInputElement, {
   onChange: (value: string) => void;
   onCommit: () => void;
   onCancel: () => void;
+  error?: string | null;
   placeholder?: string;
   stopClickPropagation?: boolean;
-}>(function InlineNameInput({ value, onChange, onCommit, onCancel, placeholder, stopClickPropagation }, ref) {
+}>(function InlineNameInput({ value, onChange, onCommit, onCancel, error, placeholder, stopClickPropagation }, ref) {
   const { theme } = useTheme();
   return (
-    <input
-      ref={ref}
-      type="text"
-      value={value}
-      placeholder={placeholder}
-      onChange={(e) => onChange(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
-        else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
-      }}
-      onBlur={() => onCommit()}
-      onMouseDown={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
-      onClick={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
-      style={{
-        width: '100%',
-        padding: '4px 8px',
-        fontSize: '12px',
-        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-        border: `1px solid ${theme.accent}`,
-        borderRadius: '4px',
-        color: theme.text,
-        outline: 'none',
-      }}
-    />
+    <div>
+      <input
+        ref={ref}
+        type="text"
+        value={value}
+        placeholder={placeholder}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+          else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+        }}
+        onBlur={() => onCommit()}
+        onMouseDown={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
+        onClick={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
+        aria-invalid={!!error}
+        aria-describedby={error ? 'command-name-error' : undefined}
+        style={{
+          width: '100%',
+          padding: '4px 8px',
+          fontSize: '12px',
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+          border: `1px solid ${error ? '#dc2626' : theme.accent}`,
+          borderRadius: '4px',
+          color: theme.text,
+          outline: 'none',
+        }}
+      />
+      {error && (
+        <div
+          id="command-name-error"
+          role="alert"
+          style={{
+            marginTop: '4px',
+            fontSize: '11px',
+            lineHeight: 1.3,
+            color: '#dc2626',
+          }}
+        >
+          {error}
+        </div>
+      )}
+    </div>
   );
 });
 
@@ -137,12 +156,14 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   // Inline new command input
   const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
   const [newCommandName, setNewCommandName] = useState('');
+  const [newCommandError, setNewCommandError] = useState<string | null>(null);
   const newCommandInputRef = useRef<HTMLInputElement>(null);
 
   // Inline rename input — replaces window.prompt(), which Electron silently
   // disables. `renamingPath` is the filePath currently being renamed.
   const [renamingPath, setRenamingPath] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
+  const [renameError, setRenameError] = useState<string | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // Text size
@@ -806,6 +827,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     if (!targetDir) return;
     setCreatingInDir(targetDir);
     setNewCommandName('');
+    setNewCommandError(null);
+    setTimeout(() => newCommandInputRef.current?.focus(), 50);
   }, [watchedDirs]);
 
   // Create new command in a specific directory
@@ -813,6 +836,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const startCreatingCommand = useCallback((dirPath: string) => {
     setCreatingInDir(dirPath);
     setNewCommandName('');
+    setNewCommandError(null);
     // Focus the input after render
     setTimeout(() => newCommandInputRef.current?.focus(), 50);
   }, []);
@@ -821,6 +845,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const cancelCreatingCommand = useCallback(() => {
     setCreatingInDir(null);
     setNewCommandName('');
+    setNewCommandError(null);
   }, []);
 
   // Actually create the command with the given name
@@ -830,6 +855,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       return;
     }
 
+    setNewCommandError(null);
     const initialContent = `# ${name}\n\n`;
     const result = await window.commandsAPI?.createCommand(targetDir, name.trim(), initialContent);
     if (result) {
@@ -844,7 +870,11 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       }
       cancelCreatingCommand();
     } else {
-      alert('Failed to create command. A file with that name may already exist.');
+      setNewCommandError('A command with that name already exists.');
+      setTimeout(() => {
+        newCommandInputRef.current?.focus();
+        newCommandInputRef.current?.select();
+      }, 0);
     }
   }, [cancelCreatingCommand]);
 
@@ -879,11 +909,13 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const handleRenameCommand = useCallback((filePath: string, currentName: string) => {
     setRenamingPath(filePath);
     setRenameDraft(currentName);
+    setRenameError(null);
   }, []);
 
   const cancelRename = useCallback(() => {
     setRenamingPath(null);
     setRenameDraft('');
+    setRenameError(null);
   }, []);
 
   const commitRename = useCallback(async () => {
@@ -894,6 +926,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       cancelRename();
       return;
     }
+    setRenameError(null);
     const newFilePath = await window.commandsAPI?.renameCommand(renamingPath, trimmed);
     if (newFilePath) {
       const updated = await window.commandsAPI?.getCommands();
@@ -901,10 +934,14 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         setCommands(updated);
         setSelectedPath(newFilePath);
       }
+      cancelRename();
     } else {
-      window.alert('Failed to rename command. A file with that name may already exist.');
+      setRenameError('A command with that name already exists.');
+      setTimeout(() => {
+        renameInputRef.current?.focus();
+        renameInputRef.current?.select();
+      }, 0);
     }
-    cancelRename();
   }, [renamingPath, renameDraft, commands, cancelRename]);
 
   // Autofocus the rename input when it appears.
@@ -1145,9 +1182,13 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     <InlineNameInput
                       ref={newCommandInputRef}
                       value={newCommandName}
-                      onChange={setNewCommandName}
+                      onChange={(value) => {
+                        setNewCommandName(value);
+                        setNewCommandError(null);
+                      }}
                       onCommit={() => handleCreateCommandInDir(dirPath, newCommandName)}
                       onCancel={cancelCreatingCommand}
+                      error={newCommandError}
                       placeholder="command name..."
                     />
                   </div>
@@ -1188,9 +1229,13 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                       <InlineNameInput
                         ref={renameInputRef}
                         value={renameDraft}
-                        onChange={setRenameDraft}
+                        onChange={(value) => {
+                          setRenameDraft(value);
+                          setRenameError(null);
+                        }}
                         onCommit={() => { void commitRename(); }}
                         onCancel={cancelRename}
+                        error={renameError}
                         stopClickPropagation
                       />
                     ) : (

@@ -1,51 +1,33 @@
-Please notarize the application, if necessary for this application with Apple. Bump the version number. Make sure to run the slop command. Then package always and push to GitHub and make this release. The latest version with release notes, succinct release notes that you provide and write and publish. Um, unless I specify that I want it to be a draft.
+# package
 
+Create a local experimental Field Theory Mac build for sharing with a friend.
 
-## Release files (CRITICAL - auto-updater will break without these)
+Do not create a GitHub release, upload release artifacts, push commits, open a PR, or bump the version unless the user explicitly asks for that in the same turn.
 
-The auto-updater requires ALL of these files to be uploaded to the GitHub release:
+## Before packaging
 
-### Required files checklist:
-1. `Field.Theory-X.X.X-arm64.dmg` - DMG installer (rename from "Field Theory-..." to "Field.Theory-...")
-2. `Field.Theory-X.X.X-arm64-mac.zip` - ZIP for auto-updates (rename similarly)
-3. `latest-mac.yml` - Auto-update manifest (MUST be edited before upload)
+1. Review `git status --short`. If unrelated dirty files are present, say what they are and do not include them in a commit.
+2. Run focused tests for touched areas when reasonable.
+3. Run `npm run build`.
+4. Run the refactor command if it has not already been run for the current work.
 
-### Steps for release files:
-1. **Rename files** to use periods instead of spaces:
-   ```bash
-   mv "release/Field Theory-X.X.X-arm64.dmg" "release/Field.Theory-X.X.X-arm64.dmg"
-   mv "release/Field Theory-X.X.X-arm64-mac.zip" "release/Field.Theory-X.X.X-arm64-mac.zip"
-   ```
+## Build
 
-2. **Edit `latest-mac.yml`** - Change all `Field-Theory-` to `Field.Theory-` in the URLs:
-   - `url: Field.Theory-X.X.X-arm64-mac.zip` (not Field-Theory-)
-   - `url: Field.Theory-X.X.X-arm64.dmg` (not Field-Theory-)
-   - `path: Field.Theory-X.X.X-arm64-mac.zip` (not Field-Theory-)
+Run `npm run package:experimental`.
 
-3. **Upload ALL three files** to the GitHub release:
-   ```bash
-   gh release upload vX.X.X --repo afar1/field-releases \
-     "release/Field.Theory-X.X.X-arm64.dmg" \
-     "release/Field.Theory-X.X.X-arm64-mac.zip" \
-     "release/latest-mac.yml"
-   ```
+This uses `electron-builder.experimental.json`, creates a separate app id (`com.fieldtheory.experimental`), product name (`Field Theory Experimental`), and writes artifacts to `release-experimental/`.
 
-**Why this matters:** The auto-updater downloads `latest-mac.yml` first, then uses the URLs inside to download the update. If the yml is missing or has wrong filenames, updates will fail with a 404 error.
+## Share
 
-This application manages its releases in the field-releases repo.
+Give the user the paths to the generated `.dmg` and `.zip` files in `release-experimental/`.
 
-You can find the credentials necessary for notarization and GitHub in my .env.local file in the root directory.
+Tell them this is an experimental local build, not an official release. The friend may need to right-click Open the app or approve macOS permissions because this path does not publish a GitHub release or update channel.
 
-You make this mistake a lot by the way "⏺ I see - the variable is named
-  APPLE_APP_SPECIFIC_PASSWORD, not APPLE_ID_PASSWORD.
-  Let me use the correct variable names."
+## Never do in this command
 
-## In-app release notes
-
-**Important:** Update `src/components/ReleaseNotesPopup.tsx` with release notes for each version. Add an entry to both:
-- `RELEASE_NOTES` - array of 1-4 bullet points describing what's new
-- `RELEASE_DATES` - the release date in format 'Jan 15 2026'
-
-This shows the "What's new" popup to users after they update. If you skip this, users won't see any release notes in the app.
-
-**Before packaging:** Draft the release notes and confirm them with me before building. I may want to make changes to the wording or add/remove items.
+- Do not run `gh release create`, `gh release upload`, or any GitHub release command.
+- Do not run `git push`.
+- Do not create a PR.
+- Do not publish update manifests.
+- Do not edit `latest-mac.yml` for this local friend build.
+- Do not bump `package.json` version unless the user explicitly asks.

@@ -397,6 +397,10 @@ export class NativeHelper extends EventEmitter {
   async stopRecording(): Promise<string> {
     return this.enqueueRecordingCommand('stopRecording', async () => {
       await this.waitForReady();
+      if (!this.recordingActive) {
+        this.markRecordingReleased();
+        throw new Error('No recording in progress');
+      }
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           cleanup();
@@ -437,6 +441,10 @@ export class NativeHelper extends EventEmitter {
   async snapshotRecording(): Promise<string> {
     return this.enqueueRecordingCommand('snapshotRecording', async () => {
       await this.waitForReady();
+      if (!this.recordingActive) {
+        this.markRecordingReleased();
+        throw new Error('No recording in progress');
+      }
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           cleanup();
@@ -470,6 +478,10 @@ export class NativeHelper extends EventEmitter {
   async cancelRecording(): Promise<void> {
     return this.enqueueRecordingCommand('cancelRecording', async () => {
       await this.waitForReady();
+      if (!this.recordingActive) {
+        this.markRecordingReleased();
+        return;
+      }
       return new Promise((resolve, reject) => {
         const timeout = setTimeout(() => {
           cleanup();
