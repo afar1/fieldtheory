@@ -9,6 +9,7 @@ export const ClipboardIPCChannels = {
   RESTORE_ITEM: 'clipboard:restoreItem',
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
+  GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',

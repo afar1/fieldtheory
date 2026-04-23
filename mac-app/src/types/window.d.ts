@@ -444,6 +444,7 @@ interface ClipboardAPI {
 
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  getClipboardImagePath?: () => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
@@ -1120,6 +1121,11 @@ interface HandoffInfo {
   lastModified: number;
 }
 
+interface FieldTheoryMarkdownTarget {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
+}
+
 /**
  * Commands API for managing portable commands (markdown files).
  * Allows users to bring their commands from other tools like Claude, Cursor, etc.
@@ -1156,6 +1162,10 @@ interface CommandsAPI {
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
   onLauncherReset?: (callback: () => void) => () => void;
+  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
+  openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
+  insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
+  onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
 
   // Mobile sync operations
   setMobileSync: (dirPath: string, enabled: boolean) => Promise<boolean>;
@@ -1438,6 +1448,8 @@ interface LibrarianAPI {
   initializeProjectStatus: (projectPath: string) => Promise<void>;
   onNewReadingAvailable: (callback: (readingPath: string) => void) => () => void;
   onShowNewReading: (callback: (readingPath: string) => void) => () => void;
+  setMarkdownEditorFocused: (focused: boolean) => void;
+  onInsertMarkdownText: (callback: (text: string) => void) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
   setImmersiveDismissable: (dismissable: boolean) => void;
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw') => void;

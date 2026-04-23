@@ -102,6 +102,8 @@ const ClipboardIPCChannels = {
   RESTORE_ITEM: 'clipboard:restoreItem',
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
+  GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
   PASTE_ITEM: 'clipboard:pasteItem',
@@ -144,7 +146,6 @@ const ClipboardIPCChannels = {
   START_CONTINUOUS_CONTEXT: 'clipboard:startContinuousContext',
   STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
   CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
-  SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:getHideScreenRecordingBanner',
   SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
   GET_CURSOR_STATUS_ENABLED: 'clipboard:getCursorStatusEnabled',
@@ -773,6 +774,7 @@ export interface ClipboardAPI {
   restoreItem: (item: ClipboardItem) => Promise<number>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  getClipboardImagePath: () => Promise<string | null>;
   saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
@@ -1406,6 +1408,10 @@ const clipboardAPI: ClipboardAPI = {
 
   captureScreenshot: async (region?: boolean): Promise<number> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CAPTURE_SCREENSHOT, region);
+  },
+
+  getClipboardImagePath: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH);
   },
 
   saveSketch: async (imageData: string, width: number, height: number): Promise<number> => {
@@ -2753,6 +2759,11 @@ type HandoffInfo = {
   lastModified: number;
 };
 
+type FieldTheoryMarkdownTarget = {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
+};
+
 const commandsAPI = {
   // Get the currently configured commands directory.
   getDirectory: async (): Promise<string | null> => {
@@ -2949,6 +2960,24 @@ const commandsAPI = {
   invokeHandoff: async (filePath: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:invokeHandoff', filePath);
   },
+
+  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean }> => {
+    return ipcRenderer.invoke('commands:getLauncherContext');
+  },
+
+  openFieldTheoryMarkdown: async (target: FieldTheoryMarkdownTarget): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:openFieldTheoryMarkdown', target);
+  },
+
+  insertMarkdownText: async (text: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:insertMarkdownText', text);
+  },
+
+  onOpenMarkdownFromLauncher: (callback: (target: FieldTheoryMarkdownTarget) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, target: FieldTheoryMarkdownTarget) => callback(target);
+    ipcRenderer.on('commands:openMarkdownFromLauncher', handler);
+    return () => ipcRenderer.removeListener('commands:openMarkdownFromLauncher', handler);
+  },
 };
 
 type CommandsAPI = typeof commandsAPI;
@@ -3090,6 +3119,16 @@ const librarianAPI = {
     const handler = (_event: Electron.IpcRendererEvent, readingPath: string) => callback(readingPath);
     ipcRenderer.on('librarian:showNewReading', handler);
     return () => ipcRenderer.removeListener('librarian:showNewReading', handler);
+  },
+
+  setMarkdownEditorFocused: (focused: boolean): void => {
+    ipcRenderer.send('librarian:setMarkdownEditorFocused', focused);
+  },
+
+  onInsertMarkdownText: (callback: (text: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, text: string) => callback(text);
+    ipcRenderer.on('librarian:insertMarkdownText', handler);
+    return () => ipcRenderer.removeListener('librarian:insertMarkdownText', handler);
   },
 
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)

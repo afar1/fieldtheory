@@ -52,6 +52,7 @@ interface LauncherItem {
   hotkeyDisplay?: string;
   // For commands, handoffs, wiki pages, and artifacts
   filePath?: string;
+  relPath?: string;
   // For actions
   actionId?: string;
   // For handoffs - relative time display
@@ -60,6 +61,7 @@ interface LauncherItem {
 
 const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
 type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
+type FieldTheoryMarkdownTarget = { kind: 'wiki' | 'artifact' | 'command'; path: string };
 
 let WIKI_COMMAND_PATH: string | null = null;
 try { WIKI_COMMAND_PATH = `${process.env.HOME}/.fieldtheory/commands/wiki.md`; } catch {}
@@ -72,6 +74,9 @@ interface LauncherCommandsAPI {
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
+  openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
+  insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
   launcherClose: () => void;
   onLauncherReset: (callback: () => void) => () => void;
@@ -215,6 +220,7 @@ function CommandLauncher() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [wikiPages, setWikiPages] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
+  const [fieldTheoryActive, setFieldTheoryActive] = useState(false);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -244,6 +250,7 @@ function CommandLauncher() {
           displayName: page.title,
           keywords: [page.name, page.title, page.relPath, ...page.name.split('-')],
           filePath: page.absPath,
+          relPath: page.relPath,
         }))
       ));
     } catch {}
@@ -272,6 +279,15 @@ function CommandLauncher() {
       setHandoffs(hoffs || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load handoffs:', err);
+    }
+  }, []);
+
+  const loadLauncherContext = useCallback(async () => {
+    try {
+      const context = await commandsAPI.getLauncherContext();
+      setFieldTheoryActive(Boolean(context?.fieldTheoryActive));
+    } catch {
+      setFieldTheoryActive(false);
     }
   }, []);
 
@@ -310,6 +326,7 @@ function CommandLauncher() {
 
     loadCommands();
     loadHandoffs();
+    loadLauncherContext();
     loadHotkeys();
 
     // Load current theme
@@ -322,6 +339,7 @@ function CommandLauncher() {
       setFiltered([]);
       setSelectedIndex(0);
       inputRef.current?.focus();
+      await loadLauncherContext();
       loadCommands();
       loadHandoffs();
       loadWikiPages();
@@ -341,7 +359,7 @@ function CommandLauncher() {
       unsubscribe();
       unsubscribeSquaresConfig?.();
     };
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadWikiPages, loadArtifacts]);
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadWikiPages, loadArtifacts, loadLauncherContext]);
 
   // Build all items (commands + actions + handoffs).
   const allItems = useMemo(() => {
@@ -366,8 +384,9 @@ function CommandLauncher() {
 
     const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher);
 
-    return [...commandItems, ...handoffItems, ...actionItems];
-  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode]);
+    const markdownItems = fieldTheoryActive ? [...wikiPages, ...artifactReadings] : [];
+    return [...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, fieldTheoryActive, wikiPages, artifactReadings]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -498,7 +517,7 @@ function CommandLauncher() {
       ? Math.min(matches.length * itemHeight + padding, 280)
       : emptyStateHeight;
     commandsAPI.launcherResize(inputHeight + listHeight);
-  }, [query, allItems, isHelpQuery]);
+  }, [query, allItems, isHelpQuery, wikiPages, artifactReadings]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -537,6 +556,24 @@ function CommandLauncher() {
     // Otherwise, item is visible - don't scroll.
   }, [selectedIndex, filtered.length]);
 
+  const getFieldTheoryTarget = useCallback((item: LauncherItem): FieldTheoryMarkdownTarget | null => {
+    if (item.type === 'wiki-page' && item.relPath) {
+      return { kind: 'wiki', path: item.relPath };
+    }
+    if (item.type === 'artifact' && item.filePath) {
+      return { kind: 'artifact', path: item.filePath };
+    }
+    if (item.type === 'command' && item.filePath) {
+      return { kind: 'command', path: item.filePath };
+    }
+    return null;
+  }, []);
+
+  const getWikiLinkText = useCallback((item: LauncherItem): string => {
+    const target = (item.type === 'command' ? item.name : item.displayName).trim();
+    return `[[${target.replace(/\]/g, '\\]')}]]`;
+  }, []);
+
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -561,13 +598,23 @@ function CommandLauncher() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
-        invokeItem(filtered[selectedIndex]);
+        invokeItem(filtered[selectedIndex], { insertWikiLink: e.metaKey });
       }
     }
   };
 
   // Invoke the selected item.
-  const invokeItem = useCallback(async (item: LauncherItem) => {
+  const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean } = {}) => {
+    const fieldTheoryTarget = fieldTheoryActive ? getFieldTheoryTarget(item) : null;
+    if (fieldTheoryTarget) {
+      if (options.insertWikiLink) {
+        await commandsAPI.insertMarkdownText(getWikiLinkText(item));
+      } else {
+        await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
+      }
+      return;
+    }
+
     if (item.type === 'command') {
       await commandsAPI.invokeCommand(item.name);
       commandsAPI.launcherClose();
@@ -606,7 +653,7 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose();
     }
-  }, []);
+  }, [fieldTheoryActive, getFieldTheoryTarget, getWikiLinkText]);
 
   const hasContentBelow = filtered.length > 0 || (query.trim() !== '' && allItems.length > 0);
   // Always use dark mode styling for the launcher regardless of system theme

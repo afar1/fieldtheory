@@ -15,6 +15,10 @@ export function isSearchFocusShortcut(e: KeyboardEvent | React.KeyboardEvent): b
   return false;
 }
 
+export function isImmersiveToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
 /** True when a click on the rendered markdown body should switch to edit
  *  mode. Clicks on interactive elements and clicks that terminate a text
  *  selection are excluded. */

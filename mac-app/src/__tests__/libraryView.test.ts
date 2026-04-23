@@ -1,9 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
+  editorSessionMatchesSelection,
+  extractMarkdownH1Title,
   formatBreadcrumb,
+  getMarkdownEditorEdgeFades,
   getScrollRatio,
+  getScrollTopForCaretVisibility,
   getScrollTopForRatio,
+  moveLibrarianNavigationHistory,
+  persistLibrarianEditorSession,
   persistLibrarianSelection,
+  preserveMarkdownBlankLines,
+  pushLibrarianNavigationEntry,
+  replaceLibrarianNavigationEntry,
+  restoreLibrarianEditorSession,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   splitFrontmatter,
@@ -14,6 +24,7 @@ import {
   filterStaleRecent,
   filterUnifiedFolders,
   splitRecent,
+  sortSidebarNodes,
   virtualizeBookmarksGroup,
   type LibrarySidebarNode,
 } from '../components/WikiSidebar';
@@ -64,6 +75,146 @@ Body text here.`;
   });
 });
 
+describe('extractMarkdownH1Title', () => {
+  it('uses the first H1 title from markdown content', () => {
+    expect(extractMarkdownH1Title('# New Title\n\nBody', 'Old Title')).toBe('New Title');
+  });
+
+  it('falls back when no H1 exists', () => {
+    expect(extractMarkdownH1Title('## H2 only\n\nBody', 'Old Title')).toBe('Old Title');
+  });
+});
+
+describe('preserveMarkdownBlankLines', () => {
+  it('turns empty source lines into rendered blank-line markers', () => {
+    expect(preserveMarkdownBlankLines('First\n\nSecond')).toBe('First\n\n\u00A0\n\nSecond');
+  });
+
+  it('leaves fenced code block spacing alone', () => {
+    expect(preserveMarkdownBlankLines('Before\n\n```\na\n\nb\n```\n\nAfter')).toBe(
+      'Before\n\n\u00A0\n\n```\na\n\nb\n```\n\n\u00A0\n\nAfter',
+    );
+  });
+});
+
+describe('librarian editor session helpers', () => {
+  it('round-trips markdown editor session state', () => {
+    const storage = new Map<string, string>();
+    const fakeStorage = {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => storage.set(key, value),
+    };
+
+    persistLibrarianEditorSession(fakeStorage, {
+      itemType: 'wiki',
+      itemPath: 'entries/note',
+      contentMode: 'markdown',
+      selectionStart: 12,
+      selectionEnd: 18,
+      scrollTop: 220,
+    });
+
+    expect(restoreLibrarianEditorSession(fakeStorage)).toEqual({
+      itemType: 'wiki',
+      itemPath: 'entries/note',
+      contentMode: 'markdown',
+      selectionStart: 12,
+      selectionEnd: 18,
+      scrollTop: 220,
+    });
+  });
+
+  it('matches restored editor session to the selected wiki page', () => {
+    expect(editorSessionMatchesSelection(
+      {
+        itemType: 'wiki',
+        itemPath: 'entries/note',
+        contentMode: 'markdown',
+        selectionStart: 0,
+        selectionEnd: 0,
+        scrollTop: 0,
+      },
+      { type: 'wiki', relPath: 'entries/note' },
+    )).toBe(true);
+  });
+});
+
+describe('librarian navigation history helpers', () => {
+  it('pushes file navigation entries and ignores consecutive duplicates', () => {
+    let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' });
+    history = pushLibrarianNavigationEntry(history, { itemType: 'wiki', itemPath: 'entries/a' });
+
+    expect(history).toEqual({
+      entries: [{ itemType: 'wiki', itemPath: 'entries/a' }],
+      index: 0,
+    });
+  });
+
+  it('clears forward history when a new file is opened after going back', () => {
+    let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' });
+    history = pushLibrarianNavigationEntry(history, { itemType: 'artifact', itemPath: '/tmp/b.md' });
+    const back = moveLibrarianNavigationHistory(history, -1);
+    expect(back?.entry).toEqual({ itemType: 'wiki', itemPath: 'entries/a' });
+
+    const next = pushLibrarianNavigationEntry(back!.history, { itemType: 'external', itemPath: '/tmp/c.md' });
+    expect(next).toEqual({
+      entries: [
+        { itemType: 'wiki', itemPath: 'entries/a' },
+        { itemType: 'external', itemPath: '/tmp/c.md' },
+      ],
+      index: 1,
+    });
+  });
+
+  it('moves back and forward without changing the entry list', () => {
+    let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' });
+    history = pushLibrarianNavigationEntry(history, { itemType: 'wiki', itemPath: 'entries/b' });
+
+    const back = moveLibrarianNavigationHistory(history, -1);
+    const forward = moveLibrarianNavigationHistory(back!.history, 1);
+
+    expect(back?.entry).toEqual({ itemType: 'wiki', itemPath: 'entries/a' });
+    expect(forward?.entry).toEqual({ itemType: 'wiki', itemPath: 'entries/b' });
+    expect(forward?.history.entries).toBe(history.entries);
+  });
+
+  it('caps history to the requested limit', () => {
+    let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' }, 2);
+    history = pushLibrarianNavigationEntry(history, { itemType: 'wiki', itemPath: 'entries/b' }, 2);
+    history = pushLibrarianNavigationEntry(history, { itemType: 'wiki', itemPath: 'entries/c' }, 2);
+
+    expect(history).toEqual({
+      entries: [
+        { itemType: 'wiki', itemPath: 'entries/b' },
+        { itemType: 'wiki', itemPath: 'entries/c' },
+      ],
+      index: 1,
+    });
+  });
+
+  it('replaces a renamed wiki entry without adding a new history item', () => {
+    const history = {
+      entries: [
+        { itemType: 'wiki' as const, itemPath: 'entries/old-title' },
+        { itemType: 'artifact' as const, itemPath: '/tmp/artifact.md' },
+      ],
+      index: 0,
+    };
+
+    expect(replaceLibrarianNavigationEntry(
+      history,
+      { itemType: 'wiki', itemPath: 'entries/old-title' },
+      { itemType: 'wiki', itemPath: 'entries/new-title' },
+    )).toEqual({
+      entries: [
+        { itemType: 'wiki', itemPath: 'entries/new-title' },
+        { itemType: 'artifact', itemPath: '/tmp/artifact.md' },
+      ],
+      index: 0,
+    });
+  });
+});
+
 describe('document scroll helpers', () => {
   it('captures the current scroll as a stable ratio', () => {
     expect(getScrollRatio(150, 1000, 500)).toBe(0.3);
@@ -82,6 +233,36 @@ describe('document scroll helpers', () => {
   it('returns the top when the document does not overflow', () => {
     expect(getScrollRatio(30, 400, 500)).toBe(0);
     expect(getScrollTopForRatio(400, 500, 0.5)).toBe(0);
+  });
+
+  it('keeps scroll position when the caret has enough room below it', () => {
+    expect(getScrollTopForCaretVisibility(200, 1200, 500, 520, 24, 96)).toBe(200);
+  });
+
+  it('scrolls down enough to leave room below the caret', () => {
+    expect(getScrollTopForCaretVisibility(200, 1200, 500, 640, 24, 96)).toBe(260);
+  });
+
+  it('clamps caret visibility scrolling to the document end', () => {
+    expect(getScrollTopForCaretVisibility(650, 1000, 400, 960, 24, 96)).toBe(600);
+  });
+});
+
+describe('markdown editor edge fades', () => {
+  it('hides both fades when the editor does not overflow', () => {
+    expect(getMarkdownEditorEdgeFades(0, 400, 500)).toEqual({ top: false, bottom: false });
+  });
+
+  it('shows only the bottom fade at the top of overflowing content', () => {
+    expect(getMarkdownEditorEdgeFades(0, 1000, 500)).toEqual({ top: false, bottom: true });
+  });
+
+  it('shows both fades in the middle of overflowing content', () => {
+    expect(getMarkdownEditorEdgeFades(250, 1000, 500)).toEqual({ top: true, bottom: true });
+  });
+
+  it('shows only the top fade at the bottom of overflowing content', () => {
+    expect(getMarkdownEditorEdgeFades(500, 1000, 500)).toEqual({ top: true, bottom: false });
   });
 });
 
@@ -233,6 +414,32 @@ describe('recursive sidebar tree helpers', () => {
     builtin: true,
     canCreateFile: true,
     children,
+  });
+  const file = (title: string, timestamp: number): LibrarySidebarNode => ({
+    kind: 'file',
+    id: `wiki:${title}`,
+    item: {
+      id: `wiki:${title}`,
+      title,
+      type: 'wiki',
+      absPath: `/wiki/${title}.md`,
+      relPath: title,
+      timestamp,
+    },
+  });
+
+  it('sorts date mode with newest file timestamps first', () => {
+    const result = sortSidebarNodes([
+      file('Old', 10),
+      file('Newest', 30),
+      file('Middle', 20),
+    ], 'time');
+
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Newest',
+      'Middle',
+      'Old',
+    ]);
   });
 
   it('groups bookmark folders under a synthetic bookmarks directory', () => {

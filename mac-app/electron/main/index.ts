@@ -8,10 +8,11 @@ import { createLogger } from './logger';
 import crypto from 'crypto';
 import { parseEnvContent } from './envUtils';
 import { NativeHelper } from './nativeHelper';
+import { isAlfredApp } from './alfredVisibility';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager, pickSavedBoundsByKey } from './preferences';
+import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistorySizeKey } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -270,6 +271,21 @@ let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
+let librarianMarkdownEditorFocused = false;
+
+function hideFieldTheoryForAlfred(): void {
+  commandLauncherWindow?.hide(true);
+
+  if (clipboardHistoryWindow?.isShowing() || clipboardHistoryWindow?.isVisible()) {
+    clipboardHistoryWindow.hide(false, 'alfred-activated');
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    mainWindow.hide();
+  }
+
+  app.hide();
+}
 
 /**
  * Check if the configured transcription engine is ready.
@@ -781,6 +797,14 @@ function registerHotkeysAfterOnboarding(): void {
         return;
       }
 
+      if (librarianMarkdownEditorFocused && clipboardHistoryWindow?.isVisible()) {
+        const imagePath = await clipboardManager.exportCurrentClipboardImageToCache();
+        if (imagePath) {
+          clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', imagePath);
+          return;
+        }
+      }
+
       // Get most recent item from clipboard history
       const db = clipboardManager['db'];
       if (!db) return;
@@ -954,12 +978,14 @@ function registerHotkeysAfterOnboarding(): void {
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
       const launcherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
       const immersiveMode = clipboardHistoryWindow?.getImmersiveMode() ?? false;
+      const fieldTheoryFocused = clipboardHistoryWindow?.getWindow()?.isFocused() ?? false;
 
       appendCommandLauncherTrace('hotkey-trigger', {
         hotkey: commandLauncherHotkey,
         launcherVisible,
         launcherShowingOrVisible,
         immersiveMode,
+        fieldTheoryFocused,
       });
 
       try {
@@ -974,14 +1000,22 @@ function registerHotkeysAfterOnboarding(): void {
           return;
         }
 
-        // If immersive view is open, dismiss it first to avoid z-order conflicts
-        if (immersiveMode) {
+        // If immersive view is open behind another app, dismiss it first to avoid
+        // z-order conflicts. Keep it in place when Field Theory is the active
+        // writing surface so launcher selection can navigate inside the app.
+        if (immersiveMode && !fieldTheoryFocused) {
           appendCommandLauncherTrace('hotkey-hide-immersive-window');
           clipboardHistoryWindow?.hide();
         }
 
-        appendCommandLauncherTrace('hotkey-show-request');
-        await commandLauncherWindow.show();
+        const anchorBounds = fieldTheoryFocused
+          ? clipboardHistoryWindow?.getBounds()
+          : null;
+
+        appendCommandLauncherTrace('hotkey-show-request', {
+          anchor: anchorBounds ? 'field-theory-window' : 'frontmost-window',
+        });
+        await commandLauncherWindow.show({ anchorBounds });
         appendCommandLauncherTrace('hotkey-show-complete', {
           launcherVisible: commandLauncherWindow.isVisible(),
           launcherShowingOrVisible: commandLauncherWindow.isShowingOrVisible(),
@@ -1001,7 +1035,7 @@ function registerHotkeysAfterOnboarding(): void {
     if (!librarianManager) return;
     const page = librarianManager.createScratchpadDefault();
     if (!page || !clipboardHistoryWindow) return;
-    const boundsToUse = restoreClipboardHistoryBounds();
+    const boundsToUse = restoreClipboardHistoryBounds('library');
     suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
     clipboardHistoryWindow.show(boundsToUse);
     clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', page.relPath);
@@ -1201,7 +1235,7 @@ function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: El
     displayMetricsDebounceTimer = null;
     if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) return;
 
-    const boundsToUse = restoreClipboardHistoryBounds();
+    const boundsToUse = restoreClipboardHistoryBounds(clipboardHistoryWindow.getCurrentSizeKey());
     if (boundsToUse) {
       clipboardHistoryWindow.reposition(boundsToUse);
     }
@@ -1221,14 +1255,21 @@ function setupDisplayListeners(): void {
  * Handles both old format (absolute x, y) and new format (display-relative).
  * Returns absolute screen coordinates for use with the native vibrancy window.
  */
-function restoreClipboardHistoryBounds(): { x: number; y: number; width: number; height: number } | undefined {
+function isClipboardHistorySizeKey(value: unknown): value is ClipboardHistorySizeKey {
+  return value === 'fields' || value === 'library' || value === 'canvas' || value === 'draw';
+}
+
+function getLastClipboardHistorySizeKey(): ClipboardHistorySizeKey {
+  const savedKey = preferencesManager?.get().clipboardHistoryLastSizeKey;
+  return isClipboardHistorySizeKey(savedKey) ? savedKey : 'fields';
+}
+
+function restoreClipboardHistoryBounds(sizeKey: ClipboardHistorySizeKey = getLastClipboardHistorySizeKey()): { x: number; y: number; width: number; height: number } | undefined {
   if (!preferencesManager) {
     return undefined;
   }
 
-  // Initial restore always starts in 'fields' view; other views' bounds are
-  // applied later via setSizeKey when the renderer reports its active view.
-  const savedBounds = pickSavedBoundsByKey(preferencesManager.get(), 'fields');
+  const savedBounds = pickSavedBoundsByKey(preferencesManager.get(), sizeKey);
   if (!savedBounds) {
     return undefined;
   }
@@ -1278,6 +1319,33 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
   return undefined;
 }
 
+async function saveClipboardHistoryBoundsForKey(
+  bounds: { x: number; y: number; width: number; height: number },
+  key: ClipboardHistorySizeKey
+): Promise<void> {
+  if (!preferencesManager) return;
+
+  const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+  const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
+
+  const entry = {
+    relativeX: displayRelative.relativeX,
+    relativeY: displayRelative.relativeY,
+    width: bounds.width,
+    height: bounds.height,
+    displayId: displayRelative.displayId,
+    displayConfig,
+  };
+
+  const prefs = preferencesManager.get();
+  const existing = prefs?.clipboardHistoryBoundsByView ?? {};
+  await preferencesManager.save({
+    clipboardHistoryBoundsByView: { ...existing, [key]: entry },
+    clipboardHistoryLastSizeKey: key,
+    ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
+  });
+}
+
 /**
  * Initialize clipboard history window with bounds change callback.
  */
@@ -1301,29 +1369,7 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   // Set up callback to save bounds when window is moved/resized.
   // Bounds are persisted per size-key so each view remembers its own dims.
   window.setOnBoundsChanged(async (bounds) => {
-    if (!preferencesManager) return;
-
-    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-    const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
-    const key = window.getCurrentSizeKey();
-
-    const entry = {
-      relativeX: displayRelative.relativeX,
-      relativeY: displayRelative.relativeY,
-      width: bounds.width,
-      height: bounds.height,
-      displayId: displayRelative.displayId,
-      displayConfig,
-    };
-
-    const prefs = preferencesManager.get();
-    const existing = prefs?.clipboardHistoryBoundsByView ?? {};
-    await preferencesManager.save({
-      clipboardHistoryBoundsByView: { ...existing, [key]: entry },
-      // Also mirror into legacy single-bounds field for 'fields' so older
-      // builds (and code paths that still read it) keep working.
-      ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
-    });
+    await saveClipboardHistoryBoundsForKey(bounds, window.getCurrentSizeKey());
   });
 
   window.setOnHidden(({ reason }) => {
@@ -1367,7 +1413,7 @@ function showSettingsInClipboardWindow(): void {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
 
-  const boundsToUse = restoreClipboardHistoryBounds();
+  const boundsToUse = restoreClipboardHistoryBounds('fields');
   suspendDynamicIslandFocusForClipboardHistory('show-settings');
   clipboardHistoryWindow.show(boundsToUse, true);
 }
@@ -1421,7 +1467,7 @@ function routeOpenMarkdown(inputPath: string): void {
     pendingOpenMarkdownPath = inputPath;
     return;
   }
-  const boundsToUse = restoreClipboardHistoryBounds();
+  const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-reading');
   clipboardHistoryWindow.show(boundsToUse);
   const webContents = clipboardHistoryWindow.getWindow()?.webContents;
@@ -1760,6 +1806,10 @@ function setupLibrarianIPCHandlers(): void {
     }
 
     return result.filePaths[0];
+  });
+
+  ipcMain.on('librarian:setMarkdownEditorFocused', (_event, focused: boolean) => {
+    librarianMarkdownEditorFocused = Boolean(focused);
   });
 
   // ===========================================================================
@@ -3163,6 +3213,13 @@ function setupClipboardIPCHandlers(): void {
     return id;
   });
 
+  ipcMain.handle(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH, async (): Promise<string | null> => {
+    if (!clipboardManager) {
+      return null;
+    }
+    return clipboardManager.exportCurrentClipboardImageToCache();
+  });
+
   ipcMain.handle(ClipboardIPCChannels.SAVE_SKETCH, async (_event, imageData: string, width: number, height: number) => {
     if (!clipboardManager) {
       return -1;
@@ -3682,27 +3739,8 @@ function setupClipboardIPCHandlers(): void {
   // Called on window hide or explicit save. Persists under the currently-
   // active size key so each view remembers its own dims.
   ipcMain.handle(ClipboardIPCChannels.SAVE_BOUNDS, async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-    if (!preferencesManager) return;
-
-    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-    const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
     const key = clipboardHistoryWindow?.getCurrentSizeKey() ?? 'fields';
-
-    const entry = {
-      relativeX: displayRelative.relativeX,
-      relativeY: displayRelative.relativeY,
-      width: bounds.width,
-      height: bounds.height,
-      displayId: displayRelative.displayId,
-      displayConfig,
-    };
-
-    const prefs = preferencesManager.get();
-    const existing = prefs?.clipboardHistoryBoundsByView ?? {};
-    await preferencesManager.save({
-      clipboardHistoryBoundsByView: { ...existing, [key]: entry },
-      ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
-    });
+    await saveClipboardHistoryBoundsForKey(bounds, key);
   });
 
   // Target app management handlers.
@@ -3801,7 +3839,7 @@ function setupClipboardIPCHandlers(): void {
   // canvas, draw). Main animates to the saved bounds for that profile and
   // subsequent user resizes persist under that key.
   ipcMain.on('clipboard-history:setSizeKey', (_event, key: string) => {
-    if (key !== 'fields' && key !== 'library' && key !== 'canvas' && key !== 'draw') return;
+    if (!isClipboardHistorySizeKey(key)) return;
     clipboardHistoryWindow?.setSizeKey(key);
   });
 
@@ -5166,6 +5204,40 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.loadHandoffContent(filePath);
   });
 
+  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean }> => {
+    const targetApp = commandLauncherWindow?.getPreviousApp();
+    return { fieldTheoryActive: isFieldTheoryBundleId(targetApp?.bundleId) };
+  });
+
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command'; path: string }) => {
+    if (!target?.path || !['wiki', 'artifact', 'command'].includes(target.kind)) {
+      return { success: false, error: 'Invalid markdown target' };
+    }
+    if (!clipboardHistoryWindow) {
+      return { success: false, error: 'Field Theory window not available' };
+    }
+
+    const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' ? 'fields' : 'library';
+    if (!clipboardHistoryWindow.isVisible()) {
+      const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
+      suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
+      clipboardHistoryWindow.show(boundsToUse);
+    }
+
+    commandLauncherWindow?.hide(true);
+    clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
+    return { success: true };
+  });
+
+  ipcMain.handle('commands:insertMarkdownText', async (_event, text: string) => {
+    if (!clipboardHistoryWindow || !text) {
+      return { success: false, error: 'No markdown editor target' };
+    }
+    commandLauncherWindow?.hide(true);
+    clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+    return { success: true };
+  });
+
   // Handle handoff invocation from command launcher (same behavior as commands).
   ipcMain.handle('commands:invokeHandoff', async (_event, filePath: string) => {
     const plist = require('plist');
@@ -5862,6 +5934,12 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   nativeHelper.warmupAudio();
   log.info('[audio-startup] after nativeHelper.warmupAudio() call (async): +%dms', Date.now() - BOOT_MARK);
 
+  nativeHelper.on('frontmostAppChanged', (appInfo) => {
+    if (isAlfredApp(appInfo)) {
+      hideFieldTheoryForAlfred();
+    }
+  });
+
   // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
   // NSPanel windows don't always trigger blur events on other panels, so we use
   // app-level blur detection with a small delay to check if any Field Theory window
@@ -6206,6 +6284,15 @@ async function initTranscriberSystem(): Promise<void> {
       return;
     }
 
+    // If the Field Theory window is already open, the user may be typing,
+    // reading, searching, or managing another surface. Save and index the
+    // artifact, but do not take over the current view.
+    if (clipboardHistoryWindow?.isVisible()) {
+      clipboardHistoryWindow.getWindow()?.webContents.send('librarian:newReadingAvailable', reading.path);
+      clipboardHistoryWindow.playArtifactDiscoverySound();
+      return;
+    }
+
     // Auto-show the window if enabled
     if (librarianManager!.isAutoShowEnabled()) {
       const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
@@ -6214,19 +6301,9 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
 
-      // If already in immersive mode, bring window to front and notify renderer
-      if (clipboardHistoryWindow.getImmersiveMode()) {
-        if (shouldStealFocus) {
-          clipboardHistoryWindow.getWindow()?.focus();
-        } else {
-          clipboardHistoryWindow.revealWithoutFocus();
-        }
-        clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
-      } else {
-        const boundsToUse = restoreClipboardHistoryBounds();
-        suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
-        clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
-      }
+      const boundsToUse = restoreClipboardHistoryBounds('library');
+      suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
+      clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
       // Showing/focusing clipboard history can corrupt transparent overlay backing
       // on some macOS compositor paths — reinforce window properties.
       cursorStatusManager?.refreshWindowProperties();
@@ -6240,20 +6317,8 @@ async function initTranscriberSystem(): Promise<void> {
       }
       clipboardHistoryWindow?.playArtifactDiscoverySound();
     } else {
-      // If already in immersive mode, still update the reading
-      if (clipboardHistoryWindow?.getImmersiveMode()) {
-        pendingImmersiveReading = reading.path;
-        if (librarianManager!.doesAutoShowStealFocus()) {
-          clipboardHistoryWindow.getWindow()?.focus();
-        } else {
-          clipboardHistoryWindow.revealWithoutFocus();
-        }
-        clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
-        clipboardHistoryWindow.playArtifactDiscoverySound();
-      } else {
-        // Just play the discovery sound if window exists
-        clipboardHistoryWindow?.playArtifactDiscoverySound();
-      }
+      // Just play the discovery sound if window exists.
+      clipboardHistoryWindow?.playArtifactDiscoverySound();
     }
   });
 
@@ -7062,7 +7127,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
       const relPath = path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
 
       if (clipboardHistoryWindow) {
-        const boundsToUse = restoreClipboardHistoryBounds();
+        const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.show(boundsToUse);
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
@@ -7095,7 +7160,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
 
       // Show and focus the clipboard history window (show() handles focusing)
       if (clipboardHistoryWindow) {
-        const boundsToUse = restoreClipboardHistoryBounds();
+        const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.show(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
