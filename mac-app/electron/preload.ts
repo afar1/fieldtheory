@@ -102,6 +102,9 @@ const ClipboardIPCChannels = {
   RESTORE_ITEM: 'clipboard:restoreItem',
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
+  GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  EXPORT_ITEM_IMAGE_PATH: 'clipboard:exportItemImagePath',
+  SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
   PASTE_ITEM: 'clipboard:pasteItem',
@@ -144,7 +147,6 @@ const ClipboardIPCChannels = {
   START_CONTINUOUS_CONTEXT: 'clipboard:startContinuousContext',
   STOP_CONTINUOUS_CONTEXT: 'clipboard:stopContinuousContext',
   CONTINUOUS_CONTEXT_CHANGED: 'clipboard:continuousContextChanged',
-  SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:getHideScreenRecordingBanner',
   SET_HIDE_SCREEN_RECORDING_BANNER: 'clipboard:setHideScreenRecordingBanner',
   GET_CURSOR_STATUS_ENABLED: 'clipboard:getCursorStatusEnabled',
@@ -773,6 +775,8 @@ export interface ClipboardAPI {
   restoreItem: (item: ClipboardItem) => Promise<number>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  getClipboardImagePath: () => Promise<string | null>;
+  exportItemImagePath: (id: number) => Promise<string | null>;
   saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
@@ -1406,6 +1410,14 @@ const clipboardAPI: ClipboardAPI = {
 
   captureScreenshot: async (region?: boolean): Promise<number> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.CAPTURE_SCREENSHOT, region);
+  },
+
+  getClipboardImagePath: async (): Promise<string | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH);
+  },
+
+  exportItemImagePath: async (id: number): Promise<string | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, id);
   },
 
   saveSketch: async (imageData: string, width: number, height: number): Promise<number> => {
@@ -2659,6 +2671,10 @@ const shellAPI = {
     ipcRenderer.invoke('shell:openExternal', url),
   showItemInFolder: (fullPath: string): Promise<void> =>
     ipcRenderer.invoke('shell:showItemInFolder', fullPath),
+  /** macOS proxy-icon + Cmd-click-title menu for the current window. Pass
+   *  "" to clear. */
+  setRepresentedFilename: (fullPath: string): Promise<void> =>
+    ipcRenderer.invoke('shell:setRepresentedFilename', fullPath),
 };
 
 type ShellAPI = typeof shellAPI;
@@ -2747,6 +2763,11 @@ type HandoffInfo = {
   displayName: string;
   filePath: string;
   lastModified: number;
+};
+
+type FieldTheoryMarkdownTarget = {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
 };
 
 const commandsAPI = {
@@ -2945,6 +2966,24 @@ const commandsAPI = {
   invokeHandoff: async (filePath: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:invokeHandoff', filePath);
   },
+
+  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean }> => {
+    return ipcRenderer.invoke('commands:getLauncherContext');
+  },
+
+  openFieldTheoryMarkdown: async (target: FieldTheoryMarkdownTarget): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:openFieldTheoryMarkdown', target);
+  },
+
+  insertMarkdownText: async (text: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:insertMarkdownText', text);
+  },
+
+  onOpenMarkdownFromLauncher: (callback: (target: FieldTheoryMarkdownTarget) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, target: FieldTheoryMarkdownTarget) => callback(target);
+    ipcRenderer.on('commands:openMarkdownFromLauncher', handler);
+    return () => ipcRenderer.removeListener('commands:openMarkdownFromLauncher', handler);
+  },
 };
 
 type CommandsAPI = typeof commandsAPI;
@@ -3088,7 +3127,23 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:showNewReading', handler);
   },
 
+  setMarkdownEditorFocused: (focused: boolean): void => {
+    ipcRenderer.send('librarian:setMarkdownEditorFocused', focused);
+  },
+
+  onInsertMarkdownText: (callback: (text: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, text: string) => callback(text);
+    ipcRenderer.on('librarian:insertMarkdownText', handler);
+    return () => ipcRenderer.removeListener('librarian:insertMarkdownText', handler);
+  },
+
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)
+  setImmersiveDismissable: (dismissable: boolean): void => {
+    ipcRenderer.send('clipboard-history:setImmersiveDismissable', dismissable);
+  },
+  setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw'): void => {
+    ipcRenderer.send('clipboard-history:setSizeKey', key);
+  },
   setImmersiveMode: (immersive: boolean): void => {
     ipcRenderer.send('clipboard-history:setImmersiveMode', immersive);
   },
@@ -3518,13 +3573,45 @@ interface WikiFolder {
   name: string;
   files: WikiPageMeta[];
 }
+type WikiNode =
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+interface LibraryRoot {
+  path: string;
+  label: string;
+  builtin: boolean;
+  writable?: boolean;
+  tree: WikiNode[];
+}
+
+const libraryAPI = {
+  getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
+  addRoot: (dirPath: string): Promise<LibraryRoot | null> => ipcRenderer.invoke('library:addRoot', dirPath),
+  removeRoot: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('library:removeRoot', dirPath),
+  createFile: (rootPath: string, folderRelPath: string, fileName: string): Promise<WikiPage | null> =>
+    ipcRenderer.invoke('library:createFile', rootPath, folderRelPath, fileName),
+  createDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('library:createDir', rootPath, dirRelPath),
+  deleteDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('library:deleteDir', rootPath, dirRelPath),
+  pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
+  onRootsChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('library:changed', handler);
+    return () => ipcRenderer.removeListener('library:changed', handler);
+  },
+};
 
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
   save: (relPath: string, content: string): Promise<boolean> => ipcRenderer.invoke('wiki:save', relPath, content),
   createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
+  deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
+  createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
+  rename: (relPath: string, newName: string): Promise<string | null> =>
+    ipcRenderer.invoke('wiki:rename', relPath, newName),
   onPageChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('wiki:changed', handler);
@@ -3535,8 +3622,120 @@ const wikiAPI = {
     ipcRenderer.on('wiki:openPage', handler);
     return () => ipcRenderer.removeListener('wiki:openPage', handler);
   },
+  // Hotkey-driven "new scratchpad" flow — main process has already created
+  // the file and wants us to switch to Library, open it, and start editing.
+  onOpenScratchpad: (callback: (relPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
+    ipcRenderer.on('wiki:openScratchpad', handler);
+    return () => ipcRenderer.removeListener('wiki:openScratchpad', handler);
+  },
 };
+contextBridge.exposeInMainWorld('libraryAPI', libraryAPI);
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
+
+interface ExternalMarkdownFile {
+  path: string;
+  name: string;
+  content: string;
+  mtime: number;
+}
+
+const externalAPI = {
+  open: (absPath: string): Promise<ExternalMarkdownFile | null> =>
+    ipcRenderer.invoke('external:open', absPath),
+  save: (absPath: string, content: string): Promise<boolean> =>
+    ipcRenderer.invoke('external:save', absPath, content),
+  onOpenExternal: (callback: (absPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, absPath: string) => callback(absPath);
+    ipcRenderer.on('external:openPage', handler);
+    return () => ipcRenderer.removeListener('external:openPage', handler);
+  },
+};
+contextBridge.exposeInMainWorld('externalAPI', externalAPI);
+
+interface RecentEntry {
+  kind: 'wiki' | 'external';
+  path: string;
+  title: string;
+  lastOpenedAt: number;
+}
+
+const recentAPI = {
+  list: (): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:list'),
+  visit: (entry: RecentEntry): Promise<RecentEntry[]> => ipcRenderer.invoke('recent:visit', entry),
+  remove: (kind: 'wiki' | 'external', entryPath: string): Promise<RecentEntry[]> =>
+    ipcRenderer.invoke('recent:remove', kind, entryPath),
+  onChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('recent:changed', handler);
+    return () => ipcRenderer.removeListener('recent:changed', handler);
+  },
+};
+contextBridge.exposeInMainWorld('recentAPI', recentAPI);
+
+interface BookmarkImage {
+  url: string;
+  width: number;
+  height: number;
+  type: string;
+  videoUrl?: string;
+  localFilename?: string;
+  localVideoFilename?: string;
+}
+interface QuotedTweet {
+  id: string;
+  text: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  localAvatarFilename?: string;
+  postedAt: string;
+  url: string;
+  images: BookmarkImage[];
+}
+interface Bookmark {
+  id: string;
+  text: string;
+  url: string;
+  authorHandle: string;
+  authorName: string;
+  authorAvatar: string;
+  localAvatarFilename?: string;
+  postedAt: string;
+  images: BookmarkImage[];
+  mediaCount: number;
+  likeCount: number;
+  repostCount: number;
+  bookmarkCount: number;
+  folders: string[];
+  quotedTweet?: QuotedTweet;
+}
+interface BookmarkFolder { name: string; id?: string }
+interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+
+const bookmarksAPI = {
+  getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
+  onChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('bookmarks:changed', handler);
+    return () => ipcRenderer.removeListener('bookmarks:changed', handler);
+  },
+};
+contextBridge.exposeInMainWorld('bookmarksAPI', bookmarksAPI);
+
+interface AgentHookTargets { claude?: boolean; codex?: boolean }
+interface AgentHookStatus { claude: boolean; codex: boolean }
+interface AgentHookResult { success: boolean; message: string; claude: boolean; codex: boolean }
+
+const agentHooksAPI = {
+  install: (targets: AgentHookTargets): Promise<AgentHookResult> =>
+    ipcRenderer.invoke('agent-hooks:install', targets),
+  uninstall: (targets: AgentHookTargets): Promise<AgentHookResult> =>
+    ipcRenderer.invoke('agent-hooks:uninstall', targets),
+  getStatus: (): Promise<AgentHookStatus> =>
+    ipcRenderer.invoke('agent-hooks:status'),
+};
+contextBridge.exposeInMainWorld('agentHooksAPI', agentHooksAPI);
 
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
