@@ -84,6 +84,39 @@ describe('CommandLauncherWindow.show()', () => {
       height: 36,
     });
   });
+
+  it('does not replace an external previous app with Field Theory', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+    (launcher as any).previousApp = { bundleId: 'com.apple.Safari', name: 'Safari' };
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
+    expect(launcher.wasFieldTheoryActiveOnShow()).toBe(true);
+  });
+
+  it('marks Field Theory inactive when shown over an external app', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.apple.Safari', name: 'Safari' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
+    expect(launcher.wasFieldTheoryActiveOnShow()).toBe(false);
+  });
 });
 
 describe('CommandLauncherWindow.hide()', () => {

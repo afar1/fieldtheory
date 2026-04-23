@@ -20,10 +20,14 @@ export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
 export const LIBRARY_DEFAULT_FOLDER_IDS = [
   'artifacts',
   SCRATCHPAD_FOLDER_NAME,
+  'Shared Markdown',
   'debates',
   'bookmarks-from-x',
   'entries',
   'concepts',
+  'categories',
+  'domains',
+  'entities',
 ] as const;
 export type LibraryDefaultFolderId = typeof LIBRARY_DEFAULT_FOLDER_IDS[number];
 const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS);
@@ -205,11 +209,22 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
   });
 }
 
-function getDefaultFolderId(node: SidebarNode): LibraryDefaultFolderId | null {
+function getLibraryFolderVisibilityId(node: SidebarNode): string | null {
   if (node.kind !== 'dir') return null;
   if (node.id === 'artifacts') return 'artifacts';
-  if (!node.builtin || node.relPath.includes('/')) return null;
-  return LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.name) ? (node.name as LibraryDefaultFolderId) : null;
+  if (!node.builtin || !node.relPath || node.relPath.includes('/')) return null;
+  return node.relPath;
+}
+
+function getDefaultFolderId(node: SidebarNode): LibraryDefaultFolderId | null {
+  const folderId = getLibraryFolderVisibilityId(node);
+  return folderId && LIBRARY_DEFAULT_FOLDER_ID_SET.has(folderId) ? (folderId as LibraryDefaultFolderId) : null;
+}
+
+function getUserFolderVisibilityId(node: SidebarNode): string | null {
+  const folderId = getLibraryFolderVisibilityId(node);
+  if (!folderId || LIBRARY_DEFAULT_FOLDER_ID_SET.has(folderId)) return null;
+  return folderId;
 }
 
 export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFolderIds: string[]): SidebarNode[] {
@@ -219,8 +234,8 @@ export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFold
     const filtered: SidebarNode[] = [];
 
     for (const node of items) {
-      const defaultFolderId = getDefaultFolderId(node);
-      if (defaultFolderId && hidden.has(defaultFolderId)) {
+      const folderId = getLibraryFolderVisibilityId(node);
+      if (folderId && hidden.has(folderId)) {
         changed = true;
         continue;
       }
@@ -845,7 +860,11 @@ function WikiSidebar({
   const contextFile = contextMenu?.node?.kind === 'file' ? contextMenu.node.item : null;
   const contextCreateTarget = contextDir?.canCreateFile ? getSidebarNodeCreateLocation(contextDir) : undefined;
   const canCreateInContext = !contextDir || contextDir.canCreateFile;
-  const canDeleteContextDir = !!contextDir?.canDeleteDir;
+  const contextDefaultFolderId = contextDir ? getDefaultFolderId(contextDir) : null;
+  const contextUserFolderId = contextDir ? getUserFolderVisibilityId(contextDir) : null;
+  const contextHideFolderId = contextDefaultFolderId ?? contextUserFolderId;
+  const contextHideDirLabel = contextDefaultFolderId ? 'Hide folder' : contextUserFolderId ? 'Remove from FT' : null;
+  const canDeleteContextDir = !!contextDir?.canDeleteDir && !contextDefaultFolderId;
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact';
   const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
   const rootCreateLocation = getBuiltinCreateLocation('');
@@ -871,6 +890,24 @@ function WikiSidebar({
     await window.libraryAPI?.removeRoot(target.rootPath);
     await loadTree();
   }, [closeContextMenu, contextDir, loadTree]);
+
+  const hideContextDir = useCallback(async () => {
+    const folderId = contextHideFolderId;
+    const previous = hiddenDefaultFolders;
+    closeContextMenu();
+    if (!folderId) return;
+
+    const optimistic = [...new Set([...previous, folderId])];
+    setHiddenDefaultFolders(optimistic);
+
+    try {
+      const result = await window.libraryAPI?.setFolderHidden(folderId, true);
+      setHiddenDefaultFolders(result ?? optimistic);
+      await loadTree();
+    } catch {
+      setHiddenDefaultFolders(previous);
+    }
+  }, [closeContextMenu, contextHideFolderId, hiddenDefaultFolders, loadTree]);
 
   const deleteContextFile = useCallback(() => {
     const target = contextFile;
@@ -1080,6 +1117,7 @@ function WikiSidebar({
           canRemoveRoot={!!contextDir?.canRemoveRoot}
           canShowFolderInFinder={!!contextFolderFinderPath}
           canDeleteFile={canDeleteContextFile}
+          hideDirLabel={contextHideDirLabel}
           canDeleteDir={canDeleteContextDir}
           onNewFile={() => {
             closeContextMenu();
@@ -1094,6 +1132,7 @@ function WikiSidebar({
           onAddFolder={addFolderFromPath}
           onShowFolderInFinder={showContextFolderInFinder}
           onRemoveRoot={removeContextRoot}
+          onHideDir={hideContextDir}
           onDeleteFile={deleteContextFile}
           onDeleteDir={deleteContextDir}
         />
@@ -1390,12 +1429,14 @@ function LibraryContextMenu({
   canRemoveRoot,
   canShowFolderInFinder,
   canDeleteFile,
+  hideDirLabel,
   canDeleteDir,
   onNewFile,
   onNewFolder,
   onAddFolder,
   onShowFolderInFinder,
   onRemoveRoot,
+  onHideDir,
   onDeleteFile,
   onDeleteDir,
 }: {
@@ -1406,12 +1447,14 @@ function LibraryContextMenu({
   canRemoveRoot: boolean;
   canShowFolderInFinder: boolean;
   canDeleteFile: boolean;
+  hideDirLabel: string | null;
   canDeleteDir: boolean;
   onNewFile: () => void;
   onNewFolder: () => void;
   onAddFolder: () => void;
   onShowFolderInFinder: () => void;
   onRemoveRoot: () => void;
+  onHideDir: () => void;
   onDeleteFile: () => void;
   onDeleteDir: () => void;
 }) {
@@ -1481,7 +1524,10 @@ function LibraryContextMenu({
         <button style={itemStyle} onClick={onShowFolderInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
       )}
       {canRemoveRoot && (
-        <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from library</button>
+        <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from FT</button>
+      )}
+      {hideDirLabel && (
+        <button style={itemStyle} onClick={onHideDir} onMouseEnter={setHover} onMouseLeave={clearHover}>{hideDirLabel}</button>
       )}
       {canDeleteDir && (
         <button
@@ -1540,6 +1586,8 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
     await window.wikiAPI?.rename(item.relPath, trimmed);
   };
 
+  const canShowInFinder = !!item.absPath && item.type !== 'bookmarks';
+
   return (
     <div
       ref={refProp}
@@ -1564,7 +1612,10 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
       style={{
-        padding: `6px 8px 6px ${28 + depth * 12}px`,
+        position: 'relative',
+        minHeight: '28px',
+        boxSizing: 'border-box',
+        padding: `6px 28px 6px ${28 + depth * 12}px`,
         cursor: 'pointer',
         backgroundColor: isSelected
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
@@ -1576,8 +1627,9 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
     >
       <div style={{
         display: 'flex',
-        alignItems: 'flex-start',
+        alignItems: 'center',
         gap: '4px',
+        minHeight: '16px',
       }}>
         {renaming ? (
           <input
@@ -1610,7 +1662,7 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
               fontSize: '12px',
               fontWeight: 500,
               color: theme.text,
-              lineHeight: 1.3,
+              lineHeight: '16px',
               flex: 1,
               minWidth: 0,
               overflow: 'hidden',
@@ -1628,19 +1680,22 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
                   borderRadius: '50%',
                   backgroundColor: '#3b82f6',
                   flexShrink: 0,
-                  marginTop: '5px',
                 }}
               />
             )}
           </>
         )}
-        {isHovered && item.absPath && item.type !== 'bookmarks' && (
+        {canShowInFinder && (
           <button
             onClick={(e) => {
               e.stopPropagation();
               window.shellAPI?.showItemInFolder(item.absPath);
             }}
             style={{
+              position: 'absolute',
+              top: '50%',
+              right: '8px',
+              transform: 'translateY(-50%)',
               padding: '0',
               width: '16px',
               height: '16px',
@@ -1653,7 +1708,9 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
               alignItems: 'center',
               justifyContent: 'center',
               borderRadius: '3px',
-              opacity: 0.7,
+              opacity: isHovered ? 0.7 : 0,
+              pointerEvents: isHovered ? 'auto' : 'none',
+              transition: 'opacity 0.1s ease, background-color 0.1s ease',
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.opacity = '1';

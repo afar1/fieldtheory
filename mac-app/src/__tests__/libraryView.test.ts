@@ -539,7 +539,7 @@ describe('recursive sidebar tree helpers', () => {
     expect(virtualizeBookmarksGroup(nodes, root)).toBe(nodes);
   });
 
-  it('filters hidden default folders without touching external roots', () => {
+  it('filters hidden Library folders without touching external roots', () => {
     const artifactRoot: LibrarySidebarNode = {
       kind: 'dir',
       id: 'artifacts',
@@ -562,8 +562,10 @@ describe('recursive sidebar tree helpers', () => {
       canCreateFile: true,
       children: [
         dir('scratchpad'),
+        dir('Shared Markdown'),
         dir('bookmarks-from-x', [dir('categories')]),
         dir('entries'),
+        dir('Client Notes'),
         dir('custom'),
       ],
     };
@@ -581,7 +583,7 @@ describe('recursive sidebar tree helpers', () => {
 
     const result = filterHiddenDefaultSidebarNodes(
       [artifactRoot, builtinRoot, externalEntries],
-      ['artifacts', 'scratchpad', 'bookmarks-from-x', 'entries']
+      ['artifacts', 'scratchpad', 'Shared Markdown', 'bookmarks-from-x', 'entries', 'Client Notes']
     );
 
     expect(result.map((node) => node.kind === 'dir' ? node.id : node.id)).toEqual([

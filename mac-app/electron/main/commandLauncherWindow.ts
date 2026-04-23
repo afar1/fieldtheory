@@ -66,6 +66,7 @@ export class CommandLauncherWindow {
 
   // The app that was active before we showed the launcher.
   private previousApp: RunningApp | null = null;
+  private fieldTheoryActiveOnShow = false;
 
   // Track when show() is in progress (before window.show() is called).
   // This closes the race window where isVisible() returns false during async setup.
@@ -146,18 +147,32 @@ export class CommandLauncherWindow {
 
       // Get cached frontmost app info for previous app (bundleId/name).
       const frontmostApp = this.nativeHelper?.getFrontmostApp();
+      this.fieldTheoryActiveOnShow = Boolean(
+        frontmostApp?.bundleId &&
+        frontmostApp?.name &&
+        isElectronApp(frontmostApp.bundleId, frontmostApp.name)
+      );
 
       // Store previous app for paste-back feature.
       if (frontmostApp?.bundleId && frontmostApp?.name) {
-        this.previousApp = {
-          bundleId: frontmostApp.bundleId,
-          name: frontmostApp.name,
-        };
-        appendCommandLauncherTrace('show-frontmost-app', {
-          bundleId: frontmostApp.bundleId,
-          name: frontmostApp.name,
-          hasWindowBounds: Boolean(frontmostApp.windowBounds),
-        });
+        if (!isElectronApp(frontmostApp.bundleId, frontmostApp.name)) {
+          this.previousApp = {
+            bundleId: frontmostApp.bundleId,
+            name: frontmostApp.name,
+          };
+          appendCommandLauncherTrace('show-frontmost-app', {
+            bundleId: frontmostApp.bundleId,
+            name: frontmostApp.name,
+            hasWindowBounds: Boolean(frontmostApp.windowBounds),
+          });
+        } else {
+          appendCommandLauncherTrace('show-frontmost-app-skipped-field-theory', {
+            bundleId: frontmostApp.bundleId,
+            name: frontmostApp.name,
+            previousAppBundleId: this.previousApp?.bundleId ?? null,
+            hasWindowBounds: Boolean(frontmostApp.windowBounds),
+          });
+        }
       }
 
       let x: number;
@@ -304,6 +319,10 @@ export class CommandLauncherWindow {
    */
   getPreviousApp(): RunningApp | null {
     return this.previousApp;
+  }
+
+  wasFieldTheoryActiveOnShow(): boolean {
+    return this.fieldTheoryActiveOnShow;
   }
 
   /**
