@@ -51,6 +51,7 @@ import {
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
+import { isSidebarToggleShortcut } from '../utils/editorShortcuts';
 import {
   buildClipboardListRows,
   getStackHydrationIds,
@@ -312,6 +313,18 @@ export default function ClipboardHistory() {
   useEffect(() => {
     localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
   }, [navSidebarCollapsed]);
+  const navSidebarToggleEnabled =
+    (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
+    (viewMode === 'commands' && !showSettings);
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!navSidebarToggleEnabled || !isSidebarToggleShortcut(event)) return;
+      event.preventDefault();
+      setNavSidebarCollapsed((collapsed) => !collapsed);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [navSidebarToggleEnabled]);
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -6336,9 +6349,7 @@ export default function ClipboardHistory() {
               and Commands views. In other views it stays visible but disabled
               so the footer layout doesn't jump. */}
           {(() => {
-            const collapseEnabled =
-              (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
-              (viewMode === 'commands' && !showSettings);
+            const collapseEnabled = navSidebarToggleEnabled;
             return (
               <button
                 onClick={() => setNavSidebarCollapsed((v) => !v)}
