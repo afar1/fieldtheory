@@ -18,11 +18,13 @@ interface LibrarianSettingsProps {
 const LIBRARY_FOLDER_TOGGLES = [
   { id: 'artifacts', label: 'Artifacts', hint: 'Agent-written reading artifacts' },
   { id: 'scratchpad', label: 'Scratchpad', hint: 'Quick notes and captures' },
+  { id: 'Shared Markdown', label: 'Shared Markdown', hint: 'Shared markdown pages' },
   { id: 'debates', label: 'Debates', hint: 'Structured debate notes' },
   { id: 'bookmarks-from-x', label: 'Bookmarks from x.com', hint: 'Synced bookmark categories, domains, and entities' },
   { id: 'entries', label: 'Entries', hint: 'Authored wiki entries' },
   { id: 'concepts', label: 'Concepts', hint: 'Concept pages and indexes' },
 ] as const;
+const LIBRARY_FOLDER_TOGGLE_IDS = new Set<string>(LIBRARY_FOLDER_TOGGLES.map((folder) => folder.id));
 
 export default function LibrarianSettings({ librarianEnabled = true, onLibrarianEnabledChange }: LibrarianSettingsProps) {
   const { theme } = useTheme();
@@ -33,6 +35,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [hiddenLibraryFolders, setHiddenLibraryFolders] = useState<string[]>([]);
+  const hiddenCustomLibraryFolders = hiddenLibraryFolders.filter((folderId) => !LIBRARY_FOLDER_TOGGLE_IDS.has(folderId));
 
   // Count readings per directory
   const readingCountsByDir = useMemo(() => {
@@ -1052,7 +1055,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               Library folders
             </div>
             <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '3px', lineHeight: 1.4 }}>
-              Choose which built-in Library sections are visible. This never deletes files.
+              Choose which Library folders are visible. This never deletes files.
             </div>
           </div>
           {LIBRARY_FOLDER_TOGGLES.map((folder) => {
@@ -1088,6 +1091,38 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               </label>
             );
           })}
+          {hiddenCustomLibraryFolders.map((folderId) => (
+            <label
+              key={folderId}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px',
+                padding: '7px 0',
+                cursor: 'pointer',
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                  {folderId}
+                </span>
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  Removed from FT
+                </span>
+              </div>
+              <input
+                type="checkbox"
+                checked={false}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    void handleLibraryFolderVisibilityChange(folderId, true);
+                  }
+                }}
+                style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+              />
+            </label>
+          ))}
         </div>
 
         {claudeConfigError && (

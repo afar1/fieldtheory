@@ -11,12 +11,16 @@ const testState = vi.hoisted(() => {
     callback?.(null, '', '');
     return {} as any;
   });
+  const execFile = vi.fn((_cmd: string, _args?: string[], callback?: (...args: any[]) => void) => {
+    callback?.(null, '', '');
+    return {} as any;
+  });
 
   const spawn = vi.fn(() => ({
     unref: vi.fn(),
   }));
 
-  return { createServer, exec, spawn };
+  return { createServer, exec, execFile, spawn };
 });
 
 vi.mock('electron', () => ({
@@ -37,9 +41,11 @@ vi.mock('http', () => ({
 vi.mock('child_process', () => ({
   default: {
     exec: testState.exec,
+    execFile: testState.execFile,
     spawn: testState.spawn,
   },
   exec: testState.exec,
+  execFile: testState.execFile,
   spawn: testState.spawn,
 }));
 
@@ -207,8 +213,9 @@ describe('HotMicManager app hide by name', () => {
     expect(tailMatch?.commandName).toBe('hide-app:Slack');
 
     await tailMatch?.action?.();
-    expect(testState.exec).toHaveBeenCalledWith(
-      expect.stringContaining('bundle identifier is "com.tinyspeck.slackmacgap"'),
+    expect(testState.execFile).toHaveBeenCalledWith(
+      'osascript',
+      ['-e', expect.stringContaining('bundle identifier is "com.tinyspeck.slackmacgap"')],
       expect.any(Function)
     );
 
