@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { List } from 'react-window';
+import { List, RowComponentProps, useDynamicRowHeight } from 'react-window';
 import { localAvatarUrl, localMediaUrls } from '../utils/bookmarkMedia';
+import { wrapLines } from '../utils/bookmarkCardHeight';
 
 function formatPostedAt(raw: string): string {
   if (!raw) return '';
@@ -27,11 +29,23 @@ const AVG_CHAR = 7;
 const IMAGE_BLOCK = 148;
 const GAP_BELOW = 8;
 
-function estimateRowHeight(bm: Bookmark): number {
-  const bodyLines = bm.text ? Math.max(1, Math.ceil(bm.text.length * AVG_CHAR / BODY_WIDTH_ESTIMATE)) : 0;
+export function estimateRowHeight(bm: Bookmark): number {
+  const bodyLines = bm.text ? wrapLines(bm.text, AVG_CHAR, BODY_WIDTH_ESTIMATE) : 0;
   const bodyHeight = bodyLines * BODY_LINE_HEIGHT + (bm.text ? 4 : 0);
   const imageHeight = localMediaUrls(bm.images).length > 0 ? IMAGE_BLOCK : 0;
   return Math.round(CARD_PAD * 2 + CARD_BORDER * 2 + HEADER_ROW + bodyHeight + imageHeight + GAP_BELOW);
+}
+
+export function estimateDefaultRowHeight(bookmarks: Bookmark[]): number {
+  if (bookmarks.length === 0) return 160;
+
+  const sample = bookmarks.slice(0, Math.min(bookmarks.length, 20));
+  const total = sample.reduce((sum, bm) => sum + estimateRowHeight(bm), 0);
+  return Math.round(total / sample.length);
+}
+
+export function getHeightCacheKey(bookmarks: Bookmark[]): string {
+  return bookmarks.map((bm) => bm.id).join('|');
 }
 
 interface RowProps {
@@ -39,7 +53,7 @@ interface RowProps {
   theme: ReturnType<typeof useTheme>['theme'];
 }
 
-function Row({ index, style, bookmarks, theme }: { index: number; style: React.CSSProperties } & RowProps) {
+function Row({ index, style, bookmarks, theme }: RowComponentProps<RowProps>) {
   const bm = bookmarks[index];
   const mediaUrls = localMediaUrls(bm.images).slice(0, 4);
   const avatarUrl = localAvatarUrl(bm);
@@ -127,13 +141,16 @@ function Row({ index, style, bookmarks, theme }: { index: number; style: React.C
 
 export default function BookmarksList({ bookmarks }: { bookmarks: Bookmark[] }) {
   const { theme } = useTheme();
+  const defaultRowHeight = useMemo(() => estimateDefaultRowHeight(bookmarks), [bookmarks]);
+  const heightCacheKey = useMemo(() => getHeightCacheKey(bookmarks), [bookmarks]);
+  const rowHeight = useDynamicRowHeight({ defaultRowHeight, key: heightCacheKey });
 
   return (
     <div style={{ height: '100%', padding: '12px 16px', boxSizing: 'border-box' }}>
       <div style={{ maxWidth: '720px', height: '100%', margin: '0 auto' }}>
         <List
           rowCount={bookmarks.length}
-          rowHeight={(index: number, props: RowProps) => estimateRowHeight(props.bookmarks[index])}
+          rowHeight={rowHeight}
           rowComponent={Row}
           rowProps={{ bookmarks, theme }}
           style={{ height: '100%' }}
