@@ -4,16 +4,64 @@
 // Supports multi-directory watching, full CRUD, and Shared commands discovery.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
+import { forwardRef, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
+import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+
+/** Inline text input used for both "new command" and "rename command" flows.
+ *  Both commit handlers treat empty input as a cancel, so blur just calls
+ *  onCommit unconditionally. */
+const InlineNameInput = forwardRef<HTMLInputElement, {
+  value: string;
+  onChange: (value: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+  placeholder?: string;
+  stopClickPropagation?: boolean;
+}>(function InlineNameInput({ value, onChange, onCommit, onCancel, placeholder, stopClickPropagation }, ref) {
+  const { theme } = useTheme();
+  return (
+    <input
+      ref={ref}
+      type="text"
+      value={value}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') { e.preventDefault(); onCommit(); }
+        else if (e.key === 'Escape') { e.preventDefault(); onCancel(); }
+      }}
+      onBlur={() => onCommit()}
+      onMouseDown={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
+      onClick={stopClickPropagation ? (e) => e.stopPropagation() : undefined}
+      style={{
+        width: '100%',
+        padding: '4px 8px',
+        fontSize: '12px',
+        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+        border: `1px solid ${theme.accent}`,
+        borderRadius: '4px',
+        color: theme.text,
+        outline: 'none',
+      }}
+    />
+  );
+});
 
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
-  onSwitchToSettings?: () => void;
+  sidebarCollapsed?: boolean;
+  externalHeaderHover?: boolean;
+  onFocusChromeActiveChange?: (active: boolean) => void;
+  onFocusChromeTopChange?: (top: number | null) => void;
+  initialCommandPath?: string | null;
+  onInitialCommandConsumed?: () => void;
+  onFocusChromeShortcut?: () => void;
 }
 
 /**
@@ -53,8 +101,9 @@ interface WatchedDir {
   enabled: boolean;
 }
 
-export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }: CommandsViewProps) {
+export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = false, externalHeaderHover, onFocusChromeActiveChange, onFocusChromeTopChange, initialCommandPath, onInitialCommandConsumed, onFocusChromeShortcut }: CommandsViewProps) {
   const { theme } = useTheme();
+  const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
 
   // View mode: 'mine' or 'popular'
   const [viewMode, setViewMode] = useState<'mine' | 'popular'>('mine');
@@ -78,6 +127,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   const [searchQuery, setSearchQuery] = useState('');
   const [searchOpen, setSearchOpen] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const sidebarKeyboardActiveRef = useRef(false);
 
   // Edit mode
   const [isEditing, setIsEditing] = useState(false);
@@ -88,6 +138,12 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
   const [newCommandName, setNewCommandName] = useState('');
   const newCommandInputRef = useRef<HTMLInputElement>(null);
+
+  // Inline rename input — replaces window.prompt(), which Electron silently
+  // disables. `renamingPath` is the filePath currently being renamed.
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState('');
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
 
   // Text size
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
@@ -100,8 +156,12 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     const saved = localStorage.getItem('commands-sidebar-width');
     return saved ? parseInt(saved, 10) : 180;
   });
+  const sidebarWidthRef = useRef(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
+  const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
+  const contentAreaRef = useRef<HTMLDivElement | null>(null);
 
   // Hover states for toolbar buttons
   const [hoveredButton, setHoveredButton] = useState<string | null>(null);
@@ -110,9 +170,10 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
 
-  // Fullscreen/focus mode
-  const [isFullScreen, setIsFullScreen] = useState(false);
-  const [headerHovered, setHeaderHovered] = useState(true);
+  // Focus immersive mode fades chrome in place without changing layout.
+  const [focusImmersive, setFocusImmersive] = useState(false);
+  const [headerHovered, setHeaderHovered] = useState(false);
+  const focusControlsVisible = !focusImmersive || headerHovered;
 
   // Context menu
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string; name: string } | null>(null);
@@ -124,15 +185,62 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     large: { base: '16px', h1: '26px', h2: '20px', h3: '17px' },
   };
 
+  const applySidebarWidth = useCallback((width: number) => {
+    const nextWidth = `${width}px`;
+    if (sidebarPaneRef.current) {
+      sidebarPaneRef.current.style.width = nextWidth;
+      sidebarPaneRef.current.style.minWidth = nextWidth;
+    }
+    if (sidebarInnerRef.current) {
+      sidebarInnerRef.current.style.width = nextWidth;
+    }
+  }, []);
+
   // Persist sidebar width
   useEffect(() => {
+    sidebarWidthRef.current = sidebarWidth;
+    if (isResizing) return;
     localStorage.setItem('commands-sidebar-width', String(sidebarWidth));
-  }, [sidebarWidth]);
+  }, [isResizing, sidebarWidth]);
 
   // Persist text size preference
   useEffect(() => {
     localStorage.setItem('commands-text-size', textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    setHeaderHovered(!!externalHeaderHover);
+  }, [externalHeaderHover]);
+
+  useEffect(() => {
+    onFocusChromeActiveChange?.(focusImmersive);
+    return () => onFocusChromeActiveChange?.(false);
+  }, [focusImmersive, onFocusChromeActiveChange]);
+
+  useEffect(() => {
+    if (!focusImmersive) {
+      onFocusChromeTopChange?.(null);
+      return;
+    }
+
+    let frame: number | null = null;
+    const reportContentTop = () => {
+      frame = null;
+      onFocusChromeTopChange?.(contentAreaRef.current?.getBoundingClientRect().top ?? null);
+    };
+    const scheduleReport = () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      frame = window.requestAnimationFrame(reportContentTop);
+    };
+
+    scheduleReport();
+    window.addEventListener('resize', scheduleReport);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', scheduleReport);
+      onFocusChromeTopChange?.(null);
+    };
+  }, [focusImmersive, onFocusChromeTopChange, textSize, selectedPath, selectedPopularId]);
 
   // Mock popular commands (fallback if Supabase unavailable)
   const getMockCommands = useCallback((): PopularCommand[] => [
@@ -280,8 +388,9 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   // Handle resize drag
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
+    sidebarWidthRef.current = sidebarWidth;
     setIsResizing(true);
-  }, []);
+  }, [sidebarWidth]);
 
   useEffect(() => {
     if (!isResizing) return;
@@ -291,10 +400,13 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       if (!containerRect) return;
 
       const newWidth = e.clientX - containerRect.left;
-      setSidebarWidth(Math.max(120, Math.min(400, newWidth)));
+      const clampedWidth = Math.max(120, Math.min(400, newWidth));
+      sidebarWidthRef.current = clampedWidth;
+      applySidebarWidth(clampedWidth);
     };
 
     const handleMouseUp = () => {
+      setSidebarWidth(sidebarWidthRef.current);
       setIsResizing(false);
     };
 
@@ -305,7 +417,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isResizing]);
+  }, [applySidebarWidth, isResizing]);
 
   // Check if content has been modified
   const isDirty = isEditing && editContent !== (selectedCommand?.content ?? '');
@@ -401,13 +513,29 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     loadCommand();
   }, [selectedPath]);
 
-  // Listen for commands changes
+  useEffect(() => {
+    if (!initialCommandPath) return;
+    setViewMode('mine');
+    setSelectedPath(initialCommandPath);
+    onInitialCommandConsumed?.();
+  }, [initialCommandPath, onInitialCommandConsumed]);
+
+  // Listen for commands changes. Also refresh on window focus as a safety
+  // net — fs.watch with recursive:true is flaky on macOS for renames, so
+  // external filename changes can be missed until the user comes back.
   useEffect(() => {
     const unsubscribe = window.commandsAPI?.onCommandsChanged((updatedCommands) => {
       setCommands(updatedCommands);
     });
-
-    return () => unsubscribe?.();
+    const onFocus = async () => {
+      const fresh = await window.commandsAPI?.getCommands();
+      if (fresh) setCommands(fresh);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      unsubscribe?.();
+      window.removeEventListener('focus', onFocus);
+    };
   }, []);
 
   // Check if selected command is already shared
@@ -482,8 +610,17 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      // Cmd+E - toggle edit mode
-      if (e.key === 'e' && e.metaKey && !e.shiftKey) {
+      if (isImmersiveToggleShortcut(e)) {
+        e.preventDefault();
+        if (!focusImmersive) {
+          onFocusChromeShortcut?.();
+        }
+        setFocusImmersive((prev) => !prev);
+        return;
+      }
+
+      // Cmd+, - toggle edit mode
+      if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
         if (isEditing) {
           if (isDirty) {
@@ -512,34 +649,57 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
             if (!confirmed) return;
           }
           exitEditMode();
+        } else if (focusImmersive) {
+          setFocusImmersive(false);
         } else {
           onSwitchToClipboard();
         }
         return;
       }
 
+      // Cmd+F or / — focus sidebar search. Gated on active element so `/`
+      // still works while the editor is on screen, just not when it's focused.
+      if (isSearchFocusShortcut(e)) {
+        e.preventDefault();
+        sidebarKeyboardActiveRef.current = false;
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+
       // Don't handle navigation keys when typing in any input
+      const isSidebarNavigationKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'k';
       const activeEl = document.activeElement;
-      if (isEditing || activeEl instanceof HTMLInputElement || activeEl instanceof HTMLTextAreaElement) return;
+      const inInput = activeEl instanceof HTMLInputElement
+        || activeEl instanceof HTMLTextAreaElement
+        || activeEl instanceof HTMLSelectElement
+        || (activeEl instanceof HTMLElement && activeEl.isContentEditable);
+      if (inInput) return;
+      if (isEditing && (!sidebarKeyboardActiveRef.current || !isSidebarNavigationKey)) return;
+      if (!isSidebarNavigationKey) return;
 
-      if (filteredCommands.length === 0) return;
+      const navigationCommands = viewMode === 'mine' && selectedPath
+        ? Array.from(groupedCommands.values()).find((items) => items.some((command) => command.filePath === selectedPath)) ?? filteredCommands
+        : filteredCommands;
+      if (navigationCommands.length === 0) return;
 
-      const currentIndex = filteredCommands.findIndex((c) => c.filePath === selectedPath);
+      const currentIndex = navigationCommands.findIndex((c) => c.filePath === selectedPath);
+      if (currentIndex < 0) return;
 
       if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
         const newIndex = Math.max(0, currentIndex - 1);
-        handleSelectCommand(filteredCommands[newIndex].filePath);
+        handleSelectCommand(navigationCommands[newIndex].filePath);
       } else if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
-        const newIndex = Math.min(filteredCommands.length - 1, currentIndex + 1);
-        handleSelectCommand(filteredCommands[newIndex].filePath);
+        const newIndex = Math.min(navigationCommands.length - 1, currentIndex + 1);
+        handleSelectCommand(navigationCommands[newIndex].filePath);
       }
     }
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, isEditing, isDirty, selectedCommand, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, isDirty, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand, onFocusChromeShortcut]);
 
   // Focus container on mount
   useEffect(() => {
@@ -627,50 +787,25 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
     }
   }, []);
 
-  // Create new command handler
+  // Create new command handler — routes to the inline input per directory
+  // since Electron silently disables window.prompt(). If no directory is
+  // configured yet, auto-create the default and open its inline input.
   const handleCreateCommand = useCallback(async () => {
-    const name = window.prompt('Enter command name (without .md extension):');
-    if (!name) return;
-
-    // Auto-create default directory if no directories configured
-    let targetDir: string;
+    let targetDir: string | null = null;
     if (watchedDirs.length === 0) {
       const defaultDir = await window.commandsAPI?.createDefaultDirectory();
       if (!defaultDir) return;
       targetDir = defaultDir;
-      // Refresh watched dirs
       const dirs = await window.commandsAPI?.getWatchedDirs();
-      if (dirs) {
-        setWatchedDirs(dirs);
-      }
-    } else if (watchedDirs.length === 1) {
-      targetDir = watchedDirs[0].path;
+      if (dirs) setWatchedDirs(dirs);
     } else {
-      // Multiple directories - prompt which one
-      const dirIndex = window.prompt(
-        `Select directory (1-${watchedDirs.length}):\n${watchedDirs.map((d, i) => `${i + 1}. ${d.path}`).join('\n')}`
-      );
-      const idx = parseInt(dirIndex || '1', 10) - 1;
-      if (idx >= 0 && idx < watchedDirs.length) {
-        targetDir = watchedDirs[idx].path;
-      } else {
-        targetDir = watchedDirs[0].path;
-      }
+      // Default to the first watched directory. Users with multiple can
+      // still click the "+" on a specific folder header.
+      targetDir = watchedDirs[0].path;
     }
-
-    const initialContent = `# ${name}\n\n`;
-    const result = await window.commandsAPI?.createCommand(targetDir, name, initialContent);
-    if (result) {
-      // Refresh and select the new command
-      const updatedCommands = await window.commandsAPI?.getCommands();
-      if (updatedCommands) {
-        setCommands(updatedCommands);
-        setSelectedPath(result.path);
-        // Enter edit mode directly with the content we already know
-        setEditContent(initialContent);
-        setIsEditing(true);
-      }
-    }
+    if (!targetDir) return;
+    setCreatingInDir(targetDir);
+    setNewCommandName('');
   }, [watchedDirs]);
 
   // Create new command in a specific directory
@@ -714,46 +849,68 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
   }, [cancelCreatingCommand]);
 
   // Delete command handler
-  const handleDeleteCommand = useCallback(async (filePath: string) => {
-    const confirmed = window.confirm('Delete this command? This cannot be undone.');
-    if (!confirmed) return;
-
-    const success = await window.commandsAPI?.deleteCommand(filePath);
-    if (success) {
-      // Refresh commands
-      const updatedCommands = await window.commandsAPI?.getCommands();
-      if (updatedCommands) {
-        setCommands(updatedCommands);
-        // Select next command or clear selection
-        if (selectedPath === filePath) {
-          if (updatedCommands.length > 0) {
-            setSelectedPath(updatedCommands[0].filePath);
-          } else {
-            setSelectedPath(null);
+  const handleDeleteCommand = useCallback((filePath: string) => {
+    confirmDelete({
+      title: 'Delete command?',
+      message: 'Delete this command? This cannot be undone.',
+      onConfirm: async () => {
+        const success = await window.commandsAPI?.deleteCommand(filePath);
+        if (success) {
+          // Refresh commands
+          const updatedCommands = await window.commandsAPI?.getCommands();
+          if (updatedCommands) {
+            setCommands(updatedCommands);
+            // Select next command or clear selection
+            if (selectedPath === filePath) {
+              if (updatedCommands.length > 0) {
+                setSelectedPath(updatedCommands[0].filePath);
+              } else {
+                setSelectedPath(null);
+              }
+            }
           }
         }
-      }
+      },
+    });
+  }, [confirmDelete, selectedPath]);
+
+  // Rename command handler — kicks off the inline input in the sidebar.
+  // Actual rename happens in commitRename() when the user confirms.
+  const handleRenameCommand = useCallback((filePath: string, currentName: string) => {
+    setRenamingPath(filePath);
+    setRenameDraft(currentName);
+  }, []);
+
+  const cancelRename = useCallback(() => {
+    setRenamingPath(null);
+    setRenameDraft('');
+  }, []);
+
+  const commitRename = useCallback(async () => {
+    if (!renamingPath) return;
+    const trimmed = renameDraft.trim();
+    const cmd = commands.find((c) => c.filePath === renamingPath);
+    if (!trimmed || !cmd || trimmed === cmd.displayName) {
+      cancelRename();
+      return;
     }
-  }, [selectedPath]);
-
-  // Rename command handler
-  const handleRenameCommand = useCallback(async (filePath: string, currentName: string) => {
-    const newName = window.prompt('Enter new command name (without .md extension):', currentName);
-    if (!newName || newName === currentName) return;
-
-    const newFilePath = await window.commandsAPI?.renameCommand(filePath, newName);
+    const newFilePath = await window.commandsAPI?.renameCommand(renamingPath, trimmed);
     if (newFilePath) {
-      // Refresh commands
-      const updatedCommands = await window.commandsAPI?.getCommands();
-      if (updatedCommands) {
-        setCommands(updatedCommands);
-        // Update selected path to the new file path
+      const updated = await window.commandsAPI?.getCommands();
+      if (updated) {
+        setCommands(updated);
         setSelectedPath(newFilePath);
       }
     } else {
       window.alert('Failed to rename command. A file with that name may already exist.');
     }
-  }, []);
+    cancelRename();
+  }, [renamingPath, renameDraft, commands, cancelRename]);
+
+  // Autofocus the rename input when it appears.
+  useEffect(() => {
+    if (renamingPath) renameInputRef.current?.focus();
+  }, [renamingPath]);
 
   // Close context menu on click-outside or Escape
   useEffect(() => {
@@ -782,18 +939,34 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
         backgroundColor: theme.bg,
       }}
     >
-      {/* Sidebar */}
+      {/* Sidebar - kept in DOM when collapsed for instant transition */}
       <div
+        ref={sidebarPaneRef}
         style={{
-          width: `${sidebarWidth}px`,
-          minWidth: `${sidebarWidth}px`,
-          overflowY: 'auto',
-          padding: '12px 0',
+          width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
-          display: isFullScreen ? 'none' : 'flex',
-          flexDirection: 'column',
+          display: 'block',
+          flexShrink: 0,
+          opacity: focusControlsVisible ? 1 : 0,
+          pointerEvents: focusControlsVisible ? 'auto' : 'none',
+          transition: isResizing ? 'opacity 0.18s ease' : 'width 0.18s ease, min-width 0.18s ease, opacity 0.18s ease',
         }}
       >
+        <div
+          ref={sidebarInnerRef}
+          style={{
+            width: `${sidebarWidth}px`,
+            height: '100%',
+            overflowX: 'hidden',
+            overflowY: 'auto',
+            padding: '12px 0',
+            display: 'flex',
+            flexDirection: 'column',
+            pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+          }}
+        >
         {/* Header - Librarian style */}
         <div
           style={{
@@ -877,6 +1050,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               type="text"
               placeholder="Search..."
               value={searchQuery}
+              onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
@@ -967,42 +1141,14 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 </div>
                 {/* Inline input for new command name */}
                 {creatingInDir === dirPath && (
-                  <div
-                    style={{
-                      padding: '4px 8px 4px 16px',
-                    }}
-                  >
-                    <input
+                  <div style={{ padding: '4px 8px 4px 16px' }}>
+                    <InlineNameInput
                       ref={newCommandInputRef}
-                      type="text"
                       value={newCommandName}
-                      onChange={(e) => setNewCommandName(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') {
-                          handleCreateCommandInDir(dirPath, newCommandName);
-                        } else if (e.key === 'Escape') {
-                          cancelCreatingCommand();
-                        }
-                      }}
-                      onBlur={() => {
-                        // Create on blur if there's a name, otherwise cancel
-                        if (newCommandName.trim()) {
-                          handleCreateCommandInDir(dirPath, newCommandName);
-                        } else {
-                          cancelCreatingCommand();
-                        }
-                      }}
+                      onChange={setNewCommandName}
+                      onCommit={() => handleCreateCommandInDir(dirPath, newCommandName)}
+                      onCancel={cancelCreatingCommand}
                       placeholder="command name..."
-                      style={{
-                        width: '100%',
-                        padding: '4px 8px',
-                        fontSize: '12px',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-                        border: `1px solid ${theme.accent}`,
-                        borderRadius: '4px',
-                        color: theme.text,
-                        outline: 'none',
-                      }}
                     />
                   </div>
                 )}
@@ -1010,7 +1156,13 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 {items.map((cmd) => (
                   <div
                     key={cmd.filePath}
-                    onClick={() => handleSelectCommand(cmd.filePath)}
+                    tabIndex={-1}
+                    onMouseDown={(e) => {
+                      if (renamingPath === cmd.filePath) return;
+                      sidebarKeyboardActiveRef.current = true;
+                      e.currentTarget.focus({ preventScroll: true });
+                    }}
+                    onClick={() => renamingPath !== cmd.filePath && handleSelectCommand(cmd.filePath)}
                     onContextMenu={(e) => {
                       e.preventDefault();
                       setContextMenu({ x: e.clientX, y: e.clientY, filePath: cmd.filePath, name: cmd.displayName });
@@ -1029,21 +1181,33 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                           ? `2px solid ${theme.accent}`
                           : '2px solid transparent',
                       transition: 'background-color 0.1s ease',
+                      outline: 'none',
                     }}
                   >
-                    <div
-                      style={{
-                        fontSize: '12px',
-                        fontWeight: 500,
-                        color: theme.text,
-                        lineHeight: 1.3,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {cmd.displayName}
-                    </div>
+                    {renamingPath === cmd.filePath ? (
+                      <InlineNameInput
+                        ref={renameInputRef}
+                        value={renameDraft}
+                        onChange={setRenameDraft}
+                        onCommit={() => { void commitRename(); }}
+                        onCancel={cancelRename}
+                        stopClickPropagation
+                      />
+                    ) : (
+                      <div
+                        style={{
+                          fontSize: '12px',
+                          fontWeight: 500,
+                          color: theme.text,
+                          lineHeight: 1.3,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {cmd.displayName}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1058,6 +1222,11 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               filteredPopularCommands.map((cmd) => (
                 <div
                   key={cmd.id}
+                  tabIndex={-1}
+                  onMouseDown={(e) => {
+                    sidebarKeyboardActiveRef.current = true;
+                    e.currentTarget.focus({ preventScroll: true });
+                  }}
                   onClick={() => setSelectedPopularId(cmd.id)}
                   style={{
                     padding: '8px 8px 8px 16px',
@@ -1073,6 +1242,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                         ? `2px solid ${theme.accent}`
                         : '2px solid transparent',
                     transition: 'background-color 0.1s ease',
+                    outline: 'none',
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -1101,36 +1271,6 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           )}
         </div>
 
-        {/* Bottom button - link to settings */}
-        <div style={{ padding: '8px 12px', borderTop: `1px solid ${theme.border}` }}>
-          <button
-            onClick={onSwitchToSettings}
-            style={{
-              width: '100%',
-              padding: '6px',
-              fontSize: '11px',
-              color: theme.textSecondary,
-              backgroundColor: 'transparent',
-              border: `1px dashed ${theme.border}`,
-              borderRadius: '4px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
-            }}
-          >
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 16 16"
-              fill="currentColor"
-            >
-              <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z"/>
-              <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319zm-2.633.283c.246-.835 1.428-.835 1.674 0l.094.319a1.873 1.873 0 0 0 2.693 1.115l.291-.16c.764-.415 1.6.42 1.184 1.185l-.159.292a1.873 1.873 0 0 0 1.116 2.692l.318.094c.835.246.835 1.428 0 1.674l-.319.094a1.873 1.873 0 0 0-1.115 2.693l.16.291c.415.764-.42 1.6-1.185 1.184l-.291-.159a1.873 1.873 0 0 0-2.693 1.116l-.094.318c-.246.835-1.428.835-1.674 0l-.094-.319a1.873 1.873 0 0 0-2.692-1.115l-.292.16c-.764.415-1.6-.42-1.184-1.185l.159-.291A1.873 1.873 0 0 0 1.945 8.93l-.319-.094c-.835-.246-.835-1.428 0-1.674l.319-.094A1.873 1.873 0 0 0 3.06 4.377l-.16-.292c-.415-.764.42-1.6 1.185-1.184l.292.159a1.873 1.873 0 0 0 2.692-1.115l.094-.319z"/>
-            </svg>
-            Command Settings
-          </button>
         </div>
       </div>
 
@@ -1138,13 +1278,16 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       <div
         onMouseDown={handleResizeMouseDown}
         style={{
-          width: '4px',
+          width: sidebarCollapsed ? '0px' : '4px',
+          minWidth: sidebarCollapsed ? '0px' : '4px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: `1px solid ${theme.border}`,
-          transition: 'background-color 0.15s ease',
+          borderRight: sidebarCollapsed ? '0 solid transparent' : `1px solid ${theme.border}`,
+          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease, opacity 0.18s ease',
           flexShrink: 0,
-          display: isFullScreen ? 'none' : 'block',
+          display: 'block',
+          pointerEvents: sidebarCollapsed || !focusControlsVisible ? 'none' : 'auto',
+          opacity: focusControlsVisible ? 1 : 0,
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -1172,10 +1315,10 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
       >
         {/* Top draggable region - matches Librarian structure */}
         <div
-          onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
-          onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
+          onMouseEnter={() => focusImmersive && setHeaderHovered(true)}
+          onMouseLeave={() => focusImmersive && setHeaderHovered(false)}
           style={{
-            height: isFullScreen ? '20px' : '0px',
+            height: '0px',
             flexShrink: 0,
             display: 'flex',
             alignItems: 'center',
@@ -1189,8 +1332,8 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
         {/* Toolbar - matches Librarian structure */}
         {(selectedCommand || selectedPopularCommand) && (
           <div
-            onMouseEnter={() => isFullScreen && setHeaderHovered(true)}
-            onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
+            onMouseEnter={() => focusImmersive && setHeaderHovered(true)}
+            onMouseLeave={() => focusImmersive && setHeaderHovered(false)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1198,6 +1341,9 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               padding: '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
+              opacity: focusControlsVisible ? 1 : 0,
+              pointerEvents: focusControlsVisible ? 'auto' : 'none',
+              transition: 'opacity 0.18s ease',
             }}
           >
             {/* Inner container - matches content width (600px centered) */}
@@ -1212,8 +1358,8 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
             >
               <ContentToolbar
                 filePath={selectedCommand?.filePath}
-                isFullScreen={isFullScreen}
-                onToggleFullScreen={() => setIsFullScreen(!isFullScreen)}
+                isFullScreen={focusImmersive}
+                onToggleFullScreen={() => setFocusImmersive((prev) => !prev)}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={true}
@@ -1244,7 +1390,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                 isSharing={isSharing}
                 onToggleShare={viewMode === 'mine' ? handleShareToggle : undefined}
                 showShare={viewMode === 'mine' && !!selectedCommand}
-                headerHovered={headerHovered}
+                headerHovered={focusControlsVisible}
               />
 
               {/* Add to Mine button for popular commands */}
@@ -1271,6 +1417,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
 
         {/* Content area */}
         <div
+          ref={contentAreaRef}
           style={{
             flex: 1,
             minHeight: 0,
@@ -1294,7 +1441,12 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
               {isEditing && selectedCommand ? (
                 <textarea
                   value={editContent}
+                  onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}
+                  onBlur={() => {
+                    if (isDirty) void saveChanges();
+                    else exitEditMode();
+                  }}
                   style={{
                     flex: 1,
                     minHeight: '400px',
@@ -1328,11 +1480,21 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
                   </h1>
                   <div
                     className="command-content"
+                    // Click into the rendered body to enter edit mode — mirrors
+                    // LibrarianView so users can click straight into writing. Clicks on links,
+                    // buttons, form controls, or while a text selection is
+                    // active still do their normal thing.
+                    onClick={(e) => {
+                      if (viewMode !== 'mine' || !selectedCommand) return;
+                      if (!shouldEnterEditOnClick(e)) return;
+                      enterEditMode();
+                    }}
                     style={{
                       fontSize: textSizes[textSize].base,
                       lineHeight: 1.5,
                       color: theme.text,
                       fontFamily: fonts.sans,
+                      cursor: viewMode === 'mine' && selectedCommand ? 'text' : 'default',
                     }}
                   >
                     <ReactMarkdown
@@ -1585,6 +1747,7 @@ export default function CommandsView({ onSwitchToClipboard, onSwitchToSettings }
           </button>
         </div>
       )}
+      {deleteConfirmationDialog}
     </div>
   );
 }
