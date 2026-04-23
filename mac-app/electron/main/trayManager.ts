@@ -40,6 +40,7 @@ export class TrayManager {
   private historyHotkey: string = 'Option+Space';
   private transcriptionHotkey: string = 'Option+Shift+Space';
   private screenshotHotkey: string = 'Command+4';
+  private taggedDocsUnreadCount: number = 0;
 
   constructor(audioManager: AudioManager, quotaManager?: QuotaManager, preferencesManager?: PreferencesManager) {
     this.audioManager = audioManager;
@@ -106,6 +107,13 @@ export class TrayManager {
     this.transcriptionHotkey = transcriptionHotkey;
     this.screenshotHotkey = screenshotHotkey;
     // Refresh menu if tray is active
+    if (this.tray) {
+      this.updateTray(this.audioManager.getState());
+    }
+  }
+
+  setTaggedDocsUnreadCount(count: number): void {
+    this.taggedDocsUnreadCount = Math.max(0, Math.floor(count));
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
@@ -198,11 +206,12 @@ export class TrayManager {
 
     // Show abbreviated mic name next to tray icon when priority mic is set.
     // Format: ":Air" or ":Blu" - first 3 letters, capitalized.
+    const unreadTitle = this.taggedDocsUnreadCount > 0 ? ` •${this.taggedDocsUnreadCount}` : '';
     if (priorityDeviceId && priorityDevice) {
       const abbrev = priorityDeviceName.slice(0, 3);
-      this.tray.setTitle(`:${abbrev}`);
+      this.tray.setTitle(`:${abbrev}${unreadTitle}`);
     } else {
-      this.tray.setTitle('');
+      this.tray.setTitle(unreadTitle.trimStart());
     }
 
     let tooltip: string;
@@ -358,6 +367,14 @@ export class TrayManager {
     }
 
     items.push({ type: 'separator' });
+
+    if (this.taggedDocsUnreadCount > 0) {
+      items.push({
+        label: `${this.taggedDocsUnreadCount} unread shared document${this.taggedDocsUnreadCount === 1 ? '' : 's'}`,
+        enabled: false,
+      });
+      items.push({ type: 'separator' });
+    }
 
     // Primary actions: Open and Start Recording.
     items.push({

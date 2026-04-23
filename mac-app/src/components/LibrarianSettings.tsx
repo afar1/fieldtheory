@@ -15,6 +15,15 @@ interface LibrarianSettingsProps {
   onLibrarianEnabledChange?: (enabled: boolean) => void;
 }
 
+const LIBRARY_FOLDER_TOGGLES = [
+  { id: 'artifacts', label: 'Artifacts', hint: 'Agent-written reading artifacts' },
+  { id: 'scratchpad', label: 'Scratchpad', hint: 'Quick notes and captures' },
+  { id: 'debates', label: 'Debates', hint: 'Structured debate notes' },
+  { id: 'bookmarks-from-x', label: 'Bookmarks from x.com', hint: 'Synced bookmark categories, domains, and entities' },
+  { id: 'entries', label: 'Entries', hint: 'Authored wiki entries' },
+  { id: 'concepts', label: 'Concepts', hint: 'Concept pages and indexes' },
+] as const;
+
 export default function LibrarianSettings({ librarianEnabled = true, onLibrarianEnabledChange }: LibrarianSettingsProps) {
   const { theme } = useTheme();
 
@@ -23,6 +32,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [hiddenLibraryFolders, setHiddenLibraryFolders] = useState<string[]>([]);
 
   // Count readings per directory
   const readingCountsByDir = useMemo(() => {
@@ -136,8 +146,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getImmersiveHeightPercent(),
       // Mute status
       window.librarianAPI.isMutedForToday(),
+      window.libraryAPI?.getHiddenFolders() ?? Promise.resolve([]),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, immersiveHeight, mutedStatus]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, immersiveHeight, mutedStatus, hiddenFolders]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -161,6 +172,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setResumeAfterClose(resumeClose);
         setImmersiveHeightPercent(typeof immersiveHeight === 'number' ? immersiveHeight : 85);
         setIsMutedForToday(mutedStatus);
+        setHiddenLibraryFolders(hiddenFolders);
         setLoading(false);
       })
       .catch((err) => {
@@ -361,6 +373,21 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   }, []);
+
+  const handleLibraryFolderVisibilityChange = useCallback(async (folderId: string, visible: boolean) => {
+    const previous = hiddenLibraryFolders;
+    const optimistic = visible
+      ? previous.filter((id) => id !== folderId)
+      : [...new Set([...previous, folderId])];
+    setHiddenLibraryFolders(optimistic);
+
+    try {
+      const result = await window.libraryAPI?.setFolderHidden(folderId, !visible);
+      setHiddenLibraryFolders(result ?? previous);
+    } catch {
+      setHiddenLibraryFolders(previous);
+    }
+  }, [hiddenLibraryFolders]);
 
   // Format path for display
   const formatPath = (path: string): string => {
@@ -1010,6 +1037,58 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               </div>
             )}
         </SettingsDisabledBlock>
+
+        <div
+          style={{
+            padding: '12px',
+            marginTop: '16px',
+            borderRadius: '6px',
+            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          }}
+        >
+          <div style={{ marginBottom: '10px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+              Library folders
+            </div>
+            <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '3px', lineHeight: 1.4 }}>
+              Choose which built-in Library sections are visible. This never deletes files.
+            </div>
+          </div>
+          {LIBRARY_FOLDER_TOGGLES.map((folder) => {
+            const visible = !hiddenLibraryFolders.includes(folder.id);
+            return (
+              <label
+                key={folder.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '12px',
+                  padding: '7px 0',
+                  cursor: 'pointer',
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                    {folder.label}
+                  </span>
+                  <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                    {folder.hint}
+                  </span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={visible}
+                  onChange={(event) => {
+                    void handleLibraryFolderVisibilityChange(folder.id, event.target.checked);
+                  }}
+                  style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+                />
+              </label>
+            );
+          })}
+        </div>
 
         {claudeConfigError && (
           <p style={{ fontSize: '11px', color: theme.error, marginTop: '12px' }}>

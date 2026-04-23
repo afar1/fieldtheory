@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -77,6 +77,19 @@ describe('isMarkdownModeToggleShortcut', () => {
 
   it('rejects bare Comma', () => {
     expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma' }))).toBe(false);
+  });
+});
+
+describe('isSidebarToggleShortcut', () => {
+  it('accepts Cmd+Slash', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects bare slash and modified slash chords', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash' }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, altKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 });
 

@@ -11,10 +11,22 @@ interface UnifiedItem {
   absPath: string;
   relPath?: string;
   timestamp: number;
+  taggedDocId?: string;
+  hasUnread?: boolean;
 }
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
 export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
+export const LIBRARY_DEFAULT_FOLDER_IDS = [
+  'artifacts',
+  SCRATCHPAD_FOLDER_NAME,
+  'debates',
+  'bookmarks-from-x',
+  'entries',
+  'concepts',
+] as const;
+export type LibraryDefaultFolderId = typeof LIBRARY_DEFAULT_FOLDER_IDS[number];
+const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS);
 
 interface UnifiedFolder {
   name: string;
@@ -35,6 +47,7 @@ type SidebarNode =
       canCreateFile: boolean;
       canDeleteDir?: boolean;
       canRemoveRoot?: boolean;
+      hasUnread?: boolean;
       children: SidebarNode[];
     }
   | {
@@ -55,6 +68,12 @@ type CreatingState =
   | { kind: 'file'; location: LibraryCreateLocation }
   | { kind: 'dir'; location: LibraryCreateLocation }
   | null;
+
+type TaggedDocListItem = {
+  ulid: string;
+  path: string;
+  unread: boolean;
+};
 
 // Lets callers (keyboard shortcuts) drive the inline-create UI since
 // Electron silently returns null from window.prompt().
@@ -186,6 +205,66 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
   });
 }
 
+function getDefaultFolderId(node: SidebarNode): LibraryDefaultFolderId | null {
+  if (node.kind !== 'dir') return null;
+  if (node.id === 'artifacts') return 'artifacts';
+  if (!node.builtin || node.relPath.includes('/')) return null;
+  return LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.name) ? (node.name as LibraryDefaultFolderId) : null;
+}
+
+export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFolderIds: string[]): SidebarNode[] {
+  const hidden = new Set(hiddenFolderIds);
+  const filterNodes = (items: SidebarNode[]): { nodes: SidebarNode[]; changed: boolean } => {
+    let changed = false;
+    const filtered: SidebarNode[] = [];
+
+    for (const node of items) {
+      const defaultFolderId = getDefaultFolderId(node);
+      if (defaultFolderId && hidden.has(defaultFolderId)) {
+        changed = true;
+        continue;
+      }
+      if (node.kind === 'file' || node.children.length === 0) {
+        filtered.push(node);
+        continue;
+      }
+
+      const children = filterNodes(node.children);
+      if (children.changed) {
+        changed = true;
+        filtered.push({
+          ...node,
+          hasUnread: children.nodes.some(sidebarNodeHasUnread),
+          children: children.nodes,
+        });
+      } else {
+        filtered.push(node);
+      }
+    }
+
+    return { nodes: changed ? filtered : items, changed };
+  };
+  return filterNodes(nodes).nodes;
+}
+
+export function flattenBuiltinSidebarRoots(nodes: SidebarNode[]): SidebarNode[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === 'dir' && node.builtin && node.relPath === '' && node.id.startsWith('root:')) {
+      return node.children;
+    }
+    return [node];
+  });
+}
+
+export function getSidebarFolderFinderPath(node: SidebarNode | null): string | null {
+  if (!node || node.kind !== 'dir') return null;
+  if (node.id === 'artifacts') return null;
+  if (!node.rootPath || node.rootPath === 'artifacts') return null;
+  if (node.builtin && node.name === 'bookmarks-from-x') return node.rootPath;
+  if (!node.relPath) return node.rootPath;
+  return `${node.rootPath.replace(/\/+$/, '')}/${node.relPath}`;
+}
+
 function countSidebarItems(nodes: SidebarNode[]): number {
   return nodes.reduce((total, node) => {
     if (node.kind === 'file') return total + (node.item.type === 'bookmarks' ? 0 : 1);
@@ -245,6 +324,14 @@ function libraryRootCanCreateFiles(root: LibraryRoot): boolean {
   return root.writable !== false;
 }
 
+function normalizeTaggedPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
+}
+
+function sidebarNodeHasUnread(node: SidebarNode): boolean {
+  return node.kind === 'file' ? node.item.hasUnread === true : node.hasUnread === true;
+}
+
 function getLibraryCreateLocationKey(location: LibraryCreateLocation): string {
   return `${location.rootPath}::${location.relPath}`;
 }
@@ -266,10 +353,16 @@ function joinLibraryRelPath(parent: string, name: string): string {
   return parent ? `${parent}/${trimmedName}` : trimmedName;
 }
 
-function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: SortMode): SidebarNode {
+function wikiNodeToSidebarNode(
+  node: WikiNode,
+  root: LibraryRoot,
+  sortMode: SortMode,
+  taggedDocByPath: Map<string, TaggedDocListItem>
+): SidebarNode {
   if (node.kind === 'file') {
     const type = root.builtin ? 'wiki' : 'external';
     const id = root.builtin ? `wiki:${node.relPath}` : `external:${node.absPath}`;
+    const taggedDoc = taggedDocByPath.get(normalizeTaggedPath(node.absPath));
     return {
       kind: 'file',
       id,
@@ -280,10 +373,16 @@ function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: Sort
         absPath: node.absPath,
         relPath: node.relPath,
         timestamp: node.lastUpdated,
+        taggedDocId: taggedDoc?.ulid,
+        hasUnread: taggedDoc?.unread ?? false,
       },
     };
   }
 
+  const children = sortSidebarNodes(
+    node.children.map((child) => wikiNodeToSidebarNode(child, root, sortMode, taggedDocByPath)),
+    sortMode
+  );
   return {
     kind: 'dir',
     id: `${root.path}::${node.relPath}`,
@@ -294,7 +393,8 @@ function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: Sort
     builtin: root.builtin,
     canCreateFile: libraryRootCanCreateFiles(root),
     canDeleteDir: true,
-    children: sortSidebarNodes(node.children.map((child) => wikiNodeToSidebarNode(child, root, sortMode)), sortMode),
+    hasUnread: children.some(sidebarNodeHasUnread),
+    children,
   };
 }
 
@@ -358,6 +458,7 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
       rootPath: root.path,
       builtin: true,
       canCreateFile: false,
+      hasUnread: bookmarkNodes.some(sidebarNodeHasUnread),
       children: [
         { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
         ...sortSidebarNodes(bookmarkNodes, sortMode),
@@ -366,8 +467,15 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
   ], sortMode);
 }
 
-function rootToSidebarNode(root: LibraryRoot, sortMode: SortMode): SidebarNode {
-  let children = sortSidebarNodes(root.tree.map((node) => wikiNodeToSidebarNode(node, root, sortMode)), sortMode);
+function rootToSidebarNode(
+  root: LibraryRoot,
+  sortMode: SortMode,
+  taggedDocByPath: Map<string, TaggedDocListItem>
+): SidebarNode {
+  let children = sortSidebarNodes(
+    root.tree.map((node) => wikiNodeToSidebarNode(node, root, sortMode, taggedDocByPath)),
+    sortMode
+  );
   if (root.builtin) {
     children = virtualizeBookmarksGroup(children, root, sortMode);
     children = ensureScratchpadNodePinned(children, root);
@@ -382,6 +490,7 @@ function rootToSidebarNode(root: LibraryRoot, sortMode: SortMode): SidebarNode {
     builtin: root.builtin,
     canCreateFile: libraryRootCanCreateFiles(root),
     canRemoveRoot: !root.builtin,
+    hasUnread: children.some(sidebarNodeHasUnread),
     children,
   };
 }
@@ -404,7 +513,9 @@ function WikiSidebar({
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
   const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
+  const [hiddenDefaultFolders, setHiddenDefaultFolders] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
+  const [taggedDocs, setTaggedDocs] = useState<TaggedDocListItem[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>(() => {
     const saved = localStorage.getItem('library-sort-mode');
     return saved === 'time' ? 'time' : 'alpha';
@@ -468,11 +579,13 @@ function WikiSidebar({
   }, [selectedId, expandedFolders, wikiTree, libraryRoots, artifacts, searchQuery]);
 
   const loadTree = useCallback(async () => {
-    const [treeResult, rootsResult] = await Promise.all([
+    const [treeResult, rootsResult, hiddenFoldersResult] = await Promise.all([
       window.wikiAPI?.getTree(),
       window.libraryAPI?.getRoots(),
+      window.libraryAPI?.getHiddenFolders(),
     ]);
     if (treeResult) setWikiTree(treeResult);
+    if (hiddenFoldersResult) setHiddenDefaultFolders(hiddenFoldersResult);
     if (rootsResult) {
       setLibraryRoots(rootsResult);
       setExpandedFolders((prev) => {
@@ -496,21 +609,29 @@ function WikiSidebar({
     if (result) setRecent(result);
   }, []);
 
+  const loadTaggedDocs = useCallback(async () => {
+    const result = await window.taggedDocsAPI?.list();
+    if (result) setTaggedDocs(result);
+  }, []);
+
   useEffect(() => {
     loadTree();
     loadArtifacts();
     loadRecent();
+    loadTaggedDocs();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => loadTree());
     const unsubLibrary = window.libraryAPI?.onRootsChanged(() => loadTree());
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
+    const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
     const onFocus = () => {
       loadTree();
       loadArtifacts();
       loadRecent();
+      loadTaggedDocs();
     };
     window.addEventListener('focus', onFocus);
     return () => {
@@ -520,9 +641,10 @@ function WikiSidebar({
       unsubRemoved?.();
       unsubUpdated?.();
       unsubRecent?.();
+      unsubTaggedDocs?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [loadTree, loadArtifacts, loadRecent]);
+  }, [loadTree, loadArtifacts, loadRecent, loadTaggedDocs]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
@@ -644,6 +766,9 @@ function WikiSidebar({
 
   const sidebarRoots = useMemo(() => {
     const roots: SidebarNode[] = [];
+    const taggedDocByPath = new Map(
+      taggedDocs.map((doc) => [normalizeTaggedPath(doc.path), doc])
+    );
 
     if (artifacts.length > 0) {
       const items: UnifiedItem[] = artifacts.map((r) => ({
@@ -671,9 +796,10 @@ function WikiSidebar({
       });
     }
 
-    roots.push(...libraryRoots.map((root) => rootToSidebarNode(root, sortMode)));
-    return roots;
-  }, [artifacts, libraryRoots, sortMode]);
+    const libraryRootNodes = libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath));
+    roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
+    return filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
+  }, [artifacts, hiddenDefaultFolders, libraryRoots, sortMode, taggedDocs]);
 
   const filteredSidebarRoots = useMemo(
     () => filterSidebarNodes(sidebarRoots, searchQuery),
@@ -721,6 +847,8 @@ function WikiSidebar({
   const canCreateInContext = !contextDir || contextDir.canCreateFile;
   const canDeleteContextDir = !!contextDir?.canDeleteDir;
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact';
+  const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
+  const rootCreateLocation = getBuiltinCreateLocation('');
 
   const addFolderFromPath = useCallback(async () => {
     closeContextMenu();
@@ -805,6 +933,13 @@ function WikiSidebar({
     });
   }, [closeContextMenu, confirmDelete, contextDir, loadTree, onDeletedItem]);
 
+  const showContextFolderInFinder = useCallback(() => {
+    const finderPath = contextFolderFinderPath;
+    closeContextMenu();
+    if (!finderPath) return;
+    window.shellAPI?.showItemInFolder(finderPath);
+  }, [closeContextMenu, contextFolderFinderPath]);
+
   return (
     <div
       onContextMenu={(event) => openContextMenu(event, null)}
@@ -876,6 +1011,32 @@ function WikiSidebar({
         {isSearching ? `${visiblePages} of ${totalPages} pages` : `${totalPages} pages`}
       </div>
 
+      {rootCreateLocation && creating?.kind === 'file' && createLocationMatches(creating.location, rootCreateLocation) && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={0}
+          placeholder="Untitled"
+        />
+      )}
+
+      {rootCreateLocation && creating?.kind === 'dir' && createLocationMatches(creating.location, rootCreateLocation) && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={0}
+          placeholder="New folder"
+        />
+      )}
+
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
@@ -917,6 +1078,7 @@ function WikiSidebar({
           theme={theme}
           canCreate={canCreateInContext}
           canRemoveRoot={!!contextDir?.canRemoveRoot}
+          canShowFolderInFinder={!!contextFolderFinderPath}
           canDeleteFile={canDeleteContextFile}
           canDeleteDir={canDeleteContextDir}
           onNewFile={() => {
@@ -930,6 +1092,7 @@ function WikiSidebar({
             beginCreateDir(contextCreateTarget);
           }}
           onAddFolder={addFolderFromPath}
+          onShowFolderInFinder={showContextFolderInFinder}
           onRemoveRoot={removeContextRoot}
           onDeleteFile={deleteContextFile}
           onDeleteDir={deleteContextDir}
@@ -1115,6 +1278,19 @@ function TreeNode({
         <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
           {itemCount}
         </span>
+        {node.hasUnread && (
+          <span
+            aria-label="Unread shared document"
+            style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              backgroundColor: '#3b82f6',
+              flexShrink: 0,
+              marginLeft: '2px',
+            }}
+          />
+        )}
         {node.canCreateFile && (
           <button
             className="bm-new-file-btn"
@@ -1212,11 +1388,13 @@ function LibraryContextMenu({
   theme,
   canCreate,
   canRemoveRoot,
+  canShowFolderInFinder,
   canDeleteFile,
   canDeleteDir,
   onNewFile,
   onNewFolder,
   onAddFolder,
+  onShowFolderInFinder,
   onRemoveRoot,
   onDeleteFile,
   onDeleteDir,
@@ -1226,11 +1404,13 @@ function LibraryContextMenu({
   theme: ReturnType<typeof useTheme>['theme'];
   canCreate: boolean;
   canRemoveRoot: boolean;
+  canShowFolderInFinder: boolean;
   canDeleteFile: boolean;
   canDeleteDir: boolean;
   onNewFile: () => void;
   onNewFolder: () => void;
   onAddFolder: () => void;
+  onShowFolderInFinder: () => void;
   onRemoveRoot: () => void;
   onDeleteFile: () => void;
   onDeleteDir: () => void;
@@ -1297,6 +1477,9 @@ function LibraryContextMenu({
         New folder
       </button>
       <button style={itemStyle} onClick={onAddFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
+      {canShowFolderInFinder && (
+        <button style={itemStyle} onClick={onShowFolderInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
+      )}
       {canRemoveRoot && (
         <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from library</button>
       )}
@@ -1422,19 +1605,34 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
             }}
           />
         ) : (
-          <div style={{
-            fontSize: '12px',
-            fontWeight: 500,
-            color: theme.text,
-            lineHeight: 1.3,
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}>
-            {item.title}
-          </div>
+          <>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 500,
+              color: theme.text,
+              lineHeight: 1.3,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {item.title}
+            </div>
+            {item.hasUnread && (
+              <span
+                aria-label="Unread shared document"
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: '#3b82f6',
+                  flexShrink: 0,
+                  marginTop: '5px',
+                }}
+              />
+            )}
+          </>
         )}
         {isHovered && item.absPath && item.type !== 'bookmarks' && (
           <button
