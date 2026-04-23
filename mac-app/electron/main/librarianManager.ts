@@ -16,6 +16,26 @@ const TOML_SANDBOX_WORKSPACE_WRITE_HEADER = '[sandbox_workspace_write]';
 const MARKDOWN_HEADER_SCAN_LINE_COUNT = 40;
 const WIKI_SKIP_FILE_NAMES = new Set(['md-state.json', 'index.md', 'log.md', 'schema.md']);
 const LIBRARIAN_INDEX_VERSION = 2;
+export const DEFAULT_LIBRARY_FOLDER_IDS = [
+  'artifacts',
+  'scratchpad',
+  'debates',
+  'bookmarks-from-x',
+  'entries',
+  'concepts',
+] as const;
+export type LibraryDefaultFolderId = typeof DEFAULT_LIBRARY_FOLDER_IDS[number];
+const DEFAULT_LIBRARY_FOLDER_ID_SET = new Set<string>(DEFAULT_LIBRARY_FOLDER_IDS);
+export const DEFAULT_README_FOLDER_IDS = [
+  'scratchpad',
+  'debates',
+  'entries',
+  'concepts',
+  'categories',
+  'domains',
+  'entities',
+] as const;
+export type LibraryReadmeFolderId = typeof DEFAULT_README_FOLDER_IDS[number];
 const ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE = /^\*(?:Model|Signed by):\s*(.+?)\*$/i;
 const ARTIFACT_MODEL_SIGNATURE_INSTRUCTION_RE = /\*(?:model|signed by):\s*/i;
 const ARTIFACT_TITLE_INSTRUCTION_RE = /\btitle\s*\(#\s*heading\)|\bmarkdown\s+h1\s+title\b/i;
@@ -31,6 +51,75 @@ const DEFAULT_LIBRARIAN_RULE_CONTENT =
   buildEffectiveArtifactRuleContent(
     'Write a short reflective story (120-200 words) connecting current work to science/history.'
   );
+const DEFAULT_FOLDER_READMES: ReadonlyArray<{
+  id: LibraryReadmeFolderId;
+  relPath: string;
+  content: string;
+}> = [
+  {
+    id: 'scratchpad',
+    relPath: 'scratchpad',
+    content: `# Scratchpad
+
+Drop quick notes here.
+Use this folder for rough captures before they become entries.
+`,
+  },
+  {
+    id: 'debates',
+    relPath: 'debates',
+    content: `# Debates
+
+Debates are structured notes for comparing approaches.
+Use the portable command at .cursor/commands/debate.md when you want one generated.
+`,
+  },
+  {
+    id: 'entries',
+    relPath: 'entries',
+    content: `# Entries
+
+Entries are durable wiki notes.
+Use portable commands from .cursor/commands/ when you want the app or an agent to create one.
+`,
+  },
+  {
+    id: 'concepts',
+    relPath: 'concepts',
+    content: `# Concepts
+
+Concept pages collect reusable ideas, references, and vocabulary.
+Keep them small enough to link from entries and debates.
+`,
+  },
+  {
+    id: 'categories',
+    relPath: 'categories',
+    content: `# Bookmark Categories
+
+This folder helps power the Bookmarks from x.com view.
+It groups synced bookmarks by category.
+`,
+  },
+  {
+    id: 'domains',
+    relPath: 'domains',
+    content: `# Bookmark Domains
+
+This folder helps power the Bookmarks from x.com view.
+It groups synced bookmarks by source domain.
+`,
+  },
+  {
+    id: 'entities',
+    relPath: 'entities',
+    content: `# Bookmark Entities
+
+This folder helps power the Bookmarks from x.com view.
+It groups synced bookmarks by people, projects, and other named entities.
+`,
+  },
+];
 
 type CursorHookEntry = {
   command?: string;
@@ -79,6 +168,18 @@ function splitTomlTopLevel(content: string): { topLevel: string; tables: string 
 function tidyTomlSpacing(content: string): string {
   const trimmed = content.replace(/\n{3,}/g, '\n\n').trimEnd();
   return trimmed ? `${trimmed}\n` : '';
+}
+
+export function normalizeHiddenDefaultFolders(value: unknown): LibraryDefaultFolderId[] {
+  if (!Array.isArray(value)) return [];
+  const requested = new Set(value.filter((item): item is string => typeof item === 'string'));
+  return DEFAULT_LIBRARY_FOLDER_IDS.filter((folderId) => requested.has(folderId));
+}
+
+export function normalizeSeededReadmes(value: unknown): LibraryReadmeFolderId[] {
+  if (!Array.isArray(value)) return [];
+  const requested = new Set(value.filter((item): item is string => typeof item === 'string'));
+  return DEFAULT_README_FOLDER_IDS.filter((folderId) => requested.has(folderId));
 }
 
 function upsertTopLevelTomlBlock(content: string, block: string): string {
@@ -1344,6 +1445,8 @@ export interface WatchedDir {
 interface LibrarianSettings {
   watchedDirs: string[];
   libraryRoots?: string[];
+  hiddenDefaultFolders?: LibraryDefaultFolderId[];
+  readmesSeeded?: LibraryReadmeFolderId[];
   enabled: boolean;                    // Single master toggle
   autoShowEnabled: boolean;
   autoShowStealsFocus?: boolean;
@@ -1420,6 +1523,7 @@ export class LibrarianManager extends EventEmitter {
 
     // Ensure central artifacts directory exists and is watched by default
     this.ensureCentralArtifactsDir();
+    this.ensureDefaultFolderReadmes();
 
     // Load index (cached metadata)
     this.loadIndex();
@@ -1516,6 +1620,7 @@ export class LibrarianManager extends EventEmitter {
     // Reload settings and index for new user
     this.settings = this.loadSettings();
     this.ensureCentralArtifactsDir();
+    this.ensureDefaultFolderReadmes();
     this.loadIndex();
     this.startWatching();
     this.startLibraryRootWatchers();
@@ -1593,6 +1698,8 @@ export class LibrarianManager extends EventEmitter {
     const defaults: LibrarianSettings = {
       watchedDirs: [],
       libraryRoots: [],
+      hiddenDefaultFolders: [],
+      readmesSeeded: [],
       enabled: true,
       autoShowEnabled: true,
       autoShowStealsFocus: true,
@@ -1617,6 +1724,8 @@ export class LibrarianManager extends EventEmitter {
         return {
           watchedDirs: data.watchedDirs || defaults.watchedDirs,
           libraryRoots: Array.isArray(data.libraryRoots) ? data.libraryRoots : defaults.libraryRoots,
+          hiddenDefaultFolders: normalizeHiddenDefaultFolders(data.hiddenDefaultFolders),
+          readmesSeeded: normalizeSeededReadmes(data.readmesSeeded),
           enabled: enabled ?? defaults.enabled,
           autoShowEnabled: data.autoShowEnabled ?? defaults.autoShowEnabled,
           autoShowStealsFocus: data.autoShowStealsFocus ?? defaults.autoShowStealsFocus,
@@ -2291,6 +2400,34 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private ensureFolderReadme(folderId: LibraryReadmeFolderId, absDir: string, content: string): boolean {
+    const seeded = normalizeSeededReadmes(this.settings.readmesSeeded);
+    if (seeded.includes(folderId)) return false;
+
+    try {
+      fs.mkdirSync(absDir, { recursive: true });
+      const readmePath = path.join(absDir, 'README.md');
+      if (!fs.existsSync(readmePath)) {
+        fs.writeFileSync(readmePath, content.endsWith('\n') ? content : `${content}\n`, 'utf-8');
+      }
+      const next = new Set([...seeded, folderId]);
+      this.settings.readmesSeeded = DEFAULT_README_FOLDER_IDS.filter((id) => next.has(id));
+      return true;
+    } catch (error) {
+      log.warn(`Failed to seed README for ${folderId}:`, error);
+      return false;
+    }
+  }
+
+  private ensureDefaultFolderReadmes(): void {
+    let changed = false;
+    for (const spec of DEFAULT_FOLDER_READMES) {
+      const absDir = path.join(this.wikiDir, spec.relPath);
+      changed = this.ensureFolderReadme(spec.id, absDir, spec.content) || changed;
+    }
+    if (changed) this.saveSettings();
+  }
+
   private scanMarkdownTree(rootPath: string, currentDir = rootPath, seenRealPaths = new Set<string>()): WikiNode[] {
     if (!fs.existsSync(currentDir)) return [];
 
@@ -2350,7 +2487,11 @@ export class LibrarianManager extends EventEmitter {
       });
     }
 
-    return nodes.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+    return nodes.sort((a, b) => {
+      const left = a.kind === 'file' && a.name.toLowerCase() === 'readme' ? '\0' : a.name.toLowerCase();
+      const right = b.kind === 'file' && b.name.toLowerCase() === 'readme' ? '\0' : b.name.toLowerCase();
+      return left.localeCompare(right, undefined, { sensitivity: 'base' });
+    });
   }
 
   private flattenWikiFiles(nodes: WikiNode[]): WikiPageMeta[] {
@@ -2853,6 +2994,32 @@ export class LibrarianManager extends EventEmitter {
     }
 
     return true;
+  }
+
+  getHiddenDefaultFolders(): LibraryDefaultFolderId[] {
+    return normalizeHiddenDefaultFolders(this.settings.hiddenDefaultFolders);
+  }
+
+  setDefaultFolderHidden(folderId: string, hidden: boolean): LibraryDefaultFolderId[] {
+    const current = this.getHiddenDefaultFolders();
+    if (!DEFAULT_LIBRARY_FOLDER_ID_SET.has(folderId)) {
+      return current;
+    }
+
+    const requested = new Set(current);
+    if (hidden) {
+      requested.add(folderId as LibraryDefaultFolderId);
+    } else {
+      requested.delete(folderId as LibraryDefaultFolderId);
+    }
+
+    const next = DEFAULT_LIBRARY_FOLDER_IDS.filter((id) => requested.has(id));
+    if (next.join('\0') !== current.join('\0')) {
+      this.settings.hiddenDefaultFolders = next;
+      this.saveSettings();
+      this.emit('library:changed', this.wikiDir);
+    }
+    return next;
   }
 
   // ===========================================================================
