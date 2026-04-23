@@ -103,6 +103,7 @@ const ClipboardIPCChannels = {
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
   GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  EXPORT_ITEM_IMAGE_PATH: 'clipboard:exportItemImagePath',
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
@@ -775,6 +776,7 @@ export interface ClipboardAPI {
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getClipboardImagePath: () => Promise<string | null>;
+  exportItemImagePath: (id: number) => Promise<string | null>;
   saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
@@ -1412,6 +1414,10 @@ const clipboardAPI: ClipboardAPI = {
 
   getClipboardImagePath: async (): Promise<string | null> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH);
+  },
+
+  exportItemImagePath: async (id: number): Promise<string | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, id);
   },
 
   saveSketch: async (imageData: string, width: number, height: number): Promise<number> => {
@@ -3574,6 +3580,7 @@ interface LibraryRoot {
   path: string;
   label: string;
   builtin: boolean;
+  writable?: boolean;
   tree: WikiNode[];
 }
 
@@ -3581,6 +3588,12 @@ const libraryAPI = {
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
   addRoot: (dirPath: string): Promise<LibraryRoot | null> => ipcRenderer.invoke('library:addRoot', dirPath),
   removeRoot: (dirPath: string): Promise<boolean> => ipcRenderer.invoke('library:removeRoot', dirPath),
+  createFile: (rootPath: string, folderRelPath: string, fileName: string): Promise<WikiPage | null> =>
+    ipcRenderer.invoke('library:createFile', rootPath, folderRelPath, fileName),
+  createDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('library:createDir', rootPath, dirRelPath),
+  deleteDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('library:deleteDir', rootPath, dirRelPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
   onRootsChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();

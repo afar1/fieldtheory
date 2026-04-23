@@ -2,6 +2,21 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const electronMocks = vi.hoisted(() => ({
+  trashItem: vi.fn(),
+}));
+
+vi.mock('electron', () => ({
+  app: {
+    getPath: (name: string) => name === 'home' ? (process.env.HOME ?? '/tmp') : '/tmp',
+  },
+  shell: {
+    trashItem: electronMocks.trashItem,
+  },
+}));
+
+import { shell } from 'electron';
 import {
   buildEffectiveArtifactRuleContent,
   defaultScratchpadName,
@@ -20,6 +35,7 @@ import {
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.clearAllMocks();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -232,6 +248,175 @@ describe('recursive wiki tree scan', () => {
     expect(manager.saveWikiPage('entries/note', '# New title\n')).toBe(true);
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
     expect(emit).toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('renames root-level wiki pages now that library roots can create them', () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'note.md'), '# Note\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      renameWikiPage: (relPath: string, newName: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.renameWikiPage('note', 'Better Note')).toBe('better-note');
+    expect(fs.existsSync(path.join(root, 'note.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'better-note.md'))).toBe(true);
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
+  });
+
+  it('creates markdown files inside external library roots', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Team Notes'), { recursive: true });
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      createLibraryFile: (rootPath: string, folderRelPath: string, fileName: string) => { relPath: string; absPath: string; content: string } | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    const page = manager.createLibraryFile(root, 'Team Notes', 'Meeting Notes');
+
+    expect(page?.relPath).toBe('Team Notes/meeting-notes');
+    expect(page?.absPath).toBe(path.join(root, 'Team Notes', 'meeting-notes.md'));
+    expect(page?.content).toBe('# Meeting Notes\n');
+    expect(fs.readFileSync(path.join(root, 'Team Notes', 'meeting-notes.md'), 'utf-8')).toBe('# Meeting Notes\n');
+    expect(emit).toHaveBeenCalledWith('library:changed', root);
+  });
+
+  it('creates wiki files inside the requested folder without slugging the folder path', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      createWikiFile: (folderName: string, fileName: string) => { relPath: string; absPath: string } | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    const page = manager.createWikiFile('Shared Markdown', 'Testing');
+
+    expect(page?.relPath).toBe('Shared Markdown/testing');
+    expect(page?.absPath).toBe(path.join(root, 'Shared Markdown', 'testing.md'));
+    expect(fs.existsSync(path.join(root, 'shared-markdown', 'testing.md'))).toBe(false);
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('creates wiki folders without slugging the requested folder path', () => {
+    const root = makeTempDir();
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      createWikiDir: (dirName: string) => boolean;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.createWikiDir('Shared Markdown')).toBe(true);
+    expect(fs.statSync(path.join(root, 'Shared Markdown')).isDirectory()).toBe(true);
+    expect(fs.existsSync(path.join(root, 'shared-markdown'))).toBe(false);
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('rejects external library file paths that leave the selected root', () => {
+    const root = makeTempDir();
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      createLibraryFile: (rootPath: string, folderRelPath: string, fileName: string) => unknown;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(manager.createLibraryFile(root, '../outside', 'Escape')).toBeNull();
+    expect(fs.existsSync(path.join(root, 'outside', 'escape.md'))).toBe(false);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('creates external library folders without slugging their names', () => {
+    const root = makeTempDir();
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      createLibraryDir: (rootPath: string, dirRelPath: string) => boolean;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(manager.createLibraryDir(root, 'Client Notes')).toBe(true);
+    expect(fs.statSync(path.join(root, 'Client Notes')).isDirectory()).toBe(true);
+    expect(emit).toHaveBeenCalledWith('library:changed', root);
+  });
+
+  it('moves wiki folders to Trash and emits deleted page relPaths', async () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Shared Markdown', 'note.md'), '# Note\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Shared Markdown'));
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Shared Markdown/note');
+  });
+
+  it('moves external library folders to Trash and emits a library change', async () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Client Notes'), { recursive: true });
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(await manager.deleteLibraryDir(root, 'Client Notes')).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Client Notes'));
+    expect(emit).toHaveBeenCalledWith('library:changed', root);
+    expect(emit).not.toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('does not delete a library root as a folder', async () => {
+    const root = makeTempDir();
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    expect(await manager.deleteLibraryDir(root, '')).toBe(false);
+    expect(trashItem).not.toHaveBeenCalled();
   });
 });
 
