@@ -547,15 +547,15 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(modeEvents[modeEvents.length - 1]?.args[0]).toBe('hot-mic');
   });
 
-  it('resizes the unified window for active states and restores idle size on return', () => {
+  it('keeps one-chip standard recording within idle outer width', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
 
     // idle: left(60) + gapFill(notchOverride=207+2) + right(60) = 329
-    // recording: right worst case = padding(18) + waveform(88) = 106 per side.
-    // Window = 106 + 209 + 106 = 421.
+    // recording with one chip remains within idle tuning:
+    // left/right outer widths = 60, window = 60 + 209 + 60 = 329.
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
     expect(unified?.getSize()).toEqual([329, 39]);
@@ -564,14 +564,38 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(unified?.getSize()).toEqual([329, 39]);
 
     manager.setState('recording');
-    expect(unified?.getSize()).toEqual([421, 39]);
+    expect(unified?.getSize()).toEqual([329, 39]);
+
+    manager.setState('transcribing');
+    expect(unified?.getSize()).toEqual([329, 39]);
 
     manager.setState('idle');
     manager.setInputMode('standard');
     expect(unified?.getSize()).toEqual([329, 39]);
   });
 
-  it('sizes the pill for recording + waiting agents so the left corner is not clipped', () => {
+  it('shows the final transcript when it arrives during transcribing', () => {
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('transcribing');
+    manager.sendTranscript('hello world', true);
+
+    expect(manager.getState()).toBe('showing-transcript');
+
+    const unified = testState.getWindowBySide('unified');
+    const transcriptEvents = unified?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-transcript'
+    ) ?? [];
+    expect(transcriptEvents[transcriptEvents.length - 1]?.args[0]).toEqual({
+      text: 'hello world',
+      isFinal: true,
+    });
+  });
+
+  it('keeps waiting-agent updates from changing pill width while the indicator is hidden', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
@@ -580,18 +604,15 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     const unified = testState.getWindowBySide('unified');
     expect(unified).toBeDefined();
 
-    // Simplified renderer (single green star for any count): left =
-    // padding(18) + X(30) + 1*agent(28) + hamburger(22) = 98. Right =
-    // padding(18) + waveform(88) = 106. Max = 106. Window = 106+209+106 = 421.
-    // Left + right side widths are max-equalized for symmetric growth.
+    // Waiting agents are still tracked for future reuse, but they should not
+    // affect layout while the visible attention indicator is disabled.
     manager.setWaitingAgents([
       { agentId: 'a', tool: 'claude', pid: 0, cwd: '/', ttyTitle: 't', terminalApp: 'x', waitingSince: 1 },
       { agentId: 'b', tool: 'codex', pid: 0, cwd: '/', ttyTitle: 't', terminalApp: 'x', waitingSince: 2 },
     ]);
     manager.setState('recording');
-    expect(unified?.getSize()).toEqual([421, 39]);
+    expect(unified?.getSize()).toEqual([329, 39]);
 
-    // 5 agents + recording: same as 2 — count doesn't grow the pill anymore.
     manager.setWaitingAgents(
       Array.from({ length: 5 }, (_, i) => ({
         agentId: `a${i}`,
@@ -603,7 +624,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
         waitingSince: i,
       })),
     );
-    expect(unified?.getSize()).toEqual([421, 39]);
+    expect(unified?.getSize()).toEqual([329, 39]);
   });
 
   it('applies runtime geometry tuning updates to pill size and notch alignment', () => {
