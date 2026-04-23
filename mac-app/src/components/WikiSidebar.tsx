@@ -17,6 +17,16 @@ interface UnifiedItem {
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
 export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
+export const LIBRARY_DEFAULT_FOLDER_IDS = [
+  'artifacts',
+  SCRATCHPAD_FOLDER_NAME,
+  'debates',
+  'bookmarks-from-x',
+  'entries',
+  'concepts',
+] as const;
+export type LibraryDefaultFolderId = typeof LIBRARY_DEFAULT_FOLDER_IDS[number];
+const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS);
 
 interface UnifiedFolder {
   name: string;
@@ -193,6 +203,66 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
     const right = b.kind === 'dir' ? b.label : b.item.title;
     return left.localeCompare(right, undefined, { sensitivity: 'base' });
   });
+}
+
+function getDefaultFolderId(node: SidebarNode): LibraryDefaultFolderId | null {
+  if (node.kind !== 'dir') return null;
+  if (node.id === 'artifacts') return 'artifacts';
+  if (!node.builtin || node.relPath.includes('/')) return null;
+  return LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.name) ? (node.name as LibraryDefaultFolderId) : null;
+}
+
+export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFolderIds: string[]): SidebarNode[] {
+  const hidden = new Set(hiddenFolderIds);
+  const filterNodes = (items: SidebarNode[]): { nodes: SidebarNode[]; changed: boolean } => {
+    let changed = false;
+    const filtered: SidebarNode[] = [];
+
+    for (const node of items) {
+      const defaultFolderId = getDefaultFolderId(node);
+      if (defaultFolderId && hidden.has(defaultFolderId)) {
+        changed = true;
+        continue;
+      }
+      if (node.kind === 'file' || node.children.length === 0) {
+        filtered.push(node);
+        continue;
+      }
+
+      const children = filterNodes(node.children);
+      if (children.changed) {
+        changed = true;
+        filtered.push({
+          ...node,
+          hasUnread: children.nodes.some(sidebarNodeHasUnread),
+          children: children.nodes,
+        });
+      } else {
+        filtered.push(node);
+      }
+    }
+
+    return { nodes: changed ? filtered : items, changed };
+  };
+  return filterNodes(nodes).nodes;
+}
+
+export function flattenBuiltinSidebarRoots(nodes: SidebarNode[]): SidebarNode[] {
+  return nodes.flatMap((node) => {
+    if (node.kind === 'dir' && node.builtin && node.relPath === '' && node.id.startsWith('root:')) {
+      return node.children;
+    }
+    return [node];
+  });
+}
+
+export function getSidebarFolderFinderPath(node: SidebarNode | null): string | null {
+  if (!node || node.kind !== 'dir') return null;
+  if (node.id === 'artifacts') return null;
+  if (!node.rootPath || node.rootPath === 'artifacts') return null;
+  if (node.builtin && node.name === 'bookmarks-from-x') return node.rootPath;
+  if (!node.relPath) return node.rootPath;
+  return `${node.rootPath.replace(/\/+$/, '')}/${node.relPath}`;
 }
 
 function countSidebarItems(nodes: SidebarNode[]): number {
@@ -443,6 +513,7 @@ function WikiSidebar({
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
   const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
+  const [hiddenDefaultFolders, setHiddenDefaultFolders] = useState<string[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
   const [taggedDocs, setTaggedDocs] = useState<TaggedDocListItem[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>(() => {
@@ -508,11 +579,13 @@ function WikiSidebar({
   }, [selectedId, expandedFolders, wikiTree, libraryRoots, artifacts, searchQuery]);
 
   const loadTree = useCallback(async () => {
-    const [treeResult, rootsResult] = await Promise.all([
+    const [treeResult, rootsResult, hiddenFoldersResult] = await Promise.all([
       window.wikiAPI?.getTree(),
       window.libraryAPI?.getRoots(),
+      window.libraryAPI?.getHiddenFolders(),
     ]);
     if (treeResult) setWikiTree(treeResult);
+    if (hiddenFoldersResult) setHiddenDefaultFolders(hiddenFoldersResult);
     if (rootsResult) {
       setLibraryRoots(rootsResult);
       setExpandedFolders((prev) => {
@@ -723,9 +796,10 @@ function WikiSidebar({
       });
     }
 
-    roots.push(...libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath)));
-    return roots;
-  }, [artifacts, libraryRoots, sortMode, taggedDocs]);
+    const libraryRootNodes = libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath));
+    roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
+    return filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
+  }, [artifacts, hiddenDefaultFolders, libraryRoots, sortMode, taggedDocs]);
 
   const filteredSidebarRoots = useMemo(
     () => filterSidebarNodes(sidebarRoots, searchQuery),
@@ -773,6 +847,8 @@ function WikiSidebar({
   const canCreateInContext = !contextDir || contextDir.canCreateFile;
   const canDeleteContextDir = !!contextDir?.canDeleteDir;
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact';
+  const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
+  const rootCreateLocation = getBuiltinCreateLocation('');
 
   const addFolderFromPath = useCallback(async () => {
     closeContextMenu();
@@ -857,6 +933,13 @@ function WikiSidebar({
     });
   }, [closeContextMenu, confirmDelete, contextDir, loadTree, onDeletedItem]);
 
+  const showContextFolderInFinder = useCallback(() => {
+    const finderPath = contextFolderFinderPath;
+    closeContextMenu();
+    if (!finderPath) return;
+    window.shellAPI?.showItemInFolder(finderPath);
+  }, [closeContextMenu, contextFolderFinderPath]);
+
   return (
     <div
       onContextMenu={(event) => openContextMenu(event, null)}
@@ -928,6 +1011,32 @@ function WikiSidebar({
         {isSearching ? `${visiblePages} of ${totalPages} pages` : `${totalPages} pages`}
       </div>
 
+      {rootCreateLocation && creating?.kind === 'file' && createLocationMatches(creating.location, rootCreateLocation) && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={0}
+          placeholder="Untitled"
+        />
+      )}
+
+      {rootCreateLocation && creating?.kind === 'dir' && createLocationMatches(creating.location, rootCreateLocation) && (
+        <CreateInput
+          inputRef={createInputRef}
+          value={newName}
+          onChange={setNewName}
+          onSubmit={submitCreate}
+          onCancel={cancelCreate}
+          theme={theme}
+          depth={0}
+          placeholder="New folder"
+        />
+      )}
+
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
@@ -969,6 +1078,7 @@ function WikiSidebar({
           theme={theme}
           canCreate={canCreateInContext}
           canRemoveRoot={!!contextDir?.canRemoveRoot}
+          canShowFolderInFinder={!!contextFolderFinderPath}
           canDeleteFile={canDeleteContextFile}
           canDeleteDir={canDeleteContextDir}
           onNewFile={() => {
@@ -982,6 +1092,7 @@ function WikiSidebar({
             beginCreateDir(contextCreateTarget);
           }}
           onAddFolder={addFolderFromPath}
+          onShowFolderInFinder={showContextFolderInFinder}
           onRemoveRoot={removeContextRoot}
           onDeleteFile={deleteContextFile}
           onDeleteDir={deleteContextDir}
@@ -1277,11 +1388,13 @@ function LibraryContextMenu({
   theme,
   canCreate,
   canRemoveRoot,
+  canShowFolderInFinder,
   canDeleteFile,
   canDeleteDir,
   onNewFile,
   onNewFolder,
   onAddFolder,
+  onShowFolderInFinder,
   onRemoveRoot,
   onDeleteFile,
   onDeleteDir,
@@ -1291,11 +1404,13 @@ function LibraryContextMenu({
   theme: ReturnType<typeof useTheme>['theme'];
   canCreate: boolean;
   canRemoveRoot: boolean;
+  canShowFolderInFinder: boolean;
   canDeleteFile: boolean;
   canDeleteDir: boolean;
   onNewFile: () => void;
   onNewFolder: () => void;
   onAddFolder: () => void;
+  onShowFolderInFinder: () => void;
   onRemoveRoot: () => void;
   onDeleteFile: () => void;
   onDeleteDir: () => void;
@@ -1362,6 +1477,9 @@ function LibraryContextMenu({
         New folder
       </button>
       <button style={itemStyle} onClick={onAddFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
+      {canShowFolderInFinder && (
+        <button style={itemStyle} onClick={onShowFolderInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
+      )}
       {canRemoveRoot && (
         <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from library</button>
       )}
