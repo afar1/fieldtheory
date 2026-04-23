@@ -184,6 +184,37 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-drawer-text-size', (_event, size) => callback(size));
   },
 
+  // Unified window resize — notifies the renderer of the new left-pill width.
+  onResize: (callback: (data: { leftWidth: number; rightWidth: number }) => void) => {
+    ipcRenderer.on('dynamic-island-resize', (_event, data) => callback(data));
+  },
+
+  // Agents currently waiting for user attention (Claude / Codex Stop hooks).
+  onAgentsChange: (callback: (agents: Array<{
+    agentId: string;
+    tool: 'claude' | 'codex';
+    pid: number;
+    cwd: string;
+    ttyTitle: string;
+    terminalApp: string;
+    waitingSince: number;
+  }>) => void) => {
+    ipcRenderer.on('dynamic-island-agents', (_event, agents) => callback(agents));
+  },
+
+  // Spatial layout for waiting-agent dots. Null when <2 agents or no native
+  // window data is available; renderer falls back to legacy ordering.
+  onAgentLayout: (callback: (layout: {
+    kind: 'row' | 'grid';
+    slots: Array<{ position: number; agentIds: string[] }>;
+    unmatched: string[];
+  } | null) => void) => {
+    ipcRenderer.on('dynamic-island-agent-layout', (_event, layout) => callback(layout));
+  },
+
+  // Focus the terminal window/tab associated with a waiting agent.
+  focusAgent: (agentId: string) => ipcRenderer.invoke('agent:focus', agentId),
+
   // Hot-mic background filter controls.
   getHotMicBackgroundFilterEnabled: () => ipcRenderer.invoke('hotmic:getBackgroundFilterEnabled'),
   setHotMicBackgroundFilterEnabled: (enabled: boolean) => ipcRenderer.invoke('hotmic:setBackgroundFilterEnabled', enabled),
@@ -192,6 +223,12 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
   getHotMicDrawerTextSize: () => ipcRenderer.invoke('hotmic:getDrawerTextSize'),
   getInputMode: () => ipcRenderer.invoke('hotmic:getInputMode'),
   setInputMode: (mode: 'hot-mic' | 'standard') => ipcRenderer.invoke('hotmic:setInputMode', mode),
+
+  // Diagnostic: renderer echoes its width math to main so widths from both
+  // sides land in the same trace file (~/.fieldtheory/debug/pill-widths.log).
+  debugRender: (payload: Record<string, unknown>) => {
+    ipcRenderer.send('di:debug-render', payload);
+  },
 
   removeAllListeners: (channel: string) => {
     ipcRenderer.removeAllListeners(channel);

@@ -2145,6 +2145,36 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Export the current clipboard image to the figures cache and return its path.
+   * This is used by markdown editors, where pasting an image should insert a
+   * stable local file reference instead of an opaque image object.
+   */
+  async exportCurrentClipboardImageToCache(): Promise<string | null> {
+    try {
+      const image = clipboard.readImage();
+      if (image.isEmpty()) return null;
+
+      const imageBuffer = image.toPNG();
+      const hash = this.hashContent(imageBuffer);
+      this.lastContentHash = hash;
+
+      const existing = this.db
+        .prepare('SELECT id FROM clipboard_items WHERE content_hash = ?')
+        .get(hash) as { id: number } | undefined;
+
+      const id = existing?.id ?? await this.storeImage(image, imageBuffer, 'screenshot');
+      if (id <= 0) return null;
+
+      const item = this.getItem(id);
+      if (!item) return null;
+      return await this.exportImageToCache(item);
+    } catch (error) {
+      log.warn('Failed to export current clipboard image:', error);
+      return null;
+    }
+  }
+
+  /**
    * Cleanup resources.
    */
   destroy(): void {

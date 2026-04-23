@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol } from 'electron';
+import { pathToFileURL } from 'url';
 import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
@@ -7,10 +8,11 @@ import { createLogger } from './logger';
 import crypto from 'crypto';
 import { parseEnvContent } from './envUtils';
 import { NativeHelper } from './nativeHelper';
+import { isAlfredApp } from './alfredVisibility';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager } from './preferences';
+import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistorySizeKey } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -57,6 +59,8 @@ import {
   DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING,
   type DynamicIslandGeometryTuning,
 } from './dynamicIslandManager';
+import { AgentAttentionManager } from './agentAttentionManager';
+import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { QuotaManager } from './quotaManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
@@ -64,7 +68,10 @@ import { CommandSyncService } from './commandSyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
+import { RecentManager, type RecentEntry } from './recentManager';
+import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
@@ -89,6 +96,8 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
+
+const BOOT_MARK = Date.now();
 const VISION_BUILD_ENABLED = false;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
@@ -208,6 +217,13 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   };
 }
 
+// Register the ftmedia:// scheme as privileged so the renderer can load
+// locally-cached bookmark media without going through the Twitter CDN.
+// Must happen before app.whenReady(). The actual handler is installed inside.
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'ftmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
+]);
+
 // Pin userData paths explicitly so auth/session storage is stable across package-name changes.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
 if (process.env.EXPERIMENTAL === 'true') {
@@ -242,15 +258,34 @@ let feedbackManager: FeedbackManager | null = null;
 let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let dynamicIslandManager: DynamicIslandManager | null = null;
+let agentAttentionManager: AgentAttentionManager | null = null;
+let agentHookInstaller: AgentHookInstaller | null = null;
 let quotaManager: QuotaManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let recentManager: RecentManager | null = null;
+let bookmarksManager: BookmarksManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
+let librarianMarkdownEditorFocused = false;
+
+function hideFieldTheoryForAlfred(): void {
+  commandLauncherWindow?.hide(true);
+
+  if (clipboardHistoryWindow?.isShowing() || clipboardHistoryWindow?.isVisible()) {
+    clipboardHistoryWindow.hide(false, 'alfred-activated');
+  }
+
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindow.isVisible()) {
+    mainWindow.hide();
+  }
+
+  app.hide();
+}
 
 /**
  * Check if the configured transcription engine is ready.
@@ -762,6 +797,14 @@ function registerHotkeysAfterOnboarding(): void {
         return;
       }
 
+      if (librarianMarkdownEditorFocused && clipboardHistoryWindow?.isVisible()) {
+        const imagePath = await clipboardManager.exportCurrentClipboardImageToCache();
+        if (imagePath) {
+          clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', imagePath);
+          return;
+        }
+      }
+
       // Get most recent item from clipboard history
       const db = clipboardManager['db'];
       if (!db) return;
@@ -935,12 +978,14 @@ function registerHotkeysAfterOnboarding(): void {
       const launcherVisible = commandLauncherWindow?.isVisible() ?? false;
       const launcherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
       const immersiveMode = clipboardHistoryWindow?.getImmersiveMode() ?? false;
+      const fieldTheoryFocused = clipboardHistoryWindow?.getWindow()?.isFocused() ?? false;
 
       appendCommandLauncherTrace('hotkey-trigger', {
         hotkey: commandLauncherHotkey,
         launcherVisible,
         launcherShowingOrVisible,
         immersiveMode,
+        fieldTheoryFocused,
       });
 
       try {
@@ -955,14 +1000,22 @@ function registerHotkeysAfterOnboarding(): void {
           return;
         }
 
-        // If immersive view is open, dismiss it first to avoid z-order conflicts
-        if (immersiveMode) {
+        // If immersive view is open behind another app, dismiss it first to avoid
+        // z-order conflicts. Keep it in place when Field Theory is the active
+        // writing surface so launcher selection can navigate inside the app.
+        if (immersiveMode && !fieldTheoryFocused) {
           appendCommandLauncherTrace('hotkey-hide-immersive-window');
           clipboardHistoryWindow?.hide();
         }
 
-        appendCommandLauncherTrace('hotkey-show-request');
-        await commandLauncherWindow.show();
+        const anchorBounds = fieldTheoryFocused
+          ? clipboardHistoryWindow?.getBounds()
+          : null;
+
+        appendCommandLauncherTrace('hotkey-show-request', {
+          anchor: anchorBounds ? 'field-theory-window' : 'frontmost-window',
+        });
+        await commandLauncherWindow.show({ anchorBounds });
         appendCommandLauncherTrace('hotkey-show-complete', {
           launcherVisible: commandLauncherWindow.isVisible(),
           launcherShowingOrVisible: commandLauncherWindow.isShowingOrVisible(),
@@ -973,6 +1026,23 @@ function registerHotkeysAfterOnboarding(): void {
         log.error('Command launcher hotkey failed:', error);
       }
   });
+
+  // Control+Option+Command+Space: show Field Theory, jump to Library, create
+  // a new scratchpad doc, and drop into edit mode. One keystroke → ready to
+  // type an ad-hoc thought.
+  const scratchpadHotkey = 'Control+Option+Command+Space';
+  const scratchpadRegistered = globalShortcut.register(scratchpadHotkey, () => {
+    if (!librarianManager) return;
+    const page = librarianManager.createScratchpadDefault();
+    if (!page || !clipboardHistoryWindow) return;
+    const boundsToUse = restoreClipboardHistoryBounds('library');
+    suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
+    clipboardHistoryWindow.show(boundsToUse);
+    clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', page.relPath);
+  });
+  if (!scratchpadRegistered) {
+    log.warn(`Scratchpad hotkey (${scratchpadHotkey}) registration failed — likely claimed by another app.`);
+  }
 
 }
 
@@ -1165,7 +1235,7 @@ function handleDisplayMetricsChanged(_event: Electron.Event, _changedDisplay: El
     displayMetricsDebounceTimer = null;
     if (!clipboardHistoryWindow || !clipboardHistoryWindow.isVisible()) return;
 
-    const boundsToUse = restoreClipboardHistoryBounds();
+    const boundsToUse = restoreClipboardHistoryBounds(clipboardHistoryWindow.getCurrentSizeKey());
     if (boundsToUse) {
       clipboardHistoryWindow.reposition(boundsToUse);
     }
@@ -1185,13 +1255,21 @@ function setupDisplayListeners(): void {
  * Handles both old format (absolute x, y) and new format (display-relative).
  * Returns absolute screen coordinates for use with the native vibrancy window.
  */
-function restoreClipboardHistoryBounds(): { x: number; y: number; width: number; height: number } | undefined {
+function isClipboardHistorySizeKey(value: unknown): value is ClipboardHistorySizeKey {
+  return value === 'fields' || value === 'library' || value === 'canvas' || value === 'draw';
+}
+
+function getLastClipboardHistorySizeKey(): ClipboardHistorySizeKey {
+  const savedKey = preferencesManager?.get().clipboardHistoryLastSizeKey;
+  return isClipboardHistorySizeKey(savedKey) ? savedKey : 'fields';
+}
+
+function restoreClipboardHistoryBounds(sizeKey: ClipboardHistorySizeKey = getLastClipboardHistorySizeKey()): { x: number; y: number; width: number; height: number } | undefined {
   if (!preferencesManager) {
     return undefined;
   }
 
-  const prefs = preferencesManager.get();
-  const savedBounds = prefs?.clipboardHistoryBounds;
+  const savedBounds = pickSavedBoundsByKey(preferencesManager.get(), sizeKey);
   if (!savedBounds) {
     return undefined;
   }
@@ -1241,6 +1319,33 @@ function restoreClipboardHistoryBounds(): { x: number; y: number; width: number;
   return undefined;
 }
 
+async function saveClipboardHistoryBoundsForKey(
+  bounds: { x: number; y: number; width: number; height: number },
+  key: ClipboardHistorySizeKey
+): Promise<void> {
+  if (!preferencesManager) return;
+
+  const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
+  const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
+
+  const entry = {
+    relativeX: displayRelative.relativeX,
+    relativeY: displayRelative.relativeY,
+    width: bounds.width,
+    height: bounds.height,
+    displayId: displayRelative.displayId,
+    displayConfig,
+  };
+
+  const prefs = preferencesManager.get();
+  const existing = prefs?.clipboardHistoryBoundsByView ?? {};
+  await preferencesManager.save({
+    clipboardHistoryBoundsByView: { ...existing, [key]: entry },
+    clipboardHistoryLastSizeKey: key,
+    ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
+  });
+}
+
 /**
  * Initialize clipboard history window with bounds change callback.
  */
@@ -1262,22 +1367,9 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   });
 
   // Set up callback to save bounds when window is moved/resized.
+  // Bounds are persisted per size-key so each view remembers its own dims.
   window.setOnBoundsChanged(async (bounds) => {
-    if (!preferencesManager) return;
-
-    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-    const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
-
-    await preferencesManager.save({
-      clipboardHistoryBounds: {
-        relativeX: displayRelative.relativeX,
-        relativeY: displayRelative.relativeY,
-        width: bounds.width,
-        height: bounds.height,
-        displayId: displayRelative.displayId,
-        displayConfig,
-      },
-    });
+    await saveClipboardHistoryBoundsForKey(bounds, window.getCurrentSizeKey());
   });
 
   window.setOnHidden(({ reason }) => {
@@ -1321,7 +1413,7 @@ function showSettingsInClipboardWindow(): void {
     clipboardHistoryWindow = initClipboardHistoryWindow();
   }
 
-  const boundsToUse = restoreClipboardHistoryBounds();
+  const boundsToUse = restoreClipboardHistoryBounds('fields');
   suspendDynamicIslandFocusForClipboardHistory('show-settings');
   clipboardHistoryWindow.show(boundsToUse, true);
 }
@@ -1361,6 +1453,35 @@ function showClipboardHistoryOnActivate(): void {
   cursorStatusManager?.refreshWindowProperties();
   dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
 }
+
+/** Route an incoming markdown path to the library view. Called from `open-file`
+ *  (macOS) and also deferred until the main window exists for cold starts. */
+function routeOpenMarkdown(inputPath: string): void {
+  const resolved = resolveIncomingMarkdownPath(inputPath, librarianManager?.getWikiRoot() ?? null);
+  if (!resolved) {
+    log.info(`open-file: ignoring non-markdown or unreadable path: ${inputPath}`);
+    return;
+  }
+  if (!clipboardHistoryWindow) {
+    log.info('open-file: main window not ready, queueing');
+    pendingOpenMarkdownPath = inputPath;
+    return;
+  }
+  const boundsToUse = restoreClipboardHistoryBounds('library');
+  suspendDynamicIslandFocusForClipboardHistory('show-reading');
+  clipboardHistoryWindow.show(boundsToUse);
+  const webContents = clipboardHistoryWindow.getWindow()?.webContents;
+  if (!webContents) return;
+  if (resolved.kind === 'wiki') {
+    webContents.send('wiki:openPage', resolved.relPath);
+  } else {
+    webContents.send('external:openPage', resolved.absPath);
+  }
+}
+
+// Cold-start queue — macOS fires `open-file` before windows exist. Last-wins
+// (batch multi-select also ends up here; we only show one file at a time).
+let pendingOpenMarkdownPath: string | null = null;
 
 /**
  * Set up all IPC handlers for audio-related communication.
@@ -1494,6 +1615,44 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getWikiTree();
   });
 
+  ipcMain.handle('library:getRoots', (): LibraryRoot[] => {
+    if (!librarianManager) return [];
+    return librarianManager.getLibraryRoots();
+  });
+
+  ipcMain.handle('library:addRoot', (_event, dirPath: string): LibraryRoot | null => {
+    if (!librarianManager) return null;
+    return librarianManager.addLibraryRoot(dirPath);
+  });
+
+  ipcMain.handle('library:removeRoot', (_event, dirPath: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.removeLibraryRoot(dirPath);
+  });
+
+  ipcMain.handle('library:createFile', (_event, rootPath: string, folderRelPath: string, fileName: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
+  });
+
+  ipcMain.handle('library:createDir', (_event, rootPath: string, dirRelPath: string): boolean => {
+    if (!librarianManager) return false;
+    return librarianManager.createLibraryDir(rootPath, dirRelPath);
+  });
+
+  ipcMain.handle('library:deleteDir', async (_event, rootPath: string, dirRelPath: string): Promise<boolean> => {
+    if (!librarianManager) return false;
+    return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
+  });
+
+  ipcMain.handle('library:pickFolder', async (): Promise<string | null> => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (result.canceled) return null;
+    return result.filePaths[0] ?? null;
+  });
+
   ipcMain.handle('wiki:getPage', (_event, relPath: string): WikiPage | null => {
     if (!librarianManager) return null;
     return librarianManager.getWikiPage(relPath);
@@ -1509,16 +1668,119 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.createWikiFile(folderName, fileName);
   });
 
+  ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
+    if (!librarianManager) return false;
+    return librarianManager.deleteWikiPage(relPath);
+  });
+
+  ipcMain.handle('wiki:createScratchpadDefault', (): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.createScratchpadDefault();
+  });
+
   ipcMain.handle('wiki:createDir', (_event, dirName: string): boolean => {
     if (!librarianManager) return false;
     return librarianManager.createWikiDir(dirName);
+  });
+
+  ipcMain.handle('wiki:rename', (_event, relPath: string, newName: string): string | null => {
+    if (!librarianManager) return null;
+    return librarianManager.renameWikiPage(relPath, newName);
+  });
+
+  // Recent items (wiki + external). Returns the updated list so the renderer
+  // can re-render without a second round-trip; also broadcasts `recent:changed`
+  // so other windows/components (e.g. sidebar) drop stale entries immediately.
+  const broadcastRecentChanged = () => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('recent:changed');
+    });
+  };
+  ipcMain.handle('recent:list', (): RecentEntry[] => recentManager?.list() ?? []);
+  ipcMain.handle('recent:visit', (_event, entry: RecentEntry): RecentEntry[] => {
+    const next = recentManager?.visit(entry) ?? [];
+    broadcastRecentChanged();
+    return next;
+  });
+  ipcMain.handle(
+    'recent:remove',
+    (_event, kind: 'wiki' | 'external', entryPath: string): RecentEntry[] => {
+      const next = recentManager?.remove(kind, entryPath) ?? [];
+      broadcastRecentChanged();
+      return next;
+    },
+  );
+
+  // External markdown files — used when macOS opens a .md file "With Field
+  // Theory" and the canonical path falls outside the wiki root. The app
+  // reads/writes the file in place; no copy, no watcher.
+  ipcMain.handle(
+    'external:open',
+    (_event, absPath: string): { path: string; name: string; content: string; mtime: number } | null => {
+      try {
+        const canonical = fs.realpathSync(absPath);
+        if (!isAllowedMarkdownExt(canonical)) return null;
+        const content = fs.readFileSync(canonical, 'utf-8');
+        const stats = fs.statSync(canonical);
+        return {
+          path: canonical,
+          name: path.basename(canonical),
+          content,
+          mtime: Math.floor(stats.mtimeMs),
+        };
+      } catch (error) {
+        log.error(`external:open failed for ${absPath}:`, error);
+        return null;
+      }
+    },
+  );
+
+  ipcMain.handle('external:save', (_event, absPath: string, content: string): boolean => {
+    try {
+      const canonical = fs.realpathSync(absPath);
+      if (!isAllowedMarkdownExt(canonical)) return false;
+      fs.writeFileSync(canonical, content, 'utf-8');
+      return true;
+    } catch (error) {
+      log.error(`external:save failed for ${absPath}:`, error);
+      return false;
+    }
   });
 
   if (librarianManager) {
     librarianManager.startWikiWatcher();
     librarianManager.on('wiki:changed', () => {
       BrowserWindow.getAllWindows().forEach((w) => {
-        if (!w.isDestroyed()) w.webContents.send('wiki:changed');
+        if (!w.isDestroyed()) {
+          w.webContents.send('wiki:changed');
+          w.webContents.send('library:changed');
+        }
+      });
+    });
+    librarianManager.on('library:changed', () => {
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('library:changed');
+      });
+    });
+    // Auto-prune recent when a wiki page is trashed so stale entries drop
+    // from the sidebar even if the caller didn't explicitly call recent:remove.
+    librarianManager.on('wiki:deleted', (relPath: string) => {
+      if (!recentManager) return;
+      recentManager.remove('wiki', relPath);
+      broadcastRecentChanged();
+    });
+  }
+
+  ipcMain.handle('bookmarks:getAll', (): BookmarksSnapshot => {
+    if (!bookmarksManager) return { bookmarks: [], folders: [] };
+    return bookmarksManager.getSnapshot();
+  });
+
+  if (bookmarksManager) {
+    bookmarksManager.startWatcher();
+    bookmarksManager.on('bookmarks:changed', () => {
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
       });
     });
   }
@@ -1559,6 +1821,10 @@ function setupLibrarianIPCHandlers(): void {
     }
 
     return result.filePaths[0];
+  });
+
+  ipcMain.on('librarian:setMarkdownEditorFocused', (_event, focused: boolean) => {
+    librarianMarkdownEditorFocused = Boolean(focused);
   });
 
   // ===========================================================================
@@ -2962,6 +3228,24 @@ function setupClipboardIPCHandlers(): void {
     return id;
   });
 
+  ipcMain.handle(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH, async (): Promise<string | null> => {
+    if (!clipboardManager) {
+      return null;
+    }
+    return clipboardManager.exportCurrentClipboardImageToCache();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, async (_event, id: number): Promise<string | null> => {
+    if (!clipboardManager) {
+      return null;
+    }
+    const item = clipboardManager.getItem(id);
+    if (!item) {
+      return null;
+    }
+    return clipboardManager.exportImageToCache(item);
+  });
+
   ipcMain.handle(ClipboardIPCChannels.SAVE_SKETCH, async (_event, imageData: string, width: number, height: number) => {
     if (!clipboardManager) {
       return -1;
@@ -3477,28 +3761,12 @@ function setupClipboardIPCHandlers(): void {
     await transcriberManager.separateIntoTasks(id);
   });
 
-  // Save bounds handler - now receives absolute screen coordinates directly.
-  // Called when window is hidden or on explicit save request.
+  // Save bounds handler - receives absolute screen coordinates directly.
+  // Called on window hide or explicit save. Persists under the currently-
+  // active size key so each view remembers its own dims.
   ipcMain.handle(ClipboardIPCChannels.SAVE_BOUNDS, async (_event, bounds: { x: number; y: number; width: number; height: number }) => {
-    if (!preferencesManager) {
-      return;
-    }
-    
-    const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
-    
-    // Convert absolute coords to display-relative for persistence.
-    const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
-    
-    await preferencesManager.save({
-      clipboardHistoryBounds: {
-        relativeX: displayRelative.relativeX,
-        relativeY: displayRelative.relativeY,
-        width: bounds.width,
-        height: bounds.height,
-        displayId: displayRelative.displayId,
-        displayConfig,
-      },
-    });
+    const key = clipboardHistoryWindow?.getCurrentSizeKey() ?? 'fields';
+    await saveClipboardHistoryBoundsForKey(bounds, key);
   });
 
   // Target app management handlers.
@@ -3585,6 +3853,20 @@ function setupClipboardIPCHandlers(): void {
   // Immersive mode for Librarian - when active, window should not auto-hide on blur
   ipcMain.on('clipboard-history:setImmersiveMode', async (_event, immersive: boolean) => {
     clipboardHistoryWindow?.setImmersiveMode(immersive);
+  });
+
+  // Some immersive content (bookmarks canvas) opts in to dismiss-on-blur,
+  // while artifact reading keeps the current stay-put behavior.
+  ipcMain.on('clipboard-history:setImmersiveDismissable', async (_event, dismissable: boolean) => {
+    clipboardHistoryWindow?.setImmersiveDismissableOnBlur(dismissable);
+  });
+
+  // Renderer reports the currently-active "size profile" (fields, library,
+  // canvas, draw). Main animates to the saved bounds for that profile and
+  // subsequent user resizes persist under that key.
+  ipcMain.on('clipboard-history:setSizeKey', (_event, key: string) => {
+    if (!isClipboardHistorySizeKey(key)) return;
+    clipboardHistoryWindow?.setSizeKey(key);
   });
 
   // Stack operations for prompt stacking feature
@@ -4030,6 +4312,12 @@ function setupClipboardIPCHandlers(): void {
   // Reveal file in Finder (macOS).
   ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
     shell.showItemInFolder(fullPath);
+  });
+
+  // macOS proxy-icon / Cmd-click title menu. Empty string clears.
+  ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    win?.setRepresentedFilename(fullPath || '');
   });
 
   // =========================================================================
@@ -4942,6 +5230,40 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.loadHandoffContent(filePath);
   });
 
+  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean }> => {
+    const targetApp = commandLauncherWindow?.getPreviousApp();
+    return { fieldTheoryActive: isFieldTheoryBundleId(targetApp?.bundleId) };
+  });
+
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command'; path: string }) => {
+    if (!target?.path || !['wiki', 'artifact', 'command'].includes(target.kind)) {
+      return { success: false, error: 'Invalid markdown target' };
+    }
+    if (!clipboardHistoryWindow) {
+      return { success: false, error: 'Field Theory window not available' };
+    }
+
+    const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' ? 'fields' : 'library';
+    if (!clipboardHistoryWindow.isVisible()) {
+      const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
+      suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
+      clipboardHistoryWindow.show(boundsToUse);
+    }
+
+    commandLauncherWindow?.hide(true);
+    clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
+    return { success: true };
+  });
+
+  ipcMain.handle('commands:insertMarkdownText', async (_event, text: string) => {
+    if (!clipboardHistoryWindow || !text) {
+      return { success: false, error: 'No markdown editor target' };
+    }
+    commandLauncherWindow?.hide(true);
+    clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+    return { success: true };
+  });
+
   // Handle handoff invocation from command launcher (same behavior as commands).
   ipcMain.handle('commands:invokeHandoff', async (_event, filePath: string) => {
     const plist = require('plist');
@@ -4959,7 +5281,7 @@ function setupClipboardIPCHandlers(): void {
       commandLauncherWindow?.hide(true);
 
       if (isTerminal || isIDE) {
-        clipboard.writeText(`[resume from handoff: ${fileName}]\n${filePath} `);
+        clipboard.writeText(`${fileName}\n${filePath} `);
         clipboardManager?.syncClipboardHash();
       } else {
         const plistData = plist.build([filePath]);
@@ -5631,9 +5953,18 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     await preferencesManager.load();
   }
 
+  log.info('[audio-startup] === BOOT TIMELINE (ready handler): +%dms since module load', Date.now() - BOOT_MARK);
   nativeHelper = new NativeHelper();
   nativeHelper.start();
+  log.info('[audio-startup] after nativeHelper.start(): +%dms', Date.now() - BOOT_MARK);
   nativeHelper.warmupAudio();
+  log.info('[audio-startup] after nativeHelper.warmupAudio() call (async): +%dms', Date.now() - BOOT_MARK);
+
+  nativeHelper.on('frontmostAppChanged', (appInfo) => {
+    if (isAlfredApp(appInfo)) {
+      hideFieldTheoryForAlfred();
+    }
+  });
 
   // Hide clipboard history when another app (like Alfred/Spotlight) becomes active.
   // NSPanel windows don't always trigger blur events on other panels, so we use
@@ -5696,7 +6027,9 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
     metricsManager?.recordPriorityMicMinute();
   });
 
+  log.info('[audio-startup] before audioManager.init(): +%dms', Date.now() - BOOT_MARK);
   await audioManager.init();
+  log.info('[audio-startup] after audioManager.init(): +%dms', Date.now() - BOOT_MARK);
 
   trayManager = new TrayManager(audioManager, undefined, preferencesManager);
 
@@ -5950,6 +6283,10 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
+  recentManager = new RecentManager();
+
+  // Initialize bookmarks manager for reading synced X bookmarks.
+  bookmarksManager = new BookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
@@ -5973,6 +6310,15 @@ async function initTranscriberSystem(): Promise<void> {
       return;
     }
 
+    // If the Field Theory window is already open, the user may be typing,
+    // reading, searching, or managing another surface. Save and index the
+    // artifact, but do not take over the current view.
+    if (clipboardHistoryWindow?.isVisible()) {
+      clipboardHistoryWindow.getWindow()?.webContents.send('librarian:newReadingAvailable', reading.path);
+      clipboardHistoryWindow.playArtifactDiscoverySound();
+      return;
+    }
+
     // Auto-show the window if enabled
     if (librarianManager!.isAutoShowEnabled()) {
       const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
@@ -5981,19 +6327,9 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
 
-      // If already in immersive mode, bring window to front and notify renderer
-      if (clipboardHistoryWindow.getImmersiveMode()) {
-        if (shouldStealFocus) {
-          clipboardHistoryWindow.getWindow()?.focus();
-        } else {
-          clipboardHistoryWindow.revealWithoutFocus();
-        }
-        clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
-      } else {
-        const boundsToUse = restoreClipboardHistoryBounds();
-        suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
-        clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
-      }
+      const boundsToUse = restoreClipboardHistoryBounds('library');
+      suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
+      clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
       // Showing/focusing clipboard history can corrupt transparent overlay backing
       // on some macOS compositor paths — reinforce window properties.
       cursorStatusManager?.refreshWindowProperties();
@@ -6007,20 +6343,8 @@ async function initTranscriberSystem(): Promise<void> {
       }
       clipboardHistoryWindow?.playArtifactDiscoverySound();
     } else {
-      // If already in immersive mode, still update the reading
-      if (clipboardHistoryWindow?.getImmersiveMode()) {
-        pendingImmersiveReading = reading.path;
-        if (librarianManager!.doesAutoShowStealFocus()) {
-          clipboardHistoryWindow.getWindow()?.focus();
-        } else {
-          clipboardHistoryWindow.revealWithoutFocus();
-        }
-        clipboardHistoryWindow.getWindow()?.webContents.send('librarian:showNewReading', reading.path);
-        clipboardHistoryWindow.playArtifactDiscoverySound();
-      } else {
-        // Just play the discovery sound if window exists
-        clipboardHistoryWindow?.playArtifactDiscoverySound();
-      }
+      // Just play the discovery sound if window exists.
+      clipboardHistoryWindow?.playArtifactDiscoverySound();
     }
   });
 
@@ -6107,12 +6431,78 @@ async function initTranscriberSystem(): Promise<void> {
   dynamicIslandManager.setStayOnLaptop(preferencesManager.getPreference('hotMicIslandStayOnLaptop') ?? false);
   dynamicIslandManager.setAutoHide(preferencesManager.getPreference('hotMicIslandAutoHide') ?? false);
 
+  // Hook installer must exist before the attention manager so the manager's
+  // tool filter can be seeded from install status (and re-synced on toggle).
+  agentHookInstaller = new AgentHookInstaller();
+
+  // Watch ~/.fieldtheory/agents/state/ for agent-waiting snapshots and
+  // surface them as glyphs in the Dynamic Island.
+  agentAttentionManager = new AgentAttentionManager();
+  agentAttentionManager.setToolFilter(agentHookInstaller.getStatus());
+  agentAttentionManager.setLayoutProvider({
+    listWindows: () => nativeHelper?.getWindowList() ?? Promise.resolve([]),
+    listDisplays: () =>
+      screen.getAllDisplays().map(d => ({
+        x: d.bounds.x,
+        y: d.bounds.y,
+        width: d.bounds.width,
+        height: d.bounds.height,
+      })),
+  });
+  agentAttentionManager.on('change', (agents) => {
+    dynamicIslandManager?.setWaitingAgents(agents);
+  });
+  agentAttentionManager.on('layout', (layout) => {
+    dynamicIslandManager?.setAgentLayout(layout);
+  });
+  agentAttentionManager.start();
+  dynamicIslandManager.setWaitingAgents(agentAttentionManager.getWaiting());
+  ipcMain.handle('agent:focus', async (_e, agentId: string) => {
+    return agentAttentionManager?.focus(agentId) ?? false;
+  });
+  ipcMain.handle('agent:setSynthetic', async (_e, count: number) => {
+    agentAttentionManager?.setSynthetic(Math.max(0, Math.floor(count)));
+  });
+
+  // Dev-only: cycle synthetic waiting-agent count to stress-test Dynamic
+  // Island pill sizing. 0 → 1 → 2 → 3 → 5 → 0. Look for clipped rounded
+  // corners as the count changes, with recording on/off.
+  const syntheticAgentCounts = [0, 1, 2, 3, 5];
+  let syntheticAgentIndex = 0;
+  globalShortcut.register('CommandOrControl+Alt+Shift+A', () => {
+    syntheticAgentIndex = (syntheticAgentIndex + 1) % syntheticAgentCounts.length;
+    const count = syntheticAgentCounts[syntheticAgentIndex];
+    agentAttentionManager?.setSynthetic(count);
+    console.log(`[DynamicIsland] synthetic agents → ${count}`);
+  });
+
+  const syncAgentToolFilter = () => {
+    if (!agentHookInstaller || !agentAttentionManager) return;
+    agentAttentionManager.setToolFilter(agentHookInstaller.getStatus());
+  };
+  ipcMain.handle('agent-hooks:install', async (_e, targets: InstallTargets) => {
+    const result = agentHookInstaller?.install(targets ?? {});
+    syncAgentToolFilter();
+    return result;
+  });
+  ipcMain.handle('agent-hooks:uninstall', async (_e, targets: InstallTargets) => {
+    const result = agentHookInstaller?.uninstall(targets ?? {});
+    syncAgentToolFilter();
+    return result;
+  });
+  ipcMain.handle('agent-hooks:status', async () => {
+    return agentHookInstaller?.getStatus();
+  });
+
   // Now create transcriberManager with cursorStatusManager.
+  log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   await transcriberManager.init();
+  log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   broadcastTranscribeEvents();
 
   // Pre-warm transcription engine so first use is fast (Parakeet model load, etc.).
+  log.info('[audio-startup] calling transcriberManager.warmup() (async): +%dms', Date.now() - BOOT_MARK);
   transcriberManager.warmup().catch((err) => {
     log.warn('Transcription warmup failed (non-fatal): %s', err?.message || err);
   });
@@ -6124,6 +6514,7 @@ async function initTranscriberSystem(): Promise<void> {
     transcriberSoundManager.setNativeHelper(nativeHelper);
 
     // Preload all sounds once (shared cache in native helper).
+    log.info('[audio-startup] calling preloadAllSounds() (async): +%dms', Date.now() - BOOT_MARK);
     transcriberSoundManager.preloadAllSounds().catch((err) => {
     });
   }
@@ -6415,6 +6806,9 @@ async function initTranscriberSystem(): Promise<void> {
     if (userDataManager.isLoggedIn()) {
       await commandsManager.reinitializeForUser();
     }
+  }
+  if (recentManager) {
+    recentManager.setUserDataManager(userDataManager);
   }
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
@@ -6759,7 +7153,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
       const relPath = path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
 
       if (clipboardHistoryWindow) {
-        const boundsToUse = restoreClipboardHistoryBounds();
+        const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.show(boundsToUse);
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
@@ -6792,7 +7186,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
 
       // Show and focus the clipboard history window (show() handles focusing)
       if (clipboardHistoryWindow) {
-        const boundsToUse = restoreClipboardHistoryBounds();
+        const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
         clipboardHistoryWindow.show(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
@@ -6815,6 +7209,12 @@ if (!gotTheLock) {
     handleProtocolUrl(url);
   });
 
+  // Batch multi-select fires this once per file; we only show one at a time.
+  app.on('open-file', (event, filePath) => {
+    event.preventDefault();
+    routeOpenMarkdown(filePath);
+  });
+
   app.on('second-instance', (_event, argv) => {
     // Handle URL from second instance (Windows/Linux)
     const url = argv.find(arg => arg.startsWith('fieldtheory://'));
@@ -6835,6 +7235,13 @@ if (!gotTheLock) {
 
   app.whenReady().then(async () => {
     log.info('App ready');
+
+    // ftmedia://media/<filename> → ~/.ft-bookmarks/media/<filename>.
+    // basename() strips any path traversal attempts from the URL.
+    protocol.handle('ftmedia', (req) => {
+      const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));
+      return net.fetch(pathToFileURL(path.join(bookmarkMediaDir(), filename)).toString());
+    });
 
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();
@@ -7489,6 +7896,24 @@ if (!gotTheLock) {
     clipboardHistoryWindow = initClipboardHistoryWindow();
     const boundsToUse = restoreClipboardHistoryBounds();
     clipboardHistoryWindow.preload(boundsToUse);
+
+    // If the app cold-started via `open-file`, the pending path was queued
+    // before the window existed. Flush it once the renderer finishes loading
+    // so wiki:openPage / external:openPage have a listener on the other end.
+    const pendingFlushContents = clipboardHistoryWindow.getWindow()?.webContents;
+    if (pendingFlushContents) {
+      const flushPendingOpen = () => {
+        if (!pendingOpenMarkdownPath) return;
+        const queued = pendingOpenMarkdownPath;
+        pendingOpenMarkdownPath = null;
+        routeOpenMarkdown(queued);
+      };
+      if (pendingFlushContents.isLoading()) {
+        pendingFlushContents.once('did-finish-load', flushPendingOpen);
+      } else {
+        flushPendingOpen();
+      }
+    }
 
     // Update tray manager with current hotkeys for menu display
     if (trayManager && clipboardManager && transcriberManager) {

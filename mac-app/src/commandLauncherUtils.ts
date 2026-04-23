@@ -74,8 +74,6 @@ export function buildBuiltInLauncherActions(
       name: 'settings',
       displayName: 'Open Settings',
       keywords: ['settings', 'preferences', 'config', 'configure', 'options'],
-      hotkey: 'Command+,',
-      hotkeyDisplay: '⌘ ,',
       actionId: 'settings',
     },
     {

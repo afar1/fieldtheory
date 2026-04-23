@@ -445,6 +445,10 @@ export default function SettingsPanel({
   // Dynamic Island auto-hide toggle.
   const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState(false);
 
+  // Agent attention hook installation status.
+  const [agentHooksClaude, setAgentHooksClaude] = useState(false);
+  const [agentHooksCodex, setAgentHooksCodex] = useState(false);
+
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
 
@@ -555,6 +559,12 @@ export default function SettingsPanel({
       // Load Dynamic Island auto-hide setting.
       window.hotMicAPI?.getIslandAutoHide?.().then(enabled => {
         setDynamicIslandAutoHide(enabled);
+      }).catch(() => {});
+
+      // Load agent attention hook install status.
+      window.agentHooksAPI?.getStatus?.().then(status => {
+        setAgentHooksClaude(status.claude);
+        setAgentHooksCodex(status.codex);
       }).catch(() => {});
 
       // Load launch at login setting
@@ -1485,6 +1495,60 @@ export default function SettingsPanel({
             style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db' }}
           >
             <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        <div style={styles.row}>
+          <div>
+            <span style={styles.rowLabel}>Claude Code attention indicator</span>
+            <span style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
+              Installs a hook in ~/.claude/settings.json that lights a green glyph in the notch when Claude finishes thinking.
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              const next = !agentHooksClaude;
+              setAgentHooksClaude(next);
+              try {
+                const result = next
+                  ? await window.agentHooksAPI?.install?.({ claude: true })
+                  : await window.agentHooksAPI?.uninstall?.({ claude: true });
+                if (!result?.success) setAgentHooksClaude(!next);
+              } catch (err) {
+                console.error('Failed to toggle Claude agent hook:', err);
+                setAgentHooksClaude(!next);
+              }
+            }}
+            style={{ ...styles.toggle, backgroundColor: agentHooksClaude ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: agentHooksClaude ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        <div style={styles.row}>
+          <div>
+            <span style={styles.rowLabel}>Codex attention indicator</span>
+            <span style={{ display: 'block', fontSize: '11px', color: theme.textSecondary, marginTop: '2px' }}>
+              Installs a hook in ~/.codex/hooks.json that lights a green glyph in the notch when Codex finishes thinking.
+            </span>
+          </div>
+          <button
+            onClick={async () => {
+              const next = !agentHooksCodex;
+              setAgentHooksCodex(next);
+              try {
+                const result = next
+                  ? await window.agentHooksAPI?.install?.({ codex: true })
+                  : await window.agentHooksAPI?.uninstall?.({ codex: true });
+                if (!result?.success) setAgentHooksCodex(!next);
+              } catch (err) {
+                console.error('Failed to toggle Codex agent hook:', err);
+                setAgentHooksCodex(!next);
+              }
+            }}
+            style={{ ...styles.toggle, backgroundColor: agentHooksCodex ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: agentHooksCodex ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
 

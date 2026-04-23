@@ -444,6 +444,8 @@ interface ClipboardAPI {
 
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  getClipboardImagePath?: () => Promise<string | null>;
+  exportItemImagePath?: (id: number) => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
@@ -1042,6 +1044,7 @@ interface QuotaAPI {
 interface ShellAPI {
   openExternal: (url: string) => Promise<void>;
   showItemInFolder: (fullPath: string) => Promise<void>;
+  setRepresentedFilename: (fullPath: string) => Promise<void>;
 }
 
 /**
@@ -1119,6 +1122,11 @@ interface HandoffInfo {
   lastModified: number;
 }
 
+interface FieldTheoryMarkdownTarget {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
+}
+
 /**
  * Commands API for managing portable commands (markdown files).
  * Allows users to bring their commands from other tools like Claude, Cursor, etc.
@@ -1155,6 +1163,10 @@ interface CommandsAPI {
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
   onLauncherReset?: (callback: () => void) => () => void;
+  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
+  openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
+  insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
+  onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
 
   // Mobile sync operations
   setMobileSync: (dirPath: string, enabled: boolean) => Promise<boolean>;
@@ -1437,7 +1449,11 @@ interface LibrarianAPI {
   initializeProjectStatus: (projectPath: string) => Promise<void>;
   onNewReadingAvailable: (callback: (readingPath: string) => void) => () => void;
   onShowNewReading: (callback: (readingPath: string) => void) => () => void;
+  setMarkdownEditorFocused: (focused: boolean) => void;
+  onInsertMarkdownText: (callback: (text: string) => void) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
+  setImmersiveDismissable: (dismissable: boolean) => void;
+  setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw') => void;
   // Content guidance customization
   getDefaultContentGuidance: () => Promise<string>;
   getContentGuidance: () => Promise<string>;
@@ -1528,14 +1544,120 @@ declare global {
     files: WikiPageMeta[];  // alphabetically sorted
   }
 
+  type WikiNode =
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+    | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+
+  interface LibraryRoot {
+    path: string;
+    label: string;
+    builtin: boolean;
+    writable?: boolean;
+    tree: WikiNode[];
+  }
+
+  interface LibraryAPI {
+    getRoots: () => Promise<LibraryRoot[]>;
+    addRoot: (dirPath: string) => Promise<LibraryRoot | null>;
+    removeRoot: (dirPath: string) => Promise<boolean>;
+    createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
+    createDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+    deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+    pickFolder: () => Promise<string | null>;
+    onRootsChanged: (callback: () => void) => () => void;
+  }
+
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string) => Promise<boolean>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
+    createScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
+    rename: (relPath: string, newName: string) => Promise<string | null>;
+    deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
+    onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
+  }
+
+  // External markdown files opened via macOS `open-file` for paths that fall
+  // outside the wiki root. Read/write happens in place — no copy, no watcher.
+  interface ExternalMarkdownFile {
+    path: string;    // canonical absolute path
+    name: string;    // basename (e.g. "README.md")
+    content: string;
+    mtime: number;
+  }
+
+  interface ExternalAPI {
+    open: (absPath: string) => Promise<ExternalMarkdownFile | null>;
+    save: (absPath: string, content: string) => Promise<boolean>;
+    onOpenExternal: (callback: (absPath: string) => void) => () => void;
+  }
+
+  interface RecentEntry {
+    kind: 'wiki' | 'external';
+    path: string;
+    title: string;
+    lastOpenedAt: number;
+  }
+
+  interface RecentAPI {
+    list: () => Promise<RecentEntry[]>;
+    visit: (entry: RecentEntry) => Promise<RecentEntry[]>;
+    remove: (kind: 'wiki' | 'external', entryPath: string) => Promise<RecentEntry[]>;
+    onChanged: (callback: () => void) => () => void;
+  }
+
+  interface BookmarkImage {
+    url: string;
+    width: number;
+    height: number;
+    type: string;
+    videoUrl?: string;
+    localFilename?: string;
+    localVideoFilename?: string;
+  }
+  interface QuotedTweet {
+    id: string;
+    text: string;
+    authorHandle: string;
+    authorName: string;
+    authorAvatar: string;
+    localAvatarFilename?: string;
+    postedAt: string;
+    url: string;
+    images: BookmarkImage[];
+  }
+  interface Bookmark {
+    id: string;
+    text: string;
+    url: string;
+    authorHandle: string;
+    authorName: string;
+    authorAvatar: string;
+    localAvatarFilename?: string;
+    postedAt: string;
+    images: BookmarkImage[];
+    mediaCount: number;
+    likeCount: number;
+    repostCount: number;
+    bookmarkCount: number;
+    folders: string[];
+    quotedTweet?: QuotedTweet;
+  }
+  interface BookmarkFolder {
+    name: string;
+    id?: string;
+  }
+  interface BookmarksSnapshot {
+    bookmarks: Bookmark[];
+    folders: BookmarkFolder[];
+  }
+  interface BookmarksAPI {
+    getAll: () => Promise<BookmarksSnapshot>;
+    onChanged: (callback: () => void) => () => void;
   }
 
   /**
@@ -1864,7 +1986,11 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
+    externalAPI?: ExternalAPI;
+    recentAPI?: RecentAPI;
+    bookmarksAPI?: BookmarksAPI;
     claudeAPI?: ClaudeAPI;
     cursorAPI?: CursorAPI;
     codexReadPermissionAPI?: CodexReadPermissionAPI;
@@ -1873,10 +1999,21 @@ declare global {
     narrationAPI?: NarrationAPI;  // Stub - feature disabled
     hotMicAPI?: HotMicAPI;
     squaresAPI?: SquaresAPI;
+    agentHooksAPI?: AgentHooksAPI;
 
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
   }
+}
+
+interface AgentHookTargets { claude?: boolean; codex?: boolean }
+interface AgentHookStatus { claude: boolean; codex: boolean }
+interface AgentHookResult { success: boolean; message: string; claude: boolean; codex: boolean }
+
+interface AgentHooksAPI {
+  install: (targets: AgentHookTargets) => Promise<AgentHookResult>;
+  uninstall: (targets: AgentHookTargets) => Promise<AgentHookResult>;
+  getStatus: () => Promise<AgentHookStatus>;
 }
 
 export {};

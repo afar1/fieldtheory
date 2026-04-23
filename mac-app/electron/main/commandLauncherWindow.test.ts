@@ -57,6 +57,35 @@ vi.mock('child_process', () => ({
 
 import { CommandLauncherWindow } from './commandLauncherWindow';
 
+describe('CommandLauncherWindow.show()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockWindow.isVisible.mockReturnValue(false);
+    mockWindow.isDestroyed.mockReturnValue(false);
+  });
+
+  it('centers over explicit anchor bounds when provided', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 390,
+      y: 350,
+      width: 320,
+      height: 36,
+    });
+  });
+});
+
 describe('CommandLauncherWindow.hide()', () => {
   let launcher: CommandLauncherWindow;
 

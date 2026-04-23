@@ -66,12 +66,27 @@ export type RunningApp = {
 };
 
 export const TAB_LABELS: Record<ViewMode, string> = {
-  clipboard: 'Fields',
+  clipboard: 'Items',
   librarian: 'Librarian',
   todo: 'Tasks',
   feedback: 'Feedback',
   commands: 'Commands',
   sketch: 'Sketch',
 };
+
+/** The left-group top-nav tabs that Tab / Shift+Tab cycles between.
+ *  Library is skipped when disabled in prefs. */
+export function nextTopNavViewMode(
+  prev: ViewMode,
+  direction: 1 | -1,
+  librarianEnabled: boolean,
+): ViewMode {
+  const tabs: ViewMode[] = librarianEnabled
+    ? ['clipboard', 'librarian', 'commands']
+    : ['clipboard', 'commands'];
+  const idx = tabs.indexOf(prev);
+  const nextIdx = idx === -1 ? 0 : (idx + direction + tabs.length) % tabs.length;
+  return tabs[nextIdx];
+}
 
 export const MAX_UNDO = 20;

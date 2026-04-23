@@ -9,6 +9,8 @@ export const ClipboardIPCChannels = {
   RESTORE_ITEM: 'clipboard:restoreItem',
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
+  GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  EXPORT_ITEM_IMAGE_PATH: 'clipboard:exportItemImagePath',
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
   SET_HOTKEYS: 'clipboard:setHotkeys',
@@ -291,6 +293,7 @@ export interface ClipboardAPI {
   deleteItem: (id: number) => Promise<void>;
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
+  exportItemImagePath?: (id: number) => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number) => Promise<void>;

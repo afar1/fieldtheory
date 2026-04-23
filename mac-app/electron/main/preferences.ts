@@ -29,7 +29,7 @@ interface WindowState {
  * Supports both old format (x, y in absolute screen coordinates) and new format
  * (relativeX, relativeY relative to display, with displayId for matching).
  */
-interface ClipboardHistoryBounds {
+export interface ClipboardHistoryBounds {
   // Legacy absolute coordinates (for backward compatibility)
   x?: number;
   y?: number;
@@ -41,6 +41,31 @@ interface ClipboardHistoryBounds {
   // Display identifier (e.g., "1920x1080@0,0") for matching displays
   displayId?: string;
   displayConfig: string; // Hash of display arrangement to detect changes
+}
+
+/**
+ * Logical "size profile" the clipboard-history window uses. Each view kind
+ * persists its own bounds so switching views restores the user's preferred
+ * dims for that view.
+ */
+export type ClipboardHistorySizeKey = 'fields' | 'library' | 'canvas' | 'draw';
+
+export type ClipboardHistoryBoundsByView = Partial<Record<ClipboardHistorySizeKey, ClipboardHistoryBounds>>;
+
+/**
+ * Resolve the saved bounds for a given size-key from a preferences snapshot.
+ * Falls back to the legacy single-bounds field (`clipboardHistoryBounds`) only
+ * for the 'fields' key, so users upgrading from a build with no per-view
+ * bounds don't lose their remembered position for the default surface.
+ */
+export function pickSavedBoundsByKey(
+  prefs: { clipboardHistoryBoundsByView?: ClipboardHistoryBoundsByView; clipboardHistoryBounds?: ClipboardHistoryBounds } | null | undefined,
+  key: ClipboardHistorySizeKey
+): ClipboardHistoryBounds | undefined {
+  const byView = prefs?.clipboardHistoryBoundsByView?.[key];
+  if (byView) return byView;
+  if (key === 'fields') return prefs?.clipboardHistoryBounds;
+  return undefined;
 }
 
 // Note: LocalQuotas interface removed - server is now single source of truth for usage tracking.
@@ -59,6 +84,10 @@ interface Preferences {
   priorityDeviceId?: string | null;
   favoriteDeviceName?: string | null; // For auto-reconnect when device reappears
   clipboardHistoryBounds?: ClipboardHistoryBounds;
+  /** Per-view-kind bounds. Takes precedence over clipboardHistoryBounds. */
+  clipboardHistoryBoundsByView?: ClipboardHistoryBoundsByView;
+  /** Last active size profile, so reopen starts at the same view size. */
+  clipboardHistoryLastSizeKey?: ClipboardHistorySizeKey;
 
   // Onboarding state - tracks whether user has completed first-run setup.
   onboardingComplete?: boolean;
@@ -231,6 +260,7 @@ interface Preferences {
 const DEFAULT_PREFERENCES: Preferences = {
   transcriptionHotkey: 'Option+/',
   selectedModel: 'small',
+  clipboardHistoryLastSizeKey: 'fields',
   transcriptionInputSource: 'microphone',
   clipboardScreenshotHotkey: 'Alt+4',
   clipboardDesktopScreenshotHotkey: 'Alt+3',

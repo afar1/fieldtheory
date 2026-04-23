@@ -1,9 +1,31 @@
 import { BrowserWindow, screen, app, ipcMain, clipboard } from 'electron';
 import { EventEmitter } from 'events';
+import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { createLogger } from './logger';
+import type { WaitingAgent } from './types/agentAttention';
+import type { AgentLayout } from './agentLayout';
 
 const log = createLogger('DynamicIsland');
+
+// Debug: pill-width trace. Writes to ~/.fieldtheory/debug/pill-widths.log
+// every time main resizes the island window. Includes renderer echo-back
+// values via the 'di:debug-render' IPC. Read this file to diagnose clipped
+// corners / wrong widths / animation mismatches.
+const PILL_DEBUG_FILE = path.join(os.homedir(), '.fieldtheory', 'debug', 'pill-widths.log');
+let pillDebugReady = false;
+function pillDebugWrite(line: string): void {
+  try {
+    if (!pillDebugReady) {
+      fs.mkdirSync(path.dirname(PILL_DEBUG_FILE), { recursive: true });
+      pillDebugReady = true;
+    }
+    fs.appendFileSync(PILL_DEBUG_FILE, `${new Date().toISOString()} ${line}\n`, 'utf-8');
+  } catch {
+    // best-effort, never break on logging
+  }
+}
 
 // =============================================================================
 // DynamicIslandManager - Fixed-position overlay near the macOS notch.
@@ -72,14 +94,14 @@ export interface DynamicIslandGeometryTuning {
 }
 
 export const DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING: DynamicIslandGeometryTuning = {
-  notchWidthOverride: 0,
-  pillWidth: 0,
-  pillHeight: 0,
+  notchWidthOverride: 207,
+  pillWidth: 60,
+  pillHeight: 39,
   offsetX: 0,
-  offsetY: 0,
+  offsetY: -1,
 };
 
-type IslandWindowLabel = 'left' | 'right' | 'filler' | 'drawer';
+type IslandWindowLabel = 'left' | 'drawer';
 
 interface NotchDisplayProfile {
   modeWidth: number;
@@ -89,13 +111,9 @@ interface NotchDisplayProfile {
 
 export class DynamicIslandManager extends EventEmitter {
   private window: BrowserWindow | null = null;
-  private rightWindow: BrowserWindow | null = null;
-  private gapFillWindow: BrowserWindow | null = null;
   private enabled: boolean = true;
   private state: DynamicIslandState = 'idle';
   private rendererReady: boolean = false;
-  private rightRendererReady: boolean = false;
-  private gapFillRendererReady: boolean = false;
   private pendingShow: boolean = false;
   private historyVisible: boolean = false;
   private leftWindowFocusable: boolean = true;
@@ -160,6 +178,13 @@ export class DynamicIslandManager extends EventEmitter {
 
   // Stack count for screenshots captured during standard recording.
   private stackCount: number = 0;
+
+  // Agents currently waiting for user attention (hook-driven).
+  private waitingAgents: WaitingAgent[] = [];
+  // Spatial arrangement of the waiting-agent dots. Null when fewer than 2
+  // agents are waiting (simple ordering is enough) or when the layout
+  // provider isn't attached. Renderer falls back to the legacy row of dots.
+  private agentLayout: AgentLayout | null = null;
 
   // Hot-mic state tracked for the right pill.
   private hotMicActive: boolean = false;
@@ -284,14 +309,16 @@ export class DynamicIslandManager extends EventEmitter {
       this.collapseHistoryPanel('renderer-history-toggle-open-redirect');
       this.emit('open-field-theory');
     });
+
+    ipcMain.on('di:debug-render', (_event, payload: Record<string, unknown>) => {
+      pillDebugWrite(`REND ${JSON.stringify(payload)}`);
+    });
   }
 
   setClipboardManager(manager: any): void {
     this.clipboardManager = manager;
     if (!this.enabled) return;
     this.show();
-    this.createRightWindow();
-    this.syncGapFillWindow();
     this.createDrawerWindow();
     this.tickAutoHide();
   }
@@ -309,8 +336,6 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (!this.clipboardManager) return;
     this.show();
-    this.showRightWindow();
-    this.syncGapFillWindow();
     if (!this.drawerWindow || this.drawerWindow.isDestroyed()) {
       this.createDrawerWindow();
     } else {
@@ -398,13 +423,9 @@ export class DynamicIslandManager extends EventEmitter {
       this.historyVisible = false;
       this.sendStateToRenderer(state);
       this.updateWindowSize();
-      this.showRightPill();
       this.tickAutoHide();
       return;
     }
-
-    // Hide right pill during expanded states.
-    this.hideRightPill();
 
     this.show();
     this.sendStateToRenderer(state);
@@ -423,12 +444,44 @@ export class DynamicIslandManager extends EventEmitter {
   updateStackCount(count: number): void {
     this.stackCount = count;
     if (!this.enabled) return;
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-stack-changed', count);
-    }
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-stack-changed', count);
     }
+  }
+
+  setWaitingAgents(agents: WaitingAgent[]): void {
+    const prevCount = this.waitingAgents.length;
+    const nextCount = agents.length;
+    this.waitingAgents = agents;
+    if (nextCount < 2) this.agentLayout = null; // layout only meaningful with ≥2
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-agents', agents);
+      if (nextCount < 2) {
+        this.window.webContents.send('dynamic-island-agent-layout', null);
+      }
+    }
+    // Pill width is granular per agent count (see getPillWidth), so resize on
+    // every count change. Auto-hide only ticks on the 0↔non-zero transition
+    // because that's when the "should be revealed" predicate flips.
+    if (prevCount !== nextCount) {
+      this.updateWindowSize();
+      if ((prevCount === 0) !== (nextCount === 0)) {
+        this.tickAutoHide();
+      }
+    }
+  }
+
+  setAgentLayout(layout: AgentLayout | null): void {
+    this.agentLayout = layout;
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-agent-layout', layout);
+    }
+  }
+
+  getWaitingAgents(): WaitingAgent[] {
+    return this.waitingAgents;
   }
 
   // -------------------------------------------------------------------------
@@ -441,6 +494,7 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicLastWord = active ? lastWord : '';
     if (!this.enabled) return;
     this.sendHotMicToRight();
+    this.updateWindowSize();
     this.tickAutoHide();
   }
 
@@ -449,11 +503,11 @@ export class DynamicIslandManager extends EventEmitter {
     this.hotMicWordCount = 0;
     this.hotMicLastWord = '';
     if (!this.enabled) return;
-    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-      this.rightWindow.webContents.send('dynamic-island-hotmic-warn-discard');
+    if (this.window && !this.window.isDestroyed()) {
+      this.window.webContents.send('dynamic-island-hotmic-warn-discard');
       setTimeout(() => {
-        if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-          this.rightWindow.webContents.send('dynamic-island-hotmic-slide-out');
+        if (this.window && !this.window.isDestroyed()) {
+          this.window.webContents.send('dynamic-island-hotmic-slide-out');
         }
       }, 600);
     }
@@ -462,8 +516,8 @@ export class DynamicIslandManager extends EventEmitter {
   sendMuteState(muted: boolean): void {
     this.hotMicMuted = muted;
     if (!this.enabled) return;
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-hotmic-mute', muted);
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-hotmic-mute', muted);
     }
     this.sendHotMicToRight();
   }
@@ -482,9 +536,8 @@ export class DynamicIslandManager extends EventEmitter {
 
   updateStandardAudioLevel(level: number): void {
     if (!this.enabled) return;
-    // Only the right pill renders the waveform; left pill no longer uses audio levels.
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-standard-audio-level', level);
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-standard-audio-level', level);
     }
   }
 
@@ -492,9 +545,6 @@ export class DynamicIslandManager extends EventEmitter {
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-hotmic-filter-meter', data);
-    }
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-hotmic-filter-meter', data);
     }
   }
 
@@ -505,8 +555,8 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private sendHotMicToRight(): void {
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-hotmic', {
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-hotmic', {
         active: this.hotMicActive,
         wordCount: this.hotMicWordCount,
         lastWord: this.hotMicLastWord,
@@ -525,9 +575,6 @@ export class DynamicIslandManager extends EventEmitter {
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-input-mode', this.inputMode);
-    }
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-input-mode', this.inputMode);
     }
   }
 
@@ -629,7 +676,9 @@ export class DynamicIslandManager extends EventEmitter {
     const backingColor = this.getOverlayBackingColor(useTransparentWindow);
     const idleWidth = this.getIdlePillWidth();
     const idleHeight = this.getIdlePillHeight();
-    const initialWidth = this.historyVisible ? this.ISLAND_WIDTH : idleWidth;
+    const initialWidth = this.historyVisible
+      ? this.getUnifiedWindowWidth(this.ISLAND_WIDTH)
+      : this.getUnifiedWindowWidth(idleWidth);
     const x = this.getLeftWindowX(idleWidth, true);
     const y = this.getTopWindowY();
 
@@ -667,7 +716,7 @@ export class DynamicIslandManager extends EventEmitter {
 
     this.window.setIgnoreMouseEvents(false);
 
-    this.loadWindowUrl(this.window, 'dynamic-island.html?side=left');
+    this.loadWindowUrl(this.window, `dynamic-island.html?side=unified&rightWidth=${this.getRightPillWidth()}`);
 
     // Intercept Cmd+W at the keyboard level so it never reaches the window
     // close handler. Using preventDefault on 'close' causes macOS to
@@ -698,6 +747,13 @@ export class DynamicIslandManager extends EventEmitter {
         }
         this.sendStateToRenderer(this.state);
         this.sendInputModeToRenderers();
+        // Seed both sides with the same width so the first frame is symmetric;
+        // getPillWidth() already accounts for agents and active state.
+        const leftWidth = this.historyVisible ? this.ISLAND_WIDTH : this.getPillWidth();
+        this.window.webContents.send('dynamic-island-resize', { leftWidth, rightWidth: this.getRightPillWidth() });
+        this.window.webContents.send('dynamic-island-stack-changed', this.stackCount);
+        this.window.webContents.send('dynamic-island-agents', this.waitingAgents);
+        this.window.webContents.send('dynamic-island-agent-layout', this.agentLayout);
         this.sendHistory();
         this.sendHotMicRuntimeStatusToLeft();
 
@@ -711,175 +767,6 @@ export class DynamicIslandManager extends EventEmitter {
         }
       }
     });
-  }
-
-  // -------------------------------------------------------------------------
-  // Window management — right pill
-  // -------------------------------------------------------------------------
-
-  private createRightWindow(): void {
-    if (this.rightWindow && !this.rightWindow.isDestroyed()) return;
-
-    this.rightRendererReady = false;
-    const useTransparentWindow = this.shouldUseTransparentWindow('right');
-    const backingColor = this.getOverlayBackingColor(useTransparentWindow);
-    const rightWidth = this.getRightPillWidth();
-    const rightHeight = this.getRightPillHeight();
-    const x = this.getRightWindowX();
-    const y = this.getTopWindowY();
-
-    this.rightWindow = new BrowserWindow({
-      width: rightWidth,
-      height: rightHeight,
-      x,
-      y,
-      frame: false,
-      transparent: useTransparentWindow,
-      backgroundColor: backingColor,
-      hasShadow: false,
-      roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      hiddenInMissionControl: true,
-      resizable: false,
-      movable: false,
-      focusable: false,
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, '../dynamic-island-preload.js'),
-      },
-    });
-
-    this.rightWindow.setOpacity(0);
-    this.applyWindowBackingColor(this.rightWindow, 'right', useTransparentWindow, { force: true, reason: 'right-create' });
-    this.rightWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    this.rightWindow.setAlwaysOnTop(true, 'screen-saver', 2);
-
-    // Right pill is clickable for mute toggle.
-    this.rightWindow.setIgnoreMouseEvents(false);
-
-    this.loadWindowUrl(this.rightWindow, 'dynamic-island.html?side=right');
-
-    this.rightWindow.on('closed', () => {
-      this.rightWindow = null;
-      this.rightRendererReady = false;
-    });
-    this.attachWindowDebugLogging(this.rightWindow, 'right');
-
-    this.rightWindow.webContents.once('did-finish-load', () => {
-      this.rightRendererReady = true;
-      if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-        if (!this.enabled) {
-          this.rightWindow.hide();
-          return;
-        }
-        this.updateRightWindowPosition();
-        this.reinforceWindowBacking('right', 'right-ready-show');
-        if (!this.isAutoHidden()) {
-          this.rightWindow.setOpacity(1);
-          this.rightWindow.showInactive();
-        }
-        this.syncRightWindowState();
-      }
-    });
-  }
-
-  private showRightWindow(): void {
-    if (!this.enabled) return;
-    if (!this.rightWindow || this.rightWindow.isDestroyed()) {
-      this.createRightWindow();
-      return;
-    }
-
-    this.updateRightWindowPosition();
-    this.reinforceWindowBacking('right', 'right-show-enabled');
-    if (!this.isAutoHidden()) {
-      this.rightWindow.setOpacity(1);
-      this.rightWindow.showInactive();
-    }
-
-    if (this.rightRendererReady) {
-      this.syncRightWindowState();
-    }
-  }
-
-  private syncRightWindowState(): void {
-    const w = this.rightWindow;
-    if (!w || w.isDestroyed()) return;
-    w.webContents.send('dynamic-island-drawer-transcript', this.drawerTranscriptText);
-    this.sendHotMicToRight();
-    w.webContents.send('dynamic-island-state', this.state);
-    this.sendInputModeToRenderers();
-    if (this.stackCount > 0) {
-      w.webContents.send('dynamic-island-stack-changed', this.stackCount);
-    }
-  }
-
-  private createGapFillWindow(): void {
-    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) return;
-
-    this.gapFillRendererReady = false;
-    const useTransparentWindow = this.shouldUseTransparentWindow('filler');
-    const backingColor = this.getOverlayBackingColor(useTransparentWindow);
-    const rightHeight = this.getRightPillHeight();
-    const x = this.getGapFillX();
-    const y = this.getTopWindowY();
-
-    this.gapFillWindow = new BrowserWindow({
-      width: this.getGapFillWidth(),
-      height: rightHeight,
-      x,
-      y,
-      frame: false,
-      transparent: useTransparentWindow,
-      backgroundColor: backingColor,
-      hasShadow: false,
-      roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      hiddenInMissionControl: true,
-      resizable: false,
-      movable: false,
-      focusable: false,
-      show: false,
-      webPreferences: {
-        nodeIntegration: false,
-        contextIsolation: true,
-        preload: path.join(__dirname, '../dynamic-island-preload.js'),
-      },
-    });
-
-    this.gapFillWindow.setOpacity(0);
-    this.applyWindowBackingColor(this.gapFillWindow, 'filler', useTransparentWindow, { force: true, reason: 'filler-create' });
-    this.gapFillWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
-    // Keep center fill below the side pills.
-    this.gapFillWindow.setAlwaysOnTop(true, 'screen-saver', 1);
-    this.gapFillWindow.setIgnoreMouseEvents(true);
-
-    this.loadWindowUrl(this.gapFillWindow, 'dynamic-island.html?side=filler');
-
-    this.gapFillWindow.on('closed', () => {
-      this.gapFillWindow = null;
-      this.gapFillRendererReady = false;
-    });
-    this.attachWindowDebugLogging(this.gapFillWindow, 'filler');
-
-    this.gapFillWindow.webContents.once('did-finish-load', () => {
-      this.gapFillRendererReady = true;
-      this.syncGapFillWindow();
-    });
-  }
-
-  private showRightPill(): void {
-    // No-op: right pill stays visible at all times so the black background
-    // never disappears. The expanded left pill paints over it when active.
-  }
-
-  private hideRightPill(): void {
-    // No-op: right pill stays visible at all times so the black background
-    // never disappears. The expanded left pill paints over it when active.
   }
 
   // -------------------------------------------------------------------------
@@ -948,9 +835,6 @@ export class DynamicIslandManager extends EventEmitter {
   updateDrawerTranscript(text: string): void {
     this.drawerTranscriptText = text;
 
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      this.rightWindow.webContents.send('dynamic-island-drawer-transcript', text);
-    }
     if ((!this.drawerWindow || this.drawerWindow.isDestroyed()) && text && this.enabled) {
       this.createDrawerWindow();
     }
@@ -1019,9 +903,6 @@ export class DynamicIslandManager extends EventEmitter {
     if (this.window && !this.window.isDestroyed()) {
       this.window.webContents.send('dynamic-island-state', state);
     }
-    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-      this.rightWindow.webContents.send('dynamic-island-state', state);
-    }
   }
 
   private collapseHistoryPanel(reason: string): void {
@@ -1035,9 +916,6 @@ export class DynamicIslandManager extends EventEmitter {
     // bounds snap. This reduces transient mismatches during rapid hotkey toggles.
     this.updateWindowSize();
     this.syncLeftWindowBackingForMode('history-close');
-    if (this.state === 'idle') {
-      this.showRightPill();
-    }
     if (this.DEBUG_WINDOW_EVENT_LOGGING) {
       log.info('Dynamic Island history collapsed (%s)', reason);
     }
@@ -1051,8 +929,6 @@ export class DynamicIslandManager extends EventEmitter {
     this.activateDebugCornerBacking(reason);
     const snapshot = this.snapshotBackingState();
     this.refreshSingleWindowProperties(this.window, 2, 'left');
-    this.refreshSingleWindowProperties(this.rightWindow, 2, 'right');
-    this.refreshSingleWindowProperties(this.gapFillWindow, 1, 'filler');
     this.refreshSingleWindowProperties(this.drawerWindow, 1, 'drawer');
     const after = this.snapshotBackingState();
     const corrupted = snapshot.some(s => s.reportedBg !== '#00000000' && s.reportedBg !== '#000000');
@@ -1069,8 +945,6 @@ export class DynamicIslandManager extends EventEmitter {
     const results: Array<{ label: string; reportedBg: string; visible: boolean; opacity: number }> = [];
     const windows: Array<[BrowserWindow | null, string]> = [
       [this.window, 'left'],
-      [this.rightWindow, 'right'],
-      [this.gapFillWindow, 'filler'],
       [this.drawerWindow, 'drawer'],
     ];
     for (const [win, label] of windows) {
@@ -1120,9 +994,6 @@ export class DynamicIslandManager extends EventEmitter {
 
   private shouldUseTransparentWindow(label: IslandWindowLabel): boolean {
     if (label === 'left' && this.KEEP_SIDE_PILLS_TRANSPARENT) {
-      return true;
-    }
-    if (label === 'right' && this.KEEP_SIDE_PILLS_TRANSPARENT) {
       return true;
     }
     if (label === 'drawer') {
@@ -1215,8 +1086,6 @@ export class DynamicIslandManager extends EventEmitter {
 
   private getWindowByLabel(label: IslandWindowLabel): BrowserWindow | null {
     if (label === 'left') return this.window;
-    if (label === 'right') return this.rightWindow;
-    if (label === 'filler') return this.gapFillWindow;
     return this.drawerWindow;
   }
 
@@ -1350,10 +1219,6 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
-  private isAutoHideActiveState(): boolean {
-    return this.state !== 'idle' || this.hotMicActive;
-  }
-
   // Final authority over whether external show() paths should be allowed to
   // run. True when auto-hide is in control of the windows and progress is
   // below 1 — external code that calls setOpacity(1) / showInactive() would
@@ -1383,9 +1248,9 @@ export class DynamicIslandManager extends EventEmitter {
     const idleWidth = this.getIdlePillWidth();
     const idleHeight = this.getIdlePillHeight();
     const leftX = this.getLeftWindowX(idleWidth, true);
-    const rightX = this.getRightWindowX() + this.getRightPillWidth();
+    const rightX = leftX + this.getUnifiedWindowWidth(idleWidth);
     const topY = this.getTopWindowY();
-    const bottomY = topY + Math.max(idleHeight, this.getRightPillHeight());
+    const bottomY = topY + idleHeight;
 
     // Distance from cursor to the island's axis-aligned bounding box.
     const dx = Math.max(leftX - cursor.x, 0, cursor.x - rightX);
@@ -1400,9 +1265,16 @@ export class DynamicIslandManager extends EventEmitter {
   private tickAutoHide(): void {
     if (!this.autoHideEnabled || !this.enabled) return;
 
-    const target = this.isAutoHideActiveState()
-      ? 1
-      : this.computeAutoHideProgressFromCursor();
+    const forceVisible = this.shouldForceAutoHideReveal();
+    const target = forceVisible ? 1 : this.computeAutoHideProgressFromCursor();
+
+    // Active states (recording, hot-mic, etc.) snap instantly to fully visible
+    // so the animation doesn't fight the window resize from updateWindowSize().
+    if (forceVisible && this.autoHideRenderedProgress < 1) {
+      this.autoHideRenderedProgress = 1;
+      this.applyAutoHideProgress(1);
+      return;
+    }
 
     // If already settled at target, nothing to do. This is the hot path
     // when the cursor is stationary — we tick at 60 Hz but early-out.
@@ -1431,49 +1303,19 @@ export class DynamicIslandManager extends EventEmitter {
     const hasNotch = this.getActiveNotchProfile() !== null;
 
     if (clamped <= 0) {
-      // Fully concealed — hide everything.
       if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
         this.window.hide();
-      }
-      if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightWindow.isVisible()) {
-        this.rightWindow.hide();
-      }
-      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillWindow.isVisible()) {
-        this.gapFillWindow.hide();
       }
       return;
     }
 
     if (clamped >= 1) {
-      // Fully revealed — setOpacity(1) + showInactive on all three. We do
-      // NOT touch position: in idle state the pills' natural position was
-      // already set by updateWindowSize; in active state, the show() path
-      // handles bounds (and this guard is unblocked once isAutoHidden()
-      // returns false at progress=1).
       if (this.window && !this.window.isDestroyed() && this.rendererReady) {
         this.window.setOpacity(1);
         this.window.showInactive();
       }
-      if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-        this.rightWindow.setOpacity(1);
-        this.rightWindow.showInactive();
-      }
-      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillRendererReady) {
-        this.gapFillWindow.setOpacity(1);
-        this.gapFillWindow.showInactive();
-      }
       return;
     }
-
-    // Partial reveal (0 < progress < 1) — cursor-driven.
-    //
-    // Notch path: pills are interpolated between slid-in (inside notch) and
-    // natural idle position. Gap filler opacity fades up at 2× speed so the
-    // notch overlap slivers are covered before they'd otherwise be exposed.
-    //
-    // External path: all three fade opacity in lockstep (no slide — there's
-    // no notch to hide behind).
-    const topY = this.getTopWindowY();
 
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       if (!this.window.isVisible()) {
@@ -1481,44 +1323,19 @@ export class DynamicIslandManager extends EventEmitter {
         this.window.showInactive();
       }
       if (hasNotch) {
-        const w = this.window.getSize()[0];
-        const naturalX = this.getLeftWindowX(this.getIdlePillWidth(), true);
-        // At progress=1: naturalX. At progress=0: naturalX + w (slid right into notch).
-        const x = naturalX + w * (1 - clamped);
-        this.window.setPosition(Math.round(x), topY);
+        // Slide only — opacity stays 1 throughout. The window hides (clamped <= 0)
+        // only after pills are fully retracted behind the notch gap.
+        const leftWidth = this.getIdlePillWidth();
+        const rightWidth = this.getRightPillWidth();
+        const naturalX = this.getLeftWindowX(leftWidth, true);
+        const x = Math.round(naturalX + leftWidth * (1 - clamped));
+        const width = Math.round(this.getGapFillWidth() + (leftWidth + rightWidth) * clamped);
+        const height = this.window.getSize()[1];
+        const y = this.getTopWindowY();
+        this.window.setBounds({ x, y, width, height });
+        this.window.setOpacity(1);
       } else {
         this.window.setOpacity(clamped);
-      }
-    }
-
-    if (this.rightWindow && !this.rightWindow.isDestroyed() && this.rightRendererReady) {
-      if (!this.rightWindow.isVisible()) {
-        this.rightWindow.setOpacity(1);
-        this.rightWindow.showInactive();
-      }
-      if (hasNotch) {
-        const w = this.rightWindow.getSize()[0];
-        const naturalX = this.getRightWindowX();
-        // At progress=1: naturalX. At progress=0: naturalX - w (slid left into notch).
-        const x = naturalX - w * (1 - clamped);
-        this.rightWindow.setPosition(Math.round(x), topY);
-      } else {
-        this.rightWindow.setOpacity(clamped);
-      }
-    }
-
-    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed() && this.gapFillRendererReady) {
-      if (!this.gapFillWindow.isVisible()) {
-        this.gapFillWindow.setOpacity(0);
-        this.gapFillWindow.showInactive();
-      }
-      if (hasNotch) {
-        // 2× fast ramp: opacity reaches 1 at progress=0.5 so the gap filler
-        // is fully opaque before the pills have slid far enough to expose
-        // the 1-2px overlap slivers.
-        this.gapFillWindow.setOpacity(Math.min(1, clamped * 2));
-      } else {
-        this.gapFillWindow.setOpacity(clamped);
       }
     }
   }
@@ -1599,14 +1416,69 @@ export class DynamicIslandManager extends EventEmitter {
     return y + (profile?.pillY ?? 0) + this.geometryTuning.offsetY;
   }
 
-  private getActivePillWidth(): number {
-    // 0 = auto: use the default idle width
-    if (this.geometryTuning.pillWidth === 0) return this.ISLAND_WIDTH_IDLE;
-    return Math.max(this.geometryTuning.pillWidth, this.ISLAND_WIDTH_IDLE);
+  private isActiveState(): boolean {
+    return this.hotMicActive || this.state !== 'idle';
+  }
+
+  // Conditions that should force the auto-hide pill to reveal, regardless of
+  // cursor proximity. Broader than isActiveState() — includes passive
+  // notifications (waiting agents) that don't warrant pill-width expansion.
+  private shouldForceAutoHideReveal(): boolean {
+    return this.isActiveState() || this.waitingAgents.length > 0;
   }
 
   private getIdlePillWidth(): number {
-    return this.getActivePillWidth();
+    if (this.geometryTuning.pillWidth === 0) return this.ISLAND_WIDTH_IDLE;
+    return this.geometryTuning.pillWidth;
+  }
+
+  // Main sizes the Electron window to fit the renderer's worst-case slot sum
+  // for the current state so the outer wrapper stays tight against the
+  // visible pill. Constants must stay in sync with src/components/pillWidths.ts.
+  private readonly PILL_PADDING = 18;
+  private readonly PILL_HAMBURGER = 22;
+  private readonly PILL_CANCEL_X = 30;   // X cancel slot (22) + 8 gap
+  private readonly PILL_WAVEFORM = 88;   // waveform slot (80) + 8 gap
+  // Renderer currently shows a single green breathing star whenever any
+  // agent is waiting (see AgentAttention.tsx), regardless of count — so the
+  // window only needs room for one slot. When we light up the spatial
+  // layout (1x4 / 2x2), bump these back up to cover the wider worst case.
+  private readonly PILL_AGENT_SLOT = 28;
+  private readonly PILL_AGENT_OVERFLOW = 0;
+  private readonly PILL_AGENT_MAX_VISIBLE = 1;
+
+  private pipeSlotWidth(pipeCount: number): number {
+    if (pipeCount >= 10) return 38;
+    if (pipeCount > 3) return 32;
+    return 22;
+  }
+
+  // Worst-case pill width the renderer might ever show for the current state +
+  // agent count, on EITHER side. Window is sized to this; sections never
+  // overflow, so the rounded outer corners stay inside the window clip area.
+  private getPillWidth(): number {
+    const n = this.waitingAgents.length;
+    const isActive = this.isActiveState();
+    if (!isActive && n === 0) return this.getIdlePillWidth();
+
+    const visible = Math.min(n, this.PILL_AGENT_MAX_VISIBLE);
+    const hasOverflow = n > this.PILL_AGENT_MAX_VISIBLE;
+
+    // Left section: padding + X cancel (active) + agents + overflow + hamburger.
+    const left =
+      this.PILL_PADDING
+      + (isActive ? this.PILL_CANCEL_X : 0)
+      + visible * this.PILL_AGENT_SLOT
+      + (hasOverflow ? this.PILL_AGENT_OVERFLOW : 0)
+      + this.PILL_HAMBURGER;
+
+    // Right section: padding + waveform (active) + pipe slot (stacking).
+    const right =
+      this.PILL_PADDING
+      + (isActive ? this.PILL_WAVEFORM : 0)
+      + (this.stackCount > 0 ? this.pipeSlotWidth(this.stackCount) : 0);
+
+    return Math.max(left, right, this.getIdlePillWidth());
   }
 
   private getIdlePillHeight(): number {
@@ -1618,14 +1490,7 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private getRightPillWidth(): number {
-    return this.getActivePillWidth();
-  }
-
-  private getRightPillHeight(): number {
-    if (this.geometryTuning.pillHeight === 0) {
-      return this.getMenuBarHeight();
-    }
-    return this.geometryTuning.pillHeight;
+    return this.getPillWidth();
   }
 
   private getLeftWindowX(width: number, isIdle: boolean): number {
@@ -1637,59 +1502,21 @@ export class DynamicIslandManager extends EventEmitter {
     return primaryX + Math.floor((screenWidth - width) / 2) + this.geometryTuning.offsetX;
   }
 
-  private getRightWindowX(): number {
-    const { x: primaryX, width: screenWidth } = this.getPrimaryDisplayGeometry();
-    const notchWidth = this.getNotchAnchorWidth();
-    return primaryX + Math.floor((screenWidth + notchWidth) / 2) + this.geometryTuning.offsetX;
-  }
-
-  private getGapFillX(): number {
-    const { x: primaryX, width: screenWidth } = this.getPrimaryDisplayGeometry();
-    const notchWidth = this.getNotchAnchorWidth();
-    return (
-      primaryX +
-      Math.floor((screenWidth - notchWidth) / 2) -
-      this.CENTER_JOIN_OVERLAP_PX +
-      this.geometryTuning.offsetX
-    );
-  }
-
   private getGapFillWidth(): number {
     return this.getNotchAnchorWidth() + (this.CENTER_JOIN_OVERLAP_PX * 2);
+  }
+
+  private getUnifiedWindowWidth(leftWidth: number): number {
+    return leftWidth + this.getGapFillWidth() + this.getRightPillWidth();
+  }
+
+  private getUnifiedWindowX(leftWidth: number, isIdle: boolean): number {
+    return this.getLeftWindowX(leftWidth, isIdle);
   }
 
   private getDrawerWindowX(): number {
     const { x: primaryX, width: screenWidth } = this.getPrimaryDisplayGeometry();
     return primaryX + Math.floor((screenWidth - this.DRAWER_WIDTH) / 2) + this.geometryTuning.offsetX;
-  }
-
-  private shouldShowGapFill(): boolean {
-    return true;
-  }
-
-  private updateRightWindowPosition(): void {
-    if (!this.rightWindow || this.rightWindow.isDestroyed()) return;
-
-    const rightWidth = this.getRightPillWidth();
-    const rightHeight = this.getRightPillHeight();
-    const x = this.getRightWindowX();
-    const y = this.getTopWindowY();
-    const [currentWidth, currentHeight] = this.rightWindow.getSize();
-    const [currentX, currentY] = this.rightWindow.getPosition();
-    if (
-      currentWidth !== rightWidth ||
-      currentHeight !== rightHeight ||
-      currentX !== x ||
-      currentY !== y
-    ) {
-      this.rightWindow.setBounds({
-        x,
-        y,
-        width: rightWidth,
-        height: rightHeight,
-      });
-      this.reinforceWindowBacking('right', 'right-set-bounds');
-    }
   }
 
   private updateDrawerWindowPosition(): void {
@@ -1715,90 +1542,59 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
-  private syncGapFillWindow(): void {
-    if (!this.enabled) {
-      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
-        this.gapFillWindow.hide();
-      }
-      return;
-    }
-
-    if (!this.shouldShowGapFill()) {
-      if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
-        this.gapFillWindow.hide();
-      }
-      return;
-    }
-
-    if (!this.gapFillWindow || this.gapFillWindow.isDestroyed()) {
-      this.createGapFillWindow();
-      return;
-    }
-
-    const x = this.getGapFillX();
-    const y = this.getTopWindowY();
-    const rightHeight = this.getRightPillHeight();
-    const [currentWidth, currentHeight] = this.gapFillWindow.getSize();
-    const [currentX, currentY] = this.gapFillWindow.getPosition();
-    if (
-      currentWidth !== this.getGapFillWidth() ||
-      currentHeight !== rightHeight ||
-      currentX !== x ||
-      currentY !== y
-    ) {
-      this.gapFillWindow.setBounds({
-        x,
-        y,
-        width: this.getGapFillWidth(),
-        height: rightHeight,
-      });
-      this.reinforceWindowBacking('filler', 'filler-set-bounds');
-    }
-
-    if (this.gapFillRendererReady) {
-      this.reinforceWindowBacking('filler', 'filler-show');
-      if (!this.isAutoHidden()) {
-        this.gapFillWindow.setOpacity(1);
-        this.gapFillWindow.showInactive();
-      }
-    }
-  }
-
   private updateWindowSize(): void {
     if (!this.enabled) {
       this.hideAllWindows();
       return;
     }
 
-    this.updateRightWindowPosition();
     this.updateDrawerWindowPosition();
-    this.syncGapFillWindow();
 
     if (!this.window || this.window.isDestroyed()) return;
 
     const showingHistory = this.historyVisible;
     const idleWidth = this.getIdlePillWidth();
     const idleHeight = this.getIdlePillHeight();
+    const targetLeftWidth = showingHistory ? this.ISLAND_WIDTH : this.getPillWidth();
     const targetHeight = showingHistory ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
-    const targetWidth = showingHistory ? this.ISLAND_WIDTH : idleWidth;
+    const targetWidth = this.getUnifiedWindowWidth(targetLeftWidth);
 
-    // Center the expanded history panel under the island/notch region.
-    // In idle mode, keep the compact pill at the left-notch anchor.
     const x = showingHistory
-      ? this.getLeftWindowX(this.ISLAND_WIDTH, false)
-      : this.getLeftWindowX(idleWidth, true);
+      ? this.getUnifiedWindowX(this.ISLAND_WIDTH, false)
+      : this.getUnifiedWindowX(targetLeftWidth, true);
     const y = this.getTopWindowY();
 
     const [currentWidth, currentHeight] = this.window.getSize();
     const [currentX, currentY] = this.window.getPosition();
-    if (currentHeight !== targetHeight || currentWidth !== targetWidth || currentX !== x || currentY !== y) {
-      this.window.setBounds({
-        x,
-        y,
-        width: targetWidth,
-        height: targetHeight,
-      });
+    const widthChanged = currentWidth !== targetWidth;
+    const heightChanged = currentHeight !== targetHeight;
+    const positionChanged = currentX !== x || currentY !== y;
+    if (widthChanged || heightChanged || positionChanged) {
+      // Animate slot-level resizes (width-only); history expand (height
+      // change) snaps because it's a distinct motion, not a slot reflow.
+      const animate = (widthChanged || positionChanged) && !heightChanged && !showingHistory;
+      this.window.setBounds({ x, y, width: targetWidth, height: targetHeight }, animate);
       this.reinforceWindowBacking('left', 'left-set-bounds');
+      log.debug(
+        'pill %d+%d+%d=%d agents=%d active=%s stack=%d',
+        targetLeftWidth,
+        this.getGapFillWidth(),
+        this.getRightPillWidth(),
+        targetWidth,
+        this.waitingAgents.length,
+        this.isActiveState(),
+        this.stackCount,
+      );
+      pillDebugWrite(
+        `MAIN setBounds W=${targetWidth} left=${targetLeftWidth} gap=${this.getGapFillWidth()} ` +
+        `right=${this.getRightPillWidth()} animate=${animate} ` +
+        `agents=${this.waitingAgents.length} active=${this.isActiveState()} ` +
+        `state=${this.state} mode=${this.inputMode} stack=${this.stackCount}`,
+      );
+    }
+
+    if (this.rendererReady) {
+      this.window.webContents.send('dynamic-island-resize', { leftWidth: targetLeftWidth, rightWidth: this.getRightPillWidth() });
     }
   }
 
@@ -1806,12 +1602,6 @@ export class DynamicIslandManager extends EventEmitter {
     this.pendingShow = false;
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
-    }
-    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-      this.rightWindow.hide();
-    }
-    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
-      this.gapFillWindow.hide();
     }
     if (this.drawerWindow && !this.drawerWindow.isDestroyed()) {
       this.drawerWindow.hide();
@@ -1836,14 +1626,6 @@ export class DynamicIslandManager extends EventEmitter {
       this.window.close();
     }
     this.window = null;
-    if (this.rightWindow && !this.rightWindow.isDestroyed()) {
-      this.rightWindow.close();
-    }
-    this.rightWindow = null;
-    if (this.gapFillWindow && !this.gapFillWindow.isDestroyed()) {
-      this.gapFillWindow.close();
-    }
-    this.gapFillWindow = null;
     if (this.drawerWindow && !this.drawerWindow.isDestroyed()) {
       this.drawerWindow.close();
     }

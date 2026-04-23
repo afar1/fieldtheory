@@ -27,7 +27,49 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { PreferencesManager } from './preferences';
+import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistoryBounds } from './preferences';
+
+const sampleBounds = (w: number): ClipboardHistoryBounds => ({
+  width: w,
+  height: 600,
+  displayConfig: 'dummy',
+});
+
+describe('pickSavedBoundsByKey', () => {
+  it('returns the per-view entry when present', () => {
+    const prefs = {
+      clipboardHistoryBoundsByView: {
+        library: sampleBounds(720),
+        canvas: sampleBounds(1180),
+      },
+    };
+    expect(pickSavedBoundsByKey(prefs, 'library')?.width).toBe(720);
+    expect(pickSavedBoundsByKey(prefs, 'canvas')?.width).toBe(1180);
+  });
+
+  it('falls back to legacy clipboardHistoryBounds only for "fields"', () => {
+    const prefs = { clipboardHistoryBounds: sampleBounds(900) };
+    expect(pickSavedBoundsByKey(prefs, 'fields')?.width).toBe(900);
+    // Non-fields keys must NOT inherit the legacy bounds.
+    expect(pickSavedBoundsByKey(prefs, 'library')).toBeUndefined();
+    expect(pickSavedBoundsByKey(prefs, 'canvas')).toBeUndefined();
+    expect(pickSavedBoundsByKey(prefs, 'draw')).toBeUndefined();
+  });
+
+  it('per-view "fields" entry wins over the legacy field', () => {
+    const prefs = {
+      clipboardHistoryBounds: sampleBounds(900),
+      clipboardHistoryBoundsByView: { fields: sampleBounds(950) },
+    };
+    expect(pickSavedBoundsByKey(prefs, 'fields')?.width).toBe(950);
+  });
+
+  it('returns undefined when nothing is saved', () => {
+    expect(pickSavedBoundsByKey(null, 'library')).toBeUndefined();
+    expect(pickSavedBoundsByKey({}, 'canvas')).toBeUndefined();
+    expect(pickSavedBoundsByKey(undefined, 'fields')).toBeUndefined();
+  });
+});
 
 describe('PreferencesManager', () => {
   let tempDir: string;

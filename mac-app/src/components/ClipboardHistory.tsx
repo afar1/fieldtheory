@@ -46,6 +46,7 @@ import {
   ClipboardQueryOptions,
   RunningApp,
   TAB_LABELS,
+  nextTopNavViewMode,
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
@@ -62,9 +63,32 @@ import {
   persistClipboardSurface,
   resolveClipboardRestoreState,
 } from '../utils/clipboardHistoryRestore';
+import {
+  buildClipboardItemsMarkdown,
+  getClipboardItemsMarkdownTitle,
+} from '../utils/clipboardMarkdown';
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
+
+type FieldTheoryMarkdownTarget = {
+  kind: 'wiki' | 'artifact' | 'command';
+  path: string;
+  contentMode?: 'rendered' | 'markdown';
+};
+
+const FOCUS_CHROME_TOP_REVEAL_PX = 96;
+const FOCUS_CHROME_BOTTOM_REVEAL_PX = 72;
+const FOCUS_CHROME_ICON_SIZE_PX = 32;
+const FOCUS_CHROME_ICON_MIN_TOP_PX = 12;
+
+function getFocusChromeIconTop(editorTop: number | null, showInDock: boolean): number {
+  if (typeof editorTop !== 'number' || !Number.isFinite(editorTop)) return showInDock ? 84 : 64;
+  return Math.max(
+    FOCUS_CHROME_ICON_MIN_TOP_PX,
+    (editorTop - FOCUS_CHROME_ICON_SIZE_PX) / 2,
+  );
+}
 
 /**
  * Check if any items in a stack have improved content.
@@ -234,6 +258,12 @@ export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(document.visibilityState === 'visible');
+
+  // When the window hides, the auto-popped-artifact exception expires: next
+  // open is a fresh session and Escape should follow the normal hierarchy.
+  useEffect(() => {
+    if (!isWindowVisible) setAutoPopArtifactPath(null);
+  }, [isWindowVisible]);
   useEffect(() => {
     const handler = () => setIsWindowVisible(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', handler);
@@ -273,6 +303,15 @@ export default function ClipboardHistory() {
   const [librarianImmersive, setLibrarianImmersive] = useState(
     () => localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
   );
+  // Sidebar collapse state lives here so the footer toggle can drive it
+  // regardless of which view is currently active. Shared between Library and
+  // Commands views so the toggle has consistent behavior.
+  const [navSidebarCollapsed, setNavSidebarCollapsed] = useState<boolean>(
+    () => localStorage.getItem('librarian-sidebar-collapsed') === '1'
+  );
+  useEffect(() => {
+    localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
+  }, [navSidebarCollapsed]);
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -280,7 +319,37 @@ export default function ClipboardHistory() {
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
+  const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(null);
+  const [pendingCommandPath, setPendingCommandPath] = useState<string | null>(null);
+  // Path of an artifact the librarian auto-popped that the user hasn't navigated
+  // away from yet. While this is set, Escape dismisses the window (preserving
+  // the artifact-popup UX) rather than merely exiting immersive.
+  const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [headerHovered, setHeaderHovered] = useState(false);
+  const [focusChromeActive, setFocusChromeActive] = useState(false);
+  const [focusChromeContentTop, setFocusChromeContentTop] = useState<number | null>(null);
+  const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
+  const isLibrarianSurface = viewMode === 'librarian' && !showSettings;
+  const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
+  const librarianChromeCollapsed = isLibrarianSurface && librarianImmersive && !headerHovered;
+  const appChromeHidden = librarianChromeCollapsed || (isFocusChromeSurface && focusChromeActive && !headerHovered);
+  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !headerHovered && !librarianChromeCollapsed;
+  const revealAppChrome = useCallback(() => {
+    setHeaderHovered(true);
+  }, []);
+  const collapseSidebarForFocusChrome = useCallback(() => {
+    focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
+    setNavSidebarCollapsed(true);
+  }, [navSidebarCollapsed]);
+  const handleFocusChromeActiveChange = useCallback((active: boolean) => {
+    setFocusChromeActive(active);
+    if (active) return;
+
+    const previous = focusChromePreviousSidebarCollapsedRef.current;
+    if (previous === null) return;
+    focusChromePreviousSidebarCollapsedRef.current = null;
+    setNavSidebarCollapsed(previous);
+  }, []);
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -1084,6 +1153,56 @@ export default function ClipboardHistory() {
     feedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 3000);
   }, []);
 
+  const handleCreateMarkdownFromItems = useCallback(async (
+    sourceItems: ClipboardItem[],
+    options: { stackId?: string; contentVersion?: 'stored' | 'original' | 'improved' } = {},
+  ) => {
+    try {
+      const resolvedItems = options.stackId && window.clipboardAPI?.queryItemsByStackId
+        ? await window.clipboardAPI.queryItemsByStackId(options.stackId)
+        : sourceItems;
+
+      if (resolvedItems.length === 0) {
+        showFeedback('no items to export');
+        return;
+      }
+
+      const markdownItems = resolvedItems.map((item) => {
+        if (options.contentVersion === 'original') return { ...item, useImprovedVersion: false };
+        if (options.contentVersion === 'improved') return { ...item, useImprovedVersion: true };
+        return item;
+      });
+
+      const imagePaths: Record<number, string | null> = {};
+      for (const item of markdownItems) {
+        if (item.type === 'image' || item.type === 'screenshot') {
+          imagePaths[item.id] = await window.clipboardAPI?.exportItemImagePath?.(item.id) ?? null;
+        }
+      }
+
+      const title = getClipboardItemsMarkdownTitle(markdownItems);
+      const markdown = buildClipboardItemsMarkdown(markdownItems, imagePaths, title);
+      const page = await window.wikiAPI?.createFile('scratchpad', title) ?? await window.wikiAPI?.createScratchpadDefault();
+      if (!page) {
+        showFeedback('could not create markdown');
+        return;
+      }
+
+      const saved = await window.wikiAPI?.save(page.relPath, markdown);
+      if (!saved) {
+        showFeedback('could not save markdown');
+        return;
+      }
+
+      setPendingLibraryOpenTarget({ kind: 'wiki', path: page.relPath, contentMode: 'markdown' });
+      setShowSettings(false);
+      setViewMode('librarian');
+    } catch (error) {
+      console.error('Failed to create clipboard markdown:', error);
+      showFeedback('could not create markdown');
+    }
+  }, [showFeedback]);
+
   useEffect(() => {
     return () => {
       if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
@@ -1392,6 +1511,16 @@ export default function ClipboardHistory() {
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
     window.clipboardAPI?.setSketchMode?.(viewMode === 'sketch');
 
+    // Push the active size-key to main so window bounds match the view.
+    // Librarian is delegated: LibrarianView/BookmarksPane push their own key.
+    if (showSettings) {
+      window.librarianAPI?.setSizeKey?.('fields');
+    } else if (viewMode === 'sketch') {
+      window.librarianAPI?.setSizeKey?.('draw');
+    } else if (viewMode !== 'librarian') {
+      window.librarianAPI?.setSizeKey?.('fields');
+    }
+
     // Log completion time
     requestAnimationFrame(() => {
       const switchEndTime = performance.now();
@@ -1409,6 +1538,31 @@ export default function ClipboardHistory() {
       setLibrarianImmersive(false);
     }
   }, [librarianImmersive, showSettings, viewMode]);
+
+  useEffect(() => {
+    const shouldTrackChromeReveal =
+      (isLibrarianSurface && librarianImmersive) ||
+      (isFocusChromeSurface && focusChromeActive);
+
+    if (!shouldTrackChromeReveal) {
+      if (!isFocusChromeSurface) {
+        setFocusChromeActive(false);
+        setFocusChromeContentTop(null);
+      }
+      setHeaderHovered(false);
+      return;
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      const nearToolArea =
+        event.clientY <= FOCUS_CHROME_TOP_REVEAL_PX ||
+        event.clientY >= window.innerHeight - FOCUS_CHROME_BOTTOM_REVEAL_PX;
+      setHeaderHovered(nearToolArea);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    return () => window.removeEventListener('mousemove', handleMouseMove);
+  }, [focusChromeActive, isFocusChromeSurface, isLibrarianSurface, librarianImmersive]);
 
   // Clear section override when settings closes.
   useEffect(() => {
@@ -1656,12 +1810,39 @@ export default function ClipboardHistory() {
     };
   }, [isMacOS, loadItems]);
 
-  // Auto-switch to Librarian tab when a new reading is added
+  // Keep the user's current surface stable when a new artifact appears.
+  // Auto-open flows use pendingReadingPath; visible-window flows only show
+  // the Library indicator.
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingAdded(() => {
+      if (viewMode !== 'librarian') setHasNewReading(true);
+    });
+
+    return () => unsubscribe?.();
+  }, [viewMode]);
+
+  useEffect(() => {
+    const unsubscribe = window.commandsAPI?.onOpenMarkdownFromLauncher?.((target) => {
+      setShowSettings(false);
+      if (target.kind === 'command') {
+        setPendingCommandPath(target.path);
+        setViewMode('commands');
+        return;
+      }
+      setPendingLibraryOpenTarget(target);
       setViewMode('librarian');
     });
 
+    return () => unsubscribe?.();
+  }, []);
+
+  // Hotkey-driven scratchpad create → jump straight into Library so
+  // LibrarianView's own onOpenScratchpad listener can open the new page.
+  useEffect(() => {
+    const unsubscribe = window.wikiAPI?.onOpenScratchpad(() => {
+      setShowSettings(false);
+      setViewMode('librarian');
+    });
     return () => unsubscribe?.();
   }, []);
 
@@ -1676,6 +1857,7 @@ export default function ClipboardHistory() {
       // If there's a pending reading, show it in immersive mode
       if (status.pendingPath) {
         setPendingReadingPath(status.pendingPath);
+        setAutoPopArtifactPath(status.pendingPath);
         setShowSettings(false);
         setViewMode('librarian');
         setLibrarianImmersive(true);
@@ -1695,11 +1877,11 @@ export default function ClipboardHistory() {
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onNewReadingAvailable(() => {
       // Don't switch views - just show indicator
-      setHasNewReading(true);
+      if (viewMode !== 'librarian') setHasNewReading(true);
     });
 
     return () => unsubscribe?.();
-  }, []);
+  }, [viewMode]);
 
   // Handle new reading to show immediately (when already in immersive mode)
   useEffect(() => {
@@ -2031,13 +2213,10 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else {
-          // Tab key: toggle between Fields and Library when not editing a control.
+          // Tab / Shift+Tab carousels through the left-group top-nav tabs.
           setShowSettings(false);
-          setViewMode((prev) => {
-            if (prev === 'clipboard' && librarianEnabled) return 'librarian';
-            if (prev === 'librarian') return 'clipboard';
-            return 'clipboard';
-          });
+          const delta = hasShift ? -1 : 1;
+          setViewMode((prev) => nextTopNavViewMode(prev, delta, librarianEnabled));
         }
         return;
       }
@@ -2731,13 +2910,10 @@ export default function ClipboardHistory() {
           }));
           window.clipboardAPI?.setTargetApp(newApp);
         } else {
-          // Tab key: toggle between Fields and Library when not editing a control.
+          // Tab / Shift+Tab carousels through the left-group top-nav tabs.
           setShowSettings(false);
-          setViewMode((prev) => {
-            if (prev === 'clipboard' && librarianEnabled) return 'librarian';
-            if (prev === 'librarian') return 'clipboard';
-            return 'clipboard';
-          });
+          const delta = hasShift ? -1 : 1;
+          setViewMode((prev) => nextTopNavViewMode(prev, delta, librarianEnabled));
         }
         return;
       }
@@ -3155,6 +3331,7 @@ export default function ClipboardHistory() {
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
+          position: 'relative',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           cursor: 'default',
         }}
@@ -3162,6 +3339,7 @@ export default function ClipboardHistory() {
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
+          onMouseEnter={revealAppChrome}
           style={{
             height: '8px',
             minHeight: '8px',
@@ -3187,23 +3365,25 @@ export default function ClipboardHistory() {
       
       {/* Draggable header area - collapses in Librarian immersive mode */}
       <div
-        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseEnter={revealAppChrome}
         onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
-          minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '52px',
+          height: librarianChromeCollapsed ? '0px' : '52px',
+          minHeight: librarianChromeCollapsed ? '0px' : '52px',
           overflow: showMicDropdown ? 'visible' : 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
-          paddingTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
+          paddingTop: librarianChromeCollapsed ? '0px' : '8px',
           paddingLeft: '16px',
           paddingRight: '16px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
           borderBottom: 'none',
-          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease',
+          opacity: appChromeHidden ? 0 : 1,
+          pointerEvents: appChromeHidden ? 'none' : 'auto',
+          transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease, opacity 0.18s ease',
         }}
       >
         <img
@@ -3400,23 +3580,55 @@ export default function ClipboardHistory() {
 
       </div>
 
+      {showFocusChromeIcon && (
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: getFocusChromeIconTop(focusChromeContentTop, showInDock),
+            left: '50%',
+            transform: 'translateX(-50%)',
+            zIndex: 20,
+            height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            pointerEvents: 'none',
+            opacity: 0.62,
+            transition: 'opacity 0.18s ease',
+          }}
+        >
+          <img
+            src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
+            alt=""
+            style={{
+              height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
+              width: 'auto',
+              display: 'block',
+            }}
+          />
+        </div>
+      )}
+
       {/* View mode tabs - collapses in Librarian immersive mode */}
       {viewMode !== 'sketch' && (
         <div
           ref={tabsRef}
-          onMouseEnter={() => setHeaderHovered(true)}
+          onMouseEnter={revealAppChrome}
           onMouseLeave={() => setHeaderHovered(false)}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '2px',
             padding: '0 16px',
-            marginTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '4px',
-            marginBottom: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '8px',
-            height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
-            minHeight: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : '28px',
+            marginTop: librarianChromeCollapsed ? '0px' : '4px',
+            marginBottom: librarianChromeCollapsed ? '0px' : '8px',
+            height: librarianChromeCollapsed ? '0px' : 'auto',
+            minHeight: librarianChromeCollapsed ? '0px' : '28px',
             overflow: 'hidden',
-            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease',
+            opacity: appChromeHidden ? 0 : 1,
+            pointerEvents: appChromeHidden ? 'none' : 'auto',
+            transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease, opacity 0.18s ease',
           }}>
           {(['clipboard'] as ViewMode[]).map((mode) => {
             const isSelected = viewMode === mode && !showSettings;
@@ -3482,24 +3694,24 @@ export default function ClipboardHistory() {
               }}
               tabIndex={0}
               style={{
-                padding: '5px 6px',
-                fontSize: '9px',
-                fontWeight: 500,
+                padding: '6px 8px',
+                fontSize: '11px',
+                fontWeight: 400,
                 backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
                 color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
                 border: 'none',
-                borderRadius: '3px',
+                borderRadius: '4px',
                 cursor: 'pointer',
                 transition: 'all 0.15s ease',
                 outline: 'none',
                 display: 'flex',
                 alignItems: 'center',
-                gap: '3px',
+                gap: '4px',
                 position: 'relative',
               }}
               onMouseEnter={(e) => {
                 if (viewMode !== 'librarian' || showSettings) {
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
                 }
               }}
               onMouseLeave={(e) => {
@@ -3525,21 +3737,21 @@ export default function ClipboardHistory() {
             </button>
           )}
 
+          {/* Commands button — sits alongside Fields / Library in the left
+              group. Matches their typography so the three read as peers. */}
           <button
             onClick={() => {
-              setEditingSketchItem(null);
-              setSketchBackgroundImage(null);
-              setViewMode('sketch');
+              setViewMode('commands');
+              setShowSettings(false);
             }}
             tabIndex={0}
             style={{
-              marginLeft: '8px',
               padding: '6px 8px',
-              fontSize: '10px',
-              fontWeight: 500,
-              backgroundColor: 'transparent',
-              color: theme.textSecondary,
-              border: `1px solid ${theme.border}`,
+              fontSize: '11px',
+              fontWeight: 400,
+              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
@@ -3549,21 +3761,18 @@ export default function ClipboardHistory() {
               gap: '4px',
             }}
             onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              e.currentTarget.style.borderColor = theme.text;
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              }
             }}
             onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-              e.currentTarget.style.borderColor = theme.border;
+              if (viewMode !== 'commands' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
             }}
-            title="Create a new drawing"
+            title="Portable commands"
           >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M12 19l7-7 3 3-7 7-3-3z" />
-              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
-              <path d="M2 2l7.586 7.586" />
-            </svg>
-            Draw
+            Commands
           </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -3648,10 +3857,13 @@ export default function ClipboardHistory() {
             </div>
           )}
 
-          {/* Commands button */}
+          {/* Draw button — this button only renders when viewMode !== 'sketch'
+              (outer guard), so no active-state styling is needed. */}
           <button
             onClick={() => {
-              setViewMode('commands');
+              setEditingSketchItem(null);
+              setSketchBackgroundImage(null);
+              setViewMode('sketch');
               setShowSettings(false);
             }}
             tabIndex={0}
@@ -3659,8 +3871,8 @@ export default function ClipboardHistory() {
               padding: '5px 6px',
               fontSize: '9px',
               fontWeight: 500,
-              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
+              backgroundColor: 'transparent',
+              color: theme.textSecondary,
               border: 'none',
               borderRadius: '3px',
               cursor: 'pointer',
@@ -3671,22 +3883,19 @@ export default function ClipboardHistory() {
               gap: '3px',
             }}
             onMouseEnter={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-              }
+              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
             }}
             onMouseLeave={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
+              e.currentTarget.style.backgroundColor = 'transparent';
             }}
-            title="Portable commands"
+            title="Create a new drawing"
           >
             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="4 17 10 11 4 5" />
-              <line x1="12" y1="19" x2="20" y2="19" />
+              <path d="M12 19l7-7 3 3-7 7-3-3z" />
+              <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z" />
+              <path d="M2 2l7.586 7.586" />
             </svg>
-            Commands
+            Draw
           </button>
 
           {/* Feedback button */}
@@ -3966,10 +4175,22 @@ export default function ClipboardHistory() {
           onSwitchToClipboard={() => setViewMode('clipboard')}
           onSwitchToSettings={() => setShowSettings(true)}
           onFullScreenChange={setLibrarianImmersive}
-          externalHeaderHover={librarianImmersive && headerHovered}
+          externalHeaderHover={headerHovered}
+          onFocusChromeActiveChange={handleFocusChromeActiveChange}
+          onFocusChromeTopChange={setFocusChromeContentTop}
           initialReadingPath={pendingReadingPath}
+          initialOpenTarget={pendingLibraryOpenTarget}
           initialFullScreen={librarianImmersive}
           onInitialReadingConsumed={() => setPendingReadingPath(null)}
+          onInitialOpenTargetConsumed={() => setPendingLibraryOpenTarget(null)}
+          autoPopArtifactPath={autoPopArtifactPath}
+          onAutoPopArtifactSuperseded={() => setAutoPopArtifactPath(null)}
+          onOpenCommandPath={(path) => {
+            setPendingCommandPath(path);
+            setViewMode('commands');
+          }}
+          onFocusChromeShortcut={collapseSidebarForFocusChrome}
+          sidebarCollapsed={navSidebarCollapsed}
         />
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
@@ -4030,10 +4251,13 @@ export default function ClipboardHistory() {
       ) : viewMode === 'commands' ? (
         <CommandsView
           onSwitchToClipboard={() => setViewMode('clipboard')}
-          onSwitchToSettings={() => {
-            setSettingsSection('commands');
-            setShowSettings(true);
-          }}
+          sidebarCollapsed={navSidebarCollapsed}
+          externalHeaderHover={headerHovered}
+          onFocusChromeActiveChange={handleFocusChromeActiveChange}
+          onFocusChromeTopChange={setFocusChromeContentTop}
+          initialCommandPath={pendingCommandPath}
+          onInitialCommandConsumed={() => setPendingCommandPath(null)}
+          onFocusChromeShortcut={collapseSidebarForFocusChrome}
         />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
@@ -5002,6 +5226,33 @@ export default function ClipboardHistory() {
                         >
                           preview <KeyCap>␣</KeyCap>
                         </button>
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleCreateMarkdownFromItems(stackItems, {
+                              stackId: stack.stackId,
+                              contentVersion: showImproved ? 'improved' : 'original',
+                            });
+                          }}
+                          title="Create Markdown in Library"
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          md
+                        </button>
                         {/* Paste hint button - rightmost */}
                         <button
                           tabIndex={-1}
@@ -5852,6 +6103,31 @@ export default function ClipboardHistory() {
                           draw <KeyCap>d</KeyCap>
                         </button>
                       )}
+                      <button
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleCreateMarkdownFromItems([item]);
+                        }}
+                        title="Create Markdown in Library"
+                        style={{
+                          padding: '3px 4px',
+                          fontSize: '9px',
+                          whiteSpace: 'nowrap',
+                          fontWeight: 500,
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        md
+                      </button>
                       {/* Paste hint button with target app - rightmost */}
                       <button
                         tabIndex={-1}
@@ -6023,13 +6299,13 @@ export default function ClipboardHistory() {
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
       {/* Collapses in Librarian immersive mode */}
       <div
-        onMouseEnter={() => setHeaderHovered(true)}
+        onMouseEnter={revealAppChrome}
         onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          padding: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0 16px' : '8px 16px',
-          height: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? '0px' : 'auto',
+          padding: librarianChromeCollapsed ? '0 16px' : '8px 16px',
+          height: librarianChromeCollapsed ? '0px' : 'auto',
           overflow: 'hidden',
-          borderTop: (librarianImmersive && viewMode === 'librarian' && !headerHovered) ? 'none' : `1px solid ${theme.border}`,
+          borderTop: librarianChromeCollapsed ? 'none' : `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
           display: 'flex',
@@ -6039,10 +6315,12 @@ export default function ClipboardHistory() {
           color: theme.textSecondary,
           userSelect: 'none',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          transition: 'height 0.3s ease, padding 0.3s ease',
+          opacity: appChromeHidden ? 0 : 1,
+          pointerEvents: appChromeHidden ? 'none' : 'auto',
+          transition: 'height 0.3s ease, padding 0.3s ease, opacity 0.18s ease',
         }}
       >
-        {/* Left side: Plan info (quotas or stats) */}
+        {/* Left side: sidebar toggle + plan info (quotas or stats) */}
         <div
           style={{
             display: 'flex',
@@ -6054,6 +6332,59 @@ export default function ClipboardHistory() {
             flex: 1,
           }}
         >
+          {/* Sidebar collapse toggle — actionable in Library (non-immersive)
+              and Commands views. In other views it stays visible but disabled
+              so the footer layout doesn't jump. */}
+          {(() => {
+            const collapseEnabled =
+              (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
+              (viewMode === 'commands' && !showSettings);
+            return (
+              <button
+                onClick={() => setNavSidebarCollapsed((v) => !v)}
+                disabled={!collapseEnabled}
+                title={collapseEnabled ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘/)` : 'Sidebar toggle'}
+                aria-label="Toggle sidebar"
+                style={{
+                  width: '20px',
+                  height: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                  background: 'transparent',
+                  color: theme.textSecondary,
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '4px',
+                  cursor: collapseEnabled ? 'pointer' : 'default',
+                  opacity: collapseEnabled ? 1 : 0.5,
+                  transition: 'background 0.15s ease, opacity 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  if (!collapseEnabled) return;
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+                }}
+                onMouseLeave={(e) => { e.currentTarget.style.backgroundColor = 'transparent'; }}
+              >
+                <svg
+                  width="11"
+                  height="11"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  style={{
+                    transform: collapseEnabled && navSidebarCollapsed ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 0.15s ease',
+                  }}
+                >
+                  <path d="M10 4L6 8l4 4" />
+                </svg>
+              </button>
+            );
+          })()}
           {/* Plan info - always show for logged in users */}
           {authSession && cachedTier === 'pro' ? (
                 // Pro Plan: show cycling stats on click
