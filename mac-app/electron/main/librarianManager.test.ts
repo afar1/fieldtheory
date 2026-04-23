@@ -381,10 +381,10 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('library:changed', root);
   });
 
-  it('moves wiki folders to Trash and emits deleted page relPaths', async () => {
+  it('moves user-created wiki folders to Trash and emits deleted page relPaths', async () => {
     const root = makeTempDir();
-    fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
-    fs.writeFileSync(path.join(root, 'Shared Markdown', 'note.md'), '# Note\n');
+    fs.mkdirSync(path.join(root, 'Client Notes'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Client Notes', 'note.md'), '# Note\n');
     const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
 
     const emit = vi.fn();
@@ -395,10 +395,24 @@ describe('recursive wiki tree scan', () => {
     Object.defineProperty(manager, 'wikiDir', { value: root });
     manager.emit = emit;
 
-    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(true);
-    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Shared Markdown'));
+    expect(await manager.deleteLibraryDir(root, 'Client Notes')).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Client Notes'));
     expect(emit).toHaveBeenCalledWith('wiki:changed');
-    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Shared Markdown/note');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Client Notes/note');
+  });
+
+  it('does not delete FT-created wiki folders', async () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(false);
+    expect(trashItem).not.toHaveBeenCalled();
   });
 
   it('moves external library folders to Trash and emits a library change', async () => {
@@ -437,15 +451,17 @@ describe('recursive wiki tree scan', () => {
 });
 
 describe('hidden default library folders', () => {
-  it('normalizes persisted folder ids to the supported defaults in canonical order', () => {
-    expect(normalizeHiddenDefaultFolders(['entries', 'unknown', 'entries', 'artifacts'])).toEqual([
+  it('normalizes persisted folder ids to FT folders first, then custom folders', () => {
+    expect(normalizeHiddenDefaultFolders(['Client Notes', 'entries', '../bad', 'entries', 'artifacts', 'Shared Markdown'])).toEqual([
       'artifacts',
+      'Shared Markdown',
       'entries',
+      'Client Notes',
     ]);
     expect(normalizeHiddenDefaultFolders('entries')).toEqual([]);
   });
 
-  it('persists only validated default folder ids', () => {
+  it('persists only validated folder ids', () => {
     const saveSettings = vi.fn();
     const emit = vi.fn();
     const manager = Object.create(LibrarianManager.prototype) as {
@@ -456,7 +472,7 @@ describe('hidden default library folders', () => {
       emit: typeof emit;
       wikiDir: string;
     };
-    manager.settings = { hiddenDefaultFolders: ['entries', 'bad'] };
+    manager.settings = { hiddenDefaultFolders: ['entries', '../bad'] };
     manager.saveSettings = saveSettings;
     manager.emit = emit;
     Object.defineProperty(manager, 'wikiDir', { value: '/wiki' });
@@ -466,8 +482,11 @@ describe('hidden default library folders', () => {
     expect(saveSettings).toHaveBeenCalledTimes(1);
     expect(emit).toHaveBeenCalledWith('library:changed', '/wiki');
 
-    expect(manager.setDefaultFolderHidden('not-real', true)).toEqual(['scratchpad', 'entries']);
-    expect(saveSettings).toHaveBeenCalledTimes(1);
+    expect(manager.setDefaultFolderHidden('Client Notes', true)).toEqual(['scratchpad', 'entries', 'Client Notes']);
+    expect(saveSettings).toHaveBeenCalledTimes(2);
+
+    expect(manager.setDefaultFolderHidden('../bad', true)).toEqual(['scratchpad', 'entries', 'Client Notes']);
+    expect(saveSettings).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -496,7 +515,14 @@ describe('default folder readmes', () => {
     manager.ensureDefaultFolderReadmes();
 
     for (const folder of ['scratchpad', 'debates', 'entries', 'concepts', 'categories', 'domains', 'entities']) {
-      expect(fs.existsSync(path.join(root, folder, 'README.md'))).toBe(true);
+      const readmePath = path.join(root, folder, 'README.md');
+      expect(fs.existsSync(readmePath)).toBe(true);
+      const readme = fs.readFileSync(readmePath, 'utf-8');
+      expect(readme).toMatch(/^# README: /);
+      expect(readme).toContain('Command+Shift+K');
+      expect(readme).toContain('Control+Option+Command+Space');
+      expect(readme).toContain('Command+N');
+      expect(readme).toContain("Field Theory's Commands tab");
     }
     expect(fs.existsSync(path.join(root, 'bookmarks', 'README.md'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'artifacts', 'README.md'))).toBe(false);
@@ -527,6 +553,27 @@ describe('default folder readmes', () => {
     expect(manager.ensureFolderReadme('entries', entriesDir, '# Default\n')).toBe(true);
     expect(fs.readFileSync(path.join(entriesDir, 'README.md'), 'utf-8')).toBe('# Custom\n');
     expect(manager.settings.readmesSeeded).toEqual(['entries']);
+  });
+
+  it('updates an existing legacy default README without touching custom README content', () => {
+    const root = makeTempDir();
+    const entriesDir = path.join(root, 'entries');
+    fs.mkdirSync(entriesDir, { recursive: true });
+    const readmePath = path.join(entriesDir, 'README.md');
+    fs.writeFileSync(readmePath, '# Old Default\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { readmesSeeded?: string[] };
+      ensureFolderReadme: (folderId: string, absDir: string, content: string, legacyContents?: string[]) => boolean;
+    };
+    manager.settings = { readmesSeeded: ['entries'] };
+
+    expect(manager.ensureFolderReadme('entries', entriesDir, '# New Default\n', ['# Old Default\n'])).toBe(true);
+    expect(fs.readFileSync(readmePath, 'utf-8')).toBe('# New Default\n');
+
+    fs.writeFileSync(readmePath, '# Custom\n');
+    expect(manager.ensureFolderReadme('entries', entriesDir, '# Newer Default\n', ['# Old Default\n'])).toBe(false);
+    expect(fs.readFileSync(readmePath, 'utf-8')).toBe('# Custom\n');
   });
 
   it('does not resurrect a deleted README after the folder is marked handled', () => {

@@ -34,6 +34,7 @@ import { CursorStatusManager } from './cursorStatusManager';
 import { CommandsManager } from './commandsManager';
 import { MESSAGES } from './messages';
 import { StdioJsonServer } from './stdioJsonServer';
+import { appendTranscriberTrace } from './transcriberTrace';
 import {
   PARAKEET_ENGINE_LABELS,
   PARAKEET_ENGINE_MODEL_IDS,
@@ -618,7 +619,7 @@ export class TranscriberManager extends EventEmitter {
       hotkeyManager.unregister('transcriptionSecondary');
       this.registeredSecondaryHotkey = null;
       this.secondaryHotkey = null;
-      await this.preferences.save({ transcriptionSecondaryHotkey: undefined });
+      await this.preferences.save({ transcriptionSecondaryHotkey: null });
       return true;
     }
 
@@ -1016,7 +1017,7 @@ export class TranscriberManager extends EventEmitter {
   private async onStandardChunkReady(wavPath: string, chunkReadyAtMs?: number): Promise<void> {
     const pipelineStart = performance.now();
     try {
-      if (this.status !== 'recording') return;
+      if (this.status !== 'recording' && this.status !== 'transcribing') return;
       if (this.pendingImmediateSquaresAction) return;
 
       const engine = this.getConfiguredTranscriptionEngine();
@@ -1204,6 +1205,15 @@ export class TranscriberManager extends EventEmitter {
     }
 
     const activeRecordingSource = this.activeRecordingSource ?? this.getRecordingSource();
+    const finishStart = performance.now();
+    const startingQueueDepth = this.getStandardRealtimePressureDepth();
+    const liveCharsAtFinish = (this.standardLiveTranscript ?? '').trim().length;
+    const helperRecordingActive = typeof this.nativeHelper.isRecordingActive === 'function'
+      ? this.nativeHelper.isRecordingActive()
+      : null;
+    const recordingAgeMs = this.recordingStartTime > 0
+      ? Math.max(0, Date.now() - this.recordingStartTime)
+      : null;
 
     try {
       // Unregister abandon hotkey.
@@ -1212,57 +1222,102 @@ export class TranscriberManager extends EventEmitter {
       // Play stop recording sound (user-configurable).
       this.soundManager.play('recordingStop');
 
-      // Force one final harvest snapshot so trailing speech is captured even if
-      // the user stops before Swift's silence detector emits a chunk.
+      // Leave the visible recording state immediately. Native stop/drain can take
+      // a moment, but the user's finish action has already been accepted.
+      this.setStatus('transcribing');
+      this.overlay.showTranscribing();
+      appendTranscriberTrace('finish.accepted', {
+        source: activeRecordingSource,
+        recordingAgeMs,
+        liveChars: liveCharsAtFinish,
+        queueDepth: startingQueueDepth,
+        helperActive: helperRecordingActive,
+      });
+
+      let snapshotMs = 0;
+      let snapshotStatus = 'skipped';
       if (activeRecordingSource === 'microphone' && !this.pendingImmediateSquaresAction) {
+        const snapshotStart = performance.now();
         try {
           const tailChunkPath = await this.nativeHelper.snapshotRecording();
+          snapshotMs = Math.round(performance.now() - snapshotStart);
+          snapshotStatus = 'ok';
           const readyAtMs = this.recordingStartTime > 0
             ? Math.max(0, Date.now() - this.recordingStartTime)
             : 0;
           this.standardPendingChunkQueue.push({ filePath: tailChunkPath, readyAtMs });
           void this.processStandardChunkQueue();
         } catch {
+          snapshotMs = Math.round(performance.now() - snapshotStart);
+          snapshotStatus = 'failed';
           // Snapshot can fail when no audio has accumulated yet; continue with normal stop.
         }
       }
       
       // Stop recording and get WAV file path
+      const stopStart = performance.now();
       const wavPath = await this.nativeHelper.stopRecording();
+      const stopMs = Math.round(performance.now() - stopStart);
+      let drainMs = 0;
       if (activeRecordingSource === 'microphone') {
+        const drainStart = performance.now();
         await this.waitForStandardChunkDrain();
+        drainMs = Math.round(performance.now() - drainStart);
         this.detachStandardChunkListener();
       }
       this.activeRecordingSource = null;
+
+      const finishPrepMs = Math.round(performance.now() - finishStart);
+      const timingMessage = '[timing] finish recording prep: snapshot=%dms snapshotStatus=%s stop=%dms drain=%dms total=%dms source=%s liveChars=%d queueDepth=%d helperActive=%s';
+      if (finishPrepMs > 400) {
+        log.warn(timingMessage, snapshotMs, snapshotStatus, stopMs, drainMs, finishPrepMs, activeRecordingSource, liveCharsAtFinish, startingQueueDepth, helperRecordingActive);
+      } else {
+        log.info(timingMessage, snapshotMs, snapshotStatus, stopMs, drainMs, finishPrepMs, activeRecordingSource, liveCharsAtFinish, startingQueueDepth, helperRecordingActive);
+      }
+      const wavBytes = await fs.promises.stat(wavPath).then(s => s.size).catch(() => null);
+      appendTranscriberTrace('finish.prep', {
+        source: activeRecordingSource,
+        snapshotMs,
+        snapshotStatus,
+        stopMs,
+        drainMs,
+        totalMs: finishPrepMs,
+        liveChars: liveCharsAtFinish,
+        queueDepth: startingQueueDepth,
+        helperActive: helperRecordingActive,
+        wavBytes,
+      });
 
       const immediateSquaresAction = this.pendingImmediateSquaresAction;
       this.pendingImmediateSquaresAction = null;
       const immediateSquaresText = this.pendingImmediateSquaresText;
       this.pendingImmediateSquaresText = '';
 
-      // Track priority mic usage if a priority device was selected during recording.
-      await this.trackPriorityMicUsage();
-
-      // Switch to transcribing state
-      this.setStatus('transcribing');
-      this.overlay.showTranscribing();
+      // Usage sync can hit the network; do not block transcription/paste on it.
+      void this.trackPriorityMicUsage().catch((error) => {
+        log.warn('Priority mic usage tracking failed:', error);
+        appendTranscriberTrace('finish.usage-track.error', { feature: 'priority_mic_seconds', error });
+      });
 
       const finalPassStart = performance.now();
       let cleanedText = '';
       const liveTranscriptFallback = this.standardLiveTranscript.trim();
       let finalAsrMs = 0;
+      let finalTextSource = 'asr';
+      let tailFileSize: number | null = null;
 
       if (immediateSquaresAction) {
         // Immediate Squares actions are finalized from the detected tail text so we can
         // execute the command deterministically even if recording is stopped mid-phrase.
         cleanedText = this.sanitizeTranscriptText(immediateSquaresText);
+        finalTextSource = 'immediate-squares';
       } else {
         const engine = this.getConfiguredTranscriptionEngine();
 
         // With realtime chunking, the tail file from stopRecording() only contains audio
         // after the last snapshot — often just silence. If live chunks already produced a
         // transcript, skip the final-pass ASR on the tiny tail and use it directly.
-        const tailFileSize = await fs.promises.stat(wavPath).then(s => s.size).catch(() => Infinity);
+        tailFileSize = wavBytes ?? Infinity;
         const hasLiveTranscript = liveTranscriptFallback.length > 0;
         // 32000 bytes ≈ 0.5s of 16kHz float32 mono — minimum for a recognizable word.
         const tailTooSmall = tailFileSize < 32000;
@@ -1270,6 +1325,7 @@ export class TranscriberManager extends EventEmitter {
         if (hasLiveTranscript && tailTooSmall) {
           // Tail is just silence/header — use the live transcript directly.
           cleanedText = this.sanitizeTranscriptText(liveTranscriptFallback);
+          finalTextSource = 'live-tail-small';
           void fs.promises.unlink(wavPath).catch(() => {});
           log.debug('Final-pass: using live transcript (%d chars, tail=%d bytes)', cleanedText.length, tailFileSize);
         } else {
@@ -1295,6 +1351,7 @@ export class TranscriberManager extends EventEmitter {
           // If full-file ASR returned empty but live chunks had content, use them.
           if (cleanedText.length === 0 && hasLiveTranscript) {
             cleanedText = this.sanitizeTranscriptText(liveTranscriptFallback);
+            finalTextSource = 'live-fallback';
             log.debug('Final-pass ASR empty; using live transcript (%d chars)', cleanedText.length);
           }
         }
@@ -1305,6 +1362,12 @@ export class TranscriberManager extends EventEmitter {
       let deferredSquaresAction = immediateSquaresAction;
       if (cleanedText.length === 0) {
         this.clearStandardLiveTranscript();
+        appendTranscriberTrace('finish.no-audio', {
+          source: activeRecordingSource,
+          totalMs: Math.round(performance.now() - finalPassStart),
+          textSource: finalTextSource,
+          tailBytes: tailFileSize,
+        });
         if (deferredSquaresAction && this.squaresManager) {
           await this.squaresManager.executeAction(deferredSquaresAction);
           this.setStatus('idle');
@@ -1358,7 +1421,8 @@ export class TranscriberManager extends EventEmitter {
       // Insert inline [Figure N] references for screenshots taken during recording.
       // IMPORTANT: must happen before clearStandardLiveTranscript() which clears
       // standardLiveSegments needed for inline placement based on timing.
-      cleanedText = this.insertFigureReferences(cleanedText);
+      const figureSegments = finalTextSource === 'asr' ? [] : this.standardLiveSegments;
+      cleanedText = this.insertFigureReferences(cleanedText, figureSegments);
       this.clearStandardLiveTranscript();
 
       // Store transcription in clipboard history.
@@ -1405,8 +1469,11 @@ export class TranscriberManager extends EventEmitter {
               // Emit event for metrics tracking
               this.emit('autostackCreated');
 
-              // Track auto-stack quota usage.
-              await this.trackAutoStackUsage();
+              // Usage sync can hit the network; do not block paste on it.
+              void this.trackAutoStackUsage().catch((error) => {
+                log.warn('Auto-stack usage tracking failed:', error);
+                appendTranscriberTrace('finish.usage-track.error', { feature: 'auto_stack_sessions', error });
+              });
             }
           }
           
@@ -1443,6 +1510,17 @@ export class TranscriberManager extends EventEmitter {
           ? ` commands=${this.detectedCommands.map(c => c.name).join(',')}`
           : ''
       );
+      appendTranscriberTrace('finish.done', {
+        source: activeRecordingSource,
+        textSource: finalTextSource,
+        textChars: finalText.length,
+        asrMs: finalAsrMs,
+        cmdMs: cmdDetectMs,
+        pasteMs,
+        totalMs: finalTotalMs,
+        tailBytes: tailFileSize,
+        commands: this.detectedCommands.map(c => c.name),
+      });
 
       // Set status to idle BEFORE emitting paste events.
       // This prevents the idle transition from overriding paste-failed UI.
@@ -1459,13 +1537,27 @@ export class TranscriberManager extends EventEmitter {
       // Reset the skip flag
       this.skipNextPasteFailedNotification = false;
     } catch (error) {
-      log.error('Transcription failed:', error);
+      const noRecordingInProgress =
+        error instanceof Error && /no recording in progress/i.test(error.message);
+      if (noRecordingInProgress) {
+        log.warn('Recording stop requested after helper had already stopped; resetting state');
+      } else {
+        log.error('Transcription failed:', error);
+      }
+      appendTranscriberTrace('finish.error', {
+        source: activeRecordingSource,
+        noRecordingInProgress,
+        totalMs: Math.round(performance.now() - finishStart),
+        error,
+      });
       this.activeRecordingSource = null;
       this.detachStandardChunkListener();
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.handleOverlayAfterTranscription();
-      this.emit('error', error as Error);
+      if (!noRecordingInProgress) {
+        this.emit('error', error as Error);
+      }
     }
   }
 
@@ -3953,8 +4045,8 @@ export class TranscriberManager extends EventEmitter {
     return (h * 3600 + m * 60 + s) * 1000 + milliseconds;
   }
   
-  private insertFigureReferences(text: string): string {
-    return insertFigureReferencesInline(text, this.standardLiveSegments, this.screenshotMetadata);
+  private insertFigureReferences(text: string, segments = this.standardLiveSegments): string {
+    return insertFigureReferencesInline(text, segments, this.screenshotMetadata);
   }
 
   /**

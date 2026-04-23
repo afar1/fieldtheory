@@ -120,10 +120,15 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
 
 // Activate target app and paste in a single osascript (avoids focus race conditions).
 async function activateAndPaste(targetApp: { bundleId: string; name: string } | null): Promise<void> {
+  appendCommandLauncherTrace('activate-and-paste-start', {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+  });
   if (targetApp) {
     const bundleId = targetApp.bundleId;
     if (bundleId.includes('"') || bundleId.includes("'")) {
       log.error('activateAndPaste: invalid bundleId contains quotes:', bundleId);
+      appendCommandLauncherTrace('activate-and-paste-invalid-bundle', { bundleId });
       return;
     }
     const script = `tell application id "${bundleId}"\n  activate\nend tell\ndelay 0.1\ntell application "System Events"\n  keystroke "v" using command down\nend tell`;
@@ -131,12 +136,25 @@ async function activateAndPaste(targetApp: { bundleId: string; name: string } | 
   } else {
     await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
   }
+  appendCommandLauncherTrace('activate-and-paste-success', {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+  });
 }
 
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
   if (!bundleId) return false;
   const lower = bundleId.toLowerCase();
   return lower.includes('fieldtheory') || lower.includes('electron');
+}
+
+function resolveClipboardFullScreenHotkeyPreference(prefs: {
+  clipboardFullScreenHotkey?: string | null;
+  clipboardDesktopScreenshotHotkey?: string | null;
+}): string | null | undefined {
+  return prefs.clipboardFullScreenHotkey !== undefined
+    ? prefs.clipboardFullScreenHotkey
+    : prefs.clipboardDesktopScreenshotHotkey;
 }
 
 function getLocalEnvPaths(): string[] {
@@ -270,10 +288,45 @@ let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
+let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
+
+function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
+  if (!appInfo?.bundleId || !appInfo.name || isFieldTheoryBundleId(appInfo.bundleId)) {
+    return;
+  }
+
+  lastExternalCommandTargetApp = {
+    bundleId: appInfo.bundleId,
+    name: appInfo.name,
+  };
+}
+
+function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
+  const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
+  if (previousApp?.bundleId && !isFieldTheoryBundleId(previousApp.bundleId)) {
+    appendCommandLauncherTrace('target-resolved', {
+      source: 'previous-app',
+      previousBundleId: previousApp.bundleId,
+      previousName: previousApp.name,
+      fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
+      fallbackName: lastExternalCommandTargetApp?.name ?? null,
+    });
+    return previousApp;
+  }
+
+  appendCommandLauncherTrace('target-resolved', {
+    source: lastExternalCommandTargetApp ? 'last-external-app' : 'none',
+    previousBundleId: previousApp?.bundleId ?? null,
+    previousName: previousApp?.name ?? null,
+    fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
+    fallbackName: lastExternalCommandTargetApp?.name ?? null,
+  });
+  return lastExternalCommandTargetApp;
+}
 
 function hideFieldTheoryForAlfred(): void {
   commandLauncherWindow?.hide(true);
@@ -5264,8 +5317,19 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean }> => {
-    const targetApp = commandLauncherWindow?.getPreviousApp();
-    return { fieldTheoryActive: isFieldTheoryBundleId(targetApp?.bundleId) };
+    const fieldTheoryActive = commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false;
+    const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
+    const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+    appendCommandLauncherTrace('launcher-context', {
+      fieldTheoryActive,
+      previousBundleId: previousApp?.bundleId ?? null,
+      previousName: previousApp?.name ?? null,
+      frontmostBundleId: frontmostApp?.bundleId ?? null,
+      frontmostName: frontmostApp?.name ?? null,
+      fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
+      fallbackName: lastExternalCommandTargetApp?.name ?? null,
+    });
+    return { fieldTheoryActive };
   });
 
   ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command'; path: string }) => {
@@ -5306,9 +5370,19 @@ function setupClipboardIPCHandlers(): void {
     }
 
     try {
-      const targetApp = commandLauncherWindow?.getPreviousApp();
-      const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
-      const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
+      const targetApp = getCommandLauncherTargetApp();
+      appendCommandLauncherTrace('invoke-handoff-start', {
+        filePath,
+        targetBundleId: targetApp?.bundleId ?? null,
+        targetName: targetApp?.name ?? null,
+      });
+      if (!targetApp) {
+        commandLauncherWindow?.hide(true);
+        appendCommandLauncherTrace('invoke-handoff-no-target', { filePath });
+        return { success: false, error: 'No external target app available' };
+      }
+      const isTerminal = isTerminalApp(targetApp.bundleId);
+      const isIDE = isIDEWithTerminal(targetApp.bundleId);
       const fileName = path.basename(filePath);
 
       commandLauncherWindow?.hide(true);
@@ -5322,10 +5396,18 @@ function setupClipboardIPCHandlers(): void {
         clipboardManager?.syncClipboardHash();
       }
 
-      await activateAndPaste(targetApp ?? null);
+      await activateAndPaste(targetApp);
+      appendCommandLauncherTrace('invoke-handoff-success', {
+        filePath,
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        terminal: isTerminal,
+        IDE: isIDE,
+      });
       return { success: true };
     } catch (error) {
       log.error('Error invoking handoff:', error);
+      appendCommandLauncherTrace('invoke-handoff-error', { filePath, error });
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
@@ -5350,9 +5432,23 @@ function setupClipboardIPCHandlers(): void {
     }
 
     try {
-      const targetApp = commandLauncherWindow?.getPreviousApp();
-      const isTerminal = targetApp ? isTerminalApp(targetApp.bundleId) : false;
-      const isIDE = targetApp ? isIDEWithTerminal(targetApp.bundleId) : false;
+      const targetApp = getCommandLauncherTargetApp();
+      appendCommandLauncherTrace('invoke-command-start', {
+        commandName,
+        commandPath: command.filePath,
+        targetBundleId: targetApp?.bundleId ?? null,
+        targetName: targetApp?.name ?? null,
+      });
+      if (!targetApp) {
+        commandLauncherWindow?.hide(true);
+        appendCommandLauncherTrace('invoke-command-no-target', {
+          commandName,
+          commandPath: command.filePath,
+        });
+        return { success: false, error: 'No external target app available' };
+      }
+      const isTerminal = isTerminalApp(targetApp.bundleId);
+      const isIDE = isIDEWithTerminal(targetApp.bundleId);
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
@@ -5367,13 +5463,22 @@ function setupClipboardIPCHandlers(): void {
         clipboardManager?.syncClipboardHash();
       }
 
-      await activateAndPaste(targetApp ?? null);
+      await activateAndPaste(targetApp);
+      appendCommandLauncherTrace('invoke-command-success', {
+        commandName,
+        commandPath: command.filePath,
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        terminal: isTerminal,
+        IDE: isIDE,
+      });
 
       await quotaManager?.updateUsage('portable_commands', 1);
       metricsManager?.recordCommandExecuted();
       return { success: true };
     } catch (error) {
       log.error('Error invoking command:', error);
+      appendCommandLauncherTrace('invoke-command-error', { commandName, commandPath: command.filePath, error });
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
@@ -5994,6 +6099,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
   log.info('[audio-startup] after nativeHelper.warmupAudio() call (async): +%dms', Date.now() - BOOT_MARK);
 
   nativeHelper.on('frontmostAppChanged', (appInfo) => {
+    rememberCommandTargetApp(appInfo);
     if (isAlfredApp(appInfo)) {
       hideFieldTheoryForAlfred();
     }
@@ -6272,7 +6378,9 @@ async function initTranscriberSystem(): Promise<void> {
   const prefs = preferencesManager.get();
   clipboardManager.loadHotkeysFromPreferences(
     prefs.clipboardScreenshotHotkey,
-    prefs.clipboardHistoryHotkey
+    prefs.clipboardHistoryHotkey,
+    resolveClipboardFullScreenHotkeyPreference(prefs),
+    prefs.clipboardActiveWindowHotkey
   );
 
   // Apply user-configured data retention on startup.
@@ -6902,7 +7010,8 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardManager.loadHotkeysFromPreferences(
           prefs.clipboardScreenshotHotkey,
           prefs.clipboardHistoryHotkey,
-          prefs.clipboardDesktopScreenshotHotkey
+          resolveClipboardFullScreenHotkeyPreference(prefs),
+          prefs.clipboardActiveWindowHotkey
         );
       }
       // Reload audio manager preferences (may differ in per-user prefs)
