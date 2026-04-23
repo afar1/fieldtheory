@@ -29,7 +29,7 @@ function pillDebugWrite(line: string): void {
 
 // =============================================================================
 // DynamicIslandManager - Fixed-position overlay near the macOS notch.
-// Two symmetric pills: left (hamburger + expanded states) and right (hot-mic dot).
+// Two symmetric pills: left (history + cancel) and right (waveform + stack).
 // =============================================================================
 
 export type DynamicIslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
@@ -450,24 +450,13 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   setWaitingAgents(agents: WaitingAgent[]): void {
-    const prevCount = this.waitingAgents.length;
-    const nextCount = agents.length;
     this.waitingAgents = agents;
-    if (nextCount < 2) this.agentLayout = null; // layout only meaningful with ≥2
+    if (agents.length < 2) this.agentLayout = null; // layout only meaningful with ≥2
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-agents', agents);
-      if (nextCount < 2) {
+      if (agents.length < 2) {
         this.window.webContents.send('dynamic-island-agent-layout', null);
-      }
-    }
-    // Pill width is granular per agent count (see getPillWidth), so resize on
-    // every count change. Auto-hide only ticks on the 0↔non-zero transition
-    // because that's when the "should be revealed" predicate flips.
-    if (prevCount !== nextCount) {
-      this.updateWindowSize();
-      if ((prevCount === 0) !== (nextCount === 0)) {
-        this.tickAutoHide();
       }
     }
   }
@@ -584,7 +573,7 @@ export class DynamicIslandManager extends EventEmitter {
 
   sendTranscript(text: string, isFinal: boolean): void {
     if (!this.enabled) return;
-    if (this.state === 'idle') {
+    if (this.state === 'idle' || this.state === 'transcribing') {
       this.setState('showing-transcript');
     }
     if (this.window && !this.window.isDestroyed()) {
@@ -748,7 +737,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.sendStateToRenderer(this.state);
         this.sendInputModeToRenderers();
         // Seed both sides with the same width so the first frame is symmetric;
-        // getPillWidth() already accounts for agents and active state.
+        // getPillWidth() already accounts for visible active chips.
         const leftWidth = this.historyVisible ? this.ISLAND_WIDTH : this.getPillWidth();
         this.window.webContents.send('dynamic-island-resize', { leftWidth, rightWidth: this.getRightPillWidth() });
         this.window.webContents.send('dynamic-island-stack-changed', this.stackCount);
@@ -1421,10 +1410,9 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   // Conditions that should force the auto-hide pill to reveal, regardless of
-  // cursor proximity. Broader than isActiveState() — includes passive
-  // notifications (waiting agents) that don't warrant pill-width expansion.
+  // cursor proximity.
   private shouldForceAutoHideReveal(): boolean {
-    return this.isActiveState() || this.waitingAgents.length > 0;
+    return this.isActiveState();
   }
 
   private getIdlePillWidth(): number {
@@ -1436,16 +1424,10 @@ export class DynamicIslandManager extends EventEmitter {
   // for the current state so the outer wrapper stays tight against the
   // visible pill. Constants must stay in sync with src/components/pillWidths.ts.
   private readonly PILL_PADDING = 18;
+  private readonly PILL_SLOT = 22;
+  private readonly PILL_GAP = 8;
   private readonly PILL_HAMBURGER = 22;
-  private readonly PILL_CANCEL_X = 30;   // X cancel slot (22) + 8 gap
-  private readonly PILL_WAVEFORM = 88;   // waveform slot (80) + 8 gap
-  // Renderer currently shows a single green breathing star whenever any
-  // agent is waiting (see AgentAttention.tsx), regardless of count — so the
-  // window only needs room for one slot. When we light up the spatial
-  // layout (1x4 / 2x2), bump these back up to cover the wider worst case.
-  private readonly PILL_AGENT_SLOT = 28;
-  private readonly PILL_AGENT_OVERFLOW = 0;
-  private readonly PILL_AGENT_MAX_VISIBLE = 1;
+  private readonly PILL_WAVEFORM = 22;
 
   private pipeSlotWidth(pipeCount: number): number {
     if (pipeCount >= 10) return 38;
@@ -1454,29 +1436,28 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   // Worst-case pill width the renderer might ever show for the current state +
-  // agent count, on EITHER side. Window is sized to this; sections never
+  // stack count, on EITHER side. Window is sized to this; sections never
   // overflow, so the rounded outer corners stay inside the window clip area.
   private getPillWidth(): number {
-    const n = this.waitingAgents.length;
     const isActive = this.isActiveState();
-    if (!isActive && n === 0) return this.getIdlePillWidth();
+    const captureActive = this.hotMicActive || this.state === 'recording' || this.state === 'silentStacking';
+    const cancelChipVisible = captureActive || (this.state === 'idle' && this.stackCount > 0);
+    const showHistoryChip = !captureActive;
+    const hasStackChip = this.stackCount > 0;
+    const hasWaveformChip = this.hotMicActive || this.state === 'recording';
+    if (!isActive && !cancelChipVisible && !hasStackChip) return this.getIdlePillWidth();
 
-    const visible = Math.min(n, this.PILL_AGENT_MAX_VISIBLE);
-    const hasOverflow = n > this.PILL_AGENT_MAX_VISIBLE;
-
-    // Left section: padding + X cancel (active) + agents + overflow + hamburger.
+    // Left section: padding + cancel chip + optional history chip.
     const left =
       this.PILL_PADDING
-      + (isActive ? this.PILL_CANCEL_X : 0)
-      + visible * this.PILL_AGENT_SLOT
-      + (hasOverflow ? this.PILL_AGENT_OVERFLOW : 0)
-      + this.PILL_HAMBURGER;
+      + (cancelChipVisible ? this.PILL_SLOT + (showHistoryChip ? this.PILL_GAP : 0) : 0)
+      + (showHistoryChip ? this.PILL_HAMBURGER : 0);
 
-    // Right section: padding + waveform (active) + pipe slot (stacking).
+    // Right section: padding + waveform chip + optional stack chip.
     const right =
       this.PILL_PADDING
-      + (isActive ? this.PILL_WAVEFORM : 0)
-      + (this.stackCount > 0 ? this.pipeSlotWidth(this.stackCount) : 0);
+      + (hasWaveformChip ? this.PILL_WAVEFORM + (hasStackChip ? this.PILL_GAP : 0) : 0)
+      + (hasStackChip ? this.pipeSlotWidth(this.stackCount) : 0);
 
     return Math.max(left, right, this.getIdlePillWidth());
   }

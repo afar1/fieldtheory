@@ -1,6 +1,6 @@
 // =============================================================================
 // DynamicIsland - Fixed-position overlay near the macOS notch.
-// Two pills: left (mode toggle + history) and right (drawer controls).
+// Two pills: left (history + cancel) and right (waveform + stack state).
 // The ?side= query param determines which pill to render.
 // =============================================================================
 
@@ -15,14 +15,10 @@ import {
   summarizeTranscriptForIsland
 } from '../utils/textUtils';
 import {
-  type DynamicIslandInputMode,
-} from '../utils/dynamicIslandIndicator';
-import {
   AudioLevelRingBuffer,
   scaleAudioLevel,
   WAVEFORM_BAR_COUNT,
 } from '../utils/audioWaveform';
-import { AgentAttention } from './AgentAttention';
 import { PillSlot, PILL_SLOT_CONTENT_FADE_MS } from './PillSlot';
 import {
   computeLeftPillWidth,
@@ -167,16 +163,19 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
   const [pipeCount, setPipeCount] = useState(0);
   const [animatedPipes, setAnimatedPipes] = useState<Set<number>>(new Set());
   const [state, setState] = useState<IslandState>('idle');
-  const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
+  const [hotMicActive, setHotMicActive] = useState(false);
   const [standardAudioLevel, setStandardAudioLevel] = useState(0);
   const [filterMeterRawLevel, setFilterMeterRawLevel] = useState(0);
   const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
   const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
-  const waveformActive = inputMode === 'hot-mic' || state === 'recording';
-  const expanded = waveformActive || state === 'silentStacking' || (state === 'idle' && pipeCount > 0);
+  const waveformActive = hotMicActive || state === 'recording';
+  const resetWaveform = useCallback(() => {
+    waveformBufferRef.current.reset();
+    setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
+  }, []);
 
   // Hot-mic waveform = orange, standard recording waveform = white.
-  const waveformColor = inputMode === 'hot-mic'
+  const waveformColor = hotMicActive
     ? 'rgba(249, 115, 22, 0.95)'
     : 'rgba(255, 255, 255, 0.92)';
 
@@ -186,13 +185,12 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
 
     api.onStateChange?.((s: string) => {
       setState(s as IslandState);
-      if (s === 'recording') {
-        waveformBufferRef.current.reset();
-        setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
+      resetWaveform();
+      if (s !== 'recording') {
+        setStandardAudioLevel(0);
       }
     });
-    api.onInputMode?.((m: 'hot-mic' | 'standard') => setInputMode(m));
-
+    api.onHotMicUpdate?.((data: { active: boolean }) => setHotMicActive(Boolean(data?.active)));
     api.onStandardAudioLevel?.((level: number) => setStandardAudioLevel(level));
     api.onHotMicFilterMeter?.((data: { rawLevel: number }) => setFilterMeterRawLevel(data.rawLevel));
 
@@ -219,23 +217,24 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
 
     return () => {
       api.removeAllListeners('dynamic-island-state');
-      api.removeAllListeners('dynamic-island-input-mode');
+      api.removeAllListeners('dynamic-island-hotmic');
       api.removeAllListeners('dynamic-island-standard-audio-level');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-stack-changed');
     };
-  }, []);
+  }, [resetWaveform]);
 
   // Update waveform ring buffer when audio levels arrive.
   useEffect(() => {
     const level = state === 'recording' ? standardAudioLevel : filterMeterRawLevel;
-    if (state !== 'recording' && inputMode !== 'hot-mic') return;
+    if (state !== 'recording' && !hotMicActive) return;
     const buf = waveformBufferRef.current;
     buf.push(level);
     setWaveformLevels(buf.getOrdered().map(scaleAudioLevel));
-  }, [filterMeterRawLevel, standardAudioLevel, inputMode, state]);
+  }, [filterMeterRawLevel, standardAudioLevel, hotMicActive, state]);
 
-  const WAVEFORM_SLOT_WIDTH = 80;
+  const WAVEFORM_SLOT_WIDTH = 22;
+  const waveformSlotMargin = pipeCount > 0 ? 8 : 0;
   const pipeSlotWidth = pipeSlotWidthForCount(pipeCount);
 
   const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount });
@@ -248,7 +247,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Ri
       className="di-section di-section--right"
       style={{ width: sectionWidth, height: 38, transitionDelay: sectionTransitionDelay }}
     >
-      <PillSlot visible={waveformActive} width={WAVEFORM_SLOT_WIDTH} marginRight={8}>
+      <PillSlot visible={waveformActive} width={WAVEFORM_SLOT_WIDTH} marginRight={waveformSlotMargin}>
         <div aria-hidden="true" style={rightStyles.waveformContainer}>
           <WaveformBars levels={waveformLevels} color={waveformColor} />
         </div>
@@ -653,10 +652,7 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
   const [historyVisible, setHistoryVisible] = useState(false);
   const [copiedId, setCopiedId] = useState<number | null>(null);
   const [deletedId, setDeletedId] = useState<number | null>(null);
-  const [waitingAgentCount, setWaitingAgentCount] = useState(0);
-  const [agentsSlotSum, setAgentsSlotSum] = useState(0);
-  const [pillHovered, setPillHovered] = useState(false);
-  const [inputMode, setInputMode] = useState<DynamicIslandInputMode>('standard');
+  const [hotMicActive, setHotMicActive] = useState(false);
   const [stackCount, setStackCount] = useState(0);
   const [historyWordsPerLine, setHistoryWordsPerLine] = useState(10);
   const [voiceTuningVisible, setVoiceTuningVisible] = useState(false);
@@ -740,12 +736,9 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
       setHistoryVisible(false);
     });
 
-    api.onInputMode?.((mode: DynamicIslandInputMode) => {
-      setInputMode(mode);
+    api.onHotMicUpdate?.((data: { active: boolean }) => {
+      setHotMicActive(Boolean(data?.active));
     });
-    if (api.getInputMode) {
-      void api.getInputMode().then((mode: DynamicIslandInputMode) => setInputMode(mode));
-    }
 
     void api.getHotMicBackgroundFilterEnabled?.().then((enabled: boolean) => {
       setBackgroundFilterEnabled(enabled);
@@ -774,7 +767,7 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
       api.removeAllListeners('dynamic-island-history');
       api.removeAllListeners('dynamic-island-hide-history');
       api.removeAllListeners('dynamic-island-show-history');
-      api.removeAllListeners('dynamic-island-input-mode');
+      api.removeAllListeners('dynamic-island-hotmic');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-hotmic-runtime');
       api.removeAllListeners('dynamic-island-stack-changed');
@@ -821,22 +814,6 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
     // it only toggles the main history window now.
     (window as any).dynamicIslandAPI?.openFieldTheory?.();
   }, []);
-
-  const toggleInputMode = useCallback(() => {
-    const nextMode: DynamicIslandInputMode = inputMode === 'hot-mic' ? 'standard' : 'hot-mic';
-    const previousMode = inputMode;
-    const setMode = (window as any).dynamicIslandAPI?.setInputMode;
-    if (setMode) {
-      void setMode(nextMode)
-        .then((savedMode: DynamicIslandInputMode) => {
-          setInputMode(savedMode);
-        })
-        .catch(() => {
-          setInputMode(previousMode);
-        });
-    }
-    setInputMode(nextMode);
-  }, [inputMode]);
 
   const handleCopyPaste = useCallback((text: string, id: number) => {
     (window as any).dynamicIslandAPI?.copyAndPaste(text);
@@ -974,19 +951,13 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
       ? styles.hudPillWarn
       : styles.hudPillGood;
 
-  // Waveform active when hot-mic is on OR standard recording is in progress.
-  const waveformActive = inputMode === 'hot-mic' || state === 'recording';
-  // Pills expand for waveform, silentStacking, or idle with stacked screenshots (so X is visible).
-  const expanded = waveformActive || state === 'silentStacking' || (state === 'idle' && stackCount > 0);
-
-  // Hamburger reveals on hover when an agent glyph is occupying the pill;
-  // otherwise it's always visible.
-  const hamburgerExpanded = waitingAgentCount === 0 || pillHovered;
+  const expanded = hotMicActive || state === 'recording' || state === 'silentStacking' || (state === 'idle' && stackCount > 0);
+  const historyChipVisible = !(hotMicActive || state === 'recording' || state === 'silentStacking');
 
   const leftSlotSum = computeLeftPillWidth({
     xExpanded: expanded,
-    agentsSlotSum,
-    hamburgerExpanded,
+    agentsSlotSum: 0,
+    hamburgerExpanded: historyChipVisible,
   });
   useEffect(() => {
     onSlotSumChange?.(leftSlotSum);
@@ -1006,8 +977,6 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
         height: '100%',
         fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
       }}
-      onMouseEnter={() => setPillHovered(true)}
-      onMouseLeave={() => setPillHovered(false)}
     >
       <div
         className="di-section di-section--left"
@@ -1015,6 +984,7 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
       >
         <PillSlot
           visible={expanded}
+          marginRight={historyChipVisible ? 8 : 0}
           onClick={handleCancelSession}
           title="cancel session"
           style={{ opacity: 0.5 }}
@@ -1023,12 +993,8 @@ function LeftPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay }: Lef
             <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
           </svg>
         </PillSlot>
-        <AgentAttention
-          onCountChanged={setWaitingAgentCount}
-          onSlotSumChange={setAgentsSlotSum}
-        />
         <PillSlot
-          visible={hamburgerExpanded}
+          visible={historyChipVisible}
           marginRight={0}
           onClick={toggleHistory}
           title="transcript history"
