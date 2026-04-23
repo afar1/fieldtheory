@@ -1308,6 +1308,7 @@ export interface LibraryRoot {
   path: string;
   label: string;
   builtin: boolean;
+  writable?: boolean;
   tree: WikiNode[];
 }
 
@@ -2224,6 +2225,59 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private canWriteDirectory(dirPath: string): boolean {
+    try {
+      if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return false;
+      fs.accessSync(dirPath, fs.constants.W_OK);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private resolveLibraryRootForWrite(rootPath: string): { rootPath: string; builtin: boolean } | null {
+    const normalizedPath = this.normalizePath(this.expandPath(rootPath.trim()));
+    const targetKey = this.libraryRootKey(normalizedPath);
+
+    if (targetKey === this.libraryRootKey(this.wikiDir)) {
+      return { rootPath: this.wikiDir, builtin: true };
+    }
+
+    for (const savedRoot of this.settings.libraryRoots ?? []) {
+      const normalizedRoot = this.normalizePath(savedRoot);
+      if (this.libraryRootKey(normalizedRoot) === targetKey) {
+        return { rootPath: normalizedRoot, builtin: false };
+      }
+    }
+
+    return null;
+  }
+
+  private normalizeLibraryRelPath(relPath: string): string | null {
+    const trimmed = relPath.trim();
+    if (!trimmed) return '';
+    if (trimmed.includes('\0')) return null;
+    const parts = trimmed.split(/[\\/]+/).map((part) => part.trim()).filter(Boolean);
+    if (parts.some((part) => part === '.' || part === '..')) return null;
+    return parts.join('/');
+  }
+
+  private stripMarkdownFileExtension(fileName: string): string {
+    return fileName.replace(/\.(md|markdown|mdx)$/i, '');
+  }
+
+  private slugifyMarkdownFileName(fileName: string): string {
+    return this.stripMarkdownFileExtension(fileName).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  }
+
+  private slugifyWikiRelPath(relPath: string): string {
+    return relPath
+      .split('/')
+      .map((part) => part.replace(/[^a-z0-9-]/gi, '-').toLowerCase())
+      .filter(Boolean)
+      .join('/');
+  }
+
   private resolveExistingDirectoryPath(dirPath: string): string | null {
     const expandedPath = this.expandPath(dirPath.trim());
     const normalizedPath = this.normalizePath(expandedPath);
@@ -2342,6 +2396,7 @@ export class LibrarianManager extends EventEmitter {
         path: this.wikiDir,
         label: 'Wiki',
         builtin: true,
+        writable: true,
         tree: this.scanMarkdownTree(this.wikiDir),
       },
     ];
@@ -2356,6 +2411,7 @@ export class LibrarianManager extends EventEmitter {
         path: normalizedRoot,
         label: path.basename(normalizedRoot) || normalizedRoot,
         builtin: false,
+        writable: this.canWriteDirectory(normalizedRoot),
         tree: this.scanMarkdownTree(normalizedRoot),
       });
     }
@@ -2382,6 +2438,7 @@ export class LibrarianManager extends EventEmitter {
       path: canonicalPath,
       label: path.basename(canonicalPath) || canonicalPath,
       builtin: false,
+      writable: this.canWriteDirectory(canonicalPath),
       tree: this.scanMarkdownTree(canonicalPath),
     };
   }
@@ -2486,11 +2543,10 @@ export class LibrarianManager extends EventEmitter {
   renameWikiPage(relPath: string, newName: string): string | null {
     const trimmed = newName.trim();
     if (!trimmed) return null;
-    const slug = trimmed.replace(/\.md$/i, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    const slug = this.slugifyMarkdownFileName(trimmed);
     if (!slug) return null;
     const folder = path.posix.dirname(relPath);
-    if (!folder || folder === '.') return null;
-    const newRelPath = `${folder}/${slug}`;
+    const newRelPath = folder && folder !== '.' ? `${folder}/${slug}` : slug;
     if (newRelPath === relPath) return relPath;
     const oldAbs = path.resolve(this.wikiDir, `${relPath}.md`);
     const newAbs = path.resolve(this.wikiDir, `${newRelPath}.md`);
@@ -2524,21 +2580,48 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  async deleteLibraryDir(rootPath: string, dirRelPath: string): Promise<boolean> {
+    const root = this.resolveLibraryRootForWrite(rootPath);
+    const normalizedDir = this.normalizeLibraryRelPath(dirRelPath);
+    if (!root || !normalizedDir) return false;
+
+    const dirPath = path.resolve(root.rootPath, normalizedDir);
+    if (!this.isInsidePath(root.rootPath, dirPath)) return false;
+    if (!fs.existsSync(dirPath) || !fs.statSync(dirPath).isDirectory()) return false;
+
+    const deletedWikiRelPaths = root.builtin
+      ? this.flattenWikiFiles(this.scanMarkdownTree(root.rootPath, dirPath)).map((page) => page.relPath)
+      : [];
+
+    try {
+      await shell.trashItem(dirPath);
+      if (root.builtin) {
+        this.emit('wiki:changed');
+        for (const relPath of deletedWikiRelPaths) {
+          this.emit('wiki:deleted', relPath);
+        }
+      } else {
+        this.emit('library:changed', root.rootPath);
+      }
+      return true;
+    } catch (error) {
+      log.error(`Error trashing library dir ${normalizedDir}:`, error);
+      return false;
+    }
+  }
+
   createWikiFile(folderName: string, fileName: string): WikiPage | null {
-    const slug = fileName.replace(/\.md$/, '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
-    const folderRelPath = folderName
-      .split('/')
-      .map((part) => part.replace(/[^a-z0-9-]/gi, '-').toLowerCase())
-      .filter(Boolean)
-      .join('/');
-    if (!slug || !folderRelPath || folderRelPath === 'artifacts' || folderRelPath.startsWith('artifacts/')) return null;
-    const relPath = `${folderRelPath}/${slug}`;
+    const title = this.stripMarkdownFileExtension(fileName).trim();
+    const slug = this.slugifyMarkdownFileName(fileName);
+    const folderRelPath = this.normalizeLibraryRelPath(folderName);
+    if (!slug || folderRelPath === null || folderRelPath === 'artifacts' || folderRelPath.startsWith('artifacts/')) return null;
+    const relPath = folderRelPath ? `${folderRelPath}/${slug}` : slug;
     const absPath = path.resolve(this.wikiDir, folderRelPath, `${slug}.md`);
     if (!this.isInsidePath(this.wikiDir, absPath)) return null;
     if (fs.existsSync(absPath)) return null;
     const dirPath = path.dirname(absPath);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-    const content = `# ${fileName.replace(/\.md$/, '')}\n`;
+    const content = `# ${title}\n`;
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
@@ -2546,7 +2629,7 @@ export class LibrarianManager extends EventEmitter {
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
       this.emit('wiki:changed');
-      return { relPath, absPath, name: slug, title: fileName.replace(/\.md$/, ''), lastUpdated: Math.floor(stats.mtimeMs), content };
+      return { relPath, absPath, name: slug, title, lastUpdated: Math.floor(stats.mtimeMs), content };
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
@@ -2566,13 +2649,9 @@ export class LibrarianManager extends EventEmitter {
   }
 
   createWikiDir(dirName: string): boolean {
-    const slug = dirName
-      .split('/')
-      .map((part) => part.replace(/[^a-z0-9-]/gi, '-').toLowerCase())
-      .filter(Boolean)
-      .join('/');
-    if (!slug || slug === 'artifacts' || slug.startsWith('artifacts/')) return false;
-    const dirPath = path.resolve(this.wikiDir, slug);
+    const relPath = this.normalizeLibraryRelPath(dirName);
+    if (!relPath || relPath === 'artifacts' || relPath.startsWith('artifacts/')) return false;
+    const dirPath = path.resolve(this.wikiDir, relPath);
     if (!this.isInsidePath(this.wikiDir, dirPath)) return false;
     if (fs.existsSync(dirPath)) return false;
     try {
@@ -2580,7 +2659,66 @@ export class LibrarianManager extends EventEmitter {
       this.emit('wiki:changed');
       return true;
     } catch (error) {
-      log.error(`Error creating wiki dir ${slug}:`, error);
+      log.error(`Error creating wiki dir ${relPath}:`, error);
+      return false;
+    }
+  }
+
+  createLibraryFile(rootPath: string, folderRelPath: string, fileName: string): WikiPage | null {
+    const root = this.resolveLibraryRootForWrite(rootPath);
+    const normalizedFolder = this.normalizeLibraryRelPath(folderRelPath);
+    if (!root || normalizedFolder === null) return null;
+
+    if (root.builtin) {
+      return this.createWikiFile(normalizedFolder, fileName);
+    }
+
+    if (!this.canWriteDirectory(root.rootPath)) return null;
+
+    const title = this.stripMarkdownFileExtension(fileName).trim();
+    const slug = this.slugifyMarkdownFileName(fileName);
+    if (!slug) return null;
+    const relPath = normalizedFolder ? `${normalizedFolder}/${slug}` : slug;
+    const absPath = path.resolve(root.rootPath, normalizedFolder, `${slug}.md`);
+    if (!this.isInsidePath(root.rootPath, absPath)) return null;
+    if (fs.existsSync(absPath)) return null;
+
+    const dirPath = path.dirname(absPath);
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+
+    const content = `# ${title}\n`;
+    try {
+      fs.writeFileSync(absPath, content, 'utf-8');
+      const stats = fs.statSync(absPath);
+      this.emit('library:changed', root.rootPath);
+      return { relPath, absPath, name: slug, title, lastUpdated: Math.floor(stats.mtimeMs), content };
+    } catch (error) {
+      log.error(`Error creating library file ${relPath}:`, error);
+      return null;
+    }
+  }
+
+  createLibraryDir(rootPath: string, dirRelPath: string): boolean {
+    const root = this.resolveLibraryRootForWrite(rootPath);
+    const normalizedDir = this.normalizeLibraryRelPath(dirRelPath);
+    if (!root || !normalizedDir) return false;
+
+    if (root.builtin) {
+      return this.createWikiDir(normalizedDir);
+    }
+
+    if (!this.canWriteDirectory(root.rootPath)) return false;
+
+    const dirPath = path.resolve(root.rootPath, normalizedDir);
+    if (!this.isInsidePath(root.rootPath, dirPath)) return false;
+    if (fs.existsSync(dirPath)) return false;
+
+    try {
+      fs.mkdirSync(dirPath, { recursive: true });
+      this.emit('library:changed', root.rootPath);
+      return true;
+    } catch (error) {
+      log.error(`Error creating library dir ${normalizedDir}:`, error);
       return false;
     }
   }

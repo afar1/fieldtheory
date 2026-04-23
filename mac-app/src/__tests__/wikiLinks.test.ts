@@ -3,7 +3,11 @@ import {
   buildWikiIndex,
   classifyLinkHref,
   decodeUnresolvedWikiHref,
+  getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
+  getMarkdownEditorLinkHits,
+  getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionReplacement,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   resolveWikiLink,
@@ -146,6 +150,45 @@ describe('transformWikiLinks', () => {
     const input = '[[My\nPage]]';
     expect(transformWikiLinks(input, index)).toBe(input);
   });
+
+  it('rewrites bare external urls to rendered markdown links beside wikilinks', () => {
+    const out = transformWikiLinks([
+      '- [[categories/technique]]',
+      '- [[domains/mac-app]]',
+      '- [[entities/bookmarks-manager]]',
+      '- https://github.com/mozilla/readability',
+      '- https://github.com/mixmark-io/turndown',
+      '- https://github.com/simonw/tools/blob/main/jina-reader.html',
+    ].join('\n'), index);
+
+    expect(out).toContain('- [categories/technique](wiki://!/categories%2Ftechnique)');
+    expect(out).toContain('- [https://github.com/mozilla/readability](https://github.com/mozilla/readability)');
+    expect(out).toContain('- [https://github.com/mixmark-io/turndown](https://github.com/mixmark-io/turndown)');
+    expect(out).toContain(
+      '- [https://github.com/simonw/tools/blob/main/jina-reader.html](https://github.com/simonw/tools/blob/main/jina-reader.html)',
+    );
+  });
+
+  it('does not rewrite urls inside code, existing markdown links, or autolinks', () => {
+    const input = [
+      'Use `https://example.com/code`.',
+      'Read [site](https://example.com/link).',
+      'Open <https://example.com/autolink>.',
+      'Then https://example.com/plain.',
+    ].join('\n');
+    const out = transformWikiLinks(input, index);
+
+    expect(out).toContain('`https://example.com/code`');
+    expect(out).toContain('[site](https://example.com/link)');
+    expect(out).toContain('<https://example.com/autolink>');
+    expect(out).toContain('[https://example.com/plain](https://example.com/plain).');
+  });
+
+  it('trims trailing punctuation from rendered bare external urls', () => {
+    const out = transformWikiLinks('Read https://example.com/path, then stop.', index);
+
+    expect(out).toBe('Read [https://example.com/path](https://example.com/path), then stop.');
+  });
 });
 
 describe('classifyLinkHref', () => {
@@ -263,6 +306,129 @@ describe('getMarkdownEditorLinkActionAtOffset', () => {
 
   it('returns noop when the offset is not on a link', () => {
     expect(getMarkdownEditorLinkActionAtOffset('plain text', 2, index)).toEqual({ kind: 'noop' });
+  });
+});
+
+describe('getMarkdownEditorLinkHits', () => {
+  it('returns link ranges for hover highlighting in edit mode', () => {
+    const input = 'See [[My Page]] and https://example.com/path.';
+    const hits = getMarkdownEditorLinkHits(input, index);
+
+    expect(hits).toEqual([
+      {
+        action: { kind: 'wiki', relPath: 'entries/my-page' },
+        start: 4,
+        end: 15,
+        displayStart: 6,
+        displayEnd: 13,
+        displayText: 'My Page',
+      },
+      {
+        action: { kind: 'external', href: 'https://example.com/path' },
+        start: 20,
+        end: 44,
+        displayStart: 20,
+        displayEnd: 44,
+        displayText: 'https://example.com/path',
+      },
+    ]);
+  });
+
+  it('uses the rendered link word as the edit-mode display range', () => {
+    const input = 'See [[My Page|this page]] and [ docs ](https://example.com).';
+    const hits = getMarkdownEditorLinkHits(input, index);
+
+    expect(hits[0]).toMatchObject({
+      displayStart: input.indexOf('this'),
+      displayEnd: input.indexOf('this') + 'this page'.length,
+      displayText: 'this page',
+    });
+    expect(hits[1]).toMatchObject({
+      displayStart: input.indexOf('docs'),
+      displayEnd: input.indexOf('docs') + 'docs'.length,
+      displayText: 'docs',
+    });
+  });
+
+  it('trims trailing bare-url punctuation from the hover range', () => {
+    const input = 'Open https://example.com/path.';
+    const [hit] = getMarkdownEditorLinkHits(input, index);
+
+    expect(hit).toEqual({
+      action: { kind: 'external', href: 'https://example.com/path' },
+      start: 5,
+      end: 29,
+      displayStart: 5,
+      displayEnd: 29,
+      displayText: 'https://example.com/path',
+    });
+  });
+});
+
+describe('getActiveMarkdownWikiLinkCompletion', () => {
+  it('returns the active double-bracket query before closing brackets exist', () => {
+    const input = 'See [[Cons';
+
+    expect(getActiveMarkdownWikiLinkCompletion(input, input.length, input.length)).toEqual({
+      openStart: 4,
+      queryStart: 6,
+      queryEnd: 10,
+      replaceEnd: 10,
+      query: 'Cons',
+    });
+  });
+
+  it('replaces the current bracket target and keeps existing closing brackets', () => {
+    const input = 'See [[Cons]] today';
+    const caret = input.indexOf('s') + 1;
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(completion).toMatchObject({
+      query: 'Cons',
+      replaceEnd: input.indexOf(']]'),
+    });
+    expect(getMarkdownWikiLinkCompletionReplacement(input, completion!, 'Consensus')).toEqual({
+      nextValue: 'See [[Consensus]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('adds closing brackets when accepting an unfinished link', () => {
+    const input = 'See [[Cons today';
+    const caret = input.indexOf(' today');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionReplacement(input, completion!, 'Consensus')).toEqual({
+      nextValue: 'See [[Consensus]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('does not complete outside an active simple wikilink target', () => {
+    expect(getActiveMarkdownWikiLinkCompletion('See [[Cons]]', 12, 12)).toBeNull();
+    expect(getActiveMarkdownWikiLinkCompletion('See [[Con\ns', 10, 10)).toBeNull();
+    expect(getActiveMarkdownWikiLinkCompletion('See [[Target|alias', 18, 18)).toBeNull();
+    expect(getActiveMarkdownWikiLinkCompletion('See [[Cons', 7, 9)).toBeNull();
+  });
+});
+
+describe('getMarkdownWikiLinkAutoCloseEdit', () => {
+  it('adds closing brackets when the user has just typed opening brackets', () => {
+    const input = 'See [[';
+
+    expect(getMarkdownWikiLinkAutoCloseEdit(input, input.length, input.length)).toEqual({
+      nextValue: 'See [[]]',
+      selectionStart: input.length,
+      selectionEnd: input.length,
+    });
+  });
+
+  it('does not duplicate closing brackets or run on non-caret edits', () => {
+    expect(getMarkdownWikiLinkAutoCloseEdit('See [[]]', 6, 6)).toBeNull();
+    expect(getMarkdownWikiLinkAutoCloseEdit('See [[[', 7, 7)).toBeNull();
+    expect(getMarkdownWikiLinkAutoCloseEdit('See [[', 5, 6)).toBeNull();
   });
 });
 

@@ -445,6 +445,7 @@ interface ClipboardAPI {
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getClipboardImagePath?: () => Promise<string | null>;
+  exportItemImagePath?: (id: number) => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
   pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
@@ -1551,6 +1552,7 @@ declare global {
     path: string;
     label: string;
     builtin: boolean;
+    writable?: boolean;
     tree: WikiNode[];
   }
 
@@ -1558,6 +1560,9 @@ declare global {
     getRoots: () => Promise<LibraryRoot[]>;
     addRoot: (dirPath: string) => Promise<LibraryRoot | null>;
     removeRoot: (dirPath: string) => Promise<boolean>;
+    createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
+    createDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+    deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     pickFolder: () => Promise<string | null>;
     onRootsChanged: (callback: () => void) => () => void;
   }

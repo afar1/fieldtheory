@@ -63,6 +63,10 @@ import {
   persistClipboardSurface,
   resolveClipboardRestoreState,
 } from '../utils/clipboardHistoryRestore';
+import {
+  buildClipboardItemsMarkdown,
+  getClipboardItemsMarkdownTitle,
+} from '../utils/clipboardMarkdown';
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
@@ -70,6 +74,7 @@ import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command';
   path: string;
+  contentMode?: 'rendered' | 'markdown';
 };
 
 const FOCUS_CHROME_TOP_REVEAL_PX = 96;
@@ -1162,6 +1167,56 @@ export default function ClipboardHistory() {
     setActionFeedback(message);
     feedbackTimeoutRef.current = setTimeout(() => setActionFeedback(null), 3000);
   }, []);
+
+  const handleCreateMarkdownFromItems = useCallback(async (
+    sourceItems: ClipboardItem[],
+    options: { stackId?: string; contentVersion?: 'stored' | 'original' | 'improved' } = {},
+  ) => {
+    try {
+      const resolvedItems = options.stackId && window.clipboardAPI?.queryItemsByStackId
+        ? await window.clipboardAPI.queryItemsByStackId(options.stackId)
+        : sourceItems;
+
+      if (resolvedItems.length === 0) {
+        showFeedback('no items to export');
+        return;
+      }
+
+      const markdownItems = resolvedItems.map((item) => {
+        if (options.contentVersion === 'original') return { ...item, useImprovedVersion: false };
+        if (options.contentVersion === 'improved') return { ...item, useImprovedVersion: true };
+        return item;
+      });
+
+      const imagePaths: Record<number, string | null> = {};
+      for (const item of markdownItems) {
+        if (item.type === 'image' || item.type === 'screenshot') {
+          imagePaths[item.id] = await window.clipboardAPI?.exportItemImagePath?.(item.id) ?? null;
+        }
+      }
+
+      const title = getClipboardItemsMarkdownTitle(markdownItems);
+      const markdown = buildClipboardItemsMarkdown(markdownItems, imagePaths, title);
+      const page = await window.wikiAPI?.createFile('scratchpad', title) ?? await window.wikiAPI?.createScratchpadDefault();
+      if (!page) {
+        showFeedback('could not create markdown');
+        return;
+      }
+
+      const saved = await window.wikiAPI?.save(page.relPath, markdown);
+      if (!saved) {
+        showFeedback('could not save markdown');
+        return;
+      }
+
+      setPendingLibraryOpenTarget({ kind: 'wiki', path: page.relPath, contentMode: 'markdown' });
+      setShowSettings(false);
+      setViewMode('librarian');
+    } catch (error) {
+      console.error('Failed to create clipboard markdown:', error);
+      showFeedback('could not create markdown');
+    }
+  }, [showFeedback]);
 
   useEffect(() => {
     return () => {
@@ -5186,6 +5241,33 @@ export default function ClipboardHistory() {
                         >
                           preview <KeyCap>␣</KeyCap>
                         </button>
+                        <button
+                          tabIndex={-1}
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void handleCreateMarkdownFromItems(stackItems, {
+                              stackId: stack.stackId,
+                              contentVersion: showImproved ? 'improved' : 'original',
+                            });
+                          }}
+                          title="Create Markdown in Library"
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            backgroundColor: 'transparent',
+                            color: theme.textSecondary,
+                            border: 'none',
+                            borderRadius: '4px',
+                            cursor: 'pointer',
+                            transition: 'background-color 0.15s ease',
+                          }}
+                          onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                          onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                        >
+                          md
+                        </button>
                         {/* Paste hint button - rightmost */}
                         <button
                           tabIndex={-1}
@@ -6036,6 +6118,31 @@ export default function ClipboardHistory() {
                           draw <KeyCap>d</KeyCap>
                         </button>
                       )}
+                      <button
+                        tabIndex={-1}
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void handleCreateMarkdownFromItems([item]);
+                        }}
+                        title="Create Markdown in Library"
+                        style={{
+                          padding: '3px 4px',
+                          fontSize: '9px',
+                          whiteSpace: 'nowrap',
+                          fontWeight: 500,
+                          backgroundColor: 'transparent',
+                          color: theme.textSecondary,
+                          border: 'none',
+                          borderRadius: '4px',
+                          cursor: 'pointer',
+                          transition: 'background-color 0.15s ease',
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
+                        onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
+                      >
+                        md
+                      </button>
                       {/* Paste hint button with target app - rightmost */}
                       <button
                         tabIndex={-1}

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  deletedLibraryItemMatchesSelection,
   editorSessionMatchesSelection,
   extractMarkdownH1Title,
   formatBreadcrumb,
@@ -21,8 +22,10 @@ import {
 import {
   ensureScratchpadNodePinned,
   ensureScratchpadPinned,
+  collectSidebarSiblingItems,
   filterStaleRecent,
   filterUnifiedFolders,
+  getWikiSidebarExpansionIds,
   splitRecent,
   sortSidebarNodes,
   virtualizeBookmarksGroup,
@@ -368,6 +371,57 @@ describe('librarian selection persistence', () => {
   });
 });
 
+describe('deletedLibraryItemMatchesSelection', () => {
+  it('matches the selected wiki page by id or relPath', () => {
+    const item = {
+      id: 'wiki:scratchpad/meeting-notes',
+      type: 'wiki' as const,
+      absPath: '/wiki/scratchpad/meeting-notes.md',
+      relPath: 'scratchpad/meeting-notes',
+    };
+
+    expect(deletedLibraryItemMatchesSelection(item, {
+      selectedItemId: 'wiki:scratchpad/meeting-notes',
+      selectedItemType: 'wiki',
+      wikiSelectedRelPath: null,
+      selectedPath: null,
+    })).toBe(true);
+    expect(deletedLibraryItemMatchesSelection(item, {
+      selectedItemId: null,
+      selectedItemType: 'wiki',
+      wikiSelectedRelPath: 'scratchpad/meeting-notes',
+      selectedPath: null,
+    })).toBe(true);
+  });
+
+  it('does not match an unrelated selected wiki page', () => {
+    expect(deletedLibraryItemMatchesSelection({
+      id: 'wiki:scratchpad/old',
+      type: 'wiki',
+      absPath: '/wiki/scratchpad/old.md',
+      relPath: 'scratchpad/old',
+    }, {
+      selectedItemId: 'wiki:scratchpad/current',
+      selectedItemType: 'wiki',
+      wikiSelectedRelPath: 'scratchpad/current',
+      selectedPath: null,
+    })).toBe(false);
+  });
+
+  it('matches the selected artifact by path', () => {
+    expect(deletedLibraryItemMatchesSelection({
+      id: 'artifact:/tmp/report.md',
+      type: 'artifact',
+      absPath: '/tmp/report.md',
+    }, {
+      selectedItemId: null,
+      selectedItemType: 'artifact',
+      wikiSelectedRelPath: null,
+      selectedPath: '/tmp/report.md',
+    })).toBe(true);
+  });
+});
+
 describe('ensureScratchpadPinned', () => {
   it('prepends a scratchpad folder when the tree lacks one', () => {
     const result = ensureScratchpadPinned([
@@ -442,6 +496,27 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
+  it('collects only the selected file siblings inside its directory', () => {
+    const tree = [
+      dir('entries', [
+        file('One', 1),
+        file('Two', 2),
+        dir('nested', [
+          file('Nested One', 3),
+          file('Nested Two', 4),
+        ]),
+      ]),
+      dir('scratchpad', [
+        file('Scratch', 5),
+      ]),
+    ];
+
+    expect(collectSidebarSiblingItems(tree, 'wiki:Nested One').map((item) => item.title)).toEqual([
+      'Nested One',
+      'Nested Two',
+    ]);
+  });
+
   it('groups bookmark folders under a synthetic bookmarks directory', () => {
     const nodes = [dir('entries'), dir('domains'), dir('categories')];
     const result = virtualizeBookmarksGroup(nodes, root);
@@ -467,6 +542,14 @@ describe('recursive sidebar tree helpers', () => {
     const result = ensureScratchpadNodePinned([entries, scratchpad], root);
     expect(result[0]).toBe(scratchpad);
     expect(result[1]).toBe(entries);
+  });
+
+  it('expands scratchpad ancestors for a newly selected wiki file', () => {
+    expect(getWikiSidebarExpansionIds('/wiki', 'scratchpad/meetings/team-notes')).toEqual([
+      'root:/wiki',
+      '/wiki::scratchpad',
+      '/wiki::scratchpad/meetings',
+    ]);
   });
 });
 
