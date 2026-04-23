@@ -11,6 +11,8 @@ interface UnifiedItem {
   absPath: string;
   relPath?: string;
   timestamp: number;
+  taggedDocId?: string;
+  hasUnread?: boolean;
 }
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
@@ -35,6 +37,7 @@ type SidebarNode =
       canCreateFile: boolean;
       canDeleteDir?: boolean;
       canRemoveRoot?: boolean;
+      hasUnread?: boolean;
       children: SidebarNode[];
     }
   | {
@@ -55,6 +58,12 @@ type CreatingState =
   | { kind: 'file'; location: LibraryCreateLocation }
   | { kind: 'dir'; location: LibraryCreateLocation }
   | null;
+
+type TaggedDocListItem = {
+  ulid: string;
+  path: string;
+  unread: boolean;
+};
 
 // Lets callers (keyboard shortcuts) drive the inline-create UI since
 // Electron silently returns null from window.prompt().
@@ -245,6 +254,14 @@ function libraryRootCanCreateFiles(root: LibraryRoot): boolean {
   return root.writable !== false;
 }
 
+function normalizeTaggedPath(filePath: string): string {
+  return filePath.replace(/\\/g, '/');
+}
+
+function sidebarNodeHasUnread(node: SidebarNode): boolean {
+  return node.kind === 'file' ? node.item.hasUnread === true : node.hasUnread === true;
+}
+
 function getLibraryCreateLocationKey(location: LibraryCreateLocation): string {
   return `${location.rootPath}::${location.relPath}`;
 }
@@ -266,10 +283,16 @@ function joinLibraryRelPath(parent: string, name: string): string {
   return parent ? `${parent}/${trimmedName}` : trimmedName;
 }
 
-function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: SortMode): SidebarNode {
+function wikiNodeToSidebarNode(
+  node: WikiNode,
+  root: LibraryRoot,
+  sortMode: SortMode,
+  taggedDocByPath: Map<string, TaggedDocListItem>
+): SidebarNode {
   if (node.kind === 'file') {
     const type = root.builtin ? 'wiki' : 'external';
     const id = root.builtin ? `wiki:${node.relPath}` : `external:${node.absPath}`;
+    const taggedDoc = taggedDocByPath.get(normalizeTaggedPath(node.absPath));
     return {
       kind: 'file',
       id,
@@ -280,10 +303,16 @@ function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: Sort
         absPath: node.absPath,
         relPath: node.relPath,
         timestamp: node.lastUpdated,
+        taggedDocId: taggedDoc?.ulid,
+        hasUnread: taggedDoc?.unread ?? false,
       },
     };
   }
 
+  const children = sortSidebarNodes(
+    node.children.map((child) => wikiNodeToSidebarNode(child, root, sortMode, taggedDocByPath)),
+    sortMode
+  );
   return {
     kind: 'dir',
     id: `${root.path}::${node.relPath}`,
@@ -294,7 +323,8 @@ function wikiNodeToSidebarNode(node: WikiNode, root: LibraryRoot, sortMode: Sort
     builtin: root.builtin,
     canCreateFile: libraryRootCanCreateFiles(root),
     canDeleteDir: true,
-    children: sortSidebarNodes(node.children.map((child) => wikiNodeToSidebarNode(child, root, sortMode)), sortMode),
+    hasUnread: children.some(sidebarNodeHasUnread),
+    children,
   };
 }
 
@@ -358,6 +388,7 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
       rootPath: root.path,
       builtin: true,
       canCreateFile: false,
+      hasUnread: bookmarkNodes.some(sidebarNodeHasUnread),
       children: [
         { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
         ...sortSidebarNodes(bookmarkNodes, sortMode),
@@ -366,8 +397,15 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
   ], sortMode);
 }
 
-function rootToSidebarNode(root: LibraryRoot, sortMode: SortMode): SidebarNode {
-  let children = sortSidebarNodes(root.tree.map((node) => wikiNodeToSidebarNode(node, root, sortMode)), sortMode);
+function rootToSidebarNode(
+  root: LibraryRoot,
+  sortMode: SortMode,
+  taggedDocByPath: Map<string, TaggedDocListItem>
+): SidebarNode {
+  let children = sortSidebarNodes(
+    root.tree.map((node) => wikiNodeToSidebarNode(node, root, sortMode, taggedDocByPath)),
+    sortMode
+  );
   if (root.builtin) {
     children = virtualizeBookmarksGroup(children, root, sortMode);
     children = ensureScratchpadNodePinned(children, root);
@@ -382,6 +420,7 @@ function rootToSidebarNode(root: LibraryRoot, sortMode: SortMode): SidebarNode {
     builtin: root.builtin,
     canCreateFile: libraryRootCanCreateFiles(root),
     canRemoveRoot: !root.builtin,
+    hasUnread: children.some(sidebarNodeHasUnread),
     children,
   };
 }
@@ -405,6 +444,7 @@ function WikiSidebar({
   const [wikiTree, setWikiTree] = useState<WikiFolder[]>([]);
   const [libraryRoots, setLibraryRoots] = useState<LibraryRoot[]>([]);
   const [artifacts, setArtifacts] = useState<ReadingMeta[]>([]);
+  const [taggedDocs, setTaggedDocs] = useState<TaggedDocListItem[]>([]);
   const [sortMode, setSortMode] = useState<SortMode>(() => {
     const saved = localStorage.getItem('library-sort-mode');
     return saved === 'time' ? 'time' : 'alpha';
@@ -496,21 +536,29 @@ function WikiSidebar({
     if (result) setRecent(result);
   }, []);
 
+  const loadTaggedDocs = useCallback(async () => {
+    const result = await window.taggedDocsAPI?.list();
+    if (result) setTaggedDocs(result);
+  }, []);
+
   useEffect(() => {
     loadTree();
     loadArtifacts();
     loadRecent();
+    loadTaggedDocs();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => loadTree());
     const unsubLibrary = window.libraryAPI?.onRootsChanged(() => loadTree());
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
+    const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
     const onFocus = () => {
       loadTree();
       loadArtifacts();
       loadRecent();
+      loadTaggedDocs();
     };
     window.addEventListener('focus', onFocus);
     return () => {
@@ -520,9 +568,10 @@ function WikiSidebar({
       unsubRemoved?.();
       unsubUpdated?.();
       unsubRecent?.();
+      unsubTaggedDocs?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [loadTree, loadArtifacts, loadRecent]);
+  }, [loadTree, loadArtifacts, loadRecent, loadTaggedDocs]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
@@ -644,6 +693,9 @@ function WikiSidebar({
 
   const sidebarRoots = useMemo(() => {
     const roots: SidebarNode[] = [];
+    const taggedDocByPath = new Map(
+      taggedDocs.map((doc) => [normalizeTaggedPath(doc.path), doc])
+    );
 
     if (artifacts.length > 0) {
       const items: UnifiedItem[] = artifacts.map((r) => ({
@@ -671,9 +723,9 @@ function WikiSidebar({
       });
     }
 
-    roots.push(...libraryRoots.map((root) => rootToSidebarNode(root, sortMode)));
+    roots.push(...libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath)));
     return roots;
-  }, [artifacts, libraryRoots, sortMode]);
+  }, [artifacts, libraryRoots, sortMode, taggedDocs]);
 
   const filteredSidebarRoots = useMemo(
     () => filterSidebarNodes(sidebarRoots, searchQuery),
@@ -1115,6 +1167,19 @@ function TreeNode({
         <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
           {itemCount}
         </span>
+        {node.hasUnread && (
+          <span
+            aria-label="Unread shared document"
+            style={{
+              width: '6px',
+              height: '6px',
+              borderRadius: '50%',
+              backgroundColor: '#3b82f6',
+              flexShrink: 0,
+              marginLeft: '2px',
+            }}
+          />
+        )}
         {node.canCreateFile && (
           <button
             className="bm-new-file-btn"
@@ -1422,19 +1487,34 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
             }}
           />
         ) : (
-          <div style={{
-            fontSize: '12px',
-            fontWeight: 500,
-            color: theme.text,
-            lineHeight: 1.3,
-            flex: 1,
-            minWidth: 0,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            whiteSpace: 'nowrap',
-          }}>
-            {item.title}
-          </div>
+          <>
+            <div style={{
+              fontSize: '12px',
+              fontWeight: 500,
+              color: theme.text,
+              lineHeight: 1.3,
+              flex: 1,
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}>
+              {item.title}
+            </div>
+            {item.hasUnread && (
+              <span
+                aria-label="Unread shared document"
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: '#3b82f6',
+                  flexShrink: 0,
+                  marginTop: '5px',
+                }}
+              />
+            )}
+          </>
         )}
         {isHovered && item.absPath && item.type !== 'bookmarks' && (
           <button
