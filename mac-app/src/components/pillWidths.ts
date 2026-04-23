@@ -4,20 +4,17 @@
 // max and feeds it back as the section width for both sides (symmetric growth).
 //
 // All widths are in px. The constants here must stay in sync with the slot
-// width/margin values used inside the PillSlot and AgentAttention components.
+// width/margin values used inside the PillSlot components.
 // =============================================================================
 
 const PILL_PADDING = 18; // 10 + 8
 const SLOT_WIDTH = 22;
 const SLOT_GAP = 8;
-const WAVEFORM_WIDTH = 80;
+const WAVEFORM_WIDTH = 22;
 const WAVEFORM_GAP = 8;
 
 export interface LeftPillSlotInputs {
   xExpanded: boolean;
-  // Sum of the agent-attention region's rendered slot widths (including gaps).
-  // The AgentAttention component reports this up because it varies with the
-  // spatial layout mode (row vs grid) and the per-slot ×N badge state.
   agentsSlotSum: number;
   hamburgerExpanded: boolean;
 }
@@ -27,9 +24,10 @@ export function computeLeftPillWidth({
   agentsSlotSum,
   hamburgerExpanded,
 }: LeftPillSlotInputs): number {
+  const hasContentAfterX = agentsSlotSum > 0 || hamburgerExpanded;
   return (
     PILL_PADDING
-    + (xExpanded ? SLOT_WIDTH + SLOT_GAP : 0)
+    + (xExpanded ? SLOT_WIDTH + (hasContentAfterX ? SLOT_GAP : 0) : 0)
     + agentsSlotSum
     + (hamburgerExpanded ? SLOT_WIDTH : 0)
   );
@@ -45,10 +43,11 @@ export function computeRightPillWidth({
   pipeCount,
 }: RightPillSlotInputs): number {
   const pipeSlot = pipeSlotWidthForCount(pipeCount);
+  const hasPipeSlot = pipeCount > 0;
   return (
     PILL_PADDING
-    + (waveformActive ? WAVEFORM_WIDTH + WAVEFORM_GAP : 0)
-    + (pipeCount > 0 ? pipeSlot : 0)
+    + (waveformActive ? WAVEFORM_WIDTH + (hasPipeSlot ? WAVEFORM_GAP : 0) : 0)
+    + (hasPipeSlot ? pipeSlot : 0)
   );
 }
 

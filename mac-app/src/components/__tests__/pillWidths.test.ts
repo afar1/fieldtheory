@@ -38,6 +38,15 @@ describe('computeLeftPillWidth', () => {
     expect(withX - base).toBe(22 + 8);
   });
 
+  it('does not add a trailing gap when X is the only chip', () => {
+    const w = computeLeftPillWidth({
+      xExpanded: true,
+      agentsSlotSum: 0,
+      hamburgerExpanded: false,
+    });
+    expect(w).toBe(18 + 22);
+  });
+
   it('agent slot sum is added through verbatim', () => {
     const base = computeLeftPillWidth({
       xExpanded: false,
@@ -70,10 +79,16 @@ describe('computeRightPillWidth', () => {
     expect(computeRightPillWidth({ waveformActive: false, pipeCount: 0 })).toBe(18);
   });
 
-  it('waveform adds 88 (80 + 8 gap)', () => {
+  it('waveform alone adds one chip with no trailing gap', () => {
     const base = computeRightPillWidth({ waveformActive: false, pipeCount: 0 });
     const withWave = computeRightPillWidth({ waveformActive: true, pipeCount: 0 });
-    expect(withWave - base).toBe(88);
+    expect(withWave - base).toBe(22);
+  });
+
+  it('waveform adds a gap only when a stack chip follows it', () => {
+    expect(
+      computeRightPillWidth({ waveformActive: true, pipeCount: 1 })
+    ).toBe(18 + 22 + 8 + 22);
   });
 
   it('1–3 pipes add 22', () => {
