@@ -22,9 +22,12 @@ import {
 import {
   ensureScratchpadNodePinned,
   ensureScratchpadPinned,
+  filterHiddenDefaultSidebarNodes,
+  flattenBuiltinSidebarRoots,
   collectSidebarSiblingItems,
   filterStaleRecent,
   filterUnifiedFolders,
+  getSidebarFolderFinderPath,
   getWikiSidebarExpansionIds,
   splitRecent,
   sortSidebarNodes,
@@ -534,6 +537,128 @@ describe('recursive sidebar tree helpers', () => {
   it('leaves the tree reference alone when no bookmark folders exist', () => {
     const nodes = [dir('entries')];
     expect(virtualizeBookmarksGroup(nodes, root)).toBe(nodes);
+  });
+
+  it('filters hidden default folders without touching external roots', () => {
+    const artifactRoot: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'artifacts',
+      name: 'artifacts',
+      label: 'Artifacts',
+      relPath: 'artifacts',
+      rootPath: 'artifacts',
+      builtin: false,
+      canCreateFile: false,
+      children: [file('Artifact One', 1)],
+    };
+    const builtinRoot: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'root:/wiki',
+      name: 'Wiki',
+      label: 'Wiki',
+      relPath: '',
+      rootPath: '/wiki',
+      builtin: true,
+      canCreateFile: true,
+      children: [
+        dir('scratchpad'),
+        dir('bookmarks-from-x', [dir('categories')]),
+        dir('entries'),
+        dir('custom'),
+      ],
+    };
+    const externalEntries: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'root:/external',
+      name: 'entries',
+      label: 'Entries',
+      relPath: '',
+      rootPath: '/external',
+      builtin: false,
+      canCreateFile: true,
+      children: [],
+    };
+
+    const result = filterHiddenDefaultSidebarNodes(
+      [artifactRoot, builtinRoot, externalEntries],
+      ['artifacts', 'scratchpad', 'bookmarks-from-x', 'entries']
+    );
+
+    expect(result.map((node) => node.kind === 'dir' ? node.id : node.id)).toEqual([
+      'root:/wiki',
+      'root:/external',
+    ]);
+    const filteredBuiltin = result[0];
+    expect(filteredBuiltin.kind).toBe('dir');
+    if (filteredBuiltin.kind !== 'dir') return;
+    expect(filteredBuiltin.children.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual(['custom']);
+    expect(result[1]).toMatchObject({ rootPath: '/external', name: 'entries' });
+  });
+
+  it('keeps sidebar node references stable when no defaults are hidden', () => {
+    const nodes = [dir('entries')];
+    expect(filterHiddenDefaultSidebarNodes(nodes, [])).toBe(nodes);
+  });
+
+  it('promotes the builtin wiki children without flattening external roots', () => {
+    const builtinRoot: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'root:/wiki',
+      name: 'Wiki',
+      label: 'Wiki',
+      relPath: '',
+      rootPath: '/wiki',
+      builtin: true,
+      canCreateFile: true,
+      children: [dir('scratchpad'), dir('entries')],
+    };
+    const externalRoot: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'root:/external',
+      name: 'external',
+      label: 'external',
+      relPath: '',
+      rootPath: '/external',
+      builtin: false,
+      canCreateFile: true,
+      children: [dir('notes')],
+    };
+
+    const result = flattenBuiltinSidebarRoots([builtinRoot, externalRoot]);
+
+    expect(result.map((node) => node.kind === 'dir' ? node.id : node.id)).toEqual([
+      '/wiki::scratchpad',
+      '/wiki::entries',
+      'root:/external',
+    ]);
+    expect(result).not.toContain(builtinRoot);
+    expect(result).toContain(externalRoot);
+  });
+
+  it('resolves Finder paths for real folders and keeps virtual bookmarks honest', () => {
+    expect(getSidebarFolderFinderPath(dir('entries'))).toBe('/wiki/entries');
+    expect(getSidebarFolderFinderPath({
+      kind: 'dir',
+      id: '/wiki::bookmarks-from-x',
+      name: 'bookmarks-from-x',
+      label: 'Bookmarks from x.com',
+      relPath: 'bookmarks-from-x',
+      rootPath: '/wiki',
+      builtin: true,
+      canCreateFile: false,
+      children: [],
+    })).toBe('/wiki');
+    expect(getSidebarFolderFinderPath({
+      kind: 'dir',
+      id: 'artifacts',
+      name: 'artifacts',
+      label: 'Artifacts',
+      relPath: 'artifacts',
+      rootPath: 'artifacts',
+      builtin: false,
+      canCreateFile: false,
+      children: [],
+    })).toBeNull();
   });
 
   it('pins an existing scratchpad directory before other built-in nodes', () => {

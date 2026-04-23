@@ -1622,6 +1622,16 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getLibraryRoots();
   });
 
+  ipcMain.handle('library:getHiddenFolders', (): string[] => {
+    if (!librarianManager) return [];
+    return librarianManager.getHiddenDefaultFolders();
+  });
+
+  ipcMain.handle('library:setFolderHidden', (_event, folderId: string, hidden: boolean): string[] => {
+    if (!librarianManager) return [];
+    return librarianManager.setDefaultFolderHidden(folderId, hidden);
+  });
+
   ipcMain.handle('library:addRoot', (_event, dirPath: string): LibraryRoot | null => {
     if (!librarianManager) return null;
     return librarianManager.addLibraryRoot(dirPath);

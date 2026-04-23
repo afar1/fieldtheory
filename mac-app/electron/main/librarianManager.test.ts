@@ -28,6 +28,8 @@ import {
   isHiddenWikiFileName,
   isHiddenWikiFolderName,
   LibrarianManager,
+  normalizeHiddenDefaultFolders,
+  normalizeSeededReadmes,
   parseMarkdownHeader,
   type WikiNode,
 } from './librarianManager';
@@ -40,6 +42,12 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function makeTempDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-wiki-tree-'));
+  tempDirs.push(dir);
+  return dir;
+}
 
 describe('defaultScratchpadName', () => {
   it('formats as "<Day> <Mon> <Nth>" with correct ordinal suffix', () => {
@@ -192,12 +200,6 @@ describe('wiki tree visibility helpers', () => {
 });
 
 describe('recursive wiki tree scan', () => {
-  function makeTempDir(): string {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-wiki-tree-'));
-    tempDirs.push(dir);
-    return dir;
-  }
-
   function scan(rootPath: string): WikiNode[] {
     const manager = Object.create(LibrarianManager.prototype) as {
       scanMarkdownTree: (rootPath: string) => WikiNode[];
@@ -229,6 +231,20 @@ describe('recursive wiki tree scan', () => {
     if (entries?.kind !== 'dir') return;
     expect(entries.children.map((node) => node.name)).toEqual(['alpha', 'nested', 'zeta']);
     expect(flatten(tree)).toEqual(['entries/alpha', 'entries/nested/beta', 'entries/zeta']);
+  });
+
+  it('sorts README before sibling pages', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'zeta.md'), '# Zeta\n');
+    fs.writeFileSync(path.join(root, 'entries', 'README.md'), '# Entries\n');
+    fs.writeFileSync(path.join(root, 'entries', 'alpha.md'), '# Alpha\n');
+
+    const tree = scan(root);
+    const entries = tree.find((node) => node.kind === 'dir' && node.name === 'entries');
+    expect(entries?.kind).toBe('dir');
+    if (entries?.kind !== 'dir') return;
+    expect(entries.children.map((node) => node.name)).toEqual(['README', 'alpha', 'zeta']);
   });
 
   it('emits wiki:changed immediately after saving a wiki page', () => {
@@ -417,6 +433,114 @@ describe('recursive wiki tree scan', () => {
 
     expect(await manager.deleteLibraryDir(root, '')).toBe(false);
     expect(trashItem).not.toHaveBeenCalled();
+  });
+});
+
+describe('hidden default library folders', () => {
+  it('normalizes persisted folder ids to the supported defaults in canonical order', () => {
+    expect(normalizeHiddenDefaultFolders(['entries', 'unknown', 'entries', 'artifacts'])).toEqual([
+      'artifacts',
+      'entries',
+    ]);
+    expect(normalizeHiddenDefaultFolders('entries')).toEqual([]);
+  });
+
+  it('persists only validated default folder ids', () => {
+    const saveSettings = vi.fn();
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { hiddenDefaultFolders?: string[] };
+      getHiddenDefaultFolders: () => string[];
+      setDefaultFolderHidden: (folderId: string, hidden: boolean) => string[];
+      saveSettings: typeof saveSettings;
+      emit: typeof emit;
+      wikiDir: string;
+    };
+    manager.settings = { hiddenDefaultFolders: ['entries', 'bad'] };
+    manager.saveSettings = saveSettings;
+    manager.emit = emit;
+    Object.defineProperty(manager, 'wikiDir', { value: '/wiki' });
+
+    expect(manager.setDefaultFolderHidden('scratchpad', true)).toEqual(['scratchpad', 'entries']);
+    expect(manager.settings.hiddenDefaultFolders).toEqual(['scratchpad', 'entries']);
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenCalledWith('library:changed', '/wiki');
+
+    expect(manager.setDefaultFolderHidden('not-real', true)).toEqual(['scratchpad', 'entries']);
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('default folder readmes', () => {
+  it('normalizes seeded README ids to the supported defaults in canonical order', () => {
+    expect(normalizeSeededReadmes(['entities', 'unknown', 'scratchpad', 'entities'])).toEqual([
+      'scratchpad',
+      'entities',
+    ]);
+    expect(normalizeSeededReadmes(null)).toEqual([]);
+  });
+
+  it('seeds READMEs for real wiki folders only and saves once', () => {
+    const root = makeTempDir();
+    const saveSettings = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { readmesSeeded?: string[] };
+      ensureDefaultFolderReadmes: () => void;
+      saveSettings: typeof saveSettings;
+      wikiDir: string;
+    };
+    manager.settings = { readmesSeeded: [] };
+    manager.saveSettings = saveSettings;
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    manager.ensureDefaultFolderReadmes();
+
+    for (const folder of ['scratchpad', 'debates', 'entries', 'concepts', 'categories', 'domains', 'entities']) {
+      expect(fs.existsSync(path.join(root, folder, 'README.md'))).toBe(true);
+    }
+    expect(fs.existsSync(path.join(root, 'bookmarks', 'README.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'artifacts', 'README.md'))).toBe(false);
+    expect(manager.settings.readmesSeeded).toEqual([
+      'scratchpad',
+      'debates',
+      'entries',
+      'concepts',
+      'categories',
+      'domains',
+      'entities',
+    ]);
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not overwrite an existing README and still marks the folder handled', () => {
+    const root = makeTempDir();
+    const entriesDir = path.join(root, 'entries');
+    fs.mkdirSync(entriesDir, { recursive: true });
+    fs.writeFileSync(path.join(entriesDir, 'README.md'), '# Custom\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { readmesSeeded?: string[] };
+      ensureFolderReadme: (folderId: string, absDir: string, content: string) => boolean;
+    };
+    manager.settings = { readmesSeeded: [] };
+
+    expect(manager.ensureFolderReadme('entries', entriesDir, '# Default\n')).toBe(true);
+    expect(fs.readFileSync(path.join(entriesDir, 'README.md'), 'utf-8')).toBe('# Custom\n');
+    expect(manager.settings.readmesSeeded).toEqual(['entries']);
+  });
+
+  it('does not resurrect a deleted README after the folder is marked handled', () => {
+    const root = makeTempDir();
+    const scratchpadDir = path.join(root, 'scratchpad');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { readmesSeeded?: string[] };
+      ensureFolderReadme: (folderId: string, absDir: string, content: string) => boolean;
+    };
+    manager.settings = { readmesSeeded: ['scratchpad'] };
+
+    expect(manager.ensureFolderReadme('scratchpad', scratchpadDir, '# Scratchpad\n')).toBe(false);
+    expect(fs.existsSync(path.join(scratchpadDir, 'README.md'))).toBe(false);
   });
 });
 

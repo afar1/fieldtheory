@@ -1589,6 +1589,8 @@ declare global {
 
   interface LibraryAPI {
     getRoots: () => Promise<LibraryRoot[]>;
+    getHiddenFolders: () => Promise<string[]>;
+    setFolderHidden: (folderId: string, hidden: boolean) => Promise<string[]>;
     addRoot: (dirPath: string) => Promise<LibraryRoot | null>;
     removeRoot: (dirPath: string) => Promise<boolean>;
     createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
