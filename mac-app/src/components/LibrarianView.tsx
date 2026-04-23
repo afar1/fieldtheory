@@ -1583,7 +1583,70 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
   }, [markdownUrlPasteChoice, scheduleEditorSessionPersist, updateMarkdownWikiLinkCompletion]);
 
+  const applyListToggle = useCallback((editor: HTMLTextAreaElement, kind: 'ordered' | 'unordered') => {
+    const value = editor.value;
+    const selStart = editor.selectionStart;
+    const selEnd = editor.selectionEnd;
+
+    const lineStart = value.lastIndexOf('\n', selStart - 1) + 1;
+    const searchFrom = selEnd > selStart ? selEnd - 1 : selEnd;
+    const nextNewline = value.indexOf('\n', searchFrom);
+    const lineEnd = nextNewline === -1 ? value.length : nextNewline;
+
+    const before = value.slice(0, lineStart);
+    const block = value.slice(lineStart, lineEnd);
+    const after = value.slice(lineEnd);
+    const lines = block.split('\n');
+
+    const orderedRe = /^(\s*)(\d+)\.\s/;
+    const unorderedRe = /^(\s*)[-*+]\s/;
+    const markerRe = kind === 'ordered' ? orderedRe : unorderedRe;
+
+    const nonBlank = lines.filter((l) => l.trim().length > 0);
+    const allMarked = nonBlank.length > 0 && nonBlank.every((l) => markerRe.test(l));
+
+    let counter = 1;
+    const transformed = lines.map((line) => {
+      if (line.trim().length === 0) return line;
+      const orderedMatch = line.match(orderedRe);
+      const unorderedMatch = line.match(unorderedRe);
+      const stripped = orderedMatch
+        ? line.slice(orderedMatch[0].length)
+        : unorderedMatch
+        ? line.slice(unorderedMatch[0].length)
+        : line;
+      if (allMarked) return stripped;
+      return kind === 'ordered' ? `${counter++}. ${stripped}` : `- ${stripped}`;
+    });
+
+    const nextBlock = transformed.join('\n');
+    if (nextBlock === block) return;
+    const nextValue = before + nextBlock + after;
+    const nextSelStart = lineStart;
+    const nextSelEnd = lineStart + nextBlock.length;
+    const scrollTop = editor.scrollTop;
+
+    markWritingActive();
+    setEditContent(nextValue);
+    scheduleEditorSessionPersist();
+    requestAnimationFrame(() => {
+      const el = markdownEditorRef.current;
+      if (!el || el.value !== nextValue) return;
+      el.setSelectionRange(nextSelStart, nextSelEnd);
+      el.scrollTop = scrollTop;
+      updateMarkdownEditorFades(el);
+    });
+  }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+
   const handleMarkdownEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.metaKey && e.shiftKey && !e.altKey && !e.ctrlKey) {
+      if (e.code === 'Digit7' || e.code === 'Digit8') {
+        e.preventDefault();
+        applyListToggle(e.currentTarget, e.code === 'Digit7' ? 'ordered' : 'unordered');
+        return;
+      }
+    }
+
     const completion = markdownWikiLinkCompletion;
     if (!completion) return;
 
@@ -1621,6 +1684,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       applyMarkdownWikiLinkSuggestion(suggestion, completion);
     }
   }, [
+    applyListToggle,
     applyMarkdownWikiLinkSuggestion,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
@@ -1929,6 +1993,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
     await flushCurrentEdit();
+    if (item.taggedDocId && item.hasUnread) {
+      void window.taggedDocsAPI?.markRead(item.taggedDocId);
+    }
     if (item.type === 'wiki' && item.relPath) {
       openWikiPage(item.relPath);
     } else if (item.type === 'artifact') {

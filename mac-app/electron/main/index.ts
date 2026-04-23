@@ -72,6 +72,7 @@ import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFo
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
+import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
 import { TodoStore, Todo } from './todoStore';
@@ -265,6 +266,7 @@ let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
 let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
+let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
@@ -2627,6 +2629,24 @@ function setupLibrarianIPCHandlers(): void {
   });
 }
 
+function setupTaggedDocsIPCHandlers(): void {
+  ipcMain.handle(TaggedDocsIPCChannels.LIST, (): TaggedDoc[] => {
+    return taggedDocsManager?.list() ?? [];
+  });
+
+  ipcMain.handle(TaggedDocsIPCChannels.MARK_READ, (_event, ulid: string): TaggedDoc | null => {
+    return taggedDocsManager?.markRead(ulid) ?? null;
+  });
+
+  ipcMain.handle(TaggedDocsIPCChannels.MARK_ALL_READ, (): TaggedDoc[] => {
+    return taggedDocsManager?.markAllRead() ?? [];
+  });
+
+  ipcMain.handle(TaggedDocsIPCChannels.RESCAN, async (): Promise<TaggedDoc[]> => {
+    return taggedDocsManager?.rescan() ?? [];
+  });
+}
+
 /**
  * Set up IPC handlers for Squares window management.
  */
@@ -4036,6 +4056,9 @@ function setupClipboardIPCHandlers(): void {
 
     // Clean up LibrarianManager (stop file watchers, close database)
     librarianManager?.destroy();
+
+    // Clean up TaggedDocsManager (stop file watcher, close database)
+    taggedDocsManager?.destroy();
 
     // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
@@ -6813,6 +6836,29 @@ async function initTranscriberSystem(): Promise<void> {
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
 
+  taggedDocsManager = new TaggedDocsManager({
+    dbPath: userDataManager.isLoggedIn()
+      ? userDataManager.getUserDataPath('tagged.db')
+      : userDataManager.getSharedDataPath('tagged.db'),
+  });
+
+  taggedDocsManager.on('updated', (docs: TaggedDoc[]) => {
+    trayManager?.setTaggedDocsUnreadCount(docs.filter((doc) => doc.unread).length);
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(TaggedDocsIPCChannels.UPDATED, docs);
+      }
+    });
+  });
+
+  taggedDocsManager.on('scanProgress', (progress: TaggedDocsScanProgress) => {
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send(TaggedDocsIPCChannels.SCAN_PROGRESS, progress);
+      }
+    });
+  });
+
   // Initialize metrics manager BEFORE authManager.init() so it exists when userChanged fires.
   // "The metrics you see are the metrics we see."
   metricsManager = new MetricsManager(authManager);
@@ -6892,6 +6938,10 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
     }
+    if (taggedDocsManager && userDataManager) {
+      taggedDocsManager.setDatabasePath(userDataManager.getUserDataPath('tagged.db'));
+      void taggedDocsManager.rescan();
+    }
     // Register Hot Mic hotkey and auto-start if enabled (now that user prefs are loaded)
     if (hotMicManager) {
       hotMicManager.registerHotkey();
@@ -6922,11 +6972,13 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       commandsManager.onUserLoggedOut();
     }
+    taggedDocsManager?.onUserLoggedOut();
   });
 
   // Listen for session changes (login/logout, token refresh)
   authManager.on('sessionChanged', async (session) => {
     logUserState(session ? 'login' : 'logout');
+    taggedDocsManager?.setIdentity(session?.user?.email ?? null);
 
     BrowserWindow.getAllWindows().forEach((win) => {
       if (!win.isDestroyed()) {
@@ -7249,6 +7301,7 @@ if (!gotTheLock) {
     setupIPCHandlers();
     setupThemeIPCHandlers();
     setupLibrarianIPCHandlers();
+    setupTaggedDocsIPCHandlers();
     setupSquaresIPCHandlers();
     setupGazeIPCHandlers();
     setupTranscribeIPCHandlers();
