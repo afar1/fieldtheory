@@ -3654,9 +3654,44 @@ interface LibraryRoot {
   writable?: boolean;
   tree: WikiNode[];
 }
+interface LibraryMigrationFile {
+  relPath: string;
+  sourcePath: string;
+  targetPath: string;
+}
+interface LibraryMigrationConflict extends LibraryMigrationFile {
+  conflictCopyPath: string;
+}
+interface LibraryMigrationPlan {
+  sourceDir: string;
+  targetDir: string;
+  backupDir: string;
+  timestamp: string;
+  sourceState: string;
+  targetState: string;
+  filesToCopy: LibraryMigrationFile[];
+  identicalFiles: LibraryMigrationFile[];
+  conflicts: LibraryMigrationConflict[];
+  targetOnlyFiles: string[];
+  missingFolders: string[];
+  symlinksToCreate: Array<{ linkPath: string; targetPath: string }>;
+  blockingIssues: string[];
+  canExecute: boolean;
+}
+interface LibraryMigrationExecutionResult {
+  success: boolean;
+  copiedFiles: string[];
+  skippedIdenticalFiles: string[];
+  conflictCopies: Array<{ relPath: string; copiedTo: string }>;
+  backupDir: string | null;
+  symlinkCreated: boolean;
+  errors: string[];
+}
 
 const libraryAPI = {
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
+  previewMigration: (): Promise<LibraryMigrationPlan> => ipcRenderer.invoke('library:previewMigration'),
+  executeMigration: (): Promise<LibraryMigrationExecutionResult> => ipcRenderer.invoke('library:executeMigration'),
   getHiddenFolders: (): Promise<string[]> => ipcRenderer.invoke('library:getHiddenFolders'),
   setFolderHidden: (folderId: string, hidden: boolean): Promise<string[]> =>
     ipcRenderer.invoke('library:setFolderHidden', folderId, hidden),
