@@ -23,6 +23,7 @@ import { app } from 'electron';
 import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
+import { commandsDir } from './fieldTheoryPaths';
 
 const log = createLogger('Commands');
 
@@ -290,14 +291,9 @@ export class CommandsManager extends EventEmitter {
 
   /**
    * Get the default commands directory path.
-   * Uses a per-user internal commands directory when available.
    */
   getDefaultDirectory(): string {
-    if (this.userDataManager?.isLoggedIn()) {
-      return this.userDataManager.getUserDataPath('commands');
-    }
-    const userDataPath = app.getPath('userData');
-    return path.join(userDataPath, 'commands');
+    return commandsDir();
   }
 
   private seedDefaultCommands(defaultDir: string): void {
