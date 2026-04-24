@@ -300,10 +300,10 @@ export function executeLibraryMigration(plan: LibraryMigrationPlan): LibraryMigr
     }
 
     for (const symlink of plan.symlinksToCreate) {
-      if (fs.existsSync(symlink.linkPath)) {
-        const state = pathState(symlink.linkPath, symlink.targetPath);
-        if (state === 'symlink-to-target') continue;
-        if (state !== 'directory') {
+      const linkState = pathState(symlink.linkPath, symlink.targetPath);
+      if (linkState !== 'missing') {
+        if (linkState === 'symlink-to-target') continue;
+        if (linkState !== 'directory') {
           throw new Error(`Refusing to replace non-directory legacy path: ${symlink.linkPath}`);
         }
         if (fs.existsSync(plan.backupDir)) {
