@@ -70,6 +70,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
+import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
@@ -7345,8 +7346,11 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (!filePath) return;
 
       const decodedPath = decodeURIComponent(filePath);
-      const wikiRoot = path.join(process.env.FT_DATA_DIR ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
-      const relPath = path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+      const wikiRoot = librarianManager?.getWikiRoot() ?? libraryDir();
+      const resolved = resolveIncomingMarkdownPath(decodedPath, wikiRoot);
+      const relPath = resolved?.kind === 'wiki'
+        ? resolved.relPath
+        : path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
 
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
@@ -7432,7 +7436,7 @@ if (!gotTheLock) {
   app.whenReady().then(async () => {
     log.info('App ready');
 
-    // ftmedia://media/<filename> → ~/.ft-bookmarks/media/<filename>.
+    // ftmedia://media/<filename> → the bookmark media folder.
     // basename() strips any path traversal attempts from the URL.
     protocol.handle('ftmedia', (req) => {
       const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));

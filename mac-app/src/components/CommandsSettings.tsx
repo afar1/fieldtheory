@@ -329,7 +329,7 @@ export default function CommandsSettings() {
               value={newPath}
               onChange={(e) => setNewPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddDirectory()}
-              placeholder="Enter path (e.g., ~/.cursor/commands)"
+              placeholder="Enter path (e.g., ~/.fieldtheory/commands)"
               style={{
                 flex: 1,
                 padding: '8px 12px',
@@ -371,7 +371,7 @@ export default function CommandsSettings() {
               lineHeight: '1.5',
             }}>
               <strong>Common locations:</strong><br />
-              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.cursor/commands</code> — Cursor commands
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.fieldtheory/commands</code> — Field Theory commands
             </p>
           )}
         </div>

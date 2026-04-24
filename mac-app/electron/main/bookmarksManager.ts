@@ -1,9 +1,9 @@
 import path from 'path';
 import fs from 'fs';
-import os from 'os';
 import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { createLogger } from './logger';
+import { bookmarkDataDir } from './fieldTheoryPaths';
 
 const log = createLogger('Bookmarks');
 
@@ -13,7 +13,7 @@ export interface BookmarkImage {
   height: number;
   type: 'photo' | 'video' | 'animated_gif' | string;
   videoUrl?: string;
-  /** Filename in ~/.ft-bookmarks/media/. Set when `ft fetch-media` has
+  /** Filename in the bookmark media folder. Set when `ft fetch-media` has
    * downloaded this asset. Renderer loads it via ftmedia://media/<filename>. */
   localFilename?: string;
   /** Local MP4 filename when the video itself has been downloaded. */
@@ -26,7 +26,7 @@ export interface QuotedTweet {
   authorHandle: string;
   authorName: string;
   authorAvatar: string;
-  /** Local avatar filename in `~/.ft-bookmarks/media/`, if downloaded. */
+  /** Local avatar filename in the bookmark media folder, if downloaded. */
   localAvatarFilename?: string;
   postedAt: string;
   url: string;
@@ -40,7 +40,7 @@ export interface Bookmark {
   authorHandle: string;
   authorName: string;
   authorAvatar: string;
-  /** Local avatar filename in `~/.ft-bookmarks/media/`, if downloaded. */
+  /** Local avatar filename in the bookmark media folder, if downloaded. */
   localAvatarFilename?: string;
   postedAt: string;
   images: BookmarkImage[];
@@ -101,8 +101,7 @@ export interface RawBookmark {
 }
 
 function bookmarksDir(): string {
-  const ftDataDir = process.env.FT_DATA_DIR;
-  return ftDataDir ?? path.join(os.homedir(), '.ft-bookmarks');
+  return bookmarkDataDir();
 }
 
 function jsonlPath(): string {
