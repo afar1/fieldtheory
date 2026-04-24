@@ -19,7 +19,10 @@ import {
   formatTimeAgo,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
+  flattenLibraryRootsForLauncher,
+  filterLauncherNamespaceItems,
   type LauncherHotkeyMap,
+  type LauncherLibraryRoot,
 } from './commandLauncherUtils';
 import { normalizeSquaresConfig } from './utils/squaresConfig';
 
@@ -40,7 +43,7 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'artifact';
+type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'markdown-file' | 'artifact';
 
 interface LauncherItem {
   id: string;
@@ -102,6 +105,10 @@ interface LauncherThemeAPI {
   setTheme: (isDark: boolean) => Promise<void>;
 }
 
+interface LauncherLibraryAPI {
+  getRoots: () => Promise<LauncherLibraryRoot[]>;
+}
+
 interface LauncherSquaresAPI {
   executeAction: (action: string, source?: 'default' | 'command-launcher') => Promise<boolean>;
   getHotkeys: () => Promise<Record<string, string>>;
@@ -115,6 +122,7 @@ const clipboardAPI = window.clipboardAPI as unknown as LauncherClipboardAPI;
 const transcribeAPI = window.transcribeAPI as unknown as LauncherTranscribeAPI;
 const themeAPI = window.themeAPI as unknown as LauncherThemeAPI;
 const squaresAPI = window.squaresAPI as unknown as LauncherSquaresAPI;
+const libraryAPI = window.libraryAPI as unknown as LauncherLibraryAPI | undefined;
 
 // =============================================================================
 // Default Hotkeys
@@ -157,6 +165,18 @@ const getStyles = (isDark: boolean) => ({
     fontSize: '11px',
     color: isDark ? '#fff' : '#1a1a1a',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
+  },
+  namespaceTag: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    height: '18px',
+    padding: '0 6px',
+    borderRadius: '4px',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.08)',
+    color: isDark ? '#f2f2f2' : '#222',
+    fontSize: '10px',
+    fontFamily: 'SF Mono, Monaco, Menlo, monospace',
+    flexShrink: 0,
   },
   list: {
     listStyle: 'none',
@@ -212,15 +232,15 @@ const getStyles = (isDark: boolean) => ({
 
 function CommandLauncher() {
   const [query, setQuery] = useState('');
+  const [namespacePrefix, setNamespacePrefix] = useState<NamespacePrefix | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
-  const [wikiPages, setWikiPages] = useState<LauncherItem[]>([]);
+  const [libraryMarkdownItems, setLibraryMarkdownItems] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
-  const [fieldTheoryActive, setFieldTheoryActive] = useState(false);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -238,21 +258,13 @@ function CommandLauncher() {
     }
   }, []);
 
-  const loadWikiPages = useCallback(async () => {
+  const loadLibraryMarkdown = useCallback(async () => {
     try {
-      const tree = await window.wikiAPI?.getTree();
-      if (!tree) return;
-      setWikiPages(tree.flatMap(folder =>
-        folder.files.map(page => ({
-          id: `wiki-${page.relPath}`,
-          type: 'wiki-page' as const,
-          name: page.name,
-          displayName: page.title,
-          keywords: [page.name, page.title, page.relPath, ...page.name.split('-')],
-          filePath: page.absPath,
-          relPath: page.relPath,
-        }))
-      ));
+      const roots = await libraryAPI?.getRoots();
+      if (roots) {
+        setLibraryMarkdownItems(flattenLibraryRootsForLauncher(roots));
+        return;
+      }
     } catch {}
   }, []);
 
@@ -279,15 +291,6 @@ function CommandLauncher() {
       setHandoffs(hoffs || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load handoffs:', err);
-    }
-  }, []);
-
-  const loadLauncherContext = useCallback(async () => {
-    try {
-      const context = await commandsAPI.getLauncherContext();
-      setFieldTheoryActive(Boolean(context?.fieldTheoryActive));
-    } catch {
-      setFieldTheoryActive(false);
     }
   }, []);
 
@@ -326,7 +329,6 @@ function CommandLauncher() {
 
     loadCommands();
     loadHandoffs();
-    loadLauncherContext();
     loadHotkeys();
 
     // Load current theme
@@ -336,14 +338,13 @@ function CommandLauncher() {
     // Reload commands and handoffs each time to pick up newly added ones without restart.
     const handleReset = async () => {
       setQuery('');
+      setNamespacePrefix(null);
       setFiltered([]);
       setSelectedIndex(0);
-      setFieldTheoryActive(false);
       inputRef.current?.focus();
-      await loadLauncherContext();
       loadCommands();
       loadHandoffs();
-      loadWikiPages();
+      loadLibraryMarkdown();
       loadArtifacts();
       // Refresh theme state
       const dark = await themeAPI.getTheme();
@@ -360,7 +361,7 @@ function CommandLauncher() {
       unsubscribe();
       unsubscribeSquaresConfig?.();
     };
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadWikiPages, loadArtifacts, loadLauncherContext]);
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts]);
 
   // Build all items (commands + actions + handoffs).
   const allItems = useMemo(() => {
@@ -385,15 +386,16 @@ function CommandLauncher() {
 
     const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher);
 
-    const markdownItems = fieldTheoryActive ? [...wikiPages, ...artifactReadings] : [];
+    const markdownItems = [...libraryMarkdownItems, ...artifactReadings];
     return [...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, fieldTheoryActive, wikiPages, artifactReadings]);
+  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
+    if (namespacePrefix) return false;
     const q = query.trim().toLowerCase();
     return q === 'help' || q === '?';
-  }, [query]);
+  }, [namespacePrefix, query]);
 
   // Filter items when query changes.
   useEffect(() => {
@@ -408,7 +410,7 @@ function CommandLauncher() {
       return;
     }
 
-    if (query.trim() === '') {
+    if (!namespacePrefix && query.trim() === '') {
       setFiltered([]);
       setSelectedIndex(0);
       commandsAPI.launcherResize(inputHeight);
@@ -447,18 +449,22 @@ function CommandLauncher() {
 
     const q = query.toLowerCase();
 
+    if (namespacePrefix) {
+      const pool = namespacePrefix === 'wiki' ? libraryMarkdownItems : artifactReadings;
+      const results = filterLauncherNamespaceItems(pool, q);
+      setFiltered(results.slice(0, 20));
+      setSelectedIndex(0);
+      const itemHeight = 22;
+      const listHeight = Math.min(results.length * itemHeight + 10, 280);
+      commandsAPI.launcherResize(inputHeight + (results.length > 0 ? listHeight : emptyStateHeight));
+      return;
+    }
+
     const nsMatch = q.match(/^(wiki|artifact)\s+(.*)$/);
     if (nsMatch) {
       const [, ns, search] = nsMatch;
-      const pool = ns === 'wiki' ? wikiPages : artifactReadings;
-      const s = search.trim().toLowerCase();
-      const results = s
-        ? pool.filter(item =>
-            item.name.toLowerCase().includes(s) ||
-            item.displayName.toLowerCase().includes(s) ||
-            item.keywords.some(k => k.toLowerCase().includes(s))
-          )
-        : pool;
+      const pool = ns === 'wiki' ? libraryMarkdownItems : artifactReadings;
+      const results = filterLauncherNamespaceItems(pool, search);
       setFiltered(results.slice(0, 20));
       setSelectedIndex(0);
       const itemHeight = 22;
@@ -475,7 +481,7 @@ function CommandLauncher() {
         displayName: 'wiki.md — lookup',
         keywords: ['wiki'],
         filePath: WIKI_COMMAND_PATH ?? undefined,
-      }, ...wikiPages.slice(0, 5)]);
+      }, ...libraryMarkdownItems.slice(0, 5)]);
       setSelectedIndex(0);
       commandsAPI.launcherResize(inputHeight + Math.min(6 * 22 + 10, 280));
       return;
@@ -518,7 +524,7 @@ function CommandLauncher() {
       ? Math.min(matches.length * itemHeight + padding, 280)
       : emptyStateHeight;
     commandsAPI.launcherResize(inputHeight + listHeight);
-  }, [query, allItems, isHelpQuery, wikiPages, artifactReadings]);
+  }, [namespacePrefix, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -589,13 +595,18 @@ function CommandLauncher() {
       setSelectedIndex(i => Math.max(i - 1, 0));
     } else if (e.key === 'Tab') {
       e.preventDefault();
+      if (namespacePrefix) return;
       const q = query.trim().toLowerCase();
       for (const prefix of NAMESPACE_PREFIXES) {
         if (prefix.startsWith(q) && q.length > 0) {
-          setQuery(prefix + ' ');
+          setNamespacePrefix(prefix);
+          setQuery('');
           return;
         }
       }
+    } else if (e.key === 'Backspace' && namespacePrefix && query === '') {
+      e.preventDefault();
+      setNamespacePrefix(null);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
@@ -620,7 +631,7 @@ function CommandLauncher() {
     if (item.type === 'command') {
       await commandsAPI.invokeCommand(item.name);
       commandsAPI.launcherClose();
-    } else if (item.type === 'wiki-page' || item.type === 'artifact') {
+    } else if (item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
@@ -657,7 +668,7 @@ function CommandLauncher() {
     }
   }, [getFieldTheoryTarget, getWikiLinkText]);
 
-  const hasContentBelow = filtered.length > 0 || (query.trim() !== '' && allItems.length > 0);
+  const hasContentBelow = filtered.length > 0 || ((namespacePrefix || query.trim() !== '') && allItems.length > 0);
   // Always use dark mode styling for the launcher regardless of system theme
   const styles = getStyles(true);
 
@@ -672,10 +683,14 @@ function CommandLauncher() {
           alt=""
           style={styles.icon}
         />
+        {namespacePrefix && (
+          <span style={styles.namespaceTag}>{namespacePrefix}</span>
+        )}
         <input
           ref={inputRef}
           type="text"
           placeholder="Type a command (? for help)"
+          aria-label={namespacePrefix ? `${namespacePrefix} search` : 'Command search'}
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -704,7 +719,7 @@ function CommandLauncher() {
                         ...styles.listItem,
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
-                      onClick={() => invokeItem(item)}
+                      onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseEnter={() => setSelectedIndex(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
@@ -729,7 +744,7 @@ function CommandLauncher() {
                         ...styles.listItem,
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
-                      onClick={() => invokeItem(item)}
+                      onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseEnter={() => setSelectedIndex(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
@@ -754,7 +769,7 @@ function CommandLauncher() {
                         ...styles.listItem,
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
-                      onClick={() => invokeItem(item)}
+                      onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseEnter={() => setSelectedIndex(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.name}</span>
@@ -772,7 +787,7 @@ function CommandLauncher() {
                   ...styles.listItem,
                   ...(i === selectedIndex ? styles.listItemSelected : {}),
                 }}
-                onClick={() => invokeItem(item)}
+                onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                 onMouseEnter={() => setSelectedIndex(i)}
               >
                 <span style={styles.itemName}>

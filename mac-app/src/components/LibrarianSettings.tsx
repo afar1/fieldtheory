@@ -22,7 +22,6 @@ const LIBRARY_FOLDER_TOGGLES = [
   { id: 'debates', label: 'Debates', hint: 'Structured debate notes' },
   { id: 'bookmarks-from-x', label: 'Bookmarks from x.com', hint: 'Synced bookmark categories, domains, and entities' },
   { id: 'entries', label: 'Entries', hint: 'Authored wiki entries' },
-  { id: 'concepts', label: 'Concepts', hint: 'Concept pages and indexes' },
 ] as const;
 const LIBRARY_FOLDER_TOGGLE_IDS = new Set<string>(LIBRARY_FOLDER_TOGGLES.map((folder) => folder.id));
 
