@@ -4,6 +4,8 @@ import {
   DEFAULT_LAUNCHER_HOTKEYS,
   formatHotkeyDisplay,
   formatTimeAgo,
+  filterLauncherNamespaceItems,
+  flattenLibraryRootsForLauncher,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -67,6 +69,59 @@ describe('formatTimeAgo', () => {
   it('returns formatted date for 7+ days', () => {
     const result = formatTimeAgo(Date.now() - 10 * 86_400_000);
     expect(result).toMatch(/^[A-Z][a-z]+ \d+$/); // e.g. "Feb 23"
+  });
+});
+
+describe('flattenLibraryRootsForLauncher', () => {
+  it('indexes builtin wiki pages and external library markdown files', () => {
+    const items = flattenLibraryRootsForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'entries/note', absPath: '/wiki/entries/note.md', name: 'note', title: 'Note', lastUpdated: 1 },
+        ],
+      },
+      {
+        path: '/projects/docs',
+        label: 'docs',
+        builtin: false,
+        tree: [
+          {
+            kind: 'dir',
+            name: 'plans',
+            relPath: 'plans',
+            children: [
+              { kind: 'file', relPath: 'plans/roadmap', absPath: '/projects/docs/plans/roadmap.md', name: 'roadmap', title: 'Roadmap', lastUpdated: 2 },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual(['wiki-page', 'markdown-file']);
+    expect(items[0]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
+    expect(items[1]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
+    expect(items[1].keywords).toContain('docs');
+  });
+});
+
+describe('filterLauncherNamespaceItems', () => {
+  const items = [
+    { name: 'daily-note', displayName: 'Daily Note', keywords: ['scratchpad', 'today'] },
+    { name: 'roadmap', displayName: 'Product Roadmap', keywords: ['planning'] },
+  ];
+
+  it('returns all items for blank searches', () => {
+    expect(filterLauncherNamespaceItems(items, '')).toBe(items);
+    expect(filterLauncherNamespaceItems(items, '   ')).toBe(items);
+  });
+
+  it('matches name, display name, and keywords case-insensitively', () => {
+    expect(filterLauncherNamespaceItems(items, 'DAILY')).toEqual([items[0]]);
+    expect(filterLauncherNamespaceItems(items, 'product')).toEqual([items[1]]);
+    expect(filterLauncherNamespaceItems(items, 'scratch')).toEqual([items[0]]);
   });
 });
 

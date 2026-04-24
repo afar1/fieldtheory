@@ -889,6 +889,7 @@ function registerHotkeysAfterOnboarding(): void {
       let bundleId = '';
       let frontmostPid = 0;
       let isTerminal = false;
+      let isIDE = false;
       try {
         const script = `
           tell application "System Events"
@@ -925,11 +926,12 @@ function registerHotkeysAfterOnboarding(): void {
         }
 
         isTerminal = isTerminalApp(bundleId);
+        isIDE = isIDEWithTerminal(bundleId);
       } catch (e) {
         log.error('Super Paste: failed to get frontmost app:', e);
       }
 
-      const pasteImagesAsPaths = isTerminal;
+      const pasteImagesAsPaths = isTerminal || isIDE;
       const orderedItemsToPaste = orderStackItemsForPaste(itemsToPaste, bundleId);
 
       let sshTarget: SSHTarget | null = null;
@@ -954,7 +956,7 @@ function registerHotkeysAfterOnboarding(): void {
           // Wait for macOS to restore focus to the previous window
           await new Promise(resolve => setTimeout(resolve, 100));
         }
-        // For terminal targets with stacks, combine text with image paths.
+        // For terminal-like targets with stacks, combine text with image paths.
         if (pasteImagesAsPaths && itemsToPaste.length > 1) {
           // Find text/transcript items and image items
           const textItems = itemsToPaste.filter(i => i.type === 'text' || i.type === 'transcript');
@@ -992,7 +994,7 @@ function registerHotkeysAfterOnboarding(): void {
               clipboard.writeText(item.content);
               await execAsync('osascript -e \'tell application "System Events" to keystroke "v" using command down\'');
             } else if (item.imageData) {
-              // Paste as file paths for terminal targets, or raw images elsewhere.
+              // Paste as file paths for terminal-like targets, or raw images elsewhere.
               if (pasteImagesAsPaths) {
                 const imagePath = await clipboardManager.exportImageToCache(item);
                 if (imagePath) {
@@ -1708,6 +1710,11 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('library:deleteDir', async (_event, rootPath: string, dirRelPath: string): Promise<boolean> => {
     if (!librarianManager) return false;
     return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
+  });
+
+  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): string | null => {
+    if (!librarianManager) return null;
+    return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath);
   });
 
   ipcMain.handle('library:pickFolder', async (): Promise<string | null> => {
@@ -3485,8 +3492,8 @@ function setupClipboardIPCHandlers(): void {
         return;
       }
 
-      // Check if target is a terminal
-      const isTerminal = isTerminalApp(effectiveBundleId);
+      // Check if target needs file paths instead of image buffers.
+      const shouldPasteImageAsPath = isTerminalApp(effectiveBundleId) || isIDEWithTerminal(effectiveBundleId);
 
       // Put content on clipboard first.
       // Use optimized hash methods to avoid expensive clipboard reads after write.
@@ -3525,8 +3532,8 @@ function setupClipboardIPCHandlers(): void {
         // Set hash directly from the text we just wrote (avoids clipboard read)
         clipboardManager.setClipboardHashFromText(textContent);
       } else if (item.imageData) {
-        if (isTerminal) {
-          // For terminals: export image to file and put path on clipboard
+        if (shouldPasteImageAsPath) {
+          // For terminal-like targets: export image to file and put path on clipboard.
           const imagePath = await clipboardManager.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
@@ -3650,10 +3657,12 @@ function setupClipboardIPCHandlers(): void {
       // Detect target app to check for terminal path pastes or Finder.
       let frontmostBundleId: string | null = effectiveBundleId;
       let isTerminal = false;
+      let isIDE = false;
       let pasteImagesAsPaths = false;
       if (frontmostBundleId) {
         isTerminal = isTerminalApp(frontmostBundleId);
-        pasteImagesAsPaths = isTerminal;
+        isIDE = isIDEWithTerminal(frontmostBundleId);
+        pasteImagesAsPaths = isTerminal || isIDE;
       } else {
         try {
           const { stdout } = await execWithTimeout(
@@ -3662,7 +3671,8 @@ function setupClipboardIPCHandlers(): void {
           );
           frontmostBundleId = stdout.trim();
           isTerminal = isTerminalApp(frontmostBundleId);
-          pasteImagesAsPaths = isTerminal;
+          isIDE = isIDEWithTerminal(frontmostBundleId);
+          pasteImagesAsPaths = isTerminal || isIDE;
         } catch {
           // Default to non-terminal if detection fails or times out
         }
@@ -3730,7 +3740,7 @@ function setupClipboardIPCHandlers(): void {
               ? item.improvedContent
               : (item.content || '');
             
-            // Terminal targets get text file references instead of raw image pastes.
+            // Terminal-like targets get text file references instead of raw image pastes.
             if (items.length > 1 && pasteImagesAsPaths) {
               textContent += await buildFigurePaths();
             }
@@ -3742,14 +3752,14 @@ function setupClipboardIPCHandlers(): void {
             } catch { /* Silently fail if paste times out (e.g., Finder) */ }
             await new Promise(resolve => setTimeout(resolve, 100));
           } else if (item.imageData) {
-            // For terminals with transcript+figures, skip individual image paste.
-            // Terminal users will use the file paths from the Figures section.
+            // For terminal-like targets with transcript+figures, skip individual image paste.
+            // Users will use the file paths from the Figures section.
             if (pasteImagesAsPaths && hasTranscriptWithFigures) {
               continue;
             }
             
             if (pasteImagesAsPaths) {
-              // Terminal target without transcript: paste file path instead of image.
+              // Terminal-like target without transcript: paste file path instead of image.
               const imagePath = await clipboardManager!.exportImageToCache(item);
               if (imagePath) {
                 // Use real path for terminal compatibility

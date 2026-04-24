@@ -90,8 +90,6 @@ interface ContentToolbarProps {
 
   onCopyPath?: () => void;
 
-  // Fullscreen hover state (for immersive mode opacity)
-  headerHovered?: boolean;
 }
 
 export default function ContentToolbar({
@@ -131,7 +129,6 @@ export default function ContentToolbar({
   onToggleShare,
   showShare = false,
   onCopyPath,
-  headerHovered = true,
 }: ContentToolbarProps) {
   const { theme } = useTheme();
   const [copied, setCopied] = useState(false);
@@ -180,8 +177,6 @@ export default function ContentToolbar({
         alignItems: 'center',
         gap: '2px',
         flex: 1,
-        opacity: isFullScreen && !headerHovered ? 0 : 1,
-        transition: 'opacity 0.2s ease',
         borderRadius: '6px',
         margin: '0 -4px',
         padding: '0 4px',

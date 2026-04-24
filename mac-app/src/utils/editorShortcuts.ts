@@ -15,8 +15,12 @@ export function isSearchFocusShortcut(e: KeyboardEvent | React.KeyboardEvent): b
   return false;
 }
 
+export function isCommandFindShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return e.key === 'f' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
 export function isImmersiveToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
-  return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+  return (e.key === '/' || e.code === 'Slash') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
 export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
@@ -24,13 +28,18 @@ export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEv
 }
 
 export function isSidebarToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
-  return (e.key === '/' || e.code === 'Slash') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+  return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
+export function isThemeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return e.key.toLowerCase() === 'l' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
 /** True when a click on the rendered markdown body should switch to edit
  *  mode. Clicks on interactive elements and clicks that terminate a text
  *  selection are excluded. */
-export function shouldEnterEditOnClick(e: { target: EventTarget | null }): boolean {
+export function shouldEnterEditOnClick(e: { target: EventTarget | null; metaKey?: boolean }): boolean {
+  if (!e.metaKey) return false;
   const target = e.target as HTMLElement | null;
   if (!target) return false;
   if (target.closest('a, button, input, textarea, select, img, code')) return false;

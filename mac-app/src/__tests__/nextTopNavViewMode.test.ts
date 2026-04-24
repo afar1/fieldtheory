@@ -14,9 +14,9 @@ describe('nextTopNavViewMode', () => {
     expect(nextTopNavViewMode('librarian', -1, true)).toBe('clipboard');
   });
 
-  it('skips librarian when the library feature is disabled', () => {
-    expect(nextTopNavViewMode('clipboard', 1, false)).toBe('commands');
-    expect(nextTopNavViewMode('commands', 1, false)).toBe('clipboard');
+  it('keeps librarian in the nav cycle when librarian automation is disabled', () => {
+    expect(nextTopNavViewMode('clipboard', 1, false)).toBe('librarian');
+    expect(nextTopNavViewMode('librarian', 1, false)).toBe('commands');
     expect(nextTopNavViewMode('clipboard', -1, false)).toBe('commands');
   });
 
