@@ -25,6 +25,7 @@ import { CommandsManager } from './commandsManager';
 describe('CommandsManager default internal commands', () => {
   let tempRoot: string;
   let manager: CommandsManager;
+  let originalCommandsDir: string | undefined;
 
   const mockUserDataManager = {
     isLoggedIn: () => true,
@@ -36,6 +37,8 @@ describe('CommandsManager default internal commands', () => {
 
   beforeEach(() => {
     tempRoot = mkdtempSync(join(tmpdir(), 'commands-manager-test-'));
+    originalCommandsDir = process.env.FT_COMMANDS_DIR;
+    process.env.FT_COMMANDS_DIR = join(tempRoot, '.fieldtheory', 'commands');
     mockApp.getPath.mockImplementation((name: string) => {
       if (name === 'userData') return join(tempRoot, 'app-data');
       if (name === 'home') return tempRoot;
@@ -48,14 +51,16 @@ describe('CommandsManager default internal commands', () => {
 
   afterEach(async () => {
     await manager.onUserLoggedOut();
+    if (originalCommandsDir === undefined) delete process.env.FT_COMMANDS_DIR;
+    else process.env.FT_COMMANDS_DIR = originalCommandsDir;
     rmSync(tempRoot, { recursive: true, force: true });
     vi.clearAllMocks();
   });
 
-  it('creates a per-user default directory and seeds the built-in commands on first reinitialize', async () => {
+  it('creates the Field Theory default directory and seeds the built-in commands on first reinitialize', async () => {
     await manager.reinitializeForUser();
 
-    const defaultDir = join(tempRoot, 'app-data', 'users', 'user-1', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
     expect(manager.getDefaultDirectory()).toBe(defaultDir);
     expect(manager.getWatchedDirs().map(dir => dir.path)).toContain(defaultDir);
 
@@ -72,8 +77,8 @@ describe('CommandsManager default internal commands', () => {
     ]);
   });
 
-  it('does not overwrite an existing per-user commands directory that already has markdown commands', async () => {
-    const defaultDir = join(tempRoot, 'app-data', 'users', 'user-1', 'commands');
+  it('does not overwrite an existing default commands directory that already has markdown commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(join(defaultDir, 'custom.md'), '# Custom\n');
 
@@ -86,7 +91,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('reseeds and rescans when the default directory is already watched but currently empty', async () => {
-    const defaultDir = join(tempRoot, 'app-data', 'users', 'user-1', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
     mkdirSync(defaultDir, { recursive: true });
 
     await manager.addWatchedDir(defaultDir);
