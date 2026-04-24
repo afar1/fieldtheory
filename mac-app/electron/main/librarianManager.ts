@@ -23,7 +23,6 @@ export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'debates',
   'bookmarks-from-x',
   'entries',
-  'concepts',
   'categories',
   'domains',
   'entities',
@@ -34,7 +33,6 @@ export const DEFAULT_README_FOLDER_IDS = [
   'scratchpad',
   'debates',
   'entries',
-  'concepts',
   'categories',
   'domains',
   'entities',
@@ -126,19 +124,6 @@ Use portable commands from .cursor/commands/ when you want the app or an agent t
 
 Entries are durable wiki notes.
 Use portable commands from .cursor/commands/ when you want the app or an agent to create one.
-`),
-  },
-  {
-    id: 'concepts',
-    relPath: 'concepts',
-    ...buildDefaultFolderReadme(`# README: Concepts
-
-Concept pages collect reusable ideas, references, and vocabulary.
-Keep them small enough to link from entries and debates.
-`, `# Concepts
-
-Concept pages collect reusable ideas, references, and vocabulary.
-Keep them small enough to link from entries and debates.
 `),
   },
   {
@@ -1391,6 +1376,102 @@ ${ARTIFACT_MODEL_SIGNATURE_GUIDANCE}`);
     : baseRule;
 }
 
+export function buildFieldTheoryMarkdownCommandContent(): string {
+  return `# Write Field Theory Markdown
+
+Use this when writing Markdown that will be read or edited in Field Theory.
+This applies to normal notes, scratchpads, entries, README pages, and command-written docs.
+It does not apply to Librarian artifacts; keep the existing artifact design and artifact-specific rules.
+
+## Goal
+
+Write clean source Markdown that already feels tidy in raw mode.
+Rendered mode should be a light presentation layer, not a rescue operation.
+
+## Voice
+
+Write in plain, practical English.
+Lead with the main point.
+Use concrete words and exact numbers when they matter.
+Be comprehensive when the topic needs it, but do not add filler scaffolding.
+
+## Structure
+
+Use one H1 title at the top.
+For normal notes, prefer bold section labels instead of more heading levels.
+
+Example:
+
+**Decision**
+
+Use a single shared paste target resolver.
+
+**Why**
+
+The bug was duplicated target detection, not paste timing.
+
+Avoid H2/H3 unless the document is long enough that real navigation matters.
+Avoid H4 and deeper.
+Keep most text at the same visual size; create hierarchy with order, spacing, and bold labels.
+
+## Spacing
+
+Use one blank line between blocks.
+Do not use repeated blank lines for visual spacing.
+Do not put blank lines between simple list items.
+
+## Lists
+
+Prefer prose.
+Use bullets only when the items are parallel or genuinely easier to scan.
+Use ordered lists only for real sequence, priority, or steps.
+Keep lists short. If a list needs explanation, write prose under a bold label instead.
+
+## Tasks
+
+Use clear Markdown tasks:
+
+- [ ] One action per line
+- [x] Finished action
+
+Do not hide decisions or explanations inside task text.
+Put context in prose, then tasks underneath.
+
+## Links
+
+Use Field Theory backlinks for internal pages:
+
+[[Page Name]]
+
+Use embedded Markdown links when the link carries the sentence:
+
+[source title](https://example.com)
+
+For sourced notes, repeat important sources at the bottom:
+
+**Sources**
+
+- [Readable source title](https://example.com)
+
+Do not dump unsorted URLs.
+Do not repeat sources at the bottom if the note is private, unsourced scratch work, or the link is incidental.
+
+## Formatting
+
+Use bold sparingly for labels, decisions, and important terms.
+Do not bold whole paragraphs.
+Use blockquotes only for actual quoted text.
+Use code formatting only for commands, paths, keys, symbols, and identifiers.
+
+## Avoid
+
+Avoid generic AI headings like "Overview", "Key Takeaways", "Conclusion", and "Final Thoughts" unless they add real structure.
+Avoid decorative callouts.
+Avoid excessive bullets.
+Avoid multiple heading sizes in short notes.
+Avoid writing for the renderer instead of the source file.`;
+}
+
 export function parseMarkdownHeader(content: string): ParsedMarkdownHeader {
   const lines = content.split('\n').slice(0, MARKDOWN_HEADER_SCAN_LINE_COUNT);
   let title = 'Untitled Reading';
@@ -1488,6 +1569,8 @@ export interface LibraryRoot {
   writable?: boolean;
   tree: WikiNode[];
 }
+
+export type LibraryMoveKind = 'file' | 'dir';
 
 export interface ReadingMeta {
   path: string;
@@ -2843,6 +2926,58 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  moveLibraryItem(rootPath: string, kind: LibraryMoveKind, sourceRelPath: string, targetDirRelPath: string): string | null {
+    const root = this.resolveLibraryRootForWrite(rootPath);
+    const sourceRel = this.normalizeLibraryRelPath(sourceRelPath);
+    const targetDirRel = this.normalizeLibraryRelPath(targetDirRelPath);
+    if (!root || !sourceRel || targetDirRel === null) return null;
+    if (!root.builtin && !this.canWriteDirectory(root.rootPath)) return null;
+    if (root.builtin && kind === 'dir' && DEFAULT_LIBRARY_FOLDER_ID_SET.has(sourceRel)) return null;
+
+    const sourceAbs = path.resolve(root.rootPath, kind === 'file' ? `${sourceRel}.md` : sourceRel);
+    const targetDirAbs = path.resolve(root.rootPath, targetDirRel);
+    if (!this.isInsidePath(root.rootPath, sourceAbs) || !this.isInsidePath(root.rootPath, targetDirAbs)) return null;
+    if (!fs.existsSync(sourceAbs)) return null;
+    if (!fs.existsSync(targetDirAbs) || !fs.statSync(targetDirAbs).isDirectory()) return null;
+
+    if (kind === 'file') {
+      if (!fs.statSync(sourceAbs).isFile()) return null;
+    } else if (!fs.statSync(sourceAbs).isDirectory()) {
+      return null;
+    }
+
+    if (kind === 'dir' && this.isInsidePath(sourceAbs, targetDirAbs)) return null;
+
+    const name = path.basename(sourceAbs);
+    const targetAbs = path.resolve(targetDirAbs, name);
+    if (!this.isInsidePath(root.rootPath, targetAbs)) return null;
+    if (sourceAbs === targetAbs) return sourceRel;
+    if (fs.existsSync(targetAbs)) return null;
+
+    const deletedWikiRelPaths = root.builtin
+      ? kind === 'file'
+        ? [sourceRel]
+        : this.flattenWikiFiles(this.scanMarkdownTree(root.rootPath, sourceAbs)).map((page) => page.relPath)
+      : [];
+
+    try {
+      fs.renameSync(sourceAbs, targetAbs);
+      const newRelPath = this.toPortableRelPath(path.relative(root.rootPath, targetAbs)).replace(/\.md$/i, '');
+      if (root.builtin) {
+        this.emit('wiki:changed');
+        for (const relPath of deletedWikiRelPaths) {
+          this.emit('wiki:deleted', relPath);
+        }
+      } else {
+        this.emit('library:changed', root.rootPath);
+      }
+      return newRelPath;
+    } catch (error) {
+      log.error(`Error moving library ${kind} ${sourceRel} -> ${targetDirRel}:`, error);
+      return null;
+    }
+  }
+
   createWikiFile(folderName: string, fileName: string): WikiPage | null {
     const title = this.stripMarkdownFileExtension(fileName).trim();
     const slug = this.slugifyMarkdownFileName(fileName);
@@ -3904,6 +4039,27 @@ You may find the reading changes what you think matters about the task.`;
     return path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md');
   }
 
+  private getFieldTheoryMarkdownCommandPath(): string {
+    return path.join(os.homedir(), '.fieldtheory', 'commands', 'write-ft-markdown.md');
+  }
+
+  private writeFieldTheoryMarkdownCommandFile(): boolean {
+    const commandPath = this.getFieldTheoryMarkdownCommandPath();
+    const commandDir = path.dirname(commandPath);
+
+    try {
+      if (!fs.existsSync(commandDir)) {
+        fs.mkdirSync(commandDir, { recursive: true });
+      }
+
+      fs.writeFileSync(commandPath, `${buildFieldTheoryMarkdownCommandContent().trim()}\n`);
+      return true;
+    } catch (error) {
+      log.error('Failed to write Field Theory Markdown command file:', error);
+      return false;
+    }
+  }
+
   /**
    * Write the full Librarian instructions to ~/.fieldtheory/commands/librarian.md
    * This is the single source of truth that CLAUDE.md references.
@@ -3985,6 +4141,7 @@ You may find the reading changes what you think matters about the task.
    */
   private generateLibrarianSectionV2(): string {
     const commandPath = this.getLibrarianCommandPath();
+    const markdownCommandPath = this.getFieldTheoryMarkdownCommandPath();
 
     return `${this.CLAUDE_MD_START_MARKER}
 ## Librarian (Field Theory)
@@ -3995,6 +4152,11 @@ Before non-trivial implementations, provide a short reading via the Librarian:
 ${commandPath}
 
 Store each reading in \`~/.fieldtheory/librarian/artifacts/\` with a unique filename.
+
+When writing normal Field Theory Markdown outside Librarian artifacts, follow:
+
+[run this command: write-ft-markdown.md]
+${markdownCommandPath}
 
 This should feel serendipitous—not every change, just when there's meaningful wait time. Use your discretion.
 ${this.CLAUDE_MD_END_MARKER}`;
@@ -4008,6 +4170,10 @@ ${this.CLAUDE_MD_END_MARKER}`;
     // First write the command file (single source of truth)
     if (!this.writeLibrarianCommandFile()) {
       log.error('Failed to write command file, aborting CLAUDE.md update');
+      return false;
+    }
+    if (!this.writeFieldTheoryMarkdownCommandFile()) {
+      log.error('Failed to write Field Theory Markdown command file, aborting CLAUDE.md update');
       return false;
     }
 
@@ -6863,6 +7029,10 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
     try {
       // 1. Shared setup: directories, rule file, config, watched dirs
       this.ensureCentralLibrarianSetup();
+      if (!this.writeFieldTheoryMarkdownCommandFile()) {
+        log.error('Failed to write Field Theory Markdown command file, aborting Codex hook install');
+        return false;
+      }
 
       // 2. Ensure ~/.codex directory exists
       const codexDir = path.join(os.homedir(), '.codex');
@@ -6912,6 +7082,11 @@ When you receive instructions prefixed with [STATE-ENFORCED] or [LIBRARIAN],
 follow them before proceeding. These create short reflective artifacts.
 Artifacts go in ~/.fieldtheory/librarian/artifacts/.
 After writing, update the job file in ~/.fieldtheory/librarian/jobs/ setting "status" to "done".
+
+When writing normal Field Theory Markdown outside Librarian artifacts, follow:
+
+[run this command: write-ft-markdown.md]
+${this.getFieldTheoryMarkdownCommandPath()}
 <!-- End Field Theory Librarian -->
 `;
       agentsMd = managedSectionUpsert(agentsMd, 'Field Theory Librarian - managed section', librarianSection);

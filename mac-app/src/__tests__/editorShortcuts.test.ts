@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -48,19 +48,33 @@ describe('isSearchFocusShortcut', () => {
   });
 });
 
+describe('isCommandFindShortcut', () => {
+  it('accepts plain Cmd+F', () => {
+    expect(isCommandFindShortcut(mkKey({ key: 'f', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects modified Cmd+F variants', () => {
+    expect(isCommandFindShortcut(mkKey({ key: 'f', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isCommandFindShortcut(mkKey({ key: 'f', metaKey: true, ctrlKey: true }))).toBe(false);
+    expect(isCommandFindShortcut(mkKey({ key: 'f', metaKey: true, altKey: true }))).toBe(false);
+    expect(isCommandFindShortcut(mkKey({ key: 'f' }))).toBe(false);
+  });
+});
+
 describe('isImmersiveToggleShortcut', () => {
-  it('accepts Cmd+Period', () => {
-    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
+  it('accepts Cmd+Slash', () => {
+    expect(isImmersiveToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true }))).toBe(true);
   });
 
-  it('rejects Cmd+Shift+Period and unrelated modifiers', () => {
-    expect(isImmersiveToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
-    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
-    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
+  it('rejects bare slash and modified slash chords', () => {
+    expect(isImmersiveToggleShortcut(mkKey({ key: '/', code: 'Slash' }))).toBe(false);
+    expect(isImmersiveToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isImmersiveToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, altKey: true }))).toBe(false);
+    expect(isImmersiveToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 
-  it('rejects bare Period', () => {
-    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
+  it('rejects Cmd+Period so it can toggle the sidebar', () => {
+    expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(false);
   });
 });
 
@@ -81,31 +95,58 @@ describe('isMarkdownModeToggleShortcut', () => {
 });
 
 describe('isSidebarToggleShortcut', () => {
-  it('accepts Cmd+Slash', () => {
-    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true }))).toBe(true);
+  it('accepts Cmd+Period', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
   });
 
-  it('rejects bare slash and modified slash chords', () => {
-    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash' }))).toBe(false);
-    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, shiftKey: true }))).toBe(false);
-    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, altKey: true }))).toBe(false);
-    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, ctrlKey: true }))).toBe(false);
+  it('rejects bare period and modified period chords', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
+  });
+
+  it('rejects Cmd+Slash so it can toggle focus mode', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true }))).toBe(false);
+  });
+});
+
+describe('isThemeToggleShortcut', () => {
+  it('accepts Shift+Cmd+L', () => {
+    expect(isThemeToggleShortcut(mkKey({ key: 'L', code: 'KeyL', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('rejects unshifted and unrelated modified L chords', () => {
+    expect(isThemeToggleShortcut(mkKey({ key: 'l', code: 'KeyL', metaKey: true }))).toBe(false);
+    expect(isThemeToggleShortcut(mkKey({ key: 'L', code: 'KeyL', metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
+    expect(isThemeToggleShortcut(mkKey({ key: 'L', code: 'KeyL', metaKey: true, shiftKey: true, ctrlKey: true }))).toBe(false);
+  });
+
+  it('rejects Shift+Cmd+D so it does not collide with debug console', () => {
+    expect(isThemeToggleShortcut(mkKey({ key: 'D', code: 'KeyD', metaKey: true, shiftKey: true }))).toBe(false);
   });
 });
 
 describe('shouldEnterEditOnClick', () => {
-  it('allows a plain click on text', () => {
+  it('allows a Cmd-click on text', () => {
     const p = document.createElement('p');
     p.textContent = 'hi';
     document.body.appendChild(p);
-    expect(shouldEnterEditOnClick({ target: p })).toBe(true);
+    expect(shouldEnterEditOnClick({ target: p, metaKey: true })).toBe(true);
+  });
+
+  it('rejects a plain click on text', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(shouldEnterEditOnClick({ target: p })).toBe(false);
   });
 
   it('rejects clicks that land on interactive elements', () => {
     for (const tag of ['a', 'button', 'input', 'textarea', 'select', 'img', 'code']) {
       const el = document.createElement(tag);
       document.body.appendChild(el);
-      expect(shouldEnterEditOnClick({ target: el })).toBe(false);
+      expect(shouldEnterEditOnClick({ target: el, metaKey: true })).toBe(false);
       el.remove();
     }
   });
@@ -115,7 +156,7 @@ describe('shouldEnterEditOnClick', () => {
     const span = document.createElement('span');
     a.appendChild(span);
     document.body.appendChild(a);
-    expect(shouldEnterEditOnClick({ target: span })).toBe(false);
+    expect(shouldEnterEditOnClick({ target: span, metaKey: true })).toBe(false);
   });
 
   it('rejects when the click terminates an active text selection', () => {
@@ -127,7 +168,7 @@ describe('shouldEnterEditOnClick', () => {
     const sel = window.getSelection();
     sel?.removeAllRanges();
     sel?.addRange(range);
-    expect(shouldEnterEditOnClick({ target: p })).toBe(false);
+    expect(shouldEnterEditOnClick({ target: p, metaKey: true })).toBe(false);
   });
 
   it('returns false when the event has no target', () => {

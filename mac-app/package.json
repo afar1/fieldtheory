@@ -1,6 +1,6 @@
 {
   "name": "fieldtheory-mac",
-  "version": "0.1.103",
+  "version": "0.1.106",
   "private": true,
   "main": "electron-dist/main/index.js",
   "scripts": {
@@ -114,9 +114,7 @@
     },
     "mac": {
       "category": "public.app-category.productivity",
-      "notarize": {
-        "teamId": "3244UJ94D8"
-      },
+      "notarize": false,
       "minimumSystemVersion": "13.0",
       "target": [
         "dmg",

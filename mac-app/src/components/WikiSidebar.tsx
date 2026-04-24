@@ -10,6 +10,7 @@ interface UnifiedItem {
   type: 'wiki' | 'artifact' | 'bookmarks' | 'external';
   absPath: string;
   relPath?: string;
+  rootPath?: string;
   timestamp: number;
   taggedDocId?: string;
   hasUnread?: boolean;
@@ -24,13 +25,68 @@ export const LIBRARY_DEFAULT_FOLDER_IDS = [
   'debates',
   'bookmarks-from-x',
   'entries',
-  'concepts',
   'categories',
   'domains',
   'entities',
 ] as const;
 export type LibraryDefaultFolderId = typeof LIBRARY_DEFAULT_FOLDER_IDS[number];
 const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS);
+const LIBRARY_DRAG_DATA_TYPE = 'application/x-fieldtheory-library-item';
+const LIBRARY_DRAG_TEXT_PREFIX = 'fieldtheory-library-item:';
+
+type LibraryDragItem = {
+  rootPath: string;
+  kind: 'file' | 'dir';
+  relPath: string;
+};
+
+let activeLibraryDragItem: LibraryDragItem | null = null;
+
+export function setLibraryDragData(dataTransfer: DataTransfer, item: LibraryDragItem): void {
+  activeLibraryDragItem = item;
+  const serialized = JSON.stringify(item);
+  dataTransfer.setData(LIBRARY_DRAG_DATA_TYPE, serialized);
+  dataTransfer.setData('text/plain', `${LIBRARY_DRAG_TEXT_PREFIX}${serialized}`);
+  dataTransfer.effectAllowed = 'move';
+}
+
+export function clearLibraryDragData(): void {
+  activeLibraryDragItem = null;
+}
+
+export function hasLibraryDragData(dataTransfer: DataTransfer): boolean {
+  if (activeLibraryDragItem) return true;
+  const types = Array.from(dataTransfer.types);
+  if (types.includes(LIBRARY_DRAG_DATA_TYPE)) return true;
+  if (!types.includes('text/plain')) return false;
+  return dataTransfer.getData('text/plain').startsWith(LIBRARY_DRAG_TEXT_PREFIX);
+}
+
+export function getLibraryDragData(dataTransfer: DataTransfer): LibraryDragItem | null {
+  const rawCustom = dataTransfer.getData(LIBRARY_DRAG_DATA_TYPE);
+  const rawText = dataTransfer.getData('text/plain');
+  const raw = rawCustom || (rawText.startsWith(LIBRARY_DRAG_TEXT_PREFIX) ? rawText.slice(LIBRARY_DRAG_TEXT_PREFIX.length) : '');
+  if (!raw) return activeLibraryDragItem;
+  try {
+    const item = JSON.parse(raw) as Partial<LibraryDragItem>;
+    if (!item.rootPath || !item.relPath || (item.kind !== 'file' && item.kind !== 'dir')) return null;
+    return item as LibraryDragItem;
+  } catch {
+    return activeLibraryDragItem;
+  }
+}
+
+export function canDropLibraryItem(item: LibraryDragItem | null, target: LibraryCreateLocation): boolean {
+  if (!item) return false;
+  if (item.rootPath !== target.rootPath) return false;
+  if (item.kind === 'dir') {
+    if (item.relPath === target.relPath) return false;
+    if (target.relPath.startsWith(`${item.relPath}/`)) return false;
+  }
+  const sourceParent = item.relPath.split('/').slice(0, -1).join('/');
+  if (sourceParent === target.relPath) return false;
+  return true;
+}
 
 interface UnifiedFolder {
   name: string;
@@ -131,29 +187,19 @@ export function filterUnifiedFolders(folders: UnifiedFolder[], searchQuery: stri
     .filter((folder) => folder.items.length > 0);
 }
 
-/** Split the recent list into wiki/external groups and clip each to a
- *  visible count that expands when the caller passes a non-null `expanded`
- *  kind. Returns stable shapes so the sidebar render can map() blindly. */
+/** Clip the recent list for the sidebar. Expanded means all remaining recent
+ *  items are visible in one click. */
 export function splitRecent(
   entries: RecentEntry[],
-  expanded: 'wiki' | 'external' | null,
-  collapsed: number = 3,
-  expandedMax: number = 10,
+  expanded: boolean,
+  collapsed: number = 6,
 ): {
-  wiki: RecentEntry[];
-  wikiTotal: number;
-  external: RecentEntry[];
-  externalTotal: number;
+  entries: RecentEntry[];
+  total: number;
 } {
-  const wikiAll = entries.filter((e) => e.kind === 'wiki');
-  const externalAll = entries.filter((e) => e.kind === 'external');
-  const wikiLimit = expanded === 'wiki' ? expandedMax : collapsed;
-  const externalLimit = expanded === 'external' ? expandedMax : collapsed;
   return {
-    wiki: wikiAll.slice(0, wikiLimit),
-    wikiTotal: wikiAll.length,
-    external: externalAll.slice(0, externalLimit),
-    externalTotal: externalAll.length,
+    entries: expanded ? entries : entries.slice(0, collapsed),
+    total: entries.length,
   };
 }
 
@@ -387,6 +433,7 @@ function wikiNodeToSidebarNode(
         type,
         absPath: node.absPath,
         relPath: node.relPath,
+        rootPath: root.path,
         timestamp: node.lastUpdated,
         taggedDocId: taggedDoc?.ulid,
         hasUnread: taggedDoc?.unread ?? false,
@@ -544,11 +591,13 @@ function WikiSidebar({
     }
   });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+  const [moveError, setMoveError] = useState<string | null>(null);
   const [creating, setCreating] = useState<CreatingState>(null);
   const [newName, setNewName] = useState('');
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
-  const [recentExpanded, setRecentExpanded] = useState<'wiki' | 'external' | null>(null);
+  const [recentExpanded, setRecentExpanded] = useState(false);
   const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('wiki-recent-collapsed') === '1';
@@ -722,6 +771,36 @@ function WikiSidebar({
       return next;
     });
   }, [libraryRoots, loadTree]);
+
+  const moveLibraryItem = useCallback(async (item: LibraryDragItem, target: LibraryCreateLocation) => {
+    if (!canDropLibraryItem(item, target)) return;
+    const newRelPath = await window.libraryAPI?.moveItem(target.rootPath, item.kind, item.relPath, target.relPath);
+    if (!newRelPath) {
+      setMoveError('Could not move item. A file or folder with that name may already exist.');
+      return;
+    }
+    setMoveError(null);
+    await reloadTreeAndExpandLocation(target, newRelPath);
+    if (item.kind === 'file') {
+      const root = libraryRoots.find((entry) => entry.path === target.rootPath);
+      setTimeout(() => {
+        const type = root?.builtin ? 'wiki' : 'external';
+        const absPath = type === 'wiki' ? '' : `${target.rootPath}/${newRelPath}.md`;
+        const id = type === 'wiki' ? `wiki:${newRelPath}` : `external:${absPath}`;
+        setHoveredId(null);
+        const fileName = newRelPath.split('/').pop() ?? newRelPath;
+        onSelectItem({
+          id,
+          title: fileName,
+          type,
+          absPath,
+          relPath: newRelPath,
+          rootPath: target.rootPath,
+          timestamp: Date.now(),
+        });
+      }, 0);
+    }
+  }, [libraryRoots, onSelectItem, reloadTreeAndExpandLocation]);
 
   const beginCreateFile = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, SCRATCHPAD_FOLDER_NAME);
@@ -1101,6 +1180,9 @@ function WikiSidebar({
           selectedItemRef={selectedItemRef}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
+          dropTargetId={dropTargetId}
+          setDropTargetId={setDropTargetId}
+          onMoveLibraryItem={moveLibraryItem}
           theme={theme}
           onSelectItem={onSelectItem}
           onContextMenu={openContextMenu}
@@ -1138,6 +1220,23 @@ function WikiSidebar({
         />
       )}
       {deleteConfirmationDialog}
+      {moveError && (
+        <div
+          role="status"
+          style={{
+            margin: '0 8px 8px',
+            padding: '6px 8px',
+            fontSize: '11px',
+            color: theme.textSecondary,
+            backgroundColor: theme.isDark ? 'rgba(245,158,11,0.12)' : 'rgba(245,158,11,0.14)',
+            border: `1px solid ${theme.isDark ? 'rgba(245,158,11,0.24)' : 'rgba(245,158,11,0.28)'}`,
+            borderRadius: '5px',
+          }}
+          onClick={() => setMoveError(null)}
+        >
+          {moveError}
+        </div>
+      )}
 
       {!isSearching && recent.length > 0 && (
         <RecentBlock
@@ -1231,6 +1330,9 @@ function TreeNode({
   selectedItemRef,
   hoveredId,
   setHoveredId,
+  dropTargetId,
+  setDropTargetId,
+  onMoveLibraryItem,
   theme,
   onSelectItem,
   onContextMenu,
@@ -1252,6 +1354,9 @@ function TreeNode({
   selectedItemRef: MutableRefObject<HTMLDivElement | null>;
   hoveredId: string | null;
   setHoveredId: (id: string | null) => void;
+  dropTargetId: string | null;
+  setDropTargetId: (id: string | null) => void;
+  onMoveLibraryItem: (item: LibraryDragItem, target: LibraryCreateLocation) => void | Promise<void>;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelectItem: (item: UnifiedItem) => void;
   onContextMenu: (event: React.MouseEvent, node: SidebarNode | null) => void;
@@ -1270,6 +1375,7 @@ function TreeNode({
         onHover={setHoveredId}
         onContextMenu={(event) => onContextMenu(event, node)}
         onKeyboardScopeActive={onKeyboardScopeActive}
+        draggable={!!node.item.rootPath && (node.item.type === 'wiki' || node.item.type === 'external')}
         refProp={isSel ? selectedItemRef : undefined}
       />
     );
@@ -1278,15 +1384,63 @@ function TreeNode({
   const isExpanded = isSearching || expandedFolders.has(node.id);
   const itemCount = countSidebarItems(node.children);
   const nodeCreateLocation = getSidebarNodeCreateLocation(node);
+  const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
+  const isDropTarget = dropTargetId === node.id;
+  const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
+  const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
+    const item = getLibraryDragData(dataTransfer);
+    return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
+  };
 
   return (
     <div>
       <div
         className="bm-folder-header"
+        draggable={canDragDir}
+        onDragStart={(event) => {
+          if (!canDragDir) {
+            event.preventDefault();
+            return;
+          }
+          const item: LibraryDragItem = {
+            rootPath: node.rootPath,
+            kind: 'dir',
+            relPath: node.relPath,
+          };
+          setLibraryDragData(event.dataTransfer, item);
+        }}
+        onDragEnd={clearLibraryDragData}
+        onDragEnter={(event) => {
+          if (!node.canCreateFile) return;
+          if (!hasLibraryDragData(event.dataTransfer)) return;
+          if (!getDroppableDragItem(event.dataTransfer)) return;
+          event.preventDefault();
+          setDropTargetId(node.id);
+        }}
+        onDragOver={(event) => {
+          if (!node.canCreateFile) return;
+          if (!hasLibraryDragData(event.dataTransfer)) return;
+          if (!getDroppableDragItem(event.dataTransfer)) return;
+          event.preventDefault();
+          event.dataTransfer.dropEffect = 'move';
+          setDropTargetId(node.id);
+        }}
+        onDragLeave={() => {
+          if (dropTargetId === node.id) setDropTargetId(null);
+        }}
+        onDrop={(event) => {
+          if (!node.canCreateFile) return;
+          event.preventDefault();
+          setDropTargetId(null);
+          const item = getDroppableDragItem(event.dataTransfer);
+          clearLibraryDragData();
+          if (!item) return;
+          void onMoveLibraryItem(item, nodeCreateLocation);
+        }}
         onClick={() => toggleFolder(node.id)}
         onContextMenu={(event) => onContextMenu(event, node)}
-        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
-        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
+        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : 'transparent')}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -1297,6 +1451,7 @@ function TreeNode({
           fontWeight: 500,
           color: theme.text,
           userSelect: 'none',
+          backgroundColor: isDropTarget ? dropBg : 'transparent',
         }}
       >
         <svg
@@ -1411,6 +1566,9 @@ function TreeNode({
           selectedItemRef={selectedItemRef}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
+          dropTargetId={dropTargetId}
+          setDropTargetId={setDropTargetId}
+          onMoveLibraryItem={onMoveLibraryItem}
           theme={theme}
           onSelectItem={onSelectItem}
           onContextMenu={onContextMenu}
@@ -1553,7 +1711,7 @@ function LibraryContextMenu({
   );
 }
 
-function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onHover, onContextMenu, onKeyboardScopeActive, refProp }: {
+function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onHover, onContextMenu, onKeyboardScopeActive, draggable, refProp }: {
   item: UnifiedItem;
   depth?: number;
   isSelected: boolean;
@@ -1563,6 +1721,7 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
   onHover: (id: string | null) => void;
   onContextMenu?: (event: React.MouseEvent) => void;
   onKeyboardScopeActive?: () => void;
+  draggable?: boolean;
   refProp?: MutableRefObject<HTMLDivElement | null>;
 }) {
   const [renaming, setRenaming] = useState(false);
@@ -1592,6 +1751,20 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
     <div
       ref={refProp}
       tabIndex={-1}
+      draggable={draggable}
+      onDragStart={(event) => {
+        if (!draggable || !item.rootPath || !item.relPath) {
+          event.preventDefault();
+          return;
+        }
+        const dragItem: LibraryDragItem = {
+          rootPath: item.rootPath,
+          kind: 'file',
+          relPath: item.relPath,
+        };
+        setLibraryDragData(event.dataTransfer, dragItem);
+      }}
+      onDragEnd={clearLibraryDragData}
       onContextMenu={onContextMenu}
       onMouseDown={(e) => {
         if (canRename && (e.metaKey || e.ctrlKey)) return;
@@ -1734,8 +1907,8 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
 
 interface RecentBlockProps {
   recent: RecentEntry[];
-  expanded: 'wiki' | 'external' | null;
-  onExpand: (kind: 'wiki' | 'external' | null) => void;
+  expanded: boolean;
+  onExpand: (expanded: boolean) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   selectedId: string | null;
@@ -1745,10 +1918,9 @@ interface RecentBlockProps {
 }
 
 function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
-  const { wiki, wikiTotal, external, externalTotal } = splitRecent(recent, expanded);
-  if (wikiTotal === 0 && externalTotal === 0) return null;
+  const visibleRecent = splitRecent(recent, expanded);
+  if (visibleRecent.total === 0) return null;
 
-  const showBothSubheads = wikiTotal > 0 && externalTotal > 0;
   const headerStyle: React.CSSProperties = {
     padding: '6px 12px',
     fontSize: '12px',
@@ -1759,11 +1931,6 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
     gap: '6px',
     cursor: 'pointer',
     userSelect: 'none',
-  };
-  const subheadStyle: React.CSSProperties = {
-    ...headerStyle,
-    padding: '4px 12px 2px 20px',
-    opacity: 0.5,
   };
   const itemStyle = (isSelected: boolean): React.CSSProperties => ({
     padding: '5px 12px 5px 20px',
@@ -1784,40 +1951,6 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
     cursor: 'pointer',
     opacity: 0.6,
   };
-
-  const renderSection = (
-    kind: 'wiki' | 'external',
-    entries: RecentEntry[],
-    total: number,
-  ) => (
-    <>
-      {showBothSubheads && (
-        <div style={subheadStyle}>{kind === 'wiki' ? 'Wiki' : 'External'}</div>
-      )}
-      {entries.map((e) => {
-        const id = `${kind}:${e.path}`;
-        const isSel = selectedId === id;
-        return (
-          <div
-            key={id}
-            onClick={() => (kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
-            style={itemStyle(isSel)}
-            title={kind === 'external' ? e.path : e.title}
-            onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
-            onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
-          >
-            {e.title}
-          </div>
-        );
-      })}
-      {total > entries.length && (
-        <div onClick={() => onExpand(kind)} style={showMoreStyle}>Show more ({total - entries.length})</div>
-      )}
-      {expanded === kind && (
-        <div onClick={() => onExpand(null)} style={showMoreStyle}>Show less</div>
-      )}
-    </>
-  );
 
   return (
     <div style={{ marginBottom: '4px' }}>
@@ -1845,8 +1978,28 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
         </svg>
         <span>Recent</span>
       </div>
-      {!collapsed && wikiTotal > 0 && renderSection('wiki', wiki, wikiTotal)}
-      {!collapsed && externalTotal > 0 && renderSection('external', external, externalTotal)}
+      {!collapsed && visibleRecent.entries.map((e) => {
+        const id = `${e.kind}:${e.path}`;
+        const isSel = selectedId === id;
+        return (
+          <div
+            key={id}
+            onClick={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
+            style={itemStyle(isSel)}
+            title={e.kind === 'external' ? e.path : e.title}
+            onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
+            onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
+          >
+            {e.title}
+          </div>
+        );
+      })}
+      {!collapsed && visibleRecent.total > visibleRecent.entries.length && (
+        <div onClick={() => onExpand(true)} style={showMoreStyle}>Show more ({visibleRecent.total - visibleRecent.entries.length})</div>
+      )}
+      {!collapsed && expanded && (
+        <div onClick={() => onExpand(false)} style={showMoreStyle}>Show less</div>
+      )}
     </div>
   );
 }

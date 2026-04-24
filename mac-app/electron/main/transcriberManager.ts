@@ -1114,7 +1114,7 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Paste all items collected during silent stacking.
-   * For terminals: pastes "Figure N" label + path with blank lines between.
+   * For terminal-like targets: pastes "Figure N" label + path with blank lines between.
    * For multimodal apps: pastes actual images with blank lines between.
    * @param itemIds - Snapshot of item IDs to paste (captured before status change)
    */
@@ -1131,7 +1131,7 @@ export class TranscriberManager extends EventEmitter {
       return;
     }
 
-    const isTerminal = isTerminalApp(frontmostBundleId);
+    const pasteImagesAsPaths = isTerminalApp(frontmostBundleId) || isIDEWithTerminal(frontmostBundleId);
 
     // Get ALL items from captured IDs (text and images).
     log.info('[SilentStack] itemIds to paste:', itemIds);
@@ -1139,7 +1139,7 @@ export class TranscriberManager extends EventEmitter {
       .map(id => this.clipboardManager!.getItem(id))
       .filter((item): item is ClipboardItem => item !== null);
 
-    log.info('[SilentStack] Pasting %d items, isTerminal: %s', items.length, isTerminal);
+    log.info('[SilentStack] Pasting %d items, pasteImagesAsPaths: %s', items.length, pasteImagesAsPaths);
     items.forEach((item, i) => {
       log.info('[SilentStack] Item %d: id=%d, type=%s, hasImage=%s, contentPreview=%s',
         i, item.id, item.type, !!item.imageData, item.content?.substring(0, 30));
@@ -1158,8 +1158,8 @@ export class TranscriberManager extends EventEmitter {
 
       if (item.imageData) {
         // Image item
-        if (isTerminal) {
-          // Terminal: paste "Figure N" label + newline + path.
+        if (pasteImagesAsPaths) {
+          // Terminal-like target: paste "Figure N" label + newline + path.
           const figureLabel = item.figureLabel || String(i + 1);
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
@@ -4308,16 +4308,16 @@ export class TranscriberManager extends EventEmitter {
     const effectiveTargetBundleId = forcedTargetBundleId ?? frontmostBundleId;
     const isTerminal = isTerminalApp(effectiveTargetBundleId);
     const isIDE = isIDEWithTerminal(effectiveTargetBundleId);
-    const pasteImagesAsPaths = isTerminal;
+    const pasteImagesAsPaths = isTerminal || isIDE;
     const mixedMultimodalPaste = shouldPasteMixedStackImagesFirst(effectiveTargetBundleId, items);
     const orderedItems = orderStackItemsForPaste(items, effectiveTargetBundleId);
 
     // Check if we have a transcript with figures
     const hasTranscriptWithFigures =
       items.some(i => i.type === 'text' || i.type === 'transcript') &&
-      items.some(i => i.imageData);
+      items.some(i => i.imageData && i.figureLabel);
 
-    // Find the last text/transcript item for appending figure paths (terminal only).
+    // Find the last text/transcript item for appending figure paths.
     const lastTextItemIndex = items.reduce((lastIdx, item, idx) =>
       (item.type === 'text' || item.type === 'transcript') ? idx : lastIdx, -1);
 
@@ -4331,8 +4331,8 @@ export class TranscriberManager extends EventEmitter {
           ? item.improvedContent
           : (item.content || '');
 
-        // Append figure paths at the end for terminals, but only on the LAST text item.
-        // Non-terminals get inline [Figure X] refs without the file path list.
+        // Append figure paths at the end for terminal-like targets, but only on the LAST text item.
+        // Other apps get inline [Figure X] refs without the file path list.
         if (this.currentStack.length > 1 && pasteImagesAsPaths && itemIdx === lastTextItemIndex) {
           textContent = await this.addImagePathsToText(textContent, items);
         }
@@ -4379,12 +4379,12 @@ export class TranscriberManager extends EventEmitter {
         }
       } else if (item.imageData) {
         if (pasteImagesAsPaths) {
-          // For terminal targets, skip individual images if they're already
+          // For terminal-like targets, skip individual images if they're already
           // represented in the transcript's figure list.
           if (hasTranscriptWithFigures) {
             continue;
           }
-          // For terminal targets without transcript, export image to file and paste path.
+          // For terminal-like targets without transcript, export image to file and paste path.
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
