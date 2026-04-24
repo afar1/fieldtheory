@@ -215,20 +215,17 @@ export class DynamicIslandManager extends EventEmitter {
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
   private stayOnLaptop: boolean = false;
 
-  // Auto-hide: when enabled, pill visibility tracks cursor proximity. Each
-  // tick we compute a *target* progress from cursor distance (0 = fully
-  // hidden, 1 = fully revealed) and ease the *rendered* progress toward it
-  // with exponential smoothing so jittery cursor input doesn't cause visible
-  // jitter on the pills. Non-idle states (recording, hot-mic active) force
-  // target = 1 regardless of cursor position.
+  // Auto-hide: when enabled, pill visibility tracks simple cursor zones.
+  // Each tick computes a binary target (0 = hidden, 1 = revealed) and eases
+  // the rendered progress toward it. This keeps the animation time-based
+  // instead of directly scrubbed by small cursor movements.
   private autoHideEnabled: boolean = false;
   private autoHideRenderedProgress: number = 1;
   private autoHidePollTimer: NodeJS.Timeout | null = null;
   private readonly AUTO_HIDE_POLL_INTERVAL_MS = 16;     // ~60 Hz cursor sampling
   private readonly AUTO_HIDE_SMOOTHING = 0.25;          // exp-smoothing factor per tick (~150ms settle)
   private readonly AUTO_HIDE_SNAP_EPSILON = 0.002;      // snap to target when close enough
-  private readonly AUTO_HIDE_INNER_PX = 12;             // full reveal at/below this distance
-  private readonly AUTO_HIDE_OUTER_PX = 54;             // full conceal at/beyond this distance
+  private readonly AUTO_HIDE_SIDE_REVEAL_PX = 54;       // reveal at left/right of the island
 
   constructor() {
     super();
@@ -1216,11 +1213,9 @@ export class DynamicIslandManager extends EventEmitter {
     return this.autoHideEnabled && this.autoHideRenderedProgress < 1;
   }
 
-  // Maps cursor distance from the island's idle bounding box to a progress
-  // value in [0, 1]: 1 at the island (inside INNER_PX), 0 far from it (at or
-  // beyond OUTER_PX), linear in between. Returns 0 when the cursor is on a
-  // different display than the island.
-  private computeAutoHideProgressFromCursor(): number {
+  // Maps the cursor to a binary auto-hide target. Only cursor movement inside
+  // the menu bar can reveal the island; anything below the menu bar closes it.
+  private computeAutoHideTargetFromCursor(): number {
     const display = this.getTargetDisplay();
     if (!display) return 0;
     const cursor = screen.getCursorScreenPoint();
@@ -1235,27 +1230,25 @@ export class DynamicIslandManager extends EventEmitter {
     }
 
     const idleWidth = this.getIdlePillWidth();
-    const idleHeight = this.getIdlePillHeight();
     const leftX = this.getLeftWindowX(idleWidth, true);
     const rightX = leftX + this.getUnifiedWindowWidth(idleWidth);
-    const topY = this.getTopWindowY();
-    const bottomY = topY + idleHeight;
+    const menuBarBottomY = display.workArea.y > bounds.y
+      ? display.workArea.y
+      : this.getTopWindowY() + this.getIdlePillHeight();
 
-    // Distance from cursor to the island's axis-aligned bounding box.
-    const dx = Math.max(leftX - cursor.x, 0, cursor.x - rightX);
-    const dy = Math.max(topY - cursor.y, 0, cursor.y - bottomY);
-    const distance = Math.sqrt(dx * dx + dy * dy);
+    const inHorizontalRevealBand =
+      cursor.x >= leftX - this.AUTO_HIDE_SIDE_REVEAL_PX &&
+      cursor.x <= rightX + this.AUTO_HIDE_SIDE_REVEAL_PX;
+    const inMenuBarVerticalBand = cursor.y >= bounds.y && cursor.y < menuBarBottomY;
 
-    if (distance <= this.AUTO_HIDE_INNER_PX) return 1;
-    if (distance >= this.AUTO_HIDE_OUTER_PX) return 0;
-    return 1 - (distance - this.AUTO_HIDE_INNER_PX) / (this.AUTO_HIDE_OUTER_PX - this.AUTO_HIDE_INNER_PX);
+    return inHorizontalRevealBand && inMenuBarVerticalBand ? 1 : 0;
   }
 
   private tickAutoHide(): void {
     if (!this.autoHideEnabled || !this.enabled) return;
 
     const forceVisible = this.shouldForceAutoHideReveal();
-    const target = forceVisible ? 1 : this.computeAutoHideProgressFromCursor();
+    const target = forceVisible ? 1 : this.computeAutoHideTargetFromCursor();
 
     // Active states (recording, hot-mic, etc.) snap instantly to fully visible
     // so the animation doesn't fight the window resize from updateWindowSize().

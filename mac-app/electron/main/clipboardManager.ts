@@ -103,13 +103,13 @@ export function isIDEWithTerminal(bundleId: string | null): boolean {
 /**
  * Many chat-style composers accept multiple pasted images, but reject image
  * attachments once text already exists in the draft. For mixed stacks, put
- * attachments first unless the target is a terminal that needs file paths.
+ * attachments first unless the target needs file paths.
  */
 export function shouldPasteMixedStackImagesFirst(
   bundleId: string | null,
   items: readonly Pick<ClipboardItem, 'type' | 'content' | 'imageData'>[],
 ): boolean {
-  if (isTerminalApp(bundleId)) return false;
+  if (isTerminalApp(bundleId) || isIDEWithTerminal(bundleId)) return false;
   const hasText = items.some((item) => item.type === 'text' || item.type === 'transcript' || (!!item.content && !item.imageData));
   const hasImages = items.some((item) => Boolean(item.imageData));
   return hasText && hasImages;

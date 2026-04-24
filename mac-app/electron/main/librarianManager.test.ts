@@ -19,6 +19,7 @@ vi.mock('electron', () => ({
 import { shell } from 'electron';
 import {
   buildEffectiveArtifactRuleContent,
+  buildFieldTheoryMarkdownCommandContent,
   defaultScratchpadName,
   defaultScratchpadNameWithTime,
   extractArtifactModelSignature,
@@ -183,6 +184,22 @@ describe('artifact signature helpers', () => {
     expect(result).toContain('Required artifact format:');
     expect(result).toContain('Signature metadata line');
     expect(result).toContain('*Model: <the exact model or assistant name that wrote this artifact>*');
+  });
+});
+
+describe('Field Theory Markdown command content', () => {
+  it('codifies the plain, tidy writing conventions for Field Theory notes', () => {
+    const content = buildFieldTheoryMarkdownCommandContent();
+
+    expect(content).toContain('plain, practical English');
+    expect(content).toContain('It does not apply to Librarian artifacts');
+    expect(content).toContain('prefer bold section labels instead of more heading levels');
+    expect(content).toContain('Keep most text at the same visual size');
+    expect(content).toContain('Prefer prose');
+    expect(content).toContain('Use ordered lists only for real sequence, priority, or steps');
+    expect(content).toContain('- [ ] One action per line');
+    expect(content).toContain('[[Page Name]]');
+    expect(content).toContain('**Sources**');
   });
 });
 
@@ -448,6 +465,62 @@ describe('recursive wiki tree scan', () => {
     expect(await manager.deleteLibraryDir(root, '')).toBe(false);
     expect(trashItem).not.toHaveBeenCalled();
   });
+
+  it('moves wiki pages into another folder and emits stale relPath deletion', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'note.md'), '# Note\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      moveLibraryItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.moveLibraryItem(root, 'file', 'entries/note', 'scratchpad')).toBe('scratchpad/note');
+    expect(fs.existsSync(path.join(root, 'entries', 'note.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'scratchpad', 'note.md'), 'utf-8')).toBe('# Note\n');
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'entries/note');
+  });
+
+  it('rejects moving a folder into itself or a descendant', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'Client Notes', 'Nested'), { recursive: true });
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      moveLibraryItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.moveLibraryItem(root, 'dir', 'Client Notes', 'Client Notes/Nested')).toBeNull();
+    expect(fs.existsSync(path.join(root, 'Client Notes', 'Nested'))).toBe(true);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it('rejects moving default wiki folders', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      moveLibraryItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.moveLibraryItem(root, 'dir', 'entries', 'scratchpad')).toBeNull();
+    expect(fs.existsSync(path.join(root, 'entries'))).toBe(true);
+    expect(emit).not.toHaveBeenCalled();
+  });
 });
 
 describe('hidden default library folders', () => {
@@ -514,7 +587,7 @@ describe('default folder readmes', () => {
 
     manager.ensureDefaultFolderReadmes();
 
-    for (const folder of ['scratchpad', 'debates', 'entries', 'concepts', 'categories', 'domains', 'entities']) {
+    for (const folder of ['scratchpad', 'debates', 'entries', 'categories', 'domains', 'entities']) {
       const readmePath = path.join(root, folder, 'README.md');
       expect(fs.existsSync(readmePath)).toBe(true);
       const readme = fs.readFileSync(readmePath, 'utf-8');
@@ -530,7 +603,6 @@ describe('default folder readmes', () => {
       'scratchpad',
       'debates',
       'entries',
-      'concepts',
       'categories',
       'domains',
       'entities',

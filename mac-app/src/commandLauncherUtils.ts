@@ -36,6 +36,83 @@ export function formatTimeAgo(timestamp: number): string {
 }
 
 // =============================================================================
+// Library Markdown Flattening
+// =============================================================================
+
+export type LauncherLibraryNode =
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'dir'; name: string; relPath: string; children: LauncherLibraryNode[] };
+
+export interface LauncherLibraryRoot {
+  path: string;
+  label: string;
+  builtin: boolean;
+  tree: LauncherLibraryNode[];
+}
+
+export interface LauncherLibraryMarkdownItem {
+  id: string;
+  type: 'wiki-page' | 'markdown-file';
+  name: string;
+  displayName: string;
+  keywords: string[];
+  filePath: string;
+  relPath?: string;
+}
+
+export interface LauncherSearchableItem {
+  name: string;
+  displayName: string;
+  keywords: string[];
+}
+
+export function filterLauncherNamespaceItems<T extends LauncherSearchableItem>(items: T[], search: string): T[] {
+  const normalizedSearch = search.trim().toLowerCase();
+  if (!normalizedSearch) return items;
+  return items.filter(item =>
+    item.name.toLowerCase().includes(normalizedSearch) ||
+    item.displayName.toLowerCase().includes(normalizedSearch) ||
+    item.keywords.some(k => k.toLowerCase().includes(normalizedSearch))
+  );
+}
+
+export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): LauncherLibraryMarkdownItem[] {
+  const items: LauncherLibraryMarkdownItem[] = [];
+
+  const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
+    if (node.kind === 'dir') {
+      for (const child of node.children) visit(root, child);
+      return;
+    }
+
+    const type = root.builtin ? 'wiki-page' : 'markdown-file';
+    const rootLabel = root.builtin ? 'wiki' : root.label;
+    items.push({
+      id: `${type}-${root.path}-${node.relPath}`,
+      type,
+      name: node.name,
+      displayName: root.builtin ? node.title : `${node.title} — ${root.label}`,
+      keywords: [
+        node.name,
+        node.title,
+        node.relPath,
+        rootLabel,
+        ...node.name.split('-'),
+        ...node.title.split(/\s+/),
+      ].filter(Boolean),
+      filePath: node.absPath,
+      relPath: root.builtin ? node.relPath : undefined,
+    });
+  };
+
+  for (const root of roots) {
+    for (const node of root.tree) visit(root, node);
+  }
+
+  return items;
+}
+
+// =============================================================================
 // Command Launcher Built-in Actions
 // =============================================================================
 
