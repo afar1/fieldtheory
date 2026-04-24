@@ -69,6 +69,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
@@ -1675,6 +1676,20 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('library:getRoots', (): LibraryRoot[] => {
     if (!librarianManager) return [];
     return librarianManager.getLibraryRoots();
+  });
+
+  ipcMain.handle('library:previewMigration', () => {
+    return buildLibraryMigrationPlan();
+  });
+
+  ipcMain.handle('library:executeMigration', () => {
+    const plan = buildLibraryMigrationPlan();
+    const result = executeLibraryMigration(plan);
+    if (result.success && librarianManager) {
+      librarianManager.emit('wiki:changed');
+      librarianManager.emit('library:changed', plan.targetDir);
+    }
+    return result;
   });
 
   ipcMain.handle('library:getHiddenFolders', (): string[] => {

@@ -1587,8 +1587,47 @@ declare global {
     tree: WikiNode[];
   }
 
+  interface LibraryMigrationFile {
+    relPath: string;
+    sourcePath: string;
+    targetPath: string;
+  }
+
+  interface LibraryMigrationConflict extends LibraryMigrationFile {
+    conflictCopyPath: string;
+  }
+
+  interface LibraryMigrationPlan {
+    sourceDir: string;
+    targetDir: string;
+    backupDir: string;
+    timestamp: string;
+    sourceState: string;
+    targetState: string;
+    filesToCopy: LibraryMigrationFile[];
+    identicalFiles: LibraryMigrationFile[];
+    conflicts: LibraryMigrationConflict[];
+    targetOnlyFiles: string[];
+    missingFolders: string[];
+    symlinksToCreate: Array<{ linkPath: string; targetPath: string }>;
+    blockingIssues: string[];
+    canExecute: boolean;
+  }
+
+  interface LibraryMigrationExecutionResult {
+    success: boolean;
+    copiedFiles: string[];
+    skippedIdenticalFiles: string[];
+    conflictCopies: Array<{ relPath: string; copiedTo: string }>;
+    backupDir: string | null;
+    symlinkCreated: boolean;
+    errors: string[];
+  }
+
   interface LibraryAPI {
     getRoots: () => Promise<LibraryRoot[]>;
+    previewMigration: () => Promise<LibraryMigrationPlan>;
+    executeMigration: () => Promise<LibraryMigrationExecutionResult>;
     getHiddenFolders: () => Promise<string[]>;
     setFolderHidden: (folderId: string, hidden: boolean) => Promise<string[]>;
     addRoot: (dirPath: string) => Promise<LibraryRoot | null>;

@@ -5,7 +5,7 @@
  * markdown readings from AI coding assistants.
  */
 
-import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { useEffect, useState, useCallback, useRef, useMemo, type MouseEvent } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
@@ -35,6 +35,9 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [error, setError] = useState<string | null>(null);
   const [hiddenLibraryFolders, setHiddenLibraryFolders] = useState<string[]>([]);
   const hiddenCustomLibraryFolders = hiddenLibraryFolders.filter((folderId) => !LIBRARY_FOLDER_TOGGLE_IDS.has(folderId));
+  const [libraryMigrationPlan, setLibraryMigrationPlan] = useState<LibraryMigrationPlan | null>(null);
+  const [libraryMigrationResult, setLibraryMigrationResult] = useState<LibraryMigrationExecutionResult | null>(null);
+  const [libraryMigrationWorking, setLibraryMigrationWorking] = useState(false);
 
   // Count readings per directory
   const readingCountsByDir = useMemo(() => {
@@ -390,6 +393,27 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       setHiddenLibraryFolders(previous);
     }
   }, [hiddenLibraryFolders]);
+
+  const handleLibraryMigrationClick = useCallback(async (event: MouseEvent<HTMLButtonElement>) => {
+    if (!window.libraryAPI || libraryMigrationWorking) return;
+
+    setError(null);
+    setLibraryMigrationWorking(true);
+    try {
+      if ((event.metaKey || event.ctrlKey) && libraryMigrationPlan) {
+        const result = await window.libraryAPI.executeMigration();
+        setLibraryMigrationResult(result);
+        setLibraryMigrationPlan(await window.libraryAPI.previewMigration());
+      } else {
+        setLibraryMigrationResult(null);
+        setLibraryMigrationPlan(await window.libraryAPI.previewMigration());
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLibraryMigrationWorking(false);
+    }
+  }, [libraryMigrationPlan, libraryMigrationWorking]);
 
   // Format path for display
   const formatPath = (path: string): string => {
@@ -1122,6 +1146,96 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               />
             </label>
           ))}
+        </div>
+
+        <div
+          style={{
+            padding: '12px',
+            marginTop: '16px',
+            borderRadius: '6px',
+            backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+                Library migration
+              </div>
+              <div style={{ fontSize: '11px', color: theme.textSecondary, marginTop: '3px', lineHeight: 1.4 }}>
+                Move markdown from the old bookmark wiki into the canonical Library folder.
+              </div>
+            </div>
+            <button
+              onClick={handleLibraryMigrationClick}
+              disabled={libraryMigrationWorking}
+              title="Click to preview. Command-click after preview to execute."
+              style={{
+                padding: '6px 10px',
+                fontSize: '11px',
+                fontWeight: 500,
+                color: libraryMigrationWorking ? theme.textSecondary : '#fff',
+                backgroundColor: libraryMigrationWorking ? 'transparent' : theme.accent,
+                border: libraryMigrationWorking ? `1px solid ${theme.border}` : 'none',
+                borderRadius: '4px',
+                cursor: libraryMigrationWorking ? 'wait' : 'pointer',
+                flexShrink: 0,
+              }}
+            >
+              {libraryMigrationWorking ? '...' : libraryMigrationPlan ? 'Refresh report' : 'Preview'}
+            </button>
+          </div>
+
+          {libraryMigrationPlan && (
+            <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: '6px' }}>
+                {[
+                  ['Copy', libraryMigrationPlan.filesToCopy.length],
+                  ['Same', libraryMigrationPlan.identicalFiles.length],
+                  ['Conflict', libraryMigrationPlan.conflicts.length],
+                  ['New only', libraryMigrationPlan.targetOnlyFiles.length],
+                ].map(([label, count]) => (
+                  <div
+                    key={label}
+                    style={{
+                      padding: '6px 8px',
+                      borderRadius: '5px',
+                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : '#f9fafb',
+                      border: `1px solid ${theme.border}`,
+                    }}
+                  >
+                    <div style={{ fontSize: '10px', color: theme.textSecondary }}>{label}</div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: theme.text }}>{count}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{ fontSize: '10px', color: theme.textSecondary, lineHeight: 1.5, fontFamily: "'SF Mono', Monaco, monospace" }}>
+                <div>Old: {formatPath(libraryMigrationPlan.sourceDir)}</div>
+                <div>New: {formatPath(libraryMigrationPlan.targetDir)}</div>
+                <div>Backup: {formatPath(libraryMigrationPlan.backupDir)}</div>
+              </div>
+              {libraryMigrationPlan.blockingIssues.length > 0 && (
+                <div style={{ fontSize: '11px', color: theme.error, lineHeight: 1.4 }}>
+                  {libraryMigrationPlan.blockingIssues.join(' ')}
+                </div>
+              )}
+            </div>
+          )}
+
+          {libraryMigrationResult && (
+            <div
+              style={{
+                marginTop: '10px',
+                fontSize: '11px',
+                lineHeight: 1.5,
+                color: libraryMigrationResult.success ? theme.success : theme.error,
+              }}
+            >
+              {libraryMigrationResult.success
+                ? `Copied ${libraryMigrationResult.copiedFiles.length}, conflict-copied ${libraryMigrationResult.conflictCopies.length}.`
+                : libraryMigrationResult.errors.join(' ')}
+            </div>
+          )}
         </div>
 
         {claudeConfigError && (
