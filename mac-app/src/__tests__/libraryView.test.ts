@@ -1,23 +1,29 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   deletedLibraryItemMatchesSelection,
   editorSessionMatchesSelection,
   extractMarkdownH1Title,
+  findNextMarkdownMatch,
+  getNewlyCheckedMarkdownTasks,
+  highlightFileFindMatches,
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
   getScrollRatio,
   getScrollTopForCaretVisibility,
   getScrollTopForRatio,
   moveLibrarianNavigationHistory,
+  normalizeMarkdownTodoLines,
   persistLibrarianEditorSession,
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
   replaceLibrarianNavigationEntry,
+  resolveMarkdownCaretOffsetFromRenderedText,
   restoreLibrarianEditorSession,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   splitFrontmatter,
+  toggleMarkdownTaskLine,
 } from '../components/LibrarianView';
 import {
   ensureScratchpadNodePinned,
@@ -25,15 +31,24 @@ import {
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
   collectSidebarSiblingItems,
+  clearLibraryDragData,
+  canDropLibraryItem,
   filterStaleRecent,
   filterUnifiedFolders,
+  getLibraryDragData,
   getSidebarFolderFinderPath,
   getWikiSidebarExpansionIds,
+  hasLibraryDragData,
   splitRecent,
   sortSidebarNodes,
+  setLibraryDragData,
   virtualizeBookmarksGroup,
   type LibrarySidebarNode,
 } from '../components/WikiSidebar';
+
+afterEach(() => {
+  clearLibraryDragData();
+});
 
 describe('splitFrontmatter', () => {
   it('strips YAML frontmatter and returns body + metadata', () => {
@@ -100,6 +115,173 @@ describe('preserveMarkdownBlankLines', () => {
     expect(preserveMarkdownBlankLines('Before\n\n```\na\n\nb\n```\n\nAfter')).toBe(
       'Before\n\n\u00A0\n\n```\na\n\nb\n```\n\n\u00A0\n\nAfter',
     );
+  });
+});
+
+describe('normalizeMarkdownTodoLines', () => {
+  it('turns scratchpad [] lines into markdown task lines', () => {
+    expect(normalizeMarkdownTodoLines('[] first\n  [] nested')).toBe('- [ ] first\n  - [ ] nested');
+  });
+
+  it('turns bare bracket task lines into markdown task lines', () => {
+    expect(normalizeMarkdownTodoLines('[ ] first\n[x] second')).toBe('- [ ] first\n- [x] second');
+  });
+
+  it('leaves fenced code examples alone', () => {
+    expect(normalizeMarkdownTodoLines('```\n[] literal\n[x] literal\n```\n[x] task')).toBe('```\n[] literal\n[x] literal\n```\n- [x] task');
+  });
+});
+
+describe('toggleMarkdownTaskLine', () => {
+  it('checks and unchecks markdown task lines', () => {
+    const checked = toggleMarkdownTaskLine('- [ ] first\n- [x] second', 'first', true);
+    expect(checked).toBe('- [x] first\n- [x] second');
+    expect(toggleMarkdownTaskLine(checked, 'first', false)).toBe('- [ ] first\n- [x] second');
+  });
+
+  it('preserves scratchpad bracket-only task syntax', () => {
+    expect(toggleMarkdownTaskLine('[] first', 'first', true)).toBe('[x] first');
+  });
+});
+
+describe('getNewlyCheckedMarkdownTasks', () => {
+  it('detects tasks checked between two markdown versions', () => {
+    expect(getNewlyCheckedMarkdownTasks(
+      '- [ ] first\n- [x] already\n[] scratch',
+      '- [x] first\n- [x] already\n[x] scratch',
+    )).toEqual(['first', 'scratch']);
+  });
+
+  it('ignores newly added tasks that are already checked', () => {
+    expect(getNewlyCheckedMarkdownTasks('', '- [x] new task')).toEqual([]);
+  });
+});
+
+describe('findNextMarkdownMatch', () => {
+  it('finds from the requested offset and wraps to the top', () => {
+    expect(findNextMarkdownMatch('Alpha beta alpha', 'alpha', 1)).toEqual({ start: 11, end: 16 });
+    expect(findNextMarkdownMatch('Alpha beta alpha', 'alpha', 16)).toEqual({ start: 0, end: 5 });
+  });
+
+  it('returns null for empty or missing queries', () => {
+    expect(findNextMarkdownMatch('Alpha', '')).toBeNull();
+    expect(findNextMarkdownMatch('Alpha', 'beta')).toBeNull();
+  });
+});
+
+describe('highlightFileFindMatches', () => {
+  it('highlights rendered text without changing the text content', () => {
+    const root = document.createElement('div');
+    root.textContent = 'Alpha beta alpha';
+
+    highlightFileFindMatches(root, 'alpha');
+
+    expect(root.textContent).toBe('Alpha beta alpha');
+    expect(root.querySelectorAll('mark[data-ft-file-find-mark]')).toHaveLength(2);
+  });
+});
+
+describe('resolveMarkdownCaretOffsetFromRenderedText', () => {
+  it('maps a rendered text-node offset back into the markdown source', () => {
+    expect(resolveMarkdownCaretOffsetFromRenderedText('# Friday Notes\n', 'Friday Notes', 6)).toBe(8);
+  });
+
+  it('falls back to the rendered prefix when the full rendered text is not contiguous in source', () => {
+    expect(resolveMarkdownCaretOffsetFromRenderedText('hello **world** today', 'hello world today', 11)).toBe(13);
+  });
+});
+
+describe('library drag data helpers', () => {
+  it('writes a plain text fallback and reads it back', () => {
+    const values = new Map<string, string>();
+    const types: string[] = [];
+    const dataTransfer = {
+      types,
+      setData(type: string, value: string) {
+        if (!types.includes(type)) types.push(type);
+        values.set(type, value);
+      },
+      getData(type: string) {
+        return values.get(type) ?? '';
+      },
+      effectAllowed: 'none',
+    } as unknown as DataTransfer;
+
+    setLibraryDragData(dataTransfer, {
+      rootPath: '/wiki',
+      kind: 'file',
+      relPath: 'scratchpad/today',
+    });
+
+    expect(hasLibraryDragData(dataTransfer)).toBe(true);
+    expect(getLibraryDragData(dataTransfer)).toEqual({
+      rootPath: '/wiki',
+      kind: 'file',
+      relPath: 'scratchpad/today',
+    });
+    expect(values.get('text/plain')).toContain('fieldtheory-library-item:');
+  });
+
+  it('keeps same-window drag data when dragover hides DataTransfer types', () => {
+    const dragItem = {
+      rootPath: '/wiki',
+      kind: 'file' as const,
+      relPath: 'entries/note',
+    };
+    const dataTransfer = {
+      types: [] as string[],
+      setData() {},
+      getData() {
+        return '';
+      },
+      effectAllowed: 'none',
+    } as unknown as DataTransfer;
+
+    setLibraryDragData(dataTransfer, dragItem);
+
+    expect(hasLibraryDragData(dataTransfer)).toBe(true);
+    expect(getLibraryDragData(dataTransfer)).toEqual(dragItem);
+
+    clearLibraryDragData();
+
+    expect(hasLibraryDragData(dataTransfer)).toBe(false);
+    expect(getLibraryDragData(dataTransfer)).toBeNull();
+  });
+
+  it('does not treat arbitrary plain text as library drag data', () => {
+    const dataTransfer = {
+      types: ['text/plain'] as string[],
+      setData() {},
+      getData(type: string) {
+        return type === 'text/plain' ? 'not a library drag' : '';
+      },
+      effectAllowed: 'none',
+    } as unknown as DataTransfer;
+
+    expect(hasLibraryDragData(dataTransfer)).toBe(false);
+    expect(getLibraryDragData(dataTransfer)).toBeNull();
+  });
+
+  it('rejects invalid library drop targets before drop', () => {
+    expect(canDropLibraryItem(
+      { rootPath: '/wiki', kind: 'file', relPath: 'entries/note' },
+      { rootPath: '/wiki', relPath: 'scratchpad', builtin: true },
+    )).toBe(true);
+
+    expect(canDropLibraryItem(
+      { rootPath: '/wiki', kind: 'file', relPath: 'entries/note' },
+      { rootPath: '/external', relPath: 'scratchpad', builtin: false },
+    )).toBe(false);
+
+    expect(canDropLibraryItem(
+      { rootPath: '/wiki', kind: 'dir', relPath: 'entries' },
+      { rootPath: '/wiki', relPath: 'entries/child', builtin: true },
+    )).toBe(false);
+
+    expect(canDropLibraryItem(
+      { rootPath: '/wiki', kind: 'file', relPath: 'entries/note' },
+      { rootPath: '/wiki', relPath: 'entries', builtin: true },
+    )).toBe(false);
   });
 });
 
@@ -698,25 +880,22 @@ describe('resolveWikiCreateFolder', () => {
 describe('splitRecent', () => {
   const make = (kind: 'wiki' | 'external', p: string) => ({ kind, path: p, title: p, lastOpenedAt: 1 });
 
-  it('splits by kind and preserves input order inside each group', () => {
+  it('keeps one recent list in input order', () => {
     const entries = [make('wiki', 'a'), make('external', 'x'), make('wiki', 'b')];
-    const out = splitRecent(entries, null);
-    expect(out.wiki.map((e) => e.path)).toEqual(['a', 'b']);
-    expect(out.external.map((e) => e.path)).toEqual(['x']);
-    expect(out.wikiTotal).toBe(2);
-    expect(out.externalTotal).toBe(1);
+    const out = splitRecent(entries, false);
+    expect(out.entries.map((e) => e.path)).toEqual(['a', 'x', 'b']);
+    expect(out.total).toBe(3);
   });
 
-  it('caps each side at 3 when collapsed, at 10 when the corresponding side is expanded', () => {
-    const wikiEntries = Array.from({ length: 8 }, (_, i) => make('wiki', `w${i}`));
-    const externalEntries = Array.from({ length: 8 }, (_, i) => make('external', `e${i}`));
-    const collapsed = splitRecent([...wikiEntries, ...externalEntries], null);
-    expect(collapsed.wiki).toHaveLength(3);
-    expect(collapsed.external).toHaveLength(3);
+  it('caps the combined list when collapsed and shows every remaining item when expanded', () => {
+    const entries = Array.from({ length: 14 }, (_, i) => make(i % 2 === 0 ? 'wiki' : 'external', `r${i}`));
+    const collapsed = splitRecent(entries, false);
+    expect(collapsed.entries).toHaveLength(6);
+    expect(collapsed.total).toBe(14);
 
-    const wikiExpanded = splitRecent([...wikiEntries, ...externalEntries], 'wiki');
-    expect(wikiExpanded.wiki).toHaveLength(8); // all 8 fit under the 10 cap
-    expect(wikiExpanded.external).toHaveLength(3);
+    const expanded = splitRecent(entries, true);
+    expect(expanded.entries).toHaveLength(14);
+    expect(expanded.entries.map((e) => e.path).at(-1)).toBe('r13');
   });
 });
 

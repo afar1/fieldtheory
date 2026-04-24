@@ -21,7 +21,7 @@ import WikiSidebar, {
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
-import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import {
   LIBRARIAN_LINE_HEIGHT_OPTIONS,
   LIBRARIAN_TYPOGRAPHY_PRESETS,
@@ -109,6 +109,7 @@ export function extractMarkdownH1Title(content: string, fallback: string): strin
 }
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
+const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
 
 export function preserveMarkdownBlankLines(content: string): string {
   if (!content || !content.trim()) return content;
@@ -131,6 +132,161 @@ export function preserveMarkdownBlankLines(content: string): string {
   }
 
   return output.join('\n');
+}
+
+export function normalizeMarkdownTodoLines(content: string): string {
+  if (!content) return content;
+
+  const output: string[] = [];
+  let inFence = false;
+  for (const line of content.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      output.push(line);
+      inFence = !inFence;
+      continue;
+    }
+
+    if (!inFence) {
+      const task = line.match(/^(\s*)\[( |x|X)?\]\s+(.+)$/);
+      if (task) {
+        const marker = task[2]?.toLowerCase() === 'x' ? 'x' : ' ';
+        output.push(`${task[1]}- [${marker}] ${task[3]}`);
+        continue;
+      }
+    }
+
+    output.push(line);
+  }
+
+  return output.join('\n');
+}
+
+export function toggleMarkdownTaskLine(content: string, text: string, checked: boolean): string {
+  const target = text.trim();
+  if (!target) return content;
+
+  const lines = content.split('\n');
+  const nextMarker = checked ? 'x' : ' ';
+  const nextLines = [...lines];
+  const taskPattern = /^(\s*)(-\s+)?\[( |x|X)?\]\s+(.+)$/;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(taskPattern);
+    if (!match || match[4].trim() !== target) continue;
+    nextLines[index] = `${match[1]}${match[2] ?? ''}[${nextMarker}] ${match[4]}`;
+    return nextLines.join('\n');
+  }
+
+  return content;
+}
+
+function getMarkdownTaskStateByText(content: string): Map<string, boolean> {
+  const states = new Map<string, boolean>();
+  for (const line of content.split('\n')) {
+    const match = line.match(/^\s*(?:[-*+]\s*)?\[( |x|X)?\]\s+(.+?)\s*$/);
+    if (!match) continue;
+    states.set(match[2].trim(), match[1]?.toLowerCase() === 'x');
+  }
+  return states;
+}
+
+export function getNewlyCheckedMarkdownTasks(previousContent: string, nextContent: string): string[] {
+  const previous = getMarkdownTaskStateByText(previousContent);
+  const next = getMarkdownTaskStateByText(nextContent);
+  const newlyChecked: string[] = [];
+
+  next.forEach((checked, text) => {
+    if (checked && previous.get(text) === false) {
+      newlyChecked.push(text);
+    }
+  });
+
+  return newlyChecked;
+}
+
+export function findNextMarkdownMatch(content: string, query: string, fromIndex: number = 0): { start: number; end: number } | null {
+  const needle = query.trim().toLowerCase();
+  if (!needle) return null;
+  const haystack = content.toLowerCase();
+  const startFrom = Math.max(0, Math.min(fromIndex, haystack.length));
+  const forward = haystack.indexOf(needle, startFrom);
+  const wrapped = forward >= 0 ? forward : haystack.indexOf(needle, 0);
+  return wrapped >= 0 ? { start: wrapped, end: wrapped + needle.length } : null;
+}
+
+export function resolveMarkdownCaretOffsetFromRenderedText(
+  markdown: string,
+  renderedText: string,
+  renderedOffset: number,
+): number | null {
+  if (!renderedText) return null;
+  const clampedOffset = Math.max(0, Math.min(renderedOffset, renderedText.length));
+  const sourceIndex = markdown.indexOf(renderedText);
+  if (sourceIndex >= 0) return sourceIndex + clampedOffset;
+
+  const before = renderedText.slice(0, clampedOffset);
+  if (!before) return null;
+  const beforeIndex = markdown.indexOf(before);
+  if (beforeIndex >= 0) return beforeIndex + before.length;
+
+  let renderedCount = 0;
+  for (let index = 0; index < markdown.length; index += 1) {
+    if (/[*_`#>\[\]()!-]/.test(markdown[index])) continue;
+    renderedCount += 1;
+    if (renderedCount >= clampedOffset) return index + 1;
+  }
+  return null;
+}
+
+function clearFileFindMarks(root: HTMLElement): void {
+  const marks = Array.from(root.querySelectorAll(`mark[${FILE_FIND_MARK_ATTR}]`));
+  for (const mark of marks) {
+    const parent = mark.parentNode;
+    if (!parent) continue;
+    parent.replaceChild(document.createTextNode(mark.textContent ?? ''), mark);
+    parent.normalize();
+  }
+}
+
+export function highlightFileFindMatches(root: HTMLElement, query: string): void {
+  clearFileFindMarks(root);
+  const needle = query.trim();
+  if (!needle) return;
+  const needleLower = needle.toLowerCase();
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent || parent.closest('script, style, mark')) return NodeFilter.FILTER_REJECT;
+      return (node.textContent ?? '').toLowerCase().includes(needleLower)
+        ? NodeFilter.FILTER_ACCEPT
+        : NodeFilter.FILTER_REJECT;
+    },
+  });
+  const textNodes: Text[] = [];
+  while (walker.nextNode()) textNodes.push(walker.currentNode as Text);
+
+  for (const textNode of textNodes) {
+    const text = textNode.textContent ?? '';
+    const textLower = text.toLowerCase();
+    const fragment = document.createDocumentFragment();
+    let index = 0;
+    let matchIndex = textLower.indexOf(needleLower);
+    while (matchIndex >= 0) {
+      if (matchIndex > index) fragment.appendChild(document.createTextNode(text.slice(index, matchIndex)));
+      const mark = document.createElement('mark');
+      mark.setAttribute(FILE_FIND_MARK_ATTR, '1');
+      mark.textContent = text.slice(matchIndex, matchIndex + needle.length);
+      mark.style.backgroundColor = '#facc15';
+      mark.style.color = '#111827';
+      mark.style.borderRadius = '2px';
+      mark.style.padding = '0 1px';
+      fragment.appendChild(mark);
+      index = matchIndex + needle.length;
+      matchIndex = textLower.indexOf(needleLower, index);
+    }
+    if (index < text.length) fragment.appendChild(document.createTextNode(text.slice(index)));
+    textNode.parentNode?.replaceChild(fragment, textNode);
+  }
 }
 
 function clipboardDataHasImage(data: DataTransfer): boolean {
@@ -625,9 +781,7 @@ interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
-  externalHeaderHover?: boolean; // Passed from parent when top edge is hovered
   onFocusChromeActiveChange?: (active: boolean) => void;
-  onFocusChromeTopChange?: (top: number | null) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialOpenTarget?: FieldTheoryMarkdownTarget | null;
   initialFullScreen?: boolean; // Start in fullscreen/immersive mode (for auto-open)
@@ -656,6 +810,11 @@ type MarkdownRenderNode = {
   children?: unknown;
 };
 
+type CaretPointDocument = Document & {
+  caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+  caretRangeFromPoint?: (x: number, y: number) => Range | null;
+};
+
 function extractMarkdownText(node: unknown): string {
   if (!node || typeof node !== 'object') return '';
   const renderNode = node as MarkdownRenderNode;
@@ -664,7 +823,25 @@ function extractMarkdownText(node: unknown): string {
   return '';
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, externalHeaderHover, onFocusChromeActiveChange, onFocusChromeTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
+function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string; offset: number } | null {
+  const doc = event.currentTarget.ownerDocument as CaretPointDocument;
+  const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
+  if (position?.offsetNode.nodeType === Node.TEXT_NODE) {
+    return {
+      text: position.offsetNode.textContent ?? '',
+      offset: position.offset,
+    };
+  }
+
+  const range = doc.caretRangeFromPoint?.(event.clientX, event.clientY);
+  if (range?.startContainer.nodeType !== Node.TEXT_NODE) return null;
+  return {
+    text: range.startContainer.textContent ?? '',
+    offset: range.startOffset,
+  };
+}
+
+export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -720,7 +897,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     }
     setFocusImmersive((prev) => !prev);
   }, [selectedItemUsesLegacyImmersive]);
-  const [headerHovered, setHeaderHovered] = useState(false);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
   const [markdownEditorEdgeFades, setMarkdownEditorEdgeFades] = useState({ top: false, bottom: false });
   const markdownEditorEdgeFadesRef = useRef(markdownEditorEdgeFades);
@@ -739,16 +915,24 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [addingDir, setAddingDir] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [fileFindOpen, setFileFindOpen] = useState(false);
+  const [fileFindQuery, setFileFindQuery] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const flatItemsRef = useRef<import('./WikiSidebar').UnifiedItem[]>([]);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const fileFindInputRef = useRef<HTMLInputElement | null>(null);
   const sidebarKeyboardActiveRef = useRef(false);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
+  const renderedContentRef = useRef<HTMLDivElement | null>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const pendingRenderedEditSelectionRef = useRef<number | null>(null);
+  const previousRenderedTaskContentRef = useRef<{ path: string | null; content: string } | null>(null);
+  const taskAnimationTimerRef = useRef<number | null>(null);
+  const [animatingTaskTexts, setAnimatingTaskTexts] = useState<Set<string>>(() => new Set());
   const focusMarkdownEditorOnOpenRef = useRef(false);
   const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
@@ -785,12 +969,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
   const focusChromeActive = canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden));
-  const readerControlsVisible = isFullScreen ? headerHovered : !(focusChromeActive && !headerHovered);
-
-  const revealWritingChrome = useCallback(() => {
-    setHeaderHovered(true);
-  }, []);
-
+  const focusToolbarControlsVisible = !focusChromeActive;
   const markWritingActive = useCallback(() => {
     if (isFocusedWritingMode) setWritingChromeHidden(true);
   }, [isFocusedWritingMode]);
@@ -1140,14 +1319,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [isFullScreen, selectedItemType, selectedItemUsesLegacyImmersive]);
 
   useEffect(() => {
-    if (externalHeaderHover) {
-      revealWritingChrome();
-    } else if (!isFullScreen) {
-      setHeaderHovered(false);
-    }
-  }, [externalHeaderHover, isFullScreen, revealWritingChrome]);
-
-  useEffect(() => {
     if (!isFocusedWritingMode) setWritingChromeHidden(false);
   }, [isFocusedWritingMode]);
 
@@ -1158,31 +1329,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     onFocusChromeActiveChange?.(focusChromeActive);
   }, [focusChromeActive, onFocusChromeActiveChange]);
-
-  useEffect(() => {
-    if (!focusChromeActive) {
-      onFocusChromeTopChange?.(null);
-      return;
-    }
-
-    let frame: number | null = null;
-    const reportEditorTop = () => {
-      frame = null;
-      onFocusChromeTopChange?.(markdownEditorRef.current?.getBoundingClientRect().top ?? contentScrollRef.current?.getBoundingClientRect().top ?? null);
-    };
-    const scheduleReport = () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(reportEditorTop);
-    };
-
-    scheduleReport();
-    window.addEventListener('resize', scheduleReport);
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      window.removeEventListener('resize', scheduleReport);
-      onFocusChromeTopChange?.(null);
-    };
-  }, [focusChromeActive, lineHeightId, onFocusChromeTopChange, textSize, typographyPresetId]);
 
   useEffect(() => {
     return () => onFocusChromeActiveChange?.(false);
@@ -1253,9 +1399,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   const textSizes = {
-    small: { base: '14px', h1: '24px', h2: '18px', h3: '15px' },
-    normal: { base: '16px', h1: '28px', h2: '20px', h3: '17px' },
-    large: { base: '18px', h1: '32px', h2: '24px', h3: '20px' },
+    small: { base: '14px', h1: '20px', h2: '16px', h3: '14px' },
+    normal: { base: '16px', h1: '22px', h2: '18px', h3: '16px' },
+    large: { base: '18px', h1: '26px', h2: '21px', h3: '18px' },
   };
 
   const typographyPreset = useMemo(
@@ -1302,7 +1448,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     fontSize: textSizes[textSize].base,
     lineHeight: resolveLibrarianLineHeight(lineHeightId, typographyPreset),
     fontFamily: typographyPreset.fontFamily,
-    color: theme.text,
+    color: theme.isDark ? 'rgba(255,255,255,0.88)' : theme.text,
+    fontWeight: 400,
+    letterSpacing: 0,
   };
 
   const wikiDisplay = useMemo(() => {
@@ -1375,8 +1523,111 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   const displayContent = useMemo(() => {
     const raw = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
     const linked = transformWikiLinks(raw, wikiIndex);
-    return preserveMarkdownBlankLines(linked);
+    return preserveMarkdownBlankLines(normalizeMarkdownTodoLines(linked));
   }, [wikiDisplay, activeReading?.content, wikiIndex]);
+
+  useEffect(() => {
+    if (!activeReading) {
+      previousRenderedTaskContentRef.current = null;
+      setAnimatingTaskTexts(new Set());
+      return;
+    }
+
+    const previous = previousRenderedTaskContentRef.current;
+    previousRenderedTaskContentRef.current = {
+      path: activeReading.path,
+      content: activeReading.content,
+    };
+
+    if (!previous || previous.path !== activeReading.path || contentMode === 'markdown') return;
+
+    const newlyChecked = getNewlyCheckedMarkdownTasks(previous.content, activeReading.content);
+    if (newlyChecked.length === 0) return;
+
+    setAnimatingTaskTexts(new Set(newlyChecked));
+    if (taskAnimationTimerRef.current) {
+      window.clearTimeout(taskAnimationTimerRef.current);
+    }
+    taskAnimationTimerRef.current = window.setTimeout(() => {
+      taskAnimationTimerRef.current = null;
+      setAnimatingTaskTexts(new Set());
+    }, 1500);
+  }, [activeReading?.path, activeReading?.content, contentMode]);
+
+  useEffect(() => () => {
+    if (taskAnimationTimerRef.current) {
+      window.clearTimeout(taskAnimationTimerRef.current);
+      taskAnimationTimerRef.current = null;
+    }
+  }, []);
+
+  const saveRenderedContent = useCallback(async (nextContent: string) => {
+    if (!activeReading) return;
+    setSaveStatus('saving');
+    try {
+      if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+        await window.wikiAPI?.save(wikiSelectedRelPath, nextContent);
+        const nextTitle = extractMarkdownH1Title(nextContent, activeReading.title);
+        setWikiSelectedPage((prev) => (prev ? { ...prev, title: nextTitle, content: nextContent } : prev));
+      } else if (selectedItemType === 'external' && activeReading.path) {
+        await window.externalAPI?.save(activeReading.path, nextContent);
+        setExternalOpenFile((prev) => (prev ? { ...prev, content: nextContent } : prev));
+      } else if (activeReading.path) {
+        await window.librarianAPI?.saveReading(activeReading.path, nextContent);
+        setSelectedReading((prev) => (prev ? { ...prev, content: nextContent } : prev));
+      }
+      setEditContent(nextContent);
+      lastSavedContentRef.current = nextContent;
+      setSaveStatus('saved');
+    } catch {
+      setSaveStatus('idle');
+    }
+  }, [activeReading, selectedItemType, wikiSelectedRelPath]);
+
+  const toggleRenderedTask = useCallback((text: string, checked: boolean) => {
+    if (!activeReading) return;
+    const nextContent = toggleMarkdownTaskLine(activeReading.content, text, checked);
+    if (nextContent === activeReading.content) return;
+    void saveRenderedContent(nextContent);
+  }, [activeReading, saveRenderedContent]);
+
+  const runFileFind = useCallback((query: string, fromSelection = true) => {
+    const trimmed = query.trim();
+    if (!trimmed) return;
+    if (contentMode === 'markdown') {
+      const editor = markdownEditorRef.current;
+      if (!editor) return;
+      const fromIndex = fromSelection ? editor.selectionEnd : 0;
+      const match = findNextMarkdownMatch(editor.value, trimmed, fromIndex);
+      if (!match) return;
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(match.start, match.end);
+      smoothScrollMarkdownCaretIntoComfortView(editor);
+      return;
+    }
+
+    const find = (window as unknown as { find?: (query: string) => boolean }).find;
+    find?.(trimmed);
+  }, [contentMode]);
+
+  const openFileFind = useCallback(() => {
+    setFileFindOpen(true);
+    requestAnimationFrame(() => {
+      fileFindInputRef.current?.focus();
+      fileFindInputRef.current?.select();
+    });
+  }, []);
+
+  useEffect(() => {
+    const root = renderedContentRef.current;
+    if (!root || contentMode === 'markdown') return;
+    if (!fileFindOpen) {
+      clearFileFindMarks(root);
+      return;
+    }
+    highlightFileFindMatches(root, fileFindQuery);
+    return () => clearFileFindMarks(root);
+  }, [contentMode, displayContent, fileFindOpen, fileFindQuery]);
 
   const captureContentScrollRatio = useCallback(() => {
     const scrollEl = contentMode === 'markdown' ? markdownEditorRef.current : contentScrollRef.current;
@@ -1856,9 +2107,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     return () => window.librarianAPI?.setMarkdownEditorFocused(false);
   }, []);
 
-  const enterEditMode = useCallback(() => {
+  const enterEditMode = useCallback((selectionStart?: number | null) => {
     captureContentScrollRatio();
     focusMarkdownEditorOnOpenRef.current = true;
+    pendingRenderedEditSelectionRef.current = typeof selectionStart === 'number' ? selectionStart : null;
     setContentMode('markdown');
   }, [captureContentScrollRatio]);
 
@@ -1866,7 +2118,15 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     if (contentMode !== 'markdown' || !focusMarkdownEditorOnOpenRef.current) return;
     focusMarkdownEditorOnOpenRef.current = false;
     const frame = requestAnimationFrame(() => {
-      markdownEditorRef.current?.focus({ preventScroll: true });
+      const editor = markdownEditorRef.current;
+      editor?.focus({ preventScroll: true });
+      const selectionStart = pendingRenderedEditSelectionRef.current;
+      pendingRenderedEditSelectionRef.current = null;
+      if (editor && typeof selectionStart === 'number') {
+        const offset = Math.max(0, Math.min(selectionStart, editor.value.length));
+        editor.setSelectionRange(offset, offset);
+        smoothScrollMarkdownCaretIntoComfortView(editor);
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [contentMode]);
@@ -2383,6 +2643,11 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       // element (not the view mode), so `/` still works while the editor
       // textarea is on screen, just not when it's focused.
       if (isSearchFocusShortcut(e)) {
+        if (isCommandFindShortcut(e) && activeReading) {
+          e.preventDefault();
+          openFileFind();
+          return;
+        }
         e.preventDefault();
         sidebarKeyboardActiveRef.current = false;
         searchInputRef.current?.focus();
@@ -2518,7 +2783,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, onFocusChromeShortcut]);
+  }, [readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, onFocusChromeShortcut, openFileFind]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -2853,6 +3118,39 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         backgroundColor: theme.bg,
       }}
     >
+      <style>
+        {`
+          @keyframes ftRenderedTaskCompletedLive {
+            0% {
+              background: rgba(52, 199, 89, 0);
+              box-shadow: inset 0 0 0 0 rgba(52, 199, 89, 0);
+              transform: translateX(0);
+            }
+            18% {
+              background: rgba(52, 199, 89, 0.16);
+              box-shadow: inset 3px 0 0 rgba(52, 199, 89, 0.8);
+              transform: translateX(2px);
+            }
+            100% {
+              background: rgba(52, 199, 89, 0);
+              box-shadow: inset 0 0 0 0 rgba(52, 199, 89, 0);
+              transform: translateX(0);
+            }
+          }
+          .ft-rendered-task-completed-live {
+            animation: ftRenderedTaskCompletedLive 1.4s ease-out;
+          }
+          .ft-rendered-task-completed-live span {
+            text-decoration: line-through;
+            text-decoration-thickness: 1.5px;
+            text-decoration-color: rgba(52, 199, 89, 0.85);
+          }
+          @keyframes ftMarkdownEditorFadeIn {
+            from { opacity: 0.72; }
+            to { opacity: 1; }
+          }
+        `}
+      </style>
       {/* Sidebar - hidden in full-screen mode but kept in DOM for instant collapse */}
       <div
         ref={sidebarPaneRef}
@@ -2950,12 +3248,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {selectedItemType !== 'bookmarks' && (<Fragment>
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
-          onMouseEnter={() => {
-            if (!isFullScreen) return;
-            setHeaderHovered(true);
-            revealWritingChrome();
-          }}
-          onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
           style={{
             height: isFullScreen ? '20px' : '0px',
             flexShrink: 0,
@@ -2976,8 +3268,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 height: '4px',
                 borderRadius: '2px',
                 backgroundColor: theme.isDark ? 'rgba(255,255,255,0.15)' : 'rgba(0,0,0,0.1)',
-                opacity: readerControlsVisible ? 1 : 0,
-                transition: 'opacity 0.18s ease',
               }}
             />
           )}
@@ -2986,12 +3276,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
         {/* Toolbar - includes draggable region for window movement */}
         {activeReading && (
           <div
-            onMouseEnter={() => {
-              if (!isFullScreen) return;
-              setHeaderHovered(true);
-              revealWritingChrome();
-            }}
-            onMouseLeave={() => isFullScreen && setHeaderHovered(false)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -2999,9 +3283,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
-              opacity: readerControlsVisible ? 1 : 0,
-              pointerEvents: readerControlsVisible ? 'auto' : 'none',
-              transition: 'opacity 0.18s ease',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
@@ -3077,42 +3358,77 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               )}
               <ContentToolbar
                 filePath={activeReading?.path || undefined}
-                isFullScreen={isFullScreen || focusImmersive}
+                isFullScreen={isFullScreen}
                 canNavigateBack={canNavigateBack}
                 canNavigateForward={canNavigateForward}
                 onNavigateBack={() => navigateHistory(-1)}
                 onNavigateForward={() => navigateHistory(1)}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
-                showTextSize={true}
+                showTextSize={focusToolbarControlsVisible}
                 typographyPreset={typographyPresetId}
-                typographyPresetOptions={LIBRARIAN_TYPOGRAPHY_PRESETS}
-                onTypographyPresetChange={(preset) => {
+                typographyPresetOptions={focusToolbarControlsVisible ? LIBRARIAN_TYPOGRAPHY_PRESETS : undefined}
+                onTypographyPresetChange={focusToolbarControlsVisible ? (preset) => {
                   if (isLibrarianTypographyPresetId(preset)) {
                     setTypographyPresetId(preset);
                   }
-                }}
+                } : undefined}
                 lineHeight={lineHeightId}
-                lineHeightOptions={LIBRARIAN_LINE_HEIGHT_OPTIONS}
-                onLineHeightChange={(lineHeight) => {
+                lineHeightOptions={focusToolbarControlsVisible ? LIBRARIAN_LINE_HEIGHT_OPTIONS : undefined}
+                onLineHeightChange={focusToolbarControlsVisible ? (lineHeight) => {
                   if (isLibrarianLineHeightId(lineHeight)) {
                     setLineHeightId(lineHeight);
                   }
-                }}
+                } : undefined}
                 isEditing={contentMode === 'markdown'}
-                onDelete={handleDelete}
-                showDelete={true}
-                onShowInFolder={() => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path)}
-                showFolder={true}
-                onCopy={shareStatus?.shared ? copyShareLink : undefined}
-                showCopy={!!shareStatus?.shared}
+                onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
+                showDelete={focusToolbarControlsVisible}
+                onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
+                showFolder={focusToolbarControlsVisible}
+                onCopy={focusToolbarControlsVisible && shareStatus?.shared ? copyShareLink : undefined}
+                showCopy={focusToolbarControlsVisible && !!shareStatus?.shared}
                 shareStatus={shareStatus}
                 isSharing={isSharing}
-                onToggleShare={handleShare}
-                showShare={true}
-                onCopyPath={activeReading?.path ? () => navigator.clipboard.writeText(activeReading.path) : undefined}
-                headerHovered={readerControlsVisible}
+                showShare={false}
+                onCopyPath={focusToolbarControlsVisible && activeReading?.path ? () => navigator.clipboard.writeText(activeReading.path) : undefined}
               />
+
+              {fileFindOpen && (
+                <input
+                  ref={fileFindInputRef}
+                  value={fileFindQuery}
+                  onChange={(event) => {
+                    setFileFindQuery(event.currentTarget.value);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      setFileFindOpen(false);
+                      setFileFindQuery('');
+                      if (contentMode === 'markdown') markdownEditorRef.current?.focus({ preventScroll: true });
+                      return;
+                    }
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      runFileFind(fileFindQuery, true);
+                    }
+                  }}
+                  placeholder="Find in file"
+                  style={{
+                    width: '150px',
+                    height: '24px',
+                    padding: '2px 8px',
+                    fontSize: '12px',
+                    color: theme.text,
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '5px',
+                    outline: 'none',
+                    // @ts-ignore - keep the find input clickable in the drag region.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                />
+              )}
 
               {/* Narration Play/Stop button (feature flagged) */}
               {FEATURE_NARRATION_ENABLED && selectedReading && contentMode !== 'markdown' && (
@@ -3133,7 +3449,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     alignItems: 'center',
                     gap: '4px',
                     transition: 'background-color 0.15s ease, color 0.15s ease',
-                    opacity: readerControlsVisible ? 1 : 0,
                   }}
                   onMouseEnter={(e) => {
                     if (!isPlaying && !isGenerating) {
@@ -3181,8 +3496,6 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     fontSize: '11px',
                     fontWeight: 500,
                     color: theme.textSecondary,
-                    opacity: readerControlsVisible ? 1 : 0,
-                    transition: 'opacity 0.2s ease',
                     marginRight: '8px',
                     userSelect: 'none',
                   }}
@@ -3192,73 +3505,73 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               )}
 
               {/* Content mode toggle - rendered view / raw markdown */}
-              <div
-                style={{
-                  display: 'flex',
-                  gap: '2px',
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                  borderRadius: '6px',
-                  padding: '2px',
-                  opacity: readerControlsVisible ? 1 : 0,
-                  transition: 'opacity 0.15s ease',
-                }}
-              >
-                <button
-                  onClick={() => {
-                    if (contentMode === 'markdown') void exitEditMode();
-                  }}
-                  title="Rendered"
-                  aria-label="Rendered"
+              {focusToolbarControlsVisible && (
+                <div
                   style={{
-                    width: '26px',
-                    height: '22px',
                     display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                    color: contentMode === 'rendered' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                    backgroundColor: contentMode === 'rendered'
-                      ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                      : 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
+                    gap: '2px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                    borderRadius: '6px',
+                    padding: '2px',
                   }}
                 >
-                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M2 4h12M2 8h12M2 12h8" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => {
-                    if (contentMode !== 'markdown' && activeReading) enterEditMode();
-                  }}
-                  title="Markdown source"
-                  aria-label="Markdown source"
-                  style={{
-                    width: '26px',
-                    height: '22px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                    color: contentMode === 'markdown' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                    backgroundColor: contentMode === 'markdown'
-                      ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                      : 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    transition: 'all 0.15s ease',
-                  }}
-                >
-                  <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                    <polyline points="5 4 2 8 5 12" />
-                    <polyline points="11 4 14 8 11 12" />
-                  </svg>
-                </button>
-              </div>
+                  <button
+                    onClick={() => {
+                      if (contentMode === 'markdown') void exitEditMode();
+                    }}
+                    title="Rendered"
+                    aria-label="Rendered"
+                    style={{
+                      width: '26px',
+                      height: '22px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      color: contentMode === 'rendered' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: contentMode === 'rendered'
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M2 4h12M2 8h12M2 12h8" />
+                    </svg>
+                  </button>
+                  <button
+                    onClick={() => {
+                      if (contentMode !== 'markdown' && activeReading) enterEditMode();
+                    }}
+                    title="Markdown source"
+                    aria-label="Markdown source"
+                    style={{
+                      width: '26px',
+                      height: '22px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      color: contentMode === 'markdown' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: contentMode === 'markdown'
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="5 4 2 8 5 12" />
+                      <polyline points="11 4 14 8 11 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
 
               {/* Immersive/fullscreen toggle sits to the right of the mode
                   toggle so the editor controls stay grouped together. */}
@@ -3363,7 +3676,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     updateMarkdownWikiLinkCompletion(e.currentTarget);
                     scheduleEditorSessionPersist();
                   }}
-                  spellCheck={true}
+                  spellCheck={false}
                   style={{
                     display: 'block',
                     position: 'absolute',
@@ -3390,6 +3703,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     overscrollBehavior: 'contain',
                     tabSize: 2,
                     cursor: markdownEditorCommandActive && markdownEditorLinkHover ? 'pointer' : 'text',
+                    animation: 'ftMarkdownEditorFadeIn 140ms ease-out',
                   }}
                   placeholder="Write your markdown here..."
                 />
@@ -3632,11 +3946,16 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                 isn't a link / selection enters edit mode so markdown pages
                 feel like editable docs instead of read-only previews. */}
             <div
+              ref={renderedContentRef}
               className="librarian-content"
               onClick={(e) => {
                 if (!activeReading) return;
                 if (!shouldEnterEditOnClick(e)) return;
-                enterEditMode();
+                const caret = getRenderedTextCaretFromPoint(e);
+                const selectionStart = caret
+                  ? resolveMarkdownCaretOffsetFromRenderedText(activeReading.content, caret.text, caret.offset)
+                  : null;
+                enterEditMode(selectionStart);
               }}
               style={{
                 ...documentTextStyle,
@@ -3656,8 +3975,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         fontSize: textSizes[textSize].h1,
                         fontWeight: 600,
                         marginTop: 0,
-                        marginBottom: '10px',
-                        lineHeight: 1.2,
+                        marginBottom: '16px',
+                        lineHeight: 1.25,
                         color: theme.text,
                         fontFamily: typographyPreset.headingFontFamily,
                       }}
@@ -3670,8 +3989,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       style={{
                         fontSize: textSizes[textSize].h2,
                         fontWeight: 600,
-                        marginTop: '16px',
+                        marginTop: '18px',
                         marginBottom: '6px',
+                        lineHeight: 1.3,
                         color: theme.text,
                       }}
                     >
@@ -3683,8 +4003,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                       style={{
                         fontSize: textSizes[textSize].h3,
                         fontWeight: 600,
-                        marginTop: '14px',
+                        marginTop: '16px',
                         marginBottom: '4px',
+                        lineHeight: 1.35,
                         color: theme.text,
                       }}
                     >
@@ -3727,7 +4048,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                           aria-hidden="true"
                           style={{
                             margin: 0,
-                            lineHeight: 'inherit',
+                            height: '0.45em',
+                            lineHeight: 0.45,
+                            overflow: 'hidden',
                           }}
                         >
                           {children}
@@ -3762,13 +4085,13 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   blockquote: ({ children }) => (
                     <blockquote
                       style={{
-                        borderLeft: `3px solid ${theme.accent}`,
-                        paddingLeft: '12px',
+                        borderLeft: `1px solid ${theme.border}`,
+                        paddingLeft: '14px',
                         marginLeft: 0,
                         marginRight: 0,
+                        marginTop: '8px',
                         marginBottom: '8px',
                         color: theme.textSecondary,
-                        fontStyle: 'italic',
                       }}
                     >
                       {children}
@@ -3781,10 +4104,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         <code
                           style={{
                             backgroundColor: theme.isDark
-                              ? 'rgba(255,255,255,0.1)'
-                              : 'rgba(0,0,0,0.05)',
-                            padding: '2px 6px',
-                            borderRadius: '4px',
+                              ? 'rgba(255,255,255,0.06)'
+                              : 'rgba(0,0,0,0.04)',
+                            padding: '1px 4px',
+                            borderRadius: '3px',
                             fontSize: '0.875em', // Slightly smaller than body text since monospace appears larger
                             fontFamily: fonts.mono,
                           }}
@@ -3798,10 +4121,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         style={{
                           display: 'block',
                           backgroundColor: theme.isDark
-                            ? 'rgba(255,255,255,0.05)'
-                            : 'rgba(0,0,0,0.03)',
+                            ? 'rgba(255,255,255,0.035)'
+                            : 'rgba(0,0,0,0.025)',
                           padding: '12px 16px',
-                          borderRadius: '6px',
+                          borderRadius: '4px',
                           fontSize: '13px',
                           fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
                           overflowX: 'auto',
@@ -3816,12 +4139,12 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                     <pre
                       style={{
                         backgroundColor: theme.isDark
-                          ? 'rgba(255,255,255,0.05)'
-                          : 'rgba(0,0,0,0.03)',
+                          ? 'rgba(255,255,255,0.035)'
+                          : 'rgba(0,0,0,0.025)',
                         padding: '12px 16px',
-                        borderRadius: '6px',
+                        borderRadius: '4px',
                         overflowX: 'auto',
-                        marginBottom: '16px',
+                        marginBottom: '12px',
                       }}
                     >
                       {children}
@@ -3830,8 +4153,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   ul: ({ children }) => (
                     <ul
                       style={{
-                        marginBottom: '16px',
-                        paddingLeft: '24px',
+                        marginTop: '8px',
+                        marginBottom: '12px',
+                        paddingLeft: '22px',
                       }}
                     >
                       {children}
@@ -3840,22 +4164,65 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                   ol: ({ children }) => (
                     <ol
                       style={{
-                        marginBottom: '16px',
-                        paddingLeft: '24px',
+                        marginTop: '8px',
+                        marginBottom: '12px',
+                        paddingLeft: '22px',
                       }}
                     >
                       {children}
                     </ol>
                   ),
-                  li: ({ children }) => (
-                    <li
-                      style={{
-                        marginBottom: '4px',
-                      }}
-                    >
-                      {children}
-                    </li>
-                  ),
+                  li: ({ children, node }) => {
+                    const textContent = extractMarkdownText(node).trim();
+                    const taskMatch = textContent.match(/^\[( |x|X)\]\s+(.+)$/);
+                    if (taskMatch) {
+                      const checked = taskMatch[1].toLowerCase() === 'x';
+                      const taskText = taskMatch[2];
+                      const animateCompletion = checked && animatingTaskTexts.has(taskText);
+                      return (
+                        <li
+                          className={animateCompletion ? 'ft-rendered-task-completed-live' : undefined}
+                          style={{
+                            marginBottom: '4px',
+                            listStyle: 'none',
+                            marginLeft: '-20px',
+                            display: 'flex',
+                            alignItems: 'baseline',
+                            gap: '8px',
+                            opacity: checked ? 0.55 : 1,
+                            borderRadius: '6px',
+                            padding: '2px 6px 2px 0',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(event) => {
+                              event.stopPropagation();
+                              toggleRenderedTask(taskText, event.currentTarget.checked);
+                            }}
+                            onClick={(event) => event.stopPropagation()}
+                            style={{
+                              flex: '0 0 auto',
+                              transform: 'translateY(1px)',
+                              cursor: 'pointer',
+                            }}
+                          />
+                          <span>{taskText}</span>
+                        </li>
+                      );
+                    }
+
+                    return (
+                      <li
+                        style={{
+                          marginBottom: '2px',
+                        }}
+                      >
+                        {children}
+                      </li>
+                    );
+                  },
                   a: ({ href, children }) => {
                     const unresolved = isUnresolvedWikiHref(href);
                     return (
@@ -3863,8 +4230,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         href={href}
                         style={{
                           color: unresolved ? '#ef4444' : theme.accent,
-                          textDecoration: unresolved ? 'underline dashed' : 'none',
-                          textUnderlineOffset: unresolved ? '2px' : undefined,
+                          textDecoration: 'underline',
+                          textDecorationColor: unresolved ? '#ef4444' : `${theme.accent}66`,
+                          textUnderlineOffset: '2px',
                           cursor: 'pointer',
                         }}
                         onClick={(e) => {
@@ -3890,7 +4258,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
                         border: 'none',
                         height: '1px',
                         backgroundColor: theme.border,
-                        margin: '24px 0',
+                        opacity: 0.55,
+                        margin: '20px 0',
                       }}
                     />
                   ),
@@ -4041,7 +4410,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
               color: theme.textSecondary,
             }}
           >
-            {loading ? 'Loading...' : 'Select a page'}
+            Select a page
           </div>
         )}
         </div>

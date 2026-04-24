@@ -51,7 +51,7 @@ import {
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
-import { isSidebarToggleShortcut } from '../utils/editorShortcuts';
+import { isSidebarToggleShortcut, isThemeToggleShortcut } from '../utils/editorShortcuts';
 import {
   buildClipboardListRows,
   getStackHydrationIds,
@@ -78,18 +78,9 @@ type FieldTheoryMarkdownTarget = {
   contentMode?: 'rendered' | 'markdown';
 };
 
-const FOCUS_CHROME_TOP_REVEAL_PX = 96;
-const FOCUS_CHROME_BOTTOM_REVEAL_PX = 72;
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
-const FOCUS_CHROME_ICON_MIN_TOP_PX = 12;
-
-function getFocusChromeIconTop(editorTop: number | null, showInDock: boolean): number {
-  if (typeof editorTop !== 'number' || !Number.isFinite(editorTop)) return showInDock ? 84 : 64;
-  return Math.max(
-    FOCUS_CHROME_ICON_MIN_TOP_PX,
-    (editorTop - FOCUS_CHROME_ICON_SIZE_PX) / 2,
-  );
-}
+const FOCUS_CHROME_ICON_TOP_PX = 64;
+const FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX = 84;
 
 /**
  * Check if any items in a stack have improved content.
@@ -338,18 +329,12 @@ export default function ClipboardHistory() {
   // away from yet. While this is set, Escape dismisses the window (preserving
   // the artifact-popup UX) rather than merely exiting immersive.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
-  const [headerHovered, setHeaderHovered] = useState(false);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
-  const [focusChromeContentTop, setFocusChromeContentTop] = useState<number | null>(null);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
-  const isLibrarianSurface = viewMode === 'librarian' && !showSettings;
   const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
-  const librarianChromeCollapsed = isLibrarianSurface && librarianImmersive && !headerHovered;
-  const appChromeHidden = librarianChromeCollapsed || (isFocusChromeSurface && focusChromeActive && !headerHovered);
-  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !headerHovered && !librarianChromeCollapsed;
-  const revealAppChrome = useCallback(() => {
-    setHeaderHovered(true);
-  }, []);
+  const appChromeHidden = isFocusChromeSurface && focusChromeActive;
+  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive;
+  const footerChromeHidden = appChromeHidden;
   const collapseSidebarForFocusChrome = useCallback(() => {
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
     setNavSidebarCollapsed(true);
@@ -1207,6 +1192,7 @@ export default function ClipboardHistory() {
         return;
       }
 
+      showFeedback(`saved to ${page.relPath}.md`);
       setPendingLibraryOpenTarget({ kind: 'wiki', path: page.relPath, contentMode: 'markdown' });
       setShowSettings(false);
       setViewMode('librarian');
@@ -1553,29 +1539,10 @@ export default function ClipboardHistory() {
   }, [librarianImmersive, showSettings, viewMode]);
 
   useEffect(() => {
-    const shouldTrackChromeReveal =
-      (isLibrarianSurface && librarianImmersive) ||
-      (isFocusChromeSurface && focusChromeActive);
-
-    if (!shouldTrackChromeReveal) {
-      if (!isFocusChromeSurface) {
-        setFocusChromeActive(false);
-        setFocusChromeContentTop(null);
-      }
-      setHeaderHovered(false);
-      return;
+    if (!isFocusChromeSurface) {
+      handleFocusChromeActiveChange(false);
     }
-
-    const handleMouseMove = (event: MouseEvent) => {
-      const nearToolArea =
-        event.clientY <= FOCUS_CHROME_TOP_REVEAL_PX ||
-        event.clientY >= window.innerHeight - FOCUS_CHROME_BOTTOM_REVEAL_PX;
-      setHeaderHovered(nearToolArea);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
-  }, [focusChromeActive, isFocusChromeSurface, isLibrarianSurface, librarianImmersive]);
+  }, [handleFocusChromeActiveChange, isFocusChromeSurface]);
 
   // Clear section override when settings closes.
   useEffect(() => {
@@ -1587,11 +1554,7 @@ export default function ClipboardHistory() {
   // Persist librarianEnabled state when it changes
   useEffect(() => {
     localStorage.setItem('librarianEnabled', librarianEnabled ? 'true' : 'false');
-    // If librarian is disabled and we're on that view, switch to clipboard
-    if (!librarianEnabled && viewMode === 'librarian') {
-      setViewMode('clipboard');
-    }
-  }, [librarianEnabled, viewMode]);
+  }, [librarianEnabled]);
 
   // Fetch user's callsign when auth session changes
   useEffect(() => {
@@ -2161,8 +2124,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Cmd+Shift+L to toggle light/dark mode
-      if (key === 'l' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
+      // Shift+Cmd+L to toggle light/dark mode.
+      if (isThemeToggleShortcut(e)) {
         e.preventDefault();
         toggleDarkMode();
         return;
@@ -3303,6 +3266,45 @@ export default function ClipboardHistory() {
     });
   };
 
+  const renderThemeToggleButton = () => (
+    <button
+      onClick={toggleDarkMode}
+      title={`${theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'} (⇧⌘L)`}
+      aria-label={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      style={{
+        width: '18px',
+        height: '18px',
+        padding: 0,
+        backgroundColor: 'transparent',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '4px',
+        cursor: 'pointer',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        transition: 'all 0.15s ease',
+      }}
+    >
+      {theme.isDark ? (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
+          <circle cx="12" cy="12" r="4" />
+          <rect x="11" y="1" width="2" height="4" rx="1" />
+          <rect x="11" y="19" width="2" height="4" rx="1" />
+          <rect x="19" y="11" width="4" height="2" rx="1" />
+          <rect x="1" y="11" width="4" height="2" rx="1" />
+          <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
+          <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
+          <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
+          <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
+        </svg>
+      ) : (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      )}
+    </button>
+  );
+
   // Window fills the entire BrowserWindow now (no overlay).
   // Native macOS vibrancy handles the blur effect at the window level.
   return (
@@ -3329,6 +3331,10 @@ export default function ClipboardHistory() {
           0% { transform: rotate(0deg); }
           100% { transform: rotate(360deg); }
         }
+        @keyframes focusLogoFadeIn {
+          from { opacity: 0; }
+          to { opacity: 0.62; }
+        }
       `}</style>
 
 
@@ -3352,7 +3358,6 @@ export default function ClipboardHistory() {
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
-          onMouseEnter={revealAppChrome}
           style={{
             height: '8px',
             minHeight: '8px',
@@ -3378,16 +3383,14 @@ export default function ClipboardHistory() {
       
       {/* Draggable header area - collapses in Librarian immersive mode */}
       <div
-        onMouseEnter={revealAppChrome}
-        onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          height: librarianChromeCollapsed ? '0px' : '52px',
-          minHeight: librarianChromeCollapsed ? '0px' : '52px',
+          height: '52px',
+          minHeight: '52px',
           overflow: showMicDropdown ? 'visible' : 'hidden',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'flex-start',
-          paddingTop: librarianChromeCollapsed ? '0px' : '8px',
+          paddingTop: '8px',
           paddingLeft: '16px',
           paddingRight: '16px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
@@ -3598,7 +3601,7 @@ export default function ClipboardHistory() {
           aria-hidden="true"
           style={{
             position: 'absolute',
-            top: getFocusChromeIconTop(focusChromeContentTop, showInDock),
+            top: showInDock ? FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX : FOCUS_CHROME_ICON_TOP_PX,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 20,
@@ -3608,7 +3611,7 @@ export default function ClipboardHistory() {
             justifyContent: 'center',
             pointerEvents: 'none',
             opacity: 0.62,
-            transition: 'opacity 0.18s ease',
+            animation: 'focusLogoFadeIn 0.18s ease-out',
           }}
         >
           <img
@@ -3627,17 +3630,15 @@ export default function ClipboardHistory() {
       {viewMode !== 'sketch' && (
         <div
           ref={tabsRef}
-          onMouseEnter={revealAppChrome}
-          onMouseLeave={() => setHeaderHovered(false)}
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: '2px',
             padding: '0 16px',
-            marginTop: librarianChromeCollapsed ? '0px' : '4px',
-            marginBottom: librarianChromeCollapsed ? '0px' : '8px',
-            height: librarianChromeCollapsed ? '0px' : 'auto',
-            minHeight: librarianChromeCollapsed ? '0px' : '28px',
+            marginTop: '4px',
+            marginBottom: '8px',
+            height: 'auto',
+            minHeight: '28px',
             overflow: 'hidden',
             opacity: appChromeHidden ? 0 : 1,
             pointerEvents: appChromeHidden ? 'none' : 'auto',
@@ -3699,56 +3700,54 @@ export default function ClipboardHistory() {
             );
           })}
           {/* Librarian button */}
-          {librarianEnabled && (
-            <button
-              onClick={() => {
-                setViewMode('librarian');
-                setShowSettings(false);
-              }}
-              tabIndex={0}
-              style={{
-                padding: '6px 8px',
-                fontSize: '11px',
-                fontWeight: 400,
-                backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
-                color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-                outline: 'none',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                position: 'relative',
-              }}
-              onMouseEnter={(e) => {
-                if (viewMode !== 'librarian' || showSettings) {
-                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (viewMode !== 'librarian' || showSettings) {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                }
+          <button
+            onClick={() => {
+              setViewMode('librarian');
+              setShowSettings(false);
+            }}
+            tabIndex={0}
+            style={{
+              padding: '6px 8px',
+              fontSize: '11px',
+              fontWeight: 400,
+              backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              position: 'relative',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'librarian' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'librarian' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
             }}
             title="Personal wiki"
           >
             Library
             {/* New reading indicator */}
             {hasNewReading && viewMode !== 'librarian' && (
-                <span style={{
-                  position: 'absolute',
-                  top: '-2px',
-                  right: '-2px',
-                  width: '6px',
-                  height: '6px',
-                  borderRadius: '50%',
-                  backgroundColor: theme.info,
-                }} />
-              )}
-            </button>
-          )}
+              <span style={{
+                position: 'absolute',
+                top: '-2px',
+                right: '-2px',
+                width: '6px',
+                height: '6px',
+                borderRadius: '50%',
+                backgroundColor: theme.info,
+              }} />
+            )}
+          </button>
 
           {/* Commands button — sits alongside Fields / Library in the left
               group. Matches their typography so the three read as peers. */}
@@ -4188,9 +4187,7 @@ export default function ClipboardHistory() {
           onSwitchToClipboard={() => setViewMode('clipboard')}
           onSwitchToSettings={() => setShowSettings(true)}
           onFullScreenChange={setLibrarianImmersive}
-          externalHeaderHover={headerHovered}
           onFocusChromeActiveChange={handleFocusChromeActiveChange}
-          onFocusChromeTopChange={setFocusChromeContentTop}
           initialReadingPath={pendingReadingPath}
           initialOpenTarget={pendingLibraryOpenTarget}
           initialFullScreen={librarianImmersive}
@@ -4265,9 +4262,7 @@ export default function ClipboardHistory() {
         <CommandsView
           onSwitchToClipboard={() => setViewMode('clipboard')}
           sidebarCollapsed={navSidebarCollapsed}
-          externalHeaderHover={headerHovered}
           onFocusChromeActiveChange={handleFocusChromeActiveChange}
-          onFocusChromeTopChange={setFocusChromeContentTop}
           initialCommandPath={pendingCommandPath}
           onInitialCommandConsumed={() => setPendingCommandPath(null)}
           onFocusChromeShortcut={collapseSidebarForFocusChrome}
@@ -6310,15 +6305,13 @@ export default function ClipboardHistory() {
       )}
 
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
-      {/* Collapses in Librarian immersive mode */}
+      {/* Fades in focus mode; the theme toggle floats separately. */}
       <div
-        onMouseEnter={revealAppChrome}
-        onMouseLeave={() => setHeaderHovered(false)}
         style={{
-          padding: librarianChromeCollapsed ? '0 16px' : '8px 16px',
-          height: librarianChromeCollapsed ? '0px' : 'auto',
+          padding: '8px 16px',
+          height: 'auto',
           overflow: 'hidden',
-          borderTop: librarianChromeCollapsed ? 'none' : `1px solid ${theme.border}`,
+          borderTop: `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
           display: 'flex',
@@ -6328,9 +6321,9 @@ export default function ClipboardHistory() {
           color: theme.textSecondary,
           userSelect: 'none',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          opacity: appChromeHidden ? 0 : 1,
-          pointerEvents: appChromeHidden ? 'none' : 'auto',
-          transition: 'height 0.3s ease, padding 0.3s ease, opacity 0.18s ease',
+          opacity: footerChromeHidden ? 0 : 1,
+          pointerEvents: footerChromeHidden ? 'none' : 'auto',
+          transition: 'opacity 0.18s ease',
         }}
       >
         {/* Left side: sidebar toggle + plan info (quotas or stats) */}
@@ -6354,7 +6347,7 @@ export default function ClipboardHistory() {
               <button
                 onClick={() => setNavSidebarCollapsed((v) => !v)}
                 disabled={!collapseEnabled}
-                title={collapseEnabled ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘/)` : 'Sidebar toggle'}
+                title={collapseEnabled ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘.)` : 'Sidebar toggle'}
                 aria-label="Toggle sidebar"
                 style={{
                   width: '20px',
@@ -6830,47 +6823,25 @@ export default function ClipboardHistory() {
                 </svg>
               </button>
               {/* Dark/Light mode toggle */}
-              <button
-                onClick={toggleDarkMode}
-                title={theme.isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
-                style={{
-                  width: '18px',
-                  height: '18px',
-                  padding: 0,
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '4px',
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                {theme.isDark ? (
-                  // Sun icon for "switch to light"
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill={theme.textSecondary} stroke="none">
-                    <circle cx="12" cy="12" r="4" />
-                    <rect x="11" y="1" width="2" height="4" rx="1" />
-                    <rect x="11" y="19" width="2" height="4" rx="1" />
-                    <rect x="19" y="11" width="4" height="2" rx="1" />
-                    <rect x="1" y="11" width="4" height="2" rx="1" />
-                    <rect x="17.5" y="4.1" width="2" height="4" rx="1" transform="rotate(45 18.5 6.1)" />
-                    <rect x="4.5" y="15.9" width="2" height="4" rx="1" transform="rotate(45 5.5 17.9)" />
-                    <rect x="15.9" y="17.5" width="4" height="2" rx="1" transform="rotate(45 17.9 18.5)" />
-                    <rect x="4.1" y="4.5" width="4" height="2" rx="1" transform="rotate(45 6.1 5.5)" />
-                  </svg>
-                ) : (
-                  // Moon icon for "switch to dark"
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-                  </svg>
-                )}
-              </button>
+              {renderThemeToggleButton()}
             </div>
           )}
         </div>
       </div>
+
+      {footerChromeHidden && (
+        <div
+          style={{
+            position: 'absolute',
+            right: '16px',
+            bottom: '8px',
+            zIndex: 20,
+            pointerEvents: 'auto',
+          }}
+        >
+          {renderThemeToggleButton()}
+        </div>
+      )}
       
       {/* Quota exhausted modal removed - users should be able to continue using other features */}
 

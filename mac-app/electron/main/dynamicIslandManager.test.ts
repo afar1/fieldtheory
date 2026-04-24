@@ -10,6 +10,7 @@ const testState = vi.hoisted(() => {
     workAreaSize: { width: 2560, height: 1402 },
     internal: true,
   };
+  let cursorPoint = { x: 0, y: 0 };
 
   const screenListeners = new Map<ScreenEvent, Set<Listener>>();
 
@@ -122,6 +123,7 @@ const testState = vi.hoisted(() => {
 
   const screenMock = {
     getPrimaryDisplay: vi.fn(() => primaryDisplay),
+    getCursorScreenPoint: vi.fn(() => cursorPoint),
     on: vi.fn((event: ScreenEvent, listener: Listener) => {
       if (!screenListeners.has(event)) {
         screenListeners.set(event, new Set());
@@ -169,8 +171,13 @@ const testState = vi.hoisted(() => {
       workAreaSize: { width: 2560, height: 1402 },
       internal: true,
     };
+    cursorPoint = { x: 0, y: 0 };
     screenListeners.clear();
     MockBrowserWindow.instances = [];
+  };
+
+  const setCursorPoint = (point: { x: number; y: number }): void => {
+    cursorPoint = point;
   };
 
   const setPrimaryInternal = (internal: boolean): void => {
@@ -217,6 +224,7 @@ const testState = vi.hoisted(() => {
     reset,
     setPrimaryInternal,
     setPrimaryDisplay,
+    setCursorPoint,
   };
 });
 
@@ -676,6 +684,36 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     // Unified X = leftWindowX(60, idle): floor((1728 - 207) / 2 - 60) + offsetX=0 = 700, offsetY=-1
     expect(unified?.getPosition()).toEqual([700, -1]);
     expect(unified?.getSize()).toEqual([329, 39]);
+  });
+
+  it('only reveals auto-hide while the cursor is inside the menu bar', () => {
+    testState.setPrimaryDisplay({
+      boundsWidth: 1728,
+      workAreaWidth: 1728,
+      internal: true,
+    });
+
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const getTarget = () => (
+      manager as unknown as { computeAutoHideTargetFromCursor: () => number }
+    ).computeAutoHideTargetFromCursor();
+
+    testState.setCursorPoint({ x: 864, y: 12 });
+    expect(getTarget()).toBe(1);
+
+    // Left/right of the island still reveal when the cursor is in the same
+    // menu-bar band.
+    testState.setCursorPoint({ x: 682, y: 12 });
+    expect(getTarget()).toBe(1);
+
+    // Below the menu bar should not trigger or sustain the animation, even
+    // directly under the island.
+    testState.setCursorPoint({ x: 864, y: 48 });
+    expect(getTarget()).toBe(0);
   });
 
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {

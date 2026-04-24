@@ -74,16 +74,13 @@ export const TAB_LABELS: Record<ViewMode, string> = {
   sketch: 'Sketch',
 };
 
-/** The left-group top-nav tabs that Tab / Shift+Tab cycles between.
- *  Library is skipped when disabled in prefs. */
+/** The left-group top-nav tabs that Tab / Shift+Tab cycles between. */
 export function nextTopNavViewMode(
   prev: ViewMode,
   direction: 1 | -1,
-  librarianEnabled: boolean,
+  _librarianEnabled: boolean,
 ): ViewMode {
-  const tabs: ViewMode[] = librarianEnabled
-    ? ['clipboard', 'librarian', 'commands']
-    : ['clipboard', 'commands'];
+  const tabs: ViewMode[] = ['clipboard', 'librarian', 'commands'];
   const idx = tabs.indexOf(prev);
   const nextIdx = idx === -1 ? 0 : (idx + direction + tabs.length) % tabs.length;
   return tabs[nextIdx];

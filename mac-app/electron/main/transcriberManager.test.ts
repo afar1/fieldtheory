@@ -844,7 +844,7 @@ describe('TranscriberManager standard paste target fallback', () => {
       currentStack: [1, 2],
       detectedCommands: [],
       screenshotMetadata: [],
-      getFrontmostAppBundleId: vi.fn(async () => 'com.anthropic.claudefordesktop'),
+      getFrontmostAppBundleId: vi.fn(async () => 'com.openai.chat'),
       pasteText,
       emit: vi.fn(),
     };
@@ -865,6 +865,66 @@ describe('TranscriberManager standard paste target fallback', () => {
 
     expect(imagePasteOrder).toBeLessThan(textPasteOrder);
     expect(pasteText).toHaveBeenCalledTimes(2);
+  });
+
+  it('pastes Claude Code image stacks as file paths', async () => {
+    const pasteText = vi.fn(async () => undefined);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn((id: number) => ({
+          id,
+          type: 'screenshot',
+          content: null,
+          imageData: Buffer.from([id]),
+        })),
+        exportImageToCache: vi.fn(async (item: { id: number }) => `/tmp/shot-${item.id}.png`),
+        syncClipboardHash: vi.fn(),
+      },
+      currentStack: [1, 2],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.anthropic.claudefordesktop'),
+      pasteText,
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(clipboard.writeImage).not.toHaveBeenCalled();
+    expect(clipboard.writeText).toHaveBeenCalledWith('/tmp/shot-1.png ');
+    expect(clipboard.writeText).toHaveBeenCalledWith('\n');
+    expect(clipboard.writeText).toHaveBeenCalledWith('/tmp/shot-2.png ');
+    expect(pasteText).toHaveBeenCalledTimes(3);
+  });
+
+  it('pastes Claude Code silent image stacks as file paths', async () => {
+    const pasteText = vi.fn(async () => undefined);
+    const manager: any = {
+      clipboardManager: {
+        getItem: vi.fn((id: number) => ({
+          id,
+          type: 'screenshot',
+          content: null,
+          imageData: Buffer.from([id]),
+        })),
+        exportImageToCache: vi.fn(async (item: { id: number }) => `/tmp/shot-${item.id}.png`),
+        syncClipboardHash: vi.fn(),
+      },
+      getFrontmostAppBundleId: vi.fn(async () => 'com.anthropic.claudefordesktop'),
+      pasteText,
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await (manager as any).pasteSilentStack([1, 2]);
+
+    expect(clipboard.writeImage).not.toHaveBeenCalled();
+    expect(clipboard.writeText).toHaveBeenCalledWith('Figure 1\n`/tmp/shot-1.png` ');
+    expect(clipboard.writeText).toHaveBeenCalledWith('\n');
+    expect(clipboard.writeText).toHaveBeenCalledWith('Figure 2\n`/tmp/shot-2.png` ');
+    expect(pasteText).toHaveBeenCalledTimes(3);
   });
 });
 

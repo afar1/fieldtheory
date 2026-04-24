@@ -75,9 +75,7 @@ const InlineNameInput = forwardRef<HTMLInputElement, {
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
   sidebarCollapsed?: boolean;
-  externalHeaderHover?: boolean;
   onFocusChromeActiveChange?: (active: boolean) => void;
-  onFocusChromeTopChange?: (top: number | null) => void;
   initialCommandPath?: string | null;
   onInitialCommandConsumed?: () => void;
   onFocusChromeShortcut?: () => void;
@@ -120,7 +118,7 @@ interface WatchedDir {
   enabled: boolean;
 }
 
-export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = false, externalHeaderHover, onFocusChromeActiveChange, onFocusChromeTopChange, initialCommandPath, onInitialCommandConsumed, onFocusChromeShortcut }: CommandsViewProps) {
+export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = false, onFocusChromeActiveChange, initialCommandPath, onInitialCommandConsumed, onFocusChromeShortcut }: CommandsViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
 
@@ -182,7 +180,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const containerRef = useRef<HTMLDivElement>(null);
   const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
-  const contentAreaRef = useRef<HTMLDivElement | null>(null);
 
   // Hover states for toolbar buttons
   const [hoveredButton, setHoveredButton] = useState<string | null>(null);
@@ -191,10 +188,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
 
-  // Focus immersive mode fades chrome in place without changing layout.
   const [focusImmersive, setFocusImmersive] = useState(false);
-  const [headerHovered, setHeaderHovered] = useState(false);
-  const focusControlsVisible = !focusImmersive || headerHovered;
+  const focusToolbarControlsVisible = !focusImmersive;
 
   // Context menu
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string; name: string } | null>(null);
@@ -230,38 +225,9 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   }, [textSize]);
 
   useEffect(() => {
-    setHeaderHovered(!!externalHeaderHover);
-  }, [externalHeaderHover]);
-
-  useEffect(() => {
     onFocusChromeActiveChange?.(focusImmersive);
     return () => onFocusChromeActiveChange?.(false);
   }, [focusImmersive, onFocusChromeActiveChange]);
-
-  useEffect(() => {
-    if (!focusImmersive) {
-      onFocusChromeTopChange?.(null);
-      return;
-    }
-
-    let frame: number | null = null;
-    const reportContentTop = () => {
-      frame = null;
-      onFocusChromeTopChange?.(contentAreaRef.current?.getBoundingClientRect().top ?? null);
-    };
-    const scheduleReport = () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      frame = window.requestAnimationFrame(reportContentTop);
-    };
-
-    scheduleReport();
-    window.addEventListener('resize', scheduleReport);
-    return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame);
-      window.removeEventListener('resize', scheduleReport);
-      onFocusChromeTopChange?.(null);
-    };
-  }, [focusImmersive, onFocusChromeTopChange, textSize, selectedPath, selectedPopularId]);
 
   // Mock popular commands (fallback if Supabase unavailable)
   const getMockCommands = useCallback((): PopularCommand[] => [
@@ -986,9 +952,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
           userSelect: isResizing ? 'none' : 'auto',
           display: 'block',
           flexShrink: 0,
-          opacity: focusControlsVisible ? 1 : 0,
-          pointerEvents: focusControlsVisible ? 'auto' : 'none',
-          transition: isResizing ? 'opacity 0.18s ease' : 'width 0.18s ease, min-width 0.18s ease, opacity 0.18s ease',
+          transition: isResizing ? undefined : 'width 0.18s ease, min-width 0.18s ease',
         }}
       >
         <div
@@ -1328,11 +1292,10 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
           borderRight: sidebarCollapsed ? '0 solid transparent' : `1px solid ${theme.border}`,
-          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease, opacity 0.18s ease',
+          transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
           display: 'block',
-          pointerEvents: sidebarCollapsed || !focusControlsVisible ? 'none' : 'auto',
-          opacity: focusControlsVisible ? 1 : 0,
+          pointerEvents: sidebarCollapsed ? 'none' : 'auto',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -1360,8 +1323,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       >
         {/* Top draggable region - matches Librarian structure */}
         <div
-          onMouseEnter={() => focusImmersive && setHeaderHovered(true)}
-          onMouseLeave={() => focusImmersive && setHeaderHovered(false)}
           style={{
             height: '0px',
             flexShrink: 0,
@@ -1377,8 +1338,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         {/* Toolbar - matches Librarian structure */}
         {(selectedCommand || selectedPopularCommand) && (
           <div
-            onMouseEnter={() => focusImmersive && setHeaderHovered(true)}
-            onMouseLeave={() => focusImmersive && setHeaderHovered(false)}
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -1386,9 +1345,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               padding: '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
-              opacity: focusControlsVisible ? 1 : 0,
-              pointerEvents: focusControlsVisible ? 'auto' : 'none',
-              transition: 'opacity 0.18s ease',
             }}
           >
             {/* Inner container - matches content width (600px centered) */}
@@ -1407,11 +1363,11 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 onToggleFullScreen={() => setFocusImmersive((prev) => !prev)}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
-                showTextSize={true}
+                showTextSize={focusToolbarControlsVisible}
                 isEditing={isEditing}
                 isDirty={isDirty}
                 isSaving={isSaving}
-                onEdit={viewMode === 'mine' && selectedCommand ? enterEditMode : undefined}
+                onEdit={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? enterEditMode : undefined}
                 onSave={saveChanges}
                 onCancel={() => {
                   if (isDirty) {
@@ -1420,22 +1376,21 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   }
                   exitEditMode();
                 }}
-                onDelete={viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
-                showDelete={viewMode === 'mine' && !!selectedCommand}
+                onDelete={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
+                showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
-                onShowInFolder={viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
-                showFolder={viewMode === 'mine' && !!selectedCommand}
-                onCopy={() => {
+                onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
+                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
+                onCopy={focusToolbarControlsVisible ? () => {
                   const content = viewMode === 'mine' ? selectedCommand?.content : selectedPopularCommand?.content;
                   const id = viewMode === 'popular' ? selectedPopularCommand?.id : undefined;
                   handleCopyContent(content || '', id);
-                }}
-                showCopy={true}
+                } : undefined}
+                showCopy={focusToolbarControlsVisible}
                 shareStatus={viewMode === 'mine' ? shareStatus : null}
                 isSharing={isSharing}
-                onToggleShare={viewMode === 'mine' ? handleShareToggle : undefined}
-                showShare={viewMode === 'mine' && !!selectedCommand}
-                headerHovered={focusControlsVisible}
+                onToggleShare={focusToolbarControlsVisible && viewMode === 'mine' ? handleShareToggle : undefined}
+                showShare={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
               />
 
               {/* Add to Mine button for popular commands */}
@@ -1462,7 +1417,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
         {/* Content area */}
         <div
-          ref={contentAreaRef}
           style={{
             flex: 1,
             minHeight: 0,
