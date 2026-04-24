@@ -376,9 +376,14 @@ describe('mixed multimodal stack ordering', () => {
   const transcriptItem = { id: 2, type: 'transcript', content: 'and compare it', imageData: null } as const;
   const imageItem = { id: 3, type: 'screenshot', content: null, imageData: Buffer.from([1, 2, 3]) } as const;
 
-  it('pastes attachments before text for mixed non-terminal stacks', () => {
-    expect(shouldPasteMixedStackImagesFirst('com.anthropic.claudefordesktop', [textItem, imageItem])).toBe(true);
-    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.anthropic.claudefordesktop').map(item => item.id)).toEqual([3, 1, 2]);
+  it('pastes attachments before text for mixed non-terminal, non-IDE stacks', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.openai.chat', [textItem, imageItem])).toBe(true);
+    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.openai.chat').map(item => item.id)).toEqual([3, 1, 2]);
+  });
+
+  it('keeps IDE-terminal stacks in their original order', () => {
+    expect(shouldPasteMixedStackImagesFirst('com.anthropic.claudefordesktop', [textItem, imageItem])).toBe(false);
+    expect(orderStackItemsForPaste([textItem, imageItem, transcriptItem], 'com.anthropic.claudefordesktop').map(item => item.id)).toEqual([1, 3, 2]);
   });
 
   it('keeps terminal stacks in their original order', () => {
