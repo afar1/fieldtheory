@@ -1705,6 +1705,7 @@ declare global {
   }
   interface Bookmark {
     id: string;
+    sourceType: 'x';
     text: string;
     url: string;
     authorHandle: string;

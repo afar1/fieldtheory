@@ -6,8 +6,10 @@ import ImmersiveToggle from './ImmersiveToggle';
 import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
+type BookmarkSourceFilter = 'all' | 'x';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
+const SOURCE_FILTER_KEY = 'bookmarks-source-filter';
 
 function loadMode(): BookmarksViewMode {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -17,6 +19,10 @@ function loadMode(): BookmarksViewMode {
 function loadShowText(): boolean {
   const saved = localStorage.getItem(SHOW_TEXT_KEY);
   return saved === null ? true : saved === '1';
+}
+
+function loadSourceFilter(): BookmarkSourceFilter {
+  return localStorage.getItem(SOURCE_FILTER_KEY) === 'x' ? 'x' : 'all';
 }
 
 interface BookmarksPaneProps {
@@ -39,6 +45,7 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showText, setShowText] = useState<boolean>(loadShowText);
+  const [sourceFilter, setSourceFilter] = useState<BookmarkSourceFilter>(loadSourceFilter);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const loading = snapshot === null;
 
@@ -55,6 +62,10 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
   }, [showText]);
+
+  useEffect(() => {
+    localStorage.setItem(SOURCE_FILTER_KEY, sourceFilter);
+  }, [sourceFilter]);
 
   useEffect(() => {
     let cancelled = false;
@@ -74,6 +85,7 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
   const filtered = useMemo(() => {
     if (!snapshot) return [];
     let list = snapshot.bookmarks;
+    if (sourceFilter === 'x') list = list.filter((b) => (b.sourceType ?? 'x') === 'x');
     if (!showText) list = list.filter((b) => b.images && b.images.length > 0);
     if (folder !== 'All') list = list.filter((b) => b.folders.includes(folder));
     if (debouncedQuery) {
@@ -85,7 +97,7 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
       );
     }
     return list;
-  }, [snapshot, folder, debouncedQuery, showText]);
+  }, [snapshot, folder, debouncedQuery, showText, sourceFilter]);
 
   const folders = snapshot?.folders ?? [];
 
@@ -131,6 +143,40 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
                 }}
               >
                 {m}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Source segmented toggle */}
+        <div
+          style={{
+            display: 'inline-flex',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            overflow: 'hidden',
+          }}
+        >
+          {(['all', 'x'] as const).map((source) => {
+            const active = sourceFilter === source;
+            return (
+              <button
+                key={source}
+                onClick={() => setSourceFilter(source)}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  color: active ? theme.text : theme.textSecondary,
+                  backgroundColor: active
+                    ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+                    : 'transparent',
+                  border: 'none',
+                  borderRight: source === 'all' ? `1px solid ${theme.border}` : 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {source === 'all' ? 'All' : 'X'}
               </button>
             );
           })}
