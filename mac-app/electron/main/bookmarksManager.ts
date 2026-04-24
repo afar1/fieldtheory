@@ -35,6 +35,7 @@ export interface QuotedTweet {
 
 export interface Bookmark {
   id: string;
+  sourceType: 'x';
   text: string;
   url: string;
   authorHandle: string;
@@ -268,6 +269,7 @@ export function parseRawBookmark(raw: RawBookmark): Bookmark | null {
 
   return {
     id,
+    sourceType: 'x',
     text: raw.text ?? '',
     url: raw.url ?? `https://x.com/${raw.authorHandle ?? 'i'}/status/${id}`,
     authorHandle: raw.authorHandle ?? '',
