@@ -210,6 +210,26 @@ describe('library migration executor', () => {
     expect(fs.realpathSync(oldDir())).toBe(fs.realpathSync(newDir()));
   });
 
+  it('refuses to replace a stale broken legacy symlink', () => {
+    write(newDir(), 'entries/new.md', '# New\n');
+
+    const plan = buildLibraryMigrationPlan({
+      sourceDir: oldDir(),
+      targetDir: newDir(),
+      timestamp: '20260424T010203Z',
+    });
+    const brokenTarget = path.join(tempDir, 'missing-target');
+    fs.mkdirSync(path.dirname(oldDir()), { recursive: true });
+    fs.symlinkSync(brokenTarget, oldDir(), 'dir');
+
+    const result = executeLibraryMigration(plan);
+
+    expect(result.success).toBe(false);
+    expect(result.errors[0]).toContain('Refusing to replace non-directory legacy path');
+    expect(fs.lstatSync(oldDir()).isSymbolicLink()).toBe(true);
+    expect(fs.readlinkSync(oldDir())).toBe(brokenTarget);
+  });
+
   it('refuses to execute a blocked plan', () => {
     fs.mkdirSync(path.dirname(oldDir()), { recursive: true });
     fs.writeFileSync(oldDir(), 'not a directory');
