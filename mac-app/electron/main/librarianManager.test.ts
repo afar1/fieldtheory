@@ -733,3 +733,41 @@ describe('librarian watcher cleanup', () => {
     expect(manager.libraryRootWatchers.size).toBe(0);
   });
 });
+
+describe('library roots', () => {
+  it('rejects adding the whole home folder as a library root', () => {
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+
+    expect(() => manager.addLibraryRoot(process.env.HOME ?? os.homedir())).toThrow(/whole home folder/);
+  });
+
+  it('prunes an unsafe persisted home-folder library root', () => {
+    const saveSettings = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      saveSettings: typeof saveSettings;
+      getSafeLibraryRootPaths: () => string[];
+    };
+    manager.settings = { libraryRoots: [process.env.HOME ?? os.homedir()] };
+    manager.saveSettings = saveSettings;
+
+    expect(manager.getSafeLibraryRootPaths()).toEqual([]);
+    expect(manager.settings.libraryRoots).toEqual([]);
+    expect(saveSettings).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('wiki rename', () => {
+  it('updates the markdown H1 when renaming a wiki page', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'untitled.md'), '# Untitled\n\nBody\n', 'utf-8');
+
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    expect(manager.renameWikiPage('entries/untitled', 'New Title')).toBe('entries/new-title');
+    expect(fs.existsSync(path.join(root, 'entries', 'untitled.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'entries', 'new-title.md'), 'utf-8')).toBe('# New Title\n\nBody\n');
+  });
+});

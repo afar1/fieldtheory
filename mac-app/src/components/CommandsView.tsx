@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
+import ImmersiveToggle from './ImmersiveToggle';
 import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 /** Inline text input used for both "new command" and "rename command" flows.
@@ -143,7 +144,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const [popularCommands, setPopularCommands] = useState<PopularCommand[]>([]);
   const [selectedPopularId, setSelectedPopularId] = useState<string | null>(null);
   const [popularLoading, setPopularLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
 
   // Search
   const [searchQuery, setSearchQuery] = useState('');
@@ -185,6 +185,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const containerRef = useRef<HTMLDivElement>(null);
   const sidebarPaneRef = useRef<HTMLDivElement | null>(null);
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
+  const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const commandContentRef = useRef<HTMLDivElement | null>(null);
 
   // Hover states for toolbar buttons
   const [hoveredButton, setHoveredButton] = useState<string | null>(null);
@@ -192,9 +194,17 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const copyPathFeedbackTimerRef = useRef<number | null>(null);
 
   const [focusImmersive, setFocusImmersive] = useState(false);
   const focusToolbarControlsVisible = !focusImmersive;
+  const toggleFocusImmersive = useCallback(() => {
+    if (!focusImmersive) {
+      onFocusChromeShortcut?.();
+    }
+    setFocusImmersive((prev) => !prev);
+  }, [focusImmersive, onFocusChromeShortcut]);
 
   // Context menu
   const [contextMenu, setContextMenu] = useState<CommandsContextMenu | null>(null);
@@ -231,8 +241,11 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
   useEffect(() => {
     onFocusChromeActiveChange?.(focusImmersive);
-    return () => onFocusChromeActiveChange?.(false);
   }, [focusImmersive, onFocusChromeActiveChange]);
+
+  useEffect(() => {
+    return () => onFocusChromeActiveChange?.(false);
+  }, [onFocusChromeActiveChange]);
 
   // Mock popular commands (fallback if Supabase unavailable)
   const getMockCommands = useCallback((): PopularCommand[] => [
@@ -325,30 +338,78 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     return popularCommands.find(cmd => cmd.id === selectedPopularId) || null;
   }, [popularCommands, selectedPopularId]);
 
+  const commandToolbarContext = useMemo(() => {
+    if (viewMode === 'mine' && selectedCommand) {
+      const parts = selectedCommand.filePath.split(/[\\/]+/).filter(Boolean);
+      const fileName = parts.at(-1) ?? selectedCommand.name;
+      const folderName = parts.at(-2) ?? 'Internal';
+      return `${folderName} / ${fileName}`;
+    }
+    if (viewMode === 'popular' && selectedPopularCommand) {
+      return `Shared / ${selectedPopularCommand.name}`;
+    }
+    return '';
+  }, [selectedCommand, selectedPopularCommand, viewMode]);
+
   // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
   const displayContent = useMemo(() => {
     const raw = viewMode === 'mine' ? selectedCommand?.content || '' : selectedPopularCommand?.content || '';
     return raw.replace(/^#\s+.+\n?/, '');
   }, [viewMode, selectedCommand?.content, selectedPopularCommand?.content]);
 
-  // Copy command content to clipboard
-  const handleCopyContent = useCallback(async (content: string, id?: string) => {
-    try {
-      await navigator.clipboard.writeText(content);
-      // Show feedback for all copies
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-      // Increment copy count in database for popular commands
-      if (supabase && id) {
-        try {
-          await supabase.rpc('increment_command_copy_count', { command_id: id });
-        } catch {
-          // Silent fail - copy still worked
-        }
-      }
-    } catch (err) {
-      console.error('Failed to copy:', err);
+  const flashCopyPathCopied = useCallback(() => {
+    setCopyPathCopied(true);
+    if (copyPathFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyPathFeedbackTimerRef.current);
     }
+    copyPathFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopyPathCopied(false);
+      copyPathFeedbackTimerRef.current = null;
+    }, 2000);
+  }, []);
+
+  const getRenderedSelectionText = useCallback((): string => {
+    const root = commandContentRef.current;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return '';
+
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i);
+      const container = range.commonAncestorContainer;
+      const node = container.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+      if (node && root.contains(node)) return selection.toString();
+    }
+    return '';
+  }, []);
+
+  const getSelectedCommandTextOrPath = useCallback((): string => {
+    if (!selectedCommand?.filePath) return '';
+    const editor = editTextareaRef.current;
+    if (editor && editor.selectionStart !== editor.selectionEnd) {
+      return editor.value.slice(editor.selectionStart, editor.selectionEnd);
+    }
+    const renderedSelection = getRenderedSelectionText();
+    if (renderedSelection) return renderedSelection;
+    return selectedCommand.filePath;
+  }, [getRenderedSelectionText, selectedCommand?.filePath]);
+
+  const copySelectedCommandTextOrPath = useCallback(async () => {
+    const text = getSelectedCommandTextOrPath();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopyPathCopied();
+    } catch (err) {
+      console.error('Failed to copy command text or path:', err);
+    }
+  }, [flashCopyPathCopied, getSelectedCommandTextOrPath]);
+
+  useEffect(() => {
+    return () => {
+      if (copyPathFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copyPathFeedbackTimerRef.current);
+      }
+    };
   }, []);
 
   // Add popular command to user's commands
@@ -448,6 +509,15 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       setIsSaving(false);
     }
   }, [selectedCommand, editContent, isDirty]);
+
+  const switchToRenderedMode = useCallback(() => {
+    if (!isEditing) return;
+    if (isDirty) {
+      void saveChanges();
+      return;
+    }
+    exitEditMode();
+  }, [exitEditMode, isDirty, isEditing, saveChanges]);
 
   // Handle navigation with unsaved changes
   const handleSelectCommand = useCallback((path: string) => {
@@ -604,10 +674,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     function handleKeyDown(e: KeyboardEvent) {
       if (isImmersiveToggleShortcut(e)) {
         e.preventDefault();
-        if (!focusImmersive) {
-          onFocusChromeShortcut?.();
-        }
-        setFocusImmersive((prev) => !prev);
+        toggleFocusImmersive();
         return;
       }
 
@@ -659,6 +726,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
+      // Cmd+C copies selected command text first, then falls back to the file path.
+      const activeElement = document.activeElement;
+      const isFormField = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
+      const isCommandEditor = activeElement === editTextareaRef.current;
+      if (e.key === 'c' && e.metaKey && !e.shiftKey && viewMode === 'mine' && selectedCommand?.filePath && (!isFormField || isCommandEditor)) {
+        e.preventDefault();
+        void copySelectedCommandTextOrPath();
+        return;
+      }
+
       // Don't handle navigation keys when typing in any input
       const isSidebarNavigationKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'k';
       const activeEl = document.activeElement;
@@ -691,7 +768,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, isDirty, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand, onFocusChromeShortcut]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, isDirty, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1387,17 +1464,42 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 gap: '8px',
               }}
             >
+              {focusToolbarControlsVisible && commandToolbarContext && (
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    minWidth: 0,
+                    flexShrink: 1,
+                    // @ts-ignore - keep context text selectable/clickable outside the drag region.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  title={viewMode === 'mine' ? selectedCommand?.filePath : selectedPopularCommand?.name}
+                >
+                  <span
+                    style={{
+                      fontSize: '11px',
+                      color: theme.textSecondary,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      fontFamily: 'system-ui, sans-serif',
+                    }}
+                  >
+                    {commandToolbarContext}
+                  </span>
+                </div>
+              )}
               <ContentToolbar
                 filePath={selectedCommand?.filePath}
                 isFullScreen={focusImmersive}
-                onToggleFullScreen={() => setFocusImmersive((prev) => !prev)}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={focusToolbarControlsVisible}
                 isEditing={isEditing}
                 isDirty={isDirty}
                 isSaving={isSaving}
-                onEdit={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? enterEditMode : undefined}
                 onSave={saveChanges}
                 onCancel={() => {
                   if (isDirty) {
@@ -1411,36 +1513,134 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 showRename={false}
                 onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
                 showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
-                onCopy={focusToolbarControlsVisible ? () => {
-                  const content = viewMode === 'mine' ? selectedCommand?.content : selectedPopularCommand?.content;
-                  const id = viewMode === 'popular' ? selectedPopularCommand?.id : undefined;
-                  handleCopyContent(content || '', id);
-                } : undefined}
-                showCopy={focusToolbarControlsVisible}
-                shareStatus={viewMode === 'mine' ? shareStatus : null}
-                isSharing={isSharing}
-                onToggleShare={focusToolbarControlsVisible && viewMode === 'mine' ? handleShareToggle : undefined}
-                showShare={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
+                onCopyPath={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand?.filePath ? copySelectedCommandTextOrPath : undefined}
+                copyPathCopied={copyPathCopied}
+                copyPathTitle="Copy selected text or command path (⌘C)"
               />
 
-              {/* Add to Mine button for popular commands */}
-              {viewMode === 'popular' && selectedPopularCommand && (
+              {/* Command-specific trailing actions. */}
+              {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && !isEditing && (
                 <button
+                  type="button"
+                  onClick={handleShareToggle}
+                  disabled={isSharing}
+                  style={{
+                    height: '24px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
+                    color: shareStatus?.shared ? theme.accent : theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: isSharing ? 'default' : 'pointer',
+                    opacity: isSharing ? 0.6 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    // @ts-ignore - toolbar buttons should receive clicks.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  title={shareStatus?.shared ? 'Remove from Shared' : 'Add to Shared'}
+                >
+                  {isSharing ? 'Sharing...' : shareStatus?.shared ? 'Shared' : 'Share'}
+                </button>
+              )}
+              {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && (
+                <div
+                  style={{
+                    display: 'flex',
+                    gap: '2px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
+                    borderRadius: '6px',
+                    padding: '2px',
+                    // @ts-ignore - toolbar buttons should receive clicks.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={switchToRenderedMode}
+                    title="Rendered"
+                    aria-label="Rendered"
+                    style={{
+                      width: '26px',
+                      height: '22px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      color: !isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: !isEditing
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M2 4h12M2 8h12M2 12h8" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (!isEditing) enterEditMode();
+                    }}
+                    title="Markdown source"
+                    aria-label="Markdown source"
+                    style={{
+                      width: '26px',
+                      height: '22px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      color: isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: isEditing
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                      <polyline points="5 4 2 8 5 12" />
+                      <polyline points="11 4 14 8 11 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+              {focusToolbarControlsVisible && viewMode === 'popular' && selectedPopularCommand && (
+                <button
+                  type="button"
                   onClick={() => handleAddToMine(selectedPopularCommand)}
                   style={{
-                    padding: '4px 10px',
-                    fontSize: '12px',
+                    height: '24px',
+                    padding: '3px 8px',
+                    fontSize: '11px',
                     color: '#fff',
                     backgroundColor: theme.accent,
                     border: 'none',
                     borderRadius: '4px',
                     cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    // @ts-ignore - toolbar buttons should receive clicks.
+                    WebkitAppRegion: 'no-drag',
                   }}
                   title="Add to your commands"
                 >
                   Add to Mine
                 </button>
               )}
+              <ImmersiveToggle isFullScreen={focusImmersive} onToggle={toggleFocusImmersive} />
             </div>
           </div>
         )}
@@ -1469,6 +1669,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
             >
               {isEditing && selectedCommand ? (
                 <textarea
+                  ref={editTextareaRef}
                   value={editContent}
                   onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}
@@ -1508,6 +1709,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     {viewMode === 'mine' ? selectedCommand?.name : selectedPopularCommand?.name}
                   </h1>
                   <div
+                    ref={commandContentRef}
                     className="command-content"
                     // Click into the rendered body to enter edit mode — mirrors
                     // LibrarianView so users can click straight into writing. Clicks on links,

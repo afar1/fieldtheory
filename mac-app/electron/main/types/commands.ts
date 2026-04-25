@@ -15,6 +15,7 @@ export const CommandsIPCChannels = {
 
   // Command content
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
+  GET_MARKDOWN_PREVIEW: 'commands:getMarkdownPreview',
 
   // Direct invocation (from command launcher)
   INVOKE_COMMAND: 'commands:invoke',

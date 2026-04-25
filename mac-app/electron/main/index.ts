@@ -74,7 +74,15 @@ import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
+import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
+import { bookmarksForTaxonomyFiles, searchBookmarks } from './bookmarkCollections';
 import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
+import {
+  COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+  captureClipboardSnapshot,
+  restoreClipboardSnapshot,
+  waitForCommandClipboardPasteRead,
+} from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -103,6 +111,7 @@ const log = createLogger('Main');
 
 const BOOT_MARK = Date.now();
 const VISION_BUILD_ENABLED = false;
+const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
 const { exec, execFile: execFileCp } = require('child_process');
@@ -590,8 +599,8 @@ function logUserState(_context: string) {
   // Silenced for production - enable for debugging auth issues
 }
 
-// Track pending reading to show in immersive mode. Renderer polls for this.
-let pendingImmersiveReading: string | null = null;
+// Track pending reading to auto-open in Library. Renderer polls for this.
+let pendingAutoOpenReading: string | null = null;
 
 /**
  * Lightweight process performance snapshot for in-app HUD rendering.
@@ -1913,6 +1922,17 @@ function setupLibrarianIPCHandlers(): void {
     return bookmarksForAuthor(handle, bookmarksManager.getSnapshot().bookmarks);
   });
 
+  ipcMain.handle('bookmarks:getTaxonomyBookmarks', (_event, filePaths: string[]) => {
+    if (!bookmarksManager) return [];
+    if (!Array.isArray(filePaths)) return [];
+    return bookmarksForTaxonomyFiles(filePaths, bookmarksManager.getSnapshot().bookmarks);
+  });
+
+  ipcMain.handle('bookmarks:search', (_event, query: string) => {
+    if (!bookmarksManager || typeof query !== 'string') return [];
+    return searchBookmarks(query, bookmarksManager.getSnapshot().bookmarks);
+  });
+
   ipcMain.handle('bookmarks:invokeBookmark', async (_event, id: string) => {
     if (!bookmarksManager) {
       return { success: false, error: 'Bookmarks not initialized' };
@@ -1924,6 +1944,26 @@ function setupLibrarianIPCHandlers(): void {
     }
 
     return pasteBookmarkTextFromLauncher('invoke-bookmark-post', { id }, formatBookmarkPost(bookmark));
+  });
+
+  ipcMain.handle('bookmarks:copyForAgent', async (_event, id: string) => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+
+    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    if (!bookmark) {
+      return { success: false, error: 'Bookmark not found' };
+    }
+
+    try {
+      clipboard.writeText(buildBookmarkAgentCopyText(bookmark, bookmarkMediaDir()));
+      clipboardManager?.syncClipboardHash();
+      return { success: true };
+    } catch (error) {
+      log.error('Error copying bookmark for agent:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   });
 
   ipcMain.handle('bookmarks:invokeAuthorTimeline', async (_event, handle: string) => {
@@ -2374,9 +2414,9 @@ function setupLibrarianIPCHandlers(): void {
     // Get current counter state (no reset logic here)
     const status = librarianManager?.checkAndResetIfNeeded() ?? { edits: 0, threshold: 5, didReset: false };
 
-    // Get and clear pending immersive reading
-    const p = pendingImmersiveReading;
-    pendingImmersiveReading = null;
+    // Get and clear pending auto-open reading
+    const p = pendingAutoOpenReading;
+    pendingAutoOpenReading = null;
 
     return {
       pendingPath: p,
@@ -5253,6 +5293,31 @@ function setupClipboardIPCHandlers(): void {
     return { content: loaded.content, filePath: loaded.filePath };
   });
 
+  ipcMain.handle(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, async (_event, filePath: string) => {
+    if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
+      return null;
+    }
+    try {
+      const canonicalPath = fs.realpathSync(filePath);
+      const stat = fs.statSync(canonicalPath);
+      if (!stat.isFile()) return null;
+
+      let content = fs.readFileSync(canonicalPath, 'utf-8');
+      if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
+        content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
+      }
+
+      return {
+        title: path.basename(canonicalPath),
+        filePath: canonicalPath,
+        content,
+      };
+    } catch (error) {
+      log.warn('Failed to load markdown preview:', error);
+      return null;
+    }
+  });
+
   // =========================================================================
   // Multi-Directory Management
   // =========================================================================
@@ -5555,16 +5620,32 @@ function setupClipboardIPCHandlers(): void {
 
       commandLauncherWindow?.hide(true);
 
-      if (isTerminal || isIDE) {
-        clipboard.writeText(`[${command.name}.md]\n${command.filePath} `);
-        clipboardManager?.syncClipboardHash();
-      } else {
-        const plistData = plist.build([command.filePath]);
-        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
-        clipboardManager?.syncClipboardHash();
-      }
+      const clipboardSnapshot = captureClipboardSnapshot();
+      try {
+        if (isTerminal || isIDE) {
+          clipboard.writeText(`[${command.name}.md]\n${command.filePath} `);
+          clipboardManager?.syncClipboardHash();
+        } else {
+          const plistData = plist.build([command.filePath]);
+          clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+          clipboardManager?.syncClipboardHash();
+        }
 
-      await activateAndPaste(targetApp);
+        await activateAndPaste(targetApp);
+      } finally {
+        appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
+          commandName,
+          commandPath: command.filePath,
+          delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+        });
+        await waitForCommandClipboardPasteRead();
+        restoreClipboardSnapshot(clipboardSnapshot);
+        clipboardManager?.syncClipboardHash();
+        appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+          commandName,
+          commandPath: command.filePath,
+        });
+      }
       appendCommandLauncherTrace('invoke-command-success', {
         commandName,
         commandPath: command.filePath,
@@ -6564,7 +6645,7 @@ async function initTranscriberSystem(): Promise<void> {
     // Auto-show the window if enabled
     if (librarianManager!.isAutoShowEnabled()) {
       const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
-      pendingImmersiveReading = reading.path;
+      pendingAutoOpenReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
@@ -6823,7 +6904,7 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardHistoryWindow.playOpenSound();
         const boundsToUse = restoreClipboardHistoryBounds();
         suspendDynamicIslandFocusForClipboardHistory('show-open-field-theory');
-        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true, true);
+        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
         // Opening clipboard history while recording can affect overlay transparency;
         // refresh transparent overlay window properties to keep them stable.
         cursorStatusManager?.refreshWindowProperties();
