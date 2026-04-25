@@ -143,6 +143,7 @@ export interface WikiCreationController {
 }
 
 interface WikiSidebarProps {
+  active?: boolean;
   onSelectItem: (item: UnifiedItem) => void;
   selectedId: string | null;
   onCreateFile: (location: LibraryCreateLocation, fileName: string) => boolean | void | Promise<boolean | void>;
@@ -558,6 +559,7 @@ function rootToSidebarNode(
 }
 
 function WikiSidebar({
+  active = true,
   onSelectItem,
   selectedId,
   onCreateFile,
@@ -679,6 +681,7 @@ function WikiSidebar({
   }, []);
 
   useEffect(() => {
+    if (!active) return;
     loadTree();
     loadArtifacts();
     loadRecent();
@@ -708,7 +711,7 @@ function WikiSidebar({
       unsubTaggedDocs?.();
       window.removeEventListener('focus', onFocus);
     };
-  }, [loadTree, loadArtifacts, loadRecent, loadTaggedDocs]);
+  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));

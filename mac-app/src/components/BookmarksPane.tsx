@@ -26,13 +26,14 @@ function loadSourceFilter(): BookmarkSourceFilter {
 }
 
 interface BookmarksPaneProps {
+  active?: boolean;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
 }
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
+function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -51,13 +52,11 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
-    // List/canvas both share the 'library' window size — LibrarianView pushes
-    // that key when bookmarks is selected. Forcing a window resize on every
-    // mode toggle was adding ~150ms animateBounds + downstream paint on each
-    // click, so we no longer push a size-key from here.
+    // Canvas uses the same window mechanics as Draw; list returns to Library.
+    if (active) window.librarianAPI?.setSizeKey?.(mode === 'canvas' ? 'draw' : 'library');
     if (mode === 'list' && !listEverShown) setListEverShown(true);
     if (mode === 'canvas' && !canvasEverShown) setCanvasEverShown(true);
-  }, [mode, listEverShown, canvasEverShown]);
+  }, [active, mode, listEverShown, canvasEverShown]);
 
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
@@ -68,13 +67,14 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
   }, [sourceFilter]);
 
   useEffect(() => {
+    if (!active) return;
     let cancelled = false;
     getBookmarks().then((data) => {
       if (!cancelled) setSnapshot(data);
     });
     const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
     return () => { cancelled = true; unsub(); };
-  }, []);
+  }, [active]);
 
   // Debounce search input; 7k substring scans is fast but avoid churn while typing.
   useEffect(() => {
