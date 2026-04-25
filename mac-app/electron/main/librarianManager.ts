@@ -6,6 +6,7 @@ import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
+import { libraryDir } from './fieldTheoryPaths';
 
 const log = createLogger('Librarian');
 
@@ -56,7 +57,7 @@ const DEFAULT_LIBRARIAN_RULE_CONTENT =
 const DEFAULT_LIBRARY_README_HELP = `## Useful Shortcuts
 
 Invoke a portable command from any app with Command+Shift+K, type the command name, then press Enter.
-Create or edit portable commands in Field Theory's Commands tab; each one is a Markdown file in a watched commands folder such as .cursor/commands/.
+Create or edit portable commands in Field Theory's Commands tab; each one is a Markdown file in a watched commands folder such as ~/.fieldtheory/commands/.
 Create a scratchpad note from anywhere with Control+Option+Command+Space.
 Inside Library, use Command+N to create a page in the selected folder and Command+Shift+N to create a folder.
 Use Command+F or / to search, Command+, to switch between rendered and Markdown, and Command+S to save Markdown edits.
@@ -106,7 +107,7 @@ Use this folder for rough captures before they become entries.
     ...buildDefaultFolderReadme(`# README: Debates
 
 Debates are structured notes for comparing approaches.
-Use the portable command at .cursor/commands/debate.md when you want one generated.
+Use the portable command at ~/.fieldtheory/commands/debate.md when you want one generated.
 `, `# Debates
 
 Debates are structured notes for comparing approaches.
@@ -119,7 +120,7 @@ Use the portable command at .cursor/commands/debate.md when you want one generat
     ...buildDefaultFolderReadme(`# README: Entries
 
 Entries are durable wiki notes.
-Use portable commands from .cursor/commands/ when you want the app or an agent to create one.
+Use portable commands from ~/.fieldtheory/commands/ when you want the app or an agent to create one.
 `, `# Entries
 
 Entries are durable wiki notes.
@@ -1663,6 +1664,8 @@ export class LibrarianManager extends EventEmitter {
   private settings: LibrarianSettings;
   private scanningDirs: Set<string> = new Set();
   private userDataManager: UserDataManager | null = null;
+  private wikiTreeCache: WikiNode[] | null = null;
+  private libraryRootsCache: LibraryRoot[] | null = null;
 
   constructor() {
     super();
@@ -1693,6 +1696,15 @@ export class LibrarianManager extends EventEmitter {
 
     // Log current status for all projects with .librarian directories
     this.logAllProjectStatuses();
+  }
+
+  emit(eventName: string | symbol, ...args: any[]): boolean {
+    if (eventName === 'wiki:changed') {
+      this.invalidateWikiTreeCache();
+    } else if (eventName === 'library:changed') {
+      this.invalidateLibraryRootsCache();
+    }
+    return super.emit(eventName, ...args);
   }
 
   /**
@@ -2447,8 +2459,7 @@ export class LibrarianManager extends EventEmitter {
   // ── Wiki viewer ──────────────────────────────────────────────────────────
 
   private get wikiDir(): string {
-    const ftDataDir = process.env.FT_DATA_DIR;
-    return path.join(ftDataDir ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
+    return libraryDir();
   }
 
   /** Canonical wiki root for substring comparisons against realpath'd paths. */
@@ -2683,13 +2694,29 @@ export class LibrarianManager extends EventEmitter {
     });
   }
 
+  private invalidateWikiTreeCache(): void {
+    this.wikiTreeCache = null;
+    this.invalidateLibraryRootsCache();
+  }
+
+  private invalidateLibraryRootsCache(): void {
+    this.libraryRootsCache = null;
+  }
+
+  private getCachedWikiTree(): WikiNode[] {
+    if (!this.wikiTreeCache) {
+      this.wikiTreeCache = this.scanMarkdownTree(this.wikiDir);
+    }
+    return this.wikiTreeCache;
+  }
+
   getWikiTree(): WikiFolder[] {
     const wikiRoot = this.wikiDir;
     if (!fs.existsSync(wikiRoot)) return [];
 
     if (!this.wikiWatcher) this.startWikiWatcher();
 
-    const tree = this.scanMarkdownTree(wikiRoot);
+    const tree = this.getCachedWikiTree();
     const folders: WikiFolder[] = [];
 
     for (const node of tree) {
@@ -2705,6 +2732,7 @@ export class LibrarianManager extends EventEmitter {
 
   getLibraryRoots(): LibraryRoot[] {
     if (!this.wikiWatcher) this.startWikiWatcher();
+    if (this.libraryRootsCache) return this.libraryRootsCache;
 
     const roots: LibraryRoot[] = [
       {
@@ -2712,7 +2740,7 @@ export class LibrarianManager extends EventEmitter {
         label: 'Wiki',
         builtin: true,
         writable: true,
-        tree: this.scanMarkdownTree(this.wikiDir),
+        tree: this.getCachedWikiTree(),
       },
     ];
     const seen = new Set<string>([this.libraryRootKey(this.wikiDir)]);
@@ -2731,6 +2759,7 @@ export class LibrarianManager extends EventEmitter {
       });
     }
 
+    this.libraryRootsCache = roots;
     return roots;
   }
 
@@ -5247,7 +5276,7 @@ PreToolUse Auto-Approve Hook for Field Theory Read Permissions
 
 Auto-approves Read/Write/Edit operations for:
 - ~/Library/Application Support/fieldtheory-mac/users/*/figures/* (screenshot figures)
-- .cursor/commands/* (portable commands)
+- ~/.fieldtheory/commands/* and .cursor/commands/* (portable commands)
 
 This is separate from Librarian functionality.
 Never blocks - only auto-approves or passes through to normal flow.
@@ -5277,8 +5306,8 @@ def main():
             }))
             sys.exit(0)
 
-        # Check for portable commands (.cursor/commands/...)
-        if "/.cursor/commands/" in file_path:
+        # Check for portable commands.
+        if "/.fieldtheory/commands/" in file_path or "/.cursor/commands/" in file_path:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",

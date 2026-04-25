@@ -8,6 +8,7 @@ import {
 function makeBookmark(text: string, id = 'bm-1'): Bookmark {
   return {
     id,
+    sourceType: 'x',
     text,
     url: 'https://x.com/test/status/1',
     authorHandle: 'test',

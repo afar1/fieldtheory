@@ -6,8 +6,10 @@ import ImmersiveToggle from './ImmersiveToggle';
 import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
+type BookmarkSourceFilter = 'all' | 'x';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
+const SOURCE_FILTER_KEY = 'bookmarks-source-filter';
 
 function loadMode(): BookmarksViewMode {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -19,14 +21,19 @@ function loadShowText(): boolean {
   return saved === null ? true : saved === '1';
 }
 
+function loadSourceFilter(): BookmarkSourceFilter {
+  return localStorage.getItem(SOURCE_FILTER_KEY) === 'x' ? 'x' : 'all';
+}
+
 interface BookmarksPaneProps {
+  active?: boolean;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
 }
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
+function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -39,31 +46,35 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showText, setShowText] = useState<boolean>(loadShowText);
+  const [sourceFilter, setSourceFilter] = useState<BookmarkSourceFilter>(loadSourceFilter);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const loading = snapshot === null;
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
-    // List/canvas both share the 'library' window size — LibrarianView pushes
-    // that key when bookmarks is selected. Forcing a window resize on every
-    // mode toggle was adding ~150ms animateBounds + downstream paint on each
-    // click, so we no longer push a size-key from here.
+    // Canvas uses the same window mechanics as Draw; list returns to Library.
+    if (active) window.librarianAPI?.setSizeKey?.(mode === 'canvas' ? 'draw' : 'library');
     if (mode === 'list' && !listEverShown) setListEverShown(true);
     if (mode === 'canvas' && !canvasEverShown) setCanvasEverShown(true);
-  }, [mode, listEverShown, canvasEverShown]);
+  }, [active, mode, listEverShown, canvasEverShown]);
 
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
   }, [showText]);
 
   useEffect(() => {
+    localStorage.setItem(SOURCE_FILTER_KEY, sourceFilter);
+  }, [sourceFilter]);
+
+  useEffect(() => {
+    if (!active) return;
     let cancelled = false;
     getBookmarks().then((data) => {
       if (!cancelled) setSnapshot(data);
     });
     const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
     return () => { cancelled = true; unsub(); };
-  }, []);
+  }, [active]);
 
   // Debounce search input; 7k substring scans is fast but avoid churn while typing.
   useEffect(() => {
@@ -74,6 +85,7 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
   const filtered = useMemo(() => {
     if (!snapshot) return [];
     let list = snapshot.bookmarks;
+    if (sourceFilter === 'x') list = list.filter((b) => (b.sourceType ?? 'x') === 'x');
     if (!showText) list = list.filter((b) => b.images && b.images.length > 0);
     if (folder !== 'All') list = list.filter((b) => b.folders.includes(folder));
     if (debouncedQuery) {
@@ -85,7 +97,7 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
       );
     }
     return list;
-  }, [snapshot, folder, debouncedQuery, showText]);
+  }, [snapshot, folder, debouncedQuery, showText, sourceFilter]);
 
   const folders = snapshot?.folders ?? [];
 
@@ -131,6 +143,40 @@ function BookmarksPane({ isFullScreen, onToggleFullScreen }: BookmarksPaneProps)
                 }}
               >
                 {m}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Source segmented toggle */}
+        <div
+          style={{
+            display: 'inline-flex',
+            border: `1px solid ${theme.border}`,
+            borderRadius: '6px',
+            overflow: 'hidden',
+          }}
+        >
+          {(['all', 'x'] as const).map((source) => {
+            const active = sourceFilter === source;
+            return (
+              <button
+                key={source}
+                onClick={() => setSourceFilter(source)}
+                style={{
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 500,
+                  color: active ? theme.text : theme.textSecondary,
+                  backgroundColor: active
+                    ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+                    : 'transparent',
+                  border: 'none',
+                  borderRight: source === 'all' ? `1px solid ${theme.border}` : 'none',
+                  cursor: 'pointer',
+                }}
+              >
+                {source === 'all' ? 'All' : 'X'}
               </button>
             );
           })}

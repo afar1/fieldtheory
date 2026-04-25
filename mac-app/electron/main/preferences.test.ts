@@ -27,7 +27,7 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistoryBounds } from './preferences';
+import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistoryBounds } from './preferences';
 
 const sampleBounds = (w: number): ClipboardHistoryBounds => ({
   width: w,
@@ -40,11 +40,15 @@ describe('pickSavedBoundsByKey', () => {
     const prefs = {
       clipboardHistoryBoundsByView: {
         library: sampleBounds(720),
-        canvas: sampleBounds(1180),
+        draw: sampleBounds(1180),
       },
     };
     expect(pickSavedBoundsByKey(prefs, 'library')?.width).toBe(720);
     expect(pickSavedBoundsByKey(prefs, 'canvas')?.width).toBe(1180);
+  });
+
+  it('normalizes canvas to draw', () => {
+    expect(normalizeClipboardHistorySizeKey('canvas')).toBe('draw');
   });
 
   it('falls back to legacy clipboardHistoryBounds only for "fields"', () => {
