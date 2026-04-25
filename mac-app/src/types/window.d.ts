@@ -1193,6 +1193,7 @@ interface CommandsAPI {
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
+  launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   onLauncherReset?: (callback: () => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
@@ -1729,8 +1730,19 @@ declare global {
     bookmarks: Bookmark[];
     folders: BookmarkFolder[];
   }
+  interface BookmarkAuthorSummary {
+    handle: string;
+    name: string;
+    count: number;
+    firstPostedAt: string;
+    lastPostedAt: string;
+  }
   interface BookmarksAPI {
     getAll: () => Promise<BookmarksSnapshot>;
+    getAuthors: () => Promise<BookmarkAuthorSummary[]>;
+    getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
+    invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+    invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   }
 

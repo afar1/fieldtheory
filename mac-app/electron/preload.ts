@@ -2976,6 +2976,11 @@ const commandsAPI = {
     ipcRenderer.send('command-launcher:close');
   },
 
+  // Write diagnostic breadcrumbs to the command launcher trace log.
+  launcherTrace: (event: string, details: Record<string, unknown> = {}): void => {
+    ipcRenderer.send('command-launcher:trace', event, details);
+  },
+
   // Listen for reset events (when launcher is shown).
   onLauncherReset: (callback: () => void): (() => void) => {
     const handler = () => callback();
@@ -3824,9 +3829,23 @@ interface Bookmark {
 }
 interface BookmarkFolder { name: string; id?: string }
 interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+interface BookmarkAuthorSummary {
+  handle: string;
+  name: string;
+  count: number;
+  firstPostedAt: string;
+  lastPostedAt: string;
+}
 
 const bookmarksAPI = {
   getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
+  getAuthors: (): Promise<BookmarkAuthorSummary[]> => ipcRenderer.invoke('bookmarks:getAuthors'),
+  getAuthorBookmarks: (handle: string): Promise<Bookmark[]> =>
+    ipcRenderer.invoke('bookmarks:getAuthorBookmarks', handle),
+  invokeBookmark: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:invokeBookmark', id),
+  invokeAuthorTimeline: (handle: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:invokeAuthorTimeline', handle),
   onChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('bookmarks:changed', handler);

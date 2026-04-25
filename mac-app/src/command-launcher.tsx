@@ -13,6 +13,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
+import BookmarkCard from './components/BookmarkCard';
 import {
   buildBuiltInLauncherActions,
   DEFAULT_LAUNCHER_HOTKEYS,
@@ -21,6 +22,11 @@ import {
   DEFAULT_SQUARES_HOTKEYS,
   flattenLibraryRootsForLauncher,
   filterLauncherNamespaceItems,
+  buildBookmarkAuthorLauncherItems,
+  buildBookmarkPostLauncherItems,
+  dedupeLauncherPersonItems,
+  isLauncherPreviewToggleKey,
+  resolveLauncherAuthorNamespaceHandle,
   type LauncherHotkeyMap,
   type LauncherLibraryRoot,
 } from './commandLauncherUtils';
@@ -43,7 +49,7 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'markdown-file' | 'artifact';
+type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark';
 
 interface LauncherItem {
   id: string;
@@ -60,6 +66,12 @@ interface LauncherItem {
   actionId?: string;
   // For handoffs - relative time display
   timeAgo?: string;
+  // For bookmark authors
+  authorHandle?: string;
+  bookmarkCount?: number;
+  // For bookmark posts
+  bookmarkId?: string;
+  postedAt?: string;
 }
 
 const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
@@ -82,6 +94,7 @@ interface LauncherCommandsAPI {
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
   launcherClose: () => void;
+  launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   onLauncherReset: (callback: () => void) => () => void;
 }
 
@@ -109,6 +122,14 @@ interface LauncherLibraryAPI {
   getRoots: () => Promise<LauncherLibraryRoot[]>;
 }
 
+interface LauncherBookmarksAPI {
+  getAuthors: () => Promise<BookmarkAuthorSummary[]>;
+  getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
+  invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+  invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
+  onChanged?: (callback: () => void) => () => void;
+}
+
 interface LauncherSquaresAPI {
   executeAction: (action: string, source?: 'default' | 'command-launcher') => Promise<boolean>;
   getHotkeys: () => Promise<Record<string, string>>;
@@ -123,6 +144,22 @@ const transcribeAPI = window.transcribeAPI as unknown as LauncherTranscribeAPI;
 const themeAPI = window.themeAPI as unknown as LauncherThemeAPI;
 const squaresAPI = window.squaresAPI as unknown as LauncherSquaresAPI;
 const libraryAPI = window.libraryAPI as unknown as LauncherLibraryAPI | undefined;
+const bookmarksAPI = window.bookmarksAPI as unknown as LauncherBookmarksAPI | undefined;
+
+function traceLauncher(event: string, details: Record<string, unknown> = {}) {
+  commandsAPI.launcherTrace?.(event, details);
+}
+
+function describeLauncherItem(item: LauncherItem | undefined): Record<string, unknown> | null {
+  if (!item) return null;
+  return {
+    id: item.id,
+    type: item.type,
+    displayName: item.displayName,
+    authorHandle: item.authorHandle ?? null,
+    bookmarkId: item.bookmarkId ?? null,
+  };
+}
 
 // =============================================================================
 // Default Hotkeys
@@ -224,6 +261,12 @@ const getStyles = (isDark: boolean) => ({
     letterSpacing: '0.5px',
     fontWeight: 600,
   },
+  preview: {
+    padding: '8px 10px 10px 10px',
+    borderTop: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)'}`,
+    maxHeight: '340px',
+    overflowY: 'auto' as const,
+  },
 });
 
 // =============================================================================
@@ -233,6 +276,7 @@ const getStyles = (isDark: boolean) => ({
 function CommandLauncher() {
   const [query, setQuery] = useState('');
   const [namespacePrefix, setNamespacePrefix] = useState<NamespacePrefix | null>(null);
+  const [authorNamespace, setAuthorNamespace] = useState<string | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
@@ -241,11 +285,24 @@ function CommandLauncher() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [libraryMarkdownItems, setLibraryMarkdownItems] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
+  const [bookmarkAuthorItems, setBookmarkAuthorItems] = useState<LauncherItem[]>([]);
+  const [authorBookmarkItems, setAuthorBookmarkItems] = useState<LauncherItem[]>([]);
+  const [authorBookmarks, setAuthorBookmarks] = useState<Bookmark[]>([]);
+  const [previewOpen, setPreviewOpen] = useState(false);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const selectedIndexRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const authorNamespaceRef = useRef<string | null>(null);
+  const previewWasOpenRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
+
+  const selectIndex = useCallback((index: number) => {
+    const nextIndex = Math.max(0, index);
+    selectedIndexRef.current = nextIndex;
+    setSelectedIndex(nextIndex);
+  }, []);
 
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
@@ -281,6 +338,25 @@ function CommandLauncher() {
         filePath: r.path,
       })));
     } catch {}
+  }, []);
+
+  const loadBookmarkAuthors = useCallback(async () => {
+    try {
+      const authors = await bookmarksAPI?.getAuthors();
+      setBookmarkAuthorItems(buildBookmarkAuthorLauncherItems(authors ?? []));
+    } catch {}
+  }, []);
+
+  const loadAuthorBookmarks = useCallback(async (handle: string) => {
+    try {
+      const bookmarks = await bookmarksAPI?.getAuthorBookmarks(handle);
+      const nextBookmarks = bookmarks ?? [];
+      setAuthorBookmarks(nextBookmarks);
+      setAuthorBookmarkItems(buildBookmarkPostLauncherItems(nextBookmarks));
+    } catch {
+      setAuthorBookmarks([]);
+      setAuthorBookmarkItems([]);
+    }
   }, []);
 
   // Load handoffs from global Field Theory directory.
@@ -330,6 +406,7 @@ function CommandLauncher() {
     loadCommands();
     loadHandoffs();
     loadHotkeys();
+    loadBookmarkAuthors();
 
     // Load current theme
     themeAPI.getTheme().then(dark => setIsDarkMode(dark));
@@ -339,13 +416,18 @@ function CommandLauncher() {
     const handleReset = async () => {
       setQuery('');
       setNamespacePrefix(null);
+      setAuthorNamespace(null);
+      setPreviewOpen(false);
+      setAuthorBookmarks([]);
+      setAuthorBookmarkItems([]);
       setFiltered([]);
-      setSelectedIndex(0);
+      selectIndex(0);
       inputRef.current?.focus();
       loadCommands();
       loadHandoffs();
       loadLibraryMarkdown();
       loadArtifacts();
+      loadBookmarkAuthors();
       // Refresh theme state
       const dark = await themeAPI.getTheme();
       setIsDarkMode(dark ?? true);
@@ -357,11 +439,28 @@ function CommandLauncher() {
     const unsubscribeSquaresConfig = squaresAPI.onConfigChanged?.((config) => {
       setShowSquaresInCommandLauncher(normalizeSquaresConfig(config).showInCommandLauncher);
     });
+    const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
+      loadBookmarkAuthors();
+      const handle = authorNamespaceRef.current;
+      if (handle) loadAuthorBookmarks(handle);
+    });
     return () => {
       unsubscribe();
       unsubscribeSquaresConfig?.();
+      unsubscribeBookmarks?.();
     };
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts]);
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadBookmarkAuthors, loadAuthorBookmarks, selectIndex]);
+
+  useEffect(() => {
+    authorNamespaceRef.current = authorNamespace;
+    if (!authorNamespace) {
+      setAuthorBookmarks([]);
+      setAuthorBookmarkItems([]);
+      setPreviewOpen(false);
+      return;
+    }
+    loadAuthorBookmarks(authorNamespace);
+  }, [authorNamespace, loadAuthorBookmarks]);
 
   // Build all items (commands + actions + handoffs).
   const allItems = useMemo(() => {
@@ -387,32 +486,61 @@ function CommandLauncher() {
     const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher);
 
     const markdownItems = [...libraryMarkdownItems, ...artifactReadings];
-    return [...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings]);
+    return [...bookmarkAuthorItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, bookmarkAuthorItems]);
+
+  const namespaceLabel = authorNamespace ? `@${authorNamespace}` : namespacePrefix;
+  const previewBookmark = useMemo(() => {
+    if (!previewOpen) return null;
+    const selected = filtered[selectedIndex];
+    if (selected?.type !== 'bookmark' || !selected.bookmarkId) return null;
+    return authorBookmarks.find((bookmark) => bookmark.id === selected.bookmarkId) ?? null;
+  }, [authorBookmarks, filtered, previewOpen, selectedIndex]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    traceLauncher('preview-render', {
+      hasBookmark: Boolean(previewBookmark),
+      selectedIndex,
+      filteredCount: filtered.length,
+      item: describeLauncherItem(filtered[selectedIndex]),
+      bookmarkId: previewBookmark?.id ?? null,
+    });
+  }, [filtered, previewBookmark, previewOpen, selectedIndex]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
-    if (namespacePrefix) return false;
+    if (namespacePrefix || authorNamespace) return false;
     const q = query.trim().toLowerCase();
     return q === 'help' || q === '?';
-  }, [namespacePrefix, query]);
+  }, [namespacePrefix, authorNamespace, query]);
 
   // Filter items when query changes.
   useEffect(() => {
     const inputHeight = 36;
     const emptyStateHeight = 26;
+    const maxListHeight = 280;
 
-    if (allItems.length === 0) {
+    const resizeForResults = (resultCount: number, forceEmptyState = false) => {
+      const itemHeight = 22;
+      const listHeight = resultCount > 0
+        ? Math.min(resultCount * itemHeight + 10, maxListHeight)
+        : (forceEmptyState ? emptyStateHeight : 0);
+      commandsAPI.launcherResize(inputHeight + listHeight);
+    };
+
+    if (allItems.length === 0 && !authorNamespace) {
       setFiltered([]);
+      selectIndex(0);
       // Don't show empty state height when still loading (query is empty)
       // Only show it when user has typed but no results found
       commandsAPI.launcherResize(inputHeight);
       return;
     }
 
-    if (!namespacePrefix && query.trim() === '') {
+    if (!namespacePrefix && !authorNamespace && query.trim() === '') {
       setFiltered([]);
-      setSelectedIndex(0);
+      selectIndex(0);
       commandsAPI.launcherResize(inputHeight);
       return;
     }
@@ -431,7 +559,7 @@ function CommandLauncher() {
         .sort((a, b) => a.name.localeCompare(b.name));
 
       setFiltered([...actions, ...hoffs, ...cmds]);
-      setSelectedIndex(0);
+      selectIndex(0);
 
       // Resize for all items.
       const itemHeight = 22;
@@ -449,14 +577,20 @@ function CommandLauncher() {
 
     const q = query.toLowerCase();
 
+    if (authorNamespace) {
+      const results = filterLauncherNamespaceItems(authorBookmarkItems, q);
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, true);
+      return;
+    }
+
     if (namespacePrefix) {
       const pool = namespacePrefix === 'wiki' ? libraryMarkdownItems : artifactReadings;
-      const results = filterLauncherNamespaceItems(pool, q);
+      const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, q));
       setFiltered(results.slice(0, 20));
-      setSelectedIndex(0);
-      const itemHeight = 22;
-      const listHeight = Math.min(results.length * itemHeight + 10, 280);
-      commandsAPI.launcherResize(inputHeight + (results.length > 0 ? listHeight : emptyStateHeight));
+      selectIndex(0);
+      resizeForResults(results.length, true);
       return;
     }
 
@@ -464,12 +598,10 @@ function CommandLauncher() {
     if (nsMatch) {
       const [, ns, search] = nsMatch;
       const pool = ns === 'wiki' ? libraryMarkdownItems : artifactReadings;
-      const results = filterLauncherNamespaceItems(pool, search);
+      const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, search));
       setFiltered(results.slice(0, 20));
-      setSelectedIndex(0);
-      const itemHeight = 22;
-      const listHeight = Math.min(results.length * itemHeight + 10, 280);
-      commandsAPI.launcherResize(inputHeight + (results.length > 0 ? listHeight : emptyStateHeight));
+      selectIndex(0);
+      resizeForResults(results.length, true);
       return;
     }
 
@@ -482,8 +614,8 @@ function CommandLauncher() {
         keywords: ['wiki'],
         filePath: WIKI_COMMAND_PATH ?? undefined,
       }, ...libraryMarkdownItems.slice(0, 5)]);
-      setSelectedIndex(0);
-      commandsAPI.launcherResize(inputHeight + Math.min(6 * 22 + 10, 280));
+      selectIndex(0);
+      resizeForResults(6);
       return;
     }
 
@@ -506,25 +638,46 @@ function CommandLauncher() {
       // Any keyword matches.
       if (item.keywords.some(kw => kw.toLowerCase().includes(q))) score += 30;
 
+      // Prefer the synthesized author action over handle-shaped markdown files.
+      if (item.type === 'bookmark-author') score += 25;
+
       return { item, score };
     });
 
-    const matches = scored
+    const matches = dedupeLauncherPersonItems(scored
       .filter(s => s.score > 0)
       .sort((a, b) => b.score - a.score)
-      .map(s => s.item);
+      .map(s => s.item));
 
     setFiltered(matches);
-    setSelectedIndex(0);
+    selectIndex(0);
 
     // Resize window.
+    resizeForResults(matches.length, true);
+  }, [namespacePrefix, authorNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, authorBookmarkItems, selectIndex]);
+
+  useEffect(() => {
+    if (!previewOpen && !previewWasOpenRef.current) return;
+    const inputHeight = 36;
+    const emptyStateHeight = 26;
     const itemHeight = 22;
-    const padding = 10;
-    const listHeight = matches.length > 0
-      ? Math.min(matches.length * itemHeight + padding, 280)
-      : emptyStateHeight;
-    commandsAPI.launcherResize(inputHeight + listHeight);
-  }, [namespacePrefix, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings]);
+    const maxListHeight = previewOpen ? 132 : 280;
+    const previewHeight = previewOpen ? 358 : 0;
+    const hasEmptyState = (query.trim() !== '' || namespaceLabel) && filtered.length === 0;
+    const listHeight = filtered.length > 0
+      ? Math.min(filtered.length * itemHeight + 10, maxListHeight)
+      : (hasEmptyState ? emptyStateHeight : 0);
+    const requestedHeight = inputHeight + listHeight + previewHeight;
+    traceLauncher('preview-resize', {
+      previewOpen,
+      requestedHeight,
+      listHeight,
+      previewHeight,
+      filteredCount: filtered.length,
+    });
+    commandsAPI.launcherResize(requestedHeight);
+    previewWasOpenRef.current = previewOpen;
+  }, [filtered.length, namespaceLabel, previewOpen, query]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -584,33 +737,123 @@ function CommandLauncher() {
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      if (previewOpen) {
+        e.preventDefault();
+        traceLauncher('preview-close', { source: 'escape' });
+        setPreviewOpen(false);
+        return;
+      }
       commandsAPI.launcherClose();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
+      if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
-      setSelectedIndex(i => Math.min(i + 1, filtered.length - 1));
+      const nextIndex = Math.min(selectedIndexRef.current + 1, filtered.length - 1);
+      selectIndex(nextIndex);
+      if (previewOpen) {
+        traceLauncher('preview-selection', {
+          source: 'arrow-down',
+          selectedIndex: nextIndex,
+          item: describeLauncherItem(filtered[nextIndex]),
+        });
+      }
     } else if (e.key === 'ArrowUp') {
       e.preventDefault();
+      if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
-      setSelectedIndex(i => Math.max(i - 1, 0));
+      const nextIndex = Math.max(selectedIndexRef.current - 1, 0);
+      selectIndex(nextIndex);
+      if (previewOpen) {
+        traceLauncher('preview-selection', {
+          source: 'arrow-up',
+          selectedIndex: nextIndex,
+          item: describeLauncherItem(filtered[nextIndex]),
+        });
+      }
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      if (namespacePrefix) return;
-      const q = query.trim().toLowerCase();
+      if (namespacePrefix || authorNamespace) return;
+
+      const rawQuery = query.trim();
+      const q = rawQuery.toLowerCase();
+      const currentIndex = selectedIndexRef.current;
+      const authorHandle = resolveLauncherAuthorNamespaceHandle(filtered, bookmarkAuthorItems, currentIndex, rawQuery);
+      if (authorHandle) {
+        setAuthorNamespace(authorHandle);
+        setQuery('');
+        selectIndex(0);
+        return;
+      }
+
       for (const prefix of NAMESPACE_PREFIXES) {
         if (prefix.startsWith(q) && q.length > 0) {
           setNamespacePrefix(prefix);
+          setPreviewOpen(false);
           setQuery('');
           return;
         }
       }
-    } else if (e.key === 'Backspace' && namespacePrefix && query === '') {
+    } else if (isLauncherPreviewToggleKey(e)) {
+      const currentIndex = selectedIndexRef.current;
+      const selectedItem = filtered[currentIndex];
+      traceLauncher('preview-key', {
+        key: e.key,
+        code: e.code,
+        previewOpen,
+        query: query.trim(),
+        namespaceLabel: namespaceLabel ?? null,
+        filteredCount: filtered.length,
+        reactSelectedIndex: selectedIndex,
+        refSelectedIndex: currentIndex,
+        selectedItem: describeLauncherItem(selectedItem),
+        activeElement: document.activeElement?.tagName ?? null,
+      });
+      if (previewOpen) {
+        e.preventDefault();
+        traceLauncher('preview-close', { source: 'space' });
+        setPreviewOpen(false);
+        return;
+      }
+      if (selectedItem?.type === 'bookmark') {
+        e.preventDefault();
+        selectIndex(currentIndex);
+        traceLauncher('preview-open-bookmark', {
+          selectedIndex: currentIndex,
+          item: describeLauncherItem(selectedItem),
+        });
+        setPreviewOpen(true);
+        return;
+      }
+      const authorHandle = resolveLauncherAuthorNamespaceHandle(filtered, bookmarkAuthorItems, currentIndex, query.trim());
+      if (authorHandle) {
+        e.preventDefault();
+        traceLauncher('preview-open-author', {
+          authorHandle,
+          selectedIndex: currentIndex,
+          item: describeLauncherItem(selectedItem),
+        });
+        setAuthorNamespace(authorHandle);
+        setQuery('');
+        selectIndex(0);
+        setPreviewOpen(true);
+        return;
+      }
+      traceLauncher('preview-key-noop', {
+        reason: 'selected-item-not-previewable',
+        selectedIndex: currentIndex,
+        item: describeLauncherItem(selectedItem),
+      });
+    } else if (e.key === 'Backspace' && (namespacePrefix || authorNamespace) && query === '') {
       e.preventDefault();
       setNamespacePrefix(null);
+      setAuthorNamespace(null);
+      setPreviewOpen(false);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
-        invokeItem(filtered[selectedIndex], { insertWikiLink: e.metaKey });
+        const currentIndex = Math.min(selectedIndexRef.current, filtered.length - 1);
+        const selectedItem = filtered[currentIndex];
+        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: e.metaKey });
       }
     }
   };
@@ -630,6 +873,16 @@ function CommandLauncher() {
 
     if (item.type === 'command') {
       await commandsAPI.invokeCommand(item.name);
+      commandsAPI.launcherClose();
+    } else if (item.type === 'bookmark-author') {
+      if (item.authorHandle) {
+        await bookmarksAPI?.invokeAuthorTimeline(item.authorHandle);
+      }
+      commandsAPI.launcherClose();
+    } else if (item.type === 'bookmark') {
+      if (item.bookmarkId) {
+        await bookmarksAPI?.invokeBookmark(item.bookmarkId);
+      }
       commandsAPI.launcherClose();
     } else if (item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact') {
       if (item.filePath) {
@@ -668,7 +921,7 @@ function CommandLauncher() {
     }
   }, [getFieldTheoryTarget, getWikiLinkText]);
 
-  const hasContentBelow = filtered.length > 0 || ((namespacePrefix || query.trim() !== '') && allItems.length > 0);
+  const hasContentBelow = filtered.length > 0 || !!previewBookmark || ((namespaceLabel || query.trim() !== '') && (allItems.length > 0 || authorBookmarkItems.length > 0));
   // Always use dark mode styling for the launcher regardless of system theme
   const styles = getStyles(true);
 
@@ -683,14 +936,14 @@ function CommandLauncher() {
           alt=""
           style={styles.icon}
         />
-        {namespacePrefix && (
-          <span style={styles.namespaceTag}>{namespacePrefix}</span>
+        {namespaceLabel && (
+          <span style={styles.namespaceTag}>{namespaceLabel}</span>
         )}
         <input
           ref={inputRef}
           type="text"
           placeholder="Type a command (? for help)"
-          aria-label={namespacePrefix ? `${namespacePrefix} search` : 'Command search'}
+          aria-label={namespaceLabel ? `${namespaceLabel} search` : 'Command search'}
           value={query}
           onChange={e => setQuery(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -720,7 +973,7 @@ function CommandLauncher() {
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => setSelectedIndex(globalIndex)}
+                      onMouseEnter={() => selectIndex(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.hotkeyDisplay && (
@@ -745,7 +998,7 @@ function CommandLauncher() {
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => setSelectedIndex(globalIndex)}
+                      onMouseEnter={() => selectIndex(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.timeAgo && (
@@ -770,7 +1023,7 @@ function CommandLauncher() {
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => setSelectedIndex(globalIndex)}
+                      onMouseEnter={() => selectIndex(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.name}</span>
                     </li>
@@ -788,7 +1041,7 @@ function CommandLauncher() {
                   ...(i === selectedIndex ? styles.listItemSelected : {}),
                 }}
                 onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                onMouseEnter={() => setSelectedIndex(i)}
+                onMouseEnter={() => selectIndex(i)}
               >
                 <span style={styles.itemName}>
                   {item.type === 'command' ? item.name : item.displayName}
@@ -805,7 +1058,13 @@ function CommandLauncher() {
         </ul>
       )}
 
-      {query.trim() !== '' && filtered.length === 0 && (
+      {previewBookmark && (
+        <div style={styles.preview}>
+          <BookmarkCard bookmark={previewBookmark} compact isDark />
+        </div>
+      )}
+
+      {(query.trim() !== '' || namespaceLabel) && filtered.length === 0 && (
         <div style={styles.emptyState}>No matches found</div>
       )}
     </div>
