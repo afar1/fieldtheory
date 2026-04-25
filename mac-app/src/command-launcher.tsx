@@ -19,14 +19,23 @@ import {
   formatTimeAgo,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
+  flattenBookmarkTaxonomyRootsForLauncher,
+  flattenLibraryDirectoriesForLauncher,
   flattenLibraryRootsForLauncher,
+  filterLauncherDirectoryNamespaceItems,
   filterLauncherNamespaceItems,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
-  isLauncherPreviewToggleKey,
+  isGeneratedBookmarkTaxonomyPath,
+  nextLauncherArrowIndex,
+  resolveLauncherEnterIndex,
   resolveLauncherAuthorNamespaceHandle,
+  resolveLauncherBookmarkFacetNamespace,
+  resolveLauncherDirectoryNamespace,
+  shouldHandleLauncherPreviewShortcut,
   type LauncherHotkeyMap,
+  type LauncherDirectoryNamespace,
   type LauncherLibraryRoot,
 } from './commandLauncherUtils';
 import { normalizeSquaresConfig } from './utils/squaresConfig';
@@ -48,7 +57,21 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark';
+type LauncherItemType = 'command' | 'action' | 'handoff' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory';
+
+type BookmarkNamespace =
+  | { kind: 'facet'; label: string; paths: string[] }
+  | { kind: 'search'; label: string; query: string };
+
+type MarkdownPreview = {
+  title: string;
+  filePath: string;
+  content: string;
+};
+
+type LauncherPreviewPayload =
+  | { kind: 'bookmark'; bookmark: Bookmark }
+  | { kind: 'markdown'; title: string; filePath: string; content: string };
 
 interface LauncherItem {
   id: string;
@@ -68,6 +91,11 @@ interface LauncherItem {
   // For bookmark authors
   authorHandle?: string;
   bookmarkCount?: number;
+  // For bookmark facets
+  facetPaths?: string[];
+  // For directory namespaces
+  directoryPath?: string;
+  directoryRelPath?: string;
   // For bookmark posts
   bookmarkId?: string;
   postedAt?: string;
@@ -86,6 +114,7 @@ interface LauncherCommandsAPI {
   getCommands: () => Promise<PortableCommandInfo[]>;
   getHandoffs: () => Promise<HandoffInfo[]>;
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
+  getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
@@ -94,7 +123,7 @@ interface LauncherCommandsAPI {
   launcherResize: (height: number) => void;
   launcherClose: () => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
-  launcherPreviewShow?: (bookmark: Bookmark) => void;
+  launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
   onLauncherReset: (callback: () => void) => () => void;
 }
@@ -126,6 +155,8 @@ interface LauncherLibraryAPI {
 interface LauncherBookmarksAPI {
   getAuthors: () => Promise<BookmarkAuthorSummary[]>;
   getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
+  getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;
+  search: (query: string) => Promise<Bookmark[]>;
   invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
   invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
   onChanged?: (callback: () => void) => () => void;
@@ -159,6 +190,7 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
     displayName: item.displayName,
     authorHandle: item.authorHandle ?? null,
     bookmarkId: item.bookmarkId ?? null,
+    directoryPath: item.directoryPath ?? null,
   };
 }
 
@@ -271,7 +303,9 @@ const getStyles = (isDark: boolean) => ({
 function CommandLauncher() {
   const [query, setQuery] = useState('');
   const [namespacePrefix, setNamespacePrefix] = useState<NamespacePrefix | null>(null);
+  const [directoryNamespace, setDirectoryNamespace] = useState<LauncherDirectoryNamespace | null>(null);
   const [authorNamespace, setAuthorNamespace] = useState<string | null>(null);
+  const [bookmarkNamespace, setBookmarkNamespace] = useState<BookmarkNamespace | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
@@ -279,25 +313,38 @@ function CommandLauncher() {
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [libraryMarkdownItems, setLibraryMarkdownItems] = useState<LauncherItem[]>([]);
+  const [directoryItems, setDirectoryItems] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
   const [bookmarkAuthorItems, setBookmarkAuthorItems] = useState<LauncherItem[]>([]);
+  const [bookmarkFacetItems, setBookmarkFacetItems] = useState<LauncherItem[]>([]);
   const [authorBookmarkItems, setAuthorBookmarkItems] = useState<LauncherItem[]>([]);
   const [authorBookmarks, setAuthorBookmarks] = useState<Bookmark[]>([]);
+  const [bookmarkNamespaceItems, setBookmarkNamespaceItems] = useState<LauncherItem[]>([]);
+  const [bookmarkNamespaceBookmarks, setBookmarkNamespaceBookmarks] = useState<Bookmark[]>([]);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewPayload, setPreviewPayload] = useState<LauncherPreviewPayload | null>(null);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const selectedIndexRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const authorNamespaceRef = useRef<string | null>(null);
+  const bookmarkNamespaceRef = useRef<BookmarkNamespace | null>(null);
   const previewWindowWasOpenRef = useRef(false);
+  const previewRequestRef = useRef(0);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
+  const hasExplicitSelectionRef = useRef(false);
 
   const selectIndex = useCallback((index: number) => {
     const nextIndex = Math.max(0, index);
     selectedIndexRef.current = nextIndex;
     setSelectedIndex(nextIndex);
   }, []);
+
+  const selectExplicitItem = useCallback((index: number) => {
+    hasExplicitSelectionRef.current = true;
+    selectIndex(index);
+  }, [selectIndex]);
 
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
@@ -315,6 +362,8 @@ function CommandLauncher() {
       const roots = await libraryAPI?.getRoots();
       if (roots) {
         setLibraryMarkdownItems(flattenLibraryRootsForLauncher(roots));
+        setDirectoryItems(flattenLibraryDirectoriesForLauncher(roots));
+        setBookmarkFacetItems(flattenBookmarkTaxonomyRootsForLauncher(roots));
         return;
       }
     } catch {}
@@ -351,6 +400,20 @@ function CommandLauncher() {
     } catch {
       setAuthorBookmarks([]);
       setAuthorBookmarkItems([]);
+    }
+  }, []);
+
+  const loadBookmarkNamespace = useCallback(async (namespace: BookmarkNamespace) => {
+    try {
+      const bookmarks = namespace.kind === 'facet'
+        ? await bookmarksAPI?.getTaxonomyBookmarks(namespace.paths)
+        : await bookmarksAPI?.search(namespace.query);
+      const nextBookmarks = bookmarks ?? [];
+      setBookmarkNamespaceBookmarks(nextBookmarks);
+      setBookmarkNamespaceItems(buildBookmarkPostLauncherItems(nextBookmarks));
+    } catch {
+      setBookmarkNamespaceBookmarks([]);
+      setBookmarkNamespaceItems([]);
     }
   }, []);
 
@@ -411,10 +474,16 @@ function CommandLauncher() {
     const handleReset = async () => {
       setQuery('');
       setNamespacePrefix(null);
+      setDirectoryNamespace(null);
       setAuthorNamespace(null);
+      setBookmarkNamespace(null);
+      previewRequestRef.current += 1;
       setPreviewOpen(false);
+      setPreviewPayload(null);
       setAuthorBookmarks([]);
       setAuthorBookmarkItems([]);
+      setBookmarkNamespaceBookmarks([]);
+      setBookmarkNamespaceItems([]);
       setFiltered([]);
       selectIndex(0);
       inputRef.current?.focus();
@@ -438,36 +507,55 @@ function CommandLauncher() {
       loadBookmarkAuthors();
       const handle = authorNamespaceRef.current;
       if (handle) loadAuthorBookmarks(handle);
+      const namespace = bookmarkNamespaceRef.current;
+      if (namespace) loadBookmarkNamespace(namespace);
     });
     return () => {
       unsubscribe();
       unsubscribeSquaresConfig?.();
       unsubscribeBookmarks?.();
     };
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadBookmarkAuthors, loadAuthorBookmarks, selectIndex]);
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadBookmarkAuthors, loadAuthorBookmarks, loadBookmarkNamespace, selectIndex]);
 
   useEffect(() => {
     authorNamespaceRef.current = authorNamespace;
     if (!authorNamespace) {
       setAuthorBookmarks([]);
       setAuthorBookmarkItems([]);
+      previewRequestRef.current += 1;
       setPreviewOpen(false);
+      setPreviewPayload(null);
       return;
     }
     loadAuthorBookmarks(authorNamespace);
   }, [authorNamespace, loadAuthorBookmarks]);
 
-  // Build all items (commands + actions + handoffs).
-  const allItems = useMemo(() => {
-    const commandItems: LauncherItem[] = commands.map(cmd => ({
+  useEffect(() => {
+    bookmarkNamespaceRef.current = bookmarkNamespace;
+    if (!bookmarkNamespace) {
+      setBookmarkNamespaceBookmarks([]);
+      setBookmarkNamespaceItems([]);
+      previewRequestRef.current += 1;
+      setPreviewOpen(false);
+      setPreviewPayload(null);
+      return;
+    }
+    loadBookmarkNamespace(bookmarkNamespace);
+  }, [bookmarkNamespace, loadBookmarkNamespace]);
+
+  const commandItems = useMemo((): LauncherItem[] => commands
+    .filter(cmd => !isGeneratedBookmarkTaxonomyPath(cmd.filePath))
+    .map(cmd => ({
       id: `cmd-${cmd.name}`,
       type: 'command' as const,
       name: cmd.name,
       displayName: cmd.displayName,
       keywords: [cmd.name, cmd.displayName, ...cmd.name.split('-'), ...cmd.name.split('_')],
       filePath: cmd.filePath,
-    }));
+    })), [commands]);
 
+  // Build all items (commands + actions + handoffs).
+  const allItems = useMemo(() => {
     const handoffItems: LauncherItem[] = handoffs.map(h => ({
       id: `handoff-${h.name}`,
       type: 'handoff' as const,
@@ -481,27 +569,88 @@ function CommandLauncher() {
     const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher);
 
     const markdownItems = [...libraryMarkdownItems, ...artifactReadings];
-    return [...bookmarkAuthorItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commands, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, bookmarkAuthorItems]);
+    return [...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems]);
 
-  const namespaceLabel = authorNamespace ? `@${authorNamespace}` : namespacePrefix;
-  const previewBookmark = useMemo(() => {
-    if (!previewOpen) return null;
-    const selected = filtered[selectedIndex];
-    if (selected?.type !== 'bookmark' || !selected.bookmarkId) return null;
-    return authorBookmarks.find((bookmark) => bookmark.id === selected.bookmarkId) ?? null;
-  }, [authorBookmarks, filtered, previewOpen, selectedIndex]);
+  const namespaceLabel = directoryNamespace?.label ?? (authorNamespace ? `@${authorNamespace}` : bookmarkNamespace?.label ?? namespacePrefix);
+  const bookmarkForItem = useCallback((item: LauncherItem | undefined): Bookmark | null => {
+    if (item?.type !== 'bookmark' || !item.bookmarkId) return null;
+    const bookmarks = authorNamespace ? authorBookmarks : bookmarkNamespaceBookmarks;
+    return bookmarks.find((bookmark) => bookmark.id === item.bookmarkId) ?? null;
+  }, [authorBookmarks, authorNamespace, bookmarkNamespaceBookmarks]);
+
+  const markdownPreviewPathForItem = useCallback((item: LauncherItem | undefined): string | null => {
+    if (!item?.filePath) return null;
+    if (item.type === 'command' || item.type === 'handoff' || item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact') {
+      return item.filePath;
+    }
+    return null;
+  }, []);
+
+  const loadPreviewForItem = useCallback(async (item: LauncherItem | undefined, itemIndex: number, source: string) => {
+    const requestId = ++previewRequestRef.current;
+    const bookmark = bookmarkForItem(item);
+    if (bookmark) {
+      setPreviewPayload({ kind: 'bookmark', bookmark });
+      traceLauncher('preview-load-bookmark', {
+        source,
+        selectedIndex: itemIndex,
+        item: describeLauncherItem(item),
+        bookmarkId: bookmark.id,
+      });
+      return;
+    }
+
+    const filePath = markdownPreviewPathForItem(item);
+    if (!filePath) {
+      setPreviewPayload(null);
+      traceLauncher('preview-load-empty', {
+        source,
+        selectedIndex: itemIndex,
+        item: describeLauncherItem(item),
+      });
+      return;
+    }
+
+    const preview = await commandsAPI.getMarkdownPreview(filePath).catch(() => null);
+    if (requestId !== previewRequestRef.current) return;
+    if (!preview) {
+      setPreviewPayload(null);
+      traceLauncher('preview-load-markdown-failed', {
+        source,
+        selectedIndex: itemIndex,
+        item: describeLauncherItem(item),
+        filePath,
+      });
+      return;
+    }
+
+    setPreviewPayload({
+      kind: 'markdown',
+      title: item?.displayName || preview.title,
+      filePath: preview.filePath,
+      content: preview.content,
+    });
+    traceLauncher('preview-load-markdown', {
+      source,
+      selectedIndex: itemIndex,
+      item: describeLauncherItem(item),
+      filePath: preview.filePath,
+    });
+  }, [bookmarkForItem, markdownPreviewPathForItem]);
 
   useEffect(() => {
     if (!previewOpen) return;
     traceLauncher('preview-state', {
-      hasBookmark: Boolean(previewBookmark),
+      hasPreview: Boolean(previewPayload),
+      previewKind: previewPayload?.kind ?? null,
       selectedIndex,
       filteredCount: filtered.length,
       item: describeLauncherItem(filtered[selectedIndex]),
-      bookmarkId: previewBookmark?.id ?? null,
+      bookmarkId: previewPayload?.kind === 'bookmark' ? previewPayload.bookmark.id : null,
+      filePath: previewPayload?.kind === 'markdown' ? previewPayload.filePath : null,
     });
-  }, [filtered, previewBookmark, previewOpen, selectedIndex]);
+  }, [filtered, previewOpen, previewPayload, selectedIndex]);
 
   useEffect(() => {
     if (!previewOpen) {
@@ -509,9 +658,10 @@ function CommandLauncher() {
         commandsAPI.launcherPreviewHide?.();
         previewWindowWasOpenRef.current = false;
       }
+      setPreviewPayload(null);
       return;
     }
-    if (!previewBookmark) {
+    if (!previewPayload) {
       if (previewWindowWasOpenRef.current) {
         commandsAPI.launcherPreviewHide?.();
         previewWindowWasOpenRef.current = false;
@@ -521,17 +671,25 @@ function CommandLauncher() {
     previewWindowWasOpenRef.current = true;
     traceLauncher('preview-window-show', {
       selectedIndex,
-      bookmarkId: previewBookmark.id,
+      previewKind: previewPayload.kind,
+      bookmarkId: previewPayload.kind === 'bookmark' ? previewPayload.bookmark.id : null,
+      filePath: previewPayload.kind === 'markdown' ? previewPayload.filePath : null,
     });
-    commandsAPI.launcherPreviewShow?.(previewBookmark);
-  }, [previewBookmark, previewOpen, selectedIndex]);
+    commandsAPI.launcherPreviewShow?.(previewPayload);
+  }, [previewOpen, previewPayload, selectedIndex]);
+
+  useEffect(() => {
+    if (!previewOpen) return;
+    const selected = filtered[selectedIndex];
+    void loadPreviewForItem(selected, selectedIndex, 'selection');
+  }, [filtered, loadPreviewForItem, previewOpen, selectedIndex]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
-    if (namespacePrefix || authorNamespace) return false;
+    if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) return false;
     const q = query.trim().toLowerCase();
     return q === 'help' || q === '?';
-  }, [namespacePrefix, authorNamespace, query]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, query]);
 
   // Filter items when query changes.
   useEffect(() => {
@@ -547,7 +705,7 @@ function CommandLauncher() {
       commandsAPI.launcherResize(inputHeight + listHeight);
     };
 
-    if (allItems.length === 0 && !authorNamespace) {
+    if (allItems.length === 0 && !directoryNamespace && !authorNamespace && !bookmarkNamespace) {
       setFiltered([]);
       selectIndex(0);
       // Don't show empty state height when still loading (query is empty)
@@ -556,7 +714,7 @@ function CommandLauncher() {
       return;
     }
 
-    if (!namespacePrefix && !authorNamespace && query.trim() === '') {
+    if (!namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && query.trim() === '') {
       setFiltered([]);
       selectIndex(0);
       commandsAPI.launcherResize(inputHeight);
@@ -595,8 +753,28 @@ function CommandLauncher() {
 
     const q = query.toLowerCase();
 
+    if (directoryNamespace) {
+      const results = filterLauncherDirectoryNamespaceItems(
+        [...libraryMarkdownItems, ...artifactReadings, ...commandItems],
+        directoryNamespace,
+        q,
+      );
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, true);
+      return;
+    }
+
     if (authorNamespace) {
       const results = filterLauncherNamespaceItems(authorBookmarkItems, q);
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, true);
+      return;
+    }
+
+    if (bookmarkNamespace) {
+      const results = filterLauncherNamespaceItems(bookmarkNamespaceItems, q);
       setFiltered(results);
       selectIndex(0);
       resizeForResults(results.length, true);
@@ -658,6 +836,8 @@ function CommandLauncher() {
 
       // Prefer the synthesized author action over handle-shaped markdown files.
       if (item.type === 'bookmark-author') score += 25;
+      if (item.type === 'bookmark-facet') score += 20;
+      if (item.type === 'directory') score += 30;
 
       return { item, score };
     });
@@ -672,11 +852,12 @@ function CommandLauncher() {
 
     // Resize window.
     resizeForResults(matches.length, true);
-  }, [namespacePrefix, authorNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, authorBookmarkItems, selectIndex]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, selectIndex]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
     hasNavigatedRef.current = false;
+    hasExplicitSelectionRef.current = false;
     // Also reset scroll position when results change.
     if (listRef.current) {
       listRef.current.scrollTop = 0;
@@ -729,13 +910,26 @@ function CommandLauncher() {
     return `[[${target.replace(/\]/g, '\\]')}]]`;
   }, []);
 
+  const dismissPreview = useCallback(() => {
+    if (previewOpen || previewWindowWasOpenRef.current) {
+      traceLauncher('preview-close', { source: 'invoke' });
+    }
+    previewRequestRef.current += 1;
+    setPreviewOpen(false);
+    setPreviewPayload(null);
+    commandsAPI.launcherPreviewHide?.();
+    previewWindowWasOpenRef.current = false;
+  }, [previewOpen]);
+
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
       if (previewOpen) {
         e.preventDefault();
         traceLauncher('preview-close', { source: 'escape' });
+        previewRequestRef.current += 1;
         setPreviewOpen(false);
+        setPreviewPayload(null);
         return;
       }
       commandsAPI.launcherClose();
@@ -743,7 +937,8 @@ function CommandLauncher() {
       e.preventDefault();
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
-      const nextIndex = Math.min(selectedIndexRef.current + 1, filtered.length - 1);
+      const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'down', hasExplicitSelectionRef.current);
+      hasExplicitSelectionRef.current = true;
       selectIndex(nextIndex);
       if (previewOpen) {
         traceLauncher('preview-selection', {
@@ -756,7 +951,8 @@ function CommandLauncher() {
       e.preventDefault();
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
-      const nextIndex = Math.max(selectedIndexRef.current - 1, 0);
+      const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'up', hasExplicitSelectionRef.current);
+      hasExplicitSelectionRef.current = true;
       selectIndex(nextIndex);
       if (previewOpen) {
         traceLauncher('preview-selection', {
@@ -767,11 +963,31 @@ function CommandLauncher() {
       }
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      if (namespacePrefix || authorNamespace) return;
+      if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) return;
 
       const rawQuery = query.trim();
       const q = rawQuery.toLowerCase();
       const currentIndex = selectedIndexRef.current;
+      const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
+      if (directory?.directoryPath) {
+        setDirectoryNamespace({
+          label: directory.displayName,
+          directoryPath: directory.directoryPath,
+          directoryRelPath: directory.directoryRelPath,
+        });
+        setQuery('');
+        selectIndex(0);
+        return;
+      }
+
+      const bookmarkFacet = resolveLauncherBookmarkFacetNamespace(filtered, bookmarkFacetItems, currentIndex, rawQuery);
+      if (bookmarkFacet?.facetPaths?.length) {
+        setBookmarkNamespace({ kind: 'facet', label: bookmarkFacet.displayName, paths: bookmarkFacet.facetPaths });
+        setQuery('');
+        selectIndex(0);
+        return;
+      }
+
       const authorHandle = resolveLauncherAuthorNamespaceHandle(filtered, bookmarkAuthorItems, currentIndex, rawQuery);
       if (authorHandle) {
         setAuthorNamespace(authorHandle);
@@ -783,12 +999,20 @@ function CommandLauncher() {
       for (const prefix of NAMESPACE_PREFIXES) {
         if (prefix.startsWith(q) && q.length > 0) {
           setNamespacePrefix(prefix);
+          previewRequestRef.current += 1;
           setPreviewOpen(false);
+          setPreviewPayload(null);
           setQuery('');
           return;
         }
       }
-    } else if (isLauncherPreviewToggleKey(e)) {
+
+      if (rawQuery) {
+        setBookmarkNamespace({ kind: 'search', label: `search: ${rawQuery}`, query: rawQuery });
+        setQuery('');
+        selectIndex(0);
+      }
+    } else if (shouldHandleLauncherPreviewShortcut(e, hasExplicitSelectionRef.current, previewOpen)) {
       const currentIndex = selectedIndexRef.current;
       const selectedItem = filtered[currentIndex];
       traceLauncher('preview-key', {
@@ -806,13 +1030,15 @@ function CommandLauncher() {
       if (previewOpen) {
         e.preventDefault();
         traceLauncher('preview-close', { source: 'space' });
+        previewRequestRef.current += 1;
         setPreviewOpen(false);
+        setPreviewPayload(null);
         return;
       }
-      if (selectedItem?.type === 'bookmark') {
+      if (bookmarkForItem(selectedItem) || markdownPreviewPathForItem(selectedItem)) {
         e.preventDefault();
         selectIndex(currentIndex);
-        traceLauncher('preview-open-bookmark', {
+        traceLauncher('preview-open-item', {
           selectedIndex: currentIndex,
           item: describeLauncherItem(selectedItem),
         });
@@ -838,15 +1064,19 @@ function CommandLauncher() {
         selectedIndex: currentIndex,
         item: describeLauncherItem(selectedItem),
       });
-    } else if (e.key === 'Backspace' && (namespacePrefix || authorNamespace) && query === '') {
+    } else if (e.key === 'Backspace' && (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) && query === '') {
       e.preventDefault();
       setNamespacePrefix(null);
+      setDirectoryNamespace(null);
       setAuthorNamespace(null);
+      setBookmarkNamespace(null);
+      previewRequestRef.current += 1;
       setPreviewOpen(false);
+      setPreviewPayload(null);
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
-        const currentIndex = Math.min(selectedIndexRef.current, filtered.length - 1);
+        const currentIndex = resolveLauncherEnterIndex(selectedIndexRef.current, filtered.length, hasNavigatedRef.current);
         const selectedItem = filtered[currentIndex];
         if (selectedItem) invokeItem(selectedItem, { insertWikiLink: e.metaKey });
       }
@@ -855,6 +1085,7 @@ function CommandLauncher() {
 
   // Invoke the selected item.
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean } = {}) => {
+    dismissPreview();
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
     const fieldTheoryTarget = latestContext?.fieldTheoryActive ? getFieldTheoryTarget(item) : null;
     if (fieldTheoryTarget) {
@@ -869,11 +1100,27 @@ function CommandLauncher() {
     if (item.type === 'command') {
       await commandsAPI.invokeCommand(item.name);
       commandsAPI.launcherClose();
+    } else if (item.type === 'directory') {
+      if (item.directoryPath) {
+        setDirectoryNamespace({
+          label: item.displayName,
+          directoryPath: item.directoryPath,
+          directoryRelPath: item.directoryRelPath,
+        });
+        setQuery('');
+        selectIndex(0);
+      }
     } else if (item.type === 'bookmark-author') {
       if (item.authorHandle) {
         await bookmarksAPI?.invokeAuthorTimeline(item.authorHandle);
       }
       commandsAPI.launcherClose();
+    } else if (item.type === 'bookmark-facet') {
+      if (item.facetPaths?.length) {
+        setBookmarkNamespace({ kind: 'facet', label: item.displayName, paths: item.facetPaths });
+        setQuery('');
+        selectIndex(0);
+      }
     } else if (item.type === 'bookmark') {
       if (item.bookmarkId) {
         await bookmarksAPI?.invokeBookmark(item.bookmarkId);
@@ -914,9 +1161,9 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose();
     }
-  }, [getFieldTheoryTarget, getWikiLinkText]);
+  }, [dismissPreview, getFieldTheoryTarget, getWikiLinkText, selectIndex]);
 
-  const hasContentBelow = filtered.length > 0 || ((namespaceLabel || query.trim() !== '') && (allItems.length > 0 || authorBookmarkItems.length > 0));
+  const hasContentBelow = filtered.length > 0 || ((namespaceLabel || query.trim() !== '') && (allItems.length > 0 || authorBookmarkItems.length > 0 || bookmarkNamespaceItems.length > 0));
   // Always use dark mode styling for the launcher regardless of system theme
   const styles = getStyles(true);
 
@@ -968,7 +1215,7 @@ function CommandLauncher() {
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => selectIndex(globalIndex)}
+                      onMouseEnter={() => selectExplicitItem(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.hotkeyDisplay && (
@@ -993,7 +1240,7 @@ function CommandLauncher() {
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => selectIndex(globalIndex)}
+                      onMouseEnter={() => selectExplicitItem(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.timeAgo && (
@@ -1018,7 +1265,7 @@ function CommandLauncher() {
                         ...(globalIndex === selectedIndex ? styles.listItemSelected : {}),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => selectIndex(globalIndex)}
+                      onMouseEnter={() => selectExplicitItem(globalIndex)}
                     >
                       <span style={styles.itemName}>{item.name}</span>
                     </li>
@@ -1036,7 +1283,7 @@ function CommandLauncher() {
                   ...(i === selectedIndex ? styles.listItemSelected : {}),
                 }}
                 onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                onMouseEnter={() => selectIndex(i)}
+                onMouseEnter={() => selectExplicitItem(i)}
               >
                 <span style={styles.itemName}>
                   {item.type === 'command' ? item.name : item.displayName}

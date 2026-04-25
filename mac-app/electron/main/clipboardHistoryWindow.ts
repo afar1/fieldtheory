@@ -468,8 +468,8 @@ export class ClipboardHistoryWindow {
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
     return {
       showInDock,
-      // Only treat immersive as blur-blocking when the current content isn't
-      // dismissable (artifact reading). Bookmarks canvas opts in to dismiss.
+      // Only treat legacy immersive as blur-blocking when the renderer has not
+      // opted into panel-like blur dismissal.
       immersive: this.isImmersiveMode && !this.immersiveDismissableOnBlur,
       sketch: this.sketchModeActive,
       scenario: this.scenarioTestingActive,
@@ -943,7 +943,7 @@ export class ClipboardHistoryWindow {
 
   /**
    * Raise the existing window without stealing focus from the current app.
-   * Used when a new artifact arrives while the immersive window is already open.
+   * Used when a new artifact arrives while the Library window is already open.
    */
   revealWithoutFocus(): void {
     if (!this.window || this.window.isDestroyed()) {

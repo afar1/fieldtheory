@@ -454,7 +454,7 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
                 fontWeight: 500,
               }}
             >
-              {isSaving ? 'Saving...' : 'Save'}
+              Save
             </button>
             <button
               onClick={() => handleSave(true)}

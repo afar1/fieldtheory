@@ -934,7 +934,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
               width: '100%',
             }}
           >
-            {isSavingName ? 'Saving...' : fullName.trim() ? 'Continue' : 'Skip'}
+            {fullName.trim() ? 'Continue' : 'Skip'}
           </button>
         </div>
       </div>

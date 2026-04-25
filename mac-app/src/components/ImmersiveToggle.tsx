@@ -16,6 +16,7 @@ export default function ImmersiveToggle({ isFullScreen, onToggle, title }: Immer
   const { theme } = useTheme();
   return (
     <button
+      type="button"
       onClick={onToggle}
       title={title ?? (isFullScreen ? 'Exit immersive view' : 'Enter immersive view')}
       aria-label={isFullScreen ? 'Exit immersive view' : 'Enter immersive view'}
@@ -29,6 +30,8 @@ export default function ImmersiveToggle({ isFullScreen, onToggle, title }: Immer
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',
+        // @ts-ignore - toolbar controls should not be treated as a window drag region.
+        WebkitAppRegion: 'no-drag',
       }}
       onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.hoverBg)}
       onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
