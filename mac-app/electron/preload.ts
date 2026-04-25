@@ -2794,6 +2794,7 @@ const CommandsIPCChannels = {
   // Handoffs - global session handoff files
   GET_HANDOFFS: 'commands:getHandoffs',
   GET_HANDOFF_CONTENT: 'commands:getHandoffContent',
+  GET_MARKDOWN_PREVIEW: 'commands:getMarkdownPreview',
 } as const;
 
 type PortableCommandInfo = {
@@ -2836,10 +2837,20 @@ type HandoffInfo = {
   lastModified: number;
 };
 
+type MarkdownPreview = {
+  title: string;
+  filePath: string;
+  content: string;
+};
+
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command';
   path: string;
 };
+
+type LauncherPreviewPayload =
+  | { kind: 'bookmark'; bookmark: Bookmark }
+  | { kind: 'markdown'; title: string; filePath: string; content: string };
 
 const commandsAPI = {
   // Get the currently configured commands directory.
@@ -2937,6 +2948,10 @@ const commandsAPI = {
     return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMAND_BY_PATH, filePath);
   },
 
+  getMarkdownPreview: async (filePath: string): Promise<MarkdownPreview | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, filePath);
+  },
+
   // Save/update a command's content.
   saveCommand: async (filePath: string, content: string): Promise<boolean> => {
     return ipcRenderer.invoke(CommandsIPCChannels.SAVE_COMMAND, filePath, content);
@@ -2982,12 +2997,16 @@ const commandsAPI = {
   },
 
   // Show or hide the detached command launcher preview window.
-  launcherPreviewShow: (bookmark: Bookmark): void => {
-    ipcRenderer.send('command-launcher:preview-show', bookmark);
+  launcherPreviewShow: (preview: LauncherPreviewPayload): void => {
+    ipcRenderer.send('command-launcher:preview-show', preview);
   },
 
   launcherPreviewHide: (): void => {
     ipcRenderer.send('command-launcher:preview-hide');
+  },
+
+  launcherPreviewResize: (height: number): void => {
+    ipcRenderer.send('command-launcher:preview-resize', height);
   },
 
   onLauncherPreviewBookmark: (callback: (bookmark: Bookmark) => void): (() => void) => {
@@ -2995,6 +3014,14 @@ const commandsAPI = {
     ipcRenderer.on('command-launcher-preview:bookmark', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher-preview:bookmark', handler);
+    };
+  },
+
+  onLauncherPreview: (callback: (preview: LauncherPreviewPayload) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, preview: LauncherPreviewPayload) => callback(preview);
+    ipcRenderer.on('command-launcher-preview:payload', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher-preview:payload', handler);
     };
   },
 
@@ -3859,8 +3886,13 @@ const bookmarksAPI = {
   getAuthors: (): Promise<BookmarkAuthorSummary[]> => ipcRenderer.invoke('bookmarks:getAuthors'),
   getAuthorBookmarks: (handle: string): Promise<Bookmark[]> =>
     ipcRenderer.invoke('bookmarks:getAuthorBookmarks', handle),
+  getTaxonomyBookmarks: (filePaths: string[]): Promise<Bookmark[]> =>
+    ipcRenderer.invoke('bookmarks:getTaxonomyBookmarks', filePaths),
+  search: (query: string): Promise<Bookmark[]> => ipcRenderer.invoke('bookmarks:search', query),
   invokeBookmark: (id: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('bookmarks:invokeBookmark', id),
+  copyForAgent: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:copyForAgent', id),
   invokeAuthorTimeline: (handle: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('bookmarks:invokeAuthorTimeline', handle),
   onChanged: (callback: () => void): (() => void) => {

@@ -2366,7 +2366,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private startLibraryRootWatchers(): void {
-    for (const dirPath of this.settings.libraryRoots ?? []) {
+    for (const dirPath of this.getSafeLibraryRootPaths()) {
       this.watchLibraryRoot(dirPath);
     }
   }
@@ -2570,6 +2570,54 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private getUnsafeBroadDirectoryMessage(dirPath: string): string | null {
+    const homePath = this.normalizePath(app.getPath('home'));
+    const usersPath = path.dirname(homePath);
+    const rootPath = path.parse(homePath).root;
+    const dirKey = this.libraryRootKey(dirPath);
+
+    if (dirKey === this.libraryRootKey(homePath)) {
+      return 'Choose a specific project or notes folder, not your whole home folder.';
+    }
+    if (dirKey === this.libraryRootKey(usersPath)) {
+      return 'Choose a specific project or notes folder, not the whole Users folder.';
+    }
+    if (dirKey === this.libraryRootKey(rootPath)) {
+      return 'Choose a specific project or notes folder, not the system root.';
+    }
+    return null;
+  }
+
+  private getSafeLibraryRootPaths(): string[] {
+    const roots = this.settings.libraryRoots ?? [];
+    const safeRoots = roots.filter((rootPath) => {
+      const expandedPath = this.expandPath(rootPath.trim());
+      const normalizedPath = this.normalizePath(expandedPath);
+      const message = this.getUnsafeBroadDirectoryMessage(normalizedPath);
+      if (message) log.warn(`Skipping unsafe library root ${normalizedPath}: ${message}`);
+      return !message;
+    });
+
+    if (safeRoots.length !== roots.length) {
+      this.settings.libraryRoots = safeRoots;
+      this.saveSettings();
+    }
+
+    return safeRoots;
+  }
+
+  private updateMarkdownH1Title(absPath: string, title: string): void {
+    const content = fs.readFileSync(absPath, 'utf-8');
+    const lines = content.split('\n');
+    const h1Index = lines.findIndex((line, index) => index < 20 && /^#\s+/.test(line));
+    if (h1Index === -1) {
+      fs.writeFileSync(absPath, `# ${title}\n\n${content}`, 'utf-8');
+      return;
+    }
+    lines[h1Index] = `# ${title}`;
+    fs.writeFileSync(absPath, lines.join('\n'), 'utf-8');
+  }
+
   private ensureFolderReadme(folderId: LibraryReadmeFolderId, absDir: string, content: string, legacyContents: string[] = []): boolean {
     const seeded = normalizeSeededReadmes(this.settings.readmesSeeded);
 
@@ -2745,7 +2793,7 @@ export class LibrarianManager extends EventEmitter {
     ];
     const seen = new Set<string>([this.libraryRootKey(this.wikiDir)]);
 
-    for (const savedRoot of this.settings.libraryRoots ?? []) {
+    for (const savedRoot of this.getSafeLibraryRootPaths()) {
       const normalizedRoot = this.normalizePath(savedRoot);
       const key = this.libraryRootKey(normalizedRoot);
       if (seen.has(key)) continue;
@@ -2766,6 +2814,9 @@ export class LibrarianManager extends EventEmitter {
   addLibraryRoot(dirPath: string): LibraryRoot | null {
     const canonicalPath = this.resolveExistingDirectoryPath(dirPath);
     if (!canonicalPath) return null;
+
+    const unsafeMessage = this.getUnsafeBroadDirectoryMessage(canonicalPath);
+    if (unsafeMessage) throw new Error(unsafeMessage);
 
     const newKey = this.libraryRootKey(canonicalPath);
     if (newKey === this.libraryRootKey(this.wikiDir)) return null;
@@ -2891,14 +2942,24 @@ export class LibrarianManager extends EventEmitter {
     if (!slug) return null;
     const folder = path.posix.dirname(relPath);
     const newRelPath = folder && folder !== '.' ? `${folder}/${slug}` : slug;
-    if (newRelPath === relPath) return relPath;
     const oldAbs = path.resolve(this.wikiDir, `${relPath}.md`);
     const newAbs = path.resolve(this.wikiDir, `${newRelPath}.md`);
     if (!this.isInsidePath(this.wikiDir, oldAbs) || !this.isInsidePath(this.wikiDir, newAbs)) return null;
     if (!fs.existsSync(oldAbs)) return null;
+    if (newRelPath === relPath) {
+      try {
+        this.updateMarkdownH1Title(oldAbs, trimmed);
+        this.emit('wiki:changed');
+        return relPath;
+      } catch (error) {
+        log.error(`Error renaming wiki page title ${relPath}:`, error);
+        return null;
+      }
+    }
     if (fs.existsSync(newAbs)) return null;
     try {
       fs.renameSync(oldAbs, newAbs);
+      this.updateMarkdownH1Title(newAbs, trimmed);
       this.emit('wiki:changed');
       // Let RecentManager prune the stale entry for the old relPath.
       this.emit('wiki:deleted', relPath);

@@ -40,7 +40,7 @@ describe('CommandsView command naming', () => {
         getCommandByPath: vi.fn(async () => ({
           ...existingCommand,
           lastModified: 0,
-          content: '# existing\n\n',
+          content: '# existing\n\nRendered selection text\n',
         })),
         createCommand: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
@@ -102,5 +102,90 @@ describe('CommandsView command naming', () => {
       expect(window.commandsAPI?.browseDirectory).toHaveBeenCalled();
       expect(window.commandsAPI?.addWatchedDir).toHaveBeenCalledWith('/tmp/more-commands');
     });
+  });
+
+  it('uses a rendered/source toggle for internal commands', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    expect(screen.queryByText('Edit')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Markdown source'));
+
+    expect(await screen.findByPlaceholderText('Write your command markdown here...')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Rendered'));
+
+    await waitFor(() => {
+      expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+    });
+  });
+
+  it('copies selected rendered command text before falling back to the file path', async () => {
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const selectedText = await screen.findByText('Rendered selection text');
+    expect(screen.queryByText('Copy content')).toBeNull();
+    const range = document.createRange();
+    range.selectNodeContents(selectedText);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    fireEvent.keyDown(window, { key: 'c', metaKey: true });
+
+    await waitFor(() => {
+      expect(writeText).toHaveBeenCalledWith('Rendered selection text');
+      expect(screen.getByLabelText('Copied')).toBeTruthy();
+    });
+    expect(writeText).not.toHaveBeenCalledWith('/tmp/commands/existing.md');
+
+    selection?.removeAllRanges();
+  });
+
+  it('uses the focus chrome collapse path for the focus button and shortcut', async () => {
+    const onFocusChromeShortcut = vi.fn();
+    const onFocusChromeActiveChange = vi.fn();
+    render(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        onFocusChromeShortcut={onFocusChromeShortcut}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+      />
+    );
+
+    await screen.findByText('Rendered selection text');
+    expect(screen.getByText('commands / existing.md')).toBeTruthy();
+    onFocusChromeActiveChange.mockClear();
+
+    fireEvent.click(screen.getByLabelText('Enter immersive view'));
+
+    expect(onFocusChromeShortcut).toHaveBeenCalledTimes(1);
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+    });
+    expect(onFocusChromeActiveChange.mock.calls.map(([active]) => active)).toEqual([true]);
+    expect(screen.queryByText('commands / existing.md')).toBeNull();
+
+    fireEvent.click(screen.getByLabelText('Exit immersive view'));
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+    });
+    expect(screen.getByText('commands / existing.md')).toBeTruthy();
+
+    fireEvent.keyDown(window, { key: '/', code: 'Slash', metaKey: true });
+
+    expect(onFocusChromeShortcut).toHaveBeenCalledTimes(2);
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+    });
+    expect(screen.queryByText('commands / existing.md')).toBeNull();
   });
 });

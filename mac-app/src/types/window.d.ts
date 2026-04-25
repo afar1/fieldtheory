@@ -1158,6 +1158,16 @@ interface FieldTheoryMarkdownTarget {
   path: string;
 }
 
+interface MarkdownPreview {
+  title: string;
+  filePath: string;
+  content: string;
+}
+
+type LauncherPreviewPayload =
+  | { kind: 'bookmark'; bookmark: Bookmark }
+  | { kind: 'markdown'; title: string; filePath: string; content: string };
+
 /**
  * Commands API for managing portable commands (markdown files).
  * Allows users to bring their commands from other tools like Claude, Cursor, etc.
@@ -1184,6 +1194,7 @@ interface CommandsAPI {
 
   // CRUD operations
   getCommandByPath: (filePath: string) => Promise<CommandWithContent | null>;
+  getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   saveCommand: (filePath: string, content: string) => Promise<boolean>;
   createCommand: (directoryPath: string, name: string, content?: string) => Promise<{ path: string; name: string } | null>;
   deleteCommand: (filePath: string) => Promise<boolean>;
@@ -1194,9 +1205,11 @@ interface CommandsAPI {
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
-  launcherPreviewShow?: (bookmark: Bookmark) => void;
+  launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
+  launcherPreviewResize?: (height: number) => void;
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
+  onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: () => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
@@ -1744,7 +1757,10 @@ declare global {
     getAll: () => Promise<BookmarksSnapshot>;
     getAuthors: () => Promise<BookmarkAuthorSummary[]>;
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
+    getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;
+    search: (query: string) => Promise<Bookmark[]>;
     invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+    copyForAgent: (id: string) => Promise<{ success: boolean; error?: string }>;
     invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   }

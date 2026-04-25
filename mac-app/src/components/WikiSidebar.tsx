@@ -493,6 +493,14 @@ export function getWikiSidebarExpansionIds(rootPath: string, relPath: string): s
   return ids;
 }
 
+export function getSelectedWikiAutoExpandKey(
+  selectedId: string | null | undefined,
+  rootPath: string | null | undefined
+): string | null {
+  if (!selectedId?.startsWith('wiki:') || !rootPath) return null;
+  return `${rootPath}::${selectedId}`;
+}
+
 export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot, sortMode: SortMode = 'alpha'): SidebarNode[] {
   if (!root.builtin) return nodes;
 
@@ -613,15 +621,23 @@ function WikiSidebar({
     y: number;
     node: SidebarNode | null;
   } | null>(null);
+  const autoExpandedSelectedWikiKeyRef = useRef<string | null>(null);
 
   // Auto-expand the parent folder of the selected wiki item so programmatic
   // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
-  // of leaving it hidden under a collapsed folder.
+  // of leaving it hidden under a collapsed folder. Track the selection so
+  // focus-triggered tree reloads do not reopen a folder the user collapsed.
   useEffect(() => {
-    if (!selectedId?.startsWith('wiki:')) return;
+    if (!selectedId?.startsWith('wiki:')) {
+      autoExpandedSelectedWikiKeyRef.current = null;
+      return;
+    }
     const relPath = selectedId.slice('wiki:'.length);
     const builtinRoot = libraryRoots.find((root) => root.builtin);
     if (!builtinRoot) return;
+    const autoExpandKey = getSelectedWikiAutoExpandKey(selectedId, builtinRoot.path);
+    if (!autoExpandKey || autoExpandedSelectedWikiKeyRef.current === autoExpandKey) return;
+    autoExpandedSelectedWikiKeyRef.current = autoExpandKey;
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       let changed = false;
@@ -955,8 +971,18 @@ function WikiSidebar({
     closeContextMenu();
     const picked = await window.libraryAPI?.pickFolder();
     if (!picked) return;
-    const root = await window.libraryAPI?.addRoot(picked);
-    if (!root) return;
+    let root: LibraryRoot | null | undefined;
+    try {
+      root = await window.libraryAPI?.addRoot(picked);
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : 'Could not add folder.');
+      return;
+    }
+    if (!root) {
+      setMoveError('Could not add folder. Choose an existing folder that is not already in Library.');
+      return;
+    }
+    setMoveError(null);
     await loadTree();
     setExpandedFolders((prev) => {
       const next = new Set(prev);

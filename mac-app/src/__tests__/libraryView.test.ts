@@ -4,6 +4,9 @@ import {
   editorSessionMatchesSelection,
   extractMarkdownH1Title,
   findNextMarkdownMatch,
+  getCarrotListEnterEdit,
+  getCarrotListTabEdit,
+  getMarkdownBodySelectionRange,
   getNewlyCheckedMarkdownTasks,
   highlightFileFindMatches,
   formatBreadcrumb,
@@ -12,7 +15,9 @@ import {
   getScrollTopForCaretVisibility,
   getScrollTopForRatio,
   moveLibrarianNavigationHistory,
+  normalizeMarkdownCarrotLists,
   normalizeMarkdownTodoLines,
+  persistLibrarianUnorderedListMarker,
   persistLibrarianEditorSession,
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
@@ -20,6 +25,7 @@ import {
   replaceLibrarianNavigationEntry,
   resolveMarkdownCaretOffsetFromRenderedText,
   restoreLibrarianEditorSession,
+  restoreLibrarianUnorderedListMarker,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   splitFrontmatter,
@@ -37,6 +43,7 @@ import {
   filterUnifiedFolders,
   getLibraryDragData,
   getSidebarFolderFinderPath,
+  getSelectedWikiAutoExpandKey,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
   splitRecent,
@@ -116,6 +123,11 @@ describe('preserveMarkdownBlankLines', () => {
       'Before\n\n\u00A0\n\n```\na\n\nb\n```\n\n\u00A0\n\nAfter',
     );
   });
+
+  it('does not add visible blank-line markers between carrot list groups', () => {
+    const normalized = normalizeMarkdownCarrotLists('› first\n›› child\n\n› second');
+    expect(preserveMarkdownBlankLines(normalized)).toBe('- \u2060first\n  - \u2060child\n\n- \u2060second');
+  });
 });
 
 describe('normalizeMarkdownTodoLines', () => {
@@ -129,6 +141,79 @@ describe('normalizeMarkdownTodoLines', () => {
 
   it('leaves fenced code examples alone', () => {
     expect(normalizeMarkdownTodoLines('```\n[] literal\n[x] literal\n```\n[x] task')).toBe('```\n[] literal\n[x] literal\n```\n- [x] task');
+  });
+});
+
+describe('normalizeMarkdownCarrotLists', () => {
+  it('turns carrot stack lines into nested unordered markdown with a render sentinel', () => {
+    expect(normalizeMarkdownCarrotLists('› first\n›› second\n››')).toBe('- \u2060first\n  - \u2060second\n  - \u2060');
+  });
+
+  it('leaves fenced carrot examples alone', () => {
+    expect(normalizeMarkdownCarrotLists('```\n› literal\n```\n› real')).toBe('```\n› literal\n```\n- \u2060real');
+  });
+});
+
+describe('carrot list editor helpers', () => {
+  it('continues a carrot list on Enter', () => {
+    expect(getCarrotListEnterEdit('› first', 7, 7)).toEqual({
+      nextValue: '› first\n› ',
+      selectionStart: 10,
+      selectionEnd: 10,
+    });
+  });
+
+  it('exits an empty carrot item on Enter', () => {
+    expect(getCarrotListEnterEdit('› first\n›› ', 11, 11)).toEqual({
+      nextValue: '› first\n',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+  });
+
+  it('indents and outdents carrot stacks with Tab and Shift+Tab', () => {
+    expect(getCarrotListTabEdit('› item', 6, 6, 'in')).toEqual({
+      nextValue: '›› item',
+      selectionStart: 7,
+      selectionEnd: 7,
+    });
+    expect(getCarrotListTabEdit('›› item', 7, 7, 'out')).toEqual({
+      nextValue: '› item',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+  });
+
+  it('handles Shift+Tab at one carrot without deleting it', () => {
+    expect(getCarrotListTabEdit('› item', 6, 6, 'out')).toEqual({
+      nextValue: '› item',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+  });
+});
+
+describe('markdown body selection', () => {
+  it('selects the body after a leading H1 and blank line', () => {
+    expect(getMarkdownBodySelectionRange('# Title\n\nBody')).toEqual({ start: 9, end: 13 });
+  });
+
+  it('does not override select-all when there is no leading H1', () => {
+    expect(getMarkdownBodySelectionRange('Body only')).toBeNull();
+  });
+});
+
+describe('librarian unordered list marker preference', () => {
+  it('round-trips the saved unordered marker', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+
+    expect(restoreLibrarianUnorderedListMarker(storage)).toBe('dash');
+    persistLibrarianUnorderedListMarker(storage, 'carrot');
+    expect(restoreLibrarianUnorderedListMarker(storage)).toBe('carrot');
   });
 });
 
@@ -441,12 +526,12 @@ describe('markdown editor edge fades', () => {
     expect(getMarkdownEditorEdgeFades(0, 400, 500)).toEqual({ top: false, bottom: false });
   });
 
-  it('shows only the bottom fade at the top of overflowing content', () => {
-    expect(getMarkdownEditorEdgeFades(0, 1000, 500)).toEqual({ top: false, bottom: true });
+  it('does not show the bottom fade at the top of overflowing content', () => {
+    expect(getMarkdownEditorEdgeFades(0, 1000, 500)).toEqual({ top: false, bottom: false });
   });
 
-  it('shows both fades in the middle of overflowing content', () => {
-    expect(getMarkdownEditorEdgeFades(250, 1000, 500)).toEqual({ top: true, bottom: true });
+  it('keeps only the top fade in the middle of overflowing content', () => {
+    expect(getMarkdownEditorEdgeFades(250, 1000, 500)).toEqual({ top: true, bottom: false });
   });
 
   it('shows only the top fade at the bottom of overflowing content', () => {
@@ -860,6 +945,16 @@ describe('recursive sidebar tree helpers', () => {
       '/wiki::scratchpad/meetings',
     ]);
   });
+
+  it('keys selected wiki auto-expansion by root and selected item', () => {
+    const key = getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', '/wiki');
+
+    expect(key).toBe('/wiki::wiki:scratchpad/team-notes');
+    expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', '/wiki')).toBe(key);
+    expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/other-note', '/wiki')).not.toBe(key);
+    expect(getSelectedWikiAutoExpandKey('artifact:/tmp/team-notes.md', '/wiki')).toBeNull();
+    expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', null)).toBeNull();
+  });
 });
 
 describe('resolveWikiCreateFolder', () => {
@@ -941,15 +1036,19 @@ describe('formatBreadcrumb', () => {
     expect(formatBreadcrumb('external', null)).toBe('');
   });
 
-  it('wiki: returns the title alone, no folder prefix', () => {
-    expect(formatBreadcrumb('wiki', reading)).toBe('My Journal');
+  it('wiki: returns the parent folder path from the relPath', () => {
+    expect(formatBreadcrumb('wiki', reading, 'entries/release-notes/my-journal')).toBe('entries / release-notes');
   });
 
-  it('external: returns the basename from the absolute path', () => {
-    expect(formatBreadcrumb('external', reading)).toBe('journal.md');
+  it('wiki: falls back to Library for top-level files', () => {
+    expect(formatBreadcrumb('wiki', reading, 'my-journal')).toBe('Library');
   });
 
-  it('external: falls back to the title when the path is just a filename', () => {
-    expect(formatBreadcrumb('external', { path: 'loose.md', title: 'Loose' })).toBe('loose.md');
+  it('external: returns the parent directory from the absolute path', () => {
+    expect(formatBreadcrumb('external', reading)).toBe('notes');
+  });
+
+  it('external: falls back to External when the path is just a filename', () => {
+    expect(formatBreadcrumb('external', { path: 'loose.md', title: 'Loose' })).toBe('External');
   });
 });
