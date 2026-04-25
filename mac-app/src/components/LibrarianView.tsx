@@ -3,7 +3,7 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo, Fragment } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo, Fragment, memo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import ReactMarkdown from 'react-markdown';
@@ -778,6 +778,7 @@ function smoothScrollMarkdownCaretIntoComfortView(editor: HTMLTextAreaElement): 
 }
 
 interface LibrarianViewProps {
+  active?: boolean;
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
@@ -841,7 +842,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string;
   };
 }
 
-export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -1209,7 +1210,19 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     });
   }, []);
 
-  useEffect(() => { prefetchBookmarks(); }, []);
+  useEffect(() => {
+    if (!active) return;
+    const scheduleIdle = window.requestIdleCallback
+      ? (callback: IdleRequestCallback) => window.requestIdleCallback(callback, { timeout: 2000 })
+      : (callback: IdleRequestCallback) => window.setTimeout(() => {
+        callback({ didTimeout: false, timeRemaining: () => 0 });
+      }, 500);
+    const cancelIdle = window.cancelIdleCallback
+      ? (handle: number) => window.cancelIdleCallback(handle)
+      : (handle: number) => window.clearTimeout(handle);
+    const handle = scheduleIdle(() => prefetchBookmarks());
+    return () => cancelIdle(handle);
+  }, [active]);
 
   const applySidebarWidth = useCallback((width: number) => {
     const nextWidth = `${width}px`;
@@ -1327,8 +1340,8 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [canUseFocusImmersive]);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(focusChromeActive);
-  }, [focusChromeActive, onFocusChromeActiveChange]);
+    onFocusChromeActiveChange?.(active && focusChromeActive);
+  }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
   useEffect(() => {
     return () => onFocusChromeActiveChange?.(false);
@@ -1337,17 +1350,18 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // Bookmarks immersive dismisses on blur (panel-like); artifact/wiki immersive
   // stays put so users can reference other apps while reading.
   useEffect(() => {
+    if (!active) return;
     const dismissable = isFullScreen && selectedItemType === 'bookmarks';
     window.librarianAPI?.setImmersiveDismissable?.(dismissable);
     return () => window.librarianAPI?.setImmersiveDismissable?.(false);
-  }, [isFullScreen, selectedItemType]);
+  }, [active, isFullScreen, selectedItemType]);
 
-  // Push 'library' size-key for every librarian section (wikis, artifacts,
-  // bookmarks). Bookmarks list/canvas modes share this size so toggling
-  // between them no longer triggers a 150ms window animation + repaint.
+  // Push 'library' size-key for every librarian section. BookmarksPane
+  // overrides this for its canvas mode so it can share Draw's window mechanics.
   useEffect(() => {
+    if (!active) return;
     window.librarianAPI?.setSizeKey?.('library');
-  }, [selectedItemType]);
+  }, [active, selectedItemType]);
 
   // Initialize narration state and subscribe to events (feature flagged)
   useEffect(() => {
@@ -2063,7 +2077,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length]);
 
   useEffect(() => {
-    if (contentMode !== 'markdown') {
+    if (!active || contentMode !== 'markdown') {
       setMarkdownEditorCommandActive(false);
       setMarkdownEditorLinkHover(null);
       return;
@@ -2091,7 +2105,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
     };
-  }, [contentMode]);
+  }, [active, contentMode]);
 
   useEffect(() => {
     setMarkdownUrlPasteChoice(null);
@@ -2099,9 +2113,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [activeReading?.path, contentMode]);
 
   useEffect(() => {
+    if (!active) return;
     const unsubscribe = window.librarianAPI?.onInsertMarkdownText(insertMarkdownText);
     return () => unsubscribe?.();
-  }, [insertMarkdownText]);
+  }, [active, insertMarkdownText]);
 
   useEffect(() => {
     return () => window.librarianAPI?.setMarkdownEditorFocused(false);
@@ -2317,6 +2332,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   }, [activeReading?.path, restoreEditorSession]);
 
   useEffect(() => {
+    if (!active) return;
     const restorePersistedSession = () => {
       const session = restoreLibrarianEditorSession(localStorage);
       restoreEditorSession(session);
@@ -2337,7 +2353,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener('focus', restorePersistedSession);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [flushEditorSessionPersist, restoreEditorSession]);
+  }, [active, flushEditorSessionPersist, restoreEditorSession]);
 
   const handleShare = useCallback(async () => {
     if (!selectedPath || !selectedReading) return;
@@ -2611,6 +2627,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   // Keyboard navigation
   useEffect(() => {
+    if (!active) return;
     function handleKeyDown(e: KeyboardEvent) {
       if (isImmersiveToggleShortcut(e)) {
         e.preventDefault();
@@ -2783,7 +2800,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, onFocusChromeShortcut, openFileFind]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, onFocusChromeShortcut, openFileFind]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -2808,6 +2825,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // on mount and whenever the wiki tree changes so links to newly created
   // pages resolve without a reopen.
   useEffect(() => {
+    if (!active) return;
     const load = async () => {
       const folders = await window.wikiAPI?.getTree();
       if (!folders) return;
@@ -2818,9 +2836,10 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     void load();
     const unsubscribe = window.wikiAPI?.onPageChanged(() => { void load(); });
     return () => unsubscribe?.();
-  }, []);
+  }, [active]);
 
   useEffect(() => {
+    if (!active) return;
     const toIndexPages = (commands: Array<{ name: string; displayName: string; filePath: string }> | undefined): WikiIndexInput[] => (
       commands ?? []
     ).flatMap((command) => {
@@ -2843,7 +2862,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
       setCommandIndexPages(toIndexPages(commands));
     });
     return () => unsubscribe?.();
-  }, []);
+  }, [active]);
 
   // macOS `open-file` for paths outside the wiki root.
   useEffect(() => {
@@ -2858,9 +2877,9 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
   // wiki/artifacts live under our private data dir so the proxy icon would
   // point users to an opaque internal path.
   useEffect(() => {
-    const path = selectedItemType === 'external' ? activeReading?.path ?? '' : '';
-    void window.shellAPI?.setRepresentedFilename(path);
-  }, [selectedItemType, activeReading?.path]);
+    const representedPath = active && selectedItemType === 'external' ? activeReading?.path ?? '' : '';
+    void window.shellAPI?.setRepresentedFilename(representedPath);
+  }, [active, selectedItemType, activeReading?.path]);
 
   // Hotkey-driven scratchpad flow: main creates the file, we land on it in
   // edit mode so the user can start typing immediately.
@@ -2874,14 +2893,14 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
 
   // Discover existing .librarian directories on empty state
   useEffect(() => {
-    if (!loading && readings.length === 0 && discoveredDirs.length === 0 && !isDiscovering) {
+    if (active && !loading && readings.length === 0 && discoveredDirs.length === 0 && !isDiscovering) {
       setIsDiscovering(true);
       window.librarianAPI?.discoverLibrarianDirs().then((dirs) => {
         setDiscoveredDirs(dirs);
         setIsDiscovering(false);
       });
     }
-  }, [loading, readings.length, discoveredDirs.length, isDiscovering]);
+  }, [active, loading, readings.length, discoveredDirs.length, isDiscovering]);
 
   // Helper to format path for display (show project name from path)
   const formatDirPath = (dirPath: string): { projectName: string; location: string } => {
@@ -3176,6 +3195,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
           }}
         >
           <WikiSidebar
+            active={active}
             selectedId={selectedItemId}
             onSelectItem={handleSelectItem}
             onCreateFile={handleCreateFile}
@@ -3240,6 +3260,7 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
             }}
           >
             <BookmarksPane
+              active={active && selectedItemType === 'bookmarks'}
               isFullScreen={isFullScreen}
               onToggleFullScreen={toggleImmersive}
             />
@@ -4422,3 +4443,5 @@ export default function LibrarianView({ onSwitchToClipboard, onSwitchToSettings,
     </div>
   );
 }
+
+export default memo(LibrarianView);
