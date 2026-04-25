@@ -1,19 +1,49 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import BookmarkCard from './components/BookmarkCard';
+import MarkdownPreviewCard from './components/MarkdownPreviewCard';
+
+type LauncherPreviewPayload =
+  | { kind: 'bookmark'; bookmark: Bookmark }
+  | { kind: 'markdown'; title: string; filePath: string; content: string };
 
 interface LauncherPreviewCommandsAPI {
-  onLauncherPreviewBookmark: (callback: (bookmark: Bookmark) => void) => () => void;
+  launcherPreviewResize?: (height: number) => void;
+  onLauncherPreview: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
 }
 
 const commandsAPI = window.commandsAPI as unknown as LauncherPreviewCommandsAPI;
+const PREVIEW_PADDING = 20;
 
 function CommandLauncherPreview() {
-  const [bookmark, setBookmark] = useState<Bookmark | null>(null);
+  const [preview, setPreview] = useState<LauncherPreviewPayload | null>(null);
+  const previewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    return commandsAPI.onLauncherPreviewBookmark(setBookmark);
+    return commandsAPI.onLauncherPreview(setPreview);
   }, []);
+
+  useLayoutEffect(() => {
+    if (!preview) return;
+    const el = previewRef.current;
+    if (!el) return;
+
+    const reportHeight = () => {
+      commandsAPI.launcherPreviewResize?.(Math.ceil(el.getBoundingClientRect().height + PREVIEW_PADDING * 2));
+    };
+
+    reportHeight();
+    const rafId = requestAnimationFrame(reportHeight);
+    const resizeObserver = typeof ResizeObserver !== 'undefined'
+      ? new ResizeObserver(reportHeight)
+      : null;
+    resizeObserver?.observe(el);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      resizeObserver?.disconnect();
+    };
+  }, [preview]);
 
   return (
     <div
@@ -26,18 +56,30 @@ function CommandLauncherPreview() {
         alignItems: 'center',
         justifyContent: 'center',
         background: 'transparent',
+        overflow: 'hidden',
       }}
     >
-      {bookmark && (
+      {preview && (
         <div
+          ref={previewRef}
           style={{
             width: '100%',
             maxHeight: '100%',
+            minHeight: 0,
             overflowY: 'auto',
+            overscrollBehavior: 'contain',
             borderRadius: '16px',
           }}
         >
-          <BookmarkCard bookmark={bookmark} isDark />
+          {preview.kind === 'bookmark' ? (
+            <BookmarkCard bookmark={preview.bookmark} isDark />
+          ) : (
+            <MarkdownPreviewCard
+              title={preview.title}
+              filePath={preview.filePath}
+              content={preview.content}
+            />
+          )}
         </div>
       )}
     </div>

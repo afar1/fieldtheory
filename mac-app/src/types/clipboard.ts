@@ -86,4 +86,8 @@ export function nextTopNavViewMode(
   return tabs[nextIdx];
 }
 
+export function shouldCycleTopNavWithTab(activeTagName?: string | null): boolean {
+  return !activeTagName?.match(/^(INPUT|TEXTAREA)$/i);
+}
+
 export const MAX_UNDO = 20;
