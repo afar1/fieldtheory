@@ -2981,6 +2981,23 @@ const commandsAPI = {
     ipcRenderer.send('command-launcher:trace', event, details);
   },
 
+  // Show or hide the detached command launcher preview window.
+  launcherPreviewShow: (bookmark: Bookmark): void => {
+    ipcRenderer.send('command-launcher:preview-show', bookmark);
+  },
+
+  launcherPreviewHide: (): void => {
+    ipcRenderer.send('command-launcher:preview-hide');
+  },
+
+  onLauncherPreviewBookmark: (callback: (bookmark: Bookmark) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bookmark: Bookmark) => callback(bookmark);
+    ipcRenderer.on('command-launcher-preview:bookmark', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher-preview:bookmark', handler);
+    };
+  },
+
   // Listen for reset events (when launcher is shown).
   onLauncherReset: (callback: () => void): (() => void) => {
     const handler = () => callback();
