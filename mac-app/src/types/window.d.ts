@@ -1194,6 +1194,9 @@ interface CommandsAPI {
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
+  launcherPreviewShow?: (bookmark: Bookmark) => void;
+  launcherPreviewHide?: () => void;
+  onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherReset?: (callback: () => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;

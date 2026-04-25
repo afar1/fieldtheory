@@ -6,6 +6,7 @@ const mockWindow = vi.hoisted(() => ({
   isVisible: vi.fn(() => true),
   hide: vi.fn(),
   show: vi.fn(),
+  showInactive: vi.fn(),
   focus: vi.fn(),
   moveTop: vi.fn(),
   setBounds: vi.fn(),
@@ -16,7 +17,7 @@ const mockWindow = vi.hoisted(() => ({
   loadFile: vi.fn(),
   destroy: vi.fn(),
   on: vi.fn(),
-  webContents: { send: vi.fn(), openDevTools: vi.fn() },
+  webContents: { send: vi.fn(), on: vi.fn(), openDevTools: vi.fn() },
 }));
 
 const mockIpcMainHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => void>());
@@ -30,7 +31,9 @@ const mockApp = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   app: mockApp,
-  BrowserWindow: vi.fn(() => mockWindow),
+  BrowserWindow: vi.fn(function () {
+    return mockWindow;
+  }),
   screen: {
     getCursorScreenPoint: vi.fn(() => ({ x: 0, y: 0 })),
     getDisplayNearestPoint: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })),
@@ -208,7 +211,7 @@ describe('CommandLauncherWindow resize IPC', () => {
     mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 320, height: 36 });
   });
 
-  it('allows preview-sized renderer resize requests', () => {
+  it('keeps renderer resize requests inside the normal launcher height', () => {
     const launcher = new CommandLauncherWindow();
     (launcher as any).window = mockWindow;
 
@@ -218,7 +221,7 @@ describe('CommandLauncherWindow resize IPC', () => {
       x: 10,
       y: 20,
       width: 320,
-      height: 526,
+      height: 300,
     });
   });
 
@@ -232,6 +235,56 @@ describe('CommandLauncherWindow resize IPC', () => {
       x: 10,
       y: 20,
       width: 320,
+      height: 300,
+    });
+  });
+});
+
+describe('CommandLauncherWindow preview IPC', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIpcMainHandlers.clear();
+    mockWindow.isVisible.mockReturnValue(false);
+    mockWindow.isDestroyed.mockReturnValue(false);
+  });
+
+  it('shows the detached preview centered on the active display', () => {
+    new CommandLauncherWindow();
+    const bookmark = { id: 'bookmark-1', text: 'hello' };
+
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, bookmark);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 700,
+      y: 260,
+      width: 520,
+      height: 560,
+    });
+    expect(mockWindow.showInactive).toHaveBeenCalled();
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher-preview:bookmark', bookmark);
+  });
+
+  it('centers the detached preview over the launcher anchor bounds', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    mockWindow.setBounds.mockClear();
+    const bookmark = { id: 'bookmark-2', text: 'anchored' };
+
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, bookmark);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 290,
+      y: 270,
+      width: 520,
       height: 560,
     });
   });
