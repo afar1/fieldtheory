@@ -13,7 +13,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
-import BookmarkCard from './components/BookmarkCard';
 import {
   buildBuiltInLauncherActions,
   DEFAULT_LAUNCHER_HOTKEYS,
@@ -95,6 +94,8 @@ interface LauncherCommandsAPI {
   launcherResize: (height: number) => void;
   launcherClose: () => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
+  launcherPreviewShow?: (bookmark: Bookmark) => void;
+  launcherPreviewHide?: () => void;
   onLauncherReset: (callback: () => void) => () => void;
 }
 
@@ -261,12 +262,6 @@ const getStyles = (isDark: boolean) => ({
     letterSpacing: '0.5px',
     fontWeight: 600,
   },
-  preview: {
-    padding: '8px 10px 10px 10px',
-    borderTop: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)'}`,
-    maxHeight: '340px',
-    overflowY: 'auto' as const,
-  },
 });
 
 // =============================================================================
@@ -295,7 +290,7 @@ function CommandLauncher() {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
   const authorNamespaceRef = useRef<string | null>(null);
-  const previewWasOpenRef = useRef(false);
+  const previewWindowWasOpenRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
 
   const selectIndex = useCallback((index: number) => {
@@ -499,7 +494,7 @@ function CommandLauncher() {
 
   useEffect(() => {
     if (!previewOpen) return;
-    traceLauncher('preview-render', {
+    traceLauncher('preview-state', {
       hasBookmark: Boolean(previewBookmark),
       selectedIndex,
       filteredCount: filtered.length,
@@ -507,6 +502,29 @@ function CommandLauncher() {
       bookmarkId: previewBookmark?.id ?? null,
     });
   }, [filtered, previewBookmark, previewOpen, selectedIndex]);
+
+  useEffect(() => {
+    if (!previewOpen) {
+      if (previewWindowWasOpenRef.current) {
+        commandsAPI.launcherPreviewHide?.();
+        previewWindowWasOpenRef.current = false;
+      }
+      return;
+    }
+    if (!previewBookmark) {
+      if (previewWindowWasOpenRef.current) {
+        commandsAPI.launcherPreviewHide?.();
+        previewWindowWasOpenRef.current = false;
+      }
+      return;
+    }
+    previewWindowWasOpenRef.current = true;
+    traceLauncher('preview-window-show', {
+      selectedIndex,
+      bookmarkId: previewBookmark.id,
+    });
+    commandsAPI.launcherPreviewShow?.(previewBookmark);
+  }, [previewBookmark, previewOpen, selectedIndex]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -655,29 +673,6 @@ function CommandLauncher() {
     // Resize window.
     resizeForResults(matches.length, true);
   }, [namespacePrefix, authorNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, authorBookmarkItems, selectIndex]);
-
-  useEffect(() => {
-    if (!previewOpen && !previewWasOpenRef.current) return;
-    const inputHeight = 36;
-    const emptyStateHeight = 26;
-    const itemHeight = 22;
-    const maxListHeight = previewOpen ? 132 : 280;
-    const previewHeight = previewOpen ? 358 : 0;
-    const hasEmptyState = (query.trim() !== '' || namespaceLabel) && filtered.length === 0;
-    const listHeight = filtered.length > 0
-      ? Math.min(filtered.length * itemHeight + 10, maxListHeight)
-      : (hasEmptyState ? emptyStateHeight : 0);
-    const requestedHeight = inputHeight + listHeight + previewHeight;
-    traceLauncher('preview-resize', {
-      previewOpen,
-      requestedHeight,
-      listHeight,
-      previewHeight,
-      filteredCount: filtered.length,
-    });
-    commandsAPI.launcherResize(requestedHeight);
-    previewWasOpenRef.current = previewOpen;
-  }, [filtered.length, namespaceLabel, previewOpen, query]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -921,7 +916,7 @@ function CommandLauncher() {
     }
   }, [getFieldTheoryTarget, getWikiLinkText]);
 
-  const hasContentBelow = filtered.length > 0 || !!previewBookmark || ((namespaceLabel || query.trim() !== '') && (allItems.length > 0 || authorBookmarkItems.length > 0));
+  const hasContentBelow = filtered.length > 0 || ((namespaceLabel || query.trim() !== '') && (allItems.length > 0 || authorBookmarkItems.length > 0));
   // Always use dark mode styling for the launcher regardless of system theme
   const styles = getStyles(true);
 
@@ -1056,12 +1051,6 @@ function CommandLauncher() {
             ))
           )}
         </ul>
-      )}
-
-      {previewBookmark && (
-        <div style={styles.preview}>
-          <BookmarkCard bookmark={previewBookmark} compact isDark />
-        </div>
       )}
 
       {(query.trim() !== '' || namespaceLabel) && filtered.length === 0 && (
