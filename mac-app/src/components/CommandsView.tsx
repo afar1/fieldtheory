@@ -118,6 +118,11 @@ interface WatchedDir {
   enabled: boolean;
 }
 
+type CommandsContextMenu =
+  | { x: number; y: number; kind: 'command'; filePath: string; name: string }
+  | { x: number; y: number; kind: 'directory'; dirPath: string }
+  | { x: number; y: number; kind: 'sidebar' };
+
 export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = false, onFocusChromeActiveChange, initialCommandPath, onInitialCommandConsumed, onFocusChromeShortcut }: CommandsViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
@@ -192,7 +197,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const focusToolbarControlsVisible = !focusImmersive;
 
   // Context menu
-  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; filePath: string; name: string } | null>(null);
+  const [contextMenu, setContextMenu] = useState<CommandsContextMenu | null>(null);
 
   // Text size values (smaller than Librarian for compact commands)
   const textSizes = {
@@ -747,7 +752,12 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     const result = await window.commandsAPI?.addWatchedDir(trimmed);
     if (result) {
-      setWatchedDirs((prev) => [...prev, result]);
+      const [dirs, cmds] = await Promise.all([
+        window.commandsAPI?.getWatchedDirs(),
+        window.commandsAPI?.getCommands(),
+      ]);
+      if (dirs) setWatchedDirs(dirs);
+      if (cmds) setCommands(cmds);
     } else {
       // Check if the path (expanded) matches an existing watched dir
       // The backend expands ~ to the full home path
@@ -765,6 +775,13 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       }
     }
   }, []);
+
+  const handleBrowseAndAddDirectory = useCallback(async () => {
+    setContextMenu(null);
+    const dirPath = await window.commandsAPI?.browseDirectory();
+    if (!dirPath) return;
+    await handleAddDirectory(dirPath);
+  }, [handleAddDirectory]);
 
   // Remove directory handler
   const handleRemoveDirectory = useCallback(async (dirPath: string) => {
@@ -1074,13 +1091,25 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         )}
 
         {/* Commands list */}
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div
+          onContextMenu={(e) => {
+            if (viewMode !== 'mine') return;
+            e.preventDefault();
+            setContextMenu({ x: e.clientX, y: e.clientY, kind: 'sidebar' });
+          }}
+          style={{ flex: 1, overflowY: 'auto' }}
+        >
           {viewMode === 'mine' ? (
             // Internal view - grouped by directory (Librarian style)
             Array.from(groupedCommands.entries()).map(([dirPath, items]) => (
               <div key={dirPath}>
                 {/* Directory header with horizontal rule - always show like Librarian */}
                 <div
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setContextMenu({ x: e.clientX, y: e.clientY, kind: 'directory', dirPath });
+                  }}
                   style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -1170,7 +1199,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     onClick={() => renamingPath !== cmd.filePath && handleSelectCommand(cmd.filePath)}
                     onContextMenu={(e) => {
                       e.preventDefault();
-                      setContextMenu({ x: e.clientX, y: e.clientY, filePath: cmd.filePath, name: cmd.displayName });
+                      e.stopPropagation();
+                      setContextMenu({ x: e.clientX, y: e.clientY, kind: 'command', filePath: cmd.filePath, name: cmd.displayName });
                     }}
                     style={{
                       padding: '8px 8px 8px 16px',
@@ -1683,7 +1713,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         </div>
       </div>
 
-      {/* Context menu for command items */}
+      {/* Context menu for command sidebar */}
       {contextMenu && (
         <div
           onClick={(e) => e.stopPropagation()}
@@ -1702,48 +1732,95 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
             minWidth: '140px',
           }}
         >
-          <button
-            onClick={() => {
-              handleRenameCommand(contextMenu.filePath, contextMenu.name);
-              setContextMenu(null);
-            }}
-            style={{
-              display: 'block',
-              width: '100%',
-              padding: '6px 12px',
-              fontSize: '12px',
-              color: theme.text,
-              backgroundColor: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              textAlign: 'left',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-          >
-            Rename
-          </button>
-          <button
-            onClick={() => {
-              handleDeleteCommand(contextMenu.filePath);
-              setContextMenu(null);
-            }}
-            style={{
-              display: 'block',
-              width: '100%',
-              padding: '6px 12px',
-              fontSize: '12px',
-              color: '#ef4444',
-              backgroundColor: 'transparent',
-              border: 'none',
-              cursor: 'pointer',
-              textAlign: 'left',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
-          >
-            Delete
-          </button>
+          {contextMenu.kind === 'command' && (
+            <>
+              <button
+                onClick={() => {
+                  handleRenameCommand(contextMenu.filePath, contextMenu.name);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  color: theme.text,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                Rename
+              </button>
+              <button
+                onClick={() => {
+                  handleDeleteCommand(contextMenu.filePath);
+                  setContextMenu(null);
+                }}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '6px 12px',
+                  fontSize: '12px',
+                  color: '#ef4444',
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+              >
+                Delete
+              </button>
+            </>
+          )}
+          {contextMenu.kind === 'directory' && (
+            <button
+              onClick={() => {
+                startCreatingCommand(contextMenu.dirPath);
+                setContextMenu(null);
+              }}
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 12px',
+                fontSize: '12px',
+                color: theme.text,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+            >
+              New Command
+            </button>
+          )}
+          {(contextMenu.kind === 'directory' || contextMenu.kind === 'sidebar') && (
+            <button
+              onClick={() => { void handleBrowseAndAddDirectory(); }}
+              style={{
+                display: 'block',
+                width: '100%',
+                padding: '6px 12px',
+                fontSize: '12px',
+                color: theme.text,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+            >
+              Add Commands Folder...
+            </button>
+          )}
         </div>
       )}
       {deleteConfirmationDialog}
