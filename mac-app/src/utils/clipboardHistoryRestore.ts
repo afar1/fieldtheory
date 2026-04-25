@@ -33,12 +33,6 @@ export function resolveClipboardRestoreState(storage: StorageReader & StorageWri
   const shouldShowFields = storage.getItem(SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY) === 'true';
   if (shouldShowFields) {
     storage.removeItem(SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY);
-    storage.setItem(FIELD_THEORY_VIEW_STORAGE_KEY, 'clipboard');
-    storage.setItem(FIELD_THEORY_LAST_SURFACE_STORAGE_KEY, 'clipboard');
-    return {
-      viewMode: 'clipboard',
-      showSettings: false,
-    };
   }
 
   const viewMode = getStoredViewMode(storage);
