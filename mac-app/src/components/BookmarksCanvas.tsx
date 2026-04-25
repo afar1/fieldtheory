@@ -179,6 +179,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const copyBtnRef = useRef<HTMLButtonElement | null>(null);
   const openBtnRef = useRef<HTMLButtonElement | null>(null);
+  const agentCopyBtnRef = useRef<HTMLButtonElement | null>(null);
   const controllerRef = useRef<Controller | null>(null);
 
   // Mount-only setup. Creates the pool, binds listeners, starts the animation loop.
@@ -193,7 +194,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     const closeBtn = closeBtnRef.current;
     const copyBtn = copyBtnRef.current;
     const openBtn = openBtnRef.current;
-    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn) return;
+    const agentCopyBtn = agentCopyBtnRef.current;
+    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn || !agentCopyBtn) return;
 
     const openExternalUrl = (url: string) => {
       // Always route through shell.openExternal so URLs open in the user's
@@ -573,6 +575,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       info.style.top = `${endY + targetH + 20}px`;
       info.style.opacity = '1';
       copyBtn.style.display = hasCopyableImage ? 'flex' : 'none';
+      delete agentCopyBtn.dataset.copied;
 
       state.lightbox = { clone, bookmark, sourceEl: el, endX, endY, endW: targetW, endH: targetH };
 
@@ -797,6 +800,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       linkEl.href = nextBm.url;
       applyAvatar(lightboxAvatarEl, localAvatarUrl(nextBm));
       copyBtn.style.display = hasCopyableImage ? 'flex' : 'none';
+      delete agentCopyBtn.dataset.copied;
 
       // Text cards scroll on the inner .bm-text-card (see openLightbox); images
       // fall back to the default non-interactive clone.
@@ -868,6 +872,20 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       }
     };
 
+    const onAgentCopyClick = async (e: MouseEvent) => {
+      e.stopPropagation();
+      const bm = state.lightbox?.bookmark;
+      if (!bm) return;
+      try {
+        const result = await window.bookmarksAPI?.copyForAgent(bm.id);
+        if (!result?.success) throw new Error(result?.error ?? 'Copy failed');
+        agentCopyBtn.dataset.copied = '1';
+        setTimeout(() => { delete agentCopyBtn.dataset.copied; }, 1200);
+      } catch (err) {
+        console.error('[BookmarksCanvas] copy for agent failed', err);
+      }
+    };
+
     let rafId: number | null = null;
     const loop = () => {
       rafId = requestAnimationFrame(loop);
@@ -908,6 +926,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     overlay.addEventListener('click', onOverlayClick);
     closeBtn.addEventListener('click', onCloseClick);
     copyBtn.addEventListener('click', onCopyClick);
+    agentCopyBtn.addEventListener('click', onAgentCopyClick);
     openBtn.addEventListener('click', onOpenClick);
     linkEl.addEventListener('click', onLinkClick);
 
@@ -952,6 +971,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         overlay.removeEventListener('click', onOverlayClick);
         closeBtn.removeEventListener('click', onCloseClick);
         copyBtn.removeEventListener('click', onCopyClick);
+        agentCopyBtn.removeEventListener('click', onAgentCopyClick);
         openBtn.removeEventListener('click', onOpenClick);
         linkEl.removeEventListener('click', onLinkClick);
         if (state.lightbox) {
@@ -1012,6 +1032,9 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         .bm-check-icon { opacity: 0; transform: scale(0.7); }
         button[data-copied="1"] .bm-copy-icon { opacity: 0; transform: scale(0.7); }
         button[data-copied="1"] .bm-check-icon { opacity: 1; transform: scale(1); }
+        .bm-agent-copied-label { display: none; }
+        button[data-copied="1"] .bm-agent-copy-label { display: none; }
+        button[data-copied="1"] .bm-agent-copied-label { display: inline; }
         .bm-text-card {
           position: absolute; inset: 0;
           display: none;
@@ -1195,7 +1218,33 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
               style={{ fontSize: '14px', color: theme.textSecondary, textDecoration: 'none', cursor: 'pointer' }}
             />
           </div>
-          <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'center' }}>
+          <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <button
+              ref={agentCopyBtnRef}
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '8px',
+                minWidth: '128px',
+                justifyContent: 'center',
+                padding: '8px 16px',
+                borderRadius: '100px',
+                backgroundColor: closeBtnBg,
+                border: `1px solid ${closeBtnBorder}`,
+                color: theme.text,
+                fontSize: '13px',
+                fontWeight: 500,
+                fontFamily: 'inherit',
+                cursor: 'pointer',
+                backdropFilter: 'blur(8px)',
+                WebkitBackdropFilter: 'blur(8px)',
+                transition: 'background 0.2s ease',
+              }}
+              aria-label="Copy for agent"
+            >
+              <span className="bm-agent-copy-label">Copy for agent</span>
+              <span className="bm-agent-copied-label">Copied</span>
+            </button>
             <button
               ref={openBtnRef}
               style={{

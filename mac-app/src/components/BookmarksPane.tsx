@@ -29,11 +29,12 @@ interface BookmarksPaneProps {
   active?: boolean;
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
+  onCanvasModeActiveChange?: (active: boolean) => void;
 }
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen }: BookmarksPaneProps) {
+function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -57,6 +58,11 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen }: Book
     if (mode === 'list' && !listEverShown) setListEverShown(true);
     if (mode === 'canvas' && !canvasEverShown) setCanvasEverShown(true);
   }, [active, mode, listEverShown, canvasEverShown]);
+
+  useEffect(() => {
+    onCanvasModeActiveChange?.(active && mode === 'canvas');
+    return () => onCanvasModeActiveChange?.(false);
+  }, [active, mode, onCanvasModeActiveChange]);
 
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
