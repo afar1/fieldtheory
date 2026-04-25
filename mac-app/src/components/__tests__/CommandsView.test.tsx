@@ -34,6 +34,8 @@ describe('CommandsView command naming', () => {
         initialize: vi.fn(async () => {}),
         getWatchedDirs: vi.fn(async () => [{ path: '/tmp/commands', enabled: true }]),
         createDefaultDirectory: vi.fn(async () => '/tmp/commands'),
+        browseDirectory: vi.fn(async () => '/tmp/more-commands'),
+        addWatchedDir: vi.fn(async (dirPath: string) => ({ path: dirPath, enabled: true, mobileSyncEnabled: false })),
         getCommands: vi.fn(async () => [existingCommand]),
         getCommandByPath: vi.fn(async () => ({
           ...existingCommand,
@@ -87,5 +89,18 @@ describe('CommandsView command naming', () => {
 
     expect(screen.queryByRole('alert')).toBeNull();
     expect(input.value).toBe('existing-two');
+  });
+
+  it('adds a watched directory from the sidebar context menu', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findAllByText('existing');
+    fireEvent.contextMenu(screen.getByTitle('/tmp/commands'), { clientX: 10, clientY: 20 });
+    fireEvent.click(await screen.findByText('Add Commands Folder...'));
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.browseDirectory).toHaveBeenCalled();
+      expect(window.commandsAPI?.addWatchedDir).toHaveBeenCalledWith('/tmp/more-commands');
+    });
   });
 });

@@ -6,6 +6,12 @@ import {
   formatTimeAgo,
   filterLauncherNamespaceItems,
   flattenLibraryRootsForLauncher,
+  buildBookmarkAuthorLauncherItems,
+  buildBookmarkPostLauncherItems,
+  dedupeLauncherPersonItems,
+  handleFromLauncherLabel,
+  isLauncherPreviewToggleKey,
+  resolveLauncherAuthorNamespaceHandle,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -122,6 +128,153 @@ describe('filterLauncherNamespaceItems', () => {
     expect(filterLauncherNamespaceItems(items, 'DAILY')).toEqual([items[0]]);
     expect(filterLauncherNamespaceItems(items, 'product')).toEqual([items[1]]);
     expect(filterLauncherNamespaceItems(items, 'scratch')).toEqual([items[0]]);
+  });
+});
+
+describe('buildBookmarkAuthorLauncherItems', () => {
+  it('builds one launcher row per bookmark author', () => {
+    const items = buildBookmarkAuthorLauncherItems([
+      {
+        handle: 'CJHandmer',
+        name: 'CJ Handmer',
+        count: 3,
+        firstPostedAt: '2026-01-01T00:00:00Z',
+        lastPostedAt: '2026-01-03T00:00:00Z',
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: 'bookmark-author-cjhandmer',
+        type: 'bookmark-author',
+        name: '@CJHandmer',
+        displayName: '@CJHandmer',
+        authorHandle: 'CJHandmer',
+        bookmarkCount: 3,
+        hotkeyDisplay: '3 bookmarks',
+      }),
+    ]);
+    expect(items[0].keywords).toEqual(expect.arrayContaining(['CJHandmer', '@CJHandmer', 'CJ Handmer', 'person']));
+  });
+});
+
+describe('buildBookmarkPostLauncherItems', () => {
+  it('builds searchable bookmark post rows for an author namespace', () => {
+    const items = buildBookmarkPostLauncherItems([
+      {
+        id: '123',
+        text: 'A useful note about rockets and manufacturing.',
+        url: 'https://x.com/elonmusk/status/123',
+        authorHandle: 'elonmusk',
+        authorName: 'Elon Musk',
+        postedAt: '2026-01-01T12:00:00Z',
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        id: 'bookmark-123',
+        type: 'bookmark',
+        bookmarkId: '123',
+        displayName: 'A useful note about rockets and manufacturing.',
+        authorHandle: 'elonmusk',
+        hotkeyDisplay: '2026-01-01',
+      }),
+    ]);
+    expect(items[0].keywords).toEqual(expect.arrayContaining(['Elon Musk', 'elonmusk', '@elonmusk', '2026-01-01']));
+  });
+
+  it('truncates long bookmark text for launcher display', () => {
+    const longText = 'a'.repeat(130);
+    const [item] = buildBookmarkPostLauncherItems([
+      {
+        id: 'long',
+        text: longText,
+        url: '',
+        authorHandle: 'alice',
+        authorName: 'Alice',
+        postedAt: '',
+      },
+    ]);
+
+    expect(item.displayName).toHaveLength(120);
+    expect(item.displayName.endsWith('...')).toBe(true);
+  });
+});
+
+describe('dedupeLauncherPersonItems', () => {
+  it('collapses duplicate exact handle rows and prefers bookmark-author rows', () => {
+    const items = [
+      { id: 'wiki', type: 'wiki-page', name: '@CJHandmer', displayName: '@CJHandmer' },
+      { id: 'author', type: 'bookmark-author', name: '@CJHandmer', displayName: '@CJHandmer' },
+      { id: 'other', type: 'wiki-page', name: '@jh3yy', displayName: '@jh3yy' },
+    ];
+
+    expect(dedupeLauncherPersonItems(items).map((item) => item.id)).toEqual(['author', 'other']);
+  });
+
+  it('does not collapse non-handle rows with the same title', () => {
+    const items = [
+      { id: 'a', type: 'wiki-page', name: 'Roadmap', displayName: 'Roadmap' },
+      { id: 'b', type: 'markdown-file', name: 'Roadmap', displayName: 'Roadmap' },
+    ];
+
+    expect(dedupeLauncherPersonItems(items)).toEqual(items);
+  });
+});
+
+describe('handleFromLauncherLabel', () => {
+  it('extracts x-style handle labels', () => {
+    expect(handleFromLauncherLabel('@elonmusk')).toBe('elonmusk');
+    expect(handleFromLauncherLabel(' @CJHandmer ')).toBe('CJHandmer');
+    expect(handleFromLauncherLabel('Elon Musk')).toBeNull();
+  });
+});
+
+describe('isLauncherPreviewToggleKey', () => {
+  it('accepts space key variants emitted by browsers and Electron', () => {
+    expect(isLauncherPreviewToggleKey({ key: ' ' })).toBe(true);
+    expect(isLauncherPreviewToggleKey({ key: 'Space' })).toBe(true);
+    expect(isLauncherPreviewToggleKey({ key: 'Spacebar' })).toBe(true);
+    expect(isLauncherPreviewToggleKey({ key: '', code: 'Space' })).toBe(true);
+  });
+
+  it('rejects non-space keys', () => {
+    expect(isLauncherPreviewToggleKey({ key: 'Enter', code: 'Enter' })).toBe(false);
+  });
+});
+
+describe('resolveLauncherAuthorNamespaceHandle', () => {
+  const authorItems = [
+    {
+      id: 'bookmark-author-elonmusk',
+      type: 'bookmark-author',
+      name: '@elonmusk',
+      displayName: '@elonmusk',
+      authorHandle: 'elonmusk',
+      keywords: ['elonmusk', '@elonmusk', 'Elon Musk'],
+    },
+  ];
+
+  it('promotes a selected markdown handle row to an author namespace', () => {
+    const filtered = [
+      { id: 'entity-elonmusk', type: 'markdown-file', name: 'elonmusk', displayName: '@elonmusk', keywords: ['elonmusk'] },
+    ];
+
+    expect(resolveLauncherAuthorNamespaceHandle(filtered, authorItems, 0, 'elon')).toBe('elonmusk');
+  });
+
+  it('promotes the first matching author row when selected item is not a handle', () => {
+    const filtered = [
+      { id: 'unrelated', type: 'markdown-file', name: 'Elon notes', displayName: 'Elon notes', keywords: ['elon'] },
+      authorItems[0],
+    ];
+
+    expect(resolveLauncherAuthorNamespaceHandle(filtered, authorItems, 0, 'elon')).toBe('elonmusk');
+  });
+
+  it('promotes an exact typed handle even before it is selected', () => {
+    expect(resolveLauncherAuthorNamespaceHandle([], authorItems, 0, '@elonmusk')).toBe('elonmusk');
   });
 });
 

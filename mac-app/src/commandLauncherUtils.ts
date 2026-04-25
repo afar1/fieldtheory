@@ -66,6 +66,86 @@ export interface LauncherSearchableItem {
   keywords: string[];
 }
 
+export interface LauncherBookmarkAuthorItem extends LauncherSearchableItem {
+  id: string;
+  type: 'bookmark-author';
+  authorHandle: string;
+  bookmarkCount: number;
+  hotkeyDisplay: string;
+}
+
+export interface LauncherBookmarkPostSource {
+  id: string;
+  text: string;
+  url: string;
+  authorHandle: string;
+  authorName: string;
+  postedAt: string;
+}
+
+export interface LauncherBookmarkPostItem extends LauncherSearchableItem {
+  id: string;
+  type: 'bookmark';
+  bookmarkId: string;
+  authorHandle: string;
+  postedAt: string;
+  hotkeyDisplay: string;
+}
+
+export interface LauncherVisibleItem {
+  id: string;
+  type?: string;
+  name: string;
+  displayName: string;
+}
+
+export interface LauncherAuthorNamespaceCandidate extends LauncherVisibleItem {
+  authorHandle?: string;
+  keywords?: string[];
+}
+
+export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
+  return event.key === ' ' || event.key === 'Space' || event.key === 'Spacebar' || event.code === 'Space';
+}
+
+function formatLauncherBookmarkDate(postedAt: string): string {
+  const time = new Date(postedAt).getTime();
+  if (!time) return 'undated';
+  return new Date(time).toISOString().slice(0, 10);
+}
+
+function truncateLauncherBookmarkText(text: string): string {
+  const compact = text.replace(/\s+/g, ' ').trim();
+  if (!compact) return '(empty bookmark)';
+  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+}
+
+function cleanLauncherHandle(handle: string): string {
+  return handle.trim().replace(/^@+/, '');
+}
+
+export function handleFromLauncherLabel(label: string): string | null {
+  const trimmed = label.trim();
+  if (!/^@[A-Za-z0-9_]{1,30}$/.test(trimmed)) return null;
+  return cleanLauncherHandle(trimmed);
+}
+
+function handleFromLauncherItem(item: LauncherAuthorNamespaceCandidate | undefined): string | null {
+  if (!item) return null;
+  if (item.authorHandle) return cleanLauncherHandle(item.authorHandle);
+  return handleFromLauncherLabel(item.displayName) ?? handleFromLauncherLabel(item.name);
+}
+
+function itemMatchesQuery(item: LauncherAuthorNamespaceCandidate, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  return item.name.toLowerCase().includes(q) ||
+    item.displayName.toLowerCase().includes(q) ||
+    item.authorHandle?.toLowerCase().includes(q) ||
+    item.keywords?.some(keyword => keyword.toLowerCase().includes(q)) ||
+    false;
+}
+
 export function filterLauncherNamespaceItems<T extends LauncherSearchableItem>(items: T[], search: string): T[] {
   const normalizedSearch = search.trim().toLowerCase();
   if (!normalizedSearch) return items;
@@ -110,6 +190,111 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
   }
 
   return items;
+}
+
+export function buildBookmarkAuthorLauncherItems(authors: BookmarkAuthorSummary[]): LauncherBookmarkAuthorItem[] {
+  return authors.map((author): LauncherBookmarkAuthorItem => {
+    const handle = author.handle.trim().replace(/^@+/, '');
+    const displayName = handle ? `@${handle}` : author.name;
+    return {
+      id: `bookmark-author-${handle.toLowerCase()}`,
+      type: 'bookmark-author',
+      name: displayName,
+      displayName,
+      keywords: [
+        handle,
+        displayName,
+        author.name,
+        'bookmarks',
+        'author',
+        'person',
+        'posts',
+      ].filter(Boolean),
+      authorHandle: handle,
+      bookmarkCount: author.count,
+      hotkeyDisplay: `${author.count} ${author.count === 1 ? 'bookmark' : 'bookmarks'}`,
+    };
+  }).filter((item) => item.authorHandle || item.displayName);
+}
+
+export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSource[]): LauncherBookmarkPostItem[] {
+  return bookmarks.map((bookmark) => {
+    const date = formatLauncherBookmarkDate(bookmark.postedAt);
+    const handle = bookmark.authorHandle.trim().replace(/^@+/, '');
+    const displayName = truncateLauncherBookmarkText(bookmark.text);
+    return {
+      id: `bookmark-${bookmark.id}`,
+      type: 'bookmark',
+      name: displayName,
+      displayName,
+      keywords: [
+        bookmark.text,
+        bookmark.url,
+        bookmark.authorName,
+        handle,
+        `@${handle}`,
+        date,
+      ].filter(Boolean),
+      bookmarkId: bookmark.id,
+      authorHandle: handle,
+      postedAt: bookmark.postedAt,
+      hotkeyDisplay: date,
+    };
+  });
+}
+
+export function dedupeLauncherPersonItems<T extends LauncherVisibleItem>(items: T[]): T[] {
+  const seenHandles = new Map<string, number>();
+  const deduped: T[] = [];
+
+  for (const item of items) {
+    const label = (item.type === 'command' ? item.name : item.displayName).trim();
+    const handle = handleFromLauncherLabel(label);
+    if (!handle) {
+      deduped.push(item);
+      continue;
+    }
+
+    const key = handle.toLowerCase();
+    const existingIndex = seenHandles.get(key);
+    if (existingIndex === undefined) {
+      seenHandles.set(key, deduped.length);
+      deduped.push(item);
+      continue;
+    }
+
+    const existing = deduped[existingIndex];
+    if (item.type === 'bookmark-author' && existing.type !== 'bookmark-author') {
+      deduped[existingIndex] = item;
+    }
+  }
+
+  return deduped;
+}
+
+export function resolveLauncherAuthorNamespaceHandle<T extends LauncherAuthorNamespaceCandidate>(
+  filteredItems: T[],
+  authorItems: T[],
+  selectedIndex: number,
+  query: string,
+): string | null {
+  const selectedHandle = handleFromLauncherItem(filteredItems[selectedIndex]);
+  if (selectedHandle) return selectedHandle;
+
+  const rawQuery = query.trim();
+  const rawHandle = handleFromLauncherLabel(rawQuery);
+  if (rawHandle) {
+    const exactAuthor = authorItems.find((item) => item.authorHandle?.toLowerCase() === rawHandle.toLowerCase());
+    return cleanLauncherHandle(exactAuthor?.authorHandle ?? rawHandle);
+  }
+
+  const filteredAuthor = filteredItems.find((item) => item.type === 'bookmark-author' && item.authorHandle);
+  if (filteredAuthor?.authorHandle) return cleanLauncherHandle(filteredAuthor.authorHandle);
+
+  const matchingAuthor = authorItems.find((item) => itemMatchesQuery(item, rawQuery));
+  if (matchingAuthor?.authorHandle) return cleanLauncherHandle(matchingAuthor.authorHandle);
+
+  return null;
 }
 
 // =============================================================================

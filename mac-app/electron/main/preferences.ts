@@ -52,6 +52,10 @@ export type ClipboardHistorySizeKey = 'fields' | 'library' | 'canvas' | 'draw';
 
 export type ClipboardHistoryBoundsByView = Partial<Record<ClipboardHistorySizeKey, ClipboardHistoryBounds>>;
 
+export function normalizeClipboardHistorySizeKey(key: ClipboardHistorySizeKey): ClipboardHistorySizeKey {
+  return key === 'canvas' ? 'draw' : key;
+}
+
 /**
  * Resolve the saved bounds for a given size-key from a preferences snapshot.
  * Falls back to the legacy single-bounds field (`clipboardHistoryBounds`) only
@@ -62,9 +66,10 @@ export function pickSavedBoundsByKey(
   prefs: { clipboardHistoryBoundsByView?: ClipboardHistoryBoundsByView; clipboardHistoryBounds?: ClipboardHistoryBounds } | null | undefined,
   key: ClipboardHistorySizeKey
 ): ClipboardHistoryBounds | undefined {
-  const byView = prefs?.clipboardHistoryBoundsByView?.[key];
+  const normalizedKey = normalizeClipboardHistorySizeKey(key);
+  const byView = prefs?.clipboardHistoryBoundsByView?.[normalizedKey];
   if (byView) return byView;
-  if (key === 'fields') return prefs?.clipboardHistoryBounds;
+  if (normalizedKey === 'fields') return prefs?.clipboardHistoryBounds;
   return undefined;
 }
 

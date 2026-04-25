@@ -39,6 +39,7 @@ describe('parseRawBookmark', () => {
     const bm = parseRawBookmark(raw);
     expect(bm).not.toBeNull();
     expect(bm!.id).toBe('123');
+    expect(bm!.sourceType).toBe('x');
     expect(bm!.images).toHaveLength(2);
     expect(bm!.images[0]).toMatchObject({ type: 'photo', width: 1822, height: 1952 });
     expect(bm!.images[1].type).toBe('video');

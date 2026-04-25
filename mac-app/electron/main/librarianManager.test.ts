@@ -264,6 +264,56 @@ describe('recursive wiki tree scan', () => {
     expect(entries.children.map((node) => node.name)).toEqual(['README', 'alpha', 'zeta']);
   });
 
+  it('reuses the wiki tree until a wiki change invalidates it', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'alpha.md'), '# Alpha\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string }> }>;
+      startWikiWatcher: () => void;
+      emit: (eventName: string) => boolean;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.startWikiWatcher = vi.fn();
+
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/alpha']);
+
+    fs.writeFileSync(path.join(root, 'entries', 'beta.md'), '# Beta\n');
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/alpha']);
+
+    manager.emit('wiki:changed');
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/alpha', 'entries/beta']);
+  });
+
+  it('reuses library roots until a library change invalidates them', () => {
+    const tempDir = makeTempDir();
+    const wikiRoot = path.join(tempDir, 'wiki');
+    const externalRoot = path.join(tempDir, 'external');
+    fs.mkdirSync(wikiRoot, { recursive: true });
+    fs.mkdirSync(externalRoot, { recursive: true });
+    fs.writeFileSync(path.join(externalRoot, 'alpha.md'), '# Alpha\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      getLibraryRoots: () => Array<{ path: string; tree: WikiNode[] }>;
+      startWikiWatcher: () => void;
+      emit: (eventName: string, rootPath?: string) => boolean;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    manager.settings = { libraryRoots: [externalRoot] };
+    manager.startWikiWatcher = vi.fn();
+
+    const externalPages = () => flatten(manager.getLibraryRoots().find((root) => root.path === externalRoot)?.tree ?? []);
+    expect(externalPages()).toEqual(['alpha']);
+
+    fs.writeFileSync(path.join(externalRoot, 'beta.md'), '# Beta\n');
+    expect(externalPages()).toEqual(['alpha']);
+
+    manager.emit('library:changed', externalRoot);
+    expect(externalPages()).toEqual(['alpha', 'beta']);
+  });
+
   it('emits wiki:changed immediately after saving a wiki page', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });

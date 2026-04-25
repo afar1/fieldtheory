@@ -1193,6 +1193,10 @@ interface CommandsAPI {
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
+  launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
+  launcherPreviewShow?: (bookmark: Bookmark) => void;
+  launcherPreviewHide?: () => void;
+  onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherReset?: (callback: () => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
@@ -1587,8 +1591,47 @@ declare global {
     tree: WikiNode[];
   }
 
+  interface LibraryMigrationFile {
+    relPath: string;
+    sourcePath: string;
+    targetPath: string;
+  }
+
+  interface LibraryMigrationConflict extends LibraryMigrationFile {
+    conflictCopyPath: string;
+  }
+
+  interface LibraryMigrationPlan {
+    sourceDir: string;
+    targetDir: string;
+    backupDir: string;
+    timestamp: string;
+    sourceState: string;
+    targetState: string;
+    filesToCopy: LibraryMigrationFile[];
+    identicalFiles: LibraryMigrationFile[];
+    conflicts: LibraryMigrationConflict[];
+    targetOnlyFiles: string[];
+    missingFolders: string[];
+    symlinksToCreate: Array<{ linkPath: string; targetPath: string }>;
+    blockingIssues: string[];
+    canExecute: boolean;
+  }
+
+  interface LibraryMigrationExecutionResult {
+    success: boolean;
+    copiedFiles: string[];
+    skippedIdenticalFiles: string[];
+    conflictCopies: Array<{ relPath: string; copiedTo: string }>;
+    backupDir: string | null;
+    symlinkCreated: boolean;
+    errors: string[];
+  }
+
   interface LibraryAPI {
     getRoots: () => Promise<LibraryRoot[]>;
+    previewMigration: () => Promise<LibraryMigrationPlan>;
+    executeMigration: () => Promise<LibraryMigrationExecutionResult>;
     getHiddenFolders: () => Promise<string[]>;
     setFolderHidden: (folderId: string, hidden: boolean) => Promise<string[]>;
     addRoot: (dirPath: string) => Promise<LibraryRoot | null>;
@@ -1666,6 +1709,7 @@ declare global {
   }
   interface Bookmark {
     id: string;
+    sourceType: 'x';
     text: string;
     url: string;
     authorHandle: string;
@@ -1689,8 +1733,19 @@ declare global {
     bookmarks: Bookmark[];
     folders: BookmarkFolder[];
   }
+  interface BookmarkAuthorSummary {
+    handle: string;
+    name: string;
+    count: number;
+    firstPostedAt: string;
+    lastPostedAt: string;
+  }
   interface BookmarksAPI {
     getAll: () => Promise<BookmarksSnapshot>;
+    getAuthors: () => Promise<BookmarkAuthorSummary[]>;
+    getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
+    invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+    invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   }
 

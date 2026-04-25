@@ -202,7 +202,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
   });
 
   it('uses the configured immersive height percentage when expanding the library view', () => {
-    attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
+    const { setBounds } = attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
     const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
 
     window.setImmersiveHeightPercentGetter(() => 90);
@@ -223,13 +223,43 @@ describe('ClipboardHistoryWindow helper methods', () => {
       getPreference: vi.fn(() => false),
       save,
     } as any);
-    attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
-    vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
+    const { setBounds } = attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
+    const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
 
     window.setSizeKey('library');
 
     expect(window.getCurrentSizeKey()).toBe('library');
     expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'library' });
+    expect(animateBounds).not.toHaveBeenCalled();
+    expect(setBounds).toHaveBeenCalledWith({
+      x: 100,
+      y: 100,
+      width: 720,
+      height: 820,
+    });
+  });
+
+  it('uses draw mechanics for the canvas size key', () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    window = new ClipboardHistoryWindow({
+      get: vi.fn(() => ({})),
+      getPreference: vi.fn(() => false),
+      save,
+    } as any);
+    const { setBounds } = attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
+    const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
+
+    window.setSizeKey('canvas');
+
+    expect(window.getCurrentSizeKey()).toBe('draw');
+    expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'draw' });
+    expect(animateBounds).not.toHaveBeenCalled();
+    expect(setBounds).toHaveBeenCalledWith({
+      x: 100,
+      y: 100,
+      width: 1180,
+      height: 760,
+    });
   });
 
   it('hides the window and restores the previous app when one is known', async () => {

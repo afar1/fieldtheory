@@ -2976,6 +2976,28 @@ const commandsAPI = {
     ipcRenderer.send('command-launcher:close');
   },
 
+  // Write diagnostic breadcrumbs to the command launcher trace log.
+  launcherTrace: (event: string, details: Record<string, unknown> = {}): void => {
+    ipcRenderer.send('command-launcher:trace', event, details);
+  },
+
+  // Show or hide the detached command launcher preview window.
+  launcherPreviewShow: (bookmark: Bookmark): void => {
+    ipcRenderer.send('command-launcher:preview-show', bookmark);
+  },
+
+  launcherPreviewHide: (): void => {
+    ipcRenderer.send('command-launcher:preview-hide');
+  },
+
+  onLauncherPreviewBookmark: (callback: (bookmark: Bookmark) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, bookmark: Bookmark) => callback(bookmark);
+    ipcRenderer.on('command-launcher-preview:bookmark', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher-preview:bookmark', handler);
+    };
+  },
+
   // Listen for reset events (when launcher is shown).
   onLauncherReset: (callback: () => void): (() => void) => {
     const handler = () => callback();
@@ -3654,9 +3676,44 @@ interface LibraryRoot {
   writable?: boolean;
   tree: WikiNode[];
 }
+interface LibraryMigrationFile {
+  relPath: string;
+  sourcePath: string;
+  targetPath: string;
+}
+interface LibraryMigrationConflict extends LibraryMigrationFile {
+  conflictCopyPath: string;
+}
+interface LibraryMigrationPlan {
+  sourceDir: string;
+  targetDir: string;
+  backupDir: string;
+  timestamp: string;
+  sourceState: string;
+  targetState: string;
+  filesToCopy: LibraryMigrationFile[];
+  identicalFiles: LibraryMigrationFile[];
+  conflicts: LibraryMigrationConflict[];
+  targetOnlyFiles: string[];
+  missingFolders: string[];
+  symlinksToCreate: Array<{ linkPath: string; targetPath: string }>;
+  blockingIssues: string[];
+  canExecute: boolean;
+}
+interface LibraryMigrationExecutionResult {
+  success: boolean;
+  copiedFiles: string[];
+  skippedIdenticalFiles: string[];
+  conflictCopies: Array<{ relPath: string; copiedTo: string }>;
+  backupDir: string | null;
+  symlinkCreated: boolean;
+  errors: string[];
+}
 
 const libraryAPI = {
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
+  previewMigration: (): Promise<LibraryMigrationPlan> => ipcRenderer.invoke('library:previewMigration'),
+  executeMigration: (): Promise<LibraryMigrationExecutionResult> => ipcRenderer.invoke('library:executeMigration'),
   getHiddenFolders: (): Promise<string[]> => ipcRenderer.invoke('library:getHiddenFolders'),
   setFolderHidden: (folderId: string, hidden: boolean): Promise<string[]> =>
     ipcRenderer.invoke('library:setFolderHidden', folderId, hidden),
@@ -3771,6 +3828,7 @@ interface QuotedTweet {
 }
 interface Bookmark {
   id: string;
+  sourceType: 'x';
   text: string;
   url: string;
   authorHandle: string;
@@ -3788,9 +3846,23 @@ interface Bookmark {
 }
 interface BookmarkFolder { name: string; id?: string }
 interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+interface BookmarkAuthorSummary {
+  handle: string;
+  name: string;
+  count: number;
+  firstPostedAt: string;
+  lastPostedAt: string;
+}
 
 const bookmarksAPI = {
   getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
+  getAuthors: (): Promise<BookmarkAuthorSummary[]> => ipcRenderer.invoke('bookmarks:getAuthors'),
+  getAuthorBookmarks: (handle: string): Promise<Bookmark[]> =>
+    ipcRenderer.invoke('bookmarks:getAuthorBookmarks', handle),
+  invokeBookmark: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:invokeBookmark', id),
+  invokeAuthorTimeline: (handle: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:invokeAuthorTimeline', handle),
   onChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('bookmarks:changed', handler);

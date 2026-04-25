@@ -4,7 +4,7 @@
 // Also supports todo view mode (switched via Cmd+Shift+T hotkey).
 // =============================================================================
 
-import React, { useEffect, useState, useRef, useCallback, useMemo, Suspense } from 'react';
+import React, { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect, Suspense } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
@@ -77,6 +77,37 @@ type FieldTheoryMarkdownTarget = {
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
+
+type TopNavMode = 'clipboard' | 'librarian' | 'commands';
+
+type TopNavPaintTrace = {
+  from: ViewMode;
+  to: TopNavMode;
+  source: 'keyboard-tab' | 'tab-click';
+  startedAt: number;
+  highlightAppliedAt?: number;
+};
+
+function isTopNavMode(mode: ViewMode): mode is TopNavMode {
+  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands';
+}
+
+function cssTimeToMs(value: string): number {
+  const trimmed = value.trim();
+  if (!trimmed) return 0;
+  if (trimmed.endsWith('ms')) return Number.parseFloat(trimmed) || 0;
+  if (trimmed.endsWith('s')) return (Number.parseFloat(trimmed) || 0) * 1000;
+  return Number.parseFloat(trimmed) || 0;
+}
+
+function maxTransitionMs(style: CSSStyleDeclaration): number {
+  const durations = style.transitionDuration.split(',').map(cssTimeToMs);
+  const delays = style.transitionDelay.split(',').map(cssTimeToMs);
+  return durations.reduce((max, duration, index) => {
+    const delay = delays[index] ?? delays[0] ?? 0;
+    return Math.max(max, duration + delay);
+  }, 0);
+}
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
 const FOCUS_CHROME_ICON_TOP_PX = 64;
@@ -265,6 +296,7 @@ export default function ClipboardHistory() {
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
   const [viewMode, setViewMode] = useState<ViewMode>(() => resolveClipboardRestoreState(localStorage).viewMode);
+  const [librarianEverRendered, setLibrarianEverRendered] = useState(() => viewMode === 'librarian');
 
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
   const [sketchBackgroundImage, setSketchBackgroundImage] = useState<{
@@ -320,6 +352,37 @@ export default function ClipboardHistory() {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
   });
+  const topNavPaintTraceRef = useRef<TopNavPaintTrace | null>(null);
+  const viewModeRef = useRef(viewMode);
+  useEffect(() => {
+    viewModeRef.current = viewMode;
+  }, [viewMode]);
+  const applyTopNavVisualMode = useCallback((mode: TopNavMode): number => {
+    const appliedAt = performance.now();
+    document.querySelectorAll<HTMLElement>('[data-top-nav-mode]').forEach((button) => {
+      const selected = button.dataset.topNavMode === mode;
+      button.style.backgroundColor = selected ? theme.accent : 'transparent';
+      button.style.color = selected ? '#fff' : theme.textSecondary;
+    });
+    return appliedAt;
+  }, [theme.accent, theme.textSecondary]);
+  const switchTopNavView = useCallback((delta: 1 | -1) => {
+    const startedAt = performance.now();
+    const previous = viewModeRef.current;
+    const next = nextTopNavViewMode(previous, delta, librarianEnabled);
+    if (!isTopNavMode(next) || next === previous) return;
+
+    const highlightAppliedAt = applyTopNavVisualMode(next);
+    viewModeRef.current = next;
+    topNavPaintTraceRef.current = {
+      from: previous,
+      to: next,
+      source: 'keyboard-tab',
+      startedAt,
+      highlightAppliedAt,
+    };
+    setViewMode(next);
+  }, [applyTopNavVisualMode, librarianEnabled]);
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
@@ -348,6 +411,32 @@ export default function ClipboardHistory() {
     focusChromePreviousSidebarCollapsedRef.current = null;
     setNavSidebarCollapsed(previous);
   }, []);
+  const handleLibrarianSwitchToClipboard = useCallback(() => setViewMode('clipboard'), []);
+  const handleLibrarianSwitchToSettings = useCallback(() => setShowSettings(true), []);
+  const handleLibrarianReadingConsumed = useCallback(() => setPendingReadingPath(null), []);
+  const handleLibrarianOpenTargetConsumed = useCallback(() => setPendingLibraryOpenTarget(null), []);
+  const handleAutoPopArtifactSuperseded = useCallback(() => setAutoPopArtifactPath(null), []);
+  const handleLibrarianOpenCommandPath = useCallback((path: string) => {
+    setPendingCommandPath(path);
+    setViewMode('commands');
+  }, []);
+  const selectTopNavView = useCallback((mode: TopNavMode) => {
+    const previous = viewModeRef.current;
+    if (previous !== mode || showSettings) {
+      const startedAt = performance.now();
+      const highlightAppliedAt = applyTopNavVisualMode(mode);
+      viewModeRef.current = mode;
+      topNavPaintTraceRef.current = {
+        from: previous,
+        to: mode,
+        source: 'tab-click',
+        startedAt,
+        highlightAppliedAt,
+      };
+    }
+    setViewMode(mode);
+    setShowSettings(false);
+  }, [applyTopNavVisualMode, showSettings]);
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -358,13 +447,18 @@ export default function ClipboardHistory() {
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const [loading, setLoading] = useState(false);
+  const clipboardSurfaceActive = isVisible && isWindowVisible && !showSettings && viewMode === 'clipboard';
+  const clipboardSurfaceActiveRef = useRef(clipboardSurfaceActive);
 
-  // Performance debugging: simple render counter
-  const renderCountRef = useRef(0);
   useEffect(() => {
-    renderCountRef.current += 1;
-    console.log(`[Performance] Render #${renderCountRef.current}`);
-  });
+    clipboardSurfaceActiveRef.current = clipboardSurfaceActive;
+  }, [clipboardSurfaceActive]);
+
+  useEffect(() => {
+    if (!showSettings && viewMode === 'librarian') {
+      setLibrarianEverRendered(true);
+    }
+  }, [showSettings, viewMode]);
 
   // Shared clipboard state (sharing to shared clipboard from clipboard view).
   const [sharingToTeam, setSharingToTeam] = useState<number | null>(null);
@@ -940,35 +1034,44 @@ export default function ClipboardHistory() {
       return;
     }
 
+    const social = window.socialAPI;
     let cancelled = false;
 
     // Check current view to avoid race condition where async query overwrites cleared state.
-    window.socialAPI.hasUnreadFeedback?.().then(hasUnread => {
-      if (cancelled) return;
-      const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
-      console.log('[FeedbackDot] hasUnreadFeedback API returned:', hasUnread, 'currentView:', currentView);
-      if (hasUnread && currentView !== 'feedback') {
-        console.log('[FeedbackDot] Setting hasUnreadFeedback to TRUE');
-        setHasUnreadFeedback(true);
-      } else {
-        setHasUnreadFeedback(false);
-      }
-    });
-
-    // Listen for incoming feedback messages.
-    const unsubscribe = window.socialAPI.onMessageReceived(async (message) => {
-      if (cancelled) return;
-      const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
-      if (message.type === 'feedback') {
-        if (currentView !== 'feedback') {
-          console.log('[FeedbackDot] New feedback message received - setting hasUnreadFeedback to TRUE');
+    const checkUnread = () => {
+      social.hasUnreadFeedback?.().then(hasUnread => {
+        if (cancelled) return;
+        const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
+        if (hasUnread && currentView !== 'feedback') {
           setHasUnreadFeedback(true);
+        } else {
+          setHasUnreadFeedback(false);
         }
+      });
+    };
+
+    checkUnread();
+
+    // Re-poll periodically and on window focus. The realtime IPC for
+    // `messageReceived` is not currently emitted by the main process, so
+    // without this the dot stays stuck on the value captured at mount.
+    const pollId = window.setInterval(checkUnread, 300_000);
+    const onFocus = () => checkUnread();
+    window.addEventListener('focus', onFocus);
+
+    // Listen for incoming feedback messages (defensive — currently unused).
+    const unsubscribe = social.onMessageReceived(async (message) => {
+      if (cancelled) return;
+      const currentView = localStorage.getItem(FIELD_THEORY_VIEW_STORAGE_KEY);
+      if (message.type === 'feedback' && currentView !== 'feedback') {
+        setHasUnreadFeedback(true);
       }
     });
 
     return () => {
       cancelled = true;
+      window.clearInterval(pollId);
+      window.removeEventListener('focus', onFocus);
       unsubscribe();
     };
   }, [authSession?.user?.id]);
@@ -1140,6 +1243,37 @@ export default function ClipboardHistory() {
 
   const isMacOS = typeof window !== 'undefined' && window.platform?.isMacOS;
 
+  useLayoutEffect(() => {
+    if (!showSettings && isTopNavMode(viewMode)) {
+      applyTopNavVisualMode(viewMode);
+    }
+
+    const trace = topNavPaintTraceRef.current;
+    if (!trace || showSettings || viewMode !== trace.to) return;
+
+    const commitAt = performance.now();
+    const selectedButton = tabsRef.current?.querySelector<HTMLElement>(
+      `[data-top-nav-mode="${trace.to}"]`
+    );
+    const selectedStyle = selectedButton ? window.getComputedStyle(selectedButton) : null;
+    const transitionMs = selectedStyle ? maxTransitionMs(selectedStyle) : null;
+
+    if (import.meta.env.DEV) {
+      requestAnimationFrame(() => {
+        const frameAt = performance.now();
+        console.info(
+          `[TopNavTiming] ${trace.source} ${trace.from} -> ${trace.to}: ` +
+          `highlight=${trace.highlightAppliedAt === undefined ? 'n/a' : `${(trace.highlightAppliedAt - trace.startedAt).toFixed(1)}ms`} ` +
+          `commit=${(commitAt - trace.startedAt).toFixed(1)}ms ` +
+          `nextFrame=${(frameAt - trace.startedAt).toFixed(1)}ms ` +
+          `cssTransition=${transitionMs === null ? 'n/a' : `${transitionMs.toFixed(0)}ms`}`
+        );
+      });
+    }
+
+    topNavPaintTraceRef.current = null;
+  }, [applyTopNavVisualMode, showSettings, viewMode]);
+
   const pushUndo = useCallback((action: UndoAction) => {
     setUndoStack(prev => [...prev.slice(-(MAX_UNDO - 1)), action]);
     setRedoStack([]);
@@ -1269,15 +1403,18 @@ export default function ClipboardHistory() {
     return fetchedStacks;
   }, []);
 
-  const loadItems = useCallback(async (reset: boolean = false) => {
+  const loadItems = useCallback(async (
+    reset: boolean = false,
+    options: { requireActiveSurface?: boolean } = {}
+  ) => {
     if (!isMacOS || !window.clipboardAPI) {
       return;
     }
+    if (options.requireActiveSurface && !clipboardSurfaceActiveRef.current) {
+      return;
+    }
 
-    // Performance tracking
-    const loadStartTime = performance.now();
     const currentOffset = offsetRef.current;
-    console.log(`[Performance] loadItems called (reset=${reset}, offset=${currentOffset}, filter=${sourceFilter}, search="${debouncedSearchQuery}")`);
 
     setLoading(true);
     try {
@@ -1298,15 +1435,15 @@ export default function ClipboardHistory() {
         queryOptions.search = debouncedSearchQuery.trim();
       }
 
-      const queryStartTime = performance.now();
       const [newItems, stacksData] = await Promise.all([
         window.clipboardAPI.queryItems(queryOptions),
         reset ? window.clipboardAPI.getUniqueStacks?.() : Promise.resolve(stacksRef.current),
       ]);
-      const queryEndTime = performance.now();
-      console.log(`[Performance] Data query completed in ${(queryEndTime - queryStartTime).toFixed(2)}ms (${newItems.length} items)`);
 
-      const stateUpdateStartTime = performance.now();
+      if (options.requireActiveSurface && !clipboardSurfaceActiveRef.current) {
+        return;
+      }
+
       if (reset) {
         setHydratedStackItemsById({});
         setItems(newItems as ClipboardItem[]);
@@ -1318,19 +1455,15 @@ export default function ClipboardHistory() {
       }
 
       setHasMore(newItems.length === ITEMS_PER_PAGE);
-      const stateUpdateEndTime = performance.now();
-      console.log(`[Performance] State update completed in ${(stateUpdateEndTime - stateUpdateStartTime).toFixed(2)}ms`);
     } catch (error) {
       console.error('Failed to load clipboard items:', error);
     } finally {
       setLoading(false);
-      const loadEndTime = performance.now();
-      console.log(`[Performance] Total loadItems duration: ${(loadEndTime - loadStartTime).toFixed(2)}ms`);
     }
   }, [isMacOS, debouncedSearchQuery, sourceFilter, filter]);
 
   useEffect(() => {
-    if (!isVisible) return;
+    if (!clipboardSurfaceActive) return;
 
     const stackIdsToHydrate = getStackHydrationIds(items, stacks, hydratedStackItemsById);
     if (stackIdsToHydrate.length === 0) return;
@@ -1338,7 +1471,7 @@ export default function ClipboardHistory() {
     void fetchStackItemsById(stackIdsToHydrate).catch((error) => {
       console.error('Failed to hydrate stack items:', error);
     });
-  }, [isVisible, items, stacks, hydratedStackItemsById, fetchStackItemsById]);
+  }, [clipboardSurfaceActive, items, stacks, hydratedStackItemsById, fetchStackItemsById]);
 
   // Check if sharing is enabled.
   // Feature is disabled by default, unlocked via Cmd+Shift+S secret toggle.
@@ -1491,11 +1624,6 @@ export default function ClipboardHistory() {
   }, [pushUndo, showFeedback]);
 
   useEffect(() => {
-    // Performance debugging: track view switches
-    const switchStartTime = performance.now();
-    const surface = showSettings ? 'settings' : viewMode;
-    console.log(`[Performance] Switching to view: ${surface}`);
-
     persistClipboardSurface(localStorage, { viewMode, showSettings });
 
     // Close settings when entering sketch mode (sketch needs full screen).
@@ -1504,7 +1632,6 @@ export default function ClipboardHistory() {
     }
     // Clear unread indicator when entering feedback view.
     if (viewMode === 'feedback') {
-      console.log('[FeedbackDot] Entering feedback view - setting hasUnreadFeedback to FALSE');
       setHasUnreadFeedback(false);
     }
     // Notify main process of sketch mode changes so it can skip auto-paste into Excalidraw.
@@ -1519,12 +1646,6 @@ export default function ClipboardHistory() {
     } else if (viewMode !== 'librarian') {
       window.librarianAPI?.setSizeKey?.('fields');
     }
-
-    // Log completion time
-    requestAnimationFrame(() => {
-      const switchEndTime = performance.now();
-      console.log(`[Performance] View switch to ${surface} completed in ${(switchEndTime - switchStartTime).toFixed(2)}ms`);
-    });
   }, [showSettings, viewMode]);
 
   useEffect(() => {
@@ -1607,11 +1728,10 @@ export default function ClipboardHistory() {
 
   // Initial load and search/filter changes.
   useEffect(() => {
-    if (isVisible) {
-      setOffset(0);
-      loadItems(true);
-    }
-  }, [isVisible, loadItems]);
+    if (!clipboardSurfaceActive) return;
+    setOffset(0);
+    loadItems(true, { requireActiveSurface: true });
+  }, [clipboardSurfaceActive, loadItems]);
 
   useEffect(() => {
     if (!isMacOS || !window.clipboardAPI) {
@@ -1728,20 +1848,24 @@ export default function ClipboardHistory() {
     });
 
     const unsubscribeAdded = window.clipboardAPI.onItemAdded(async (id) => {
+      if (!clipboardSurfaceActiveRef.current) {
+        return;
+      }
+
       // Preserve scroll position and loaded items count when adding new items
       const scrollContainer = listRef.current?.parentElement;
       const savedScrollTop = scrollContainer?.scrollTop ?? 0;
       const currentOffset = offsetRef.current;
 
       // Reload with reset, but then restore the loaded count if user had loaded more
-      await loadItems(true);
+      await loadItems(true, { requireActiveSurface: true });
 
       // If user had loaded more items, keep loading until we match or exceed the previous offset
       let attempts = 0;
       const maxAttempts = 20; // Safety limit to prevent infinite loops
-      while (offsetRef.current < currentOffset && attempts < maxAttempts) {
+      while (clipboardSurfaceActiveRef.current && offsetRef.current < currentOffset && attempts < maxAttempts) {
         const offsetBefore = offsetRef.current;
-        await loadItems(false);
+        await loadItems(false, { requireActiveSurface: true });
         const offsetAfter = offsetRef.current;
 
         // Break if offset didn't increase (no more items to load)
@@ -1751,7 +1875,7 @@ export default function ClipboardHistory() {
 
       // Restore scroll position after all items are loaded
       requestAnimationFrame(() => {
-        if (scrollContainer) {
+        if (clipboardSurfaceActiveRef.current && scrollContainer) {
           scrollContainer.scrollTop = savedScrollTop;
         }
       });
@@ -2192,7 +2316,7 @@ export default function ClipboardHistory() {
           // Tab / Shift+Tab carousels through the left-group top-nav tabs.
           setShowSettings(false);
           const delta = hasShift ? -1 : 1;
-          setViewMode((prev) => nextTopNavViewMode(prev, delta, librarianEnabled));
+          switchTopNavView(delta);
         }
         return;
       }
@@ -2850,50 +2974,6 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Tab/Shift+Tab cycles through view modes.
-      // Option+Tab cycles through target apps.
-      // Skip if user is typing in an input field - let Tab work naturally for form navigation.
-      if (key === 'Tab' && !hasCtrl && !hasMeta) {
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
-          return; // Let Tab navigate between form fields naturally.
-        }
-        e.preventDefault();
-
-        if (hasAlt && hasShift) {
-          // Shift+Option+Tab - cycle backwards through target apps.
-          if (targetAppInfo.runningApps.length === 0) {
-            return;
-          }
-          const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
-          const newApp = targetAppInfo.runningApps[prevIndex];
-          setTargetAppInfo(prev => ({
-            ...prev,
-            targetApp: newApp,
-            targetAppIndex: prevIndex,
-          }));
-          window.clipboardAPI?.setTargetApp(newApp);
-        } else if (hasAlt) {
-          // Option+Tab - cycle forwards through target apps.
-          if (targetAppInfo.runningApps.length === 0) {
-            return;
-          }
-          const nextIndex = (targetAppInfo.targetAppIndex + 1) % targetAppInfo.runningApps.length;
-          const newApp = targetAppInfo.runningApps[nextIndex];
-          setTargetAppInfo(prev => ({
-            ...prev,
-            targetApp: newApp,
-            targetAppIndex: nextIndex,
-          }));
-          window.clipboardAPI?.setTargetApp(newApp);
-        } else {
-          // Tab / Shift+Tab carousels through the left-group top-nav tabs.
-          setShowSettings(false);
-          const delta = hasShift ? -1 : 1;
-          setViewMode((prev) => nextTopNavViewMode(prev, delta, librarianEnabled));
-        }
-        return;
-      }
-      
       // Escape key - close preview modal if open
       if (e.key === 'Escape' && preview) {
         e.preventDefault();
@@ -3060,7 +3140,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -3652,9 +3732,9 @@ export default function ClipboardHistory() {
               <button
                 key={mode}
                 onClick={() => {
-                  setViewMode(mode);
-                  setShowSettings(false);
+                  selectTopNavView(mode as TopNavMode);
                 }}
+                data-top-nav-mode={mode}
                 tabIndex={0}
                 style={{
                   position: 'relative',
@@ -3666,7 +3746,7 @@ export default function ClipboardHistory() {
                   border: 'none',
                   borderRadius: '4px',
                   cursor: 'pointer',
-                  transition: 'all 0.15s ease',
+                  transition: 'none',
                   outline: 'none',
                   display: 'flex',
                   alignItems: 'center',
@@ -3702,9 +3782,9 @@ export default function ClipboardHistory() {
           {/* Librarian button */}
           <button
             onClick={() => {
-              setViewMode('librarian');
-              setShowSettings(false);
+              selectTopNavView('librarian');
             }}
+            data-top-nav-mode="librarian"
             tabIndex={0}
             style={{
               padding: '6px 8px',
@@ -3715,7 +3795,7 @@ export default function ClipboardHistory() {
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
-              transition: 'all 0.15s ease',
+              transition: 'none',
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
@@ -3753,9 +3833,9 @@ export default function ClipboardHistory() {
               group. Matches their typography so the three read as peers. */}
           <button
             onClick={() => {
-              setViewMode('commands');
-              setShowSettings(false);
+              selectTopNavView('commands');
             }}
+            data-top-nav-mode="commands"
             tabIndex={0}
             style={{
               padding: '6px 8px',
@@ -3766,7 +3846,7 @@ export default function ClipboardHistory() {
               border: 'none',
               borderRadius: '4px',
               cursor: 'pointer',
-              transition: 'all 0.15s ease',
+              transition: 'none',
               outline: 'none',
               display: 'flex',
               alignItems: 'center',
@@ -4164,6 +4244,35 @@ export default function ClipboardHistory() {
         </div>
       )}
 
+      {!showSettings && (librarianEverRendered || viewMode === 'librarian') && (
+        <div
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: viewMode === 'librarian' ? 'flex' : 'none',
+            flexDirection: 'column',
+          }}
+        >
+          <LibrarianView
+            active={viewMode === 'librarian'}
+            onSwitchToClipboard={handleLibrarianSwitchToClipboard}
+            onSwitchToSettings={handleLibrarianSwitchToSettings}
+            onFullScreenChange={setLibrarianImmersive}
+            onFocusChromeActiveChange={handleFocusChromeActiveChange}
+            initialReadingPath={pendingReadingPath}
+            initialOpenTarget={pendingLibraryOpenTarget}
+            initialFullScreen={librarianImmersive}
+            onInitialReadingConsumed={handleLibrarianReadingConsumed}
+            onInitialOpenTargetConsumed={handleLibrarianOpenTargetConsumed}
+            autoPopArtifactPath={autoPopArtifactPath}
+            onAutoPopArtifactSuperseded={handleAutoPopArtifactSuperseded}
+            onOpenCommandPath={handleLibrarianOpenCommandPath}
+            onFocusChromeShortcut={collapseSidebarForFocusChrome}
+            sidebarCollapsed={navSidebarCollapsed}
+          />
+        </div>
+      )}
+
       {/* Conditionally show Settings, Todo View, Feedback View, or Clipboard History */}
       {showSettings ? (
         <SettingsPanel
@@ -4183,25 +4292,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'todo' ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'librarian' ? (
-        <LibrarianView
-          onSwitchToClipboard={() => setViewMode('clipboard')}
-          onSwitchToSettings={() => setShowSettings(true)}
-          onFullScreenChange={setLibrarianImmersive}
-          onFocusChromeActiveChange={handleFocusChromeActiveChange}
-          initialReadingPath={pendingReadingPath}
-          initialOpenTarget={pendingLibraryOpenTarget}
-          initialFullScreen={librarianImmersive}
-          onInitialReadingConsumed={() => setPendingReadingPath(null)}
-          onInitialOpenTargetConsumed={() => setPendingLibraryOpenTarget(null)}
-          autoPopArtifactPath={autoPopArtifactPath}
-          onAutoPopArtifactSuperseded={() => setAutoPopArtifactPath(null)}
-          onOpenCommandPath={(path) => {
-            setPendingCommandPath(path);
-            setViewMode('commands');
-          }}
-          onFocusChromeShortcut={collapseSidebarForFocusChrome}
-          sidebarCollapsed={navSidebarCollapsed}
-        />
+        null
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
         sessionInitialized && authSession?.user?.email ? (
@@ -6594,12 +6685,9 @@ export default function ClipboardHistory() {
                 cursor: 'pointer',
                 position: 'relative',
               }}
-              onClick={(e) => {
+              onClick={() => {
                 if (narrationPlayback.status === 'generating') return;
-                const rect = e.currentTarget.getBoundingClientRect();
-                const percentage = ((e.clientX - rect.left) / rect.width) * 100;
                 // TODO: Implement seek functionality when available
-                console.log('Seek to:', percentage, '%');
               }}
             >
               <div
@@ -7162,11 +7250,7 @@ export default function ClipboardHistory() {
                       ? selectedRow.item.id 
                       : selectedRow?.items?.[0]?.id;
                     if (itemId) {
-                      window.socialAPI?.sendDM(contact.userId, itemId).then((result) => {
-                        if (result) {
-                          console.log('[ClipboardHistory] DM sent:', result.id);
-                        }
-                      });
+                      void window.socialAPI?.sendDM(contact.userId, itemId);
                     }
                     setShowDMModal(false);
                   }
