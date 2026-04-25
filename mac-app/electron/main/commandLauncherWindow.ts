@@ -75,7 +75,8 @@ export class CommandLauncherWindow {
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 320;
   private readonly WINDOW_HEIGHT_COLLAPSED = 36;
-  private readonly WINDOW_HEIGHT_EXPANDED = 300;
+  private readonly WINDOW_HEIGHT_RESULTS = 300;
+  private readonly WINDOW_HEIGHT_MAX = 560;
 
   private resizeBurstCount = 0;
   private resizeBurstStartedAt = 0;
@@ -95,7 +96,14 @@ export class CommandLauncherWindow {
 
       if (this.window && !this.window.isDestroyed()) {
         const bounds = this.window.getBounds();
-        const nextHeight = Math.min(height, this.WINDOW_HEIGHT_EXPANDED);
+        const nextHeight = Math.min(height, this.WINDOW_HEIGHT_MAX);
+        if (nextHeight !== height) {
+          appendCommandLauncherTrace('renderer-resize-clamped', {
+            requestedHeight: height,
+            appliedHeight: nextHeight,
+            maxHeight: this.WINDOW_HEIGHT_MAX,
+          });
+        }
         this.window.setBounds({
           x: bounds.x,
           y: bounds.y,
@@ -117,6 +125,12 @@ export class CommandLauncherWindow {
         isShowing: this._isShowing,
       });
       this.hide();
+    });
+
+    ipcMain.on('command-launcher:trace', (_event, event: string, details: Record<string, unknown> = {}) => {
+      if (!event || typeof event !== 'string') return;
+      const safeDetails = details && typeof details === 'object' ? details : { value: details };
+      appendCommandLauncherTrace(`renderer-${event.slice(0, 80)}`, safeDetails);
     });
   }
   
@@ -189,13 +203,13 @@ export class CommandLauncherWindow {
       if (windowBounds) {
         // Center on the current frontmost window.
         x = Math.round(windowBounds.x + (windowBounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
+        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
       } else {
         // Fallback: center on active display.
         const cursorPoint = screen.getCursorScreenPoint();
         const display = screen.getDisplayNearestPoint(cursorPoint);
         x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
+        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
       }
 
       this.window!.setBounds({

@@ -19,6 +19,8 @@ const mockWindow = vi.hoisted(() => ({
   webContents: { send: vi.fn(), openDevTools: vi.fn() },
 }));
 
+const mockIpcMainHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => void>());
+
 const mockApp = vi.hoisted(() => ({
   hide: vi.fn(),
   getName: vi.fn(() => 'Field Theory'),
@@ -34,7 +36,9 @@ vi.mock('electron', () => ({
     getDisplayNearestPoint: vi.fn(() => ({ bounds: { x: 0, y: 0, width: 1920, height: 1080 } })),
   },
   ipcMain: {
-    on: vi.fn(),
+    on: vi.fn((channel: string, handler: (...args: any[]) => void) => {
+      mockIpcMainHandlers.set(channel, handler);
+    }),
     handle: vi.fn(),
   },
 }));
@@ -60,6 +64,7 @@ import { CommandLauncherWindow } from './commandLauncherWindow';
 describe('CommandLauncherWindow.show()', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIpcMainHandlers.clear();
     mockWindow.isVisible.mockReturnValue(false);
     mockWindow.isDestroyed.mockReturnValue(false);
   });
@@ -124,6 +129,7 @@ describe('CommandLauncherWindow.hide()', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIpcMainHandlers.clear();
     launcher = new CommandLauncherWindow();
     // Force-create the window via show() internals
     (launcher as any).window = mockWindow;
@@ -190,5 +196,43 @@ describe('CommandLauncherWindow.hide()', () => {
     launcher.hide();
 
     expect(mockWindow.hide).not.toHaveBeenCalled();
+  });
+});
+
+describe('CommandLauncherWindow resize IPC', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIpcMainHandlers.clear();
+    mockWindow.isVisible.mockReturnValue(true);
+    mockWindow.isDestroyed.mockReturnValue(false);
+    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 320, height: 36 });
+  });
+
+  it('allows preview-sized renderer resize requests', () => {
+    const launcher = new CommandLauncherWindow();
+    (launcher as any).window = mockWindow;
+
+    mockIpcMainHandlers.get('command-launcher:resize')?.({}, 526);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 10,
+      y: 20,
+      width: 320,
+      height: 526,
+    });
+  });
+
+  it('clamps oversized renderer resize requests', () => {
+    const launcher = new CommandLauncherWindow();
+    (launcher as any).window = mockWindow;
+
+    mockIpcMainHandlers.get('command-launcher:resize')?.({}, 900);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 10,
+      y: 20,
+      width: 320,
+      height: 560,
+    });
   });
 });

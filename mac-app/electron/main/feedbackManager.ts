@@ -273,6 +273,39 @@ export class FeedbackManager extends EventEmitter {
     }
   }
 
+  private async prefetchProfiles(rows: MessageRow[]): Promise<void> {
+    if (!this.supabase || rows.length === 0) return;
+
+    const needed = new Set<string>();
+    for (const row of rows) {
+      if (!this.profileCache.has(row.sender_user_id)) needed.add(row.sender_user_id);
+      if (!this.profileCache.has(row.recipient_user_id)) needed.add(row.recipient_user_id);
+    }
+    if (needed.size === 0) return;
+
+    try {
+      const { data, error } = await this.supabase
+        .from('profiles')
+        .select('*')
+        .in('id', Array.from(needed));
+
+      if (error || !data) return;
+
+      for (const row of data as ProfileRow[]) {
+        this.profileCache.set(row.id, {
+          id: row.id,
+          email: row.email,
+          callsign: row.callsign,
+          firstName: row.first_name,
+          lastName: row.last_name,
+          isAdmin: row.is_admin,
+        });
+      }
+    } catch (err) {
+      log.error('Failed to prefetch profiles:', err);
+    }
+  }
+
   private async getDisplayName(userId: string): Promise<string | null> {
     const profile = await this.getProfile(userId);
     if (!profile) return null;
@@ -597,12 +630,9 @@ export class FeedbackManager extends EventEmitter {
         return [];
       }
 
-      const messages: FeedbackMessage[] = [];
-      for (const row of data as MessageRow[]) {
-        messages.push(await this.rowToMessage(row));
-      }
-
-      return messages;
+      const rows = data as MessageRow[];
+      await this.prefetchProfiles(rows);
+      return await Promise.all(rows.map((row) => this.rowToMessage(row)));
     } catch (err) {
       log.error('Failed to get my feedback:', err);
       return [];
@@ -631,12 +661,9 @@ export class FeedbackManager extends EventEmitter {
         return [];
       }
 
-      const messages: FeedbackMessage[] = [];
-      for (const row of data as MessageRow[]) {
-        messages.push(await this.rowToMessage(row));
-      }
-
-      return messages;
+      const rows = data as MessageRow[];
+      await this.prefetchProfiles(rows);
+      return await Promise.all(rows.map((row) => this.rowToMessage(row)));
     } catch (err) {
       log.error('Failed to get all feedback:', err);
       return [];
@@ -658,12 +685,9 @@ export class FeedbackManager extends EventEmitter {
         return [];
       }
 
-      const messages: FeedbackMessage[] = [];
-      for (const row of data as MessageRow[]) {
-        messages.push(await this.rowToMessage(row));
-      }
-
-      return messages;
+      const rows = data as MessageRow[];
+      await this.prefetchProfiles(rows);
+      return await Promise.all(rows.map((row) => this.rowToMessage(row)));
     } catch (err) {
       log.error('Failed to get feedback replies:', err);
       return [];
