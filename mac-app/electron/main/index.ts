@@ -12,7 +12,7 @@ import { isAlfredApp } from './alfredVisibility';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistorySizeKey } from './preferences';
+import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistorySizeKey } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -69,9 +69,12 @@ import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
+import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
+import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -1318,7 +1321,7 @@ function isClipboardHistorySizeKey(value: unknown): value is ClipboardHistorySiz
 
 function getLastClipboardHistorySizeKey(): ClipboardHistorySizeKey {
   const savedKey = preferencesManager?.get().clipboardHistoryLastSizeKey;
-  return isClipboardHistorySizeKey(savedKey) ? savedKey : 'fields';
+  return isClipboardHistorySizeKey(savedKey) ? normalizeClipboardHistorySizeKey(savedKey) : 'fields';
 }
 
 function restoreClipboardHistoryBounds(sizeKey: ClipboardHistorySizeKey = getLastClipboardHistorySizeKey()): { x: number; y: number; width: number; height: number } | undefined {
@@ -1381,6 +1384,7 @@ async function saveClipboardHistoryBoundsForKey(
   key: ClipboardHistorySizeKey
 ): Promise<void> {
   if (!preferencesManager) return;
+  const normalizedKey = normalizeClipboardHistorySizeKey(key);
 
   const displayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
   const displayRelative = ClipboardHistoryWindow.convertToDisplayRelative(bounds.x, bounds.y);
@@ -1397,9 +1401,9 @@ async function saveClipboardHistoryBoundsForKey(
   const prefs = preferencesManager.get();
   const existing = prefs?.clipboardHistoryBoundsByView ?? {};
   await preferencesManager.save({
-    clipboardHistoryBoundsByView: { ...existing, [key]: entry },
-    clipboardHistoryLastSizeKey: key,
-    ...(key === 'fields' ? { clipboardHistoryBounds: entry } : {}),
+    clipboardHistoryBoundsByView: { ...existing, [normalizedKey]: entry },
+    clipboardHistoryLastSizeKey: normalizedKey,
+    ...(normalizedKey === 'fields' ? { clipboardHistoryBounds: entry } : {}),
   });
 }
 
@@ -1677,6 +1681,20 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getLibraryRoots();
   });
 
+  ipcMain.handle('library:previewMigration', () => {
+    return buildLibraryMigrationPlan();
+  });
+
+  ipcMain.handle('library:executeMigration', () => {
+    const plan = buildLibraryMigrationPlan();
+    const result = executeLibraryMigration(plan);
+    if (result.success && librarianManager) {
+      librarianManager.emit('wiki:changed');
+      librarianManager.emit('library:changed', plan.targetDir);
+    }
+    return result;
+  });
+
   ipcMain.handle('library:getHiddenFolders', (): string[] => {
     if (!librarianManager) return [];
     return librarianManager.getHiddenDefaultFolders();
@@ -1846,6 +1864,79 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('bookmarks:getAll', (): BookmarksSnapshot => {
     if (!bookmarksManager) return { bookmarks: [], folders: [] };
     return bookmarksManager.getSnapshot();
+  });
+
+  ipcMain.handle('bookmarks:getAuthors', () => {
+    if (!bookmarksManager) return [];
+    return buildBookmarkAuthorSummaries(bookmarksManager.getSnapshot().bookmarks);
+  });
+
+  const pasteBookmarkTextFromLauncher = async (
+    tracePrefix: string,
+    tracePayload: Record<string, unknown>,
+    text: string,
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const targetApp = getCommandLauncherTargetApp();
+      appendCommandLauncherTrace(`${tracePrefix}-start`, {
+        ...tracePayload,
+        targetBundleId: targetApp?.bundleId ?? null,
+        targetName: targetApp?.name ?? null,
+      });
+
+      if (!targetApp) {
+        commandLauncherWindow?.hide(true);
+        appendCommandLauncherTrace(`${tracePrefix}-no-target`, tracePayload);
+        return { success: false, error: 'No external target app available' };
+      }
+
+      commandLauncherWindow?.hide(true);
+      clipboard.writeText(text);
+      clipboardManager?.syncClipboardHash();
+      await activateAndPaste(targetApp);
+
+      appendCommandLauncherTrace(`${tracePrefix}-success`, {
+        ...tracePayload,
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+      });
+      return { success: true };
+    } catch (error) {
+      log.error(`Error invoking ${tracePrefix}:`, error);
+      appendCommandLauncherTrace(`${tracePrefix}-error`, { ...tracePayload, error });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  };
+
+  ipcMain.handle('bookmarks:getAuthorBookmarks', (_event, handle: string) => {
+    if (!bookmarksManager) return [];
+    return bookmarksForAuthor(handle, bookmarksManager.getSnapshot().bookmarks);
+  });
+
+  ipcMain.handle('bookmarks:invokeBookmark', async (_event, id: string) => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+
+    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    if (!bookmark) {
+      return { success: false, error: 'Bookmark not found' };
+    }
+
+    return pasteBookmarkTextFromLauncher('invoke-bookmark-post', { id }, formatBookmarkPost(bookmark));
+  });
+
+  ipcMain.handle('bookmarks:invokeAuthorTimeline', async (_event, handle: string) => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+
+    const timeline = formatBookmarkAuthorTimeline(handle, bookmarksManager.getSnapshot().bookmarks);
+    if (!timeline) {
+      return { success: false, error: 'No bookmarks found for author' };
+    }
+
+    return pasteBookmarkTextFromLauncher('invoke-bookmark-author', { handle }, timeline);
   });
 
   if (bookmarksManager) {
@@ -7330,8 +7421,11 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (!filePath) return;
 
       const decodedPath = decodeURIComponent(filePath);
-      const wikiRoot = path.join(process.env.FT_DATA_DIR ?? path.join(os.homedir(), '.ft-bookmarks'), 'md');
-      const relPath = path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
+      const wikiRoot = librarianManager?.getWikiRoot() ?? libraryDir();
+      const resolved = resolveIncomingMarkdownPath(decodedPath, wikiRoot);
+      const relPath = resolved?.kind === 'wiki'
+        ? resolved.relPath
+        : path.relative(wikiRoot, decodedPath).replace(/\.md$/i, '');
 
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
@@ -7417,7 +7511,7 @@ if (!gotTheLock) {
   app.whenReady().then(async () => {
     log.info('App ready');
 
-    // ftmedia://media/<filename> → ~/.ft-bookmarks/media/<filename>.
+    // ftmedia://media/<filename> → the bookmark media folder.
     // basename() strips any path traversal attempts from the URL.
     protocol.handle('ftmedia', (req) => {
       const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));

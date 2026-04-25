@@ -75,13 +75,18 @@ export class CommandLauncherWindow {
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 320;
   private readonly WINDOW_HEIGHT_COLLAPSED = 36;
-  private readonly WINDOW_HEIGHT_EXPANDED = 300;
+  private readonly WINDOW_HEIGHT_RESULTS = 300;
+  private readonly PREVIEW_WINDOW_WIDTH = 520;
+  private readonly PREVIEW_WINDOW_HEIGHT = 560;
 
   private resizeBurstCount = 0;
   private resizeBurstStartedAt = 0;
   private resizeBurstLastAt = 0;
   private resizeBurstHeights = new Set<number>();
   private resizeBurstTimer: NodeJS.Timeout | null = null;
+  private previewWindow: BrowserWindow | null = null;
+  private previewBookmark: Record<string, unknown> | null = null;
+  private previewAnchorBounds: AnchorBounds | null = null;
 
   constructor(nativeHelper?: NativeHelper) {
     this.nativeHelper = nativeHelper || null;
@@ -95,7 +100,14 @@ export class CommandLauncherWindow {
 
       if (this.window && !this.window.isDestroyed()) {
         const bounds = this.window.getBounds();
-        const nextHeight = Math.min(height, this.WINDOW_HEIGHT_EXPANDED);
+        const nextHeight = Math.min(height, this.WINDOW_HEIGHT_RESULTS);
+        if (nextHeight !== height) {
+          appendCommandLauncherTrace('renderer-resize-clamped', {
+            requestedHeight: height,
+            appliedHeight: nextHeight,
+            maxHeight: this.WINDOW_HEIGHT_RESULTS,
+          });
+        }
         this.window.setBounds({
           x: bounds.x,
           y: bounds.y,
@@ -117,6 +129,20 @@ export class CommandLauncherWindow {
         isShowing: this._isShowing,
       });
       this.hide();
+    });
+
+    ipcMain.on('command-launcher:preview-show', (_event, bookmark: Record<string, unknown>) => {
+      this.showPreview(bookmark);
+    });
+
+    ipcMain.on('command-launcher:preview-hide', () => {
+      this.hidePreview();
+    });
+
+    ipcMain.on('command-launcher:trace', (_event, event: string, details: Record<string, unknown> = {}) => {
+      if (!event || typeof event !== 'string') return;
+      const safeDetails = details && typeof details === 'object' ? details : { value: details };
+      appendCommandLauncherTrace(`renderer-${event.slice(0, 80)}`, safeDetails);
     });
   }
   
@@ -187,15 +213,17 @@ export class CommandLauncherWindow {
       });
 
       if (windowBounds) {
+        this.previewAnchorBounds = windowBounds;
         // Center on the current frontmost window.
         x = Math.round(windowBounds.x + (windowBounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
+        y = Math.round(windowBounds.y + (windowBounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
       } else {
         // Fallback: center on active display.
         const cursorPoint = screen.getCursorScreenPoint();
         const display = screen.getDisplayNearestPoint(cursorPoint);
+        this.previewAnchorBounds = display.bounds;
         x = Math.round(display.bounds.x + (display.bounds.width - this.WINDOW_WIDTH) / 2);
-        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_EXPANDED) / 2 - 50);
+        y = Math.round(display.bounds.y + (display.bounds.height - this.WINDOW_HEIGHT_RESULTS) / 2 - 50);
       }
 
       this.window!.setBounds({
@@ -240,6 +268,7 @@ export class CommandLauncherWindow {
    */
   hide(skipActivation = false): void {
     this._isShowing = false;
+    this.hidePreview();
 
     // Already hidden — prevents blur re-entry after hide(true).
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
@@ -384,6 +413,7 @@ export class CommandLauncherWindow {
     this.window.on('closed', () => {
       appendCommandLauncherTrace('window-closed');
       this.flushResizeBurst('window-closed');
+      this.hidePreview();
       this.window = null;
     });
 
@@ -416,6 +446,112 @@ export class CommandLauncherWindow {
       this.window.loadFile(htmlPath);
     }
   }
+
+  private createPreviewWindow(): void {
+    appendCommandLauncherTrace('preview-create-window-start');
+    this.previewWindow = new BrowserWindow({
+      width: this.PREVIEW_WINDOW_WIDTH,
+      height: this.PREVIEW_WINDOW_HEIGHT,
+      frame: false,
+      transparent: true,
+      resizable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      show: false,
+      hasShadow: true,
+      focusable: false,
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true,
+        preload: path.join(__dirname, '../preload.js'),
+      },
+    });
+    appendCommandLauncherTrace('preview-create-window-complete');
+
+    this.previewWindow.setAlwaysOnTop(true, 'screen-saver', 1);
+    this.previewWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+
+    this.previewWindow.on('show', () => {
+      appendCommandLauncherTrace('preview-window-show-event');
+    });
+
+    this.previewWindow.on('hide', () => {
+      appendCommandLauncherTrace('preview-window-hide-event');
+    });
+
+    this.previewWindow.on('closed', () => {
+      appendCommandLauncherTrace('preview-window-closed');
+      this.previewWindow = null;
+    });
+
+    this.previewWindow.webContents.on('did-finish-load', () => {
+      appendCommandLauncherTrace('preview-renderer-did-finish-load');
+      if (this.previewBookmark) {
+        this.previewWindow?.webContents.send('command-launcher-preview:bookmark', this.previewBookmark);
+      }
+    });
+
+    this.previewWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+      appendCommandLauncherTrace('preview-renderer-did-fail-load', {
+        errorCode,
+        errorDescription,
+        validatedURL,
+      });
+    });
+
+    const startUrl = process.env.ELECTRON_START_URL;
+    if (startUrl) {
+      const url = startUrl.endsWith('/') ? startUrl : `${startUrl}/`;
+      this.previewWindow.loadURL(`${url}command-launcher-preview.html`);
+    } else {
+      const htmlPath = path.join(app.getAppPath(), 'dist', 'command-launcher-preview.html');
+      this.previewWindow.loadFile(htmlPath);
+    }
+  }
+
+  private showPreview(bookmark: Record<string, unknown> | null | undefined): void {
+    if (!bookmark || typeof bookmark !== 'object') {
+      appendCommandLauncherTrace('preview-show-ignored', { reason: 'invalid-bookmark' });
+      return;
+    }
+
+    this.previewBookmark = bookmark;
+    if (!this.previewWindow || this.previewWindow.isDestroyed()) {
+      this.createPreviewWindow();
+    }
+
+    const anchor = this.previewAnchorBounds ?? (() => {
+      const cursorPoint = screen.getCursorScreenPoint();
+      return screen.getDisplayNearestPoint(cursorPoint).bounds;
+    })();
+    const x = Math.round(anchor.x + (anchor.width - this.PREVIEW_WINDOW_WIDTH) / 2);
+    const y = Math.round(anchor.y + (anchor.height - this.PREVIEW_WINDOW_HEIGHT) / 2);
+
+    this.previewWindow!.setBounds({
+      x,
+      y,
+      width: this.PREVIEW_WINDOW_WIDTH,
+      height: this.PREVIEW_WINDOW_HEIGHT,
+    });
+    appendCommandLauncherTrace('preview-show', {
+      bookmarkId: bookmark.id ?? null,
+      x,
+      y,
+      width: this.PREVIEW_WINDOW_WIDTH,
+      height: this.PREVIEW_WINDOW_HEIGHT,
+    });
+
+    this.previewWindow!.showInactive();
+    this.previewWindow!.moveTop();
+    this.previewWindow!.webContents.send('command-launcher-preview:bookmark', bookmark);
+  }
+
+  private hidePreview(): void {
+    this.previewBookmark = null;
+    if (!this.previewWindow || this.previewWindow.isDestroyed() || !this.previewWindow.isVisible()) return;
+    appendCommandLauncherTrace('preview-hide');
+    this.previewWindow.hide();
+  }
   
   /**
    * Destroy the window and clean up.
@@ -423,6 +559,11 @@ export class CommandLauncherWindow {
   destroy(): void {
     appendCommandLauncherTrace('destroy');
     this.flushResizeBurst('destroy');
+    this.previewBookmark = null;
+    if (this.previewWindow && !this.previewWindow.isDestroyed()) {
+      this.previewWindow.destroy();
+      this.previewWindow = null;
+    }
     if (this.window && !this.window.isDestroyed()) {
       this.window.destroy();
       this.window = null;

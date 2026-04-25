@@ -2,7 +2,7 @@ import { app, BrowserWindow, BrowserWindowConstructorOptions, screen, Menu } fro
 import path from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
-import { PreferencesManager, pickSavedBoundsByKey, type ClipboardHistoryBounds, type ClipboardHistorySizeKey } from './preferences';
+import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistoryBounds, type ClipboardHistorySizeKey } from './preferences';
 import { SoundManager } from './soundManager';
 import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
@@ -487,13 +487,14 @@ export class ClipboardHistoryWindow {
 
   /**
    * Switch the active size-key (e.g., when the user navigates to a different
-   * view). Persists any pending resize under the old key, then animates to
+   * view). Persists any pending resize under the old key, then applies
    * the saved (or default) bounds for the new key. During immersive mode,
    * the key is tracked but the window stays immersive — exit will pick up
    * the new key automatically.
    */
   setSizeKey(key: ClipboardHistorySizeKey): void {
-    if (key === this.currentSizeKey) return;
+    const normalizedKey = normalizeClipboardHistorySizeKey(key);
+    if (normalizedKey === this.currentSizeKey) return;
 
     // Flush any pending unsaved bounds under the old key before switching.
     // (Some code paths update bounds without a `resized` event; be defensive.)
@@ -501,8 +502,8 @@ export class ClipboardHistoryWindow {
       this.emitBoundsChanged();
     }
 
-    this.currentSizeKey = key;
-    this.preferencesManager.save({ clipboardHistoryLastSizeKey: key }).catch((err) => {
+    this.currentSizeKey = normalizedKey;
+    this.preferencesManager.save({ clipboardHistoryLastSizeKey: normalizedKey }).catch((err) => {
       log.error('Failed to save clipboard history size key:', err);
     });
 
@@ -513,10 +514,10 @@ export class ClipboardHistoryWindow {
 
     // Keep the window anchored at its current on-screen position when
     // switching views — only width/height should track the new section.
-    const saved = pickSavedBoundsByKey(this.preferencesManager.get(), key);
-    const defaultDims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[key];
+    const saved = pickSavedBoundsByKey(this.preferencesManager.get(), normalizedKey);
+    const defaultDims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[normalizedKey];
     const current = this.window.getBounds();
-    this.animateBounds({
+    this.setBoundsImmediately({
       x: current.x,
       y: current.y,
       width: saved?.width ?? defaultDims.width,
@@ -1230,6 +1231,17 @@ export class ClipboardHistoryWindow {
         this.animationTimer = null;
       }
     }, stepDuration);
+  }
+
+  private setBoundsImmediately(targetBounds: Electron.Rectangle): void {
+    if (!this.window || this.window.isDestroyed()) return;
+
+    if (this.animationTimer) {
+      clearInterval(this.animationTimer);
+      this.animationTimer = null;
+    }
+
+    this.window.setBounds(targetBounds);
   }
 
   private computeExpandedBounds(
