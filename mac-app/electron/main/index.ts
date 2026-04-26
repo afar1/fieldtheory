@@ -77,6 +77,7 @@ import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } fro
 import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
 import { bookmarksForTaxonomyFiles, searchBookmarks } from './bookmarkCollections';
 import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
+import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
   captureClipboardSnapshot,
@@ -1931,6 +1932,95 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('bookmarks:search', (_event, query: string) => {
     if (!bookmarksManager || typeof query !== 'string') return [];
     return searchBookmarks(query, bookmarksManager.getSnapshot().bookmarks);
+  });
+
+  ipcMain.handle('bookmarks:saveWebUrl', async (_event, url: string) => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+    if (typeof url !== 'string' || !url.trim()) {
+      return { success: false, error: 'URL is required' };
+    }
+
+    try {
+      const result = await bookmarksManager.saveWebBookmarkFromUrl(url);
+      return { success: true, ...result };
+    } catch (error) {
+      log.error('Error saving web bookmark:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
+  const getActiveWebPageForLauncher = async (tracePrefix: string) => {
+    const targetApp = getCommandLauncherTargetApp();
+    appendCommandLauncherTrace(`${tracePrefix}-start`, {
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
+    });
+
+    if (!targetApp) {
+      appendCommandLauncherTrace(`${tracePrefix}-no-target`);
+      return { success: false, error: 'No browser app was active before the launcher opened' };
+    }
+
+    try {
+      const page = await getActiveBrowserPage(targetApp);
+      if (!page) {
+        appendCommandLauncherTrace(`${tracePrefix}-no-page`, {
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+        });
+        return { success: false, error: `No active browser page found in ${targetApp.name}` };
+      }
+      appendCommandLauncherTrace(`${tracePrefix}-success`, {
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        url: page.url,
+      });
+      return { success: true, page };
+    } catch (error) {
+      log.error(`Error resolving active browser page for ${tracePrefix}:`, error);
+      appendCommandLauncherTrace(`${tracePrefix}-error`, {
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        error,
+      });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  };
+
+  ipcMain.handle('bookmarks:getActiveWebPage', async () => getActiveWebPageForLauncher('get-active-web-page'));
+
+  ipcMain.handle('bookmarks:saveActiveWebPage', async () => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+
+    const activePage = await getActiveWebPageForLauncher('save-active-web-page');
+    if (!activePage.success || !activePage.page) {
+      return activePage;
+    }
+
+    try {
+      const { page } = activePage;
+      const result = await bookmarksManager.saveWebBookmarkFromUrl(page.url);
+      appendCommandLauncherTrace('save-active-web-page-success', {
+        targetBundleId: page.bundleId,
+        targetName: page.appName,
+        url: page.url,
+        created: result.created,
+        markdownPath: result.markdownPath,
+      });
+      return { success: true, page, ...result };
+    } catch (error) {
+      log.error('Error saving active browser page:', error);
+      appendCommandLauncherTrace('save-active-web-page-error', {
+        targetBundleId: activePage.page.bundleId,
+        targetName: activePage.page.appName,
+        error,
+      });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   });
 
   ipcMain.handle('bookmarks:invokeBookmark', async (_event, id: string) => {
@@ -6707,6 +6797,15 @@ async function initTranscriberSystem(): Promise<void> {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('tier:changed', tier);
+      }
+    });
+  });
+
+  // Broadcast trial-state changes (pro / trial / expired) to all windows.
+  quotaManager.on('stateChanged', (state) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('state:changed', state);
       }
     });
   });
