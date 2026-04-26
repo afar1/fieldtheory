@@ -13,6 +13,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
+import TrialGate from './components/TrialGate';
 import {
   buildBuiltInLauncherActions,
   DEFAULT_LAUNCHER_HOTKEYS,
@@ -67,6 +68,13 @@ type MarkdownPreview = {
   title: string;
   filePath: string;
   content: string;
+};
+
+type ActiveWebPage = {
+  url: string;
+  title: string;
+  bundleId: string;
+  appName: string;
 };
 
 type LauncherPreviewPayload =
@@ -153,10 +161,13 @@ interface LauncherLibraryAPI {
 }
 
 interface LauncherBookmarksAPI {
+  getAll: () => Promise<BookmarksSnapshot>;
   getAuthors: () => Promise<BookmarkAuthorSummary[]>;
   getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
   getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;
   search: (query: string) => Promise<Bookmark[]>;
+  getActiveWebPage?: () => Promise<{ success: boolean; page?: ActiveWebPage; error?: string }>;
+  saveActiveWebPage?: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
   invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
   invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
   onChanged?: (callback: () => void) => () => void;
@@ -192,6 +203,16 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
     bookmarkId: item.bookmarkId ?? null,
     directoryPath: item.directoryPath ?? null,
   };
+}
+
+function compactLauncherUrl(rawUrl: string): string {
+  let label = rawUrl.trim();
+  try {
+    const parsed = new URL(rawUrl);
+    label = `${parsed.hostname.replace(/^www\./i, '')}${parsed.pathname === '/' ? '' : parsed.pathname}${parsed.search}`;
+  } catch {}
+  if (label.length <= 72) return label;
+  return `${label.slice(0, 36)}...${label.slice(-30)}`;
 }
 
 // =============================================================================
@@ -271,7 +292,10 @@ const getStyles = (isDark: boolean) => ({
   itemName: {
     flex: 1,
     fontWeight: 400,
-    letterSpacing: '-0.2px',
+    letterSpacing: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
   },
   itemHotkey: {
     fontSize: '9px',
@@ -321,6 +345,9 @@ function CommandLauncher() {
   const [authorBookmarks, setAuthorBookmarks] = useState<Bookmark[]>([]);
   const [bookmarkNamespaceItems, setBookmarkNamespaceItems] = useState<LauncherItem[]>([]);
   const [bookmarkNamespaceBookmarks, setBookmarkNamespaceBookmarks] = useState<Bookmark[]>([]);
+  const [webBookmarkItems, setWebBookmarkItems] = useState<LauncherItem[]>([]);
+  const [webBookmarks, setWebBookmarks] = useState<Bookmark[]>([]);
+  const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<LauncherPreviewPayload | null>(null);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
@@ -330,8 +357,12 @@ function CommandLauncher() {
   const listRef = useRef<HTMLUListElement>(null);
   const authorNamespaceRef = useRef<string | null>(null);
   const bookmarkNamespaceRef = useRef<BookmarkNamespace | null>(null);
+  const authorBookmarkRequestRef = useRef(0);
+  const bookmarkNamespaceRequestRef = useRef(0);
+  const activeWebPageRequestRef = useRef(0);
   const previewWindowWasOpenRef = useRef(false);
   const previewRequestRef = useRef(0);
+  const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
 
@@ -391,27 +422,59 @@ function CommandLauncher() {
     } catch {}
   }, []);
 
+  const loadWebBookmarks = useCallback(async () => {
+    try {
+      const snapshot = await bookmarksAPI?.getAll();
+      const bookmarks = (snapshot?.bookmarks ?? [])
+        .filter((bookmark) => bookmark.sourceType === 'web')
+        .slice(0, 100);
+      setWebBookmarks(bookmarks);
+      setWebBookmarkItems(buildBookmarkPostLauncherItems(bookmarks));
+    } catch {
+      setWebBookmarks([]);
+      setWebBookmarkItems([]);
+    }
+  }, []);
+
+  const loadActiveWebPage = useCallback(async () => {
+    const requestId = ++activeWebPageRequestRef.current;
+    try {
+      const result = await bookmarksAPI?.getActiveWebPage?.();
+      if (requestId !== activeWebPageRequestRef.current) return;
+      setActiveWebPage(result?.success && result.page ? result.page : null);
+    } catch {
+      if (requestId !== activeWebPageRequestRef.current) return;
+      setActiveWebPage(null);
+    }
+  }, []);
+
   const loadAuthorBookmarks = useCallback(async (handle: string) => {
+    const requestId = ++authorBookmarkRequestRef.current;
     try {
       const bookmarks = await bookmarksAPI?.getAuthorBookmarks(handle);
+      if (requestId !== authorBookmarkRequestRef.current || authorNamespaceRef.current !== handle) return;
       const nextBookmarks = bookmarks ?? [];
       setAuthorBookmarks(nextBookmarks);
       setAuthorBookmarkItems(buildBookmarkPostLauncherItems(nextBookmarks));
     } catch {
+      if (requestId !== authorBookmarkRequestRef.current || authorNamespaceRef.current !== handle) return;
       setAuthorBookmarks([]);
       setAuthorBookmarkItems([]);
     }
   }, []);
 
   const loadBookmarkNamespace = useCallback(async (namespace: BookmarkNamespace) => {
+    const requestId = ++bookmarkNamespaceRequestRef.current;
     try {
       const bookmarks = namespace.kind === 'facet'
         ? await bookmarksAPI?.getTaxonomyBookmarks(namespace.paths)
         : await bookmarksAPI?.search(namespace.query);
+      if (requestId !== bookmarkNamespaceRequestRef.current || bookmarkNamespaceRef.current !== namespace) return;
       const nextBookmarks = bookmarks ?? [];
       setBookmarkNamespaceBookmarks(nextBookmarks);
       setBookmarkNamespaceItems(buildBookmarkPostLauncherItems(nextBookmarks));
     } catch {
+      if (requestId !== bookmarkNamespaceRequestRef.current || bookmarkNamespaceRef.current !== namespace) return;
       setBookmarkNamespaceBookmarks([]);
       setBookmarkNamespaceItems([]);
     }
@@ -465,6 +528,8 @@ function CommandLauncher() {
     loadHandoffs();
     loadHotkeys();
     loadBookmarkAuthors();
+    loadWebBookmarks();
+    loadActiveWebPage();
 
     // Load current theme
     themeAPI.getTheme().then(dark => setIsDarkMode(dark));
@@ -472,11 +537,18 @@ function CommandLauncher() {
     // Listen for reset events (when window is shown).
     // Reload commands and handoffs each time to pick up newly added ones without restart.
     const handleReset = async () => {
+      authorNamespaceRef.current = null;
+      bookmarkNamespaceRef.current = null;
+      authorBookmarkRequestRef.current += 1;
+      bookmarkNamespaceRequestRef.current += 1;
+      activeWebPageRequestRef.current += 1;
+      manualPreviewRef.current = false;
       setQuery('');
       setNamespacePrefix(null);
       setDirectoryNamespace(null);
       setAuthorNamespace(null);
       setBookmarkNamespace(null);
+      setActiveWebPage(null);
       previewRequestRef.current += 1;
       setPreviewOpen(false);
       setPreviewPayload(null);
@@ -492,6 +564,8 @@ function CommandLauncher() {
       loadLibraryMarkdown();
       loadArtifacts();
       loadBookmarkAuthors();
+      loadWebBookmarks();
+      loadActiveWebPage();
       // Refresh theme state
       const dark = await themeAPI.getTheme();
       setIsDarkMode(dark ?? true);
@@ -505,6 +579,7 @@ function CommandLauncher() {
     });
     const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
       loadBookmarkAuthors();
+      loadWebBookmarks();
       const handle = authorNamespaceRef.current;
       if (handle) loadAuthorBookmarks(handle);
       const namespace = bookmarkNamespaceRef.current;
@@ -515,7 +590,7 @@ function CommandLauncher() {
       unsubscribeSquaresConfig?.();
       unsubscribeBookmarks?.();
     };
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadBookmarkAuthors, loadAuthorBookmarks, loadBookmarkNamespace, selectIndex]);
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, loadAuthorBookmarks, loadBookmarkNamespace, selectIndex]);
 
   useEffect(() => {
     authorNamespaceRef.current = authorNamespace;
@@ -566,18 +641,28 @@ function CommandLauncher() {
       timeAgo: formatTimeAgo(h.lastModified),
     }));
 
-    const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher);
+    const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher)
+      .map((item) => {
+        if (item.actionId !== 'save-current-website' || !activeWebPage?.url) return item;
+        return {
+          ...item,
+          displayName: `Save to Markdown: ${compactLauncherUrl(activeWebPage.url)}`,
+          keywords: [...item.keywords, activeWebPage.url, activeWebPage.title, activeWebPage.appName].filter(Boolean),
+        };
+      });
 
     const markdownItems = [...libraryMarkdownItems, ...artifactReadings];
-    return [...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems]);
+    return [...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, activeWebPage]);
 
   const namespaceLabel = directoryNamespace?.label ?? (authorNamespace ? `@${authorNamespace}` : bookmarkNamespace?.label ?? namespacePrefix);
   const bookmarkForItem = useCallback((item: LauncherItem | undefined): Bookmark | null => {
     if (item?.type !== 'bookmark' || !item.bookmarkId) return null;
     const bookmarks = authorNamespace ? authorBookmarks : bookmarkNamespaceBookmarks;
-    return bookmarks.find((bookmark) => bookmark.id === item.bookmarkId) ?? null;
-  }, [authorBookmarks, authorNamespace, bookmarkNamespaceBookmarks]);
+    return bookmarks.find((bookmark) => bookmark.id === item.bookmarkId)
+      ?? webBookmarks.find((bookmark) => bookmark.id === item.bookmarkId)
+      ?? null;
+  }, [authorBookmarks, authorNamespace, bookmarkNamespaceBookmarks, webBookmarks]);
 
   const markdownPreviewPathForItem = useCallback((item: LauncherItem | undefined): string | null => {
     if (!item?.filePath) return null;
@@ -680,6 +765,7 @@ function CommandLauncher() {
 
   useEffect(() => {
     if (!previewOpen) return;
+    if (manualPreviewRef.current) return;
     const selected = filtered[selectedIndex];
     void loadPreviewForItem(selected, selectedIndex, 'selection');
   }, [filtered, loadPreviewForItem, previewOpen, selectedIndex]);
@@ -914,6 +1000,7 @@ function CommandLauncher() {
     if (previewOpen || previewWindowWasOpenRef.current) {
       traceLauncher('preview-close', { source: 'invoke' });
     }
+    manualPreviewRef.current = false;
     previewRequestRef.current += 1;
     setPreviewOpen(false);
     setPreviewPayload(null);
@@ -927,6 +1014,7 @@ function CommandLauncher() {
       if (previewOpen) {
         e.preventDefault();
         traceLauncher('preview-close', { source: 'escape' });
+        manualPreviewRef.current = false;
         previewRequestRef.current += 1;
         setPreviewOpen(false);
         setPreviewPayload(null);
@@ -937,6 +1025,7 @@ function CommandLauncher() {
       e.preventDefault();
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
+      manualPreviewRef.current = false;
       const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'down', hasExplicitSelectionRef.current);
       hasExplicitSelectionRef.current = true;
       selectIndex(nextIndex);
@@ -951,6 +1040,7 @@ function CommandLauncher() {
       e.preventDefault();
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
+      manualPreviewRef.current = false;
       const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'up', hasExplicitSelectionRef.current);
       hasExplicitSelectionRef.current = true;
       selectIndex(nextIndex);
@@ -963,11 +1053,23 @@ function CommandLauncher() {
       }
     } else if (e.key === 'Tab') {
       e.preventDefault();
-      if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) return;
-
       const rawQuery = query.trim();
       const q = rawQuery.toLowerCase();
       const currentIndex = selectedIndexRef.current;
+
+      if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) {
+        const authorHandle = resolveLauncherAuthorNamespaceHandle([], bookmarkAuthorItems, 0, rawQuery);
+        if (authorHandle) {
+          setNamespacePrefix(null);
+          setDirectoryNamespace(null);
+          setBookmarkNamespace(null);
+          setAuthorNamespace(authorHandle);
+          setQuery('');
+          selectIndex(0);
+        }
+        return;
+      }
+
       const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
       if (directory?.directoryPath) {
         setDirectoryNamespace({
@@ -1030,6 +1132,7 @@ function CommandLauncher() {
       if (previewOpen) {
         e.preventDefault();
         traceLauncher('preview-close', { source: 'space' });
+        manualPreviewRef.current = false;
         previewRequestRef.current += 1;
         setPreviewOpen(false);
         setPreviewPayload(null);
@@ -1042,6 +1145,7 @@ function CommandLauncher() {
           selectedIndex: currentIndex,
           item: describeLauncherItem(selectedItem),
         });
+        manualPreviewRef.current = false;
         setPreviewOpen(true);
         return;
       }
@@ -1066,6 +1170,11 @@ function CommandLauncher() {
       });
     } else if (e.key === 'Backspace' && (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) && query === '') {
       e.preventDefault();
+      authorNamespaceRef.current = null;
+      bookmarkNamespaceRef.current = null;
+      authorBookmarkRequestRef.current += 1;
+      bookmarkNamespaceRequestRef.current += 1;
+      manualPreviewRef.current = false;
       setNamespacePrefix(null);
       setDirectoryNamespace(null);
       setAuthorNamespace(null);
@@ -1152,6 +1261,51 @@ function CommandLauncher() {
             await themeAPI.setTheme(!currentIsDark);
           })();
           break;
+        case 'save-current-website': {
+          setQuery('Saving to markdown...');
+          setFiltered([]);
+          commandsAPI.launcherResize(36);
+          const result = await bookmarksAPI?.saveActiveWebPage?.();
+          if (!result?.success) {
+            traceLauncher('save-current-website-error', { error: result?.error ?? 'Bookmarks API unavailable' });
+            setQuery(result?.error ?? 'Bookmarks API unavailable');
+            return;
+          }
+          const markdownPath = result.markdownPath ?? result.bookmark?.markdownPath;
+          traceLauncher('save-current-website-success', {
+            bookmarkId: result.bookmark?.id ?? null,
+            markdownPath: markdownPath ?? null,
+            created: result.created ?? null,
+            url: result.page?.url ?? result.bookmark?.url ?? null,
+          });
+          await loadWebBookmarks();
+
+          if (!markdownPath) {
+            setQuery('Saved, but no markdown path was returned');
+            return;
+          }
+
+          const preview = await commandsAPI.getMarkdownPreview(markdownPath).catch(() => null);
+          if (!preview) {
+            setQuery('Saved, but preview could not be loaded');
+            return;
+          }
+
+          manualPreviewRef.current = true;
+          previewRequestRef.current += 1;
+          setQuery('');
+          setFiltered([]);
+          selectIndex(0);
+          commandsAPI.launcherResize(36);
+          setPreviewPayload({
+            kind: 'markdown',
+            title: result.bookmark?.title || preview.title,
+            filePath: preview.filePath,
+            content: preview.content,
+          });
+          setPreviewOpen(true);
+          return;
+        }
         // Route Squares window management actions.
         default:
           if (item.actionId && SQUARES_ACTION_IDS.has(item.actionId)) {
@@ -1161,7 +1315,7 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose();
     }
-  }, [dismissPreview, getFieldTheoryTarget, getWikiLinkText, selectIndex]);
+  }, [dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, selectIndex]);
 
   const hasContentBelow = filtered.length > 0 || ((namespaceLabel || query.trim() !== '') && (allItems.length > 0 || authorBookmarkItems.length > 0 || bookmarkNamespaceItems.length > 0));
   // Always use dark mode styling for the launcher regardless of system theme
@@ -1311,6 +1465,11 @@ function CommandLauncher() {
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
-    <CommandLauncher />
+    <TrialGate
+      showBanner={false}
+      onPaywallMount={() => commandsAPI.launcherResize(360)}
+    >
+      <CommandLauncher />
+    </TrialGate>
   </React.StrictMode>
 );

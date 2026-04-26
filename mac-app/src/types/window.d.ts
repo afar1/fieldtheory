@@ -1056,8 +1056,19 @@ interface QuotaLimits {
  * API for tracking and displaying quota usage.
  * Free users have monthly limits on priority mic, auto-stacking, and text improvements.
  */
+type TrialState = 'pro' | 'trial' | 'expired';
+
 interface QuotaAPI {
-  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; portableCommands: QuotaStatus; tier: 'free' | 'pro' } | null>;
+  getQuotas: () => Promise<{
+    priorityMic: QuotaStatus;
+    autoStack: QuotaStatus;
+    textImprove: QuotaStatus;
+    portableCommands: QuotaStatus;
+    tier: 'free' | 'pro';
+    state: TrialState;
+    trialEndsAt: string | null;
+    nextTrialResetAt: string | null;
+  } | null>;
   checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => Promise<QuotaCheckResult>;
   getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }>;
   getResetDate: () => Promise<Date>;
@@ -1065,6 +1076,7 @@ interface QuotaAPI {
   getLimits: () => Promise<QuotaLimits>;
   refreshTier: () => Promise<{ tier: 'free' | 'pro'; error: string | null }>;
   onTierChanged: (callback: (tier: 'free' | 'pro') => void) => () => void;
+  onStateChanged: (callback: (state: TrialState) => void) => () => void;
   onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
   onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }) => void) => () => void;
 }
@@ -1722,7 +1734,7 @@ declare global {
   }
   interface Bookmark {
     id: string;
-    sourceType: 'x';
+    sourceType: 'x' | 'web';
     text: string;
     url: string;
     authorHandle: string;
@@ -1737,6 +1749,11 @@ declare global {
     bookmarkCount: number;
     folders: string[];
     quotedTweet?: QuotedTweet;
+    title?: string;
+    domain?: string;
+    excerpt?: string;
+    savedAt?: string;
+    markdownPath?: string;
   }
   interface BookmarkFolder {
     name: string;
@@ -1745,6 +1762,12 @@ declare global {
   interface BookmarksSnapshot {
     bookmarks: Bookmark[];
     folders: BookmarkFolder[];
+  }
+  interface ActiveWebPage {
+    url: string;
+    title: string;
+    bundleId: string;
+    appName: string;
   }
   interface BookmarkAuthorSummary {
     handle: string;
@@ -1759,6 +1782,9 @@ declare global {
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
     getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;
     search: (query: string) => Promise<Bookmark[]>;
+    saveWebUrl: (url: string) => Promise<{ success: boolean; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
+    getActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; error?: string }>;
+    saveActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
     invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
     copyForAgent: (id: string) => Promise<{ success: boolean; error?: string }>;
     invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;

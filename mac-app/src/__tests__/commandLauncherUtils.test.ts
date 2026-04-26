@@ -403,6 +403,31 @@ describe('buildBookmarkPostLauncherItems', () => {
     expect(item.displayName).toHaveLength(120);
     expect(item.displayName.endsWith('...')).toBe(true);
   });
+
+  it('builds searchable web bookmark rows from title and excerpt', () => {
+    const [item] = buildBookmarkPostLauncherItems([
+      {
+        id: 'web:abc',
+        sourceType: 'web',
+        text: 'Fallback text',
+        title: 'Readable Article',
+        domain: 'example.com',
+        excerpt: 'A useful article about durable notes.',
+        url: 'https://example.com/readable',
+        authorHandle: '',
+        authorName: '',
+        postedAt: '2026-04-25T12:00:00Z',
+      },
+    ]);
+
+    expect(item.displayName).toBe('Readable Article');
+    expect(item.keywords).toEqual(expect.arrayContaining([
+      'Readable Article',
+      'example.com',
+      'A useful article about durable notes.',
+      'https://example.com/readable',
+    ]));
+  });
 });
 
 describe('dedupeLauncherPersonItems', () => {
@@ -527,6 +552,25 @@ describe('resolveLauncherAuthorNamespaceHandle', () => {
   it('promotes an exact typed handle even before it is selected', () => {
     expect(resolveLauncherAuthorNamespaceHandle([], authorItems, 0, '@elonmusk')).toBe('elonmusk');
   });
+
+  it('prefers an exact typed handle over a stale selected handle row', () => {
+    const filtered = [
+      { id: 'entity-old', type: 'markdown-file', name: 'oldhandle', displayName: '@oldhandle', keywords: ['oldhandle'] },
+    ];
+    const authors = [
+      ...authorItems,
+      {
+        id: 'bookmark-author-newhandle',
+        type: 'bookmark-author',
+        name: '@newhandle',
+        displayName: '@newhandle',
+        authorHandle: 'newhandle',
+        keywords: ['newhandle', '@newhandle'],
+      },
+    ];
+
+    expect(resolveLauncherAuthorNamespaceHandle(filtered, authors, 0, '@newhandle')).toBe('newhandle');
+  });
 });
 
 describe('resolveLauncherDirectoryNamespace', () => {
@@ -612,7 +656,8 @@ describe('SQUARES_ACTION_DEFS', () => {
   it('SQUARES_ACTION_IDS does not contain non-squares actions', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
-      'active-window-screenshot', 'start-recording', 'super-paste', 'open-history', 'toggle-theme'];
+      'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
+      'save-current-website', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -650,5 +695,16 @@ describe('buildBuiltInLauncherActions', () => {
       .toBe('Toggle Light Mode (Field Theory)');
     expect(lightActions.find((action) => action.actionId === 'toggle-theme')?.displayName)
       .toBe('Toggle Dark Mode (Field Theory)');
+  });
+
+  it('includes a Save Website action searchable by the expected phrase', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const saveAction = actions.find((action) => action.actionId === 'save-current-website');
+
+    expect(saveAction).toEqual(expect.objectContaining({
+      name: 'save website',
+      displayName: 'Save Website',
+    }));
+    expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
   });
 });

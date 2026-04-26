@@ -120,8 +120,8 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
 }
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
-const FOCUS_CHROME_ICON_TOP_PX = 64;
-const FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX = 84;
+const FOCUS_CHROME_ICON_TOP_PX = 48;
+const FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX = 70;
 
 /**
  * Check if any items in a stack have improved content.
@@ -409,11 +409,13 @@ export default function ClipboardHistory() {
   // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
+  const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
+  const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
   const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
   const appChromeHidden = isFocusChromeSurface && focusChromeActive;
   const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive;
-  const footerChromeHidden = appChromeHidden;
+  const footerChromeHidden = appChromeHidden || bookmarksCanvasChromeActive;
   const collapseSidebarForFocusChrome = useCallback(() => {
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
     setNavSidebarCollapsed(true);
@@ -807,6 +809,9 @@ export default function ClipboardHistory() {
   
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
+  const focusChromeIconTop = bookmarksCanvasToolbarTop === null
+    ? (showInDock ? FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX : FOCUS_CHROME_ICON_TOP_PX)
+    : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
   // Show fieldtheory.dev link in footer.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
@@ -1687,8 +1692,8 @@ export default function ClipboardHistory() {
 
   useEffect(() => {
     localStorage.setItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY, librarianImmersive ? 'true' : 'false');
-    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive);
-  }, [librarianImmersive, showSettings, viewMode]);
+    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive && !focusChromeActive);
+  }, [focusChromeActive, librarianImmersive, showSettings, viewMode]);
 
   useEffect(() => {
     if ((showSettings || viewMode !== 'librarian') && librarianImmersive) {
@@ -3475,12 +3480,15 @@ export default function ClipboardHistory() {
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
           style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
             height: '8px',
-            minHeight: '8px',
+            zIndex: 30,
             // @ts-ignore - webkit vendor prefix for Electron draggable region
             WebkitAppRegion: 'drag',
             cursor: 'grab',
-            flexShrink: 0,
           }}
         />
       )}
@@ -3717,7 +3725,7 @@ export default function ClipboardHistory() {
           aria-hidden="true"
           style={{
             position: 'absolute',
-            top: showInDock ? FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX : FOCUS_CHROME_ICON_TOP_PX,
+            top: focusChromeIconTop,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 20,
@@ -4295,6 +4303,8 @@ export default function ClipboardHistory() {
             onSwitchToSettings={handleLibrarianSwitchToSettings}
             onFullScreenChange={setLibrarianImmersive}
             onFocusChromeActiveChange={handleFocusChromeActiveChange}
+            onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
+            onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
             initialReadingPath={pendingReadingPath}
             initialOpenTarget={pendingLibraryOpenTarget}
             initialFullScreen={librarianImmersive}
@@ -6441,7 +6451,7 @@ export default function ClipboardHistory() {
           borderTop: `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
-          display: 'flex',
+          display: bookmarksCanvasChromeActive ? 'none' : 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           fontSize: '11px',
@@ -6958,7 +6968,9 @@ export default function ClipboardHistory() {
           style={{
             position: 'absolute',
             right: '16px',
-            bottom: '8px',
+            ...(bookmarksCanvasChromeActive
+              ? { top: showInDock ? '38px' : '10px' }
+              : { bottom: '8px' }),
             zIndex: 20,
             pointerEvents: 'auto',
           }}

@@ -972,6 +972,8 @@ interface LibrarianViewProps {
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   onFocusChromeActiveChange?: (active: boolean) => void;
+  onBookmarksCanvasActiveChange?: (active: boolean) => void;
+  onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialOpenTarget?: FieldTheoryMarkdownTarget | null;
   initialFullScreen?: boolean; // Start in legacy fullscreen/immersive mode when supported.
@@ -1058,7 +1060,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string;
   };
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -1110,11 +1112,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [focusImmersive, setFocusImmersive] = useState(false);
   const toggleImmersive = useCallback(() => {
     if (selectedItemUsesLegacyImmersive) {
-      setIsFullScreen((prev) => {
-        const next = !prev;
-        window.librarianAPI?.setImmersiveMode?.(next);
-        return next;
-      });
+      setIsFullScreen((prev) => !prev);
       return;
     }
     if (!focusImmersive) {
@@ -1580,8 +1578,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
   useEffect(() => {
-    return () => onFocusChromeActiveChange?.(false);
-  }, [onFocusChromeActiveChange]);
+    onBookmarksCanvasActiveChange?.(active && selectedItemType === 'bookmarks' && bookmarksCanvasActive);
+  }, [active, bookmarksCanvasActive, onBookmarksCanvasActiveChange, selectedItemType]);
+
+  useEffect(() => {
+    return () => {
+      onFocusChromeActiveChange?.(false);
+      onBookmarksCanvasActiveChange?.(false);
+      onBookmarksCanvasToolbarTopChange?.(null);
+    };
+  }, [onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onFocusChromeActiveChange]);
 
   // Bookmarks still uses legacy immersive, and keeps its panel-like blur behavior.
   useEffect(() => {
@@ -3633,6 +3639,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               isFullScreen={isFullScreen}
               onToggleFullScreen={toggleImmersive}
               onCanvasModeActiveChange={setBookmarksCanvasActive}
+              onCanvasToolbarTopChange={onBookmarksCanvasToolbarTopChange}
             />
           </div>
         )}

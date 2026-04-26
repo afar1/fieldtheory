@@ -123,6 +123,9 @@ export function searchBookmarks(query: string, bookmarks: Bookmark[]): Bookmark[
       const haystack = normalizeSearchText([
         bookmark.text,
         bookmark.url,
+        bookmark.title ?? '',
+        bookmark.domain ?? '',
+        bookmark.excerpt ?? '',
         bookmark.authorHandle,
         bookmark.authorName,
         bookmark.quotedTweet?.text ?? '',

@@ -155,11 +155,15 @@ export interface LauncherBookmarkAuthorItem extends LauncherSearchableItem {
 
 export interface LauncherBookmarkPostSource {
   id: string;
+  sourceType?: 'x' | 'web';
   text: string;
   url: string;
   authorHandle: string;
   authorName: string;
   postedAt: string;
+  title?: string;
+  domain?: string;
+  excerpt?: string;
 }
 
 export interface LauncherBookmarkPostItem extends LauncherSearchableItem {
@@ -499,7 +503,11 @@ export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSo
   return bookmarks.map((bookmark) => {
     const date = formatLauncherBookmarkDate(bookmark.postedAt);
     const handle = bookmark.authorHandle.trim().replace(/^@+/, '');
-    const displayName = truncateLauncherBookmarkText(bookmark.text);
+    const displayName = truncateLauncherBookmarkText(
+      bookmark.sourceType === 'web'
+        ? (bookmark.title || bookmark.excerpt || bookmark.text || bookmark.url)
+        : bookmark.text
+    );
     return {
       id: `bookmark-${bookmark.id}`,
       type: 'bookmark',
@@ -507,6 +515,9 @@ export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSo
       displayName,
       keywords: [
         bookmark.text,
+        bookmark.title ?? '',
+        bookmark.domain ?? '',
+        bookmark.excerpt ?? '',
         bookmark.url,
         bookmark.authorName,
         handle,
@@ -556,15 +567,15 @@ export function resolveLauncherAuthorNamespaceHandle<T extends LauncherAuthorNam
   selectedIndex: number,
   query: string,
 ): string | null {
-  const selectedHandle = handleFromLauncherItem(filteredItems[selectedIndex]);
-  if (selectedHandle) return selectedHandle;
-
   const rawQuery = query.trim();
   const rawHandle = handleFromLauncherLabel(rawQuery);
   if (rawHandle) {
     const exactAuthor = authorItems.find((item) => item.authorHandle?.toLowerCase() === rawHandle.toLowerCase());
     return cleanLauncherHandle(exactAuthor?.authorHandle ?? rawHandle);
   }
+
+  const selectedHandle = handleFromLauncherItem(filteredItems[selectedIndex]);
+  if (selectedHandle) return selectedHandle;
 
   return null;
 }
@@ -698,6 +709,14 @@ export function buildBuiltInLauncherActions(
       hotkey: hotkeys.history,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
       actionId: 'open-history',
+    },
+    {
+      id: 'action-save-current-website',
+      type: 'action',
+      name: 'save website',
+      displayName: 'Save Website',
+      keywords: ['save website', 'save web page', 'save page', 'bookmark page', 'bookmark website', 'current tab', 'browser', 'markdown'],
+      actionId: 'save-current-website',
     },
     {
       id: 'action-theme',
