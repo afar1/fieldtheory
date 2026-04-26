@@ -309,29 +309,49 @@ function directoryDisplayName(root: LauncherLibraryRoot, relPath: string): strin
 
 export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[]): LauncherDirectoryItem[] {
   const items: LauncherDirectoryItem[] = [];
+  const seen = new Set<string>();
 
-  const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
-    if (node.kind !== 'dir') return;
+  const addDirectory = (root: LauncherLibraryRoot, relPath: string, name: string) => {
+    if (!relPath) return;
+    const key = `${root.path}:${relPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
 
-    const displayName = directoryDisplayName(root, node.relPath);
+    const displayName = directoryDisplayName(root, relPath);
     items.push({
-      id: `directory-${root.path}-${node.relPath}`,
+      id: `directory-${root.path}-${relPath}`,
       type: 'directory',
-      name: node.name,
+      name,
       displayName,
       keywords: [
-        node.name,
-        node.relPath,
+        name,
+        relPath,
         displayName,
         root.label,
-        ...node.name.split(/[-_]/),
-        ...node.relPath.split('/'),
+        ...name.split(/[-_]/),
+        ...relPath.split('/'),
       ].filter(Boolean),
-      directoryPath: joinLauncherPath(root.path, node.relPath),
-      directoryRelPath: root.builtin ? node.relPath : undefined,
+      directoryPath: joinLauncherPath(root.path, relPath),
+      directoryRelPath: root.builtin ? relPath : undefined,
       hotkeyDisplay: 'folder',
     });
+  };
 
+  const addParentDirectories = (root: LauncherLibraryRoot, fileRelPath: string) => {
+    const parts = fileRelPath.split('/').filter(Boolean);
+    for (let i = 1; i < parts.length; i += 1) {
+      const relPath = parts.slice(0, i).join('/');
+      addDirectory(root, relPath, parts[i - 1]);
+    }
+  };
+
+  const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
+    if (node.kind === 'file') {
+      addParentDirectories(root, node.relPath);
+      return;
+    }
+
+    addDirectory(root, node.relPath, node.name);
     for (const child of node.children) visit(root, child);
   };
 
