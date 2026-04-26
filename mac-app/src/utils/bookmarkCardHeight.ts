@@ -13,6 +13,7 @@ export const QUOTED_PAD_V = 10;
 export const QUOTED_PAD_H = 12;
 export const QUOTED_MARGIN_TOP = 10;
 export const QUOTED_GAP = 4;
+export const DATE_BAND = 17;
 
 /** Average glyph width for the body font (-apple-system 14px, proportional).
  * Calibrated against canvas measureText on a sample of English tweets; real
@@ -39,6 +40,7 @@ export function wrapLines(text: string, avgCharWidth: number, maxWidth: number):
 export interface BookmarkHeightInput {
   id: string;
   text: string;
+  postedAt?: string | null;
   quotedTweet?: { text: string };
 }
 
@@ -46,7 +48,7 @@ const heightCache = new Map<string, number>();
 
 export function estimateTextCardHeight(bm: BookmarkHeightInput, width: number): number {
   const bucketWidth = Math.round(width / WIDTH_BUCKET) * WIDTH_BUCKET;
-  const key = `${bm.id}:${bucketWidth}`;
+  const key = `${bm.id}:${bucketWidth}:${bm.postedAt ? 'dated' : 'undated'}`;
   const cached = heightCache.get(key);
   if (cached !== undefined) return cached;
 
@@ -59,6 +61,9 @@ export function estimateTextCardHeight(bm: BookmarkHeightInput, width: number): 
     const quotedMax = bodyMax - QUOTED_PAD_H * 2;
     h += QUOTED_MARGIN_TOP + QUOTED_PAD_V * 2 + QUOTED_HANDLE_BAND + QUOTED_GAP
       + wrapLines(bm.quotedTweet.text, AVG_CHAR_WIDTH_QUOTED, quotedMax) * QUOTED_LINE_HEIGHT;
+  }
+  if (bm.postedAt) {
+    h += CARD_GAP + DATE_BAND;
   }
 
   const rounded = Math.round(h);

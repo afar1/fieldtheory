@@ -2686,6 +2686,24 @@ const quotaAPI = {
   // Manually refresh tier from server (debugging and edge cases).
   refreshTier: () => ipcRenderer.invoke('quota:refreshTier') as Promise<{ tier: 'free' | 'pro'; error: string | null }>,
 
+  // Listen for trial-state changes (pro / trial / expired).
+  // Fires whenever the server-computed state changes. Also immediately emits the
+  // current state on registration (BehaviorSubject pattern).
+  onStateChanged: (callback: (state: 'pro' | 'trial' | 'expired') => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: 'pro' | 'trial' | 'expired') => {
+      callback(state);
+    };
+    ipcRenderer.on('state:changed', handler);
+
+    ipcRenderer.invoke('quota:getQuotas').then((quotas) => {
+      if (quotas?.state) callback(quotas.state);
+    }).catch(() => { /* ignore */ });
+
+    return () => {
+      ipcRenderer.removeListener('state:changed', handler);
+    };
+  },
+
   // Listen for tier changes (e.g., after Stripe checkout upgrades user to pro).
   // Also immediately emits the current tier on registration (BehaviorSubject pattern).
   onTierChanged: (callback: (tier: 'free' | 'pro') => void): (() => void) => {
@@ -3855,7 +3873,7 @@ interface QuotedTweet {
 }
 interface Bookmark {
   id: string;
-  sourceType: 'x';
+  sourceType: 'x' | 'web';
   text: string;
   url: string;
   authorHandle: string;
@@ -3870,9 +3888,20 @@ interface Bookmark {
   bookmarkCount: number;
   folders: string[];
   quotedTweet?: QuotedTweet;
+  title?: string;
+  domain?: string;
+  excerpt?: string;
+  savedAt?: string;
+  markdownPath?: string;
 }
 interface BookmarkFolder { name: string; id?: string }
 interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+interface ActiveWebPage {
+  url: string;
+  title: string;
+  bundleId: string;
+  appName: string;
+}
 interface BookmarkAuthorSummary {
   handle: string;
   name: string;
@@ -3889,6 +3918,12 @@ const bookmarksAPI = {
   getTaxonomyBookmarks: (filePaths: string[]): Promise<Bookmark[]> =>
     ipcRenderer.invoke('bookmarks:getTaxonomyBookmarks', filePaths),
   search: (query: string): Promise<Bookmark[]> => ipcRenderer.invoke('bookmarks:search', query),
+  saveWebUrl: (url: string): Promise<{ success: boolean; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:saveWebUrl', url),
+  getActiveWebPage: (): Promise<{ success: boolean; page?: ActiveWebPage; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:getActiveWebPage'),
+  saveActiveWebPage: (): Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:saveActiveWebPage'),
   invokeBookmark: (id: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('bookmarks:invokeBookmark', id),
   copyForAgent: (id: string): Promise<{ success: boolean; error?: string }> =>
@@ -4299,7 +4334,7 @@ contextBridge.exposeInMainWorld('platform', {
 // Stripe configuration - always use live links.
 contextBridge.exposeInMainWorld('stripeConfig', {
   // Payment link for upgrading to Pro
-  paymentLink: 'https://buy.stripe.com/14A00j3iCbyl6aZ3fU3Ru00',
+  paymentLink: 'https://buy.stripe.com/cNi28rg5odGtbvjdUy3Ru01',
   // Customer portal for managing subscription
   portalLink: 'https://billing.stripe.com/p/login/14A00j3iCbyl6aZ3fU3Ru00',
 });

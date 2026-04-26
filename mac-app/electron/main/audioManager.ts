@@ -313,12 +313,25 @@ export class AudioManager extends EventEmitter {
       if (this.priorityDeviceId) {
         const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
         if (!stillExists) {
-          this.priorityDeviceId = null;
+          await this.clearMissingPriorityDevice('refreshDevices: priority device disappeared');
         }
       }
     } catch (error) {
       log.error('Failed to refresh devices:', error);
     }
+  }
+
+  private async clearMissingPriorityDevice(reason: string): Promise<void> {
+    const missingDeviceId = this.priorityDeviceId;
+    if (!missingDeviceId) {
+      return;
+    }
+
+    log.warn('%s; clearing priority device %s and falling back to current default input', reason, missingDeviceId);
+    await this.setPriorityDevice(null);
+    await this.refreshDefaultInput();
+    this.emit('priorityDeviceUnavailable', missingDeviceId);
+    this.emitStateChanged();
   }
 
   /**
@@ -333,9 +346,7 @@ export class AudioManager extends EventEmitter {
     if (this.priorityDeviceId) {
       const stillExists = devices.some((d) => d.id === this.priorityDeviceId);
       if (!stillExists) {
-        // Use setPriorityDevice to ensure preference is saved
-        // Note: This preserves favoriteDeviceName for auto-reconnect
-        await this.setPriorityDevice(null);
+        await this.clearMissingPriorityDevice('devicesChanged: priority device disappeared');
       }
     }
 
@@ -421,6 +432,13 @@ export class AudioManager extends EventEmitter {
       return;
     }
 
+    await this.refreshDevices();
+
+    if (!this.priorityDeviceId) {
+      log.debug('enforcePriority: skipped (priority device was cleared during refresh)');
+      return;
+    }
+
     // Find the priority device.
     const priorityDevice = this.devices.find((d) => d.id === this.priorityDeviceId);
     if (!priorityDevice) {
@@ -443,10 +461,28 @@ export class AudioManager extends EventEmitter {
     this.isSettingDefaultInput = true;
 
     const tEnforce = Date.now();
+    const enforcedDeviceId = this.priorityDeviceId;
     try {
-      await this.applyDefaultInputAndWaitForSettle(this.priorityDeviceId);
+      const observedSwitch = await this.applyDefaultInputAndWaitForSettle(enforcedDeviceId);
+      if (this.priorityDeviceId !== enforcedDeviceId) {
+        return;
+      }
+
+      if (!observedSwitch) {
+        await this.refreshDevices();
+        if (this.priorityDeviceId !== enforcedDeviceId) {
+          return;
+        }
+
+        await this.refreshDefaultInput();
+        if (this.defaultInputId !== enforcedDeviceId) {
+          log.warn('enforcePriority: default input did not switch to %s; leaving current input unchanged', enforcedDeviceId);
+          return;
+        }
+      }
+
       log.info('[audio-startup] enforcePriority: settle complete in %dms', Date.now() - tEnforce);
-      this.defaultInputId = this.priorityDeviceId;
+      this.defaultInputId = enforcedDeviceId;
       this.emit('deviceEnforced');
     } finally {
       // Reset flag after a short delay to account for async CoreAudio callback.
@@ -464,8 +500,8 @@ export class AudioManager extends EventEmitter {
     await this.enforcePriority();
   }
 
-  private async applyDefaultInputAndWaitForSettle(deviceId: string): Promise<void> {
-    await new Promise<void>((resolve, reject) => {
+  private async applyDefaultInputAndWaitForSettle(deviceId: string): Promise<boolean> {
+    return await new Promise<boolean>((resolve, reject) => {
       let settled = false;
 
       const cleanup = () => {
@@ -477,7 +513,7 @@ export class AudioManager extends EventEmitter {
         if (settled) return;
         settled = true;
         cleanup();
-        setTimeout(resolve, DEFAULT_INPUT_SETTLE_GRACE_MS);
+        setTimeout(() => resolve(true), DEFAULT_INPUT_SETTLE_GRACE_MS);
       };
 
       const onDefaultInputChanged = (changedDeviceId: string | null) => {
@@ -493,11 +529,11 @@ export class AudioManager extends EventEmitter {
         settled = true;
         cleanup();
         log.warn(
-          'Timed out waiting for default input switch to %s after %dms; continuing',
+          'Timed out waiting for default input switch to %s after %dms; verifying current default input',
           deviceId,
           DEFAULT_INPUT_SWITCH_TIMEOUT_MS,
         );
-        resolve();
+        resolve(false);
       }, DEFAULT_INPUT_SWITCH_TIMEOUT_MS);
 
       this.helper.on('defaultInputChanged', onDefaultInputChanged);
