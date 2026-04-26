@@ -10,7 +10,7 @@ const mockWindow = vi.hoisted(() => ({
   focus: vi.fn(),
   moveTop: vi.fn(),
   setBounds: vi.fn(),
-  getBounds: vi.fn(() => ({ x: 0, y: 0, width: 320, height: 36 })),
+  getBounds: vi.fn(() => ({ x: 0, y: 0, width: 425, height: 36 })),
   setAlwaysOnTop: vi.fn(),
   setVisibleOnAllWorkspaces: vi.fn(),
   loadURL: vi.fn(),
@@ -87,9 +87,9 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
-      x: 390,
-      y: 350,
-      width: 320,
+      x: 338,
+      y: 323,
+      width: 425,
       height: 36,
     });
   });
@@ -209,7 +209,7 @@ describe('CommandLauncherWindow resize IPC', () => {
     mockIpcMainHandlers.clear();
     mockWindow.isVisible.mockReturnValue(true);
     mockWindow.isDestroyed.mockReturnValue(false);
-    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 320, height: 36 });
+    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 425, height: 36 });
   });
 
   it('keeps renderer resize requests inside the normal launcher height', () => {
@@ -221,8 +221,8 @@ describe('CommandLauncherWindow resize IPC', () => {
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
-      width: 320,
-      height: 300,
+      width: 425,
+      height: 354,
     });
   });
 
@@ -235,8 +235,8 @@ describe('CommandLauncherWindow resize IPC', () => {
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
-      width: 320,
-      height: 300,
+      width: 425,
+      height: 354,
     });
   });
 });
