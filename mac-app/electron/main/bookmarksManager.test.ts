@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
+import http from 'http';
+import type { AddressInfo } from 'net';
 import os from 'os';
 import path from 'path';
-import { BookmarksManager, parseRawBookmark, type RawBookmark } from './bookmarksManager';
+import { BookmarksManager, parseRawBookmark, parseRawWebBookmark, type RawBookmark } from './bookmarksManager';
 
 vi.mock('./logger', () => ({
   createLogger: () => ({ error: () => {}, warn: () => {}, info: () => {}, debug: () => {} }),
@@ -101,6 +103,27 @@ describe('parseRawBookmark', () => {
   });
 });
 
+describe('parseRawWebBookmark', () => {
+  it('normalizes a saved web bookmark into the shared bookmark shape', () => {
+    const bm = parseRawWebBookmark({
+      sourceType: 'web',
+      url: 'https://www.example.com/article#section',
+      title: 'Example Article',
+      domain: 'example.com',
+      excerpt: 'A short summary',
+      savedAt: '2026-04-25T12:00:00.000Z',
+      markdownPath: 'web/pages/example.com/example.md',
+    });
+
+    expect(bm).not.toBeNull();
+    expect(bm!.sourceType).toBe('web');
+    expect(bm!.url).toBe('https://example.com/article');
+    expect(bm!.title).toBe('Example Article');
+    expect(bm!.authorName).toBe('example.com');
+    expect(bm!.text).toBe('Example Article\n\nA short summary');
+  });
+});
+
 describe('BookmarksManager.getSnapshot', () => {
   let tmpDir: string;
   let origDataDir: string | undefined;
@@ -120,6 +143,104 @@ describe('BookmarksManager.getSnapshot', () => {
   it('returns an empty snapshot when no jsonl exists', () => {
     const mgr = new BookmarksManager();
     expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [] });
+  });
+
+  it('loads web bookmarks even when no X bookmark JSONL exists', () => {
+    fs.mkdirSync(path.join(tmpDir, 'web'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, 'web', 'index.jsonl'),
+      JSON.stringify({
+        id: 'web:abc',
+        sourceType: 'web',
+        url: 'https://example.com/page',
+        title: 'Saved Page',
+        domain: 'example.com',
+        excerpt: 'Saved excerpt',
+        savedAt: '2026-04-25T12:00:00.000Z',
+        markdownPath: 'web/pages/example.com/saved-page.md',
+      }) + '\n',
+    );
+
+    const mgr = new BookmarksManager();
+    const snap = mgr.getSnapshot();
+
+    expect(snap.bookmarks).toHaveLength(1);
+    expect(snap.bookmarks[0]).toMatchObject({
+      sourceType: 'web',
+      title: 'Saved Page',
+      domain: 'example.com',
+    });
+  });
+
+  it('saves a web page as markdown, indexes it, and dedupes by canonical URL', () => {
+    const mgr = new BookmarksManager();
+    const html = `
+      <!doctype html>
+      <html>
+        <head><title>Readable Test</title></head>
+        <body>
+          <nav>Skip me</nav>
+          <article>
+            <h1>Readable Test</h1>
+            <p>This is the first paragraph.</p>
+            <p>Visit <a href="/next">the next page</a>.</p>
+          </article>
+        </body>
+      </html>
+    `;
+
+    const first = mgr.saveWebBookmarkFromHtml('https://www.example.com/posts/readable#intro', html, '2026-04-25T12:00:00.000Z');
+    const second = mgr.saveWebBookmarkFromHtml('https://example.com/posts/readable', html, '2026-04-25T12:00:00.000Z');
+
+    expect(first.created).toBe(true);
+    expect(second.created).toBe(false);
+    expect(fs.existsSync(first.markdownPath)).toBe(true);
+    expect(fs.readFileSync(first.markdownPath, 'utf-8')).toContain('source_url: "https://example.com/posts/readable"');
+    expect(fs.readFileSync(first.markdownPath, 'utf-8')).toContain('[the next page](https://example.com/next)');
+
+    const indexLines = fs.readFileSync(path.join(tmpDir, 'web', 'index.jsonl'), 'utf-8').trim().split('\n');
+    expect(indexLines).toHaveLength(1);
+
+    const snap = mgr.getSnapshot();
+    expect(snap.bookmarks).toHaveLength(1);
+    expect(snap.bookmarks[0]).toMatchObject({
+      sourceType: 'web',
+      title: 'Readable Test',
+      domain: 'example.com',
+    });
+  });
+
+  it('saves a web page as markdown from a URL', async () => {
+    const server = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+      res.end(`
+        <html>
+          <head><title>Local Test Page</title></head>
+          <body>
+            <main>
+              <h1>Local Test Page</h1>
+              <p>This came from the local test server.</p>
+            </main>
+          </body>
+        </html>
+      `);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()));
+    const address = server.address() as AddressInfo;
+
+    try {
+      const mgr = new BookmarksManager();
+      const result = await mgr.saveWebBookmarkFromUrl(`http://127.0.0.1:${address.port}/article`);
+
+      expect(result.created).toBe(true);
+      expect(fs.readFileSync(result.markdownPath, 'utf-8')).toContain('This came from the local test server.');
+      expect(mgr.getSnapshot().bookmarks[0]).toMatchObject({
+        sourceType: 'web',
+        title: 'Local Test Page',
+      });
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((err) => err ? reject(err) : resolve()));
+    }
   });
 
   it('parses JSONL, skips malformed lines, and merges folder assignments', () => {

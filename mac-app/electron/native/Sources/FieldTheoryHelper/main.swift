@@ -784,7 +784,7 @@ final class CoreAudioHelper {
     func setDefaultInputDevice(uid: String) -> Bool {
         // First, find the device ID for this UID.
         guard let deviceID = findDeviceID(byUID: uid) else {
-            sendLog(level: "error", message: "Device not found for UID: \(uid)")
+            sendLog(level: "warn", message: "Default input device no longer available for UID: \(uid)")
             return false
         }
         

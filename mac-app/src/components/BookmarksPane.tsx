@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useMemo, useRef } from 'react';
+import { memo, useEffect, useState, useMemo, useRef, type FormEvent } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import BookmarksList from './BookmarksList';
 import BookmarksCanvas from './BookmarksCanvas';
@@ -6,7 +6,7 @@ import ImmersiveToggle from './ImmersiveToggle';
 import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
-type BookmarkSourceFilter = 'all' | 'x';
+type BookmarkSourceFilter = 'all' | 'x' | 'web';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
 const SOURCE_FILTER_KEY = 'bookmarks-source-filter';
@@ -22,7 +22,8 @@ function loadShowText(): boolean {
 }
 
 function loadSourceFilter(): BookmarkSourceFilter {
-  return localStorage.getItem(SOURCE_FILTER_KEY) === 'x' ? 'x' : 'all';
+  const saved = localStorage.getItem(SOURCE_FILTER_KEY);
+  return saved === 'x' || saved === 'web' ? saved : 'all';
 }
 
 interface BookmarksPaneProps {
@@ -30,11 +31,12 @@ interface BookmarksPaneProps {
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
   onCanvasModeActiveChange?: (active: boolean) => void;
+  onCanvasToolbarTopChange?: (top: number | null) => void;
 }
 
 // memo so parent re-renders (e.g. textarea keystrokes in the librarian
 // editor) don't reconcile the bookmarks canvas while it's hidden.
-function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange }: BookmarksPaneProps) {
+function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanvasModeActiveChange, onCanvasToolbarTopChange }: BookmarksPaneProps) {
   const { theme } = useTheme();
   const [mode, setMode] = useState<BookmarksViewMode>(loadMode);
   // Lazy keep-alive: mount each view on first visit, then toggle via display
@@ -48,7 +50,10 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showText, setShowText] = useState<boolean>(loadShowText);
   const [sourceFilter, setSourceFilter] = useState<BookmarkSourceFilter>(loadSourceFilter);
+  const [saveUrl, setSaveUrl] = useState('');
+  const [saveState, setSaveState] = useState<{ status: 'idle' | 'saving' | 'saved' | 'error'; message: string }>({ status: 'idle', message: '' });
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
   const loading = snapshot === null;
 
   useEffect(() => {
@@ -63,6 +68,25 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
     onCanvasModeActiveChange?.(active && mode === 'canvas');
     return () => onCanvasModeActiveChange?.(false);
   }, [active, mode, onCanvasModeActiveChange]);
+
+  useEffect(() => {
+    if (!active || mode !== 'canvas') {
+      onCanvasToolbarTopChange?.(null);
+      return;
+    }
+    const toolbar = toolbarRef.current;
+    if (!toolbar) return;
+    const updateTop = () => onCanvasToolbarTopChange?.(toolbar.getBoundingClientRect().top);
+    updateTop();
+    const resizeObserver = new ResizeObserver(updateTop);
+    resizeObserver.observe(toolbar);
+    window.addEventListener('resize', updateTop);
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateTop);
+      onCanvasToolbarTopChange?.(null);
+    };
+  }, [active, mode, onCanvasToolbarTopChange]);
 
   useEffect(() => {
     localStorage.setItem(SHOW_TEXT_KEY, showText ? '1' : '0');
@@ -91,13 +115,16 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const filtered = useMemo(() => {
     if (!snapshot) return [];
     let list = snapshot.bookmarks;
-    if (sourceFilter === 'x') list = list.filter((b) => (b.sourceType ?? 'x') === 'x');
+    if (sourceFilter !== 'all') list = list.filter((b) => (b.sourceType ?? 'x') === sourceFilter);
     if (!showText) list = list.filter((b) => b.images && b.images.length > 0);
     if (folder !== 'All') list = list.filter((b) => b.folders.includes(folder));
     if (debouncedQuery) {
       const q = debouncedQuery;
       list = list.filter((b) =>
         b.text.toLowerCase().includes(q) ||
+        (b.title ?? '').toLowerCase().includes(q) ||
+        (b.domain ?? '').toLowerCase().includes(q) ||
+        b.url.toLowerCase().includes(q) ||
         b.authorHandle.toLowerCase().includes(q) ||
         b.authorName.toLowerCase().includes(q)
       );
@@ -106,11 +133,33 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   }, [snapshot, folder, debouncedQuery, showText, sourceFilter]);
 
   const folders = snapshot?.folders ?? [];
+  const handleSaveUrl = async (event: FormEvent) => {
+    event.preventDefault();
+    const url = saveUrl.trim();
+    if (!url || saveState.status === 'saving') return;
+
+    setSaveState({ status: 'saving', message: 'Saving…' });
+    try {
+      const result = await window.bookmarksAPI?.saveWebUrl(url);
+      if (!result?.success) {
+        setSaveState({ status: 'error', message: result?.error ?? 'Could not save URL' });
+        return;
+      }
+      setSaveUrl('');
+      setSourceFilter('web');
+      setSaveState({ status: 'saved', message: result.created === false ? 'Already saved' : 'Saved' });
+      const latest = await window.bookmarksAPI?.getAll();
+      if (latest) setSnapshot(latest);
+    } catch (error) {
+      setSaveState({ status: 'error', message: error instanceof Error ? error.message : 'Could not save URL' });
+    }
+  };
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden', minHeight: 0, backgroundColor: theme.bg }}>
       {/* Toolbar */}
       <div
+        ref={toolbarRef}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -163,8 +212,9 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
             overflow: 'hidden',
           }}
         >
-          {(['all', 'x'] as const).map((source) => {
+          {(['all', 'x', 'web'] as const).map((source, index, sources) => {
             const active = sourceFilter === source;
+            const label = source === 'all' ? 'All' : source === 'x' ? 'X' : 'Web';
             return (
               <button
                 key={source}
@@ -178,15 +228,69 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
                     ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
                     : 'transparent',
                   border: 'none',
-                  borderRight: source === 'all' ? `1px solid ${theme.border}` : 'none',
+                  borderRight: index < sources.length - 1 ? `1px solid ${theme.border}` : 'none',
                   cursor: 'pointer',
                 }}
               >
-                {source === 'all' ? 'All' : 'X'}
+                {label}
               </button>
             );
           })}
         </div>
+
+        <form onSubmit={handleSaveUrl} style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '220px' }}>
+          <input
+            value={saveUrl}
+            onChange={(e) => {
+              setSaveUrl(e.target.value);
+              if (saveState.status !== 'saving') setSaveState({ status: 'idle', message: '' });
+            }}
+            placeholder="Save URL"
+            disabled={saveState.status === 'saving'}
+            style={{
+              width: '180px',
+              padding: '5px 10px',
+              fontSize: '11px',
+              color: theme.text,
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${saveState.status === 'error' ? '#dc2626' : theme.border}`,
+              borderRadius: '6px',
+              outline: 'none',
+            }}
+          />
+          <button
+            type="submit"
+            disabled={!saveUrl.trim() || saveState.status === 'saving'}
+            style={{
+              padding: '5px 10px',
+              fontSize: '11px',
+              fontWeight: 600,
+              color: theme.text,
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              cursor: saveUrl.trim() && saveState.status !== 'saving' ? 'pointer' : 'default',
+              opacity: saveUrl.trim() && saveState.status !== 'saving' ? 1 : 0.55,
+            }}
+          >
+            {saveState.status === 'saving' ? 'Saving' : 'Save'}
+          </button>
+          {saveState.message && (
+            <span
+              style={{
+                maxWidth: '120px',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+                fontSize: '10px',
+                color: saveState.status === 'error' ? '#dc2626' : theme.textSecondary,
+              }}
+              title={saveState.message}
+            >
+              {saveState.message}
+            </span>
+          )}
+        </form>
 
         {/* Search */}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
@@ -325,7 +429,7 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
         ) : filtered.length === 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.textSecondary, fontSize: '12px', textAlign: 'center', padding: '24px' }}>
             {snapshot && snapshot.bookmarks.length === 0
-              ? <>No bookmarks synced yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync</code> in your terminal.</>
+              ? 'No bookmarks saved yet.'
               : 'No bookmarks in this folder.'}
           </div>
         ) : (
