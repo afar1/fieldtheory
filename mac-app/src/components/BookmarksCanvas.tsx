@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { localAvatarUrl, localMediaUrl, localMediaUrls, localVideoUrl } from '../utils/bookmarkMedia';
 import { estimateTextCardHeight } from '../utils/bookmarkCardHeight';
+import { formatLongBookmarkDate, formatShortBookmarkDate } from '../utils/bookmarkDate';
 
 const CONFIG = {
   MIN_COLS: 2,
@@ -114,6 +115,16 @@ interface HandleSource {
   localAvatarFilename?: string;
 }
 
+function bookmarkLinkLabel(bookmark: Bookmark): string {
+  if (bookmark.sourceType === 'web') return bookmark.domain || bookmark.url;
+  return bookmark.authorHandle ? `@${bookmark.authorHandle}` : (bookmark.authorName || '');
+}
+
+function bookmarkCaptionText(bookmark: Bookmark): string {
+  if (bookmark.sourceType === 'web') return bookmark.excerpt || bookmark.text;
+  return bookmark.text;
+}
+
 /** Populate a `.bm-text-handle` / `.bm-text-quoted-handle` div with the author's
  * avatar (when downloaded) and `@handle` text, falling back to display name. */
 function setHandleContent(handleEl: HTMLDivElement, source: HandleSource): void {
@@ -175,6 +186,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
   const infoRef = useRef<HTMLDivElement | null>(null);
   const titleRef = useRef<HTMLDivElement | null>(null);
   const linkRef = useRef<HTMLAnchorElement | null>(null);
+  const dateRef = useRef<HTMLDivElement | null>(null);
   const lightboxAvatarRef = useRef<HTMLImageElement | null>(null);
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const copyBtnRef = useRef<HTMLButtonElement | null>(null);
@@ -190,12 +202,13 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     const info = infoRef.current;
     const titleEl = titleRef.current;
     const linkEl = linkRef.current;
+    const dateEl = dateRef.current;
     const lightboxAvatarEl = lightboxAvatarRef.current;
     const closeBtn = closeBtnRef.current;
     const copyBtn = copyBtnRef.current;
     const openBtn = openBtnRef.current;
     const agentCopyBtn = agentCopyBtnRef.current;
-    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn || !agentCopyBtn) return;
+    if (!viewport || !grid || !overlay || !info || !titleEl || !linkEl || !dateEl || !lightboxAvatarEl || !closeBtn || !copyBtn || !openBtn || !agentCopyBtn) return;
 
     const openExternalUrl = (url: string) => {
       // Always route through shell.openExternal so URLs open in the user's
@@ -229,6 +242,18 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     let lastBuildColWidth = 0;
     let lastBuildCols = 0;
     let lastBuildCurrent: Bookmark[] | null = null;
+
+    const clampOffset = (offset: { x: number; y: number }) => {
+      const maxX = Math.max(0, totalWidth - viewport.clientWidth);
+      const maxY = Math.max(0, maxColHeight - viewport.clientHeight);
+      offset.x = Math.min(maxX, Math.max(0, offset.x));
+      offset.y = Math.min(maxY, Math.max(0, offset.y));
+    };
+
+    const clampCamera = () => {
+      clampOffset(state.cameraOffset);
+      clampOffset(state.targetOffset);
+    };
 
     const buildLayout = () => {
       const vw = viewport.clientWidth;
@@ -357,10 +382,17 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         quotedBody.className = 'bm-text-quoted-body';
         quotedEl.appendChild(quotedHandle);
         quotedEl.appendChild(quotedBody);
+        const textDateEl = document.createElement('div');
+        textDateEl.className = 'bm-text-date';
         textEl.appendChild(handleEl);
         textEl.appendChild(bodyEl);
         textEl.appendChild(quotedEl);
+        textEl.appendChild(textDateEl);
         el.appendChild(textEl);
+
+        const dateBadgeEl = document.createElement('div');
+        dateBadgeEl.className = 'bm-date-badge';
+        el.appendChild(dateBadgeEl);
 
         grid.appendChild(el);
         pool.push(el);
@@ -382,13 +414,17 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     };
 
     const clearActive = () => {
-      for (const [, entry] of activeMap) {
-        if (entry.poolEl !== state.lightbox?.sourceEl) {
+      let preservedLightboxEntry: [string, ActiveEntry] | null = null;
+      for (const [key, entry] of activeMap) {
+        if (entry.poolEl === state.lightbox?.sourceEl) {
+          preservedLightboxEntry = [key, entry];
+        } else {
           releaseEl(entry.poolEl);
           elToBookmark.delete(entry.poolEl);
         }
       }
       activeMap.clear();
+      if (preservedLightboxEntry) activeMap.set(preservedLightboxEntry[0], preservedLightboxEntry[1]);
     };
 
     const renderVisible = () => {
@@ -396,86 +432,80 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const vh = viewport.clientHeight;
       const buf = CONFIG.BUFFER;
       const lightboxEl = state.lightbox?.sourceEl ?? null;
+      clampCamera();
 
       const camX = state.cameraOffset.x;
       const camY = state.cameraOffset.y;
-      const minCullX = Math.min(camX, state.targetOffset.x);
-      const maxCullX = Math.max(camX, state.targetOffset.x);
-      const minCullY = Math.min(camY, state.targetOffset.y);
-      const maxCullY = Math.max(camY, state.targetOffset.y);
-
-      const startTileX = Math.floor((minCullX - buf) / totalWidth);
-      const endTileX = Math.floor((maxCullX + vw + buf) / totalWidth);
-      const startTileY = Math.floor((minCullY - buf) / maxColHeight);
-      const endTileY = Math.floor((maxCullY + vh + buf) / maxColHeight);
 
       const visibleThisFrame = new Set<string>();
 
       for (let i = 0; i < layoutItems.length; i++) {
         const item = layoutItems[i];
-        for (let ty = startTileY; ty <= endTileY; ty++) {
-          for (let tx = startTileX; tx <= endTileX; tx++) {
-            const worldX = item.x + tx * totalWidth;
-            const worldY = item.y + ty * maxColHeight;
-            const sx = worldX - camX;
-            const sy = worldY - camY;
-            const txs = worldX - state.targetOffset.x;
-            const tys = worldY - state.targetOffset.y;
+        const sx = item.x - camX;
+        const sy = item.y - camY;
+        const txs = item.x - state.targetOffset.x;
+        const tys = item.y - state.targetOffset.y;
 
-            const visibleAtCam =
-              sx + item.w >= -buf && sx <= vw + buf &&
-              sy + item.h >= -buf && sy <= vh + buf;
-            const visibleAtTarget =
-              txs + item.w >= -buf && txs <= vw + buf &&
-              tys + item.h >= -buf && tys <= vh + buf;
-            if (!visibleAtCam && !visibleAtTarget) continue;
+        const visibleAtCam =
+          sx + item.w >= -buf && sx <= vw + buf &&
+          sy + item.h >= -buf && sy <= vh + buf;
+        const visibleAtTarget =
+          txs + item.w >= -buf && txs <= vw + buf &&
+          tys + item.h >= -buf && tys <= vh + buf;
+        if (!visibleAtCam && !visibleAtTarget) continue;
 
-            const visKey = `${item.key}_${tx}_${ty}`;
-            visibleThisFrame.add(visKey);
+        const visKey = item.key;
+        visibleThisFrame.add(visKey);
 
-            const existing = activeMap.get(visKey);
-            if (existing) {
-              if (existing.poolEl !== lightboxEl) {
-                existing.poolEl.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
-              }
-              existing.screenX = sx;
-              existing.screenY = sy;
-            } else {
-              const el = acquireEl();
-              if (!el) continue;
-              const imageGrid = el.querySelector('.bm-image-grid') as HTMLDivElement;
-              const textEl = el.querySelector('.bm-text-card') as HTMLDivElement;
-              const localSources = localMediaUrls(item.bookmark.images).slice(0, 4);
-              const hasImage = localSources.length > 0;
-              if (hasImage) {
-                applyImageGrid(imageGrid, localSources, item.bookmark.text.substring(0, 60));
-                textEl.style.display = 'none';
-              } else {
-                applyImageGrid(imageGrid, [], '');
-                const handleEl = textEl.querySelector('.bm-text-handle') as HTMLDivElement;
-                const bodyEl = textEl.querySelector('.bm-text-body') as HTMLDivElement;
-                const quotedEl = textEl.querySelector('.bm-text-quoted') as HTMLDivElement;
-                setHandleContent(handleEl, item.bookmark);
-                bodyEl.textContent = item.bookmark.text;
-                bodyEl.style.display = item.bookmark.text ? 'block' : 'none';
-                if (item.bookmark.quotedTweet) {
-                  const qHandle = quotedEl.querySelector('.bm-text-quoted-handle') as HTMLDivElement;
-                  const qBody = quotedEl.querySelector('.bm-text-quoted-body') as HTMLDivElement;
-                  setHandleContent(qHandle, item.bookmark.quotedTweet);
-                  qBody.textContent = item.bookmark.quotedTweet.text;
-                  quotedEl.style.display = 'flex';
-                } else {
-                  quotedEl.style.display = 'none';
-                }
-                textEl.style.display = 'flex';
-              }
-              el.style.width = `${item.w}px`;
-              el.style.height = `${item.h}px`;
-              el.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
-              elToBookmark.set(el, item.bookmark);
-              activeMap.set(visKey, { poolEl: el, layoutItem: item, screenX: sx, screenY: sy });
-            }
+        const existing = activeMap.get(visKey);
+        if (existing) {
+          if (existing.poolEl !== lightboxEl) {
+            existing.poolEl.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
           }
+          existing.screenX = sx;
+          existing.screenY = sy;
+        } else {
+          const el = acquireEl();
+          if (!el) continue;
+          const imageGrid = el.querySelector('.bm-image-grid') as HTMLDivElement;
+          const textEl = el.querySelector('.bm-text-card') as HTMLDivElement;
+          const localSources = localMediaUrls(item.bookmark.images).slice(0, 4);
+          const hasImage = localSources.length > 0;
+          const shortDate = formatShortBookmarkDate(item.bookmark.postedAt);
+          const dateBadgeEl = el.querySelector('.bm-date-badge') as HTMLDivElement;
+          if (hasImage) {
+            applyImageGrid(imageGrid, localSources, bookmarkCaptionText(item.bookmark).substring(0, 60));
+            textEl.style.display = 'none';
+            dateBadgeEl.textContent = shortDate;
+            dateBadgeEl.style.display = shortDate ? 'block' : 'none';
+          } else {
+            applyImageGrid(imageGrid, [], '');
+            const handleEl = textEl.querySelector('.bm-text-handle') as HTMLDivElement;
+            const bodyEl = textEl.querySelector('.bm-text-body') as HTMLDivElement;
+            const quotedEl = textEl.querySelector('.bm-text-quoted') as HTMLDivElement;
+            const textDateEl = textEl.querySelector('.bm-text-date') as HTMLDivElement;
+            setHandleContent(handleEl, item.bookmark);
+            bodyEl.textContent = item.bookmark.text;
+            bodyEl.style.display = item.bookmark.text ? 'block' : 'none';
+            if (item.bookmark.quotedTweet) {
+              const qHandle = quotedEl.querySelector('.bm-text-quoted-handle') as HTMLDivElement;
+              const qBody = quotedEl.querySelector('.bm-text-quoted-body') as HTMLDivElement;
+              setHandleContent(qHandle, item.bookmark.quotedTweet);
+              qBody.textContent = item.bookmark.quotedTweet.text;
+              quotedEl.style.display = 'flex';
+            } else {
+              quotedEl.style.display = 'none';
+            }
+            textDateEl.textContent = shortDate;
+            textDateEl.style.display = shortDate ? 'block' : 'none';
+            textEl.style.display = 'flex';
+            dateBadgeEl.style.display = 'none';
+          }
+          el.style.width = `${item.w}px`;
+          el.style.height = `${item.h}px`;
+          el.style.transform = `translate3d(${sx}px, ${sy}px, 0)`;
+          elToBookmark.set(el, item.bookmark);
+          activeMap.set(visKey, { poolEl: el, layoutItem: item, screenX: sx, screenY: sy });
         }
       }
 
@@ -502,6 +532,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const maxH = vh * 0.7;
       const hasImage = localMediaUrls(bookmark.images).length > 0;
       const hasCopyableImage = !!copyableLocalImage(bookmark);
+      const shortDate = formatShortBookmarkDate(bookmark.postedAt);
+      const longDate = formatLongBookmarkDate(bookmark.postedAt);
       let targetW: number;
       let targetH: number;
       if (hasImage) {
@@ -548,6 +580,16 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const val = viewport.style.getPropertyValue(v);
         if (val) clone.style.setProperty(v, val);
       }
+      const cloneDateBadge = clone.querySelector('.bm-date-badge') as HTMLDivElement | null;
+      const cloneTextDate = clone.querySelector('.bm-text-date') as HTMLDivElement | null;
+      if (cloneDateBadge) {
+        cloneDateBadge.textContent = shortDate;
+        cloneDateBadge.style.display = hasImage && shortDate ? 'block' : 'none';
+      }
+      if (cloneTextDate) {
+        cloneTextDate.textContent = shortDate;
+        cloneTextDate.style.display = !hasImage && shortDate ? 'block' : 'none';
+      }
       const cloneVideo = document.createElement('video');
       cloneVideo.className = 'bm-lightbox-video';
       cloneVideo.controls = true;
@@ -567,10 +609,12 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       // block below the media. For text-only the card already contains the
       // full text — don't duplicate it in the info block.
       titleEl.textContent = hasImage
-        ? (bookmark.text.length > 140 ? bookmark.text.substring(0, 140) + '…' : bookmark.text)
+        ? (bookmarkCaptionText(bookmark).length > 140 ? bookmarkCaptionText(bookmark).substring(0, 140) + '…' : bookmarkCaptionText(bookmark))
         : '';
-      linkEl.textContent = bookmark.authorHandle ? `@${bookmark.authorHandle}` : '';
+      linkEl.textContent = bookmarkLinkLabel(bookmark);
       linkEl.href = bookmark.url;
+      dateEl.textContent = longDate;
+      dateEl.style.display = longDate ? 'block' : 'none';
       applyAvatar(lightboxAvatarEl, localAvatarUrl(bookmark));
       info.style.top = `${endY + targetH + 20}px`;
       info.style.opacity = '1';
@@ -641,9 +685,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const video = lb.clone.querySelector('.bm-lightbox-video') as HTMLVideoElement | null;
         if (video) resetLightboxVideo(video);
         lb.clone.remove();
+        const sourceStillTracked = Array.from(activeMap.values()).some((entry) => entry.poolEl === lb.sourceEl);
         lb.sourceEl.style.visibility = '';
         state.lightbox = null;
         state.lightboxAnimating = false;
+        if (!sourceStillTracked) {
+          releaseEl(lb.sourceEl);
+          elToBookmark.delete(lb.sourceEl);
+        }
+        renderVisible();
       });
     };
 
@@ -668,6 +718,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const dy = e.clientY - state.previousMousePosition.y;
       state.targetOffset.x -= dx;
       state.targetOffset.y -= dy;
+      clampOffset(state.targetOffset);
       state.previousMousePosition = { x: e.clientX, y: e.clientY };
     };
 
@@ -697,6 +748,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const dy = e.touches[0].clientY - state.touchStart.y;
         state.targetOffset.x -= dx;
         state.targetOffset.y -= dy;
+        clampOffset(state.targetOffset);
         state.touchStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
       }
     };
@@ -708,6 +760,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       e.preventDefault();
       state.targetOffset.x += e.deltaX;
       state.targetOffset.y += e.deltaY;
+      clampOffset(state.targetOffset);
     };
 
     const onResize = () => {
@@ -737,6 +790,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       state.cameraOffset.y = nextItem.y + nextItem.h / 2 - vh / 2;
       state.targetOffset.x = state.cameraOffset.x;
       state.targetOffset.y = state.cameraOffset.y;
+      clampCamera();
 
       // Restore old source visibility, render so new source has a pool element.
       state.lightbox.sourceEl.style.visibility = '';
@@ -756,12 +810,16 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       const cloneGrid = clone.querySelector('.bm-image-grid') as HTMLDivElement;
       const cloneVideo = clone.querySelector('.bm-lightbox-video') as HTMLVideoElement;
       const cloneText = clone.querySelector('.bm-text-card') as HTMLDivElement;
+      const cloneDateBadge = clone.querySelector('.bm-date-badge') as HTMLDivElement | null;
+      const cloneTextDate = clone.querySelector('.bm-text-date') as HTMLDivElement | null;
       const localSources = localMediaUrls(nextBm.images).slice(0, 4);
       const hasImage = localSources.length > 0;
       const videoImage = localVideoImage(nextBm);
       const videoSrc = localVideoUrl(videoImage);
       const hasPlayableVideo = !!videoSrc;
       const hasCopyableImage = !!copyableLocalImage(nextBm);
+      const shortDate = formatShortBookmarkDate(nextBm.postedAt);
+      const longDate = formatLongBookmarkDate(nextBm.postedAt);
       if (hasPlayableVideo) {
         applyImageGrid(cloneGrid, [], '');
         cloneText.style.display = 'none';
@@ -769,7 +827,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         cloneVideo.src = videoSrc!;
         cloneVideo.style.display = 'block';
       } else if (hasImage) {
-        applyImageGrid(cloneGrid, localSources, nextBm.text.substring(0, 60));
+        applyImageGrid(cloneGrid, localSources, bookmarkCaptionText(nextBm).substring(0, 60));
         cloneText.style.display = 'none';
         resetLightboxVideo(cloneVideo);
       } else {
@@ -794,10 +852,20 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       }
 
       titleEl.textContent = hasImage
-        ? (nextBm.text.length > 140 ? nextBm.text.substring(0, 140) + '…' : nextBm.text)
+        ? (bookmarkCaptionText(nextBm).length > 140 ? bookmarkCaptionText(nextBm).substring(0, 140) + '…' : bookmarkCaptionText(nextBm))
         : '';
-      linkEl.textContent = nextBm.authorHandle ? `@${nextBm.authorHandle}` : '';
+      linkEl.textContent = bookmarkLinkLabel(nextBm);
       linkEl.href = nextBm.url;
+      dateEl.textContent = longDate;
+      dateEl.style.display = longDate ? 'block' : 'none';
+      if (cloneDateBadge) {
+        cloneDateBadge.textContent = shortDate;
+        cloneDateBadge.style.display = (hasImage || hasPlayableVideo) && shortDate ? 'block' : 'none';
+      }
+      if (cloneTextDate) {
+        cloneTextDate.textContent = shortDate;
+        cloneTextDate.style.display = !hasImage && !hasPlayableVideo && shortDate ? 'block' : 'none';
+      }
       applyAvatar(lightboxAvatarEl, localAvatarUrl(nextBm));
       copyBtn.style.display = hasCopyableImage ? 'flex' : 'none';
       delete agentCopyBtn.dataset.copied;
@@ -815,6 +883,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       nextEl.style.visibility = 'hidden';
       state.lightbox.sourceEl = nextEl;
       state.lightbox.bookmark = nextBm;
+      renderVisible();
     };
 
     const onKey = (e: KeyboardEvent) => {
@@ -997,6 +1066,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
   const overlayBg = theme.isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)';
   const closeBtnBg = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
   const closeBtnBorder = theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)';
+  const canvasFadeSoft = `${theme.bg}cc`;
+  const canvasFadeClear = `${theme.bg}00`;
 
   // Text-card palette — tuned for readability in both themes. Backgrounds are
   // fully opaque so cards don't bleed with the canvas behind them.
@@ -1035,6 +1106,21 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         .bm-agent-copied-label { display: none; }
         button[data-copied="1"] .bm-agent-copy-label { display: none; }
         button[data-copied="1"] .bm-agent-copied-label { display: inline; }
+        .bm-date-badge {
+          position: absolute;
+          right: 10px;
+          bottom: 10px;
+          z-index: 2;
+          padding: 3px 7px;
+          border-radius: 999px;
+          background: rgba(0,0,0,0.48);
+          color: rgba(255,255,255,0.88);
+          font: 600 10px/1.2 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          letter-spacing: 0.01em;
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          pointer-events: none;
+        }
         .bm-text-card {
           position: absolute; inset: 0;
           display: none;
@@ -1101,6 +1187,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           white-space: pre-wrap;
           word-break: break-word;
         }
+        .bm-text-date {
+          margin-top: auto;
+          padding-top: 4px;
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--bm-card-secondary);
+          opacity: 0.72;
+          flex-shrink: 0;
+        }
         .bm-grid-item:hover .bm-text-card { filter: brightness(1.03); }
       `}</style>
       <div
@@ -1110,6 +1205,19 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
           inset: 0,
           width: '100%',
           height: '100%',
+        }}
+      />
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: '30px',
+          zIndex: 3,
+          pointerEvents: 'none',
+          background: `linear-gradient(to bottom, ${canvasFadeSoft} 0%, ${canvasFadeClear} 100%)`,
         }}
       />
 
@@ -1218,6 +1326,16 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
               style={{ fontSize: '14px', color: theme.textSecondary, textDecoration: 'none', cursor: 'pointer' }}
             />
           </div>
+          <div
+            ref={dateRef}
+            style={{
+              display: 'none',
+              marginTop: '4px',
+              fontSize: '12px',
+              color: theme.textSecondary,
+              opacity: 0.82,
+            }}
+          />
           <div style={{ marginTop: '14px', display: 'flex', justifyContent: 'center', gap: '8px', flexWrap: 'wrap' }}>
             <button
               ref={agentCopyBtnRef}

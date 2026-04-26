@@ -1,9 +1,19 @@
 import path from 'path';
 import fs from 'fs';
+import http from 'http';
+import https from 'https';
 import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { createLogger } from './logger';
 import { bookmarkDataDir } from './fieldTheoryPaths';
+import {
+  canonicalWebBookmarkUrl,
+  extractWebBookmarkMarkdown,
+  slugifyWebBookmarkTitle,
+  webBookmarkDomain,
+  webBookmarkId,
+  withWebBookmarkFrontmatter,
+} from './webBookmarkMarkdown';
 
 const log = createLogger('Bookmarks');
 
@@ -35,7 +45,7 @@ export interface QuotedTweet {
 
 export interface Bookmark {
   id: string;
-  sourceType: 'x';
+  sourceType: 'x' | 'web';
   text: string;
   url: string;
   authorHandle: string;
@@ -51,6 +61,11 @@ export interface Bookmark {
   bookmarkCount: number;
   folders: string[];
   quotedTweet?: QuotedTweet;
+  title?: string;
+  domain?: string;
+  excerpt?: string;
+  savedAt?: string;
+  markdownPath?: string;
 }
 
 export interface BookmarkFolder {
@@ -101,6 +116,24 @@ export interface RawBookmark {
   quotedTweet?: RawQuotedTweet;
 }
 
+export interface RawWebBookmark {
+  id?: string;
+  sourceType?: 'web';
+  url?: string;
+  title?: string;
+  domain?: string;
+  excerpt?: string;
+  savedAt?: string;
+  publishedAt?: string;
+  markdownPath?: string;
+}
+
+export interface SaveWebBookmarkResult {
+  bookmark: Bookmark;
+  markdownPath: string;
+  created: boolean;
+}
+
 function bookmarksDir(): string {
   return bookmarkDataDir();
 }
@@ -119,6 +152,14 @@ function mediaManifestPath(): string {
 
 export function mediaDir(): string {
   return path.join(bookmarksDir(), 'media');
+}
+
+function webDir(): string {
+  return path.join(bookmarksDir(), 'web');
+}
+
+function webIndexPath(): string {
+  return path.join(webDir(), 'index.jsonl');
 }
 
 interface RawMediaManifestEntry {
@@ -301,6 +342,121 @@ function loadFolders(): { folders: BookmarkFolder[]; folderMap: Record<string, s
   }
 }
 
+function resolveStoredMarkdownPath(markdownPath: string | undefined): string | undefined {
+  if (!markdownPath) return undefined;
+  return path.isAbsolute(markdownPath) ? markdownPath : path.join(bookmarksDir(), markdownPath);
+}
+
+export function parseRawWebBookmark(raw: RawWebBookmark): Bookmark | null {
+  if (raw.sourceType !== 'web' && raw.sourceType !== undefined) return null;
+  if (!raw.url) return null;
+
+  let url: string;
+  try {
+    url = canonicalWebBookmarkUrl(raw.url);
+  } catch {
+    return null;
+  }
+
+  const id = raw.id || webBookmarkId(url);
+  const domain = raw.domain || webBookmarkDomain(url);
+  const title = (raw.title || domain).trim();
+  const excerpt = (raw.excerpt || '').trim();
+  const savedAt = raw.savedAt || raw.publishedAt || '';
+  const text = [title, excerpt].filter(Boolean).join('\n\n') || url;
+
+  return {
+    id,
+    sourceType: 'web',
+    text,
+    url,
+    authorHandle: '',
+    authorName: domain,
+    authorAvatar: '',
+    postedAt: raw.publishedAt || savedAt,
+    images: [],
+    mediaCount: 0,
+    likeCount: 0,
+    repostCount: 0,
+    bookmarkCount: 0,
+    folders: [],
+    title,
+    domain,
+    excerpt,
+    savedAt,
+    markdownPath: resolveStoredMarkdownPath(raw.markdownPath),
+  };
+}
+
+function readWebBookmarkRows(): RawWebBookmark[] {
+  const p = webIndexPath();
+  if (!fs.existsSync(p)) return [];
+
+  const rows: RawWebBookmark[] = [];
+  const text = fs.readFileSync(p, 'utf-8');
+  for (const line of text.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      rows.push(JSON.parse(trimmed) as RawWebBookmark);
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return rows;
+}
+
+function loadWebBookmarks(): Bookmark[] {
+  return readWebBookmarkRows()
+    .map((row) => parseRawWebBookmark(row))
+    .filter((bookmark): bookmark is Bookmark => !!bookmark);
+}
+
+async function fetchWebPageHtml(url: string, redirects = 0): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const client = parsed.protocol === 'https:' ? https : http;
+    const req = client.get(parsed, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; FieldTheory/1.0; +https://fieldtheory.dev)',
+        Accept: 'text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.8',
+      },
+    }, (res) => {
+      const status = res.statusCode ?? 0;
+      const location = res.headers.location;
+      if (status >= 300 && status < 400 && location) {
+        res.resume();
+        if (redirects >= 5) {
+          reject(new Error('Too many redirects'));
+          return;
+        }
+        resolve(fetchWebPageHtml(new URL(location, url).toString(), redirects + 1));
+        return;
+      }
+
+      if (status < 200 || status >= 300) {
+        res.resume();
+        reject(new Error(`HTTP ${status}`));
+        return;
+      }
+
+      const contentType = String(res.headers['content-type'] ?? '');
+      if (contentType && !/text\/html|application\/xhtml\+xml|text\/plain/i.test(contentType)) {
+        res.resume();
+        reject(new Error(`Unsupported content type: ${contentType}`));
+        return;
+      }
+
+      res.setEncoding('utf-8');
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => resolve(body));
+    });
+    req.setTimeout(30000, () => req.destroy(new Error('Request timed out')));
+    req.on('error', reject);
+  });
+}
+
 export class BookmarksManager extends EventEmitter {
   private watcher: chokidar.FSWatcher | null = null;
   private watcherPending = false;
@@ -312,39 +468,37 @@ export class BookmarksManager extends EventEmitter {
   }
 
   private reload(): BookmarksSnapshot {
-    const p = jsonlPath();
-    if (!fs.existsSync(p)) {
-      this.cached = { bookmarks: [], folders: [] };
-      return this.cached;
-    }
-
     const { folders, folderMap } = loadFolders();
     const mediaIndex = indexMediaByTweetSource();
 
     const bookmarks: Bookmark[] = [];
-    const text = fs.readFileSync(p, 'utf-8');
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const raw = JSON.parse(trimmed) as RawBookmark;
-        const bm = parseRawBookmark(raw);
-        if (bm) {
-          bm.folders = folderMap[bm.id] ?? [];
-          attachLocalImages(bm.images, bm.id, mediaIndex);
-          const bmAvatar = lookupAvatar(bm.authorHandle, mediaIndex);
-          if (bmAvatar) bm.localAvatarFilename = bmAvatar;
-          if (bm.quotedTweet) {
-            attachLocalImages(bm.quotedTweet.images, bm.quotedTweet.id, mediaIndex);
-            const qAvatar = lookupAvatar(bm.quotedTweet.authorHandle, mediaIndex);
-            if (qAvatar) bm.quotedTweet.localAvatarFilename = qAvatar;
+    const p = jsonlPath();
+    if (fs.existsSync(p)) {
+      const text = fs.readFileSync(p, 'utf-8');
+      for (const line of text.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const raw = JSON.parse(trimmed) as RawBookmark;
+          const bm = parseRawBookmark(raw);
+          if (bm) {
+            bm.folders = folderMap[bm.id] ?? [];
+            attachLocalImages(bm.images, bm.id, mediaIndex);
+            const bmAvatar = lookupAvatar(bm.authorHandle, mediaIndex);
+            if (bmAvatar) bm.localAvatarFilename = bmAvatar;
+            if (bm.quotedTweet) {
+              attachLocalImages(bm.quotedTweet.images, bm.quotedTweet.id, mediaIndex);
+              const qAvatar = lookupAvatar(bm.quotedTweet.authorHandle, mediaIndex);
+              if (qAvatar) bm.quotedTweet.localAvatarFilename = qAvatar;
+            }
+            bookmarks.push(bm);
           }
-          bookmarks.push(bm);
+        } catch {
+          // skip malformed lines
         }
-      } catch {
-        // skip malformed lines
       }
     }
+    bookmarks.push(...loadWebBookmarks());
 
     bookmarks.sort((a, b) => {
       const ta = new Date(a.postedAt).getTime() || 0;
@@ -354,6 +508,72 @@ export class BookmarksManager extends EventEmitter {
 
     this.cached = { bookmarks, folders };
     return this.cached;
+  }
+
+  saveWebBookmarkFromHtml(rawUrl: string, html: string, savedAt = new Date().toISOString()): SaveWebBookmarkResult {
+    const url = canonicalWebBookmarkUrl(rawUrl);
+    const id = webBookmarkId(url);
+    const existing = readWebBookmarkRows().find((row) => {
+      if (row.id === id) return true;
+      if (!row.url) return false;
+      try {
+        return webBookmarkId(canonicalWebBookmarkUrl(row.url)) === id;
+      } catch {
+        return false;
+      }
+    });
+    if (existing) {
+      const bookmark = parseRawWebBookmark(existing);
+      if (bookmark) {
+        return { bookmark, markdownPath: bookmark.markdownPath ?? '', created: false };
+      }
+    }
+
+    const domain = webBookmarkDomain(url);
+    const extracted = extractWebBookmarkMarkdown(html, url);
+    const title = extracted.title || domain;
+    const slug = slugifyWebBookmarkTitle(title, domain);
+    const fileName = `${slug}-${id.replace(/^web:/, '').slice(0, 8)}.md`;
+    const relativeMarkdownPath = path.join('web', 'pages', domain, fileName);
+    const absoluteMarkdownPath = path.join(bookmarksDir(), relativeMarkdownPath);
+    const markdown = withWebBookmarkFrontmatter({
+      title,
+      url,
+      domain,
+      savedAt,
+      markdown: extracted.markdown,
+    });
+
+    fs.mkdirSync(path.dirname(absoluteMarkdownPath), { recursive: true });
+    fs.writeFileSync(absoluteMarkdownPath, markdown, 'utf-8');
+
+    fs.mkdirSync(webDir(), { recursive: true });
+    const row: RawWebBookmark = {
+      id,
+      sourceType: 'web',
+      url,
+      title,
+      domain,
+      excerpt: extracted.excerpt,
+      savedAt,
+      markdownPath: relativeMarkdownPath,
+    };
+    fs.appendFileSync(webIndexPath(), `${JSON.stringify(row)}\n`, 'utf-8');
+
+    const bookmark = parseRawWebBookmark(row);
+    if (!bookmark) {
+      throw new Error('Saved web bookmark could not be read back');
+    }
+
+    this.cached = null;
+    this.emit('bookmarks:changed');
+    return { bookmark, markdownPath: absoluteMarkdownPath, created: true };
+  }
+
+  async saveWebBookmarkFromUrl(rawUrl: string): Promise<SaveWebBookmarkResult> {
+    const url = canonicalWebBookmarkUrl(rawUrl);
+    const html = await fetchWebPageHtml(url);
+    return this.saveWebBookmarkFromHtml(url, html);
   }
 
   startWatcher(): void {
@@ -376,7 +596,7 @@ export class BookmarksManager extends EventEmitter {
     }
 
     this.watcher = chokidar.watch(
-      [jsonlPath(), foldersPath()],
+      [jsonlPath(), foldersPath(), webIndexPath()],
       {
         ignoreInitial: true,
         awaitWriteFinish: { stabilityThreshold: 300, pollInterval: 100 },

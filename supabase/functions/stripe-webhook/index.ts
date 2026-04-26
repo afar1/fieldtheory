@@ -106,7 +106,8 @@ async function handleCheckoutCompleted(
   const { error } = await supabase
     .from('profiles')
     .update({
-      tier: 'pro',
+      tier: 'pro',                   // legacy field — kept for old mac-app clients
+      is_paid_subscriber: true,      // new field — source of truth for paid status
       stripe_customer_id: customerId,
       stripe_subscription_id: subscriptionId,
     })
@@ -129,10 +130,15 @@ async function handleSubscriptionDeleted(
 ) {
   const customerId = subscription.customer as string;
 
-  // Find user by Stripe customer ID and downgrade to free.
+  // Find user by Stripe customer ID and downgrade. Reset the trial clock so they
+  // re-enter the cycle from now (gives them another 14 days of full access).
   const { error } = await supabase
     .from('profiles')
-    .update({ tier: 'free' })
+    .update({
+      tier: 'free',                  // legacy field
+      is_paid_subscriber: false,
+      trial_started_at: new Date().toISOString(),
+    })
     .eq('stripe_customer_id', customerId);
 
   if (error) {

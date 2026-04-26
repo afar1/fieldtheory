@@ -60,9 +60,18 @@ export type QuotaFeature =
   | 'auto_stack_sessions'
   | 'portable_commands';
 
+// Trial lifecycle state — server-computed from is_paid_subscriber + trial_started_at.
+// 'pro'     = paid subscriber (Stripe). Permanent.
+// 'trial'   = inside the 14-day active window of the current 30-day cycle.
+// 'expired' = inside the 16-day expired window. Reverts to 'trial' at the next cycle boundary.
+export type TrialState = 'pro' | 'trial' | 'expired';
+
 // Usage data synced from server.
 interface ServerUsage {
   tier: 'free' | 'pro';
+  state: TrialState;
+  trialEndsAt: string | null;
+  nextTrialResetAt: string | null;
   monthYear: string;
   usage: Record<QuotaFeature, number>;
   limits: Record<QuotaFeature, number>;
@@ -181,6 +190,13 @@ export class QuotaManager extends EventEmitter {
         }
       }
 
+      // Defensive: if the server is on an older deploy and returns no `state`,
+      // default permissively to 'pro' so we never lock a user out by accident.
+      // The first sync against the new server overwrites this.
+      if (!data.state) {
+        data.state = 'pro';
+      }
+
       this.cache = data;
       this.lastSyncAt = Date.now();
 
@@ -188,6 +204,7 @@ export class QuotaManager extends EventEmitter {
 
       this.emit('quotaChanged', this.getQuotas());
       this.emit('tierChanged', this.cache.tier);
+      this.emit('stateChanged', this.cache.state);
     } catch (err) {
       if (isNetworkError(err)) {
         log.warn('Sync skipped; network unavailable:', getErrorMessage(err));
@@ -229,7 +246,12 @@ export class QuotaManager extends EventEmitter {
     // Offline or not synced yet: allow (permissive).
     if (!this.cache) return true;
 
-    // Pro users have no limits on most features (except text_improve_words soft limit).
+    // Expired trial: deny every feature. Catches background/hotkey-triggered
+    // paths that don't go through TrialGate (recording, screenshot stacking, etc.).
+    if (this.cache.state === 'expired') return false;
+
+    // Pro and active-trial users have no limits on most features
+    // (except text_improve_words soft limit).
     if (this.cache.tier === 'pro' && feature !== 'text_improve_words') {
       return true;
     }
@@ -280,6 +302,9 @@ export class QuotaManager extends EventEmitter {
     autoStack: QuotaStatus;
     portableCommands: QuotaStatus;
     tier: 'free' | 'pro';
+    state: TrialState;
+    trialEndsAt: string | null;
+    nextTrialResetAt: string | null;
   } {
     return {
       textImprove: this.getFeatureStatus('text_improve_words'),
@@ -287,6 +312,10 @@ export class QuotaManager extends EventEmitter {
       autoStack: this.getFeatureStatus('auto_stack_sessions'),
       portableCommands: this.getFeatureStatus('portable_commands'),
       tier: this.cache?.tier || 'free',
+      // Default to 'pro' when offline / not synced yet — permissive (matches isAllowed behaviour).
+      state: this.cache?.state || 'pro',
+      trialEndsAt: this.cache?.trialEndsAt ?? null,
+      nextTrialResetAt: this.cache?.nextTrialResetAt ?? null,
     };
   }
 
@@ -304,10 +333,15 @@ export class QuotaManager extends EventEmitter {
    */
   setInitialTier(tier: 'free' | 'pro'): void {
     if (!this.cache) {
-      // Create minimal cache with just tier - server will fill in rest
+      // Create minimal cache with just tier - server will fill in rest.
+      // State defaults to 'pro' (permissive) until the first server sync; the cached `tier`
+      // alone can't tell us whether a non-paid user is currently trial or expired.
       const monthYear = new Date().toISOString().slice(0, 7);
       this.cache = {
         tier,
+        state: 'pro',
+        trialEndsAt: null,
+        nextTrialResetAt: null,
         monthYear,
         usage: {
           text_improve_words: 0,

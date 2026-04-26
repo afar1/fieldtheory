@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'events';
 
 const testState = vi.hoisted(() => {
   const createServer = vi.fn(() => ({
@@ -80,6 +81,7 @@ function createManager(preferences: Record<string, unknown> = {}) {
     typeIntoApp: vi.fn(async () => ({ success: true })),
     setHarvestMode: vi.fn(),
     startRecording: vi.fn(async () => undefined),
+    stopRecording: vi.fn(async () => undefined),
     cancelRecording: vi.fn(async () => undefined),
     isRecordingActive: vi.fn(() => false),
     on: vi.fn(),
@@ -110,6 +112,11 @@ function createManager(preferences: Record<string, unknown> = {}) {
   };
   manager.setClipboardManager(clipboardManager as any);
   return { manager, nativeHelper, prefs, clipboardManager, clipboardItems };
+}
+
+async function flushAsyncWork() {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 describe('HotMicManager run-command phrases', () => {
@@ -1041,6 +1048,46 @@ describe('HotMicManager audio diagnostics', () => {
     const shouldWarn = (manager as any).shouldWarnForSpeechMiss(0.05, 0.015, 0.24);
     expect(shouldWarn).toBe(false);
 
+    manager.destroy();
+  });
+});
+
+describe('HotMicManager audio device recovery', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('restarts active recording when the priority input disappears and a fallback input exists', async () => {
+    const { manager, nativeHelper } = createManager();
+    const audioManager = new EventEmitter() as EventEmitter & { getState: ReturnType<typeof vi.fn> };
+    audioManager.getState = vi.fn(() => ({ defaultInputId: 'built-in-mic' }));
+
+    manager.setAudioManager(audioManager as any);
+    (manager as any).state = 'listening';
+    nativeHelper.isRecordingActive.mockReturnValue(true);
+
+    audioManager.emit('priorityDeviceUnavailable', 'priority-mic');
+    await flushAsyncWork();
+
+    expect(nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
+    expect(nativeHelper.startRecording).toHaveBeenCalledTimes(1);
+    manager.destroy();
+  });
+
+  it('stops active recording when the priority input disappears and no fallback input exists', async () => {
+    const { manager, nativeHelper } = createManager();
+    const audioManager = new EventEmitter() as EventEmitter & { getState: ReturnType<typeof vi.fn> };
+    audioManager.getState = vi.fn(() => ({ defaultInputId: null }));
+
+    manager.setAudioManager(audioManager as any);
+    (manager as any).state = 'listening';
+    nativeHelper.isRecordingActive.mockReturnValue(true);
+
+    audioManager.emit('priorityDeviceUnavailable', 'priority-mic');
+    await flushAsyncWork();
+
+    expect(nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
+    expect(nativeHelper.startRecording).not.toHaveBeenCalled();
     manager.destroy();
   });
 });

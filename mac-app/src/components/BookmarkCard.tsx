@@ -26,6 +26,21 @@ function imageAspectRatio(image: BookmarkImage | undefined): string | undefined 
   return `${image.width} / ${image.height}`;
 }
 
+function bookmarkPrimaryLabel(bookmark: Bookmark): string {
+  if (bookmark.sourceType === 'web') return bookmark.title || bookmark.domain || bookmark.url;
+  return bookmark.authorName || (bookmark.authorHandle ? `@${bookmark.authorHandle}` : 'Unknown author');
+}
+
+function bookmarkSecondaryLabel(bookmark: Bookmark): string {
+  if (bookmark.sourceType === 'web') return bookmark.domain || 'web';
+  return bookmark.authorHandle ? `@${bookmark.authorHandle}` : '';
+}
+
+function bookmarkBodyText(bookmark: Bookmark): string {
+  if (bookmark.sourceType === 'web') return bookmark.excerpt || bookmark.text;
+  return bookmark.text;
+}
+
 function mediaGridStyle(items: MediaCardItem[], border: string, multiImageHeight = 240): CSSProperties {
   const count = items.length;
   const singleAspectRatio = imageAspectRatio(items[0]?.image) ?? '16 / 9';
@@ -81,6 +96,8 @@ function AuthorLine({ source, secondary }: { source: { authorHandle: string; aut
 export default function BookmarkCard({ bookmark, compact = false, isDark = true }: { bookmark: Bookmark; compact?: boolean; isDark?: boolean }) {
   const mediaItems = localMediaItems(bookmark.images).slice(0, 4);
   const quotedMediaItems = localMediaItems(bookmark.quotedTweet?.images).slice(0, 4);
+  const secondaryLabel = bookmarkSecondaryLabel(bookmark);
+  const bodyText = bookmarkBodyText(bookmark);
   const colors = isDark ? {
     bg: '#1c1c1e',
     border: 'rgba(255,255,255,0.1)',
@@ -109,13 +126,20 @@ export default function BookmarkCard({ bookmark, compact = false, isDark = true 
       }}
     >
       <header style={{ display: 'flex', justifyContent: 'space-between', gap: '12px', fontSize: compact ? '12px' : '13px', fontWeight: 650, color: colors.secondary }}>
-        <AuthorLine source={bookmark} />
+        {bookmark.sourceType === 'web' ? (
+          <div style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            <span>{bookmarkPrimaryLabel(bookmark)}</span>
+            {secondaryLabel && <span style={{ opacity: 0.72 }}> · {secondaryLabel}</span>}
+          </div>
+        ) : (
+          <AuthorLine source={bookmark} />
+        )}
         <span style={{ flexShrink: 0, fontWeight: 500 }}>{formatPostedAt(bookmark.postedAt)}</span>
       </header>
 
-      {bookmark.text && (
+      {bodyText && (
         <div style={{ marginTop: '10px', fontSize: compact ? '13px' : '14px', lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {bookmark.text}
+          {bodyText}
         </div>
       )}
 
