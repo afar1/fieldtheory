@@ -55,6 +55,7 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const loading = snapshot === null;
+  const isCanvasMode = mode === 'canvas';
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
@@ -115,7 +116,7 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const filtered = useMemo(() => {
     if (!snapshot) return [];
     let list = snapshot.bookmarks;
-    if (sourceFilter !== 'all') list = list.filter((b) => (b.sourceType ?? 'x') === sourceFilter);
+    if (!isCanvasMode && sourceFilter !== 'all') list = list.filter((b) => (b.sourceType ?? 'x') === sourceFilter);
     if (!showText) list = list.filter((b) => b.images && b.images.length > 0);
     if (folder !== 'All') list = list.filter((b) => b.folders.includes(folder));
     if (debouncedQuery) {
@@ -130,7 +131,7 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
       );
     }
     return list;
-  }, [snapshot, folder, debouncedQuery, showText, sourceFilter]);
+  }, [snapshot, folder, debouncedQuery, showText, sourceFilter, isCanvasMode]);
 
   const folders = snapshot?.folders ?? [];
   const handleSaveUrl = async (event: FormEvent) => {
@@ -203,94 +204,98 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
           })}
         </div>
 
-        {/* Source segmented toggle */}
-        <div
-          style={{
-            display: 'inline-flex',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '6px',
-            overflow: 'hidden',
-          }}
-        >
-          {(['all', 'x', 'web'] as const).map((source, index, sources) => {
-            const active = sourceFilter === source;
-            const label = source === 'all' ? 'All' : source === 'x' ? 'X' : 'Web';
-            return (
-              <button
-                key={source}
-                onClick={() => setSourceFilter(source)}
+        {!isCanvasMode && (
+          <>
+            {/* Source segmented toggle */}
+            <div
+              style={{
+                display: 'inline-flex',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                overflow: 'hidden',
+              }}
+            >
+              {(['all', 'x', 'web'] as const).map((source, index, sources) => {
+                const active = sourceFilter === source;
+                const label = source === 'all' ? 'All' : source === 'x' ? 'X' : 'Web';
+                return (
+                  <button
+                    key={source}
+                    onClick={() => setSourceFilter(source)}
+                    style={{
+                      padding: '4px 10px',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                      color: active ? theme.text : theme.textSecondary,
+                      backgroundColor: active
+                        ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRight: index < sources.length - 1 ? `1px solid ${theme.border}` : 'none',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            <form onSubmit={handleSaveUrl} style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '220px' }}>
+              <input
+                value={saveUrl}
+                onChange={(e) => {
+                  setSaveUrl(e.target.value);
+                  if (saveState.status !== 'saving') setSaveState({ status: 'idle', message: '' });
+                }}
+                placeholder="Save URL"
+                disabled={saveState.status === 'saving'}
                 style={{
-                  padding: '4px 10px',
+                  width: '180px',
+                  padding: '5px 10px',
                   fontSize: '11px',
-                  fontWeight: 500,
-                  color: active ? theme.text : theme.textSecondary,
-                  backgroundColor: active
-                    ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
-                    : 'transparent',
-                  border: 'none',
-                  borderRight: index < sources.length - 1 ? `1px solid ${theme.border}` : 'none',
-                  cursor: 'pointer',
+                  color: theme.text,
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                  border: `1px solid ${saveState.status === 'error' ? '#dc2626' : theme.border}`,
+                  borderRadius: '6px',
+                  outline: 'none',
+                }}
+              />
+              <button
+                type="submit"
+                disabled={!saveUrl.trim() || saveState.status === 'saving'}
+                style={{
+                  padding: '5px 10px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: theme.text,
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  cursor: saveUrl.trim() && saveState.status !== 'saving' ? 'pointer' : 'default',
+                  opacity: saveUrl.trim() && saveState.status !== 'saving' ? 1 : 0.55,
                 }}
               >
-                {label}
+                {saveState.status === 'saving' ? 'Saving' : 'Save'}
               </button>
-            );
-          })}
-        </div>
-
-        <form onSubmit={handleSaveUrl} style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '220px' }}>
-          <input
-            value={saveUrl}
-            onChange={(e) => {
-              setSaveUrl(e.target.value);
-              if (saveState.status !== 'saving') setSaveState({ status: 'idle', message: '' });
-            }}
-            placeholder="Save URL"
-            disabled={saveState.status === 'saving'}
-            style={{
-              width: '180px',
-              padding: '5px 10px',
-              fontSize: '11px',
-              color: theme.text,
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-              border: `1px solid ${saveState.status === 'error' ? '#dc2626' : theme.border}`,
-              borderRadius: '6px',
-              outline: 'none',
-            }}
-          />
-          <button
-            type="submit"
-            disabled={!saveUrl.trim() || saveState.status === 'saving'}
-            style={{
-              padding: '5px 10px',
-              fontSize: '11px',
-              fontWeight: 600,
-              color: theme.text,
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-              border: `1px solid ${theme.border}`,
-              borderRadius: '6px',
-              cursor: saveUrl.trim() && saveState.status !== 'saving' ? 'pointer' : 'default',
-              opacity: saveUrl.trim() && saveState.status !== 'saving' ? 1 : 0.55,
-            }}
-          >
-            {saveState.status === 'saving' ? 'Saving' : 'Save'}
-          </button>
-          {saveState.message && (
-            <span
-              style={{
-                maxWidth: '120px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: '10px',
-                color: saveState.status === 'error' ? '#dc2626' : theme.textSecondary,
-              }}
-              title={saveState.message}
-            >
-              {saveState.message}
-            </span>
-          )}
-        </form>
+              {saveState.message && (
+                <span
+                  style={{
+                    maxWidth: '120px',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                    fontSize: '10px',
+                    color: saveState.status === 'error' ? '#dc2626' : theme.textSecondary,
+                  }}
+                  title={saveState.message}
+                >
+                  {saveState.message}
+                </span>
+              )}
+            </form>
+          </>
+        )}
 
         {/* Search */}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
