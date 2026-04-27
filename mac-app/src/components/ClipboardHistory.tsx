@@ -6451,16 +6451,13 @@ export default function ClipboardHistory() {
           borderTop: `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
-          display: bookmarksCanvasChromeActive ? 'none' : 'flex',
+          display: footerChromeHidden ? 'none' : 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           fontSize: '11px',
           color: theme.textSecondary,
           userSelect: 'none',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          opacity: footerChromeHidden ? 0 : 1,
-          pointerEvents: footerChromeHidden ? 'none' : 'auto',
-          transition: 'opacity 0.18s ease',
         }}
       >
         {/* Left side: sidebar toggle + plan info (quotas or stats) */}
