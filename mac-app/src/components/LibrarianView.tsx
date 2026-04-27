@@ -1707,6 +1707,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     fontWeight: 400,
     letterSpacing: 0,
   };
+  const readerTopFadeVisible = contentMode === 'markdown' ? markdownEditorEdgeFades.top : renderedDocumentTopFade;
 
   const wikiDisplay = useMemo(() => {
     if (selectedItemType !== 'wiki' || !activeReading) return null;
@@ -3964,6 +3965,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         )}
 
         {/* Scrollable content area */}
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
         <div
           ref={contentScrollRef}
           onScroll={(e) => {
@@ -3992,22 +3994,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               position: 'relative',
             }}
           >
-            {contentMode !== 'markdown' && (
-              <div
-                aria-hidden="true"
-                style={{
-                  position: 'sticky',
-                  top: 0,
-                  height: '28px',
-                  marginBottom: '-28px',
-                  pointerEvents: 'none',
-                  background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 18%, transparent 100%)`,
-                  opacity: renderedDocumentTopFade ? 1 : 0,
-                  zIndex: 1,
-                  transition: 'opacity 0.12s ease',
-                }}
-              />
-            )}
             {contentMode === 'markdown' ? (
               /* Markdown edit mode - textarea */
               <div
@@ -4259,21 +4245,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     })}
                   </div>
                 )}
-                <div
-                  aria-hidden="true"
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: '28px',
-                    pointerEvents: 'none',
-                    background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 18%, transparent 100%)`,
-                    opacity: markdownEditorEdgeFades.top ? 1 : 0,
-                    zIndex: 1,
-                    transition: 'opacity 0.12s ease',
-                  }}
-                />
               </div>
             ) : (
               /* View mode - markdown renderer */
@@ -4832,6 +4803,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             Select a page
           </div>
         )}
+        </div>
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '24px',
+            pointerEvents: 'none',
+            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 30%, transparent 100%)`,
+            opacity: activeReading && readerTopFadeVisible ? 0.86 : 0,
+            zIndex: 3,
+            transition: 'opacity 0.12s ease',
+          }}
+        />
         </div>
         </Fragment>
         )}
