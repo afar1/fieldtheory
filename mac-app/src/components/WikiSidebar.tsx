@@ -1,6 +1,7 @@
 import { memo, useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
+import { SidebarFolderIcon, SidebarMarkdownIcon, SidebarRecentIcon } from './SidebarIcons';
 
 type SortMode = 'alpha' | 'time';
 
@@ -1506,20 +1507,7 @@ function TreeNode({
           backgroundColor: isDropTarget ? dropBg : 'transparent',
         }}
       >
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          fill="currentColor"
-          style={{
-            transition: 'transform 0.15s ease',
-            transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            flexShrink: 0,
-            color: theme.textSecondary,
-          }}
-        >
-          <path d="M2 1l4 3-4 3V1z" />
-        </svg>
+        <SidebarFolderIcon color={theme.textSecondary} />
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label}</span>
         <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
           {itemCount}
@@ -1840,7 +1828,7 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
         position: 'relative',
         minHeight: '28px',
         boxSizing: 'border-box',
-        padding: `6px 28px 6px ${28 + depth * 12}px`,
+        padding: `6px 28px 6px ${12 + depth * 12}px`,
         cursor: 'pointer',
         backgroundColor: isSelected
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
@@ -1883,6 +1871,7 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
           />
         ) : (
           <>
+            <SidebarMarkdownIcon color={theme.textSecondary} />
             <div style={{
               fontSize: '12px',
               fontWeight: 500,
@@ -1986,6 +1975,9 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
     userSelect: 'none',
   };
   const itemStyle = (isSelected: boolean): React.CSSProperties => ({
+    display: 'flex',
+    alignItems: 'center',
+    gap: '6px',
     padding: '5px 12px 5px 20px',
     fontSize: '11.5px',
     cursor: 'pointer',
@@ -2018,20 +2010,8 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
         />
       )}
       <div style={headerStyle} onClick={onToggleCollapsed}>
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          fill="currentColor"
-          style={{
-            transition: 'transform 0.15s ease',
-            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
-            flexShrink: 0,
-          }}
-        >
-          <path d="M2 1l4 3-4 3V1z" />
-        </svg>
-        <span>Recent</span>
+        <SidebarRecentIcon color={theme.textSecondary} />
+        <span>Recents</span>
       </div>
       {!collapsed && visibleRecent.entries.map((e) => {
         const id = `${e.kind}:${e.path}`;
@@ -2045,7 +2025,10 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
             onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
             onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
           >
-            {e.title}
+            <SidebarMarkdownIcon color={theme.textSecondary} />
+            <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {e.title}
+            </span>
           </div>
         );
       })}

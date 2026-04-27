@@ -12,6 +12,7 @@ import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
+import { SidebarFolderIcon, SidebarMarkdownIcon } from './SidebarIcons';
 import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 /** Inline text input used for both "new command" and "rename command" flows.
@@ -1190,10 +1191,11 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '8px',
+                    gap: '6px',
                     padding: '12px 12px 6px',
                   }}
                 >
+                  <SidebarFolderIcon color={theme.textSecondary} />
                   <span
                     style={{
                       fontSize: '10px',
@@ -1312,16 +1314,28 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     ) : (
                       <div
                         style={{
-                          fontSize: '12px',
-                          fontWeight: 500,
-                          color: theme.text,
-                          lineHeight: 1.3,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          minWidth: 0,
                         }}
                       >
-                        {cmd.displayName}
+                        <SidebarMarkdownIcon color={theme.textSecondary} />
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            color: theme.text,
+                            lineHeight: 1.3,
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {cmd.displayName}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1361,7 +1375,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     outline: 'none',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <SidebarMarkdownIcon color={theme.textSecondary} />
                     <div
                       style={{
                         fontSize: '12px',
