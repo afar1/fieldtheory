@@ -1177,6 +1177,9 @@ export class DynamicIslandManager extends EventEmitter {
     if (this.autoHideEnabled === next) return;
     this.autoHideEnabled = next;
     if (this.autoHideEnabled) {
+      const initialTarget = this.shouldForceAutoHideReveal() ? 1 : this.computeAutoHideTargetFromCursor();
+      this.autoHideRenderedProgress = initialTarget;
+      this.applyAutoHideProgress(initialTarget);
       this.startAutoHidePolling();
       this.tickAutoHide();
     } else {

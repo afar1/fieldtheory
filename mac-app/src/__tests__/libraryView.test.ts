@@ -46,6 +46,7 @@ import {
   getSelectedWikiAutoExpandKey,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
+  orderTopLevelSidebarNodes,
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
@@ -751,6 +752,17 @@ describe('recursive sidebar tree helpers', () => {
       timestamp,
     },
   });
+  const bookmarksAction = (): LibrarySidebarNode => ({
+    kind: 'file',
+    id: 'bookmarks:root',
+    item: {
+      id: 'bookmarks:root',
+      title: 'View bookmarks',
+      type: 'bookmarks',
+      absPath: '',
+      timestamp: 0,
+    },
+  });
 
   it('sorts date mode with newest file timestamps first', () => {
     const result = sortSidebarNodes([
@@ -763,6 +775,47 @@ describe('recursive sidebar tree helpers', () => {
       'Newest',
       'Middle',
       'Old',
+    ]);
+  });
+
+  it('alphabetizes combined top-level sidebar nodes in alpha mode', () => {
+    const artifactRoot: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'artifacts',
+      name: 'artifacts',
+      label: 'Artifacts',
+      relPath: 'artifacts',
+      rootPath: 'artifacts',
+      builtin: false,
+      canCreateFile: false,
+      children: [],
+    };
+    const result = orderTopLevelSidebarNodes([
+      dir('scratchpad'),
+      dir('plans'),
+      dir('debates'),
+      dir('entries'),
+      {
+        kind: 'dir',
+        id: 'root:/team',
+        name: 'Team Markdown',
+        label: 'Team Markdown',
+        relPath: '',
+        rootPath: '/team',
+        builtin: false,
+        canCreateFile: true,
+        children: [],
+      },
+      artifactRoot,
+    ], 'alpha');
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Artifacts',
+      'Debates',
+      'Entries',
+      'Plans',
+      'Scratchpad',
+      'Team Markdown',
     ]);
   });
 
@@ -787,18 +840,39 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
-  it('groups bookmark folders under a synthetic bookmarks directory', () => {
+  it('replaces bookmark taxonomy folders with a single bookmarks action', () => {
     const nodes = [dir('entries'), dir('domains'), dir('categories')];
     const result = virtualizeBookmarksGroup(nodes, root);
-    const group = result.find((node) => node.kind === 'dir' && node.name === 'bookmarks-from-x');
-    expect(group?.kind).toBe('dir');
-    if (group?.kind !== 'dir') return;
-    expect(group.children.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
+    expect(result.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
+      'entries',
       'bookmarks:root',
-      'categories',
-      'domains',
     ]);
+    expect(result.some((node) => node.kind === 'dir' && node.label === 'Bookmarks from x.com')).toBe(false);
+    const bookmarksNode = result.find((node) => node.id === 'bookmarks:root');
+    expect(bookmarksNode?.kind).toBe('file');
+    if (bookmarksNode?.kind !== 'file') return;
+    expect(bookmarksNode.item).toMatchObject({ title: 'View bookmarks', type: 'bookmarks' });
     expect(result.some((node) => node.kind === 'dir' && node.name === 'categories')).toBe(false);
+  });
+
+  it('renders the raw bookmarks-from-x folder as the bookmarks action', () => {
+    const nodes = [dir('entries'), dir('bookmarks-from-x'), dir('domains')];
+    const result = virtualizeBookmarksGroup(nodes, root);
+    expect(result.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
+      'entries',
+      'bookmarks:root',
+    ]);
+    expect(result.some((node) => node.kind === 'dir' && node.name === 'bookmarks-from-x')).toBe(false);
+  });
+
+  it('renders a real bookmarks data folder as the bookmarks action', () => {
+    const nodes = [dir('entries'), dir('bookmarks', [file('Saved bookmark', 1)])];
+    const result = virtualizeBookmarksGroup(nodes, root);
+    expect(result.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
+      'entries',
+      'bookmarks:root',
+    ]);
+    expect(result.some((node) => node.kind === 'dir' && node.name === 'bookmarks')).toBe(false);
   });
 
   it('leaves the tree reference alone when no bookmark folders exist', () => {
@@ -869,6 +943,25 @@ describe('recursive sidebar tree helpers', () => {
     expect(filterHiddenDefaultSidebarNodes(nodes, [])).toBe(nodes);
   });
 
+  it('hides the legacy builtin concepts folder without touching external concepts roots', () => {
+    const builtinConcepts = dir('concepts');
+    const externalConcepts: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'root:/external-concepts',
+      name: 'concepts',
+      label: 'Concepts',
+      relPath: '',
+      rootPath: '/external-concepts',
+      builtin: false,
+      canCreateFile: true,
+      children: [file('Concept note', 1)],
+    };
+
+    const result = filterHiddenDefaultSidebarNodes([builtinConcepts, externalConcepts], []);
+
+    expect(result).toEqual([externalConcepts]);
+  });
+
   it('promotes the builtin wiki children without flattening external roots', () => {
     const builtinRoot: LibrarySidebarNode = {
       kind: 'dir',
@@ -902,6 +995,24 @@ describe('recursive sidebar tree helpers', () => {
     ]);
     expect(result).not.toContain(builtinRoot);
     expect(result).toContain(externalRoot);
+  });
+
+  it('promotes the bookmarks action out of a wrapper root', () => {
+    const bookmarkRoot: LibrarySidebarNode = {
+      kind: 'dir',
+      id: 'root:/bookmarks',
+      name: 'Bookmarks',
+      label: 'Bookmarks',
+      relPath: '',
+      rootPath: '/bookmarks',
+      builtin: false,
+      canCreateFile: false,
+      children: [
+        bookmarksAction(),
+      ],
+    };
+
+    expect(flattenBuiltinSidebarRoots([bookmarkRoot]).map((node) => node.id)).toEqual(['bookmarks:root']);
   });
 
   it('resolves Finder paths for real folders and keeps virtual bookmarks honest', () => {

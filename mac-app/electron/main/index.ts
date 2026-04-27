@@ -8523,16 +8523,19 @@ if (!gotTheLock) {
     // Check if the configured transcription engine is ready
     const modelDownloaded = await isTranscriptionEngineReady();
 
-    // Check if user is authenticated
+    // Check if user is authenticated. A returning user with a stored local
+    // session can use offline/local features while token refresh catches up.
     const isAuthenticated = authManager?.isAuthenticated() ?? false;
+    const canUseLocalAccount = isAuthenticated || (authManager?.hasEverBeenAuthenticated() ?? false);
 
-    // All three permissions, model download, AND authentication are required for full app functionality
+    // All three permissions, model download, and a known local account are
+    // required for full local app functionality.
     const isFullyReady =
       micStatus === 'granted' &&
       accessibilityStatus &&
       screenStatus === 'granted' &&
       modelDownloaded &&
-      isAuthenticated;
+      canUseLocalAccount;
 
     if (isFullyReady) {
       // All requirements met - mark onboarding complete and allow app access
@@ -8565,9 +8568,9 @@ if (!gotTheLock) {
       const hasAllPermissionsAndModel = hasAllPermissions && modelDownloaded;
 
       let startStep: number;
-      if (hasAllPermissionsAndModel && !isAuthenticated) {
+      if (hasAllPermissionsAndModel && !canUseLocalAccount) {
         // Only auth is missing - go straight to account phase
-        startStep = 2; // account phase
+        startStep = OnboardingStep.ACCOUNT;
       } else if (hasAllPermissions && !modelDownloaded) {
         // Only model is missing - go straight to model download phase
         startStep = OnboardingStep.MODEL;
