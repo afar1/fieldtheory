@@ -716,6 +716,27 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(getTarget()).toBe(0);
   });
 
+  it('hides immediately when auto-hide starts with the cursor below the menu bar', () => {
+    testState.setPrimaryDisplay({
+      boundsWidth: 1728,
+      workAreaWidth: 1728,
+      internal: true,
+    });
+    testState.setCursorPoint({ x: 864, y: 48 });
+
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const unified = testState.getWindowBySide('unified');
+    expect(unified?.isVisible()).toBe(true);
+
+    manager.setAutoHide(true);
+
+    expect(unified?.isVisible()).toBe(false);
+  });
+
   it('redirects legacy history-visible open requests to the main history window without expanding the left pill', () => {
     manager = new DynamicIslandManager();
     manager.setClipboardManager({

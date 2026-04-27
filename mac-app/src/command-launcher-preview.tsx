@@ -12,15 +12,49 @@ interface LauncherPreviewCommandsAPI {
   onLauncherPreview: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
 }
 
+interface LauncherPreviewThemeAPI {
+  getTheme: () => Promise<boolean>;
+  onThemeChanged?: (callback: (isDark: boolean) => void) => () => void;
+}
+
 const commandsAPI = window.commandsAPI as unknown as LauncherPreviewCommandsAPI;
+const themeAPI = window.themeAPI as unknown as LauncherPreviewThemeAPI | undefined;
 const PREVIEW_PADDING = 20;
+
+function readStoredIsDarkMode(): boolean {
+  return localStorage.getItem('darkMode') === 'true';
+}
+
+function writeStoredIsDarkMode(isDark: boolean): void {
+  localStorage.setItem('darkMode', String(isDark));
+}
 
 function CommandLauncherPreview() {
   const [preview, setPreview] = useState<LauncherPreviewPayload | null>(null);
+  const [isDarkMode, setIsDarkMode] = useState(readStoredIsDarkMode);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     return commandsAPI.onLauncherPreview(setPreview);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    themeAPI?.getTheme?.().then((dark) => {
+      if (cancelled) return;
+      setIsDarkMode(dark);
+      writeStoredIsDarkMode(dark);
+    });
+
+    const unsubscribe = themeAPI?.onThemeChanged?.((dark) => {
+      setIsDarkMode(dark);
+      writeStoredIsDarkMode(dark);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
   }, []);
 
   useLayoutEffect(() => {
@@ -72,12 +106,13 @@ function CommandLauncherPreview() {
           }}
         >
           {preview.kind === 'bookmark' ? (
-            <BookmarkCard bookmark={preview.bookmark} isDark />
+            <BookmarkCard bookmark={preview.bookmark} isDark={isDarkMode} />
           ) : (
             <MarkdownPreviewCard
               title={preview.title}
               filePath={preview.filePath}
               content={preview.content}
+              isDark={isDarkMode}
             />
           )}
         </div>

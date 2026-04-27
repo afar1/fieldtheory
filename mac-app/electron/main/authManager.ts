@@ -41,7 +41,7 @@ class FileStorage implements SupportedStorage {
    * Get raw session data for manual recovery when getSession() returns null
    * but we may still have a valid refresh_token.
    */
-  getRawSessionData(): { access_token?: string; refresh_token?: string; expires_at?: number; user?: { email?: string } } | null {
+  getRawSessionData(): Partial<Session> | null {
     try {
       const authKeyPatterns = ['auth-token', 'supabase.auth.token', 'session'];
       const keys = Array.from(this.storage.keys());
@@ -599,13 +599,47 @@ export class AuthManager extends EventEmitter {
         log.debug('Stored session for:', rawSession.user?.email || 'unknown', `(expired ${expiredAgoMinutes} min ago)`);
 
         // Use coordinated refresh to prevent concurrent attempts
-        await this.coordinatedRefresh(rawSession.refresh_token, 'restore');
+        const refreshed = await this.coordinatedRefresh(rawSession.refresh_token, 'restore');
+        if (!refreshed) {
+          await this.restoreLocalSessionWithoutRefresh(rawSession);
+        }
       } else {
         log.debug('No stored session found - user must login');
       }
     } catch (err) {
       log.warn('Failed to restore session:', err);
     }
+  }
+
+  /**
+   * Keep a returning user locally signed in when the stored token cannot be
+   * refreshed at startup. This preserves offline/restart behavior while later
+   * API calls still depend on a server-accepted access token.
+   */
+  private async restoreLocalSessionWithoutRefresh(rawSession: Partial<Session>): Promise<boolean> {
+    if (!rawSession.access_token || !rawSession.refresh_token || !rawSession.user?.id) {
+      log.warn('Stored session was not usable for local restore');
+      return false;
+    }
+
+    this.session = rawSession as Session;
+    this.writeCliSessionMirror(this.session);
+    this.hasEverAuthenticated = true;
+
+    const userId = this.session.user.id;
+    const shouldEmitUserChanged = userId !== this.lastEmittedUserId;
+    this.lastEmittedUserId = userId;
+
+    if (shouldEmitUserChanged && this.userDataManager) {
+      await this.userDataManager.setCurrentUser(userId);
+      await this.userDataManager.migrateExistingData(userId);
+      this.emit('userChanged', userId);
+    }
+
+    log.warn('Using stored local session until server refresh succeeds:', this.session.user?.email);
+    this.emit('sessionChanged', this.session);
+    this.scheduleTokenRefresh();
+    return true;
   }
 
   /**
