@@ -220,6 +220,36 @@ describe('flattenLibraryDirectoriesForLauncher', () => {
       }),
     ]);
   });
+
+  it('infers directory rows from file paths when the tree is flat', () => {
+    const items = flattenLibraryDirectoriesForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'scratchpad/projects/plan', absPath: '/wiki/scratchpad/projects/plan.md', name: 'plan', title: 'Plan', lastUpdated: 1 },
+        ],
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        type: 'directory',
+        name: 'scratchpad',
+        displayName: 'scratchpad',
+        directoryPath: '/wiki/scratchpad',
+        directoryRelPath: 'scratchpad',
+      }),
+      expect.objectContaining({
+        type: 'directory',
+        name: 'projects',
+        displayName: 'scratchpad/projects',
+        directoryPath: '/wiki/scratchpad/projects',
+        directoryRelPath: 'scratchpad/projects',
+      }),
+    ]);
+  });
 });
 
 describe('flattenBookmarkTaxonomyRootsForLauncher', () => {

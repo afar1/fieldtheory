@@ -31,6 +31,7 @@ export const LIBRARY_DEFAULT_FOLDER_IDS = [
 ] as const;
 export type LibraryDefaultFolderId = typeof LIBRARY_DEFAULT_FOLDER_IDS[number];
 const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS);
+const LEGACY_HIDDEN_DEFAULT_FOLDER_IDS = ['concepts'] as const;
 const LIBRARY_DRAG_DATA_TYPE = 'application/x-fieldtheory-library-item';
 const LIBRARY_DRAG_TEXT_PREFIX = 'fieldtheory-library-item:';
 
@@ -256,6 +257,10 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
   });
 }
 
+export function orderTopLevelSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alpha'): SidebarNode[] {
+  return sortMode === 'alpha' ? sortSidebarNodes(nodes, 'alpha') : nodes;
+}
+
 function getLibraryFolderVisibilityId(node: SidebarNode): string | null {
   if (node.kind !== 'dir') return null;
   if (node.id === 'artifacts') return 'artifacts';
@@ -275,7 +280,7 @@ function getUserFolderVisibilityId(node: SidebarNode): string | null {
 }
 
 export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFolderIds: string[]): SidebarNode[] {
-  const hidden = new Set(hiddenFolderIds);
+  const hidden = new Set([...LEGACY_HIDDEN_DEFAULT_FOLDER_IDS, ...hiddenFolderIds]);
   const filterNodes = (items: SidebarNode[]): { nodes: SidebarNode[]; changed: boolean } => {
     let changed = false;
     const filtered: SidebarNode[] = [];
@@ -311,6 +316,9 @@ export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFold
 
 export function flattenBuiltinSidebarRoots(nodes: SidebarNode[]): SidebarNode[] {
   return nodes.flatMap((node) => {
+    if (node.kind === 'dir' && node.children.some((child) => child.id === BOOKMARKS_ITEM_ID)) {
+      return node.children;
+    }
     if (node.kind === 'dir' && node.builtin && node.relPath === '' && node.id.startsWith('root:')) {
       return node.children;
     }
@@ -505,36 +513,33 @@ export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot
   if (!root.builtin) return nodes;
 
   const bookmarkFolderNames = new Set(['categories', 'domains', 'entities']);
-  const bookmarkNodes: SidebarNode[] = [];
+  const isBookmarkSourceNode = (node: SidebarNode): boolean => {
+    if (node.kind === 'file') return node.id === BOOKMARKS_ITEM_ID;
+    // These directories remain on disk; the sidebar renders them through the
+    // dedicated bookmarks canvas/list entry instead of as ordinary folders.
+    if (bookmarkFolderNames.has(node.name) || node.name === 'bookmarks-from-x' || node.name.toLowerCase() === 'bookmarks') return true;
+    return node.children.some(isBookmarkSourceNode);
+  };
   const remainingNodes: SidebarNode[] = [];
+  let foundBookmarkSourceNode = false;
 
   for (const node of nodes) {
-    if (node.kind === 'dir' && bookmarkFolderNames.has(node.name)) {
-      bookmarkNodes.push(node);
-    } else {
+    if (node.kind !== 'dir') {
       remainingNodes.push(node);
+      continue;
     }
+    if (isBookmarkSourceNode(node)) {
+      foundBookmarkSourceNode = true;
+      continue;
+    }
+    remainingNodes.push(node);
   }
 
-  if (bookmarkNodes.length === 0) return nodes;
+  if (!foundBookmarkSourceNode) return nodes;
 
   return sortSidebarNodes([
     ...remainingNodes,
-    {
-      kind: 'dir',
-      id: `${root.path}::bookmarks-from-x`,
-      name: 'bookmarks-from-x',
-      label: 'Bookmarks from x.com',
-      relPath: 'bookmarks-from-x',
-      rootPath: root.path,
-      builtin: true,
-      canCreateFile: false,
-      hasUnread: bookmarkNodes.some(sidebarNodeHasUnread),
-      children: [
-        { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
-        ...sortSidebarNodes(bookmarkNodes, sortMode),
-      ],
-    },
+    { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
   ], sortMode);
 }
 
@@ -911,12 +916,20 @@ function WikiSidebar({
 
     const libraryRootNodes = libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath));
     roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
-    return filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
+    return orderTopLevelSidebarNodes(filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders), sortMode);
   }, [artifacts, hiddenDefaultFolders, libraryRoots, sortMode, taggedDocs]);
 
   const filteredSidebarRoots = useMemo(
     () => filterSidebarNodes(sidebarRoots, searchQuery),
     [sidebarRoots, searchQuery]
+  );
+  const bookmarksActionItem = useMemo(() => {
+    const node = sidebarRoots.find((item) => item.id === BOOKMARKS_ITEM_ID);
+    return node?.kind === 'file' ? node.item : null;
+  }, [sidebarRoots]);
+  const visibleSidebarRoots = useMemo(
+    () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
+    [filteredSidebarRoots]
   );
 
   const flatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots), [filteredSidebarRoots]);
@@ -930,7 +943,7 @@ function WikiSidebar({
   const visiblePages = flatItems.length;
   const isSearching = searchQuery.trim().length > 0;
 
-  const emptyWiki = sidebarRoots.length === 0;
+  const emptyWiki = visibleSidebarRoots.length === 0 && !bookmarksActionItem;
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -1186,11 +1199,11 @@ function WikiSidebar({
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
         </div>
-      ) : filteredSidebarRoots.length === 0 ? (
+      ) : visibleSidebarRoots.length === 0 ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages match that search.
         </div>
-      ) : filteredSidebarRoots.map((node) => (
+      ) : visibleSidebarRoots.map((node) => (
         <TreeNode
           key={node.id}
           node={node}
@@ -1267,6 +1280,15 @@ function WikiSidebar({
         </div>
       )}
 
+      {!isSearching && bookmarksActionItem && (
+        <BookmarksShortcutBlock
+          item={bookmarksActionItem}
+          isSelected={selectedId === bookmarksActionItem.id}
+          theme={theme}
+          onOpen={() => onSelectItem(bookmarksActionItem)}
+        />
+      )}
+
       {!isSearching && recent.length > 0 && (
         <RecentBlock
           recent={filterStaleRecent(recent, wikiTree)}
@@ -1274,6 +1296,7 @@ function WikiSidebar({
           onExpand={setRecentExpanded}
           collapsed={recentCollapsed}
           onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
+          showDivider={!bookmarksActionItem}
           selectedId={selectedId}
           theme={theme}
           onOpenWiki={(relPath, title) =>
@@ -1940,13 +1963,14 @@ interface RecentBlockProps {
   onExpand: (expanded: boolean) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  showDivider?: boolean;
   selectedId: string | null;
   theme: ReturnType<typeof useTheme>['theme'];
   onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
   if (visibleRecent.total === 0) return null;
 
@@ -1983,14 +2007,16 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
 
   return (
     <div style={{ marginBottom: '4px' }}>
-      <hr
-        style={{
-          border: 'none',
-          height: '1px',
-          margin: '8px 12px 4px',
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-        }}
-      />
+      {showDivider && (
+        <hr
+          style={{
+            border: 'none',
+            height: '1px',
+            margin: '8px 12px 4px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+          }}
+        />
+      )}
       <div style={headerStyle} onClick={onToggleCollapsed}>
         <svg
           width="8"
@@ -2029,6 +2055,47 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
       {!collapsed && expanded && (
         <div onClick={() => onExpand(false)} style={showMoreStyle}>Show less</div>
       )}
+    </div>
+  );
+}
+
+function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
+  item: UnifiedItem;
+  isSelected: boolean;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onOpen: () => void;
+}) {
+  return (
+    <div>
+      <hr
+        style={{
+          border: 'none',
+          height: '1px',
+          margin: '8px 12px 4px',
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+        }}
+      />
+      <div
+        onClick={onOpen}
+        style={{
+          padding: '6px 12px',
+          fontSize: '12px',
+          fontWeight: 500,
+          color: theme.textSecondary,
+          display: 'flex',
+          alignItems: 'center',
+          gap: '6px',
+          cursor: 'pointer',
+          userSelect: 'none',
+          backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
+          borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
+        }}
+        onMouseEnter={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+        onMouseLeave={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = 'transparent'; }}
+      >
+        <span style={{ width: '6px', flexShrink: 0 }} />
+        <span>{item.title}</span>
+      </div>
     </div>
   );
 }

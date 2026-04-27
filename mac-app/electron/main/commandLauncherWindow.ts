@@ -73,9 +73,9 @@ export class CommandLauncherWindow {
   private _isShowing: boolean = false;
 
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 320;
+  private readonly WINDOW_WIDTH = 425;
   private readonly WINDOW_HEIGHT_COLLAPSED = 36;
-  private readonly WINDOW_HEIGHT_RESULTS = 300;
+  private readonly WINDOW_HEIGHT_RESULTS = 354;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
   private readonly PREVIEW_WINDOW_MIN_HEIGHT = 120;
