@@ -436,6 +436,9 @@ export default function SettingsPanel({
   // Show in Dock - whether app appears in Dock and Cmd+Tab.
   const [showInDock, setShowInDock] = useState(false);
 
+  // Click-away dismissal - whether the panel hides when another app gets focus.
+  const [clickAwayToDismiss, setClickAwayToDismiss] = useState(true);
+
   // Show fieldtheory.dev link in footer.
   // showFieldTheoryLink always true — toggle removed from UI
 
@@ -545,6 +548,11 @@ export default function SettingsPanel({
       // Load show in dock setting
       window.clipboardAPI.getShowInDock?.().then(show => {
         setShowInDock(show);
+      });
+
+      // Load click-away dismissal setting
+      window.clipboardAPI.getClickAwayToDismiss?.().then(enabled => {
+        setClickAwayToDismiss(enabled);
       });
 
       // Load in-app performance HUD setting.
@@ -775,6 +783,20 @@ export default function SettingsPanel({
       }
     } catch (err) {
       console.error('Failed to toggle performance HUD:', err);
+    }
+  };
+
+  // Handler for toggling click-away dismissal.
+  const handleToggleClickAwayToDismiss = async (enabled: boolean) => {
+    if (!window.clipboardAPI?.setClickAwayToDismiss) return;
+
+    try {
+      const success = await window.clipboardAPI.setClickAwayToDismiss(enabled);
+      if (success) {
+        setClickAwayToDismiss(enabled);
+      }
+    } catch (err) {
+      console.error('Failed to toggle click-away dismissal:', err);
     }
   };
 
@@ -1456,6 +1478,21 @@ export default function SettingsPanel({
             style={{ ...styles.toggle, backgroundColor: performanceHudEnabled ? theme.success : '#d1d5db' }}
           >
             <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Click away to dismiss</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Turn off to keep Field Theory open until Escape, the menu button, or the shortcut
+            </span>
+          </div>
+          <button
+            onClick={() => handleToggleClickAwayToDismiss(!clickAwayToDismiss)}
+            style={{ ...styles.toggle, backgroundColor: clickAwayToDismiss ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: clickAwayToDismiss ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
       </div>

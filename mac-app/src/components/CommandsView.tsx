@@ -12,6 +12,15 @@ import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
+import {
+  SIDEBAR_DARK_ICON_COLOR,
+  SIDEBAR_DARK_TEXT_COLOR,
+  SIDEBAR_ICON_TEXT_GAP,
+  SIDEBAR_LIGHT_ICON_COLOR,
+  SIDEBAR_LIGHT_TEXT_COLOR,
+  SidebarFolderIcon,
+  SidebarMarkdownIcon,
+} from './SidebarIcons';
 import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 /** Inline text input used for both "new command" and "rename command" flows.
@@ -154,7 +163,9 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   // Edit mode
   const [isEditing, setIsEditing] = useState(false);
   const [editContent, setEditContent] = useState('');
-  const [isSaving, setIsSaving] = useState(false);
+  const flushSaveRef = useRef<(() => Promise<boolean>) | null>(null);
+  const lastSavedContentRef = useRef<string | null>(null);
+  const lastSeededPathRef = useRef<string | null>(null);
 
   // Inline new command input
   const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
@@ -472,62 +483,63 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     };
   }, [applySidebarWidth, isResizing]);
 
-  // Check if content has been modified
-  const isDirty = isEditing && editContent !== (selectedCommand?.content ?? '');
+  // Check against the content last written to disk; selectedCommand.content is
+  // intentionally not round-tripped on every auto-save.
+  const isDirty = isEditing && editContent !== (lastSavedContentRef.current ?? selectedCommand?.content ?? '');
 
   // Enter edit mode
   const enterEditMode = useCallback(() => {
     if (selectedCommand) {
-      setEditContent(selectedCommand.content);
       setIsEditing(true);
     }
   }, [selectedCommand]);
 
-  // Exit edit mode (discard changes)
-  const exitEditMode = useCallback(() => {
-    setIsEditing(false);
-    setEditContent('');
+  const saveCommandContent = useCallback(async (filePath: string, content: string) => {
+    try {
+      const success = await window.commandsAPI?.saveCommand(filePath, content);
+      if (success) {
+        setSelectedCommand((prev) => prev && prev.filePath === filePath
+          ? { ...prev, content }
+          : prev
+        );
+        lastSavedContentRef.current = content;
+        return true;
+      }
+    } catch (err) {
+      console.error('Failed to save command:', err);
+    }
+    return false;
   }, []);
 
-  // Save changes
-  const saveChanges = useCallback(async () => {
-    if (!selectedCommand || !isDirty) return;
+  const flushCurrentEdit = useCallback(async () => {
+    const pendingSave = flushSaveRef.current;
+    if (pendingSave) return pendingSave();
+    if (!selectedCommand || !isDirty) return true;
+    return saveCommandContent(selectedCommand.filePath, editContent);
+  }, [editContent, isDirty, saveCommandContent, selectedCommand]);
 
-    setIsSaving(true);
-    try {
-      const success = await window.commandsAPI?.saveCommand(selectedCommand.filePath, editContent);
-      if (success) {
-        setIsEditing(false);
-        setEditContent('');
-        // Reload the command to get updated content
-        const updated = await window.commandsAPI?.getCommandByPath(selectedCommand.filePath);
-        if (updated) {
-          setSelectedCommand(updated);
-        }
-      }
-    } finally {
-      setIsSaving(false);
-    }
-  }, [selectedCommand, editContent, isDirty]);
+  const exitEditMode = useCallback(async () => {
+    const saved = await flushCurrentEdit();
+    if (!saved) return false;
+    setIsEditing(false);
+    setEditContent('');
+    lastSeededPathRef.current = null;
+    return true;
+  }, [flushCurrentEdit]);
 
   const switchToRenderedMode = useCallback(() => {
     if (!isEditing) return;
-    if (isDirty) {
-      void saveChanges();
-      return;
-    }
-    exitEditMode();
-  }, [exitEditMode, isDirty, isEditing, saveChanges]);
+    void exitEditMode();
+  }, [exitEditMode, isEditing]);
 
-  // Handle navigation with unsaved changes
-  const handleSelectCommand = useCallback((path: string) => {
-    if (isDirty) {
-      const confirmed = window.confirm('You have unsaved changes. Discard them?');
-      if (!confirmed) return;
-      exitEditMode();
+  // Save any command edit before switching files, matching Library behavior.
+  const handleSelectCommand = useCallback(async (path: string) => {
+    if (isEditing) {
+      const saved = await flushCurrentEdit();
+      if (!saved) return;
     }
     setSelectedPath(path);
-  }, [isDirty, exitEditMode]);
+  }, [flushCurrentEdit, isEditing]);
 
   // Load commands and watched dirs on mount
   useEffect(() => {
@@ -574,6 +586,41 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     }
     loadCommand();
   }, [selectedPath]);
+
+  // Seed editContent when entering markdown mode or switching files while
+  // editing. Guard by path so our own save updates do not reset the textarea.
+  useEffect(() => {
+    if (!isEditing || !selectedCommand) {
+      lastSeededPathRef.current = null;
+      return;
+    }
+    if (lastSeededPathRef.current === selectedCommand.filePath) return;
+    setEditContent(selectedCommand.content);
+    lastSavedContentRef.current = selectedCommand.content;
+    lastSeededPathRef.current = selectedCommand.filePath;
+  }, [isEditing, selectedCommand]);
+
+  // Debounced auto-save, matching Library's markdown editor behavior.
+  useEffect(() => {
+    flushSaveRef.current = null;
+    if (!isEditing || !selectedCommand) return;
+    if (editContent === lastSavedContentRef.current) return;
+
+    const targetPath = selectedCommand.filePath;
+    const targetContent = editContent;
+    let done = false;
+    const doSave = async () => {
+      if (done) return true;
+      done = true;
+      const saved = await saveCommandContent(targetPath, targetContent);
+      if (flushSaveRef.current === doSave) flushSaveRef.current = null;
+      return saved;
+    };
+
+    flushSaveRef.current = doSave;
+    const timer = setTimeout(() => { void doSave(); }, 400);
+    return () => clearTimeout(timer);
+  }, [editContent, isEditing, saveCommandContent, selectedCommand]);
 
   useEffect(() => {
     if (!initialCommandPath) return;
@@ -682,32 +729,24 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
         if (isEditing) {
-          if (isDirty) {
-            const confirmed = window.confirm('You have unsaved changes. Discard them?');
-            if (!confirmed) return;
-          }
-          exitEditMode();
+          void exitEditMode();
         } else if (selectedCommand) {
           enterEditMode();
         }
         return;
       }
 
-      // Cmd+S - save while editing
+      // Cmd+S - save while editing and return to rendered mode.
       if (e.key === 's' && e.metaKey && isEditing) {
         e.preventDefault();
-        saveChanges();
+        void exitEditMode();
         return;
       }
 
       // Escape: exit edit mode, then exit to clipboard
       if (e.key === 'Escape') {
         if (isEditing) {
-          if (isDirty) {
-            const confirmed = window.confirm('You have unsaved changes. Discard them?');
-            if (!confirmed) return;
-          }
-          exitEditMode();
+          void exitEditMode();
         } else if (focusImmersive) {
           setFocusImmersive(false);
         } else {
@@ -768,7 +807,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, isDirty, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, saveChanges, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath]);
 
   // Focus container on mount
   useEffect(() => {
@@ -821,6 +860,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     return groups;
   }, [filteredCommands, watchedDirs]);
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   // Add directory handler (from path input)
   const handleAddDirectory = useCallback(async (dirPath: string) => {
@@ -1190,15 +1231,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   style={{
                     display: 'flex',
                     alignItems: 'center',
-                    gap: '8px',
+                    gap: SIDEBAR_ICON_TEXT_GAP,
                     padding: '12px 12px 6px',
                   }}
                 >
+                  <SidebarFolderIcon color={sidebarIconColor} />
                   <span
                     style={{
                       fontSize: '10px',
                       fontWeight: 600,
-                      color: theme.textSecondary,
+                      color: sidebarTextColor,
                       flexShrink: 0,
                     }}
                     title={dirPath}
@@ -1312,16 +1354,28 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     ) : (
                       <div
                         style={{
-                          fontSize: '12px',
-                          fontWeight: 500,
-                          color: theme.text,
-                          lineHeight: 1.3,
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: SIDEBAR_ICON_TEXT_GAP,
+                          minWidth: 0,
                         }}
                       >
-                        {cmd.displayName}
+                        <SidebarMarkdownIcon color={sidebarIconColor} />
+                        <div
+                          style={{
+                            fontSize: '12px',
+                            fontWeight: 500,
+                            color: sidebarTextColor,
+                            lineHeight: 1.3,
+                            flex: 1,
+                            minWidth: 0,
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            whiteSpace: 'nowrap',
+                          }}
+                        >
+                          {cmd.displayName}
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1361,12 +1415,13 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     outline: 'none',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: SIDEBAR_ICON_TEXT_GAP }}>
+                    <SidebarMarkdownIcon color={sidebarIconColor} />
                     <div
                       style={{
                         fontSize: '12px',
                         fontWeight: 500,
-                        color: theme.text,
+                        color: sidebarTextColor,
                         lineHeight: 1.3,
                         flex: 1,
                         minWidth: 0,
@@ -1497,17 +1552,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={focusToolbarControlsVisible}
-                isEditing={isEditing}
-                isDirty={isDirty}
-                isSaving={isSaving}
-                onSave={saveChanges}
-                onCancel={() => {
-                  if (isDirty) {
-                    const confirmed = window.confirm('Discard changes?');
-                    if (!confirmed) return;
-                  }
-                  exitEditMode();
-                }}
                 onDelete={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
                 showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
@@ -1519,7 +1563,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               />
 
               {/* Command-specific trailing actions. */}
-              {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && !isEditing && (
+              {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && (
                 <button
                   type="button"
                   onClick={handleShareToggle}
@@ -1673,10 +1717,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   value={editContent}
                   onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}
-                  onBlur={() => {
-                    if (isDirty) void saveChanges();
-                    else exitEditMode();
-                  }}
                   style={{
                     flex: 1,
                     minHeight: '400px',
