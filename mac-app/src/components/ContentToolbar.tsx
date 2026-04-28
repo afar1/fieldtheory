@@ -416,9 +416,7 @@ export default function ContentToolbar({
         </button>
       )}
 
-      {/* Edit controls. Save/Cancel only render when their callbacks are
-          provided — LibrarianView dropped them in favor of auto-save, but
-          CommandsView still uses the manual save model. */}
+      {/* Optional edit controls for callers that use a manual save model. */}
       {isEditing ? (
         <>
           {isDirty && (

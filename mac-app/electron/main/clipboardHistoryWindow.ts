@@ -466,8 +466,10 @@ export class ClipboardHistoryWindow {
 
   private getBlurDismissState() {
     const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const clickAwayToDismiss = this.preferencesManager.getPreference('clickAwayToDismiss') ?? true;
     return {
       showInDock,
+      clickAwayToDismiss,
       // Only treat legacy immersive as blur-blocking when the renderer has not
       // opted into panel-like blur dismissal.
       immersive: this.isImmersiveMode && !this.immersiveDismissableOnBlur,
@@ -570,6 +572,7 @@ export class ClipboardHistoryWindow {
     if (Date.now() < this.blurDismissSuppressedUntil) return false;
     const state = this.getBlurDismissState();
     return !state.showInDock
+      && state.clickAwayToDismiss
       && !state.immersive
       && !state.sketch
       && !state.scenario
@@ -848,14 +851,13 @@ export class ClipboardHistoryWindow {
       this.window.on('ready-to-show', () => emit('ready-to-show'));
     }
 
-    // Dismiss when window loses focus (Alfred behavior).
-    // When showInDock is enabled, skip this entirely - user expects normal app behavior.
-    // When immersive mode is active, also skip - user positioned window intentionally.
+    // Dismiss when window loses focus (Alfred behavior), unless the user has
+    // disabled click-away dismissal or the active surface explicitly blocks it.
     this.window.on('blur', () => {
       const blurState = this.getBlurDismissState();
       this.logLifecycle(
         'window:blur-handler',
-        `showInDock=${blurState.showInDock} immersive=${blurState.immersive} sketch=${blurState.sketch} scenario=${blurState.scenario} recording=${blurState.recording}`
+        `showInDock=${blurState.showInDock} clickAwayToDismiss=${blurState.clickAwayToDismiss} immersive=${blurState.immersive} sketch=${blurState.sketch} scenario=${blurState.scenario} recording=${blurState.recording}`
       );
 
       if (!this.shouldAutoHideOnBlur()) {

@@ -527,6 +527,10 @@ interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
 
+  // Click-away dismissal
+  getClickAwayToDismiss?: () => Promise<boolean>;
+  setClickAwayToDismiss?: (enabled: boolean) => Promise<boolean>;
+
   // Show fieldtheory.dev link in footer
   getShowFieldTheoryLink?: () => Promise<boolean>;
   setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
@@ -1476,6 +1480,8 @@ interface LibrarianAPI {
   isCodexHookInstalled: () => Promise<boolean>;
   installCodexHook: () => Promise<boolean>;
   uninstallCodexHook: () => Promise<boolean>;
+  isCodexStopOnPendingEnabled: () => Promise<boolean>;
+  setCodexStopOnPendingEnabled: (enabled: boolean) => Promise<boolean>;
   // Discovery Frequency API
   getDiscoveryFrequency: () => Promise<string>;
   setDiscoveryFrequency: (frequency: string) => Promise<boolean>;
