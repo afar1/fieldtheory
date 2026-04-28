@@ -1,4 +1,4 @@
-import React, { memo } from 'react';
+import React, { memo, useRef } from 'react';
 import {
   View,
   Text,
@@ -10,9 +10,13 @@ import {
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
 import { TranscriptEntry } from '../types';
+import { useThemeColors } from '../services/theme';
 
 const MAX_PREVIEW_LINES = 3;
 const ENDING_WORD_COUNT = 3;
+// Long-press feel: must hold still for ~600ms; any movement > 8px cancels.
+const LONG_PRESS_MS = 600;
+const LONG_PRESS_MOVE_CANCEL_PX = 8;
 
 /**
  * Count words in text.
@@ -76,7 +80,6 @@ export interface TranscriptItemProps {
   selectionMode: boolean;
   isProcessingLLM: boolean;
   // Settings
-  showCursor: boolean;
   autoSeparate: boolean;
   // Editing state (only relevant when this item is being edited)
   isEditing: boolean;
@@ -84,7 +87,6 @@ export interface TranscriptItemProps {
   onEditTextChange: (text: string) => void;
   // Callbacks
   onToggleExpand: (id: string) => void;
-  onSendToCursor: (text: string) => void;
   onSpeak: (entry: TranscriptEntry) => void;
   onManualSeparate: (text: string, id: string) => void;
   onUnstack: (id: string) => void;
@@ -112,13 +114,11 @@ function TranscriptItemComponent({
   showDateHeader,
   selectionMode,
   isProcessingLLM,
-  showCursor,
   autoSeparate,
   isEditing,
   editText,
   onEditTextChange,
   onToggleExpand,
-  onSendToCursor,
   onSpeak,
   onManualSeparate,
   onUnstack,
@@ -129,6 +129,7 @@ function TranscriptItemComponent({
   onCancelEdit,
   onSaveEdit,
 }: TranscriptItemProps) {
+  const colors = useThemeColors();
   const shouldShowExpand = item.text.length > 160 || item.text.includes('\n');
   const stackCount = item.stackSegments?.length ?? 1;
   const isStacked = stackCount > 1;
@@ -142,11 +143,6 @@ function TranscriptItemComponent({
   const handleExpandPress = (event: GestureResponderEvent) => {
     event.stopPropagation();
     onToggleExpand(item.id);
-  };
-
-  const handleSendToCursorPress = (event: GestureResponderEvent) => {
-    event.stopPropagation();
-    onSendToCursor(item.text);
   };
 
   const handleFindTasksPress = (event: GestureResponderEvent) => {
@@ -172,9 +168,38 @@ function TranscriptItemComponent({
     }
   };
 
-  const handleLongPress = () => {
-    if (!selectionMode) {
+  // Custom long press: only fires after holding still for LONG_PRESS_MS.
+  // Any finger movement beyond LONG_PRESS_MOVE_CANCEL_PX cancels the timer.
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressStartPosRef = useRef<{ x: number; y: number } | null>(null);
+
+  const cancelLongPressTimer = () => {
+    if (longPressTimerRef.current) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+    longPressStartPosRef.current = null;
+  };
+
+  const handlePressIn = (event: GestureResponderEvent) => {
+    if (selectionMode) return;
+    longPressStartPosRef.current = {
+      x: event.nativeEvent.pageX,
+      y: event.nativeEvent.pageY,
+    };
+    longPressTimerRef.current = setTimeout(() => {
       onEnterSelectionMode(item.id);
+      longPressTimerRef.current = null;
+    }, LONG_PRESS_MS);
+  };
+
+  const handleTouchMove = (event: GestureResponderEvent) => {
+    const start = longPressStartPosRef.current;
+    if (!start || !longPressTimerRef.current) return;
+    const dx = event.nativeEvent.pageX - start.x;
+    const dy = event.nativeEvent.pageY - start.y;
+    if (dx * dx + dy * dy > LONG_PRESS_MOVE_CANCEL_PX * LONG_PRESS_MOVE_CANCEL_PX) {
+      cancelLongPressTimer();
     }
   };
 
@@ -188,11 +213,14 @@ function TranscriptItemComponent({
       )}
       <Pressable
         onPress={handlePress}
-        onLongPress={handleLongPress}
-        delayLongPress={85}
+        onPressIn={handlePressIn}
+        onPressOut={cancelLongPressTimer}
+        onTouchMove={handleTouchMove}
+        onTouchCancel={cancelLongPressTimer}
         android_ripple={{ color: '#E2E8F0' }}
         style={[
           styles.transcriptCard,
+          { backgroundColor: colors.bgSurface, borderColor: colors.border },
           isCopied && styles.transcriptCardCopied,
           isSelected && styles.transcriptCardSelected,
         ]}
@@ -224,7 +252,7 @@ function TranscriptItemComponent({
             {isStacked && (
               <TouchableOpacity
                 onLongPress={handleStackBadgeLongPress}
-                delayLongPress={85}
+                delayLongPress={LONG_PRESS_MS}
                 style={styles.stackBadge}
                 hitSlop={8}
                 disabled={selectionMode}
@@ -234,14 +262,25 @@ function TranscriptItemComponent({
               </TouchableOpacity>
             )}
           </View>
-          {/* Edit is now in long-press menu */}
+          {/* Expand/Collapse button - top right */}
+          {shouldShowExpand && (
+            <TouchableOpacity
+              onPress={handleExpandPress}
+              hitSlop={8}
+              style={styles.expandButton}
+            >
+              <Text style={styles.expandButtonText}>
+                {isExpanded ? 'Collapse ▲' : 'Expand ▼'}
+              </Text>
+            </TouchableOpacity>
+          )}
         </View>
         
         {/* Main text content - show TextInput when editing */}
         {isEditing ? (
           <View style={styles.transcriptEditContainer}>
             <TextInput
-              style={styles.transcriptEditInput}
+              style={[styles.transcriptEditInput, { color: colors.textPrimary, backgroundColor: colors.bgPage, borderColor: colors.border }]}
               value={editText}
               onChangeText={onEditTextChange}
               multiline
@@ -271,7 +310,7 @@ function TranscriptItemComponent({
         ) : (
           <View>
             <Text
-              style={styles.transcriptText}
+              style={[styles.transcriptText, { color: colors.textPrimary }]}
               numberOfLines={isExpanded ? undefined : MAX_PREVIEW_LINES}
             >
               {item.text}
@@ -285,21 +324,9 @@ function TranscriptItemComponent({
           </View>
         )}
         
-        {/* Bottom row: Action buttons on left, Expand button on right */}
+        {/* Bottom row: Action buttons */}
         <View style={styles.transcriptFooter}>
           <View style={styles.transcriptActions}>
-            {/* Send to Cursor button - only shown when Cursor tab is enabled */}
-            {showCursor && (
-              <TouchableOpacity
-                onPress={handleSendToCursorPress}
-                hitSlop={8}
-                style={[styles.sendToCursorButton, selectionMode && styles.actionButtonDisabled]}
-                disabled={selectionMode}
-              >
-                <Feather name="terminal" size={14} color={selectionMode ? '#9CA3AF' : '#059669'} />
-                <Text style={[styles.sendToCursorText, selectionMode && styles.sendToCursorTextDisabled]}>Send to Cursor</Text>
-              </TouchableOpacity>
-            )}
             <TouchableOpacity
               onPress={handleSpeakPress}
               hitSlop={8}
@@ -351,18 +378,6 @@ function TranscriptItemComponent({
               )
             )}
           </View>
-          {/* Expand/Collapse button - bottom right */}
-          {shouldShowExpand && (
-            <TouchableOpacity
-              onPress={handleExpandPress}
-              hitSlop={8}
-              style={styles.expandButton}
-            >
-              <Text style={styles.expandButtonText}>
-                {isExpanded ? 'Collapse ▲' : 'Expand ▼'}
-              </Text>
-            </TouchableOpacity>
-          )}
         </View>
       </Pressable>
     </View>
@@ -538,25 +553,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 10,
     gap: 8,
-  },
-  sendToCursorButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 8,
-    backgroundColor: '#ECFDF5',
-    borderWidth: 1,
-    borderColor: '#A7F3D0', // Slightly darker green
-    gap: 5,
-  },
-  sendToCursorText: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#059669',
-  },
-  sendToCursorTextDisabled: {
-    color: '#9CA3AF',
   },
   speakButton: {
     flexDirection: 'row',

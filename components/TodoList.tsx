@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,12 +9,15 @@ import {
   SectionList,
   Alert,
   Vibration,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
+import { Feather } from '@expo/vector-icons';
 import { Todo } from '../types';
 import * as Clipboard from 'expo-clipboard';
 import { PullToCreate } from './PullToCreate';
+import { useThemeColors } from '../services/theme';
 
 type TodoSection = {
   key: string;
@@ -33,6 +36,8 @@ interface TodoListProps {
   onCreateTask?: (text: string) => Promise<boolean> | boolean;
   // Called when create mode changes - parent uses this for dynamic bottom bar.
   onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
+  // Opacity 0..1 applied to the search header so it fades during a page swipe.
+  searchOpacity?: number;
 }
 
 /**
@@ -41,18 +46,73 @@ interface TodoListProps {
  * Groups items by date with sticky section headers.
  * Pull down at the top to create a new task inline (no modal).
  */
-export function TodoList({ 
-  sections, 
-  onToggleComplete, 
-  onUpdate, 
-  onDelete, 
-  formatTime, 
+export function TodoList({
+  sections,
+  onToggleComplete,
+  onUpdate,
+  onDelete,
+  formatTime,
   formatDateHeader,
   onCreateTask,
   onCreateModeChange,
+  searchOpacity = 1,
 }: TodoListProps) {
+  const colors = useThemeColors();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editText, setEditText] = useState('');
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+
+  const filteredSections = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return sections;
+    return sections
+      .map((s) => ({ ...s, data: s.data.filter((t) => t.text.toLowerCase().includes(q)) }))
+      .filter((s) => s.data.length > 0);
+  }, [sections, searchQuery]);
+
+  // Memoized so the SectionList's ListHeaderComponent identity stays stable
+  // across re-renders; otherwise the TextInput remounts each keystroke and
+  // loses focus, which looks like "search doesn't filter".
+  const searchHeaderEl = useMemo(
+    () => (
+      <View style={[searchStyles.searchHeader, { opacity: searchOpacity }]}>
+        {searchVisible ? (
+          <View style={[searchStyles.searchInputRow, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.textSecondary} />
+            <TextInput
+              style={[searchStyles.searchInput, { color: colors.textPrimary }]}
+              value={searchQuery}
+              onChangeText={setSearchQuery}
+              placeholder="Search tasks"
+              placeholderTextColor={colors.textTertiary}
+              autoFocus
+              returnKeyType="search"
+            />
+            <TouchableOpacity
+              onPress={() => {
+                setSearchQuery('');
+                setSearchVisible(false);
+                Keyboard.dismiss();
+              }}
+              hitSlop={8}
+            >
+              <Feather name="x" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={searchStyles.searchIconButton}
+            onPress={() => setSearchVisible(true)}
+            hitSlop={8}
+          >
+            <Feather name="search" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+      </View>
+    ),
+    [searchVisible, searchQuery, searchOpacity, colors],
+  );
 
   const handleEdit = (todo: Todo) => {
     setEditingId(todo.id);
@@ -91,7 +151,7 @@ export function TodoList({
   }, [onCreateTask]);
 
   const renderItem = ({ item: todo }: { item: Todo }) => (
-    <View style={styles.item}>
+    <View style={[styles.item, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
       <TouchableOpacity
         style={styles.checkbox}
         onPress={() => onToggleComplete(todo.id)}
@@ -110,6 +170,7 @@ export function TodoList({
           <Text
             style={[
               styles.text,
+              { color: colors.textPrimary },
               todo.completed && styles.textCompleted,
             ]}
           >
@@ -128,12 +189,12 @@ export function TodoList({
   );
 
   const renderSectionHeader = ({ section }: { section: TodoSection }) => (
-    <View style={styles.sectionHeader}>
-      <Text style={styles.sectionHeaderText}>{section.title}</Text>
+    <View style={[styles.sectionHeader, { backgroundColor: colors.bgPage }]}>
+      <Text style={[styles.sectionHeaderText, { color: colors.textSecondary }]}>{section.title}</Text>
     </View>
   );
 
-  if (sections.length === 0) {
+  if (filteredSections.length === 0) {
     return (
       <PullToCreate
         itemType="task"
@@ -145,10 +206,15 @@ export function TodoList({
         <SectionList
           sections={[]}
           renderItem={() => null}
+          ListHeaderComponent={searchHeaderEl}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>No todos yet</Text>
-              <Text style={styles.emptySubtext}>Pull down to create a task</Text>
+              <Text style={[styles.emptyText, { color: colors.textPrimary }]}>
+                {searchQuery ? 'No matches' : 'No todos yet'}
+              </Text>
+              <Text style={[styles.emptySubtext, { color: colors.textSecondary }]}>
+                {searchQuery ? 'Try a different search term.' : 'Pull down to create a task'}
+              </Text>
             </View>
           }
           contentContainerStyle={{ flex: 1 }}
@@ -167,10 +233,11 @@ export function TodoList({
         onCreateModeChange={onCreateModeChange}
       >
         <SectionList
-          sections={sections}
+          sections={filteredSections}
           keyExtractor={(item) => item.id}
           renderItem={renderItem}
           renderSectionHeader={renderSectionHeader}
+          ListHeaderComponent={searchHeaderEl}
           stickySectionHeadersEnabled
           contentContainerStyle={styles.content}
         />
@@ -364,6 +431,36 @@ const styles = StyleSheet.create({
   modalButtonTextSave: {
     color: '#fff',
     fontWeight: '600',
+  },
+});
+
+const searchStyles = StyleSheet.create({
+  searchHeader: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  searchIconButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#111827',
+    padding: 0,
   },
 });
 

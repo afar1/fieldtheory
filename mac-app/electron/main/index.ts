@@ -2241,6 +2241,14 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.uninstallCodexHook() ?? false;
   });
 
+  ipcMain.handle('librarian:isCodexStopOnPendingEnabled', (): boolean => {
+    return librarianManager?.isCodexStopOnPendingEnabled() ?? false;
+  });
+
+  ipcMain.handle('librarian:setCodexStopOnPendingEnabled', (_event, enabled: boolean): boolean => {
+    return librarianManager?.setCodexStopOnPendingEnabled(enabled) ?? false;
+  });
+
   // ===========================================================================
   // Discovery Frequency API
   // ===========================================================================
@@ -5001,6 +5009,22 @@ function setupClipboardIPCHandlers(): void {
         }
       }
     }
+    return true;
+  });
+
+  // Click-away dismissal - controls whether the panel hides when another app gets focus.
+  ipcMain.handle('clipboard:getClickAwayToDismiss', async () => {
+    if (!preferencesManager) {
+      return true;
+    }
+    return preferencesManager.getPreference('clickAwayToDismiss') ?? true;
+  });
+
+  ipcMain.handle('clipboard:setClickAwayToDismiss', async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ clickAwayToDismiss: enabled });
     return true;
   });
 
