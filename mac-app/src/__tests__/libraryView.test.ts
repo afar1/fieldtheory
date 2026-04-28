@@ -819,6 +819,22 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
+  it('keeps combined top-level sidebar nodes alphabetical in date mode', () => {
+    const result = orderTopLevelSidebarNodes([
+      dir('scratchpad'),
+      dir('plans'),
+      dir('debates'),
+      dir('entries'),
+    ], 'time');
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Debates',
+      'Entries',
+      'Plans',
+      'Scratchpad',
+    ]);
+  });
+
   it('collects only the selected file siblings inside its directory', () => {
     const tree = [
       dir('entries', [

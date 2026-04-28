@@ -4,43 +4,56 @@
  * Shows commands from Supabase that were synced when mobile sync is enabled.
  * Users can:
  * - View all synced commands
+ * - Search commands by name or content
+ * - Favorite commands (favorites pinned to top, persisted locally)
  * - Copy command content to clipboard
  * - Refresh to fetch latest commands
- *
- * Similar to the Fields page but for commands.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
   FlatList,
   TouchableOpacity,
   StyleSheet,
-  RefreshControl,
   Vibration,
   ActivityIndicator,
+  TextInput,
+  Keyboard,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { Feather } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Command } from '../types';
 import { CommandsService } from '../services/commands';
+import { useThemeColors } from '../services/theme';
+import { PullToCreate } from './PullToCreate';
+
+const FAVORITES_KEY = '@littleai/commandFavorites';
 
 interface CommandsListProps {
   /** Called when user wants to use a command (copy formatted text) */
   onUseCommand?: (text: string) => void;
+  /** Opacity 0..1 applied to the search header so it fades during a page swipe. */
+  searchOpacity?: number;
+  /** Notifies parent of pull-to-create state so the bottom bar can swap to Cancel/Save. */
+  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
 }
 
-export function CommandsList({ onUseCommand }: CommandsListProps) {
+export function CommandsList({ onUseCommand, searchOpacity = 1, onCreateModeChange }: CommandsListProps) {
+  const colors = useThemeColors();
   const [commands, setCommands] = useState<Command[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [isRefreshing, setIsRefreshing] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
 
-  // Load commands on mount
   useEffect(() => {
     loadCommands();
+    loadFavorites();
   }, []);
 
   const loadCommands = async () => {
@@ -55,17 +68,36 @@ export function CommandsList({ onUseCommand }: CommandsListProps) {
     }
   };
 
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
+  const loadFavorites = async () => {
     try {
-      const fetched = await CommandsService.fetchCommands();
-      setCommands(fetched);
+      const data = await AsyncStorage.getItem(FAVORITES_KEY);
+      if (data) {
+        const ids: string[] = JSON.parse(data);
+        setFavoriteIds(new Set(ids));
+      }
     } catch (error) {
-      console.error('Failed to refresh commands:', error);
-    } finally {
-      setIsRefreshing(false);
+      console.error('Failed to load command favorites:', error);
     }
   };
+
+  const persistFavorites = async (ids: Set<string>) => {
+    try {
+      await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(ids)));
+    } catch (error) {
+      console.error('Failed to save command favorites:', error);
+    }
+  };
+
+  // Pull-to-create handler. Inserts via Supabase, then re-fetches so the new
+  // command shows up at the right sort position (and we pick up server defaults).
+  const handleCreateCommand = useCallback(async (text: string) => {
+    const created = await CommandsService.createCommand(text);
+    if (!created) return false;
+    Vibration.vibrate(15);
+    const fetched = await CommandsService.fetchCommands();
+    setCommands(fetched);
+    return true;
+  }, []);
 
   const handleCopyCommand = useCallback(async (command: Command) => {
     await Clipboard.setStringAsync(command.content);
@@ -75,7 +107,6 @@ export function CommandsList({ onUseCommand }: CommandsListProps) {
   }, []);
 
   const handleUseCommand = useCallback((command: Command) => {
-    // Format the command for use - include command header
     const formattedText = `---
 # Command: ${command.displayName}
 
@@ -86,7 +117,6 @@ ${command.content}
     if (onUseCommand) {
       onUseCommand(formattedText);
     } else {
-      // Fallback: copy to clipboard
       Clipboard.setStringAsync(formattedText);
       Vibration.vibrate();
       setCopiedId(command.id);
@@ -94,31 +124,74 @@ ${command.content}
     }
   }, [onUseCommand]);
 
+  const handleToggleFavorite = useCallback((command: Command) => {
+    setFavoriteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(command.id)) {
+        next.delete(command.id);
+      } else {
+        next.add(command.id);
+      }
+      persistFavorites(next);
+      return next;
+    });
+    Vibration.vibrate(10);
+  }, []);
+
   const toggleExpand = useCallback((id: string) => {
     setExpandedId(prev => prev === id ? null : id);
   }, []);
 
+  const visibleCommands = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const filtered = q
+      ? commands.filter((c) =>
+          c.displayName.toLowerCase().includes(q) ||
+          c.content.toLowerCase().includes(q),
+        )
+      : commands;
+    // Pin favorites to the top, preserve relative order otherwise.
+    return [...filtered].sort((a, b) => {
+      const aFav = favoriteIds.has(a.id) ? 0 : 1;
+      const bFav = favoriteIds.has(b.id) ? 0 : 1;
+      return aFav - bFav;
+    });
+  }, [commands, searchQuery, favoriteIds]);
+
   const renderCommand = useCallback(({ item }: { item: Command }) => {
     const isExpanded = expandedId === item.id;
     const isCopied = copiedId === item.id;
+    const isFavorite = favoriteIds.has(item.id);
 
-    // Preview: first 100 chars
     const preview = item.content.length > 100
       ? item.content.slice(0, 100) + '...'
       : item.content;
 
     return (
       <TouchableOpacity
-        style={styles.commandCard}
+        style={[styles.commandCard, { backgroundColor: colors.bgSurface, borderColor: colors.border, borderWidth: 1 }]}
         onPress={() => toggleExpand(item.id)}
         activeOpacity={0.7}
       >
         <View style={styles.commandHeader}>
           <View style={styles.commandTitleRow}>
             <Feather name="file-text" size={16} color="#6366F1" />
-            <Text style={styles.commandName}>{item.displayName}</Text>
+            <Text style={[styles.commandName, { color: colors.textPrimary }]}>{item.displayName}</Text>
           </View>
           <View style={styles.commandActions}>
+            <TouchableOpacity
+              style={[styles.actionButton, isFavorite && styles.actionButtonFavorite]}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                handleToggleFavorite(item);
+              }}
+            >
+              <Feather
+                name="star"
+                size={16}
+                color={isFavorite ? '#F59E0B' : '#6B7280'}
+              />
+            </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionButton, isCopied && styles.actionButtonCopied]}
               onPress={(e) => {
@@ -145,7 +218,7 @@ ${command.content}
         </View>
 
         <Text
-          style={styles.commandPreview}
+          style={[styles.commandPreview, { color: colors.textSecondary }]}
           numberOfLines={isExpanded ? undefined : 3}
         >
           {isExpanded ? item.content : preview}
@@ -158,8 +231,84 @@ ${command.content}
         )}
       </TouchableOpacity>
     );
-  }, [expandedId, copiedId, toggleExpand, handleCopyCommand, handleUseCommand]);
+  }, [expandedId, copiedId, favoriteIds, toggleExpand, handleCopyCommand, handleUseCommand, handleToggleFavorite]);
 
+  // Search row + count subtitle, memoized as the FlatList ListHeaderComponent.
+  // Without memoization, the wrapping fragment is a new identity every render,
+  // FlatList remounts the header, and the TextInput loses focus on each
+  // keystroke — which manifests as "search doesn't filter".
+  // While searching, the bulk count ("62 commands synced") is replaced with a
+  // match count so the header doesn't lie about what's visible below.
+  // Defined BEFORE any early-return so hook order stays stable across renders.
+  const isSearching = searchQuery.trim().length > 0;
+  const matchCount = visibleCommands.length;
+  const listHeader = useMemo(
+    () => (
+      <>
+        <View style={[styles.searchHeader, { opacity: searchOpacity }]}>
+          {searchVisible ? (
+            <View style={[styles.searchInputRow, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
+              <Feather name="search" size={16} color={colors.textSecondary} />
+              <TextInput
+                style={[styles.searchInput, { color: colors.textPrimary }]}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                placeholder="Search commands"
+                placeholderTextColor={colors.textTertiary}
+                autoFocus
+                returnKeyType="search"
+              />
+              <TouchableOpacity
+                onPress={() => {
+                  setSearchQuery('');
+                  setSearchVisible(false);
+                  Keyboard.dismiss();
+                }}
+                hitSlop={8}
+              >
+                <Feather name="x" size={18} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <TouchableOpacity
+              style={styles.searchIconButton}
+              onPress={() => setSearchVisible(true)}
+              hitSlop={8}
+            >
+              <Feather name="search" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          )}
+        </View>
+        {isSearching ? (
+          <View style={styles.headerContainer}>
+            <Text style={[styles.headerText, { color: colors.textPrimary }]}>
+              {matchCount} match{matchCount !== 1 ? 'es' : ''}
+            </Text>
+          </View>
+        ) : commands.length > 0 ? (
+          <View style={styles.headerContainer}>
+            <Text style={[styles.headerText, { color: colors.textPrimary }]}>
+              {commands.length} command{commands.length !== 1 ? 's' : ''} synced
+            </Text>
+            <Text style={[styles.headerSubtext, { color: colors.textSecondary }]}>
+              Say "use the [name] command" while recording
+            </Text>
+          </View>
+        ) : null}
+      </>
+    ),
+    [
+      searchVisible,
+      searchQuery,
+      searchOpacity,
+      isSearching,
+      matchCount,
+      commands.length,
+      colors,
+    ],
+  );
+
+  // Loading guard placed AFTER all hooks so hook order is stable across renders.
   if (isLoading) {
     return (
       <View style={styles.loadingContainer}>
@@ -170,41 +319,35 @@ ${command.content}
   }
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.bgPage }]}>
+      <PullToCreate
+        itemType="command"
+        onCreateItem={handleCreateCommand}
+        enabled={true}
+        style={{ flex: 1 }}
+        onCreateModeChange={onCreateModeChange}
+      >
       <FlatList
-        data={commands}
+        data={visibleCommands}
         keyExtractor={(item) => item.id}
         renderItem={renderCommand}
         contentContainerStyle={styles.listContent}
-        refreshControl={
-          <RefreshControl
-            refreshing={isRefreshing}
-            onRefresh={handleRefresh}
-            tintColor="#6366F1"
-          />
-        }
         ListEmptyComponent={
           <View style={styles.emptyState}>
-            <Feather name="command" size={48} color="#D1D5DB" />
-            <Text style={styles.emptyTitle}>No commands synced</Text>
-            <Text style={styles.emptySubtitle}>
-              Enable mobile sync for command directories{'\n'}in the Mac app Settings {">"} Commands
+            <Feather name="command" size={48} color={colors.textTertiary} />
+            <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
+              {searchQuery ? 'No matches' : 'No commands synced'}
+            </Text>
+            <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+              {searchQuery
+                ? 'Try a different search term.'
+                : `Enable mobile sync for command directories\nin the Mac app Settings > Commands`}
             </Text>
           </View>
         }
-        ListHeaderComponent={
-          commands.length > 0 ? (
-            <View style={styles.headerContainer}>
-              <Text style={styles.headerText}>
-                {commands.length} command{commands.length !== 1 ? 's' : ''} synced
-              </Text>
-              <Text style={styles.headerSubtext}>
-                Say "use the [name] command" while recording
-              </Text>
-            </View>
-          ) : null
-        }
+        ListHeaderComponent={listHeader}
       />
+      </PullToCreate>
     </View>
   );
 }
@@ -224,6 +367,33 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 16,
     color: '#6B7280',
+  },
+  searchHeader: {
+    paddingHorizontal: 4,
+    paddingTop: 0,
+    paddingBottom: 4,
+  },
+  searchIconButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#111827',
+    padding: 0,
   },
   listContent: {
     padding: 16,
@@ -281,6 +451,9 @@ const styles = StyleSheet.create({
   },
   actionButtonCopied: {
     backgroundColor: '#D1FAE5',
+  },
+  actionButtonFavorite: {
+    backgroundColor: '#FEF3C7',
   },
   commandPreview: {
     fontSize: 14,

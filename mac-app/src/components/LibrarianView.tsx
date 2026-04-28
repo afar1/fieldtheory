@@ -1589,13 +1589,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, [onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onFocusChromeActiveChange]);
 
-  // Bookmarks still uses legacy immersive, and keeps its panel-like blur behavior.
+  // Keep Library fullscreen in the same click-away dismissal path as the panel.
   useEffect(() => {
     if (!active) return;
-    const dismissable = isFullScreen && selectedItemType === 'bookmarks';
+    const dismissable = isFullScreen;
     window.librarianAPI?.setImmersiveDismissable?.(dismissable);
     return () => window.librarianAPI?.setImmersiveDismissable?.(false);
-  }, [active, isFullScreen, selectedItemType]);
+  }, [active, isFullScreen]);
 
   // Push 'library' size-key for every librarian section. BookmarksPane
   // overrides this for its canvas mode so it can share Draw's window mechanics.
@@ -3781,7 +3781,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 } : undefined}
                 unorderedListMarker={unorderedListMarker}
                 onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
-                isEditing={contentMode === 'markdown'}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
                 onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}

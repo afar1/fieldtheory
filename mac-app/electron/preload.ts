@@ -916,6 +916,10 @@ export interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
 
+  // Click-away dismissal
+  getClickAwayToDismiss?: () => Promise<boolean>;
+  setClickAwayToDismiss?: (enabled: boolean) => Promise<boolean>;
+
   // Show fieldtheory.dev link in footer
   getShowFieldTheoryLink?: () => Promise<boolean>;
   setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
@@ -1842,6 +1846,15 @@ const clipboardAPI: ClipboardAPI = {
   
   setShowInDock: async (show: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setShowInDock', show);
+  },
+
+  // Click-away dismissal.
+  getClickAwayToDismiss: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getClickAwayToDismiss');
+  },
+
+  setClickAwayToDismiss: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setClickAwayToDismiss', enabled);
   },
 
   // Show fieldtheory.dev link in footer.
@@ -3330,6 +3343,8 @@ const librarianAPI = {
   isCodexHookInstalled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isCodexHookInstalled'),
   installCodexHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installCodexHook'),
   uninstallCodexHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallCodexHook'),
+  isCodexStopOnPendingEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isCodexStopOnPendingEnabled'),
+  setCodexStopOnPendingEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('librarian:setCodexStopOnPendingEnabled', enabled),
 
   // ===========================================================================
   // Discovery Frequency API
