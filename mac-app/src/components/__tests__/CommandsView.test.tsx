@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CommandsView from '../CommandsView';
 
@@ -42,6 +42,7 @@ describe('CommandsView command naming', () => {
           lastModified: 0,
           content: '# existing\n\nRendered selection text\n',
         })),
+        saveCommand: vi.fn(async () => true),
         createCommand: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
       },
@@ -118,6 +119,34 @@ describe('CommandsView command naming', () => {
 
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+    });
+  });
+
+  it('autosaves markdown edits without toolbar save controls', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Markdown source'));
+
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...');
+    expect(screen.queryByText('Save')).toBeNull();
+    expect(screen.queryByText('Cancel')).toBeNull();
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.change(editor, { target: { value: '# existing\n\nChanged content\n' } });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(450);
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.saveCommand).toHaveBeenCalledWith(
+        '/tmp/commands/existing.md',
+        '# existing\n\nChanged content\n'
+      );
     });
   });
 

@@ -95,7 +95,10 @@ describe('ClipboardHistoryWindow helper methods', () => {
     vi.clearAllMocks();
     window = new ClipboardHistoryWindow({
       get: vi.fn(() => ({})),
-      getPreference: vi.fn(() => false),
+      getPreference: vi.fn((key: string) => {
+        if (key === 'clickAwayToDismiss') return true;
+        return false;
+      }),
     } as any);
   });
 
@@ -156,8 +159,21 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.shouldAutoHideOnBlur()).toBe(false);
     window.setRecordingActive(false);
 
+    (window as any).preferencesManager.getPreference.mockImplementation((key: string) => {
+      if (key === 'clickAwayToDismiss') return false;
+      return false;
+    });
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+    (window as any).preferencesManager.getPreference.mockImplementation((key: string) => {
+      if (key === 'clickAwayToDismiss') return true;
+      return false;
+    });
+
     window.setImmersiveMode(true);
     expect(window.shouldAutoHideOnBlur()).toBe(false);
+    window.setImmersiveDismissableOnBlur(true);
+    expect(window.shouldAutoHideOnBlur()).toBe(true);
+    window.setImmersiveDismissableOnBlur(false);
     window.setImmersiveMode(false);
 
     window.setScenarioTestingActive(true);

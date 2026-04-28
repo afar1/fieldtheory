@@ -1,6 +1,17 @@
 import { memo, useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
+import {
+  SIDEBAR_DARK_ICON_COLOR,
+  SIDEBAR_DARK_TEXT_COLOR,
+  SIDEBAR_ICON_TEXT_GAP,
+  SIDEBAR_LIGHT_ICON_COLOR,
+  SIDEBAR_LIGHT_TEXT_COLOR,
+  SidebarBookmarkIcon,
+  SidebarFolderIcon,
+  SidebarMarkdownIcon,
+  SidebarRecentIcon,
+} from './SidebarIcons';
 
 type SortMode = 'alpha' | 'time';
 
@@ -34,6 +45,19 @@ const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS
 const LEGACY_HIDDEN_DEFAULT_FOLDER_IDS = ['concepts'] as const;
 const LIBRARY_DRAG_DATA_TYPE = 'application/x-fieldtheory-library-item';
 const LIBRARY_DRAG_TEXT_PREFIX = 'fieldtheory-library-item:';
+const LIBRARY_SIDEBAR_ROW_PADDING_Y = '6px';
+const LIBRARY_SIDEBAR_ROW_LINE_HEIGHT = '16px';
+const LIBRARY_SIDEBAR_ROW_MIN_HEIGHT = '28px';
+const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
+const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
+const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): React.CSSProperties => ({
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
+  maskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
+});
 
 type LibraryDragItem = {
   rootPath: string;
@@ -257,8 +281,8 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
   });
 }
 
-export function orderTopLevelSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alpha'): SidebarNode[] {
-  return sortMode === 'alpha' ? sortSidebarNodes(nodes, 'alpha') : nodes;
+export function orderTopLevelSidebarNodes(nodes: SidebarNode[], _sortMode: SortMode = 'alpha'): SidebarNode[] {
+  return sortSidebarNodes(nodes, 'alpha');
 }
 
 function getLibraryFolderVisibilityId(node: SidebarNode): string | null {
@@ -1439,6 +1463,8 @@ function TreeNode({
   const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
   const isDropTarget = dropTargetId === node.id;
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -1496,32 +1522,36 @@ function TreeNode({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '6px',
-          padding: `6px 12px 6px ${12 + depth * 12}px`,
+          gap: SIDEBAR_ICON_TEXT_GAP,
+          padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
           cursor: 'pointer',
           fontSize: '12px',
-          fontWeight: 500,
-          color: theme.text,
+          fontWeight: 400,
+          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+          color: sidebarTextColor,
           userSelect: 'none',
           backgroundColor: isDropTarget ? dropBg : 'transparent',
         }}
       >
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          fill="currentColor"
-          style={{
-            transition: 'transform 0.15s ease',
-            transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            flexShrink: 0,
-            color: theme.textSecondary,
-          }}
-        >
-          <path d="M2 1l4 3-4 3V1z" />
-        </svg>
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label}</span>
-        <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
+        <SidebarFolderIcon color={sidebarIconColor} />
+        <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>{node.label}</span>
+        <span style={{
+          minWidth: '14px',
+          height: '14px',
+          padding: '0 4px',
+          borderRadius: '999px',
+          boxSizing: 'border-box',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          color: theme.textSecondary,
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
+          fontWeight: 400,
+          fontSize: '9px',
+          lineHeight: '14px',
+          opacity: 0.72,
+        }}>
           {itemCount}
         </span>
         {node.hasUnread && (
@@ -1788,6 +1818,8 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
   }, [renaming]);
 
   const canRename = item.type === 'wiki' && !!item.relPath;
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   const commitRename = async () => {
     if (!renaming) return;
@@ -1798,6 +1830,7 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
   };
 
   const canShowInFinder = !!item.absPath && item.type !== 'bookmarks';
+  const showFinderButton = canShowInFinder && isHovered;
 
   return (
     <div
@@ -1838,13 +1871,13 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
       onMouseLeave={() => onHover(null)}
       style={{
         position: 'relative',
-        minHeight: '28px',
+        minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
         boxSizing: 'border-box',
-        padding: `6px 28px 6px ${28 + depth * 12}px`,
+        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${showFinderButton ? 28 : 12}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
         cursor: 'pointer',
         backgroundColor: isSelected
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
-          : 'transparent',
+          : isHovered ? theme.hoverBg : 'transparent',
         borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
         transition: 'background-color 0.1s ease',
         outline: 'none',
@@ -1853,8 +1886,8 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        gap: '4px',
-        minHeight: '16px',
+        gap: SIDEBAR_ICON_TEXT_GAP,
+        minHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
       }}>
         {renaming ? (
           <input
@@ -1883,16 +1916,13 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
           />
         ) : (
           <>
+            <SidebarMarkdownIcon color={sidebarIconColor} />
             <div style={{
               fontSize: '12px',
-              fontWeight: 500,
-              color: theme.text,
-              lineHeight: '16px',
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              fontWeight: 400,
+              color: sidebarTextColor,
+              lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+              ...librarySidebarFadeTextStyle(showFinderButton ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH),
             }}>
               {item.title}
             </div>
@@ -1973,25 +2003,36 @@ interface RecentBlockProps {
 function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
   if (visibleRecent.total === 0) return null;
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   const headerStyle: React.CSSProperties = {
-    padding: '6px 12px',
+    boxSizing: 'border-box',
+    minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px`,
     fontSize: '12px',
-    fontWeight: 500,
-    color: theme.textSecondary,
+    fontWeight: 400,
+    lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+    color: sidebarTextColor,
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: SIDEBAR_ICON_TEXT_GAP,
     cursor: 'pointer',
     userSelect: 'none',
   };
   const itemStyle = (isSelected: boolean): React.CSSProperties => ({
-    padding: '5px 12px 5px 20px',
-    fontSize: '11.5px',
+    boxSizing: 'border-box',
+    minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+    display: 'flex',
+    alignItems: 'center',
+    gap: SIDEBAR_ICON_TEXT_GAP,
+    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} 24px`,
+    fontSize: '12px',
+    fontWeight: 400,
+    lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
     cursor: 'pointer',
-    color: theme.text,
+    color: sidebarTextColor,
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     userSelect: 'none',
     backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
@@ -2017,21 +2058,14 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
           }}
         />
       )}
-      <div style={headerStyle} onClick={onToggleCollapsed}>
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          fill="currentColor"
-          style={{
-            transition: 'transform 0.15s ease',
-            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
-            flexShrink: 0,
-          }}
-        >
-          <path d="M2 1l4 3-4 3V1z" />
-        </svg>
-        <span>Recent</span>
+      <div
+        style={headerStyle}
+        onClick={onToggleCollapsed}
+        onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+        onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
+      >
+        <SidebarRecentIcon color={sidebarIconColor} />
+        <span>Recents</span>
       </div>
       {!collapsed && visibleRecent.entries.map((e) => {
         const id = `${e.kind}:${e.path}`;
@@ -2045,7 +2079,10 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
             onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
             onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
           >
-            {e.title}
+            <SidebarMarkdownIcon color={sidebarIconColor} />
+            <span style={librarySidebarFadeTextStyle()}>
+              {e.title}
+            </span>
           </div>
         );
       })}
@@ -2065,6 +2102,9 @@ function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
   theme: ReturnType<typeof useTheme>['theme'];
   onOpen: () => void;
 }) {
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+
   return (
     <div>
       <hr
@@ -2078,13 +2118,16 @@ function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
       <div
         onClick={onOpen}
         style={{
-          padding: '6px 12px',
+          boxSizing: 'border-box',
+          minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+          padding: '6px 12px 6px 10px',
           fontSize: '12px',
-          fontWeight: 500,
-          color: theme.textSecondary,
+          fontWeight: 400,
+          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+          color: sidebarTextColor,
           display: 'flex',
           alignItems: 'center',
-          gap: '6px',
+          gap: SIDEBAR_ICON_TEXT_GAP,
           cursor: 'pointer',
           userSelect: 'none',
           backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
@@ -2093,8 +2136,10 @@ function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
         onMouseEnter={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = theme.hoverBg; }}
         onMouseLeave={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = 'transparent'; }}
       >
-        <span style={{ width: '6px', flexShrink: 0 }} />
-        <span>{item.title}</span>
+        <SidebarBookmarkIcon color={sidebarIconColor} />
+        <span style={librarySidebarFadeTextStyle()}>
+          {item.title}
+        </span>
       </div>
     </div>
   );

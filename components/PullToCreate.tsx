@@ -11,6 +11,7 @@ import {
   NativeScrollEvent,
 } from 'react-native';
 import { Feather } from '@expo/vector-icons';
+import { useThemeColors } from '../services/theme';
 
 // How far the user must pull (overscroll) to activate the create card.
 const PULL_THRESHOLD = 80;
@@ -18,7 +19,7 @@ const PULL_THRESHOLD = 80;
 // Minimum height of the new item card (just the input, no header).
 const CARD_HEIGHT = 56;
 
-export type ItemType = 'transcript' | 'task' | 'observation';
+export type ItemType = 'transcript' | 'task' | 'observation' | 'command';
 
 interface PullToCreateProps {
   // What type of item this creates - affects placeholder and styling.
@@ -58,6 +59,8 @@ export function PullToCreate({
   style,
   onCreateModeChange,
 }: PullToCreateProps) {
+  const colors = useThemeColors();
+
   // Track whether the create card is actively shown.
   const [isCreating, setIsCreating] = useState(false);
   
@@ -92,11 +95,13 @@ export function PullToCreate({
   const getPlaceholder = () => {
     switch (itemType) {
       case 'transcript':
-        return 'Add to stack...';
+        return 'Add item...';
       case 'task':
         return 'Add a new task...';
       case 'observation':
         return 'Add an observation...';
+      case 'command':
+        return 'Command title\nThen the command content...';
       default:
         return 'Type here...';
     }
@@ -111,6 +116,8 @@ export function PullToCreate({
         return '#059669'; // Green
       case 'observation':
         return '#7C3AED'; // Purple
+      case 'command':
+        return '#6366F1'; // Indigo
       default:
         return '#2563EB';
     }
@@ -144,16 +151,16 @@ export function PullToCreate({
   }, [newItemText, isSaving, onCreateItem]);
 
   // Handle canceling the create action.
+  // Use a short timing instead of a long spring so the bottom-bar swap back
+  // to nav tabs happens in ~120ms instead of waiting for the spring to settle.
   const handleCancel = useCallback(() => {
     Keyboard.dismiss();
     justSubmitted.current = false;
-    
-    // Animate card closed.
-    Animated.spring(cardHeight, {
+
+    Animated.timing(cardHeight, {
       toValue: 0,
+      duration: 120,
       useNativeDriver: false,
-      tension: 50,
-      friction: 10,
     }).start(() => {
       setIsCreating(false);
       setNewItemText('');
@@ -194,23 +201,26 @@ export function PullToCreate({
   // Handle scroll events to detect overscroll (iOS bounce).
   const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
     if (!enabled || isCreating) return;
-    
+
     const offsetY = event.nativeEvent.contentOffset.y;
-    
+
     // Negative offsetY means we're overscrolling at the top.
     if (offsetY < 0 && isDragging.current) {
       currentOverscroll.current = Math.abs(offsetY);
-      
+
       // Update pull indicator based on progress toward threshold.
       const progress = Math.min(currentOverscroll.current / PULL_THRESHOLD, 1);
       pullProgress.setValue(progress);
-      
+
       // Haptic when passing threshold.
       if (currentOverscroll.current >= PULL_THRESHOLD && !hasTriggeredCreate.current) {
         Vibration.vibrate(10);
         hasTriggeredCreate.current = true;
       }
-    } else {
+    } else if (currentOverscroll.current !== 0) {
+      // Only zero out / reset when transitioning out of overscroll.
+      // Re-firing setValue(0) on every regular scroll frame caused bridge
+      // chatter that showed up as visible pull-indicator jitter.
       currentOverscroll.current = 0;
       if (!isCreating) {
         pullProgress.setValue(0);
@@ -236,12 +246,14 @@ export function PullToCreate({
       openCreateCard();
     }
     
-    // Fade out the pull indicator.
+    // Fade out the pull indicator. Indicator drives only opacity + transform,
+    // both native-driver compatible — keep this off the JS thread for smoother
+    // motion under release pressure.
     if (!isCreating) {
       Animated.timing(pullProgress, {
         toValue: 0,
         duration: 200,
-        useNativeDriver: false,
+        useNativeDriver: true,
       }).start();
     }
   }, [enabled, isCreating, openCreateCard, pullProgress]);
@@ -333,12 +345,12 @@ export function PullToCreate({
       {/* New item card - minimal, just the input */}
       <Animated.View style={[styles.cardContainer, { height: cardContainerHeight }]}>
         {isCreating && (
-          <View style={[styles.card, { borderColor: safeAccentColor }]}>
+          <View style={[styles.card, { borderColor: safeAccentColor, backgroundColor: colors.bgSurface }]}>
             <TextInput
               ref={inputRef}
-              style={styles.input}
+              style={[styles.input, { color: colors.textPrimary }]}
               placeholder={getPlaceholder()}
-              placeholderTextColor="#9CA3AF"
+              placeholderTextColor={colors.textTertiary}
               value={newItemText}
               onChangeText={setNewItemText}
               multiline
