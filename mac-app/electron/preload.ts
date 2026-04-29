@@ -735,7 +735,7 @@ export interface GazeAPI {
 }
 
 // Valid hotkey IDs that can be get/set via the hotkeyAPI
-export type HotkeyId = 'superPaste' | 'commandLauncher';
+export type HotkeyId = 'superPaste' | 'commandLauncher' | 'scratchpad';
 
 export interface HotkeyTestResult {
   key: string;

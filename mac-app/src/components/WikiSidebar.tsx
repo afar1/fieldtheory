@@ -1174,7 +1174,17 @@ function WikiSidebar({
           ref={searchInputRef}
           value={searchQuery}
           onChange={(e) => onSearchQueryChange(e.target.value)}
-          placeholder="Search library (⌘F)"
+          onKeyDown={(e) => {
+            if (e.key !== 'Escape') return;
+            e.preventDefault();
+            e.stopPropagation();
+            onSearchQueryChange('');
+            e.currentTarget.blur();
+          }}
+          onBlur={(e) => {
+            if (!e.currentTarget.value.trim()) onSearchQueryChange('');
+          }}
+          placeholder="Search library (/)"
           style={{
             width: '100%',
             padding: '7px 10px',

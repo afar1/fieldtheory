@@ -31,7 +31,7 @@ import {
   getLauncherUsageScore,
   isGeneratedBookmarkTaxonomyPath,
   nextLauncherArrowIndex,
-  resolveLauncherEnterIndex,
+  resolveHighlightedLauncherIndex,
   resolveLauncherAuthorNamespaceHandle,
   resolveLauncherBookmarkFacetNamespace,
   resolveLauncherDirectoryNamespace,
@@ -230,22 +230,6 @@ function scoreLauncherItem(item: LauncherItem, query: string): number {
   if (item.type === 'handoff') typeScore += 3;
 
   return textScore + typeScore;
-}
-
-function bestTypedLauncherMatchIndex(items: LauncherItem[], query: string): number {
-  const q = query.trim().toLowerCase();
-  if (!q) return 0;
-
-  let bestIndex = 0;
-  let bestScore = 0;
-  items.forEach((item, index) => {
-    const score = scoreLauncherItem(item, q);
-    if (score > bestScore) {
-      bestIndex = index;
-      bestScore = score;
-    }
-  });
-  return bestIndex;
 }
 
 const LAUNCHER_USAGE_STORAGE_KEY = 'launcherItemUsage.v1';
@@ -1488,9 +1472,7 @@ function CommandLauncher() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
-        const hasSelection = hasNavigatedRef.current || hasExplicitSelectionRef.current;
-        const typedMatchIndex = bestTypedLauncherMatchIndex(filtered, inputRef.current?.value ?? query);
-        const currentIndex = resolveLauncherEnterIndex(selectedIndexRef.current, filtered.length, hasSelection, typedMatchIndex);
+        const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
         const selectedItem = filtered[currentIndex];
         if (selectedItem) invokeItem(selectedItem, { insertWikiLink: e.metaKey });
       }

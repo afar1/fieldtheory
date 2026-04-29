@@ -1415,7 +1415,7 @@ interface HotMicAPI {
 /**
  * Valid hotkey IDs that can be get/set via the hotkeyAPI.
  */
-type HotkeyId = 'superPaste' | 'commandLauncher';
+type HotkeyId = 'superPaste' | 'commandLauncher' | 'scratchpad';
 
 /**
  * Generic hotkey management API for UI-configurable hotkeys.

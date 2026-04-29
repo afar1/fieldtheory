@@ -18,7 +18,7 @@ import {
   isGeneratedBookmarkTaxonomyPath,
   isLauncherPreviewToggleKey,
   nextLauncherArrowIndex,
-  resolveLauncherEnterIndex,
+  resolveHighlightedLauncherIndex,
   resolveLauncherAuthorNamespaceHandle,
   resolveLauncherBookmarkFacetNamespace,
   resolveLauncherDirectoryNamespace,
@@ -587,22 +587,15 @@ describe('nextLauncherArrowIndex', () => {
   });
 });
 
-describe('resolveLauncherEnterIndex', () => {
-  it('uses the first row when there is no explicit selection', () => {
-    expect(resolveLauncherEnterIndex(2, 4, false)).toBe(0);
+describe('resolveHighlightedLauncherIndex', () => {
+  it('uses the highlighted row for Enter', () => {
+    expect(resolveHighlightedLauncherIndex(2, 4)).toBe(2);
   });
 
-  it('uses the best typed match when there is no explicit selection', () => {
-    expect(resolveLauncherEnterIndex(0, 4, false, 2)).toBe(2);
-  });
-
-  it('uses the selected row after explicit keyboard or pointer selection', () => {
-    expect(resolveLauncherEnterIndex(2, 4, true, 1)).toBe(2);
-  });
-
-  it('clamps explicit selection to available rows', () => {
-    expect(resolveLauncherEnterIndex(9, 4, true)).toBe(3);
-    expect(resolveLauncherEnterIndex(-2, 4, true)).toBe(0);
+  it('clamps the highlighted row to available results', () => {
+    expect(resolveHighlightedLauncherIndex(9, 4)).toBe(3);
+    expect(resolveHighlightedLauncherIndex(-2, 4)).toBe(0);
+    expect(resolveHighlightedLauncherIndex(0, 0)).toBe(0);
   });
 });
 

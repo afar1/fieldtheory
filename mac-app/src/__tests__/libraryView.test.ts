@@ -23,6 +23,7 @@ import {
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
+  rankMarkdownWikiLinkSuggestions,
   replaceLibrarianNavigationEntry,
   resolveMarkdownCaretOffsetFromRenderedText,
   restoreLibrarianEditorSession,
@@ -58,6 +59,32 @@ import {
 
 afterEach(() => {
   clearLibraryDragData();
+});
+
+describe('rankMarkdownWikiLinkSuggestions', () => {
+  it('keeps username-like matches searchable but ranks local content first', () => {
+    const results = rankMarkdownWikiLinkSuggestions([
+      { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
+      { title: 'Paul Graham notes', detail: 'entries/paul-graham-notes', kind: 'wiki' },
+      { title: 'Paul Graham interview', detail: '/artifacts/paul-graham-interview.md', kind: 'artifact' },
+    ], 'paul');
+
+    expect(results.map((item) => item.title)).toEqual([
+      'Paul Graham interview',
+      'Paul Graham notes',
+      '@paulg',
+    ]);
+  });
+
+  it('returns username-like matches when they are the only match', () => {
+    const results = rankMarkdownWikiLinkSuggestions([
+      { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
+    ], 'paul');
+
+    expect(results).toEqual([
+      { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
+    ]);
+  });
 });
 
 describe('splitFrontmatter', () => {

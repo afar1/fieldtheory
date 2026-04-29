@@ -21,7 +21,7 @@ import {
   SidebarFolderIcon,
   SidebarMarkdownIcon,
 } from './SidebarIcons';
-import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 
 /** Inline text input used for both "new command" and "rename command" flows.
@@ -186,6 +186,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     const saved = localStorage.getItem('commands-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
+  const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
 
   // Layout
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -288,6 +289,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   useEffect(() => {
     localStorage.setItem('commands-text-size', textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
+    window.addEventListener('storage', syncRenderedEditClickMode);
+    window.addEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    return () => {
+      window.removeEventListener('storage', syncRenderedEditClickMode);
+      window.removeEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    };
+  }, []);
 
   useEffect(() => {
     onFocusChromeActiveChange?.(focusImmersive);
@@ -804,13 +815,15 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
-      // Cmd+F or / — focus sidebar search. Gated on active element so `/`
-      // still works while the editor is on screen, just not when it's focused.
+      // / focuses sidebar search. Cmd+F is reserved for in-file find.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
         sidebarKeyboardActiveRef.current = false;
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
+        setSearchOpen(true);
+        window.requestAnimationFrame(() => {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        });
         return;
       }
 
@@ -1240,12 +1253,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Search..."
+              placeholder="Search commands (/)"
+              onBlur={(e) => {
+                if (!e.currentTarget.value.trim()) setSearchOpen(false);
+              }}
               value={searchQuery}
               onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
+                  e.stopPropagation();
                   setSearchOpen(false);
                   setSearchQuery('');
                 }
@@ -1751,7 +1768,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: '24px 20px',
+            padding: isEditing ? '8px 20px 12px 20px' : '24px 20px',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -1776,17 +1793,18 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   onKeyDown={handleEditTextareaKeyDown}
                   style={{
                     flex: 1,
-                    minHeight: '400px',
-                    padding: '16px',
-                    fontSize: '14px',
-                    lineHeight: 1.6,
-                    fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '8px',
+                    minHeight: 0,
+                    padding: 0,
+                    fontSize: textSizes[textSize].base,
+                    lineHeight: 1.5,
+                    fontFamily: fonts.sans,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: 0,
                     color: theme.text,
                     resize: 'none',
                     outline: 'none',
+                    boxShadow: 'none',
                   }}
                   placeholder="Write your command markdown here..."
                   autoFocus
@@ -1814,7 +1832,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     // active still do their normal thing.
                     onClick={(e) => {
                       if (viewMode !== 'mine' || !selectedCommand) return;
-                      if (!shouldEnterEditOnClick(e)) return;
+                      if (!shouldEnterEditOnClick(e, renderedEditClickMode)) return;
                       enterEditMode();
                     }}
                     style={{

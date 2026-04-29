@@ -336,6 +336,21 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.activateApp).toHaveBeenCalledWith('com.apple.Safari');
   });
 
+  it('does not restore the previous app when hiding the app-mode window', async () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const activateApp = vi.spyOn(window, 'activateApp').mockResolvedValue(true);
+    vi.spyOn(window, 'getPreviousApp').mockReturnValue({
+      bundleId: 'com.apple.Safari',
+      name: 'Safari',
+    });
+    vi.spyOn(window, 'hide').mockImplementation(() => {});
+
+    await window.hideAndRestorePreviousApp('hotkey-toggle-hide');
+
+    expect(window.hide).toHaveBeenCalledWith(false, 'hotkey-toggle-hide');
+    expect(activateApp).not.toHaveBeenCalled();
+  });
+
   it('skips activation when no previous app is known', async () => {
     vi.spyOn(window, 'getPreviousApp').mockReturnValue(null);
     vi.spyOn(window, 'hide').mockImplementation(() => {});
