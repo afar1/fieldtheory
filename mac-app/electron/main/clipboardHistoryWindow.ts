@@ -1037,10 +1037,12 @@ export class ClipboardHistoryWindow {
       this.window.hide();
     }
 
+    const showInDock = this.shouldUseAppWindow();
+
     // Hide the whole app when callers want macOS to complete a native focus
-    // handoff. Skip if other windows need to stay visible (e.g., recording overlay).
+    // handoff. Keep the Dock icon visible in app-window mode.
     if (hideApp) {
-      if (process.platform === 'darwin') {
+      if (!showInDock && process.platform === 'darwin') {
         app.dock.hide();
       }
       app.hide();
@@ -1049,7 +1051,6 @@ export class ClipboardHistoryWindow {
       // Even when not hiding the whole app, ensure dock stays hidden.
       // Immersive mode (alwaysOnTop:false) or dock.bounce() can cause the
       // dock icon to reappear; re-hide it on every window dismiss.
-      const showInDock = this.shouldUseAppWindow();
       if (!showInDock && process.platform === 'darwin') {
         app.dock.hide();
       }

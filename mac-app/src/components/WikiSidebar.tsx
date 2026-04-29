@@ -14,6 +14,8 @@ import {
 } from './SidebarIcons';
 
 type SortMode = 'alpha' | 'time';
+type SidebarTodoState = 'open' | 'done';
+type SidebarTodoStateOverride = SidebarTodoState | null;
 
 interface UnifiedItem {
   id: string;
@@ -23,7 +25,7 @@ interface UnifiedItem {
   relPath?: string;
   rootPath?: string;
   timestamp: number;
-  todoState?: 'open' | 'done';
+  todoState?: SidebarTodoState;
   taggedDocId?: string;
   hasUnread?: boolean;
 }
@@ -51,6 +53,7 @@ const LIBRARY_SIDEBAR_ROW_LINE_HEIGHT = '16px';
 const LIBRARY_SIDEBAR_ROW_MIN_HEIGHT = '28px';
 const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
 const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
+const EMPTY_TODO_STATE_OVERRIDES: Record<string, SidebarTodoStateOverride | undefined> = {};
 const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): React.CSSProperties => ({
   flex: 1,
   minWidth: 0,
@@ -173,6 +176,7 @@ interface WikiSidebarProps {
   onSelectItem: (item: UnifiedItem) => void;
   selectedId: string | null;
   selectedKeyboardActive?: boolean;
+  todoStateOverrides?: Record<string, SidebarTodoStateOverride | undefined>;
   onCreateFile: (location: LibraryCreateLocation, fileName: string) => boolean | void | Promise<boolean | void>;
   onCreateDefaultFile?: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
   onCreateDir: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
@@ -186,6 +190,31 @@ interface WikiSidebarProps {
 }
 
 export type { UnifiedItem, UnifiedFolder, SortMode };
+
+export function applyTodoStateOverrideToItem(
+  item: UnifiedItem,
+  todoStateOverrides: Record<string, SidebarTodoStateOverride | undefined>,
+): UnifiedItem {
+  if (!Object.prototype.hasOwnProperty.call(todoStateOverrides, item.id)) return item;
+  const override = todoStateOverrides[item.id];
+  if (override) return { ...item, todoState: override };
+
+  const { todoState: _todoState, ...rest } = item;
+  return rest;
+}
+
+function applyTodoStateOverridesToNodes(
+  nodes: SidebarNode[],
+  todoStateOverrides: Record<string, SidebarTodoStateOverride | undefined>,
+): SidebarNode[] {
+  if (Object.keys(todoStateOverrides).length === 0) return nodes;
+  return nodes.map((node) => {
+    if (node.kind === 'file') {
+      return { ...node, item: applyTodoStateOverrideToItem(node.item, todoStateOverrides) };
+    }
+    return { ...node, children: applyTodoStateOverridesToNodes(node.children, todoStateOverrides) };
+  });
+}
 
 export type { SidebarNode as LibrarySidebarNode };
 
@@ -603,6 +632,7 @@ function WikiSidebar({
   onSelectItem,
   selectedId,
   selectedKeyboardActive = false,
+  todoStateOverrides = EMPTY_TODO_STATE_OVERRIDES,
   onCreateFile,
   onCreateDefaultFile,
   onCreateDir,
@@ -947,14 +977,19 @@ function WikiSidebar({
     return orderTopLevelSidebarNodes(filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders), sortMode);
   }, [artifacts, hiddenDefaultFolders, libraryRoots, sortMode, taggedDocs]);
 
+  const sidebarRootsWithTodoOverrides = useMemo(
+    () => applyTodoStateOverridesToNodes(sidebarRoots, todoStateOverrides),
+    [sidebarRoots, todoStateOverrides],
+  );
+
   const filteredSidebarRoots = useMemo(
-    () => filterSidebarNodes(sidebarRoots, searchQuery),
-    [sidebarRoots, searchQuery]
+    () => filterSidebarNodes(sidebarRootsWithTodoOverrides, searchQuery),
+    [sidebarRootsWithTodoOverrides, searchQuery]
   );
   const bookmarksActionItem = useMemo(() => {
-    const node = sidebarRoots.find((item) => item.id === BOOKMARKS_ITEM_ID);
+    const node = sidebarRootsWithTodoOverrides.find((item) => item.id === BOOKMARKS_ITEM_ID);
     return node?.kind === 'file' ? node.item : null;
-  }, [sidebarRoots]);
+  }, [sidebarRootsWithTodoOverrides]);
   const visibleSidebarRoots = useMemo(
     () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
     [filteredSidebarRoots]
@@ -967,7 +1002,7 @@ function WikiSidebar({
   }, [filteredSidebarRoots, flatItems, selectedId]);
   if (flatItemsRef) flatItemsRef.current = navigationItems;
 
-  const totalPages = countSidebarItems(sidebarRoots);
+  const totalPages = countSidebarItems(sidebarRootsWithTodoOverrides);
   const visiblePages = flatItems.length;
   const isSearching = searchQuery.trim().length > 0;
 

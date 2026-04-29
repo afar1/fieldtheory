@@ -20,6 +20,7 @@ import {
   ModelSize,
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import { isFieldTheorySuperPasteBundleId, shouldInsertImagePathIntoLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
 import { AuthManager } from './authManager';
 import { createUserDataManager, UserDataManager } from './userDataManager';
@@ -1005,10 +1006,15 @@ function registerHotkeysAfterOnboarding(): void {
         return;
       }
 
-      if (librarianMarkdownEditorFocused && clipboardHistoryWindow?.isVisible()) {
+      const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+      if (shouldInsertImagePathIntoLibrarian({
+        editorFocused: librarianMarkdownEditorFocused,
+        windowVisible: clipboardWindow?.isVisible() ?? false,
+        windowFocused: clipboardWindow?.isFocused() ?? false,
+      })) {
         const imagePath = await clipboardManager.exportCurrentClipboardImageToCache();
         if (imagePath) {
-          clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', imagePath);
+          clipboardWindow?.webContents.send('librarian:insertMarkdownText', imagePath);
           return;
         }
       }
@@ -1062,10 +1068,7 @@ function registerHotkeysAfterOnboarding(): void {
 
         // If frontmost app is Field Theory itself, use the previous app instead
         // This handles cases where super paste is triggered while Field Theory UI is visible
-        const isFieldTheory = bundleId === 'com.fieldtheory.app' ||
-                              bundleId === 'com.fieldtheory.experimental' ||
-                              bundleId === 'com.github.Electron'; // Dev mode
-        if (isFieldTheory && clipboardHistoryWindow) {
+        if (isFieldTheorySuperPasteBundleId(bundleId) && clipboardHistoryWindow) {
           const previousApp = clipboardHistoryWindow.getPreviousApp();
           if (previousApp?.bundleId) {
             bundleId = previousApp.bundleId;
@@ -1086,6 +1089,10 @@ function registerHotkeysAfterOnboarding(): void {
 
       const pasteImagesAsPaths = isTerminal || isIDE;
       const orderedItemsToPaste = orderStackItemsForPaste(itemsToPaste, bundleId);
+      if (isFieldTheorySuperPasteBundleId(bundleId)) {
+        log.info('Super Paste: no external target resolved; skipping paste into Field Theory');
+        return;
+      }
 
       let sshTarget: SSHTarget | null = null;
       if (isTerminal && frontmostPid) {
@@ -1101,12 +1108,15 @@ function registerHotkeysAfterOnboarding(): void {
       };
 
       try {
-        // If Field Theory is visible, hide it to restore previous focus state
-        // Don't use activate - it brings ALL windows of the target app to front
-        // Instead, hiding our window lets macOS naturally restore the previously focused window
+        // If Field Theory is visible, use the normal paste-dismiss path, then
+        // explicitly activate the resolved target so Cmd+V does not paste into us.
         if (clipboardHistoryWindow?.isVisible()) {
-          clipboardHistoryWindow.hide();
-          // Wait for macOS to restore focus to the previous window
+          clipboardHistoryWindow.hideAfterPaste('super-paste');
+        }
+        if (bundleId && clipboardHistoryWindow && !isFinder(bundleId)) {
+          await clipboardHistoryWindow.activateApp(bundleId);
+          await new Promise(resolve => setTimeout(resolve, 50));
+        } else {
           await new Promise(resolve => setTimeout(resolve, 100));
         }
         // For terminal-like targets with stacks, combine text with image paths.
@@ -1271,7 +1281,7 @@ function createWindow(): void {
 
   // Load saved window state from preferences
   const savedState = preferencesManager?.get().windowState;
-  const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+  const showInDock = shouldUseClipboardAppWindowMode();
   const defaultWidth = 800;
   const defaultHeight = 600;
 
