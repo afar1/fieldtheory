@@ -248,15 +248,21 @@ describe('CommandLauncherWindow.hide()', () => {
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
-  it('does not hide on blur when Field Theory was active on show', () => {
+  it('hides on blur without activating stale previous app when Field Theory was active on show', () => {
+    (launcher as any).window = null;
     launcher.preload();
     (launcher as any).fieldTheoryActiveOnShow = true;
+    (launcher as any).previousApp = { bundleId: 'com.apple.Safari', name: 'Safari' };
     const hide = vi.spyOn(launcher, 'hide');
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
     const blurHandler = mockWindow.on.mock.calls.find(([event]) => event === 'blur')?.[1];
 
     blurHandler?.();
 
-    expect(hide).not.toHaveBeenCalled();
+    expect(hide).toHaveBeenCalled();
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
   it('skips everything when window is already hidden (visibility guard)', () => {

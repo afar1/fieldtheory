@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -73,24 +73,25 @@ describe('isImmersiveToggleShortcut', () => {
     expect(isImmersiveToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 
-  it('rejects Cmd+Period so it can toggle the sidebar', () => {
+  it('rejects Cmd+Period so it can toggle markdown mode', () => {
     expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(false);
   });
 });
 
 describe('isMarkdownModeToggleShortcut', () => {
-  it('accepts Cmd+Comma', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(true);
+  it('accepts Cmd+Period', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
   });
 
-  it('rejects Cmd+Shift+Comma and unrelated modifiers', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '<', code: 'Comma', metaKey: true, shiftKey: true }))).toBe(false);
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true, altKey: true }))).toBe(false);
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true, ctrlKey: true }))).toBe(false);
+  it('rejects Cmd+Shift+Period and unrelated modifiers', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 
-  it('rejects bare Comma', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma' }))).toBe(false);
+  it('rejects bare period and Cmd+Comma', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(false);
   });
 });
 
@@ -125,19 +126,32 @@ describe('isMarkdownTaskToggleShortcut', () => {
 });
 
 describe('isSidebarToggleShortcut', () => {
-  it('accepts Cmd+Period', () => {
-    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
+  it('accepts Cmd+Comma', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(true);
   });
 
-  it('rejects bare period and modified period chords', () => {
-    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
-    expect(isSidebarToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
-    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
-    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
+  it('rejects bare comma, modified comma chords, and Cmd+Period', () => {
+    expect(isSidebarToggleShortcut(mkKey({ key: ',', code: 'Comma' }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '<', code: 'Comma', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true, altKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true, ctrlKey: true }))).toBe(false);
+    expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(false);
   });
 
   it('rejects Cmd+Slash so it can toggle focus mode', () => {
     expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true }))).toBe(false);
+  });
+});
+
+describe('isCommandDeleteShortcut', () => {
+  it('accepts Cmd+Delete and Cmd+ForwardDelete', () => {
+    expect(isCommandDeleteShortcut(mkKey({ key: 'Backspace', code: 'Backspace', metaKey: true }))).toBe(true);
+    expect(isCommandDeleteShortcut(mkKey({ key: 'Delete', code: 'Delete', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects delete without Command or with extra modifiers', () => {
+    expect(isCommandDeleteShortcut(mkKey({ key: 'Backspace', code: 'Backspace' }))).toBe(false);
+    expect(isCommandDeleteShortcut(mkKey({ key: 'Backspace', code: 'Backspace', metaKey: true, shiftKey: true }))).toBe(false);
   });
 });
 

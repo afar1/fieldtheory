@@ -16,6 +16,7 @@ import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
+import { buildHotkeyString, normalizeHotkeyForComparison } from '../utils/hotkeys';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -47,7 +48,7 @@ import {
   RunningApp,
   TAB_LABELS,
   nextTopNavViewMode,
-  shouldCycleTopNavWithTab,
+  shouldCycleTopNavWithAltTab,
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
@@ -87,7 +88,7 @@ type TopNavMode = 'clipboard' | 'librarian' | 'commands';
 type TopNavPaintTrace = {
   from: ViewMode;
   to: TopNavMode;
-  source: 'keyboard-tab' | 'tab-click';
+  source: 'keyboard-alt-tab' | 'tab-click';
   startedAt: number;
   highlightAppliedAt?: number;
 };
@@ -292,6 +293,7 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
  */
 export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
+  const scratchpadHotkeyRef = useRef('');
   const [isVisible, setIsVisible] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(document.visibilityState === 'visible');
   const [windowStyleTransition, setWindowStyleTransition] = useState<'idle' | 'out' | 'in'>(() => {
@@ -308,6 +310,36 @@ export default function ClipboardHistory() {
     const handler = () => setIsWindowVisible(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const setScratchpadHotkey = (hotkey: string | null | undefined) => {
+      scratchpadHotkeyRef.current = normalizeHotkeyForComparison(hotkey);
+    };
+    void window.hotkeyAPI?.getHotkey('scratchpad').then((hotkey) => {
+      if (!cancelled) setScratchpadHotkey(hotkey);
+    });
+
+    const hotkeyChangedHandler = (event: Event) => {
+      setScratchpadHotkey((event as CustomEvent<string>).detail);
+    };
+    const handler = (event: KeyboardEvent) => {
+      if (event.repeat) return;
+      const configuredHotkey = scratchpadHotkeyRef.current;
+      if (!configuredHotkey) return;
+      if (normalizeHotkeyForComparison(buildHotkeyString(event)) !== configuredHotkey) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void window.wikiAPI?.openScratchpadDefault();
+    };
+
+    window.addEventListener('fieldtheory:scratchpad-hotkey-changed', hotkeyChangedHandler);
+    document.addEventListener('keydown', handler, true);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('fieldtheory:scratchpad-hotkey-changed', hotkeyChangedHandler);
+      document.removeEventListener('keydown', handler, true);
+    };
   }, []);
   useEffect(() => {
     if (windowStyleTransition !== 'in') return;
@@ -410,7 +442,7 @@ export default function ClipboardHistory() {
     const highlightAppliedAt = applyTopNavVisualMode(next);
     viewModeRef.current = next;
     traceTopNav('top-nav-switch-start', {
-      source: 'keyboard-tab',
+      source: 'keyboard-alt-tab',
       from: previous,
       to: next,
       activeTag: document.activeElement?.tagName ?? null,
@@ -419,7 +451,7 @@ export default function ClipboardHistory() {
     topNavPaintTraceRef.current = {
       from: previous,
       to: next,
-      source: 'keyboard-tab',
+      source: 'keyboard-alt-tab',
       startedAt,
       highlightAppliedAt,
     };
@@ -436,6 +468,7 @@ export default function ClipboardHistory() {
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
   const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
+  const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
@@ -474,6 +507,9 @@ export default function ClipboardHistory() {
       window.removeEventListener('mouseleave', hideProximityChrome);
     };
   }, [focusChromeActive, isFocusChromeSurface]);
+  useEffect(() => {
+    if (!appChromeHidden) setThemeToggleProximityVisible(false);
+  }, [appChromeHidden]);
   const handleLibrarianSwitchToClipboard = useCallback(() => {
     setLibraryKeepsCurrentSizeKey(false);
     setViewMode('clipboard');
@@ -2438,49 +2474,20 @@ export default function ClipboardHistory() {
         }
       }
 
-      // Tab/Shift+Tab cycles through view modes (global shortcut, works from any view).
-      // But allow normal Tab navigation when focused on input fields.
-      if (key === 'Tab' && !hasCtrl && !hasMeta) {
-        if (!shouldCycleTopNavWithTab(document.activeElement?.tagName)) {
+      // Option+Tab/Shift+Option+Tab cycles through the left-group top-nav tabs.
+      // Plain Tab is left to focused surfaces such as the Library sidebar.
+      if (key === 'Tab' && hasAlt && !hasCtrl && !hasMeta) {
+        if (!shouldCycleTopNavWithAltTab(document.activeElement?.tagName)) {
           traceTopNav('top-nav-tab-native', {
             activeTag: document.activeElement?.tagName ?? null,
           });
-          return; // Let Tab navigate between form fields naturally.
+          return; // Let fields keep native Tab behavior.
         }
         e.preventDefault();
 
-        if (hasAlt && hasShift) {
-          // Shift+Option+Tab - cycle backwards through target apps.
-          if (targetAppInfo.runningApps.length === 0) {
-            return;
-          }
-          const prevIndex = (targetAppInfo.targetAppIndex - 1 + targetAppInfo.runningApps.length) % targetAppInfo.runningApps.length;
-          const newApp = targetAppInfo.runningApps[prevIndex];
-          setTargetAppInfo(prev => ({
-            ...prev,
-            targetApp: newApp,
-            targetAppIndex: prevIndex,
-          }));
-          window.clipboardAPI?.setTargetApp(newApp);
-        } else if (hasAlt) {
-          // Option+Tab - cycle forwards through target apps.
-          if (targetAppInfo.runningApps.length === 0) {
-            return;
-          }
-          const nextIndex = (targetAppInfo.targetAppIndex + 1) % targetAppInfo.runningApps.length;
-          const newApp = targetAppInfo.runningApps[nextIndex];
-          setTargetAppInfo(prev => ({
-            ...prev,
-            targetApp: newApp,
-            targetAppIndex: nextIndex,
-          }));
-          window.clipboardAPI?.setTargetApp(newApp);
-        } else {
-          // Tab / Shift+Tab carousels through the left-group top-nav tabs.
-          setShowSettings(false);
-          const delta = hasShift ? -1 : 1;
-          switchTopNavView(delta);
-        }
+        setShowSettings(false);
+        const delta = hasShift ? -1 : 1;
+        switchTopNavView(delta);
         return;
       }
 
@@ -3035,7 +3042,7 @@ export default function ClipboardHistory() {
         }
         
         // Default paste goes to previousApp (the app you were just in).
-        // Option+Enter goes to targetApp (the user-selected target via Option+Tab).
+        // Option+Enter goes to targetApp when one is already known.
         // Fallback to previousApp if targetApp is not set.
         const pasteBundleId = hasAlt
           ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
@@ -3406,7 +3413,7 @@ export default function ClipboardHistory() {
       setLastClickedIndex(index);
     } else {
       // Normal click: paste to previousApp (the app you were just in).
-      // Option+click: paste to targetApp (the user-selected target via Option+Tab).
+      // Option+click: paste to targetApp when one is already known.
       const hasAlt = e?.altKey;
       // Fallback to previousApp if targetApp is not set.
       const pasteBundleId = hasAlt
@@ -3639,15 +3646,17 @@ export default function ClipboardHistory() {
       {/* Draggable header area - collapses in Librarian immersive mode */}
       <div
         style={{
-          height: '52px',
-          minHeight: '52px',
-          overflow: showMicDropdown ? 'visible' : 'hidden',
+          height: 0,
+          minHeight: 0,
+          overflow: 'visible',
           display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'flex-start',
-          paddingTop: '8px',
+          alignItems: 'flex-start',
+          justifyContent: 'center',
+          position: 'relative',
+          paddingTop: 0,
           paddingLeft: '16px',
           paddingRight: '16px',
+          zIndex: 10,
           // @ts-ignore - webkit vendor prefix for Electron draggable region
           WebkitAppRegion: 'drag',
           cursor: 'grab',
@@ -3657,77 +3666,83 @@ export default function ClipboardHistory() {
           transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease, opacity 0.18s ease',
         }}
       >
-        <img
-          src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"}
-          alt="Field Theory"
+        <div
           style={{
-            height: '20px',
-            width: 'auto',
-            maxWidth: '120px',
-            objectFit: 'contain',
+            position: 'absolute',
+            top: '10px',
+            left: '50%',
+            transform: 'translateX(-50%)',
+            display: 'flex',
+            alignItems: 'center',
+            maxWidth: '220px',
+            overflow: 'hidden',
+            pointerEvents: 'none',
           }}
-        />
-        {/* Header title based on current view - Fields (clipboard) is the only view without a title */}
-        {(showSettings || viewMode === 'commands' || viewMode === 'feedback' || viewMode === 'sketch' || viewMode === 'librarian') && (
-          <span style={{
-            marginLeft: '8px',
-            fontSize: '14px',
-            fontWeight: 500,
-            color: theme.textSecondary,
-            marginRight: 'auto',
-          }}>
-            {showSettings ? 'Settings' : viewMode === 'commands' ? 'Commands' : viewMode === 'feedback' ? 'Feedback' : viewMode === 'sketch' ? 'Draw' : viewMode === 'librarian' ? 'Library' : ''}
-          </span>
-        )}
-        {!showSettings && viewMode !== 'commands' && viewMode !== 'feedback' && viewMode !== 'sketch' && viewMode !== 'librarian' && <div style={{ marginRight: 'auto' }} />}
+        >
+          <img
+            src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"}
+            alt="Field Theory"
+            style={{
+              height: '20px',
+              width: 'auto',
+              maxWidth: '120px',
+              objectFit: 'contain',
+              flex: '0 0 auto',
+            }}
+          />
+        </div>
 
-        {/* Priority Mic label - visible in all views */}
         {audioDevices.length > 0 && (
-          <span style={{
-            fontSize: '10px',
-            color: theme.textSecondary,
-            opacity: 0.7,
-            // @ts-ignore - prevent drag
-            WebkitAppRegion: 'no-drag',
-          }}>
-            Priority Mic:
-          </span>
-        )}
-
-        {/* Mic Lock dropdown - visible in all views */}
-        {audioDevices.length > 0 && (
-          <div 
-            style={{ 
-              position: 'relative',
+          <div
+            style={{
+              position: 'absolute',
+              top: showInDock ? '-21px' : '7px',
+              right: '28px',
               display: 'flex',
               alignItems: 'center',
               gap: '6px',
-              marginLeft: '6px',
               // @ts-ignore - prevent drag on dropdown
               WebkitAppRegion: 'no-drag',
-            }} 
-            data-mic-dropdown
+            }}
           >
+            <span style={{
+              fontSize: '9px',
+              color: theme.textSecondary,
+              opacity: 0.6,
+            }}>
+              Priority Mic:
+            </span>
+
+            {/* Mic Lock dropdown - visible in all views */}
+            <div
+              style={{
+                position: 'relative',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+              }}
+              data-mic-dropdown
+            >
             <button
               onClick={() => setShowMicDropdown(!showMicDropdown)}
               title="Priority Mic"
               style={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: '4px',
+                gap: '3px',
                 padding: '6px 8px',
-                fontSize: '10px',
+                fontSize: '9px',
                 color: theme.textSecondary,
                 backgroundColor: 'transparent',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '4px',
+                border: 'none',
+                borderRadius: '3px',
                 cursor: 'pointer',
                 whiteSpace: 'nowrap',
-                maxWidth: '140px',
+                maxWidth: '112px',
                 overflow: 'hidden',
               }}
             >
-              <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
                 <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
                 <line x1="12" y1="19" x2="12" y2="23"/>
@@ -3738,7 +3753,7 @@ export default function ClipboardHistory() {
                   ? audioDevices.find(d => d.id === priorityDeviceId)?.name?.replace(/^(Built-in |MacBook )/, '') || 'Mic'
                   : 'None'}
               </span>
-              <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg width="7" height="7" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
                 <polyline points="6 9 12 15 18 9"/>
               </svg>
             </button>
@@ -3846,6 +3861,7 @@ export default function ClipboardHistory() {
               </div>
               </>
             )}
+            </div>
           </div>
         )}
 
@@ -3889,11 +3905,11 @@ export default function ClipboardHistory() {
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
-            padding: '0 16px',
-            marginTop: '4px',
-            marginBottom: '8px',
+            padding: '30px 28px 0 20px',
+            marginTop: 0,
+            marginBottom: '14px',
             height: 'auto',
-            minHeight: '28px',
+            minHeight: '32px',
             overflow: 'hidden',
             opacity: appChromeHidden ? 0 : 1,
             pointerEvents: appChromeHidden ? 'none' : 'auto',
@@ -5006,7 +5022,7 @@ export default function ClipboardHistory() {
                       }
                       
                       // Normal click: paste to previousApp (the app you were just in).
-                      // Option+click: paste to targetApp (user-selected via Option+Tab).
+                      // Option+click: paste to targetApp when one is already known.
                       const hasAlt = e.altKey;
                       // Fallback to previousApp if targetApp is not set.
                       const pasteBundleId = hasAlt
@@ -7109,6 +7125,8 @@ export default function ClipboardHistory() {
 
       {footerChromeHidden && (
         <div
+          onMouseEnter={() => setThemeToggleProximityVisible(true)}
+          onMouseLeave={() => setThemeToggleProximityVisible(false)}
           style={{
             position: 'absolute',
             right: '16px',
@@ -7117,6 +7135,13 @@ export default function ClipboardHistory() {
               : { bottom: '8px' }),
             zIndex: 20,
             pointerEvents: 'auto',
+            width: '34px',
+            height: '34px',
+            display: 'flex',
+            alignItems: 'flex-end',
+            justifyContent: 'flex-end',
+            opacity: appChromeHidden && !themeToggleProximityVisible ? 0 : 1,
+            transition: 'opacity 180ms ease',
           }}
         >
           {renderThemeToggleButton()}
@@ -7386,7 +7411,7 @@ export default function ClipboardHistory() {
               color: theme.textSecondary,
             }}>
               {/* Left column (A-N) */}
-              <span>change view <KeyCap>tab</KeyCap></span>
+              <span>change view <KeyCap>⌥</KeyCap><KeyCap>tab</KeyCap></span>
               <span>close <KeyCap>esc</KeyCap></span>
               <span>copy <KeyCap>⌘</KeyCap><KeyCap>c</KeyCap></span>
               <span>delete <KeyCap>⌫</KeyCap></span>
@@ -7405,7 +7430,6 @@ export default function ClipboardHistory() {
               <span>search <KeyCap>/</KeyCap></span>
               <span>select <KeyCap>x</KeyCap></span>
               <span>stack <KeyCap>s</KeyCap></span>
-              <span>target app <KeyCap>⌥</KeyCap><KeyCap>tab</KeyCap></span>
               <span>team share <KeyCap>t</KeyCap></span>
               <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
               <span>unstack <KeyCap>u</KeyCap></span>

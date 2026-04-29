@@ -32,6 +32,7 @@ import {
   normalizeHiddenDefaultFolders,
   normalizeSeededReadmes,
   parseMarkdownHeader,
+  parseMarkdownTodoState,
   type WikiNode,
 } from './librarianManager';
 
@@ -155,6 +156,19 @@ describe('parseMarkdownHeader', () => {
   });
 });
 
+describe('parseMarkdownTodoState', () => {
+  it('reads open and done states from todo frontmatter', () => {
+    expect(parseMarkdownTodoState('---\ntodo: true\ntodo_state: open\n---\n# Task')).toBe('open');
+    expect(parseMarkdownTodoState('---\ntodo: done\n---\n# Task')).toBe('done');
+  });
+
+  it('supports task aliases and non-task notes', () => {
+    expect(parseMarkdownTodoState('---\ntask: true\ntask_state: done\n---\n# Task')).toBe('done');
+    expect(parseMarkdownTodoState('---\ntodo: false\n---\n# Note')).toBeNull();
+    expect(parseMarkdownTodoState('# Note')).toBeNull();
+  });
+});
+
 describe('artifact signature helpers', () => {
   it('extracts signature metadata from supported header lines', () => {
     expect(extractArtifactModelSignature('*Model: GPT-5 Codex*')).toBe('GPT-5 Codex');
@@ -262,6 +276,25 @@ describe('recursive wiki tree scan', () => {
     expect(entries?.kind).toBe('dir');
     if (entries?.kind !== 'dir') return;
     expect(entries.children.map((node) => node.name)).toEqual(['README', 'alpha', 'zeta']);
+  });
+
+  it('adds todo state metadata to markdown file nodes', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'scratchpad', 'open.md'), '---\ntodo: true\ntodo_state: open\n---\n# Open Task\n');
+    fs.writeFileSync(path.join(root, 'scratchpad', 'done.md'), '---\ntask: done\n---\n# Done Task\n');
+    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '# Note\n');
+
+    const tree = scan(root);
+    const scratchpad = tree.find((node) => node.kind === 'dir' && node.name === 'scratchpad');
+    expect(scratchpad?.kind).toBe('dir');
+    if (scratchpad?.kind !== 'dir') return;
+    const files = scratchpad.children.filter((node): node is Extract<WikiNode, { kind: 'file' }> => node.kind === 'file');
+    expect(files.map((file) => [file.name, file.todoState])).toEqual([
+      ['done', 'done'],
+      ['note', undefined],
+      ['open', 'open'],
+    ]);
   });
 
   it('reuses the wiki tree until a wiki change invalidates it', () => {
