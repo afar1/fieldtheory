@@ -395,6 +395,27 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
 
+  it('creates suggested-title wiki files with a blank editable H1', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      createWikiFileWithTitleSuggestion: (folderName: string, titleSuggestion: string) => { relPath: string; title: string; titleSuggestion?: string; content: string } | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    const page = manager.createWikiFileWithTitleSuggestion('scratchpad', 'Wednesday Apr 29th');
+
+    expect(page?.relPath).toBe('scratchpad/wednesday-apr-29th');
+    expect(page?.title).toBe('');
+    expect(page?.titleSuggestion).toBe('Wednesday Apr 29th');
+    expect(page?.content).toBe('# \n');
+    expect(fs.readFileSync(path.join(root, 'scratchpad', 'wednesday-apr-29th.md'), 'utf-8')).toBe('# \n');
+  });
+
   it('creates wiki folders without slugging the requested folder path', () => {
     const root = makeTempDir();
 

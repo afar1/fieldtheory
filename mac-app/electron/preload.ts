@@ -2837,6 +2837,23 @@ const shellAPI = {
 
 type ShellAPI = typeof shellAPI;
 
+type AgentImproveLaunchRequest = {
+  tool: 'codex' | 'claude';
+  instruction: string;
+  content: string;
+  contextKind: 'selection' | 'markdown-file';
+  filePath?: string | null;
+  title?: string | null;
+  cwd?: string | null;
+};
+
+const agentImproveAPI = {
+  launch: (request: AgentImproveLaunchRequest): Promise<{ promptPath: string; command: string }> =>
+    ipcRenderer.invoke('agent-improve:launch', request),
+};
+
+type AgentImproveAPI = typeof agentImproveAPI;
+
 const diagnosticsAPI: DiagnosticsAPI = {
   getDiagnostics: async (): Promise<unknown> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS);
@@ -3857,6 +3874,7 @@ const wikiAPI = {
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
   save: (relPath: string, content: string): Promise<boolean> => ipcRenderer.invoke('wiki:save', relPath, content),
   createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
+  createFileWithTitleSuggestion: (folderName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFileWithTitleSuggestion', folderName),
   deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
   createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
@@ -3874,8 +3892,14 @@ const wikiAPI = {
   },
   // Hotkey-driven "new scratchpad" flow — main process has already created
   // the file and wants us to switch to Library, open it, and start editing.
-  onOpenScratchpad: (callback: (relPath: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
+  onOpenScratchpad: (callback: (relPath: string, titleSuggestion?: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: string | { relPath: string; titleSuggestion?: string }) => {
+      if (typeof payload === 'string') {
+        callback(payload);
+        return;
+      }
+      callback(payload.relPath, payload.titleSuggestion);
+    };
     ipcRenderer.on('wiki:openScratchpad', handler);
     return () => ipcRenderer.removeListener('wiki:openScratchpad', handler);
   },
@@ -4061,6 +4085,7 @@ const agentHooksAPI = {
 };
 contextBridge.exposeInMainWorld('agentHooksAPI', agentHooksAPI);
 
+contextBridge.exposeInMainWorld('agentImproveAPI', agentImproveAPI);
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
@@ -4466,6 +4491,7 @@ declare global {
     quotaAPI: QuotaAPI;
     accountAPI: AccountAPI;
     shellAPI: ShellAPI;
+    agentImproveAPI: AgentImproveAPI;
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;

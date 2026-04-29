@@ -1100,6 +1100,28 @@ interface ShellAPI {
   setRepresentedFilename: (fullPath: string) => Promise<void>;
 }
 
+type AgentImproveTool = 'codex' | 'claude';
+type AgentImproveContextKind = 'selection' | 'markdown-file';
+
+interface AgentImproveLaunchRequest {
+  tool: AgentImproveTool;
+  instruction: string;
+  content: string;
+  contextKind: AgentImproveContextKind;
+  filePath?: string | null;
+  title?: string | null;
+  cwd?: string | null;
+}
+
+interface AgentImproveLaunchResult {
+  promptPath: string;
+  command: string;
+}
+
+interface AgentImproveAPI {
+  launch: (request: AgentImproveLaunchRequest) => Promise<AgentImproveLaunchResult>;
+}
+
 /**
  * Diagnostics API for system diagnostics.
  */
@@ -1610,6 +1632,7 @@ declare global {
 
   interface WikiPage extends WikiPageMeta {
     content: string;
+    titleSuggestion?: string;
   }
 
   interface WikiFolder {
@@ -1687,13 +1710,14 @@ declare global {
     getPage: (relPath: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string) => Promise<boolean>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
+    createFileWithTitleSuggestion: (folderName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
     rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
-    onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
+    onOpenScratchpad: (callback: (relPath: string, titleSuggestion?: string) => void) => () => void;
   }
 
   // External markdown files opened via macOS `open-file` for paths that fall
@@ -2129,6 +2153,7 @@ declare global {
     cursorStatusAPI?: CursorStatusAPI;
     quotaAPI?: QuotaAPI;
     shellAPI?: ShellAPI;
+    agentImproveAPI?: AgentImproveAPI;
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
