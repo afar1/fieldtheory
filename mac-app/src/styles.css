@@ -42,3 +42,8 @@ input, textarea, [contenteditable="true"] {
   user-select: text;
   -webkit-user-select: text;
 }
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: gray transparent;
+}
