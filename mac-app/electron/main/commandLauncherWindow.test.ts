@@ -94,6 +94,46 @@ describe('CommandLauncherWindow.show()', () => {
     });
   });
 
+  it('uses cached frontmost window bounds without waiting for fresh bounds', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.apple.Safari',
+        name: 'Safari',
+        windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
+      })),
+      getFrontmostWindowBounds: vi.fn(() => {
+        throw new Error('should not fetch fresh bounds before showing');
+      }),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show();
+
+    expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 338,
+      y: 273,
+      width: 425,
+      height: 36,
+    });
+  });
+
+  it('resets renderer state before showing and focusing the window', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.apple.Safari', name: 'Safari' })),
+      getFrontmostWindowBounds: vi.fn(),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show();
+
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset');
+    expect(mockWindow.webContents.send.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.show.mock.invocationCallOrder[0]);
+    expect(mockWindow.show.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.focus.mock.invocationCallOrder[0]);
+  });
+
   it('does not replace an external previous app with Field Theory', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
@@ -125,6 +165,39 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
     expect(launcher.wasFieldTheoryActiveOnShow()).toBe(false);
+  });
+});
+
+describe('CommandLauncherWindow.preload()', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockIpcMainHandlers.clear();
+    mockWindow.isVisible.mockReturnValue(false);
+    mockWindow.isDestroyed.mockReturnValue(false);
+  });
+
+  it('creates and loads the hidden launcher window before first show', () => {
+    const launcher = new CommandLauncherWindow();
+
+    launcher.preload();
+
+    expect(BrowserWindow).toHaveBeenCalled();
+    expect(mockWindow.loadFile).toHaveBeenCalled();
+    expect(mockWindow.show).not.toHaveBeenCalled();
+  });
+
+  it('passes the current app theme to the launcher before renderer startup', () => {
+    const launcher = new CommandLauncherWindow(undefined, {
+      getInitialDarkMode: () => true,
+    });
+
+    launcher.preload();
+
+    expect(BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({
+      webPreferences: expect.objectContaining({
+        additionalArguments: ['--field-theory-dark-mode=true'],
+      }),
+    }));
   });
 });
 

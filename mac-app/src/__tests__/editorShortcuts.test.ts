@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -91,6 +91,36 @@ describe('isMarkdownModeToggleShortcut', () => {
 
   it('rejects bare Comma', () => {
     expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma' }))).toBe(false);
+  });
+});
+
+describe('isMarkdownTaskShortcut', () => {
+  it('accepts Shift+Cmd+0 from the main keyboard', () => {
+    expect(isMarkdownTaskShortcut(mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isMarkdownTaskShortcut(mkKey({ key: '0', code: 'Digit0', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('accepts Shift+Cmd+0 from the numpad', () => {
+    expect(isMarkdownTaskShortcut(mkKey({ key: '0', code: 'Numpad0', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('rejects unshifted and unrelated modified zero chords', () => {
+    expect(isMarkdownTaskShortcut(mkKey({ key: '0', code: 'Digit0', metaKey: true }))).toBe(false);
+    expect(isMarkdownTaskShortcut(mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownTaskShortcut(mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true, ctrlKey: true }))).toBe(false);
+  });
+});
+
+describe('isMarkdownTaskToggleShortcut', () => {
+  it('accepts Cmd+Enter', () => {
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects shifted or unrelated Enter chords', () => {
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter' }))).toBe(false);
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 });
 

@@ -34,11 +34,17 @@ const TRIAL_CYCLE_MS  = 30 * 24 * 60 * 60 * 1000;
 
 type TrialState = 'pro' | 'trial' | 'expired';
 
-function computeState(profile: { is_paid_subscriber: boolean; trial_started_at: string | null }): {
+function computeState(profile: { is_paid_subscriber: boolean; trial_started_at: string | null; app_access_mode?: 'active' | 'read_only' | 'disabled' | null }): {
   state: TrialState;
   trialEndsAt: string | null;
   nextTrialResetAt: string | null;
 } {
+  if (profile.app_access_mode === 'disabled') {
+    return { state: 'expired', trialEndsAt: null, nextTrialResetAt: null };
+  }
+  if (profile.app_access_mode === 'read_only') {
+    return { state: 'expired', trialEndsAt: null, nextTrialResetAt: null };
+  }
   if (profile.is_paid_subscriber) {
     return { state: 'pro', trialEndsAt: null, nextTrialResetAt: null };
   }
@@ -104,13 +110,14 @@ serve(async (req: Request) => {
   // Get user's profile (state inputs).
   const { data: profile } = await supabase
     .from('profiles')
-    .select('tier, is_paid_subscriber, trial_started_at')
+    .select('tier, is_paid_subscriber, trial_started_at, app_access_mode')
     .eq('id', user.id)
     .single();
 
   const { state, trialEndsAt, nextTrialResetAt } = computeState({
     is_paid_subscriber: profile?.is_paid_subscriber ?? false,
     trial_started_at: profile?.trial_started_at ?? null,
+    app_access_mode: profile?.app_access_mode ?? 'active',
   });
 
   // Legacy `tier` field for old mac-app clients: trial users see pro, expired users see free.
@@ -133,6 +140,7 @@ serve(async (req: Request) => {
   return new Response(JSON.stringify({
     tier,
     state,
+    app_access_mode: profile?.app_access_mode ?? 'active',
     trialEndsAt,
     nextTrialResetAt,
     monthYear,

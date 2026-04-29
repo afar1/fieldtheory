@@ -37,6 +37,8 @@ type SettingsSection =
   | 'hot-mic'
   | 'rectangle';
 
+type FieldTheoryWindowMode = 'panel' | 'app';
+
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
   | 'screenshot'
@@ -433,11 +435,8 @@ export default function SettingsPanel({
   // Cursor status window color debug - shows magenta native window background.
   const [cursorStatusWindowColorDebug, setCursorStatusWindowColorDebug] = useState(false);
 
-  // Show in Dock - whether app appears in Dock and Cmd+Tab.
-  const [showInDock, setShowInDock] = useState(false);
-
-  // Click-away dismissal - whether the panel hides when another app gets focus.
-  const [clickAwayToDismiss, setClickAwayToDismiss] = useState(true);
+  // Field Theory window behavior - panel uses current overlay mechanics, app behaves like a normal app.
+  const [fieldTheoryWindowMode, setFieldTheoryWindowMode] = useState<FieldTheoryWindowMode>('panel');
 
   // Show fieldtheory.dev link in footer.
   // showFieldTheoryLink always true — toggle removed from UI
@@ -545,14 +544,9 @@ export default function SettingsPanel({
         setDataRetentionDays(days);
       });
       
-      // Load show in dock setting
-      window.clipboardAPI.getShowInDock?.().then(show => {
-        setShowInDock(show);
-      });
-
-      // Load click-away dismissal setting
-      window.clipboardAPI.getClickAwayToDismiss?.().then(enabled => {
-        setClickAwayToDismiss(enabled);
+      // Load Field Theory window behavior.
+      window.clipboardAPI.getFieldTheoryWindowMode?.().then(mode => {
+        setFieldTheoryWindowMode(mode);
       });
 
       // Load in-app performance HUD setting.
@@ -786,17 +780,16 @@ export default function SettingsPanel({
     }
   };
 
-  // Handler for toggling click-away dismissal.
-  const handleToggleClickAwayToDismiss = async (enabled: boolean) => {
-    if (!window.clipboardAPI?.setClickAwayToDismiss) return;
+  const handleSetFieldTheoryWindowMode = async (mode: FieldTheoryWindowMode) => {
+    if (!window.clipboardAPI?.setFieldTheoryWindowMode) return;
 
     try {
-      const success = await window.clipboardAPI.setClickAwayToDismiss(enabled);
+      const success = await window.clipboardAPI.setFieldTheoryWindowMode(mode);
       if (success) {
-        setClickAwayToDismiss(enabled);
+        setFieldTheoryWindowMode(mode);
       }
     } catch (err) {
-      console.error('Failed to toggle click-away dismissal:', err);
+      console.error('Failed to change Field Theory window behavior:', err);
     }
   };
 
@@ -1483,16 +1476,16 @@ export default function SettingsPanel({
 
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={styles.rowLabel}>Click away to dismiss</span>
+            <span style={styles.rowLabel}>Normal app window</span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Turn off to keep Field Theory open until Escape, the menu button, or the shortcut
+              Show Field Theory in the Dock and let it behave like a regular macOS window
             </span>
           </div>
           <button
-            onClick={() => handleToggleClickAwayToDismiss(!clickAwayToDismiss)}
-            style={{ ...styles.toggle, backgroundColor: clickAwayToDismiss ? theme.success : '#d1d5db' }}
+            onClick={() => handleSetFieldTheoryWindowMode(fieldTheoryWindowMode === 'app' ? 'panel' : 'app')}
+            style={{ ...styles.toggle, backgroundColor: fieldTheoryWindowMode === 'app' ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: clickAwayToDismiss ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
       </div>

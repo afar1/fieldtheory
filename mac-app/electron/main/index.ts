@@ -12,7 +12,7 @@ import { isAlfredApp } from './alfredVisibility';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistorySizeKey } from './preferences';
+import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, resolveFieldTheoryWindowMode, type ClipboardHistorySizeKey, type FieldTheoryWindowMode } from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -62,9 +62,11 @@ import {
 import { AgentAttentionManager } from './agentAttentionManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { QuotaManager } from './quotaManager';
+import { AccountStatusManager } from './accountStatusManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
+import { LibrarySyncService } from './librarySyncService';
 import { CommandsIPCChannels } from './types/commands';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
@@ -113,11 +115,80 @@ const log = createLogger('Main');
 const BOOT_MARK = Date.now();
 const VISION_BUILD_ENABLED = false;
 const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
+const BOOKMARK_BACKGROUND_SYNC_STALE_MS = 15 * 60 * 1000;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
 const { exec, execFile: execFileCp } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFileCp);
+
+type BookmarkBackgroundSyncResult =
+  | { status: 'synced' | 'already-running' | 'too-recent' | 'missing-cli' | 'unavailable' }
+  | { status: 'failed'; error: string };
+
+let bookmarkBackgroundSyncInFlight: Promise<BookmarkBackgroundSyncResult> | null = null;
+let bookmarkBackgroundSyncLastAttemptAt = 0;
+
+function findFieldTheoryCli(): string | null {
+  const candidates = [
+    '/opt/homebrew/bin/ft',
+    '/usr/local/bin/ft',
+    'ft',
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate === 'ft') return candidate;
+    try {
+      fs.accessSync(candidate, fs.constants.X_OK);
+      return candidate;
+    } catch {
+      // Keep trying common install locations.
+    }
+  }
+
+  return null;
+}
+
+function fieldTheoryCliEnv(): NodeJS.ProcessEnv {
+  const pathValue = process.env.PATH ?? '';
+  const extraPaths = ['/opt/homebrew/bin', '/usr/local/bin', '/usr/bin', '/bin'];
+  return {
+    ...process.env,
+    PATH: [...extraPaths, pathValue].filter(Boolean).join(':'),
+  };
+}
+
+async function syncBookmarksFromCliIfStale(): Promise<BookmarkBackgroundSyncResult> {
+  if (!bookmarksManager) return { status: 'unavailable' };
+  if (bookmarkBackgroundSyncInFlight) return { status: 'already-running' };
+
+  const now = Date.now();
+  if (bookmarkBackgroundSyncLastAttemptAt > 0 && now - bookmarkBackgroundSyncLastAttemptAt < BOOKMARK_BACKGROUND_SYNC_STALE_MS) {
+    return { status: 'too-recent' };
+  }
+
+  const cli = findFieldTheoryCli();
+  if (!cli) return { status: 'missing-cli' };
+
+  bookmarkBackgroundSyncLastAttemptAt = now;
+  bookmarkBackgroundSyncInFlight = (async () => {
+    try {
+      await execFileAsync(cli, ['sync', '--yes'], { env: fieldTheoryCliEnv(), maxBuffer: 10 * 1024 * 1024 });
+      bookmarksManager?.reloadAndEmitChanged();
+      return { status: 'synced' as const };
+    } catch (error) {
+      const err = error as NodeJS.ErrnoException;
+      if (err.code === 'ENOENT') return { status: 'missing-cli' as const };
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      log.debug('Background bookmark sync failed:', message);
+      return { status: 'failed' as const, error: message };
+    } finally {
+      bookmarkBackgroundSyncInFlight = null;
+    }
+  })();
+
+  return bookmarkBackgroundSyncInFlight;
+}
 
 function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
@@ -131,12 +202,16 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
   });
 }
 
-// Activate target app and paste in a single osascript (avoids focus race conditions).
-async function activateAndPaste(targetApp: { bundleId: string; name: string } | null): Promise<void> {
+// Activate the target app, then optionally hide launcher chrome before pasting.
+async function activateAndPaste(
+  targetApp: { bundleId: string; name: string } | null,
+  options: { beforePaste?: () => void | Promise<void> } = {},
+): Promise<void> {
   appendCommandLauncherTrace('activate-and-paste-start', {
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
   });
+  const beforePaste = options.beforePaste;
   if (targetApp) {
     const bundleId = targetApp.bundleId;
     if (bundleId.includes('"') || bundleId.includes("'")) {
@@ -144,9 +219,13 @@ async function activateAndPaste(targetApp: { bundleId: string; name: string } | 
       appendCommandLauncherTrace('activate-and-paste-invalid-bundle', { bundleId });
       return;
     }
-    const script = `tell application id "${bundleId}"\n  activate\nend tell\ndelay 0.1\ntell application "System Events"\n  keystroke "v" using command down\nend tell`;
-    await execFileAsync('osascript', ['-e', script], { timeout: 3000 });
+    const activateScript = `tell application id "${bundleId}"\n  activate\nend tell`;
+    await execFileAsync('osascript', ['-e', activateScript], { timeout: 3000 });
+    await beforePaste?.();
+    await new Promise(resolve => setTimeout(resolve, 40));
+    await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down'], { timeout: 3000 });
   } else {
+    await beforePaste?.();
     await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
   }
   appendCommandLauncherTrace('activate-and-paste-success', {
@@ -293,6 +372,7 @@ let dynamicIslandManager: DynamicIslandManager | null = null;
 let agentAttentionManager: AgentAttentionManager | null = null;
 let agentHookInstaller: AgentHookInstaller | null = null;
 let quotaManager: QuotaManager | null = null;
+let accountStatusManager: AccountStatusManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
 let recentManager: RecentManager | null = null;
@@ -300,12 +380,26 @@ let bookmarksManager: BookmarksManager | null = null;
 let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let commandSyncService: CommandSyncService | null = null;
+let librarySyncService: LibrarySyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
+
+function canWriteFieldTheoryContent(): boolean {
+  return accountStatusManager?.getCapabilityMode() !== 'read_only';
+}
+
+function blockWrite(reason: string = 'read_only'): { blocked: true; reason: string } {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('account:blockedWrite', { reason });
+    }
+  });
+  return { blocked: true, reason };
+}
 
 function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
   if (!appInfo?.bundleId || !appInfo.name || isFieldTheoryBundleId(appInfo.bundleId)) {
@@ -813,7 +907,21 @@ function registerHotkeysAfterOnboarding(): void {
 
     // Use internal state for instant toggle (avoids querying window system).
     const showing = clipboardHistoryWindow.isShowing();
-    const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+    const existingWindow = clipboardHistoryWindow.getWindow();
+
+    if (
+      showing
+      && shouldUseClipboardAppWindowMode()
+      && existingWindow
+      && !existingWindow.isDestroyed()
+      && existingWindow.isVisible()
+      && !existingWindow.isFocused()
+    ) {
+      clipboardHistoryWindow.focusExistingWindow();
+      cursorStatusManager?.refreshWindowProperties();
+      dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-hotkey');
+      return;
+    }
 
     if (!showing) {
       clipboardHistoryWindow.playOpenSound();
@@ -824,7 +932,7 @@ function registerHotkeysAfterOnboarding(): void {
       // overlay backing on some macOS compositor paths.
       cursorStatusManager?.refreshWindowProperties();
       dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-hotkey');
-    } else if (!showInDock) {
+    } else {
       // If in immersive mode, exit fullscreen instead of hiding (like pressing ESC)
       if (clipboardHistoryWindow.getImmersiveMode()) {
         clipboardHistoryWindow.sendExitFullscreen();
@@ -1151,6 +1259,7 @@ function createWindow(): void {
     minHeight: 400, // More compact for settings
     backgroundColor: '#f5f5f5',
     titleBarStyle: 'hiddenInset', // Modern macOS style with traffic lights in content.
+    roundedCorners: true,
     skipTaskbar: !showInDock, // Don't show in Dock when in panel mode
     webPreferences: {
       contextIsolation: true,
@@ -1460,6 +1569,66 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   return window;
 }
 
+function getFieldTheoryWindowMode(): FieldTheoryWindowMode {
+  return resolveFieldTheoryWindowMode(preferencesManager?.get());
+}
+
+function shouldUseClipboardAppWindowMode(): boolean {
+  return getFieldTheoryWindowMode() === 'app';
+}
+
+async function prepareClipboardWindowStyleTransition(): Promise<void> {
+  const window = clipboardHistoryWindow?.getWindow();
+  if (!window || window.isDestroyed() || !window.isVisible()) return;
+
+  await window.webContents.executeJavaScript(
+    "localStorage.setItem('ftWindowStyleTransitionIn', 'true')",
+    true
+  ).catch(() => undefined);
+
+  await new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      ipcMain.removeListener('clipboard:windowStyleTransitionReady', onReady);
+      resolve();
+    };
+    const onReady = (event: Electron.IpcMainEvent) => {
+      if (event.sender !== window.webContents) return;
+      finish();
+    };
+    const timeout = setTimeout(finish, 220);
+    ipcMain.on('clipboard:windowStyleTransitionReady', onReady);
+    window.webContents.send('clipboard:windowStyleTransitionOut');
+  });
+}
+
+async function applyClipboardWindowStyleChange(reason: string, restoreSettings: boolean = false): Promise<void> {
+  if (process.platform === 'darwin') {
+    if (shouldUseClipboardAppWindowMode()) {
+      await app.dock.show();
+    } else {
+      app.dock.hide();
+    }
+  }
+
+  if (!clipboardHistoryWindow) return;
+
+  const wasVisible = clipboardHistoryWindow.isVisible();
+  const bounds = clipboardHistoryWindow.getWindow()?.getBounds();
+  await prepareClipboardWindowStyleTransition();
+
+  clipboardHistoryWindow.destroy();
+  clipboardHistoryWindow = initClipboardHistoryWindow();
+
+  if (wasVisible && bounds) {
+    suspendDynamicIslandFocusForClipboardHistory(reason);
+    clipboardHistoryWindow.show(bounds, restoreSettings, true);
+  }
+}
+
 function suspendDynamicIslandFocusForClipboardHistory(_reason: string): void {
   if (clipboardHistoryDynamicIslandFocusRestoreTimer) {
     clearTimeout(clipboardHistoryDynamicIslandFocusRestoreTimer);
@@ -1670,12 +1839,20 @@ function setupLibrarianIPCHandlers(): void {
     if (!librarianManager) {
       return false;
     }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.saveReading(filePath, content);
   });
 
   // Delete a reading file
   ipcMain.handle('librarian:deleteReading', (_event, filePath: string): boolean => {
     if (!librarianManager) {
+      return false;
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
       return false;
     }
     return librarianManager.deleteReading(filePath);
@@ -1717,31 +1894,55 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('library:addRoot', (_event, dirPath: string): LibraryRoot | null => {
     if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.addLibraryRoot(dirPath);
   });
 
   ipcMain.handle('library:removeRoot', (_event, dirPath: string): boolean => {
     if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.removeLibraryRoot(dirPath);
   });
 
   ipcMain.handle('library:createFile', (_event, rootPath: string, folderRelPath: string, fileName: string): WikiPage | null => {
     if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.createLibraryFile(rootPath, folderRelPath, fileName);
   });
 
   ipcMain.handle('library:createDir', (_event, rootPath: string, dirRelPath: string): boolean => {
     if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.createLibraryDir(rootPath, dirRelPath);
   });
 
   ipcMain.handle('library:deleteDir', async (_event, rootPath: string, dirRelPath: string): Promise<boolean> => {
     if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
   });
 
   ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): string | null => {
     if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath);
   });
 
@@ -1760,31 +1961,55 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('wiki:save', (_event, relPath: string, content: string): boolean => {
     if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.saveWikiPage(relPath, content);
   });
 
   ipcMain.handle('wiki:createFile', (_event, folderName: string, fileName: string): WikiPage | null => {
     if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.createWikiFile(folderName, fileName);
   });
 
   ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
     if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.deleteWikiPage(relPath);
   });
 
   ipcMain.handle('wiki:createScratchpadDefault', (): WikiPage | null => {
     if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.createScratchpadDefault();
   });
 
   ipcMain.handle('wiki:createDir', (_event, dirName: string): boolean => {
     if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager.createWikiDir(dirName);
   });
 
   ipcMain.handle('wiki:rename', (_event, relPath: string, newName: string): string | null => {
     if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.renameWikiPage(relPath, newName);
   });
 
@@ -1836,6 +2061,10 @@ function setupLibrarianIPCHandlers(): void {
   );
 
   ipcMain.handle('external:save', (_event, absPath: string, content: string): boolean => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     try {
       const canonical = fs.realpathSync(absPath);
       if (!isAllowedMarkdownExt(canonical)) return false;
@@ -1850,6 +2079,7 @@ function setupLibrarianIPCHandlers(): void {
   if (librarianManager) {
     librarianManager.startWikiWatcher();
     librarianManager.on('wiki:changed', () => {
+      librarySyncService?.scheduleSync();
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
           w.webContents.send('wiki:changed');
@@ -1858,6 +2088,7 @@ function setupLibrarianIPCHandlers(): void {
       });
     });
     librarianManager.on('library:changed', () => {
+      librarySyncService?.scheduleSync();
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('library:changed');
       });
@@ -1875,6 +2106,8 @@ function setupLibrarianIPCHandlers(): void {
     if (!bookmarksManager) return { bookmarks: [], folders: [] };
     return bookmarksManager.getSnapshot();
   });
+
+  ipcMain.handle('bookmarks:syncIfStale', () => syncBookmarksFromCliIfStale());
 
   ipcMain.handle('bookmarks:getAuthors', () => {
     if (!bookmarksManager) return [];
@@ -1935,6 +2168,10 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:saveWebUrl', async (_event, url: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { success: false, error: 'Field Theory is read-only' };
+    }
     if (!bookmarksManager) {
       return { success: false, error: 'Bookmarks not initialized' };
     }
@@ -1992,6 +2229,10 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('bookmarks:getActiveWebPage', async () => getActiveWebPageForLauncher('get-active-web-page'));
 
   ipcMain.handle('bookmarks:saveActiveWebPage', async () => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { success: false, error: 'Field Theory is read-only' };
+    }
     if (!bookmarksManager) {
       return { success: false, error: 'Bookmarks not initialized' };
     }
@@ -2091,12 +2332,20 @@ function setupLibrarianIPCHandlers(): void {
     if (!librarianManager) {
       return null;
     }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
     return librarianManager.addWatchedDir(dirPath);
   });
 
   // Remove a watched directory (by path)
   ipcMain.handle('librarian:removeWatchedDir', (_event, dirPath: string): boolean => {
     if (!librarianManager) {
+      return false;
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
       return false;
     }
     return librarianManager.removeWatchedDir(dirPath);
@@ -2131,6 +2380,10 @@ function setupLibrarianIPCHandlers(): void {
 
   // Enable or disable Librarian
   ipcMain.handle('librarian:setEnabled', (_event, enabled: boolean): boolean => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager?.setEnabled(enabled) ?? false;
   });
 
@@ -2146,6 +2399,10 @@ function setupLibrarianIPCHandlers(): void {
 
   // Create welcome artifact for setup wizard
   ipcMain.handle('librarian:createWelcomeArtifact', (_event, dirPath: string): boolean => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager?.createWelcomeArtifact(dirPath) ?? false;
   });
 
@@ -2175,6 +2432,10 @@ function setupLibrarianIPCHandlers(): void {
 
   // Set custom rule content
   ipcMain.handle('librarian:setCustomRuleContent', (_event, content: string | undefined): boolean => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return librarianManager?.setCustomRuleContent(content) ?? false;
   });
 
@@ -4968,46 +5229,52 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  // Show in Dock - controls whether app appears in Dock and Cmd+Tab.
+  // Field Theory window behavior - panel uses the floating overlay, app uses a normal app window.
+  ipcMain.handle('clipboard:getFieldTheoryWindowMode', async () => {
+    return getFieldTheoryWindowMode();
+  });
+
+  ipcMain.handle('clipboard:setFieldTheoryWindowMode', async (_event, mode: FieldTheoryWindowMode) => {
+    if (!preferencesManager || (mode !== 'panel' && mode !== 'app')) {
+      return false;
+    }
+
+    const wasAppWindowMode = shouldUseClipboardAppWindowMode();
+    await preferencesManager.save({
+      fieldTheoryWindowMode: mode,
+      showInDock: mode === 'app',
+      clickAwayToDismiss: mode === 'panel',
+    });
+
+    if (wasAppWindowMode !== shouldUseClipboardAppWindowMode()) {
+      await applyClipboardWindowStyleChange('field-theory-window-mode-toggle', true);
+    }
+    return true;
+  });
+
+  // Show in Dock - legacy API; maps onto Field Theory window behavior.
   ipcMain.handle('clipboard:getShowInDock', async () => {
     if (!preferencesManager) {
       return false;
     }
-    return preferencesManager.getPreference('showInDock') ?? false;
+    return shouldUseClipboardAppWindowMode();
   });
   
   ipcMain.handle('clipboard:setShowInDock', async (_event, show: boolean) => {
     if (!preferencesManager) {
       return false;
     }
-    await preferencesManager.save({ showInDock: show });
+    const wasAppWindowMode = shouldUseClipboardAppWindowMode();
+    await preferencesManager.save({
+      showInDock: show,
+      fieldTheoryWindowMode: show ? 'app' : 'panel',
+      clickAwayToDismiss: !show,
+    });
     
-    // Apply immediately. Window type can't change dynamically, so recreate the window.
-    if (process.platform === 'darwin') {
-      if (show) {
-        await app.dock.show();
-      } else {
-        app.dock.hide();
-      }
-      
-      // Recreate window with correct type (panel vs normal window with titlebar).
-      if (clipboardHistoryWindow) {
-        const wasVisible = clipboardHistoryWindow.isVisible();
-        const bounds = clipboardHistoryWindow.getWindow()?.getBounds();
-        
-        // Destroy the old window.
-        clipboardHistoryWindow.destroy();
-        clipboardHistoryWindow = null;
-        
-        // Reinitialize with new window type.
-        clipboardHistoryWindow = initClipboardHistoryWindow();
-        
-        // If it was visible, show it again at the same position.
-        if (wasVisible && bounds) {
-          suspendDynamicIslandFocusForClipboardHistory('show-window-type-toggle');
-          clipboardHistoryWindow.show(bounds);
-        }
-      }
+    // Apply immediately. Window type can't change dynamically, so recreate
+    // only when the effective native style changes.
+    if (wasAppWindowMode !== shouldUseClipboardAppWindowMode()) {
+      await applyClipboardWindowStyleChange('show-window-type-toggle', true);
     }
     return true;
   });
@@ -5493,11 +5760,19 @@ function setupClipboardIPCHandlers(): void {
     if (!commandsManager) {
       return false;
     }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return commandsManager.saveCommand(filePath, content);
   });
 
   ipcMain.handle(CommandsIPCChannels.CREATE_COMMAND, async (_event, directoryPath: string, name: string, content: string) => {
     if (!commandsManager) {
+      return null;
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
       return null;
     }
     return commandsManager.createCommand(directoryPath, name, content);
@@ -5507,11 +5782,19 @@ function setupClipboardIPCHandlers(): void {
     if (!commandsManager) {
       return false;
     }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
     return commandsManager.deleteCommand(filePath);
   });
 
   ipcMain.handle(CommandsIPCChannels.RENAME_COMMAND, async (_event, oldFilePath: string, newName: string) => {
     if (!commandsManager) {
+      return null;
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
       return null;
     }
     return commandsManager.renameCommand(oldFilePath, newName);
@@ -5523,6 +5806,10 @@ function setupClipboardIPCHandlers(): void {
 
   ipcMain.handle(CommandsIPCChannels.SET_MOBILE_SYNC, async (_event, dirPath: string, enabled: boolean) => {
     if (!commandsManager) {
+      return false;
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
       return false;
     }
     const success = commandsManager.setMobileSyncEnabled(dirPath, enabled);
@@ -5553,6 +5840,10 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle(CommandsIPCChannels.SYNC_TO_MOBILE, async () => {
     if (!commandSyncService) {
       return { success: false, uploaded: 0, updated: 0, deleted: 0, errors: ['Not initialized'] };
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { success: false, uploaded: 0, updated: 0, deleted: 0, errors: ['Field Theory is read-only'] };
     }
     const result = await commandSyncService.syncToSupabase();
     // Track newly contributed commands
@@ -5665,8 +5956,6 @@ function setupClipboardIPCHandlers(): void {
       const isIDE = isIDEWithTerminal(targetApp.bundleId);
       const fileName = path.basename(filePath);
 
-      commandLauncherWindow?.hide(true);
-
       if (isTerminal || isIDE) {
         clipboard.writeText(`${fileName}\n${filePath} `);
         clipboardManager?.syncClipboardHash();
@@ -5676,7 +5965,9 @@ function setupClipboardIPCHandlers(): void {
         clipboardManager?.syncClipboardHash();
       }
 
-      await activateAndPaste(targetApp);
+      await activateAndPaste(targetApp, {
+        beforePaste: () => commandLauncherWindow?.hide(true),
+      });
       appendCommandLauncherTrace('invoke-handoff-success', {
         filePath,
         targetBundleId: targetApp.bundleId,
@@ -5732,8 +6023,6 @@ function setupClipboardIPCHandlers(): void {
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
-      commandLauncherWindow?.hide(true);
-
       const clipboardSnapshot = captureClipboardSnapshot();
       try {
         if (isTerminal || isIDE) {
@@ -5745,7 +6034,9 @@ function setupClipboardIPCHandlers(): void {
           clipboardManager?.syncClipboardHash();
         }
 
-        await activateAndPaste(targetApp);
+        await activateAndPaste(targetApp, {
+          beforePaste: () => commandLauncherWindow?.hide(true),
+        });
       } finally {
         appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
           commandName,
@@ -5957,6 +6248,17 @@ function setupClipboardIPCHandlers(): void {
       return false;
     }
     return await feedbackManager.isCurrentUserAdmin();
+  });
+
+  ipcMain.handle('account:getStatus', async () => {
+    return accountStatusManager?.getStatus() ?? { state: 'checking', capabilityMode: 'writable' };
+  });
+
+  ipcMain.handle('account:checkNow', async () => {
+    if (!accountStatusManager) {
+      return { state: 'checking', capabilityMode: 'writable' };
+    }
+    return accountStatusManager.checkNow();
   });
 }
 
@@ -6221,7 +6523,7 @@ function broadcastTranscribeEvents(): void {
     
     // Force Dock visibility when showInDock is enabled.
     if (process.platform === 'darwin' && preferencesManager) {
-      const showInDock = preferencesManager.getPreference('showInDock') ?? false;
+      const showInDock = shouldUseClipboardAppWindowMode();
       if (showInDock) {
         app.dock.show();
       }
@@ -6717,6 +7019,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize quota manager (will be configured after auth is ready).
   quotaManager = new QuotaManager();
+  accountStatusManager = new AccountStatusManager();
 
   // Initialize librarian manager for watching markdown reading files.
   librarianManager = new LibrarianManager();
@@ -6774,7 +7077,7 @@ async function initTranscriberSystem(): Promise<void> {
 
       // Only bounce dock if the icon is visible (showInDock mode).
       // Bouncing when hidden can cause the dock icon to reappear.
-      const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+      const showInDock = shouldUseClipboardAppWindowMode();
       if (app.dock && showInDock) {
         app.dock.bounce('informational');
       }
@@ -7203,7 +7506,10 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize command launcher window for Cmd+Shift+K.
   // Pass nativeHelper for instant access to cached frontmost app info.
-  commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined);
+  commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined, {
+    getInitialDarkMode: () => preferencesManager?.getPreference('darkMode') ?? false,
+  });
+  commandLauncherWindow.preload();
 
   // Set up escape key priority: dismiss clipboard history before canceling recording
   transcriberManager.setClipboardHistoryVisibilityChecker(() => {
@@ -7397,6 +7703,7 @@ async function initTranscriberSystem(): Promise<void> {
       commandsManager.onUserLoggedOut();
     }
     taggedDocsManager?.onUserLoggedOut();
+    accountStatusManager?.setNeedsLogin();
   });
 
   // Listen for session changes (login/logout, token refresh)
@@ -7413,6 +7720,11 @@ async function initTranscriberSystem(): Promise<void> {
     // Sync quota data when session is restored
     if (session && quotaManager) {
       await quotaManager.reload();
+    }
+    if (session) {
+      await accountStatusManager?.checkNow();
+    } else {
+      accountStatusManager?.setNeedsLogin();
     }
   });
 
@@ -7528,6 +7840,27 @@ async function initTranscriberSystem(): Promise<void> {
     }
   }
 
+  if (accountStatusManager && envVars.supabaseUrl) {
+    accountStatusManager.init(envVars.supabaseUrl, () => {
+      const session = authManager?.getSession();
+      if (!session) return null;
+      return {
+        access_token: session.access_token,
+        user: {
+          email: session.user.email ?? undefined,
+        },
+      };
+    });
+    accountStatusManager.on('statusChanged', (status) => {
+      BrowserWindow.getAllWindows().forEach((window) => {
+        if (!window.isDestroyed()) {
+          window.webContents.send('account:statusChanged', status);
+        }
+      });
+    });
+    void accountStatusManager.checkNow();
+  }
+
   // Initialize feedback manager for user feedback to admin.
   feedbackManager = new FeedbackManager(authManager, clipboardManager);
 
@@ -7535,6 +7868,10 @@ async function initTranscriberSystem(): Promise<void> {
   // This syncs portable commands to Supabase when mobile sync is enabled.
   if (commandsManager && authManager) {
     commandSyncService = new CommandSyncService(authManager, commandsManager);
+  }
+
+  if (authManager) {
+    librarySyncService = new LibrarySyncService(authManager);
   }
 
   // metricsManager was initialized earlier, before authManager.init()
@@ -8406,7 +8743,7 @@ if (!gotTheLock) {
     // Apply Dock visibility setting.
     // Default is panel mode (hidden from Dock). This is a WIP feature.
     if (process.platform === 'darwin') {
-      const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+      const showInDock = shouldUseClipboardAppWindowMode();
       if (showInDock) {
         await app.dock.show();
       } else {

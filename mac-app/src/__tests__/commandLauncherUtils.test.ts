@@ -12,6 +12,7 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
+  getLauncherUsageScore,
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
   isGeneratedBookmarkTaxonomyPath,
@@ -362,6 +363,57 @@ describe('filterLauncherDirectoryNamespaceItems', () => {
 
     expect(results.map((item) => item.name)).toEqual(['root']);
   });
+
+  it('sorts directory results by recency before name', () => {
+    const results = filterLauncherDirectoryNamespaceItems([
+      {
+        name: 'older',
+        displayName: 'Older',
+        keywords: ['older'],
+        relPath: 'scratchpad/older',
+        filePath: '/wiki/scratchpad/older.md',
+        lastUpdated: 100,
+      },
+      {
+        name: 'newer',
+        displayName: 'Newer',
+        keywords: ['newer'],
+        relPath: 'scratchpad/newer',
+        filePath: '/wiki/scratchpad/newer.md',
+        lastUpdated: 200,
+      },
+    ], {
+      label: 'scratchpad',
+      directoryPath: '/wiki/scratchpad',
+      directoryRelPath: 'scratchpad',
+    }, '');
+
+    expect(results.map((item) => item.name)).toEqual(['newer', 'older']);
+  });
+});
+
+describe('getLauncherUsageScore', () => {
+  const now = new Date('2026-03-05T12:00:00Z').getTime();
+
+  it('boosts matching commands by usage, recency, and prefix', () => {
+    expect(getLauncherUsageScore(
+      { id: 'command-commit', type: 'command', name: 'commit' },
+      'comm',
+      { 'command-commit': { count: 3, lastUsedAt: now - 2 * 86_400_000 } },
+      500,
+      now,
+    )).toBe(103);
+  });
+
+  it('does not make a nonmatching item match through usage alone', () => {
+    expect(getLauncherUsageScore(
+      { id: 'command-commit', type: 'command', name: 'commit' },
+      'zzzz',
+      { 'command-commit': { count: 20, lastUsedAt: now } },
+      0,
+      now,
+    )).toBe(0);
+  });
 });
 
 describe('buildBookmarkAuthorLauncherItems', () => {
@@ -536,15 +588,19 @@ describe('nextLauncherArrowIndex', () => {
 });
 
 describe('resolveLauncherEnterIndex', () => {
-  it('uses the first row when the user has only typed', () => {
+  it('uses the first row when there is no explicit selection', () => {
     expect(resolveLauncherEnterIndex(2, 4, false)).toBe(0);
   });
 
-  it('uses the navigated row after keyboard navigation', () => {
-    expect(resolveLauncherEnterIndex(2, 4, true)).toBe(2);
+  it('uses the best typed match when there is no explicit selection', () => {
+    expect(resolveLauncherEnterIndex(0, 4, false, 2)).toBe(2);
   });
 
-  it('clamps navigated selection to available rows', () => {
+  it('uses the selected row after explicit keyboard or pointer selection', () => {
+    expect(resolveLauncherEnterIndex(2, 4, true, 1)).toBe(2);
+  });
+
+  it('clamps explicit selection to available rows', () => {
     expect(resolveLauncherEnterIndex(9, 4, true)).toBe(3);
     expect(resolveLauncherEnterIndex(-2, 4, true)).toBe(0);
   });

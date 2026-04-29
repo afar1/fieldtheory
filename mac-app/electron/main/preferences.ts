@@ -49,6 +49,12 @@ export interface ClipboardHistoryBounds {
  * dims for that view.
  */
 export type ClipboardHistorySizeKey = 'fields' | 'library' | 'canvas' | 'draw';
+export type FieldTheoryWindowMode = 'panel' | 'app';
+export interface FieldTheoryWindowModePreferenceSnapshot {
+  fieldTheoryWindowMode?: FieldTheoryWindowMode;
+  showInDock?: boolean;
+  clickAwayToDismiss?: boolean;
+}
 
 export type ClipboardHistoryBoundsByView = Partial<Record<ClipboardHistorySizeKey, ClipboardHistoryBounds>>;
 
@@ -71,6 +77,28 @@ export function pickSavedBoundsByKey(
   if (byView) return byView;
   if (normalizedKey === 'fields') return prefs?.clipboardHistoryBounds;
   return undefined;
+}
+
+export function resolveFieldTheoryWindowMode(
+  prefs: FieldTheoryWindowModePreferenceSnapshot | null | undefined
+): FieldTheoryWindowMode {
+  if (prefs?.fieldTheoryWindowMode === 'app' || prefs?.fieldTheoryWindowMode === 'panel') {
+    return prefs.fieldTheoryWindowMode;
+  }
+
+  return prefs?.showInDock === true || prefs?.clickAwayToDismiss === false ? 'app' : 'panel';
+}
+
+function normalizeFieldTheoryWindowMode(prefs: Partial<Preferences>): Partial<Preferences> {
+  const hasExplicitMode = prefs.fieldTheoryWindowMode === 'app' || prefs.fieldTheoryWindowMode === 'panel';
+  const hasLegacyAppMode = prefs.showInDock === true || prefs.clickAwayToDismiss === false;
+
+  if (hasExplicitMode || hasLegacyAppMode) {
+    const mode = resolveFieldTheoryWindowMode(prefs);
+    return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
+  }
+
+  return prefs;
 }
 
 // Note: LocalQuotas interface removed - server is now single source of truth for usage tracking.
@@ -150,6 +178,10 @@ interface Preferences {
   
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
+
+  // Field Theory window behavior - panel uses the current floating overlay mechanics,
+  // app behaves like a normal app window with Dock/Cmd+Tab presence.
+  fieldTheoryWindowMode?: FieldTheoryWindowMode;
 
   // Click-away dismissal - when enabled, the panel hides after focus moves to another app.
   clickAwayToDismiss?: boolean;
@@ -295,8 +327,11 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
   hideStatusLabels: false,
 
-  // Show in Dock - disabled by default (panel mode). WIP feature.
+  // Show in Dock - disabled by default (panel mode). Kept for legacy callers.
   showInDock: false,
+
+  // Field Theory opens as the existing floating panel by default.
+  fieldTheoryWindowMode: 'panel',
 
   // Click-away dismissal matches the existing panel behavior by default.
   clickAwayToDismiss: true,
@@ -466,7 +501,7 @@ export class PreferencesManager {
 
     const loaded = await this.readPrefsFile(this.prefsPath);
     if (loaded) {
-      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...loaded };
+      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...normalizeFieldTheoryWindowMode(loaded) };
       await this.syncSharedHotkeysFromPreferences(this.preferences);
       return this.preferences;
     }
@@ -477,7 +512,7 @@ export class PreferencesManager {
       if (legacyPath !== this.prefsPath) {
         const legacyPrefs = await this.readPrefsFile(legacyPath);
         if (legacyPrefs) {
-          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...legacyPrefs };
+          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...normalizeFieldTheoryWindowMode(legacyPrefs) };
           // Save to new per-user path
           await this.save({});
           return this.preferences;
@@ -513,6 +548,7 @@ export class PreferencesManager {
    * Internal save implementation.
    */
   private async saveInternal(prefs: Partial<Preferences>): Promise<void> {
+    const normalizedPrefs = normalizeFieldTheoryWindowMode(prefs);
     // Check if path needs updating (user logged in since last load)
     const oldPath = this.prefsPath;
     this.updatePrefsPath();
@@ -522,16 +558,16 @@ export class PreferencesManager {
     if (oldPath !== this.prefsPath) {
       try {
         const data = await fs.readFile(this.prefsPath, 'utf-8');
-        const filePrefs = JSON.parse(data) as Partial<Preferences>;
+        const filePrefs = normalizeFieldTheoryWindowMode(JSON.parse(data) as Partial<Preferences>);
         // File at new path is authoritative - only overlay the new prefs being saved
-        this.preferences = { ...DEFAULT_PREFERENCES, ...filePrefs, ...prefs };
+        this.preferences = { ...DEFAULT_PREFERENCES, ...filePrefs, ...normalizedPrefs };
       } catch (error) {
         // File doesn't exist at new path, use current in-memory + new prefs
-        this.preferences = { ...this.preferences, ...prefs };
+        this.preferences = { ...this.preferences, ...normalizedPrefs };
       }
     } else {
       // No path change - just merge new prefs into current in-memory state
-      this.preferences = { ...this.preferences, ...prefs };
+      this.preferences = { ...this.preferences, ...normalizedPrefs };
     }
 
     // Ensure directory exists

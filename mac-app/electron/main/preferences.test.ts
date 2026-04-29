@@ -118,6 +118,38 @@ describe('PreferencesManager', () => {
     expect(saved.commandLauncherHotkey).toBe('Command+Shift+L');
     expect(saved.transcriptionHotkey).toBe('Control+Space');
     expect(saved.showInDock).toBe(true);
+    expect(saved.fieldTheoryWindowMode).toBe('app');
+  });
+
+  it('migrates legacy normal-window prefs into Field Theory app mode', async () => {
+    const prefsPath = path.join(tempDir, 'preferences.json');
+    await fs.writeFile(
+      prefsPath,
+      JSON.stringify(
+        {
+          clickAwayToDismiss: false,
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const preferences = new PreferencesManager();
+    const loaded = await preferences.load();
+
+    expect(loaded.fieldTheoryWindowMode).toBe('app');
+    expect(loaded.showInDock).toBe(true);
+    expect(loaded.clickAwayToDismiss).toBe(false);
+  });
+
+  it('keeps current panel mechanics as the default Field Theory window mode', async () => {
+    const preferences = new PreferencesManager();
+    const loaded = await preferences.load();
+
+    expect(loaded.fieldTheoryWindowMode).toBe('panel');
+    expect(loaded.showInDock).toBe(false);
+    expect(loaded.clickAwayToDismiss).toBe(true);
   });
 
   it('mirrors hotkeys to shared prefs and preserves them when signed out', async () => {

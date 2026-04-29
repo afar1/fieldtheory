@@ -2,6 +2,13 @@ import { contextBridge, ipcRenderer } from 'electron';
 
 // Define IPC channels locally to avoid import issues
 
+function readInitialDarkModeArgument(): boolean | undefined {
+  const prefix = '--field-theory-dark-mode=';
+  const argument = process.argv.find((value) => value.startsWith(prefix));
+  if (!argument) return undefined;
+  return argument.slice(prefix.length) === 'true';
+}
+
 // Generic hotkey management channels
 const HotkeyIPCChannels = {
   GET_HOTKEY: 'hotkey:get',
@@ -828,6 +835,8 @@ export interface ClipboardAPI {
   onShowSettings: (callback: () => void) => () => void;
   onCollapseImmersive: (callback: () => void) => () => void;
   onResetToClipboardView: (callback: () => void) => () => void;
+  onWindowStyleTransitionOut: (callback: () => void) => () => void;
+  windowStyleTransitionReady: () => void;
   onPlaySound: (callback: (soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => void) => () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number }) => void) => () => void;
@@ -915,6 +924,10 @@ export interface ClipboardAPI {
   // Show in Dock and Cmd+Tab
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
+
+  // Field Theory window behavior
+  getFieldTheoryWindowMode?: () => Promise<'panel' | 'app'>;
+  setFieldTheoryWindowMode?: (mode: 'panel' | 'app') => Promise<boolean>;
 
   // Click-away dismissal
   getClickAwayToDismiss?: () => Promise<boolean>;
@@ -1574,6 +1587,20 @@ const clipboardAPI: ClipboardAPI = {
     };
   },
 
+  onWindowStyleTransitionOut: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:windowStyleTransitionOut', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:windowStyleTransitionOut', handler);
+    };
+  },
+
+  windowStyleTransitionReady: (): void => {
+    ipcRenderer.send('clipboard:windowStyleTransitionReady');
+  },
+
   onPlaySound: (callback: (soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, soundId: 'windowOpen' | 'windowClose' | 'artifactDiscovery') => {
       callback(soundId);
@@ -1846,6 +1873,15 @@ const clipboardAPI: ClipboardAPI = {
   
   setShowInDock: async (show: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:setShowInDock', show);
+  },
+
+  // Field Theory window behavior.
+  getFieldTheoryWindowMode: async (): Promise<'panel' | 'app'> => {
+    return ipcRenderer.invoke('clipboard:getFieldTheoryWindowMode');
+  },
+
+  setFieldTheoryWindowMode: async (mode: 'panel' | 'app'): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setFieldTheoryWindowMode', mode);
   },
 
   // Click-away dismissal.
@@ -2764,6 +2800,26 @@ const quotaAPI = {
 
 type QuotaAPI = typeof quotaAPI;
 
+const accountAPI = {
+  getStatus: () => ipcRenderer.invoke('account:getStatus'),
+  checkNow: () => ipcRenderer.invoke('account:checkNow'),
+  onStatusChanged: (callback: (status: unknown) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: unknown) => callback(status);
+    ipcRenderer.on('account:statusChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('account:statusChanged', handler);
+    };
+  },
+  onBlockedWrite: (callback: (payload: { reason: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { reason: string }) => callback(payload);
+    ipcRenderer.on('account:blockedWrite', handler);
+    return () => {
+      ipcRenderer.removeListener('account:blockedWrite', handler);
+    };
+  },
+};
+type AccountAPI = typeof accountAPI;
+
 // =============================================================================
 // Shell API - Open external URLs in default browser
 // =============================================================================
@@ -3151,6 +3207,7 @@ const electronAPI = {
 
 // Theme API for dark mode synchronization
 const themeAPI = {
+  initialTheme: readInitialDarkModeArgument(),
   getTheme: (): Promise<boolean> => ipcRenderer.invoke('theme:get'),
   setTheme: (isDark: boolean): Promise<void> => ipcRenderer.invoke('theme:set', isDark),
   onThemeChanged: (callback: (isDark: boolean) => void): (() => void) => {
@@ -3927,6 +3984,7 @@ interface BookmarkAuthorSummary {
 
 const bookmarksAPI = {
   getAll: (): Promise<BookmarksSnapshot> => ipcRenderer.invoke('bookmarks:getAll'),
+  syncIfStale: (): Promise<{ status: string; error?: string }> => ipcRenderer.invoke('bookmarks:syncIfStale'),
   getAuthors: (): Promise<BookmarkAuthorSummary[]> => ipcRenderer.invoke('bookmarks:getAuthors'),
   getAuthorBookmarks: (handle: string): Promise<Bookmark[]> =>
     ipcRenderer.invoke('bookmarks:getAuthorBookmarks', handle),
@@ -3970,6 +4028,7 @@ contextBridge.exposeInMainWorld('agentHooksAPI', agentHooksAPI);
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
+contextBridge.exposeInMainWorld('accountAPI', accountAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('gazeAPI', gazeAPI);
 contextBridge.exposeInMainWorld('hotkeyAPI', hotkeyAPI);
@@ -4369,6 +4428,7 @@ declare global {
     sharedClipboardAPI: SharedClipboardAPI;
     socialAPI: SocialAPI;
     quotaAPI: QuotaAPI;
+    accountAPI: AccountAPI;
     shellAPI: ShellAPI;
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;

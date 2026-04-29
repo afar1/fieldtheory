@@ -1,7 +1,7 @@
 import { supabase } from './supabase';
 import { StorageService } from './storage';
 import { getSession } from './auth';
-import { Observation, Todo, TranscriptEntry, TranscriptSegment } from '../types';
+import { LibraryDocument, Observation, Todo, TranscriptEntry, TranscriptSegment } from '../types';
 import { mergeByLastWriteWins } from './syncUtils';
 
 // Remote table column adapters -------------------------------------------------
@@ -36,6 +36,20 @@ type TranscriptRow = {
   } | null;
 };
 
+type LibraryDocumentRow = {
+  id: string;
+  user_id: string;
+  title: string;
+  content: string;
+  tags: string[];
+  source_path: string | null;
+  source_kind: 'mobile' | 'laptop';
+  client_id: string;
+  client_created_at_ms: number;
+  deleted_at: string | null;
+  updated_at: string;
+};
+
 const toLocalTodo = (row: TodoRow): Todo => ({
   id: row.client_id,
   text: row.text,
@@ -59,6 +73,42 @@ const toLocalTranscript = (row: TranscriptRow): TranscriptEntry => ({
   stackSegments: row.metadata?.stackSegments,
 });
 
+const parseSourcePath = (sourcePath: string | null, title: string) => {
+  const fallbackFileName = `${(title.trim() || 'Untitled').replace(/[/:]/g, '-')}.md`;
+  if (!sourcePath) {
+    return { folderPath: 'scratchpad', fileName: fallbackFileName };
+  }
+
+  const parts = sourcePath.split('/').filter(Boolean);
+  const fileName = parts.pop() || fallbackFileName;
+  return {
+    folderPath: parts.join('/') || 'scratchpad',
+    fileName,
+  };
+};
+
+const sourcePathForLibraryDocument = (doc: LibraryDocument) => {
+  const folderPath = doc.folderPath?.trim() || 'scratchpad';
+  const fileName = doc.fileName?.trim() || `${(doc.title.trim() || 'Untitled').replace(/[/:]/g, '-')}.md`;
+  return `${folderPath}/${fileName}`;
+};
+
+const toLocalLibraryDocument = (row: LibraryDocumentRow): LibraryDocument => {
+  const pathParts = parseSourcePath(row.source_path, row.title);
+  return {
+    id: row.client_id,
+    title: row.title,
+    content: row.content,
+    tags: row.tags ?? [],
+    folderPath: pathParts.folderPath,
+    fileName: pathParts.fileName,
+    sourceKind: row.source_kind,
+    isPinned: false,
+    createdAt: row.client_created_at_ms,
+    updatedAt: new Date(row.updated_at).getTime(),
+  };
+};
+
 const now = () => Date.now();
 
 const requireSession = async () => {
@@ -81,6 +131,42 @@ const upsertRows = async (table: string, rows: object[]) => {
   if (error) {
     throw error;
   }
+};
+
+const syncLibraryUpForUser = async (userId: string) => {
+  const libraryDocuments = await StorageService.getLibraryDocuments();
+  await upsertRows('library_documents', libraryDocuments.map((doc) => ({
+    user_id: userId,
+    title: doc.title,
+    content: doc.content,
+    tags: doc.tags ?? [],
+    source_path: sourcePathForLibraryDocument(doc),
+    source_kind: doc.sourceKind ?? 'mobile',
+    client_id: doc.id,
+    client_created_at_ms: doc.createdAt,
+    deleted_at: null,
+  })));
+};
+
+const syncLibraryDownOnly = async () => {
+  const localLibraryDocuments = await StorageService.getLibraryDocuments();
+  const { data, error } = await supabase
+    .from('library_documents')
+    .select('*')
+    .is('deleted_at', null)
+    .order('updated_at', { ascending: false });
+
+  if (error) throw error;
+
+  const mergedLibraryDocuments = mergeByLastWriteWins(localLibraryDocuments, (data ?? []).map(toLocalLibraryDocument));
+  await StorageService.saveLibraryDocuments(mergedLibraryDocuments);
+  return mergedLibraryDocuments;
+};
+
+const syncLibraryRemoteFirstForUser = async (userId: string) => {
+  const mergedLibraryDocuments = await syncLibraryDownOnly();
+  await syncLibraryUpForUser(userId);
+  return mergedLibraryDocuments;
 };
 
 export async function syncUp() {
@@ -113,6 +199,7 @@ export async function syncUp() {
       client_created_at_ms: transcript.createdAt,
       metadata: transcript.stackSegments ? { stackSegments: transcript.stackSegments } : {},
     }))),
+    syncLibraryRemoteFirstForUser(userId),
   ]);
 }
 
@@ -124,11 +211,17 @@ export async function syncDown() {
     StorageService.getTranscripts(),
   ]);
 
-  const [{ data: todosData, error: todosError }, { data: obsData, error: obsError }, { data: transcriptsData, error: transcriptsError }] =
+  const [
+    { data: todosData, error: todosError },
+    { data: obsData, error: obsError },
+    { data: transcriptsData, error: transcriptsError },
+    mergedLibraryDocuments,
+  ] =
     await Promise.all([
       supabase.from('todos').select('*').order('updated_at', { ascending: false }),
       supabase.from('observations').select('*').order('updated_at', { ascending: false }),
       supabase.from('transcripts').select('*').order('updated_at', { ascending: false }),
+      syncLibraryDownOnly(),
     ]);
 
   if (todosError) throw todosError;
@@ -149,6 +242,7 @@ export async function syncDown() {
     todos: mergedTodos.length,
     observations: mergedObservations.length,
     transcripts: mergedTranscripts.length,
+    libraryDocuments: mergedLibraryDocuments.length,
     syncedAt: now(),
   };
 }
@@ -156,6 +250,15 @@ export async function syncDown() {
 export async function syncAll() {
   await syncUp();
   return syncDown();
+}
+
+export async function syncLibraryDocuments() {
+  const session = await requireSession();
+  const mergedLibraryDocuments = await syncLibraryRemoteFirstForUser(session.user.id);
+  return {
+    libraryDocuments: mergedLibraryDocuments.length,
+    syncedAt: now(),
+  };
 }
 
 export async function seedRemoteFromLocal() {

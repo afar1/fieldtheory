@@ -28,6 +28,7 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
+  getLauncherUsageScore,
   isGeneratedBookmarkTaxonomyPath,
   nextLauncherArrowIndex,
   resolveLauncherEnterIndex,
@@ -38,6 +39,7 @@ import {
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
   type LauncherLibraryRoot,
+  type LauncherUsageMap,
 } from './commandLauncherUtils';
 import { normalizeSquaresConfig } from './utils/squaresConfig';
 
@@ -99,6 +101,7 @@ interface LauncherItem {
   // For commands, handoffs, wiki pages, and artifacts
   filePath?: string;
   relPath?: string;
+  lastUpdated?: number;
   recentKind?: LauncherRecentEntry['kind'];
   lastOpenedAt?: number;
   // For actions
@@ -229,12 +232,39 @@ function scoreLauncherItem(item: LauncherItem, query: string): number {
   return textScore + typeScore;
 }
 
-function readStoredIsDarkMode(): boolean {
-  return localStorage.getItem('darkMode') === 'true';
+function bestTypedLauncherMatchIndex(items: LauncherItem[], query: string): number {
+  const q = query.trim().toLowerCase();
+  if (!q) return 0;
+
+  let bestIndex = 0;
+  let bestScore = 0;
+  items.forEach((item, index) => {
+    const score = scoreLauncherItem(item, q);
+    if (score > bestScore) {
+      bestIndex = index;
+      bestScore = score;
+    }
+  });
+  return bestIndex;
 }
 
-function writeStoredIsDarkMode(isDark: boolean): void {
-  localStorage.setItem('darkMode', String(isDark));
+const LAUNCHER_USAGE_STORAGE_KEY = 'launcherItemUsage.v1';
+
+function readLauncherUsageMap(): LauncherUsageMap {
+  try {
+    const raw = localStorage.getItem(LAUNCHER_USAGE_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as LauncherUsageMap;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeLauncherUsageMap(next: LauncherUsageMap): void {
+  try {
+    localStorage.setItem(LAUNCHER_USAGE_STORAGE_KEY, JSON.stringify(next));
+  } catch {}
 }
 
 const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
@@ -280,6 +310,7 @@ interface LauncherTranscribeAPI {
 }
 
 interface LauncherThemeAPI {
+  initialTheme?: boolean;
   getTheme: () => Promise<boolean>;
   setTheme: (isDark: boolean) => Promise<void>;
   onThemeChanged?: (callback: (isDark: boolean) => void) => () => void;
@@ -508,7 +539,7 @@ function CommandLauncher() {
   const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
-  const [isDarkMode, setIsDarkMode] = useState(readStoredIsDarkMode);
+  const [isDarkMode, setIsDarkMode] = useState(() => themeAPI.initialTheme ?? false);
   const [libraryMarkdownItems, setLibraryMarkdownItems] = useState<LauncherItem[]>([]);
   const [directoryItems, setDirectoryItems] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
@@ -526,6 +557,7 @@ function CommandLauncher() {
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
+  const [usageByItemId, setUsageByItemId] = useState<LauncherUsageMap>(() => readLauncherUsageMap());
   const selectedIndexRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
@@ -541,6 +573,7 @@ function CommandLauncher() {
   const hasExplicitSelectionRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(36);
+  const lastMousePositionRef = useRef<{ x: number; y: number } | null>(null);
 
   const resizeLauncher = useCallback((height: number) => {
     const nextHeight = Math.max(36, Math.round(height));
@@ -557,7 +590,18 @@ function CommandLauncher() {
 
   const applyTheme = useCallback((dark: boolean) => {
     setIsDarkMode(dark);
-    writeStoredIsDarkMode(dark);
+  }, []);
+
+  const noteItemUsage = useCallback((itemId: string) => {
+    setUsageByItemId((prev) => {
+      const existing = prev[itemId];
+      const next: LauncherUsageMap = {
+        ...prev,
+        [itemId]: { count: (existing?.count ?? 0) + 1, lastUsedAt: Date.now() },
+      };
+      writeLauncherUsageMap(next);
+      return next;
+    });
   }, []);
 
   const selectIndex = useCallback((index: number) => {
@@ -571,6 +615,14 @@ function CommandLauncher() {
     setHasExplicitSelection(true);
     selectIndex(index);
   }, [selectIndex]);
+
+  const handleListItemMouseMove = useCallback((event: React.MouseEvent, index: number) => {
+    const last = lastMousePositionRef.current;
+    const moved = !last || last.x !== event.clientX || last.y !== event.clientY;
+    if (!moved) return;
+    lastMousePositionRef.current = { x: event.clientX, y: event.clientY };
+    selectExplicitItem(index);
+  }, [selectExplicitItem]);
 
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
@@ -606,6 +658,7 @@ function CommandLauncher() {
         displayName: r.title,
         keywords: [r.title, r.context ?? '', ...r.title.split(/\s+/)].filter(Boolean),
         filePath: r.path,
+        lastUpdated: r.mtime,
       })));
     } catch {}
   }, []);
@@ -739,7 +792,7 @@ function CommandLauncher() {
     loadActiveWebPage();
 
     // Load current Field Theory theme preference and keep this separate window in sync.
-    themeAPI.getTheme().then(applyTheme);
+    themeAPI.getTheme().then(applyTheme).catch(() => {});
     const unsubscribeTheme = themeAPI.onThemeChanged?.(applyTheme);
 
     // Listen for reset events (when window is shown).
@@ -776,7 +829,7 @@ function CommandLauncher() {
       loadWebBookmarks();
       loadActiveWebPage();
       // Refresh theme state
-      const dark = await themeAPI.getTheme();
+      const dark = await themeAPI.getTheme().catch(() => themeAPI.initialTheme ?? false);
       applyTheme(dark ?? false);
       // Reset height to input-only
       resizeLauncher(36);
@@ -1154,7 +1207,10 @@ function CommandLauncher() {
       return;
     }
 
-    const scored = allItems.map(item => ({ item, score: scoreLauncherItem(item, q) }));
+    const scored = allItems.map(item => {
+      const baseScore = scoreLauncherItem(item, q);
+      return { item, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
+    });
 
     const matches = dedupeLauncherPersonItems(scored
       .filter(s => s.score > 0)
@@ -1179,7 +1235,7 @@ function CommandLauncher() {
       totalResultCount: matches.length,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, resizeLauncher, selectIndex]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, resizeLauncher, selectIndex, usageByItemId]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -1432,7 +1488,9 @@ function CommandLauncher() {
     } else if (e.key === 'Enter') {
       e.preventDefault();
       if (filtered.length > 0) {
-        const currentIndex = resolveLauncherEnterIndex(selectedIndexRef.current, filtered.length, hasNavigatedRef.current);
+        const hasSelection = hasNavigatedRef.current || hasExplicitSelectionRef.current;
+        const typedMatchIndex = bestTypedLauncherMatchIndex(filtered, inputRef.current?.value ?? query);
+        const currentIndex = resolveLauncherEnterIndex(selectedIndexRef.current, filtered.length, hasSelection, typedMatchIndex);
         const selectedItem = filtered[currentIndex];
         if (selectedItem) invokeItem(selectedItem, { insertWikiLink: e.metaKey });
       }
@@ -1441,6 +1499,7 @@ function CommandLauncher() {
 
   // Invoke the selected item.
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean } = {}) => {
+    noteItemUsage(item.id);
     dismissPreview();
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
     const fieldTheoryTarget = latestContext?.fieldTheoryActive ? getFieldTheoryTarget(item) : null;
@@ -1569,7 +1628,7 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose();
     }
-  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, resizeLauncher, selectIndex]);
+  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, noteItemUsage, resizeLauncher, selectIndex]);
 
   const styles = getStyles(isDarkMode);
   const selectedItemStyle = (index: number) => {
@@ -1617,7 +1676,13 @@ function CommandLauncher() {
       </div>
 
       {filtered.length > 0 && (
-        <ul ref={listRef} style={styles.list}>
+        <ul
+          ref={listRef}
+          style={styles.list}
+          onMouseLeave={() => {
+            lastMousePositionRef.current = null;
+          }}
+        >
           {isHelpQuery ? (
             // Help mode: show grouped by type with section headers.
             <>
@@ -1637,7 +1702,7 @@ function CommandLauncher() {
                         ...selectedItemStyle(globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => selectExplicitItem(globalIndex)}
+                      onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.hotkeyDisplay && (
@@ -1662,7 +1727,7 @@ function CommandLauncher() {
                         ...selectedItemStyle(globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => selectExplicitItem(globalIndex)}
+                      onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.timeAgo && (
@@ -1687,7 +1752,7 @@ function CommandLauncher() {
                         ...selectedItemStyle(globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseEnter={() => selectExplicitItem(globalIndex)}
+                      onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       <span style={styles.itemName}>{item.name}</span>
                     </li>
@@ -1707,7 +1772,7 @@ function CommandLauncher() {
                     ...selectedItemStyle(i),
                   }}
                   onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                  onMouseEnter={() => selectExplicitItem(i)}
+                  onMouseMove={(event) => handleListItemMouseMove(event, i)}
                 >
                   <span style={styles.itemName}>
                     {item.type === 'command' ? item.name : item.displayName}

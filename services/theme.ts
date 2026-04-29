@@ -1,3 +1,5 @@
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useEffect, useState } from 'react';
 import { useColorScheme } from 'react-native';
 
 export interface ThemeColors {
@@ -39,11 +41,69 @@ const dark: ThemeColors = {
   tabActive: '#0A84FF',
 };
 
-export function useThemeColors(): ThemeColors {
-  const scheme = useColorScheme();
-  return scheme === 'dark' ? dark : light;
+export type ThemeMode = 'system' | 'light' | 'dark';
+
+const THEME_MODE_KEY = '@littleai/theme-mode';
+const listeners = new Set<() => void>();
+let themeMode: ThemeMode = 'system';
+let loaded = false;
+
+const notify = () => {
+  listeners.forEach((listener) => listener());
+};
+
+export async function loadThemeMode(): Promise<ThemeMode> {
+  if (loaded) return themeMode;
+  try {
+    const stored = await AsyncStorage.getItem(THEME_MODE_KEY);
+    if (stored === 'light' || stored === 'dark' || stored === 'system') {
+      themeMode = stored;
+    }
+  } catch (error) {
+    console.error('Failed to load theme mode:', error);
+  } finally {
+    loaded = true;
+  }
+  notify();
+  return themeMode;
+}
+
+export async function setThemeMode(nextMode: ThemeMode): Promise<void> {
+  themeMode = nextMode;
+  loaded = true;
+  notify();
+  try {
+    await AsyncStorage.setItem(THEME_MODE_KEY, nextMode);
+  } catch (error) {
+    console.error('Failed to save theme mode:', error);
+  }
+}
+
+export function useThemeMode(): [ThemeMode, (nextMode: ThemeMode) => void] {
+  const [mode, setMode] = useState(themeMode);
+
+  useEffect(() => {
+    let mounted = true;
+    const listener = () => {
+      if (mounted) setMode(themeMode);
+    };
+    listeners.add(listener);
+    loadThemeMode().catch(console.error);
+    return () => {
+      mounted = false;
+      listeners.delete(listener);
+    };
+  }, []);
+
+  return [mode, (nextMode: ThemeMode) => setThemeMode(nextMode).catch(console.error)];
 }
 
 export function useIsDark(): boolean {
-  return useColorScheme() === 'dark';
+  const scheme = useColorScheme();
+  const [mode] = useThemeMode();
+  return mode === 'system' ? scheme === 'dark' : mode === 'dark';
+}
+
+export function useThemeColors(): ThemeColors {
+  return useIsDark() ? dark : light;
 }
