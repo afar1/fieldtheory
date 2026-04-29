@@ -467,6 +467,13 @@ export class BookmarksManager extends EventEmitter {
     return this.reload();
   }
 
+  reloadAndEmitChanged(): BookmarksSnapshot {
+    this.cached = null;
+    const snapshot = this.reload();
+    this.emit('bookmarks:changed');
+    return snapshot;
+  }
+
   private reload(): BookmarksSnapshot {
     const { folders, folderMap } = loadFolders();
     const mediaIndex = indexMediaByTweetSource();

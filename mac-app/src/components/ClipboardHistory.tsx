@@ -73,6 +73,8 @@ import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 
+const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
+
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command';
   path: string;
@@ -291,6 +293,10 @@ export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(document.visibilityState === 'visible');
+  const [windowStyleTransition, setWindowStyleTransition] = useState<'idle' | 'out' | 'in'>(() => {
+    if (localStorage.getItem(WINDOW_STYLE_TRANSITION_IN_KEY) === 'true') return 'in';
+    return 'idle';
+  });
 
   // When the window hides, the auto-popped-artifact exception expires: next
   // open is a fresh session and Escape should follow the normal hierarchy.
@@ -301,6 +307,23 @@ export default function ClipboardHistory() {
     const handler = () => setIsWindowVisible(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
+  useEffect(() => {
+    if (windowStyleTransition !== 'in') return;
+    localStorage.removeItem(WINDOW_STYLE_TRANSITION_IN_KEY);
+    const frame = requestAnimationFrame(() => {
+      setWindowStyleTransition('idle');
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [windowStyleTransition]);
+  useEffect(() => {
+    const unsubscribe = window.clipboardAPI?.onWindowStyleTransitionOut?.(() => {
+      setWindowStyleTransition('out');
+      window.setTimeout(() => {
+        window.clipboardAPI?.windowStyleTransitionReady?.();
+      }, 140);
+    });
+    return () => unsubscribe?.();
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
@@ -618,15 +641,17 @@ export default function ClipboardHistory() {
     return previewItems;
   }, []);
   
+  const clearPreview = useCallback(() => {
+    setPreview(null);
+    setPreviewClosing(false);
+    setStackPreviewIndex(0);
+    setStackPreviewItems([]);
+  }, []);
+
   const dismissPreview = () => {
     if (!preview || previewClosing) return;
     setPreviewClosing(true);
-    setTimeout(() => {
-      setPreview(null);
-      setPreviewClosing(false);
-      setStackPreviewIndex(0);
-      setStackPreviewItems([]);
-    }, 150);
+    setTimeout(clearPreview, 150);
   };
   
   // Get preview for a row, using cache if available.
@@ -1982,11 +2007,12 @@ export default function ClipboardHistory() {
   // LibrarianView's own onOpenScratchpad listener can open the new page.
   useEffect(() => {
     const unsubscribe = window.wikiAPI?.onOpenScratchpad(() => {
+      clearPreview();
       setShowSettings(false);
       setViewMode('librarian');
     });
     return () => unsubscribe?.();
-  }, []);
+  }, [clearPreview]);
 
   // Poll for pending readings and handle Library auto-open handoff.
   useEffect(() => {
@@ -3474,6 +3500,9 @@ export default function ClipboardHistory() {
           position: 'relative',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           cursor: 'default',
+          opacity: windowStyleTransition === 'idle' ? 1 : 0,
+          filter: windowStyleTransition === 'idle' ? 'none' : 'blur(6px)',
+          transition: 'opacity 140ms ease, filter 140ms ease',
         }}
       >
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}

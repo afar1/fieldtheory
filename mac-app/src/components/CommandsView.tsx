@@ -21,7 +21,8 @@ import {
   SidebarFolderIcon,
   SidebarMarkdownIcon,
 } from './SidebarIcons';
-import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -216,6 +217,44 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     }
     setFocusImmersive((prev) => !prev);
   }, [focusImmersive, onFocusChromeShortcut]);
+  const handleEditTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImmersiveToggleShortcut(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+      toggleFocusImmersive();
+      return;
+    }
+
+    const isTaskToggle = isMarkdownTaskToggleShortcut(e);
+    const isTaskCreate = isMarkdownTaskShortcut(e);
+    const taskEdit = isTaskToggle
+      ? getMarkdownTaskToggleEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+      )
+      : isTaskCreate
+        ? getMarkdownTaskShortcutEdit(
+          e.currentTarget.value,
+          e.currentTarget.selectionStart,
+          e.currentTarget.selectionEnd,
+        )
+        : null;
+    if (isTaskToggle || isTaskCreate) {
+      e.preventDefault();
+      if (!taskEdit) return;
+      const scrollTop = e.currentTarget.scrollTop;
+      setEditContent(taskEdit.nextValue);
+      requestAnimationFrame(() => {
+        const editor = editTextareaRef.current;
+        if (!editor || editor.value !== taskEdit.nextValue) return;
+        editor.setSelectionRange(taskEdit.selectionStart, taskEdit.selectionEnd);
+        editor.scrollTop = scrollTop;
+      });
+      return;
+    }
+  }, [toggleFocusImmersive]);
 
   // Context menu
   const [contextMenu, setContextMenu] = useState<CommandsContextMenu | null>(null);
@@ -414,6 +453,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       console.error('Failed to copy command text or path:', err);
     }
   }, [flashCopyPathCopied, getSelectedCommandTextOrPath]);
+
+  const copySelectedCommandPath = useCallback(async () => {
+    if (!selectedCommand?.filePath) return;
+    try {
+      await navigator.clipboard.writeText(selectedCommand.filePath);
+      flashCopyPathCopied();
+    } catch (err) {
+      console.error('Failed to copy command path:', err);
+    }
+  }, [flashCopyPathCopied, selectedCommand?.filePath]);
 
   useEffect(() => {
     return () => {
@@ -769,6 +818,12 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       const activeElement = document.activeElement;
       const isFormField = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
       const isCommandEditor = activeElement === editTextareaRef.current;
+      if (e.key === 'c' && e.metaKey && e.shiftKey && viewMode === 'mine' && selectedCommand?.filePath && (!isFormField || isCommandEditor)) {
+        e.preventDefault();
+        void copySelectedCommandPath();
+        return;
+      }
+
       if (e.key === 'c' && e.metaKey && !e.shiftKey && viewMode === 'mine' && selectedCommand?.filePath && (!isFormField || isCommandEditor)) {
         e.preventDefault();
         void copySelectedCommandTextOrPath();
@@ -807,7 +862,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1075,6 +1130,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         minHeight: 0,
         outline: 'none',
         backgroundColor: theme.bg,
+        position: 'relative',
       }}
     >
       {/* Sidebar - kept in DOM when collapsed for instant transition */}
@@ -1717,6 +1773,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   value={editContent}
                   onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}
+                  onKeyDown={handleEditTextareaKeyDown}
                   style={{
                     flex: 1,
                     minHeight: '400px',
@@ -2066,6 +2123,28 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         </div>
       )}
       {deleteConfirmationDialog}
+
+      {copyPathCopied && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: '14px',
+            transform: 'translateX(-50%)',
+            padding: '4px 8px',
+            borderRadius: '5px',
+            fontSize: '11px',
+            color: theme.isDark ? '#d1fae5' : '#065f46',
+            backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
+            border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
+            pointerEvents: 'none',
+            zIndex: 6,
+          }}
+        >
+          Copied path
+        </div>
+      )}
     </div>
   );
 }
