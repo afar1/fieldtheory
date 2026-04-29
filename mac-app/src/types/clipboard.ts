@@ -74,7 +74,7 @@ export const TAB_LABELS: Record<ViewMode, string> = {
   sketch: 'Sketch',
 };
 
-/** The left-group top-nav tabs that Tab / Shift+Tab cycles between. */
+/** The left-group top-nav tabs that Option+Tab / Shift+Option+Tab cycles between. */
 export function nextTopNavViewMode(
   prev: ViewMode,
   direction: 1 | -1,
@@ -86,7 +86,7 @@ export function nextTopNavViewMode(
   return tabs[nextIdx];
 }
 
-export function shouldCycleTopNavWithTab(activeTagName?: string | null): boolean {
+export function shouldCycleTopNavWithAltTab(activeTagName?: string | null): boolean {
   return !activeTagName?.match(/^(INPUT|TEXTAREA)$/i);
 }
 

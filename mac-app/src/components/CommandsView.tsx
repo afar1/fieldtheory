@@ -8,6 +8,7 @@ import { forwardRef, useEffect, useState, useRef, useCallback, useMemo } from 'r
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
@@ -785,7 +786,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
-      // Cmd+, - toggle edit mode
+      // Cmd+. - toggle edit mode
       if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
         if (isEditing) {
@@ -1677,33 +1678,6 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   <button
                     type="button"
                     onMouseDown={(e) => e.preventDefault()}
-                    onClick={switchToRenderedMode}
-                    title="Rendered"
-                    aria-label="Rendered"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: !isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: !isEditing
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M2 4h12M2 8h12M2 12h8" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
                     onClick={() => {
                       if (!isEditing) enterEditMode();
                     }}
@@ -1729,6 +1703,33 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                       <polyline points="5 4 2 8 5 12" />
                       <polyline points="11 4 14 8 11 12" />
+                    </svg>
+                  </button>
+                  <button
+                    type="button"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={switchToRenderedMode}
+                    title="Rendered"
+                    aria-label="Rendered"
+                    style={{
+                      width: '26px',
+                      height: '22px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: 0,
+                      color: !isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                      backgroundColor: !isEditing
+                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                        : 'transparent',
+                      border: 'none',
+                      borderRadius: '4px',
+                      cursor: 'pointer',
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                      <path d="M2 4h12M2 8h12M2 12h8" />
                     </svg>
                   </button>
                 </div>
@@ -1847,6 +1848,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     }}
                   >
                     <ReactMarkdown
+                      remarkPlugins={[remarkGfm]}
                       components={{
                         h1: ({ children }) => (
                           <h1
@@ -1977,9 +1979,22 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                             {children}
                           </ol>
                         ),
-                        li: ({ children }) => (
-                          <li style={{ marginBottom: '4px' }}>{children}</li>
-                        ),
+                        li: ({ children, node }) => {
+                          const className = (node as { properties?: { className?: unknown } }).properties?.className;
+                          const isTaskListItem = Array.isArray(className)
+                            ? className.includes('task-list-item')
+                            : className === 'task-list-item';
+                          return (
+                            <li
+                              style={{
+                                marginBottom: '4px',
+                                listStyle: isTaskListItem ? 'none' : undefined,
+                              }}
+                            >
+                              {children}
+                            </li>
+                          );
+                        },
                         a: ({ href, children }) => (
                           <a
                             href={href}

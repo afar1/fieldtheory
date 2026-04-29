@@ -351,6 +351,24 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(activateApp).not.toHaveBeenCalled();
   });
 
+  it('hides after paste in panel mode', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'panel' });
+    const hide = vi.spyOn(window, 'hide').mockImplementation(() => {});
+
+    window.hideAfterPaste('paste-item');
+
+    expect(hide).toHaveBeenCalledWith(false, 'paste-item');
+  });
+
+  it('keeps the app-mode window visible after paste', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const hide = vi.spyOn(window, 'hide').mockImplementation(() => {});
+
+    window.hideAfterPaste('paste-item');
+
+    expect(hide).not.toHaveBeenCalled();
+  });
+
   it('skips activation when no previous app is known', async () => {
     vi.spyOn(window, 'getPreviousApp').mockReturnValue(null);
     vi.spyOn(window, 'hide').mockImplementation(() => {});
