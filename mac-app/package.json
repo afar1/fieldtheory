@@ -57,6 +57,7 @@
     "react-markdown": "^10.1.0",
     "react-window": "^2.2.7",
     "remark-breaks": "^4.0.0",
+    "remark-gfm": "^4.0.1",
     "ws": "^8.18.3"
   },
   "devDependencies": {

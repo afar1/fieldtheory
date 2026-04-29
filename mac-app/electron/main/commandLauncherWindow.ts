@@ -439,7 +439,6 @@ export class CommandLauncherWindow {
         windowVisible: this.isVisible(),
         fieldTheoryActiveOnShow: this.fieldTheoryActiveOnShow,
       });
-      if (this.fieldTheoryActiveOnShow) return;
       this.hide();
     });
 

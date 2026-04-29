@@ -1061,6 +1061,14 @@ export class ClipboardHistoryWindow {
     this.logLifecycle('hide:complete');
   }
 
+  hideAfterPaste(reason: string): void {
+    if (this.shouldUseAppWindow()) {
+      this.logLifecycle('hide-after-paste:skipped-app-mode', `reason=${reason}`);
+      return;
+    }
+    this.hide(false, reason);
+  }
+
   /**
    * Hide the window without hiding the whole app, then restore the previously
    * focused external app when one is known.

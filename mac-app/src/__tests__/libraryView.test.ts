@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  cycleMarkdownTodoState,
   deletedLibraryItemMatchesSelection,
   editorSessionMatchesSelection,
   extractMarkdownH1Title,
@@ -12,6 +13,7 @@ import {
   highlightFileFindMatches,
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
+  getMarkdownTaskLines,
   getScrollRatio,
   getScrollTopForCaretVisibility,
   getScrollTopForRatio,
@@ -32,7 +34,9 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   splitFrontmatter,
+  setMarkdownTodoState,
   toggleMarkdownTaskLine,
+  toggleMarkdownTaskLineAtIndex,
 } from '../components/LibrarianView';
 import {
   ensureScratchpadNodePinned,
@@ -101,6 +105,32 @@ Body text here.`;
     expect(result.body).toBe('# My Entry\n\nBody text here.');
     expect(result.meta.tags).toBe('[ft/entry, ai]');
     expect(result.meta.source_type).toBe('authored');
+  });
+
+  it('extracts open and done todo state from frontmatter', () => {
+    expect(splitFrontmatter('---\ntodo: true\ntodo_state: open\n---\n# Task').todoState).toBe('open');
+    expect(splitFrontmatter('---\ntask: done\n---\n# Task').todoState).toBe('done');
+    expect(splitFrontmatter('---\ntodo: false\n---\n# Note').todoState).toBeNull();
+  });
+
+  it('sets and removes todo state while preserving other frontmatter', () => {
+    const content = '---\ntags: [work]\n---\n# Task\n';
+    expect(setMarkdownTodoState(content, 'open')).toBe('---\ntags: [work]\n\ntodo: true\ntodo_state: open\n---\n\n# Task\n');
+    expect(setMarkdownTodoState('---\ntags: [work]\ntodo: true\ntodo_state: done\n---\n# Task\n', null)).toBe('---\ntags: [work]\n---\n\n# Task\n');
+  });
+
+  it('cycles todo state from none to open to done to none', () => {
+    const open = cycleMarkdownTodoState('# Task\n');
+    expect(open.state).toBe('open');
+    expect(splitFrontmatter(open.content).todoState).toBe('open');
+
+    const done = cycleMarkdownTodoState(open.content);
+    expect(done.state).toBe('done');
+    expect(splitFrontmatter(done.content).todoState).toBe('done');
+
+    const none = cycleMarkdownTodoState(done.content);
+    expect(none.state).toBeNull();
+    expect(none.content).toBe('# Task\n');
   });
 
   it('returns raw content when no frontmatter present', () => {
@@ -314,6 +344,25 @@ describe('toggleMarkdownTaskLine', () => {
 
   it('preserves scratchpad bracket-only task syntax', () => {
     expect(toggleMarkdownTaskLine('[] first', 'first', true)).toBe('[x] first');
+  });
+});
+
+describe('markdown task line indexing', () => {
+  it('finds markdown task lines by source line index', () => {
+    expect(getMarkdownTaskLines('- [ ] first\ntext\n  - [x] nested')).toEqual([
+      { lineIndex: 0, text: 'first', checked: false },
+      { lineIndex: 2, text: 'nested', checked: true },
+    ]);
+  });
+
+  it('ignores task-looking lines inside fenced code', () => {
+    expect(getMarkdownTaskLines('```\n- [ ] literal\n```\n- [x] real')).toEqual([
+      { lineIndex: 3, text: 'real', checked: true },
+    ]);
+  });
+
+  it('toggles a task by source line index instead of duplicate text', () => {
+    expect(toggleMarkdownTaskLineAtIndex('- [ ] same\n- [ ] same', 1, true)).toBe('- [ ] same\n- [x] same');
   });
 });
 
