@@ -387,6 +387,7 @@ function compactLauncherUrl(rawUrl: string): string {
 // =============================================================================
 
 const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
+const LAUNCHER_COLLAPSED_HEIGHT = 43;
 
 // =============================================================================
 // Styles (dynamic based on theme)
@@ -404,7 +405,7 @@ const getStyles = (isDark: boolean) => ({
   inputRow: {
     display: 'flex',
     alignItems: 'center',
-    padding: '9px 10px',
+    padding: '12px 10px',
     gap: '6px',
   },
   icon: {
@@ -556,11 +557,11 @@ function CommandLauncher() {
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
-  const resizeHeightRef = useRef<number>(36);
+  const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const lastMousePositionRef = useRef<{ x: number; y: number } | null>(null);
 
   const resizeLauncher = useCallback((height: number) => {
-    const nextHeight = Math.max(36, Math.round(height));
+    const nextHeight = Math.max(LAUNCHER_COLLAPSED_HEIGHT, Math.round(height));
     if (resizeHeightRef.current === nextHeight) return;
     resizeHeightRef.current = nextHeight;
     if (resizeFrameRef.current !== null) {
@@ -763,7 +764,7 @@ function CommandLauncher() {
   // Load commands, handoffs, and hotkeys on mount.
   useEffect(() => {
     // Set initial height immediately to prevent layout shift
-    resizeLauncher(36);
+    resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
 
     loadCommands();
     loadHandoffs();
@@ -816,7 +817,7 @@ function CommandLauncher() {
       const dark = await themeAPI.getTheme().catch(() => themeAPI.initialTheme ?? false);
       applyTheme(dark ?? false);
       // Reset height to input-only
-      resizeLauncher(36);
+      resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     };
 
     const unsubscribe = commandsAPI.onLauncherReset(handleReset);
@@ -1069,7 +1070,7 @@ function CommandLauncher() {
   // Filter items when query changes.
   useEffect(() => {
     const filterStartedAt = performance.now();
-    const inputHeight = 36;
+    const inputHeight = LAUNCHER_COLLAPSED_HEIGHT;
     const emptyStateHeight = 26;
     const maxListHeight = 318;
 
@@ -1559,7 +1560,7 @@ function CommandLauncher() {
         case 'save-current-website': {
           setQuery('Saving to markdown...');
           setFiltered([]);
-          resizeLauncher(36);
+          resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
           const result = await bookmarksAPI?.saveActiveWebPage?.();
           if (!result?.success) {
             traceLauncher('save-current-website-error', { error: result?.error ?? 'Bookmarks API unavailable' });
@@ -1591,7 +1592,7 @@ function CommandLauncher() {
           setQuery('');
           setFiltered([]);
           selectIndex(0);
-          resizeLauncher(36);
+          resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
           setPreviewPayload({
             kind: 'markdown',
             title: result.bookmark?.title || preview.title,
