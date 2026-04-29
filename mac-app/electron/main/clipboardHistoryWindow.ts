@@ -1069,6 +1069,7 @@ export class ClipboardHistoryWindow {
     let previousApp = this.getPreviousApp();
     const pendingCapture = !previousApp?.bundleId ? this.previousAppCapturePromise : null;
     this.hide(false, reason);
+    if (this.shouldUseAppWindow()) return;
     if (!previousApp?.bundleId) {
       previousApp = await this.resolvePreviousAppForRestore(pendingCapture);
     }
