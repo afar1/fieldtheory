@@ -4406,6 +4406,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               >
                 <textarea
                   ref={markdownEditorRef}
+                  data-ft-agent-context="markdown"
+                  data-ft-agent-file-path={activeReading.path}
+                  data-ft-agent-title={activeReading.title}
                   value={editContent}
                   onChange={(e) => {
                     const nextValue = e.currentTarget.value;
