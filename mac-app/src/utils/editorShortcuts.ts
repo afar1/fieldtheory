@@ -27,6 +27,15 @@ export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEv
   return (e.key === ',' || e.code === 'Comma') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export function isMarkdownTaskShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  const isZeroKey = e.key === '0' || e.key === ')' || e.code === 'Digit0' || e.code === 'Numpad0';
+  return isZeroKey && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
+export function isMarkdownTaskToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return e.key === 'Enter' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
 export function isSidebarToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
   return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }

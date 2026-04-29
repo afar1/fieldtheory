@@ -58,6 +58,7 @@ export interface LauncherLibraryMarkdownItem {
   keywords: string[];
   filePath: string;
   relPath?: string;
+  lastUpdated?: number;
 }
 
 export interface LauncherDirectoryItem extends LauncherSearchableItem {
@@ -198,6 +199,14 @@ export interface LauncherDirectoryNamespaceCandidate extends LauncherVisibleItem
   keywords?: string[];
 }
 
+export type LauncherUsageMap = Record<string, { count: number; lastUsedAt: number }>;
+
+export interface LauncherUsageScoreItem {
+  id: string;
+  type?: string;
+  name: string;
+}
+
 export interface LauncherDirectoryNamespace {
   label: string;
   directoryPath: string;
@@ -232,11 +241,12 @@ export function nextLauncherArrowIndex(
 export function resolveLauncherEnterIndex(
   currentIndex: number,
   itemCount: number,
-  hasKeyboardNavigation: boolean,
+  hasExplicitSelection: boolean,
+  bestTypedMatchIndex: number = 0,
 ): number {
   if (itemCount <= 0) return 0;
-  if (!hasKeyboardNavigation) return 0;
-  return Math.max(0, Math.min(currentIndex, itemCount - 1));
+  const index = hasExplicitSelection ? currentIndex : bestTypedMatchIndex;
+  return Math.max(0, Math.min(index, itemCount - 1));
 }
 
 function formatLauncherBookmarkDate(postedAt: string): string {
@@ -391,6 +401,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       ].filter(Boolean),
       filePath: node.absPath,
       relPath: root.builtin ? node.relPath : undefined,
+      lastUpdated: Number.isFinite(node.lastUpdated) ? node.lastUpdated : undefined,
     });
   };
 
@@ -414,7 +425,29 @@ function isDescendantRelPath(relPath: string | undefined, directoryRelPath: stri
   return relPath.startsWith(`${normalizedDirectory}/`);
 }
 
-export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchableItem & { filePath?: string; relPath?: string }>(
+function compareLauncherDirectoryItemsByRecency<T extends LauncherSearchableItem & { lastUpdated?: number }>(a: T, b: T): number {
+  const aUpdated = typeof a.lastUpdated === 'number' ? a.lastUpdated : 0;
+  const bUpdated = typeof b.lastUpdated === 'number' ? b.lastUpdated : 0;
+  if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+  return a.displayName.localeCompare(b.displayName);
+}
+
+export function getLauncherUsageScore(
+  item: LauncherUsageScoreItem,
+  query: string,
+  usageByItemId: LauncherUsageMap,
+  baseScore: number,
+  now: number = Date.now(),
+): number {
+  if (baseScore <= 0) return 0;
+  const usage = usageByItemId[item.id];
+  const usageScore = usage ? Math.min(140, usage.count * 12) : 0;
+  const recencyScore = usage ? Math.max(0, 24 - Math.floor((now - usage.lastUsedAt) / 86_400_000)) : 0;
+  const commandPrefixBoost = item.type === 'command' && item.name.toLowerCase().startsWith(query) ? 45 : 0;
+  return usageScore + recencyScore + commandPrefixBoost;
+}
+
+export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchableItem & { filePath?: string; relPath?: string; lastUpdated?: number }>(
   items: T[],
   namespace: LauncherDirectoryNamespace,
   search: string,
@@ -423,7 +456,8 @@ export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchab
     isDescendantRelPath(item.relPath, namespace.directoryRelPath) ||
     isDescendantPath(item.filePath, namespace.directoryPath)
   );
-  return filterLauncherNamespaceItems(descendants, search);
+  const filtered = filterLauncherNamespaceItems(descendants, search);
+  return filtered.slice().sort(compareLauncherDirectoryItemsByRecency);
 }
 
 function formatBookmarkFacetKind(kind: LauncherBookmarkFacetKind): string {

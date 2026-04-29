@@ -464,6 +464,8 @@ interface ClipboardAPI {
   onShowSettings?: (callback: () => void) => () => void;
   onCollapseImmersive?: (callback: () => void) => () => void;
   onResetToClipboardView?: (callback: () => void) => () => void;
+  onWindowStyleTransitionOut?: (callback: () => void) => () => void;
+  windowStyleTransitionReady?: () => void;
   onDialogPosition: (callback: (position: { left: number; top: number }) => void) => () => void;
   onDialogBounds: (callback: (bounds: { x: number; y: number; width: number; height: number; overlayWidth: number; overlayHeight: number }) => void) => () => void;
   onTargetAppInfo: (callback: (info: TargetAppInfo) => void) => () => void;
@@ -526,6 +528,10 @@ interface ClipboardAPI {
   // Show in Dock and Cmd+Tab
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
+
+  // Field Theory window behavior
+  getFieldTheoryWindowMode?: () => Promise<'panel' | 'app'>;
+  setFieldTheoryWindowMode?: (mode: 'panel' | 'app') => Promise<boolean>;
 
   // Click-away dismissal
   getClickAwayToDismiss?: () => Promise<boolean>;
@@ -1431,6 +1437,7 @@ interface HotkeyAPI {
  * Theme API for dark mode synchronization across windows.
  */
 interface ThemeAPI {
+  initialTheme?: boolean;
   getTheme: () => Promise<boolean>;
   setTheme: (isDark: boolean) => Promise<void>;
   onThemeChanged: (callback: (isDark: boolean) => void) => () => void;
@@ -1784,6 +1791,7 @@ declare global {
   }
   interface BookmarksAPI {
     getAll: () => Promise<BookmarksSnapshot>;
+    syncIfStale: () => Promise<{ status: string; error?: string }>;
     getAuthors: () => Promise<BookmarkAuthorSummary[]>;
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
     getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;

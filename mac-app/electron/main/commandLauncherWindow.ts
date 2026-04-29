@@ -17,7 +17,7 @@ import { app, BrowserWindow, screen, ipcMain } from 'electron';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { NativeHelper, FrontmostAppInfo } from './nativeHelper';
+import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
 
@@ -38,6 +38,10 @@ type AnchorBounds = {
   y: number;
   width: number;
   height: number;
+};
+
+type CommandLauncherWindowOptions = {
+  getInitialDarkMode?: () => boolean;
 };
 
 /**
@@ -63,6 +67,7 @@ function isElectronApp(bundleId: string, appName: string): boolean {
 export class CommandLauncherWindow {
   private window: BrowserWindow | null = null;
   private nativeHelper: NativeHelper | null = null;
+  private getInitialDarkMode: () => boolean;
 
   // The app that was active before we showed the launcher.
   private previousApp: RunningApp | null = null;
@@ -89,8 +94,9 @@ export class CommandLauncherWindow {
   private previewPayload: Record<string, unknown> | null = null;
   private previewAnchorBounds: AnchorBounds | null = null;
 
-  constructor(nativeHelper?: NativeHelper) {
+  constructor(nativeHelper?: NativeHelper, options: CommandLauncherWindowOptions = {}) {
     this.nativeHelper = nativeHelper || null;
+    this.getInitialDarkMode = options.getInitialDarkMode ?? (() => false);
     appendCommandLauncherTrace('launcher-constructed', {
       hasNativeHelper: Boolean(this.nativeHelper),
     });
@@ -152,9 +158,25 @@ export class CommandLauncherWindow {
   }
   
   /**
+   * Create and load the hidden launcher ahead of the first hotkey press.
+   * This keeps the input ready so fast typing after Cmd+Shift+K is not lost.
+   */
+  preload(): void {
+    if (this.window && !this.window.isDestroyed()) {
+      return;
+    }
+
+    if (this.window?.isDestroyed()) {
+      this.window = null;
+    }
+
+    this.createWindow();
+    appendCommandLauncherTrace('preload-complete');
+  }
+
+  /**
    * Show the command launcher window.
-   * Fetches fresh window bounds at hotkey time (~1-5ms) for accurate positioning,
-   * even when switching between windows of the same app.
+   * Uses cached window bounds so the input can focus immediately after the hotkey.
    */
   async show(options: { anchorBounds?: AnchorBounds | null } = {}): Promise<void> {
     // Mark as showing BEFORE any async work to close the race window.
@@ -209,12 +231,11 @@ export class CommandLauncherWindow {
       let x: number;
       let y: number;
 
-      // Fetch fresh window bounds on-demand (~1-5ms), unless the caller
-      // already knows the Field Theory window we should anchor over.
-      const windowBounds = options.anchorBounds ?? await this.nativeHelper?.getFrontmostWindowBounds();
+      const windowBounds = options.anchorBounds ?? frontmostApp?.windowBounds ?? null;
       appendCommandLauncherTrace('show-position-source', {
         usedWindowBounds: Boolean(windowBounds),
         usedAnchorBounds: Boolean(options.anchorBounds),
+        usedCachedWindowBounds: Boolean(!options.anchorBounds && frontmostApp?.windowBounds),
       });
 
       if (windowBounds) {
@@ -244,6 +265,10 @@ export class CommandLauncherWindow {
         height: this.WINDOW_HEIGHT_COLLAPSED,
       });
 
+      // Reset before focus so early typed characters are not cleared after show.
+      this.window!.webContents.send('command-launcher:reset');
+      appendCommandLauncherTrace('show-sent-reset');
+
       this.window!.show();
       this.window!.moveTop(); // Ensure we're at top of window stack (above immersive clipboard)
       this.window!.focus();
@@ -253,10 +278,6 @@ export class CommandLauncherWindow {
         windowVisible: this.isVisible(),
         previousAppBundleId: this.previousApp?.bundleId ?? null,
       });
-
-      // Tell renderer to reset state.
-      this.window!.webContents.send('command-launcher:reset');
-      appendCommandLauncherTrace('show-sent-reset');
 
       this.scheduleProcessMetricsSnapshot('after-show-250ms', 250);
       this.scheduleProcessMetricsSnapshot('after-show-1500ms', 1500);
@@ -359,6 +380,10 @@ export class CommandLauncherWindow {
     return this.fieldTheoryActiveOnShow;
   }
 
+  private getInitialThemeArgument(): string {
+    return `--field-theory-dark-mode=${this.getInitialDarkMode() ? 'true' : 'false'}`;
+  }
+
   /**
    * Create the command launcher window.
    */
@@ -378,6 +403,7 @@ export class CommandLauncherWindow {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, '../preload.js'),
+        additionalArguments: [this.getInitialThemeArgument()],
       },
     });
     appendCommandLauncherTrace('create-window-complete');
@@ -469,6 +495,7 @@ export class CommandLauncherWindow {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, '../preload.js'),
+        additionalArguments: [this.getInitialThemeArgument()],
       },
     });
     appendCommandLauncherTrace('preview-create-window-complete');

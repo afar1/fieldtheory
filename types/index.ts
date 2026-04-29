@@ -24,10 +24,24 @@ export interface Settings {
 
   // Feature visibility toggles - when false, the tab button is hidden
   showTodos: boolean;
+  showLibrary: boolean;
 
   // Auto-separation toggle - when true, transcriptions are automatically processed
   // into tasks and observations. When false, user must manually tap "Separate".
   autoSeparate: boolean;
+}
+
+export interface LibraryDocument {
+  id: string;
+  title: string;
+  content: string;
+  folderPath?: string;
+  fileName?: string;
+  sourceKind?: 'mobile' | 'laptop';
+  tags?: string[];
+  isPinned?: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface TranscriptSegment {

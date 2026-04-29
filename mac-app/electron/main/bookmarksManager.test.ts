@@ -145,6 +145,26 @@ describe('BookmarksManager.getSnapshot', () => {
     expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [] });
   });
 
+  it('reloads cached bookmark data and emits when externally refreshed', () => {
+    const mgr = new BookmarksManager();
+    const changed = vi.fn();
+    mgr.on('bookmarks:changed', changed);
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'bookmarks.jsonl'),
+      JSON.stringify({ tweetId: 'a', text: 'first', postedAt: '2026-01-01T00:00:00.000Z' }) + '\n'
+    );
+    expect(mgr.getSnapshot().bookmarks.map((b) => b.id)).toEqual(['a']);
+
+    fs.writeFileSync(
+      path.join(tmpDir, 'bookmarks.jsonl'),
+      JSON.stringify({ tweetId: 'b', text: 'second', postedAt: '2026-01-02T00:00:00.000Z' }) + '\n'
+    );
+
+    expect(mgr.reloadAndEmitChanged().bookmarks.map((b) => b.id)).toEqual(['b']);
+    expect(changed).toHaveBeenCalledTimes(1);
+  });
+
   it('loads web bookmarks even when no X bookmark JSONL exists', () => {
     fs.mkdirSync(path.join(tmpDir, 'web'), { recursive: true });
     fs.writeFileSync(

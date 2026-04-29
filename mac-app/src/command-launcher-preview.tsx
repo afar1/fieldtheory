@@ -13,6 +13,7 @@ interface LauncherPreviewCommandsAPI {
 }
 
 interface LauncherPreviewThemeAPI {
+  initialTheme?: boolean;
   getTheme: () => Promise<boolean>;
   onThemeChanged?: (callback: (isDark: boolean) => void) => () => void;
 }
@@ -21,17 +22,9 @@ const commandsAPI = window.commandsAPI as unknown as LauncherPreviewCommandsAPI;
 const themeAPI = window.themeAPI as unknown as LauncherPreviewThemeAPI | undefined;
 const PREVIEW_PADDING = 20;
 
-function readStoredIsDarkMode(): boolean {
-  return localStorage.getItem('darkMode') === 'true';
-}
-
-function writeStoredIsDarkMode(isDark: boolean): void {
-  localStorage.setItem('darkMode', String(isDark));
-}
-
 function CommandLauncherPreview() {
   const [preview, setPreview] = useState<LauncherPreviewPayload | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(readStoredIsDarkMode);
+  const [isDarkMode, setIsDarkMode] = useState(() => themeAPI?.initialTheme ?? false);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -43,12 +36,10 @@ function CommandLauncherPreview() {
     themeAPI?.getTheme?.().then((dark) => {
       if (cancelled) return;
       setIsDarkMode(dark);
-      writeStoredIsDarkMode(dark);
     });
 
     const unsubscribe = themeAPI?.onThemeChanged?.((dark) => {
       setIsDarkMode(dark);
-      writeStoredIsDarkMode(dark);
     });
 
     return () => {
