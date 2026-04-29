@@ -21,7 +21,7 @@ import WikiSidebar, {
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
-import { isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import {
   LIBRARIAN_LINE_HEIGHT_OPTIONS,
   LIBRARIAN_TYPOGRAPHY_PRESETS,
@@ -42,6 +42,7 @@ import {
   type MarkdownUrlPasteEdit,
   type MarkdownUrlPasteKind,
 } from '../utils/markdownUrlPaste';
+import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import {
   buildWikiIndex,
   classifyLinkHref,
@@ -136,6 +137,12 @@ export function persistLibrarianUnorderedListMarker(
 
 type MarkdownTextEdit = {
   nextValue: string;
+  selectionStart: number;
+  selectionEnd: number;
+};
+
+type MarkdownUndoSnapshot = {
+  value: string;
   selectionStart: number;
   selectionEnd: number;
 };
@@ -280,6 +287,60 @@ export function getCarrotListEnterEdit(value: string, selectionStart: number, se
     selectionStart: nextSelection,
     selectionEnd: nextSelection,
   };
+}
+
+export function getMarkdownListEnterEdit(value: string, selectionStart: number, selectionEnd: number): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+
+  const bareTask = line.match(/^(\s*)(\[(?: |x|X)?\])\s*(.*)$/);
+  if (bareTask) {
+    if (bareTask[3].trim().length === 0) {
+      return {
+        nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+        selectionStart: lineStart,
+        selectionEnd: lineStart,
+      };
+    }
+    const nextMarker = bareTask[2] === '[ ]' ? '[ ]' : '[]';
+    const insertion = `\n${bareTask[1]}${nextMarker} `;
+    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + insertion.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  }
+
+  const task = line.match(/^(\s*)[-*+]\s+\[(?: |x|X)\]\s*(.*)$/);
+  if (task) {
+    if (task[2].trim().length === 0) {
+      return {
+        nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+        selectionStart: lineStart,
+        selectionEnd: lineStart,
+      };
+    }
+    const insertion = `\n${task[1]}- [ ] `;
+    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + insertion.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  }
+
+  const unordered = line.match(/^(\s*)([-*+])\s+(.*)$/);
+  if (!unordered) return null;
+  if (unordered[3].trim().length === 0) {
+    return {
+      nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+      selectionStart: lineStart,
+      selectionEnd: lineStart,
+    };
+  }
+
+  const insertion = `\n${unordered[1]}${unordered[2]} `;
+  const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+  const nextSelection = selectionStart + insertion.length;
+  return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
 }
 
 export function getCarrotListTabEdit(
@@ -713,11 +774,46 @@ type MarkdownWikiLinkCompletionState = MarkdownWikiLinkCompletion & {
   left: number;
 };
 
-type MarkdownWikiLinkSuggestion = {
+export type MarkdownWikiLinkSuggestion = {
   title: string;
   detail: string;
   kind: 'wiki' | 'artifact' | 'command';
 };
+
+function isTwitterLikeWikiLinkSuggestion(item: MarkdownWikiLinkSuggestion): boolean {
+  return item.title.trim().startsWith('@') || /(^|\/)@[\w]{1,15}(?:\/|$)/.test(item.detail);
+}
+
+export function rankMarkdownWikiLinkSuggestions(
+  items: MarkdownWikiLinkSuggestion[],
+  query: string,
+  limit = 8,
+): MarkdownWikiLinkSuggestion[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  return items
+    .map((item) => {
+      const title = item.title.toLowerCase();
+      const detail = item.detail.toLowerCase();
+      const titleIndex = normalizedQuery ? title.indexOf(normalizedQuery) : 0;
+      const detailIndex = normalizedQuery ? detail.indexOf(normalizedQuery) : 0;
+      if (normalizedQuery && titleIndex < 0 && detailIndex < 0) return null;
+      const matchScore = !normalizedQuery
+        ? 4
+        : title === normalizedQuery
+          ? 0
+          : title.startsWith(normalizedQuery)
+            ? 1
+            : titleIndex >= 0
+              ? 2
+              : 3;
+      const usernamePenalty = isTwitterLikeWikiLinkSuggestion(item) ? 4 : 0;
+      return { item, score: matchScore + usernamePenalty };
+    })
+    .filter((entry): entry is { item: MarkdownWikiLinkSuggestion; score: number } => !!entry)
+    .sort((a, b) => a.score - b.score || a.item.title.localeCompare(b.item.title))
+    .slice(0, limit)
+    .map((entry) => entry.item);
+}
 
 export function getScrollRatio(scrollTop: number, scrollHeight: number, clientHeight: number): number {
   const maxScrollTop = scrollHeight - clientHeight;
@@ -759,6 +855,15 @@ export function getMarkdownEditorEdgeFades(
     top: clampedScrollTop > 1,
     bottom: false,
   };
+}
+
+export function shouldRevealFocusChrome(
+  cursorClientY: number,
+  paneClientTop: number,
+  revealDistancePx = 96,
+): boolean {
+  if (!Number.isFinite(cursorClientY) || !Number.isFinite(paneClientTop)) return false;
+  return cursorClientY >= paneClientTop && cursorClientY <= paneClientTop + Math.max(0, revealDistancePx);
 }
 
 function getComputedLineHeightPx(editor: HTMLTextAreaElement): number {
@@ -986,6 +1091,7 @@ interface LibrarianViewProps {
   onAutoPopArtifactSuperseded?: () => void;
   onOpenCommandPath?: (path: string) => void;
   onFocusChromeShortcut?: () => void;
+  preserveCurrentSizeKey?: boolean;
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
   sidebarCollapsed: boolean;
@@ -1060,7 +1166,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string;
   };
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -1098,6 +1204,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [unorderedListMarker, setUnorderedListMarker] = useState<LibrarianUnorderedListMarker>(() => (
     restoreLibrarianUnorderedListMarker(localStorage)
   ));
+  const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
     if (!restoredSelection) return null;
     if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
@@ -1121,8 +1228,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setFocusImmersive((prev) => !prev);
   }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive]);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
-  const [markdownEditorEdgeFades, setMarkdownEditorEdgeFades] = useState({ top: false, bottom: false });
-  const markdownEditorEdgeFadesRef = useRef(markdownEditorEdgeFades);
+  const markdownEditorEdgeFadesRef = useRef({ top: false, bottom: false });
   const [renderedDocumentTopFade, setRenderedDocumentTopFade] = useState(false);
   const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
   const [markdownEditorCommandActive, setMarkdownEditorCommandActive] = useState(false);
@@ -1154,6 +1260,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingRenderedEditSelectionRef = useRef<number | null>(null);
+  const pendingScratchpadTitleSelectionRef = useRef<{ path: string; start: number; end: number } | null>(null);
   const previousRenderedTaskContentRef = useRef<{ path: string | null; content: string } | null>(null);
   const taskAnimationTimerRef = useRef<number | null>(null);
   const [animatingTaskTexts, setAnimatingTaskTexts] = useState<Set<string>>(() => new Set());
@@ -1161,6 +1268,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
+  const markdownEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
 
   const activateSidebarKeyboard = useCallback(() => {
     sidebarKeyboardActiveRef.current = true;
@@ -1199,6 +1307,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     (selectedItemType === 'bookmarks' && isFullScreen && bookmarksCanvasActive) ||
     (canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden)));
   const focusToolbarControlsVisible = !focusChromeActive;
+  const focusChromeUsesProximityFade = focusChromeActive && contentMode === 'markdown';
+  const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
+  const focusChromeVisualVisible = !focusChromeUsesProximityFade || focusChromeProximityVisible;
+  const toggleFocusChromeShortcut = useCallback(() => {
+    if (!selectedItemUsesLegacyImmersive && focusChromeActive) {
+      setFocusImmersive(false);
+      setWritingChromeHidden(false);
+      return;
+    }
+    toggleImmersive();
+  }, [focusChromeActive, selectedItemUsesLegacyImmersive, toggleImmersive]);
   const markWritingActive = useCallback(() => {
     if (isFocusedWritingMode) setWritingChromeHidden(true);
   }, [isFocusedWritingMode]);
@@ -1207,7 +1326,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const current = markdownEditorEdgeFadesRef.current;
     if (current.top === next.top && current.bottom === next.bottom) return;
     markdownEditorEdgeFadesRef.current = next;
-    setMarkdownEditorEdgeFades(next);
   }, []);
 
   const updateMarkdownEditorFades = useCallback((editor: Pick<HTMLTextAreaElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'> | null) => {
@@ -1437,6 +1555,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     persistLibrarianUnorderedListMarker(localStorage, unorderedListMarker);
   }, [unorderedListMarker]);
 
+  useEffect(() => {
+    const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
+    window.addEventListener('storage', syncRenderedEditClickMode);
+    window.addEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    return () => {
+      window.removeEventListener('storage', syncRenderedEditClickMode);
+      window.removeEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    };
+  }, []);
+
   // Check mute status on mount
   useEffect(() => {
     window.librarianAPI?.isMutedForToday().then((muted) => {
@@ -1574,6 +1702,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [canUseFocusImmersive]);
 
   useEffect(() => {
+    if (!focusChromeUsesProximityFade) {
+      setFocusChromeProximityVisible(false);
+      return;
+    }
+
+    const updateProximity = (event: MouseEvent) => {
+      const paneTop = readerPaneRef.current?.getBoundingClientRect().top ?? 0;
+      setFocusChromeProximityVisible(shouldRevealFocusChrome(event.clientY, paneTop));
+    };
+    const hideProximityChrome = () => setFocusChromeProximityVisible(false);
+
+    window.addEventListener('mousemove', updateProximity);
+    window.addEventListener('mouseleave', hideProximityChrome);
+    return () => {
+      window.removeEventListener('mousemove', updateProximity);
+      window.removeEventListener('mouseleave', hideProximityChrome);
+    };
+  }, [focusChromeUsesProximityFade]);
+
+  useEffect(() => {
     onFocusChromeActiveChange?.(active && focusChromeActive);
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
@@ -1600,9 +1748,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Push 'library' size-key for every librarian section. BookmarksPane
   // overrides this for its canvas mode so it can share Draw's window mechanics.
   useEffect(() => {
-    if (!active) return;
+    if (!active || preserveCurrentSizeKey) return;
     window.librarianAPI?.setSizeKey?.('library');
-  }, [active, selectedItemType]);
+  }, [active, preserveCurrentSizeKey, selectedItemType]);
 
   // Initialize narration state and subscribe to events (feature flagged)
   useEffect(() => {
@@ -1707,7 +1855,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     fontWeight: 400,
     letterSpacing: 0,
   };
-  const readerTopFadeVisible = contentMode === 'markdown' ? markdownEditorEdgeFades.top : renderedDocumentTopFade;
+  const readerTopFadeVisible = contentMode === 'markdown' ? true : renderedDocumentTopFade;
 
   const wikiDisplay = useMemo(() => {
     if (selectedItemType !== 'wiki' || !activeReading) return null;
@@ -1751,29 +1899,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const markdownWikiLinkSuggestions = useMemo(() => {
     if (!markdownWikiLinkCompletion) return [];
-    const query = markdownWikiLinkCompletion.query.trim().toLowerCase();
-    return markdownWikiLinkSuggestionItems
-      .map((item) => {
-        const title = item.title.toLowerCase();
-        const detail = item.detail.toLowerCase();
-        const titleIndex = query ? title.indexOf(query) : 0;
-        const detailIndex = query ? detail.indexOf(query) : 0;
-        if (query && titleIndex < 0 && detailIndex < 0) return null;
-        const score = !query
-          ? 4
-          : title === query
-            ? 0
-            : title.startsWith(query)
-              ? 1
-              : titleIndex >= 0
-                ? 2
-                : 3;
-        return { item, score };
-      })
-      .filter((entry): entry is { item: MarkdownWikiLinkSuggestion; score: number } => !!entry)
-      .sort((a, b) => a.score - b.score || a.item.title.localeCompare(b.item.title))
-      .slice(0, 8)
-      .map((entry) => entry.item);
+    return rankMarkdownWikiLinkSuggestions(markdownWikiLinkSuggestionItems, markdownWikiLinkCompletion.query);
   }, [markdownWikiLinkCompletion, markdownWikiLinkSuggestionItems]);
 
   const displayContent = useMemo(() => {
@@ -2136,6 +2262,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const nextSelEnd = lineStart + nextBlock.length;
     const scrollTop = editor.scrollTop;
 
+    markdownEditUndoStackRef.current.push({
+      value,
+      selectionStart: selStart,
+      selectionEnd: selEnd,
+    });
     markWritingActive();
     setEditContent(nextValue);
     scheduleEditorSessionPersist();
@@ -2150,6 +2281,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const applyMarkdownTextEdit = useCallback((editor: HTMLTextAreaElement, edit: MarkdownTextEdit) => {
     const scrollTop = editor.scrollTop;
+    markdownEditUndoStackRef.current.push({
+      value: editor.value,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
+    });
     markWritingActive();
     setEditContent(edit.nextValue);
     setMarkdownUrlPasteChoice(null);
@@ -2165,7 +2301,55 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades, updateMarkdownWikiLinkCompletion]);
 
+  const restoreMarkdownProgrammaticUndo = useCallback((editor: HTMLTextAreaElement): boolean => {
+    const snapshot = markdownEditUndoStackRef.current.pop();
+    if (!snapshot) return false;
+    const scrollTop = editor.scrollTop;
+    markWritingActive();
+    setEditContent(snapshot.value);
+    setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
+    scheduleEditorSessionPersist();
+    requestAnimationFrame(() => {
+      const el = markdownEditorRef.current;
+      if (!el || el.value !== snapshot.value) return;
+      el.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+      el.scrollTop = scrollTop;
+      updateMarkdownWikiLinkCompletion(el);
+      updateMarkdownEditorFades(el);
+      smoothScrollMarkdownCaretIntoComfortView(el);
+    });
+    return true;
+  }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades, updateMarkdownWikiLinkCompletion]);
+
   const handleMarkdownEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImmersiveToggleShortcut(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+      toggleFocusChromeShortcut();
+      return;
+    }
+
+    if (e.key.toLowerCase() === 'z' && e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+      if (restoreMarkdownProgrammaticUndo(e.currentTarget)) {
+        e.preventDefault();
+        return;
+      }
+    }
+
+    if (isMarkdownTaskToggleShortcut(e)) {
+      e.preventDefault();
+      const edit = getMarkdownTaskToggleEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+      );
+      if (!edit) return;
+      applyMarkdownTextEdit(e.currentTarget, edit);
+      return;
+    }
+
     if (e.key.toLowerCase() === 'a' && e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
       const range = getMarkdownBodySelectionRange(e.currentTarget.value);
       if (
@@ -2180,6 +2364,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     if (e.metaKey && e.shiftKey && !e.altKey && !e.ctrlKey) {
+      if (isMarkdownTaskShortcut(e)) {
+        e.preventDefault();
+        const edit = getMarkdownTaskShortcutEdit(
+          e.currentTarget.value,
+          e.currentTarget.selectionStart,
+          e.currentTarget.selectionEnd,
+        );
+        if (!edit) return;
+        applyMarkdownTextEdit(e.currentTarget, edit);
+        return;
+      }
+
       if (e.code === 'Digit7' || e.code === 'Digit8') {
         e.preventDefault();
         applyListToggle(e.currentTarget, e.code === 'Digit7' ? 'ordered' : 'unordered');
@@ -2226,19 +2422,43 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     if (e.key === 'Enter') {
-      const edit = getCarrotListEnterEdit(
+      const carrotEdit = getCarrotListEnterEdit(
         e.currentTarget.value,
         e.currentTarget.selectionStart,
         e.currentTarget.selectionEnd,
       );
-      if (!edit) return;
+      if (carrotEdit) {
+        e.preventDefault();
+        setUnorderedListMarker('carrot');
+        applyMarkdownTextEdit(e.currentTarget, carrotEdit);
+        return;
+      }
+
+      const listEdit = getMarkdownListEnterEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+      );
+      if (!listEdit) return;
       e.preventDefault();
-      setUnorderedListMarker('carrot');
-      applyMarkdownTextEdit(e.currentTarget, edit);
+      applyMarkdownTextEdit(e.currentTarget, listEdit);
       return;
     }
 
     if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const pendingScratchpadSelection = pendingScratchpadTitleSelectionRef.current;
+      if (
+        pendingScratchpadSelection?.path === activeReading?.path &&
+        e.currentTarget.selectionStart === pendingScratchpadSelection.start &&
+        e.currentTarget.selectionEnd === pendingScratchpadSelection.end
+      ) {
+        e.preventDefault();
+        e.currentTarget.setSelectionRange(pendingScratchpadSelection.end, pendingScratchpadSelection.end);
+        pendingScratchpadTitleSelectionRef.current = null;
+        scheduleEditorSessionPersist();
+        return;
+      }
+
       const edit = getCarrotListTabEdit(
         e.currentTarget.value,
         e.currentTarget.selectionStart,
@@ -2254,10 +2474,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyMarkdownTextEdit,
     applyListToggle,
     applyMarkdownWikiLinkSuggestion,
+    activeReading?.path,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
+    restoreMarkdownProgrammaticUndo,
     scheduleEditorSessionPersist,
+    toggleFocusChromeShortcut,
   ]);
 
   const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2446,20 +2669,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     if (contentMode !== 'markdown' || !focusMarkdownEditorOnOpenRef.current) return;
-    focusMarkdownEditorOnOpenRef.current = false;
     const frame = requestAnimationFrame(() => {
       const editor = markdownEditorRef.current;
-      editor?.focus({ preventScroll: true });
-      const selectionStart = pendingRenderedEditSelectionRef.current;
+      if (!editor) return;
+      focusMarkdownEditorOnOpenRef.current = false;
+      editor.focus({ preventScroll: true });
+      const pendingScratchpadSelection = pendingScratchpadTitleSelectionRef.current;
+      const selectionStart = pendingScratchpadSelection?.path === activeReading?.path
+        ? pendingScratchpadSelection.start
+        : pendingRenderedEditSelectionRef.current;
+      const selectionEnd = pendingScratchpadSelection?.path === activeReading?.path
+        ? pendingScratchpadSelection.end
+        : selectionStart;
       pendingRenderedEditSelectionRef.current = null;
       if (editor && typeof selectionStart === 'number') {
         const offset = Math.max(0, Math.min(selectionStart, editor.value.length));
-        editor.setSelectionRange(offset, offset);
+        const endOffset = Math.max(offset, Math.min(selectionEnd ?? offset, editor.value.length));
+        editor.setSelectionRange(offset, endOffset);
         smoothScrollMarkdownCaretIntoComfortView(editor);
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [contentMode]);
+  }, [activeReading?.path, contentMode]);
 
   const exitEditMode = useCallback(async () => {
     captureContentScrollRatio();
@@ -2565,7 +2796,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const handleCreateScratchpadDefault = useCallback(async () => {
     const page = await window.wikiAPI?.createScratchpadDefault();
     if (page) {
+      const firstLineEnd = page.content.indexOf('\n');
+      const headingEnd = firstLineEnd === -1 ? page.content.length : firstLineEnd;
+      pendingScratchpadTitleSelectionRef.current = page.content.startsWith('# ')
+        ? { path: page.absPath, start: 2, end: Math.max(2, headingEnd) }
+        : null;
       openWikiPage(page.relPath);
+      setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
+      setEditContent(page.content);
+      lastSavedContentRef.current = page.content;
+      focusMarkdownEditorOnOpenRef.current = true;
       setContentMode('markdown');
       return true;
     }
@@ -2760,6 +3000,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       console.warn('[Librarian] Failed to copy text or path:', err);
     }
   }, [flashCopyPathCopied, getActiveReadingCopyText]);
+
+  const copyActiveReadingPath = useCallback(async () => {
+    if (!activeReading?.path) return;
+    try {
+      await navigator.clipboard.writeText(activeReading.path);
+      flashCopyPathCopied();
+    } catch (err) {
+      console.warn('[Librarian] Failed to copy path:', err);
+    }
+  }, [activeReading?.path, flashCopyPathCopied]);
 
   useEffect(() => {
     return () => {
@@ -3010,7 +3260,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     function handleKeyDown(e: KeyboardEvent) {
       if (isImmersiveToggleShortcut(e)) {
         e.preventDefault();
-        toggleImmersive();
+        toggleFocusChromeShortcut();
         return;
       }
 
@@ -3032,19 +3282,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Cmd+F or / — focus library search. Firing is gated on the active
-      // element (not the view mode), so `/` still works while the editor
-      // textarea is on screen, just not when it's focused.
+      if (isCommandFindShortcut(e) && activeReading) {
+        e.preventDefault();
+        openFileFind();
+        return;
+      }
+
+      // / focuses library search. Cmd+F remains available for in-file find.
       if (isSearchFocusShortcut(e)) {
-        if (isCommandFindShortcut(e) && activeReading) {
-          e.preventDefault();
-          openFileFind();
-          return;
-        }
         e.preventDefault();
         sidebarKeyboardActiveRef.current = false;
         searchInputRef.current?.focus();
         searchInputRef.current?.select();
+        return;
+      }
+
+      if (e.key === 'c' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey && activeReading?.path) {
+        e.preventDefault();
+        void copyActiveReadingPath();
         return;
       }
 
@@ -3119,6 +3374,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
       }
 
+      if (document.activeElement === searchInputRef.current) {
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          setSearchQuery('');
+          searchInputRef.current?.blur();
+        }
+        return;
+      }
+
       // Escape hierarchy: edit-mode → focus chrome → legacy fullscreen → close window.
       // In markdown mode, Esc just drops back to rendered without closing the
       // window — auto-save already persisted the content.
@@ -3133,14 +3397,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           setIsFullScreen(false);
         } else {
           window.clipboardAPI?.closeWindow();
-        }
-        return;
-      }
-
-      if (document.activeElement === searchInputRef.current) {
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          searchInputRef.current?.blur();
         }
         return;
       }
@@ -3176,7 +3432,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleFocusChromeShortcut, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -3682,6 +3938,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
+              opacity: focusChromeVisualVisible ? 1 : 0,
+              pointerEvents: focusChromeVisualVisible ? 'auto' : 'none',
+              transition: 'opacity 180ms ease',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
@@ -3958,7 +4217,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
               {/* Immersive/fullscreen toggle sits to the right of the mode
                   toggle so the editor controls stay grouped together. */}
-              <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleImmersive} />
+              <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleFocusChromeShortcut} />
             </div>
           </div>
         )}
@@ -3974,7 +4233,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             flex: 1,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
-            padding: isFullScreen ? '16px 32px 28px 32px' : '28px 32px',
+            padding: contentMode === 'markdown'
+              ? '8px 32px 12px 32px'
+              : (isFullScreen ? '16px 32px 28px 32px' : '28px 32px'),
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -4013,6 +4274,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     const nextSelectionEnd = e.currentTarget.selectionEnd;
                     const nextScrollTop = e.currentTarget.scrollTop;
                     const nativeEvent = e.nativeEvent as InputEvent;
+                    pendingScratchpadTitleSelectionRef.current = null;
+                    markdownEditUndoStackRef.current = [];
                     const autoCloseEdit = nativeEvent.inputType === 'insertText' && nativeEvent.data === '['
                       ? getMarkdownWikiLinkAutoCloseEdit(nextValue, nextSelectionStart, nextSelectionEnd)
                       : null;
@@ -4308,7 +4571,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               className="librarian-content"
               onClick={(e) => {
                 if (!activeReading) return;
-                if (!shouldEnterEditOnClick(e)) return;
+                if (!shouldEnterEditOnClick(e, renderedEditClickMode)) return;
                 const caret = getRenderedTextCaretFromPoint(e);
                 const selectionStart = caret
                   ? resolveMarkdownCaretOffsetFromRenderedText(activeReading.content, caret.text, caret.offset)
@@ -4822,6 +5085,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </Fragment>
         )}
       </div>
+
+      {copyPathCopied && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: '14px',
+            transform: 'translateX(-50%)',
+            padding: '4px 8px',
+            borderRadius: '5px',
+            fontSize: '11px',
+            color: theme.isDark ? '#d1fae5' : '#065f46',
+            backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
+            border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
+            pointerEvents: 'none',
+            zIndex: 6,
+          }}
+        >
+          Copied path
+        </div>
+      )}
 
       {deleteConfirmationDialog}
     </div>

@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -11,11 +11,11 @@ afterEach(() => {
 });
 
 describe('isSearchFocusShortcut', () => {
-  it('accepts Cmd+F even while an input is focused', () => {
+  it('rejects Cmd+F so it can be reserved for in-file find', () => {
     const input = document.createElement('input');
     document.body.appendChild(input);
     input.focus();
-    expect(isSearchFocusShortcut(mkKey({ key: 'f', metaKey: true }))).toBe(true);
+    expect(isSearchFocusShortcut(mkKey({ key: 'f', metaKey: true }))).toBe(false);
   });
 
   it('accepts bare "/" when focus is on the body', () => {
@@ -94,6 +94,36 @@ describe('isMarkdownModeToggleShortcut', () => {
   });
 });
 
+describe('isMarkdownTaskShortcut', () => {
+  it('accepts Shift+Cmd+0 from the main keyboard', () => {
+    expect(isMarkdownTaskShortcut(mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isMarkdownTaskShortcut(mkKey({ key: '0', code: 'Digit0', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('accepts Shift+Cmd+0 from the numpad', () => {
+    expect(isMarkdownTaskShortcut(mkKey({ key: '0', code: 'Numpad0', metaKey: true, shiftKey: true }))).toBe(true);
+  });
+
+  it('rejects unshifted and unrelated modified zero chords', () => {
+    expect(isMarkdownTaskShortcut(mkKey({ key: '0', code: 'Digit0', metaKey: true }))).toBe(false);
+    expect(isMarkdownTaskShortcut(mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownTaskShortcut(mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true, ctrlKey: true }))).toBe(false);
+  });
+});
+
+describe('isMarkdownTaskToggleShortcut', () => {
+  it('accepts Cmd+Enter', () => {
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true }))).toBe(true);
+  });
+
+  it('rejects shifted or unrelated Enter chords', () => {
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter' }))).toBe(false);
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, ctrlKey: true }))).toBe(false);
+  });
+});
+
 describe('isSidebarToggleShortcut', () => {
   it('accepts Cmd+Period', () => {
     expect(isSidebarToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
@@ -128,18 +158,32 @@ describe('isThemeToggleShortcut', () => {
 });
 
 describe('shouldEnterEditOnClick', () => {
-  it('allows a Cmd-click on text', () => {
+  it('allows a plain click on text by default', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(shouldEnterEditOnClick({ target: p })).toBe(true);
+  });
+
+  it('allows a Cmd-click on text by default', () => {
     const p = document.createElement('p');
     p.textContent = 'hi';
     document.body.appendChild(p);
     expect(shouldEnterEditOnClick({ target: p, metaKey: true })).toBe(true);
   });
 
-  it('rejects a plain click on text', () => {
+  it('rejects a plain click when Command-click mode is enabled', () => {
     const p = document.createElement('p');
     p.textContent = 'hi';
     document.body.appendChild(p);
-    expect(shouldEnterEditOnClick({ target: p })).toBe(false);
+    expect(shouldEnterEditOnClick({ target: p }, 'command-click')).toBe(false);
+  });
+
+  it('allows a Cmd-click when Command-click mode is enabled', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(shouldEnterEditOnClick({ target: p, metaKey: true }, 'command-click')).toBe(true);
   });
 
   it('rejects clicks that land on interactive elements', () => {
@@ -173,5 +217,23 @@ describe('shouldEnterEditOnClick', () => {
 
   it('returns false when the event has no target', () => {
     expect(shouldEnterEditOnClick({ target: null })).toBe(false);
+  });
+});
+
+describe('rendered edit click mode persistence', () => {
+  it('defaults to click mode', () => {
+    const storage = { getItem: () => null };
+    expect(restoreRenderedEditClickMode(storage)).toBe('click');
+  });
+
+  it('restores Command-click mode', () => {
+    const storage = { getItem: (key: string) => key === RENDERED_EDIT_CLICK_MODE_STORAGE_KEY ? 'command-click' : null };
+    expect(restoreRenderedEditClickMode(storage)).toBe('command-click');
+  });
+
+  it('persists the selected mode', () => {
+    const values = new Map<string, string>();
+    persistRenderedEditClickMode({ setItem: (key, value) => values.set(key, value) }, 'command-click');
+    expect(values.get(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY)).toBe('command-click');
   });
 });
