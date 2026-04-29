@@ -9,7 +9,7 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { AuthManager } from './authManager';
-import { libraryDir } from './fieldTheoryPaths';
+import { fieldTheoryDir, libraryDir } from './fieldTheoryPaths';
 import { createLogger } from './logger';
 
 const log = createLogger('LibrarySync');
@@ -43,6 +43,11 @@ interface LocalLibraryDocument {
   contentHash: string;
   createdAtMs: number;
   updatedAtMs: number;
+}
+
+export interface LibrarySyncSourceRoot {
+  dirPath: string;
+  sourcePrefix: string;
 }
 
 export interface LibrarySyncResult {
@@ -105,6 +110,17 @@ function relativeMarkdownPath(rootDir: string, filePath: string): string | null 
   const relPath = path.relative(rootDir, filePath);
   if (!relPath || relPath.startsWith('..') || path.isAbsolute(relPath)) return null;
   return relPath.split(path.sep).join('/');
+}
+
+export function getLibrarySyncSourceRoots(): LibrarySyncSourceRoot[] {
+  return [
+    { dirPath: libraryDir(), sourcePrefix: '' },
+    { dirPath: path.join(fieldTheoryDir(), 'librarian', 'artifacts'), sourcePrefix: 'artifacts' },
+  ];
+}
+
+function prefixedSourcePath(prefix: string, relPath: string): string {
+  return prefix ? `${prefix}/${relPath}` : relPath;
 }
 
 function walkMarkdownFiles(rootDir: string): string[] {
@@ -208,16 +224,25 @@ export class LibrarySyncService {
   }
 
   private scanLocalDocuments(remoteRows: LibraryDocumentRow[]): LocalLibraryDocument[] {
-    const rootDir = libraryDir();
     const remoteBySourcePath = new Map<string, LibraryDocumentRow>();
     for (const row of remoteRows) {
       const sourcePath = normalizeLibrarySourcePath(row.source_path, row.title);
       if (sourcePath) remoteBySourcePath.set(sourcePath, row);
     }
 
-    return walkMarkdownFiles(rootDir).flatMap((filePath): LocalLibraryDocument[] => {
-      const sourcePath = relativeMarkdownPath(rootDir, filePath);
-      if (!sourcePath) return [];
+    return getLibrarySyncSourceRoots().flatMap((root) => (
+      this.scanSourceRoot(root, remoteBySourcePath)
+    ));
+  }
+
+  private scanSourceRoot(
+    root: LibrarySyncSourceRoot,
+    remoteBySourcePath: Map<string, LibraryDocumentRow>,
+  ): LocalLibraryDocument[] {
+    return walkMarkdownFiles(root.dirPath).flatMap((filePath): LocalLibraryDocument[] => {
+      const relPath = relativeMarkdownPath(root.dirPath, filePath);
+      if (!relPath) return [];
+      const sourcePath = prefixedSourcePath(root.sourcePrefix, relPath);
 
       try {
         const content = fs.readFileSync(filePath, 'utf-8');

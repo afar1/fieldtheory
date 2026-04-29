@@ -148,6 +148,17 @@ type MarkdownUndoSnapshot = {
   selectionEnd: number;
 };
 
+type PendingTitleSuggestion = {
+  path: string;
+  text: string;
+  offset: number;
+};
+
+type MarkdownTitleSuggestionState = PendingTitleSuggestion & {
+  top: number;
+  left: number;
+};
+
 function parseCarrotListLine(line: string): { indent: string; markers: string; text: string } | null {
   const match = line.match(/^(\s*)(›+)(?:[ \t](.*)|[ \t]*)$/);
   if (!match) return null;
@@ -1056,6 +1067,23 @@ function getMarkdownWikiLinkCompletionPosition(
   }
 }
 
+function getMarkdownTitleSuggestionPosition(
+  editor: HTMLTextAreaElement,
+  offset: number,
+): { top: number; left: number } | null {
+  const mirror = createTextareaMirror(editor);
+  if (!mirror) return null;
+  try {
+    const caret = measureTextareaOffset(mirror, editor.value, offset);
+    return {
+      top: caret.top - editor.scrollTop,
+      left: caret.left - editor.scrollLeft,
+    };
+  } finally {
+    mirror.remove();
+  }
+}
+
 function smoothScrollMarkdownCaretIntoComfortView(editor: HTMLTextAreaElement): void {
   const caretTop = getTextareaCaretTop(editor);
   if (caretTop === null) return;
@@ -1261,7 +1289,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement | null>(null);
   const pendingRenderedEditSelectionRef = useRef<number | null>(null);
-  const pendingScratchpadTitleSelectionRef = useRef<{ path: string; start: number; end: number } | null>(null);
+  const pendingTitleSuggestionRef = useRef<PendingTitleSuggestion | null>(null);
+  const [markdownTitleSuggestion, setMarkdownTitleSuggestion] = useState<MarkdownTitleSuggestionState | null>(null);
   const previousRenderedTaskContentRef = useRef<{ path: string | null; content: string } | null>(null);
   const taskAnimationTimerRef = useRef<number | null>(null);
   const [animatingTaskTexts, setAnimatingTaskTexts] = useState<Set<string>>(() => new Set());
@@ -2065,6 +2094,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     persistEditorSession();
   }, [persistEditorSession]);
 
+  const updateMarkdownTitleSuggestion = useCallback((editor: HTMLTextAreaElement | null, valueOverride?: string) => {
+    const pending = pendingTitleSuggestionRef.current;
+    const value = valueOverride ?? editor?.value ?? editContent;
+    if (
+      !pending ||
+      !editor ||
+      contentMode !== 'markdown' ||
+      pending.path !== activeReading?.path ||
+      value !== '# \n'
+    ) {
+      setMarkdownTitleSuggestion(null);
+      return;
+    }
+
+    const position = getMarkdownTitleSuggestionPosition(editor, pending.offset);
+    if (!position) {
+      setMarkdownTitleSuggestion(null);
+      return;
+    }
+    setMarkdownTitleSuggestion({ ...pending, ...position });
+  }, [activeReading?.path, contentMode, editContent]);
+
   const updateMarkdownWikiLinkCompletion = useCallback((
     editor: HTMLTextAreaElement,
     valueOverride?: string,
@@ -2451,16 +2502,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const pendingScratchpadSelection = pendingScratchpadTitleSelectionRef.current;
+      const pendingTitleSuggestion = pendingTitleSuggestionRef.current;
       if (
-        pendingScratchpadSelection?.path === activeReading?.path &&
-        e.currentTarget.selectionStart === pendingScratchpadSelection.start &&
-        e.currentTarget.selectionEnd === pendingScratchpadSelection.end
+        pendingTitleSuggestion &&
+        pendingTitleSuggestion.path === activeReading?.path &&
+        e.currentTarget.value === '# \n'
       ) {
         e.preventDefault();
-        e.currentTarget.setSelectionRange(pendingScratchpadSelection.end, pendingScratchpadSelection.end);
-        pendingScratchpadTitleSelectionRef.current = null;
+        const nextValue = `# ${pendingTitleSuggestion.text}\n`;
+        const nextOffset = 2 + pendingTitleSuggestion.text.length;
+        pendingTitleSuggestionRef.current = null;
+        setMarkdownTitleSuggestion(null);
+        markWritingActive();
+        setEditContent(nextValue);
+        setWikiSelectedPage((prev) => (prev ? { ...prev, title: pendingTitleSuggestion.text, content: nextValue } : prev));
         scheduleEditorSessionPersist();
+        requestAnimationFrame(() => {
+          const editor = markdownEditorRef.current;
+          if (!editor || editor.value !== nextValue) return;
+          editor.setSelectionRange(nextOffset, nextOffset);
+          updateMarkdownEditorFades(editor);
+        });
         return;
       }
 
@@ -2483,9 +2545,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
+    markWritingActive,
     restoreMarkdownProgrammaticUndo,
     scheduleEditorSessionPersist,
     toggleFocusChromeShortcut,
+    updateMarkdownEditorFades,
   ]);
 
   const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2605,6 +2669,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [contentMode, editContent, lineHeightId, textSize, typographyPresetId, updateMarkdownEditorFades]);
 
   useEffect(() => {
+    if (contentMode !== 'markdown') {
+      setMarkdownTitleSuggestion(null);
+      return;
+    }
+    const frame = requestAnimationFrame(() => updateMarkdownTitleSuggestion(markdownEditorRef.current));
+    return () => cancelAnimationFrame(frame);
+  }, [activeReading?.path, contentMode, editContent, lineHeightId, textSize, typographyPresetId, updateMarkdownTitleSuggestion]);
+
+  useEffect(() => {
     if (!markdownUrlPasteChoice) return;
     const timer = window.setTimeout(() => setMarkdownUrlPasteChoice(null), 8000);
     return () => window.clearTimeout(timer);
@@ -2679,23 +2752,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (!editor) return;
       focusMarkdownEditorOnOpenRef.current = false;
       editor.focus({ preventScroll: true });
-      const pendingScratchpadSelection = pendingScratchpadTitleSelectionRef.current;
-      const selectionStart = pendingScratchpadSelection?.path === activeReading?.path
-        ? pendingScratchpadSelection.start
+      const pendingTitleSuggestion = pendingTitleSuggestionRef.current;
+      const activeTitleSuggestion = pendingTitleSuggestion?.path === activeReading?.path
+        ? pendingTitleSuggestion
+        : null;
+      const selectionStart = activeTitleSuggestion
+        ? activeTitleSuggestion.offset
         : pendingRenderedEditSelectionRef.current;
-      const selectionEnd = pendingScratchpadSelection?.path === activeReading?.path
-        ? pendingScratchpadSelection.end
+      const selectionEnd = activeTitleSuggestion
+        ? activeTitleSuggestion.offset
         : selectionStart;
       pendingRenderedEditSelectionRef.current = null;
       if (editor && typeof selectionStart === 'number') {
         const offset = Math.max(0, Math.min(selectionStart, editor.value.length));
         const endOffset = Math.max(offset, Math.min(selectionEnd ?? offset, editor.value.length));
         editor.setSelectionRange(offset, endOffset);
+        updateMarkdownTitleSuggestion(editor);
         smoothScrollMarkdownCaretIntoComfortView(editor);
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [activeReading?.path, contentMode]);
+  }, [activeReading?.path, contentMode, updateMarkdownTitleSuggestion]);
 
   const exitEditMode = useCallback(async () => {
     captureContentScrollRatio();
@@ -2765,8 +2842,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => clearTimeout(t);
   }, [saveStatus]);
 
-  // Create new wiki file. Name comes from the sidebar's inline input because
-  // Electron silently disables window.prompt().
+  // Explicit names still come from the sidebar's inline input; built-in folders
+  // can also create pages that start with an editor-side title suggestion.
   const handleCreateFile = useCallback(async (location: LibraryCreateLocation, fileName: string) => {
     if (!fileName.trim()) return false;
     if (!location.builtin) {
@@ -2788,6 +2865,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return false;
   }, [openWikiPage, selectExternalFile]);
 
+  const openPageWithTitleSuggestion = useCallback((page: WikiPage) => {
+    pendingTitleSuggestionRef.current = page.titleSuggestion && page.content === '# \n'
+      ? { path: page.absPath, text: page.titleSuggestion, offset: 2 }
+      : null;
+    openWikiPage(page.relPath);
+    setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
+    setEditContent(page.content);
+    lastSavedContentRef.current = page.content;
+    focusMarkdownEditorOnOpenRef.current = true;
+    setContentMode('markdown');
+  }, [openWikiPage]);
+
+  const handleCreateDefaultFile = useCallback(async (location: LibraryCreateLocation) => {
+    if (!location.builtin) return false;
+    const page = await window.wikiAPI?.createFileWithTitleSuggestion(location.relPath);
+    if (!page) return false;
+    openPageWithTitleSuggestion(page);
+    return true;
+  }, [openPageWithTitleSuggestion]);
+
   const handleCreateDir = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.relPath.trim()) return false;
     if (!location.builtin) {
@@ -2795,27 +2892,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     return await window.wikiAPI?.createDir(location.relPath) ?? false;
   }, []);
-
-  // Scratchpad default create — used by the sidebar "+" button and Cmd+N
-  // from anywhere. Same backend as the Ctrl+Opt+Cmd+Space hotkey.
-  const handleCreateScratchpadDefault = useCallback(async () => {
-    const page = await window.wikiAPI?.createScratchpadDefault();
-    if (page) {
-      const firstLineEnd = page.content.indexOf('\n');
-      const headingEnd = firstLineEnd === -1 ? page.content.length : firstLineEnd;
-      pendingScratchpadTitleSelectionRef.current = page.content.startsWith('# ')
-        ? { path: page.absPath, start: 2, end: Math.max(2, headingEnd) }
-        : null;
-      openWikiPage(page.relPath);
-      setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated });
-      setEditContent(page.content);
-      lastSavedContentRef.current = page.content;
-      focusMarkdownEditorOnOpenRef.current = true;
-      setContentMode('markdown');
-      return true;
-    }
-    return false;
-  }, [openWikiPage]);
 
   // True while the currently-selected item is the artifact the librarian
   // just auto-popped. Escape should close the window in that case.
@@ -3521,12 +3597,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Hotkey-driven scratchpad flow: main creates the file, we land on it in
   // edit mode so the user can start typing immediately.
   useEffect(() => {
-    const unsubscribe = window.wikiAPI?.onOpenScratchpad((relPath) => {
-      openWikiPage(relPath);
-      setContentMode('markdown');
+    const unsubscribe = window.wikiAPI?.onOpenScratchpad((relPath, titleSuggestion) => {
+      void (async () => {
+        const page = await window.wikiAPI?.getPage(relPath);
+        if (page) {
+          openPageWithTitleSuggestion({ ...page, titleSuggestion });
+          return;
+        }
+        openWikiPage(relPath);
+        setContentMode('markdown');
+      })();
     });
     return () => unsubscribe?.();
-  }, [openWikiPage]);
+  }, [openPageWithTitleSuggestion, openWikiPage]);
 
   // Discover existing .librarian directories on empty state
   useEffect(() => {
@@ -3836,8 +3919,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             selectedId={selectedItemId}
             onSelectItem={handleSelectItem}
             onCreateFile={handleCreateFile}
+            onCreateDefaultFile={handleCreateDefaultFile}
             onCreateDir={handleCreateDir}
-            onCreateScratchpadDefault={handleCreateScratchpadDefault}
             flatItemsRef={flatItemsRef}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}
@@ -4330,7 +4413,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     const nextSelectionEnd = e.currentTarget.selectionEnd;
                     const nextScrollTop = e.currentTarget.scrollTop;
                     const nativeEvent = e.nativeEvent as InputEvent;
-                    pendingScratchpadTitleSelectionRef.current = null;
+                    if (pendingTitleSuggestionRef.current && nextValue !== '# \n') {
+                      pendingTitleSuggestionRef.current = null;
+                      setMarkdownTitleSuggestion(null);
+                    }
                     markdownEditUndoStackRef.current = [];
                     const autoCloseEdit = nativeEvent.inputType === 'insertText' && nativeEvent.data === '['
                       ? getMarkdownWikiLinkAutoCloseEdit(nextValue, nextSelectionStart, nextSelectionEnd)
@@ -4381,6 +4467,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onScroll={(e) => {
                     updateMarkdownEditorFades(e.currentTarget);
                     updateMarkdownWikiLinkCompletion(e.currentTarget);
+                    updateMarkdownTitleSuggestion(e.currentTarget);
                     scheduleEditorSessionPersist();
                   }}
                   spellCheck={false}
@@ -4414,6 +4501,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   }}
                   placeholder="Write your markdown here..."
                 />
+                {markdownTitleSuggestion && (
+                  <span
+                    aria-hidden="true"
+                    style={{
+                      position: 'absolute',
+                      top: `${markdownTitleSuggestion.top}px`,
+                      left: `${markdownTitleSuggestion.left}px`,
+                      pointerEvents: 'none',
+                      zIndex: 2,
+                      ...documentTextStyle,
+                      color: theme.text,
+                      opacity: 0.5,
+                      whiteSpace: 'pre-wrap',
+                      overflowWrap: 'break-word',
+                    }}
+                  >
+                    {markdownTitleSuggestion.text}
+                  </span>
+                )}
                 {markdownEditorCommandActive && markdownEditorLinkHover && markdownEditorLinkHover.overlays.map((overlay, index) => (
                   <span
                     key={`${overlay.top}:${overlay.left}:${index}`}

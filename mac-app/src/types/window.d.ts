@@ -1610,6 +1610,7 @@ declare global {
 
   interface WikiPage extends WikiPageMeta {
     content: string;
+    titleSuggestion?: string;
   }
 
   interface WikiFolder {
@@ -1687,13 +1688,14 @@ declare global {
     getPage: (relPath: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string) => Promise<boolean>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
+    createFileWithTitleSuggestion: (folderName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
     rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
-    onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
+    onOpenScratchpad: (callback: (relPath: string, titleSuggestion?: string) => void) => () => void;
   }
 
   // External markdown files opened via macOS `open-file` for paths that fall
