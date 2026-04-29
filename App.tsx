@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Switch,
-  Modal,
   Alert,
   Pressable,
   Vibration,
@@ -28,8 +27,6 @@ import { useState, useEffect, useCallback, useMemo, useRef, Component, ErrorInfo
 import { ensureModelAvailable } from './services/modelService';
 import PagerView from 'react-native-pager-view';
 import { TodoList } from './components/TodoList';
-import { ObservationList } from './components/ObservationList';
-import { CursorBrowser, CursorBrowserHandle } from './components/CursorBrowser';
 import { PullToCreate } from './components/PullToCreate';
 import { TranscriptItem } from './components/TranscriptItem';
 import { SketchCanvas } from './components/SketchCanvas';
@@ -52,6 +49,7 @@ import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from '.
 import { syncAll, seedRemoteFromLocal } from './services/sync';
 import { supabase } from './services/supabase';
 import { CommandsService } from './services/commands';
+import { useThemeColors } from './services/theme';
 import type { Session } from '@supabase/supabase-js';
 
 // Error boundary component to catch and display errors
@@ -92,6 +90,27 @@ class ErrorBoundary extends Component<
 
     return this.props.children;
   }
+}
+
+// Top-fade overlay opacities — stripes from fully opaque (top) to nearly
+// transparent (bottom) so list items dissolve into the page background.
+const TOP_FADE_OPACITIES = [1, 0.85, 0.65, 0.45, 0.25, 0.1];
+
+const TAB_INACTIVE = '#9CA3AF';
+const TAB_ACTIVE = '#007AFF';
+
+// Linear color interpolation between two #rrggbb hex strings.
+function lerpHex(from: string, to: string, t: number): string {
+  const clamp = Math.max(0, Math.min(1, t));
+  const a = parseInt(from.slice(1), 16);
+  const b = parseInt(to.slice(1), 16);
+  const ar = (a >> 16) & 255, ag = (a >> 8) & 255, ab = a & 255;
+  const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
+  const r = Math.round(ar + (br - ar) * clamp);
+  const g = Math.round(ag + (bg - ag) * clamp);
+  const bl = Math.round(ab + (bb - ab) * clamp);
+  const hex = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(bl)}`;
 }
 
 const MAX_PREVIEW_CHARS = 160; // Max chars to show before truncation
@@ -187,6 +206,7 @@ function AppContent() {
   } = useWhisperRecording();
 
   const insets = useSafeAreaInsets();
+  const colors = useThemeColors();
 
   const [modelDownloadProgress, setModelDownloadProgress] = useState<number | null>(null);
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
@@ -200,19 +220,15 @@ function AppContent() {
   const [settings, setSettings] = useState<Settings>({
     autoStart: false,
     showTodos: true,
-    showObservations: true,
-    showCursor: true,
     autoSeparate: true,
   });
   const [isProcessingLLM, setIsProcessingLLM] = useState(false);
-  const [showSettings, setShowSettings] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
   
   // Transcript history state
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [todosSortOrder, setTodosSortOrder] = useState<'newest' | 'oldest'>('newest');
-  const [observationsSortOrder, setObservationsSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -232,7 +248,7 @@ function AppContent() {
   // Track create mode state from PullToCreate - used to show dynamic bottom bar
   const [createMode, setCreateMode] = useState<{
     isCreating: boolean;
-    itemType: 'stack' | 'task' | 'observation' | null;
+    itemType: 'stack' | 'task' | null;
     text: string;
     save: (() => void) | null;
     cancel: (() => void) | null;
@@ -243,9 +259,17 @@ function AppContent() {
   
   // Brief flash for Tasks tab when tasks are saved
   const [tasksTabFlash, setTasksTabFlash] = useState(false);
+
+  // Search state for the Items page (transcripts).
+  const [itemsSearchVisible, setItemsSearchVisible] = useState(false);
+  const [itemsSearchQuery, setItemsSearchQuery] = useState('');
+
+  // Continuous pager scroll progress (e.g. 1.42 between Commands and Tasks).
+  // Drives bottom-tab color interpolation and per-page search-icon fade so
+  // both react during the swipe, not only after it settles.
+  const [pageScrollFloat, setPageScrollFloat] = useState(0);
   type PagerRef = React.ComponentRef<typeof PagerView>;
   const pagerRef = useRef<PagerRef>(null);
-  const cursorBrowserRef = useRef<CursorBrowserHandle>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
   const [authEmail, setAuthEmail] = useState('');
@@ -266,8 +290,6 @@ function AppContent() {
   const appStateRef = useRef<string>(AppState.currentState);
   // Track if user manually stopped recording (prevents auto-start until they manually start again)
   const manuallyStoppedRef = useRef<boolean>(false);
-  // Track which page was active when recording started, so we know where to send the transcription
-  const recordingStartedOnPageRef = useRef<number>(0);
 
   // Load data from storage on mount
   useEffect(() => {
@@ -382,10 +404,6 @@ function AppContent() {
   // Configure audio session for headset controls
   useHeadsetControls();
 
-  const closeSettings = useCallback(() => {
-    setShowSettings(false);
-  }, []);
-
   useEffect(() => {
     const subscription = subscribeToSpeechPlaybackState((state) => {
       setSpeechPlaybackState(state);
@@ -457,7 +475,6 @@ function AppContent() {
   }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording, session]);
 
   // Capture every finished transcription so we can build the timeline.
-  // If recording started on the Cursor page, paste directly into Cursor's input.
   // Detects and expands portable commands (e.g., "use the review command").
   useEffect(() => {
     if (transcription === null) {
@@ -478,19 +495,6 @@ function AppContent() {
         console.log(`[App] Detected ${detectedCommands.length} command(s):`, detectedCommands.map(c => c.name));
       }
 
-      // Check if recording started on the Cursor page (page index 1)
-      const shouldPasteToCursor = recordingStartedOnPageRef.current === 1;
-
-      if (shouldPasteToCursor && cleanedText !== 'No speech detected in this recording.') {
-        // Paste directly to Cursor and don't create a transcript entry
-        console.log('[App] Recording from Cursor page - pasting directly to Cursor');
-        cursorBrowserRef.current?.pasteText(processedText);
-        // Also copy to clipboard as a backup
-        Clipboard.setStringAsync(processedText).catch(console.error);
-        return;
-      }
-
-      // Normal flow: create a transcript entry
       // Use processedText so expanded commands are visible in the transcript
       const newEntry: TranscriptEntry = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -605,6 +609,16 @@ function AppContent() {
     );
   }, [transcripts, sortOrder]);
 
+  const filteredTranscripts = useMemo(() => {
+    const q = itemsSearchQuery.trim().toLowerCase();
+    if (!q) return sortedTranscripts;
+    return sortedTranscripts.filter((entry) => {
+      if (entry.text?.toLowerCase().includes(q)) return true;
+      if (entry.stackSegments?.some((seg) => seg.text.toLowerCase().includes(q))) return true;
+      return false;
+    });
+  }, [sortedTranscripts, itemsSearchQuery]);
+
   const sortedTodos = useMemo(() => {
     return [...todos].sort((a, b) => {
       // Incomplete tasks come first, then completed tasks
@@ -615,12 +629,6 @@ function AppContent() {
       return todosSortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt;
     });
   }, [todos, todosSortOrder]);
-
-  const sortedObservations = useMemo(() => {
-    return [...observations].sort((a, b) =>
-      observationsSortOrder === 'newest' ? b.createdAt - a.createdAt : a.createdAt - b.createdAt,
-    );
-  }, [observations, observationsSortOrder]);
 
   const todosSections = useMemo(() => {
     const grouped: { key: string; title: string; data: Todo[] }[] = [];
@@ -644,35 +652,11 @@ function AppContent() {
     return grouped;
   }, [sortedTodos]);
 
-  const observationsSections = useMemo(() => {
-    const grouped: { key: string; title: string; data: Observation[] }[] = [];
-    const sectionIndex: Record<string, number> = {};
-
-    sortedObservations.forEach((observation) => {
-      const key = getDateKey(observation.createdAt);
-
-      if (sectionIndex[key] === undefined) {
-        sectionIndex[key] = grouped.length;
-        grouped.push({
-          key,
-          title: formatDateHeader(observation.createdAt),
-          data: [],
-        });
-      }
-
-      grouped[sectionIndex[key]].data.push(observation);
-    });
-
-    return grouped;
-  }, [sortedObservations]);
-
   const handleRecordPress = async () => {
     if (isRecording) {
       await stopRecording();
       manuallyStoppedRef.current = true; // User manually stopped - don't auto-start again
     } else {
-      // Track which page we're on when starting recording
-      recordingStartedOnPageRef.current = pageIndex;
       await startRecording();
       manuallyStoppedRef.current = false; // User manually started - allow auto-start again
     }
@@ -806,18 +790,6 @@ function AppContent() {
     StorageService.saveTodos(newTodos).catch(console.error);
   }, [todos]);
 
-  const handleUpdateObservation = useCallback((id: string, text: string) => {
-    const newObservations = observations.map((o) => (o.id === id ? { ...o, text, updatedAt: Date.now() } : o));
-    setObservations(newObservations);
-    StorageService.saveObservations(newObservations).catch(console.error);
-  }, [observations]);
-
-  const handleDeleteObservation = useCallback((id: string) => {
-    const newObservations = observations.filter((o) => o.id !== id);
-    setObservations(newObservations);
-    StorageService.saveObservations(newObservations).catch(console.error);
-  }, [observations]);
-
   // Create a new task via pull-to-create.
   const handleCreateTask = useCallback((text: string): boolean => {
     const newTodo: Todo = {
@@ -832,20 +804,6 @@ function AppContent() {
     StorageService.saveTodos(newTodos).catch(console.error);
     return true;
   }, [todos]);
-
-  // Create a new observation via pull-to-create.
-  const handleCreateObservation = useCallback((text: string): boolean => {
-    const newObs: Observation = {
-      id: Date.now().toString() + Math.random().toString(36).substr(2, 9),
-      text,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
-    const newObservations = [newObs, ...observations];
-    setObservations(newObservations);
-    StorageService.saveObservations(newObservations).catch(console.error);
-    return true;
-  }, [observations]);
 
   // Handle sketch completion - save the PNG and sync to cloud.
   const handleSketchComplete = useCallback(async (data: { uri: string; width: number; height: number }) => {
@@ -916,8 +874,8 @@ function AppContent() {
     setCreateMode({ isCreating, itemType: 'task', text, save, cancel });
   }, []);
 
-  const handleObservationCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
-    setCreateMode({ isCreating, itemType: 'observation', text, save, cancel });
+  const handleCommandCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'task', text, save, cancel });
   }, []);
 
   const handleToggleAutoStart = useCallback((value: boolean) => {
@@ -986,26 +944,6 @@ function AppContent() {
   const handleCancelEditTranscript = useCallback(() => {
     setEditingTranscriptId(null);
     setEditTranscriptText('');
-  }, []);
-
-  // Send transcribed text to Cursor's agent dashboard.
-  // This pastes the text into Cursor's input field and switches to the browser view.
-  const handleSendToCursor = useCallback((text: string) => {
-    // Dismiss keyboard before navigating to prevent it from staying open.
-    Keyboard.dismiss();
-    
-    // Paste the text into Cursor's input field.
-    cursorBrowserRef.current?.pasteText(text);
-    
-    // Cursor is always at page 1 (right after Transcripts).
-    const cursorPageIndex = 1;
-    
-    // Switch to the Cursor browser page instantly (no animation).
-    pagerRef.current?.setPageWithoutAnimation(cursorPageIndex);
-    setPageIndex(cursorPageIndex);
-    
-    // Provide haptic feedback.
-    Vibration.vibrate();
   }, []);
 
   const handleSpeakTranscript = useCallback(async (entry: TranscriptEntry) => {
@@ -1263,7 +1201,7 @@ function AppContent() {
   // Render a single transcript item using memoized component.
   // We compute per-item state here and pass it as props to avoid re-rendering the whole list.
   const renderTranscriptItem = useCallback(({ item, index }: { item: TranscriptEntry; index: number }) => {
-    const prevItem = index > 0 ? sortedTranscripts[index - 1] : null;
+    const prevItem = index > 0 ? filteredTranscripts[index - 1] : null;
     const showDateHeader = !prevItem || getDateKey(item.createdAt) !== getDateKey(prevItem.createdAt);
 
     return (
@@ -1279,13 +1217,11 @@ function AppContent() {
         showDateHeader={showDateHeader}
         selectionMode={selectionMode}
         isProcessingLLM={isProcessingLLM}
-        showCursor={settings.showCursor}
         autoSeparate={settings.autoSeparate}
         isEditing={editingTranscriptId === item.id}
         editText={editingTranscriptId === item.id ? editTranscriptText : ''}
         onEditTextChange={setEditTranscriptText}
         onToggleExpand={handleToggleExpand}
-        onSendToCursor={handleSendToCursor}
         onSpeak={handleSpeakTranscript}
         onManualSeparate={handleManualSeparate}
         onUnstack={handleUnstackTranscript}
@@ -1298,7 +1234,7 @@ function AppContent() {
       />
     );
   }, [
-    sortedTranscripts,
+    filteredTranscripts,
     expandedMap,
     copiedId,
     selectedIds,
@@ -1308,12 +1244,10 @@ function AppContent() {
     speechPlaybackState,
     selectionMode,
     isProcessingLLM,
-    settings.showCursor,
     settings.autoSeparate,
     editingTranscriptId,
     editTranscriptText,
     handleToggleExpand,
-    handleSendToCursor,
     handleSpeakTranscript,
     handleManualSeparate,
     handleUnstackTranscript,
@@ -1325,7 +1259,67 @@ function AppContent() {
     handleUpdateTranscript,
   ]);
 
-  // Show loading state during initial data load
+  // Per-page proximity (1 = fully on this page, 0 = at neighbor or beyond).
+  // Defined before any early-return so all hooks below stay in stable order.
+  const proximityToPage = (idx: number) =>
+    Math.max(0, 1 - Math.abs(pageScrollFloat - idx));
+
+  // Tab tap navigation. setPageWithoutAnimation jumps instantly without
+  // emitting onPageScroll, so pageScrollFloat would otherwise stay stale and
+  // the active-tab color wouldn't update until the next swipe. Snap both.
+  const navigateToPage = (idx: number) => {
+    pagerRef.current?.setPageWithoutAnimation(idx);
+    setPageIndex(idx);
+    setPageScrollFloat(idx);
+  };
+
+  // Items page search row — rendered as the FlatList header so it scrolls
+  // with the list (not sticky) and only takes up the height it needs.
+  // Memoized so its identity stays stable across unrelated re-renders;
+  // otherwise FlatList would treat each render as a new header and churn.
+  const itemsSearchOpacity = proximityToPage(0);
+  const itemsSearchHeader = useMemo(
+    () => (
+      <View style={[styles.searchHeader, { opacity: itemsSearchOpacity, backgroundColor: colors.bgPage }]}>
+        {itemsSearchVisible ? (
+          <View style={[styles.searchInputRow, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
+            <Feather name="search" size={16} color={colors.textSecondary} />
+            <TextInput
+              style={[styles.searchInput, { color: colors.textPrimary }]}
+              value={itemsSearchQuery}
+              onChangeText={setItemsSearchQuery}
+              placeholder="Search items"
+              placeholderTextColor={colors.textTertiary}
+              autoFocus
+              returnKeyType="search"
+            />
+            <TouchableOpacity
+              onPress={() => {
+                setItemsSearchQuery('');
+                setItemsSearchVisible(false);
+                Keyboard.dismiss();
+              }}
+              hitSlop={8}
+            >
+              <Feather name="x" size={18} color={colors.textSecondary} />
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.searchIconButton}
+            onPress={() => setItemsSearchVisible(true)}
+            hitSlop={8}
+          >
+            <Feather name="search" size={18} color={colors.textSecondary} />
+          </TouchableOpacity>
+        )}
+      </View>
+    ),
+    [itemsSearchVisible, itemsSearchQuery, itemsSearchOpacity, colors],
+  );
+
+  // Show loading state during initial data load.
+  // Must come AFTER all hooks so hook order is stable across renders.
   if (!isInitialized) {
     return (
       <View style={styles.container}>
@@ -1341,7 +1335,7 @@ function AppContent() {
   return (
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
-        <View style={[styles.container, { paddingTop: insets.top }]}>
+        <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bgPage }]}>
           <StatusBar style="auto" />
 
       {/* Header removed - moved settings to bottom tab */}
@@ -1380,35 +1374,39 @@ function AppContent() {
         </View>
       )}
 
-      {/* Pager View - Order: Transcripts → Cursor → Tasks → Observations */}
-      {/* Swipe gestures are disabled because they conflict with the WebView on the Cursor page. */}
-      {/* Users navigate via the bottom tab bar instead for reliable navigation. */}
-      {/* PagerView with animations disabled for instant tab switching. */}
-      {/* scrollEnabled=false prevents swipe conflicts with WebView. */}
-      {/* overdrag=false + overScrollMode prevent bounce animation. */}
+      {/* Pager View - Order: Items → Commands → Tasks → Settings */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
-        scrollEnabled={false}
+        scrollEnabled={true}
         overdrag={false}
         overScrollMode="never"
+        onPageScroll={(e) => {
+          const next = e.nativeEvent.position + e.nativeEvent.offset;
+          // Bail out on sub-pixel jitter so an unrelated vertical gesture
+          // (e.g. pull-to-create) doesn't churn re-renders via tiny
+          // horizontal touch noise reported by the pager.
+          setPageScrollFloat((prev) => (Math.abs(prev - next) > 0.005 ? next : prev));
+        }}
         onPageSelected={(e) => {
           try {
-            const newPageIndex = e.nativeEvent.position;
-            setPageIndex(newPageIndex);
-            
-            // Pre-warm the Cursor page when navigating to it.
-            // This ensures the page is fresh and ready for paste operations.
-            if (newPageIndex === 1 && cursorBrowserRef.current) {
-              cursorBrowserRef.current.ensureFresh();
-            }
+            setPageIndex(e.nativeEvent.position);
           } catch (err) {
             console.error('Error handling page selection:', err);
           }
         }}
       >
-        <View key="transcripts" style={styles.transcriptContainer}>
+        <View key="transcripts" style={[styles.transcriptContainer, { backgroundColor: colors.bgPage }]}>
           <View style={styles.transcriptListWrapper}>
+            {/* Top fade overlay — items gently fade as they scroll past the top. */}
+            <View pointerEvents="none" style={styles.topFadeOverlay}>
+              {TOP_FADE_OPACITIES.map((op, i) => (
+                <View
+                  key={i}
+                  style={{ height: 4, backgroundColor: colors.bgPage, opacity: op }}
+                />
+              ))}
+            </View>
             <PullToCreate
               itemType="transcript"
               onCreateItem={handleCreateTranscript}
@@ -1416,15 +1414,20 @@ function AppContent() {
               style={{ flex: 1 }}
               onCreateModeChange={handleStackCreateModeChange}
             >
-              {sortedTranscripts.length === 0 ? (
+              {filteredTranscripts.length === 0 ? (
                 <FlatList
                   data={[]}
                   renderItem={() => null}
+                  ListHeaderComponent={itemsSearchHeader}
                   ListEmptyComponent={
                     <View style={styles.emptyState}>
-                      <Text style={styles.emptyTitle}>No stacks yet</Text>
-                      <Text style={styles.emptySubtitle}>
-                        Pull down to type a note, or tap Record.
+                      <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
+                        {itemsSearchQuery ? 'No matches' : 'No stacks yet'}
+                      </Text>
+                      <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+                        {itemsSearchQuery
+                          ? 'Try a different search term.'
+                          : 'Pull down to type a note, or tap Record.'}
                       </Text>
                     </View>
                   }
@@ -1432,9 +1435,10 @@ function AppContent() {
                 />
               ) : (
                 <FlatList
-                  data={sortedTranscripts}
+                  data={filteredTranscripts}
                   keyExtractor={(item) => item.id}
                   renderItem={renderTranscriptItem}
+                  ListHeaderComponent={itemsSearchHeader}
                   contentContainerStyle={styles.sectionContent}
                   windowSize={5}
                   removeClippedSubviews={true}
@@ -1445,25 +1449,13 @@ function AppContent() {
             </PullToCreate>
           </View>
         </View>
-        <View key="cursor" style={styles.pageContainer}>
-          <CursorBrowser 
-            ref={cursorBrowserRef}
-            isRecording={isRecording}
-            isProcessing={isProcessing}
-            isWhisperReady={isReady && !isDownloadingModel}
-            onStartRecording={() => {
-              // Track that recording started on Cursor page (page 1)
-              recordingStartedOnPageRef.current = 1;
-              manuallyStoppedRef.current = false;
-              startRecording();
-            }}
-            onStopRecording={() => {
-              manuallyStoppedRef.current = true;
-              stopRecording();
-            }}
+        <View key="commands" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
+          <CommandsList
+            searchOpacity={proximityToPage(1)}
+            onCreateModeChange={handleCommandCreateModeChange}
           />
         </View>
-        <View key="todos" style={styles.pageContainer}>
+        <View key="todos" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
           <TodoList
             sections={todosSections}
             onToggleComplete={handleToggleComplete}
@@ -1473,280 +1465,20 @@ function AppContent() {
             formatDateHeader={formatDateHeader}
             onCreateTask={handleCreateTask}
             onCreateModeChange={handleTaskCreateModeChange}
+            searchOpacity={proximityToPage(2)}
           />
         </View>
-        <View key="observations" style={styles.pageContainer}>
-          <ObservationList
-            sections={observationsSections}
-            onUpdate={handleUpdateObservation}
-            onDelete={handleDeleteObservation}
-            formatTime={formatTime}
-            formatDateHeader={formatDateHeader}
-            onCreateObservation={handleCreateObservation}
-            onCreateModeChange={handleObservationCreateModeChange}
-          />
-        </View>
-        <View key="commands" style={styles.pageContainer}>
-          <CommandsList />
-        </View>
-        </PagerView>
-
-      {/* BOTTOM BAR - Changes based on mode (create > selection > normal) */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={createMode.isCreating && Platform.OS === 'ios' ? 36 : 0} // 36px offset for iOS suggestion bar when creating
-      >
-        <View style={[styles.bottomBar, { paddingBottom: insets.bottom }]}>
-          {createMode.isCreating ? (
-            /* Create mode: Cancel | Save */
-            <>
-              <TouchableOpacity
-                onPress={() => createMode.cancel?.()}
-                style={styles.tabButton}
-              >
-                <Feather name="x" size={22} color="#6B7280" />
-                <Text style={styles.tabLabel}>Cancel</Text>
-              </TouchableOpacity>
-              
-              <TouchableOpacity
-                onPress={() => createMode.save?.()}
-                style={[styles.saveTabButton, !createMode.text.trim() && styles.saveTabButtonDisabled]}
-                disabled={!createMode.text.trim()}
-              >
-                <Feather 
-                  name="check" 
-                  size={22} 
-                  color={createMode.text.trim() ? '#fff' : '#9CA3AF'} 
-                />
-                <Text style={[styles.saveTabButtonText, !createMode.text.trim() && styles.saveTabButtonTextDisabled]}>
-                  {createMode.itemType === 'stack' ? 'Save Stack' : 
-                   createMode.itemType === 'task' ? 'Save Task' : 
-                   'Save Note'}
-                </Text>
-              </TouchableOpacity>
-            </>
-          ) : selectionMode ? (
-          /* Selection mode: Back | Stack | Unstack | Delete */
-          <>
-            <TouchableOpacity
-              onPress={exitSelectionMode}
-              style={styles.tabButton}
-            >
-              <Feather name="arrow-left" size={22} color="#6B7280" />
-              <Text style={styles.tabLabel}>Back</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              onPress={handleStackSelected}
-              style={[styles.tabButton, selectedIds.size < 2 && styles.selectionBottomButtonDisabled]}
-              disabled={selectedIds.size < 2}
-            >
-              <Feather name="layers" size={22} color={selectedIds.size >= 2 ? '#2563EB' : '#9CA3AF'} />
-              <Text style={[styles.tabLabel, selectedIds.size >= 2 ? styles.stackTabLabel : styles.tabLabelDisabled]}>
-                Stack
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              onPress={handleUnstackSelected}
-              style={[styles.tabButton, !hasSelectedStacked && styles.selectionBottomButtonDisabled]}
-              disabled={!hasSelectedStacked}
-            >
-              <Feather name="minimize-2" size={22} color={hasSelectedStacked ? '#7C3AED' : '#9CA3AF'} />
-              <Text style={[styles.tabLabel, hasSelectedStacked ? styles.unstackTabLabel : styles.tabLabelDisabled]}>
-                Unstack
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              onPress={() => {
-                // Edit only works with exactly 1 item selected
-                if (selectedIds.size === 1) {
-                  const selectedId = Array.from(selectedIds)[0];
-                  const entry = sortedTranscripts.find(t => t.id === selectedId);
-                  if (entry) {
-                    handleEditTranscript(entry);
-                    exitSelectionMode();
-                  }
-                }
-              }}
-              style={[styles.tabButton, selectedIds.size !== 1 && styles.selectionBottomButtonDisabled]}
-              disabled={selectedIds.size !== 1}
-            >
-              <Feather name="edit-2" size={22} color={selectedIds.size === 1 ? '#059669' : '#9CA3AF'} />
-              <Text style={[styles.tabLabel, selectedIds.size === 1 ? styles.editTabLabel : styles.tabLabelDisabled]}>
-                Edit
-              </Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity
-              onPress={handleDeleteSelected}
-              style={[styles.tabButton, selectedIds.size === 0 && styles.selectionBottomButtonDisabled]}
-              disabled={selectedIds.size === 0}
-            >
-              <Feather name="trash-2" size={22} color={selectedIds.size > 0 ? '#DC2626' : '#9CA3AF'} />
-              <Text style={[styles.tabLabel, selectedIds.size > 0 ? styles.deleteTabLabel : styles.tabLabelDisabled]}>
-                Delete
-              </Text>
-            </TouchableOpacity>
-          </>
-        ) : (
-          /* Normal mode: show tab navigation
-           * Layout: Fields, Shared Fields, Cursor, [RECORD], Tasks, Settings, Commands
-           * Record button is centered with 3 tabs on each side.
-           */
-          <>
-            {/* Fields Tab (was Stacks) */}
-            <TouchableOpacity 
-              style={styles.tabButton} 
-              onPress={() => pagerRef.current?.setPageWithoutAnimation(0)}
-            >
-              <Feather 
-                name="layers" 
-                size={22} 
-                color={pageIndex === 0 ? '#007AFF' : '#9CA3AF'} 
-              />
-              <Text style={[styles.tabLabel, pageIndex === 0 && styles.tabLabelActive]}>
-                iOS Fields
-              </Text>
-            </TouchableOpacity>
-
-            {/* Shared Fields Tab - always visible, prompts for login if not authenticated */}
-            <TouchableOpacity
-              style={styles.tabButton}
-              onPress={() => {
-                if (!session) {
-                  Alert.alert(
-                    'Sign In Required',
-                    'You need to log in to access shared fields. Go to Settings to sign in.',
-                    [
-                      { text: 'Cancel', style: 'cancel' },
-                      { text: 'Settings', onPress: () => setShowSettings(true) },
-                    ]
-                  );
-                } else {
-                  // TODO: Navigate to shared fields page when implemented
-                  Alert.alert('Shared Fields', 'Shared fields coming soon to iOS.');
-                }
-              }}
-            >
-              <Feather 
-                name="users" 
-                size={22} 
-                color={'#9CA3AF'} 
-              />
-              <Text style={styles.tabLabel}>
-                Shared
-              </Text>
-            </TouchableOpacity>
-
-            {/* Cursor Tab */}
-            {settings.showCursor && (
-              <TouchableOpacity 
-                style={styles.tabButton} 
-                onPress={() => pagerRef.current?.setPageWithoutAnimation(1)}
-              >
-                <Feather 
-                  name="terminal" 
-                  size={22} 
-                  color={pageIndex === 1 ? '#007AFF' : '#9CA3AF'} 
-                />
-                <Text style={[styles.tabLabel, pageIndex === 1 && styles.tabLabelActive]}>
-                  Cursor
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* RECORD BUTTON - Floating Center */}
-            <View style={styles.recordButtonContainer}>
-              <TouchableOpacity
-                style={[
-                  styles.recordButton,
-                  isRecording && styles.recordButtonActive,
-                  (!isReady || isProcessing || isProcessingLLM) && styles.recordButtonDisabled,
-                ]}
-                onPress={handleRecordPress}
-                disabled={!isReady || isProcessing || isProcessingLLM}
-              >
-                {isProcessing || isProcessingLLM ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <Feather name={isRecording ? "square" : "mic"} size={32} color="#fff" />
-                )}
-              </TouchableOpacity>
-            </View>
-
-            {/* Tasks Tab - flashes when tasks are saved */}
-            {settings.showTodos && (
-              <TouchableOpacity 
-                style={styles.tabButton} 
-                onPress={() => pagerRef.current?.setPageWithoutAnimation(2)}
-              >
-                <Feather 
-                  name="check-square" 
-                  size={22} 
-                  color={tasksTabFlash ? '#059669' : (pageIndex === 2 ? '#007AFF' : '#9CA3AF')} 
-                />
-                <Text style={[styles.tabLabel, pageIndex === 2 && styles.tabLabelActive, tasksTabFlash && styles.tabLabelFlash]}>
-                  Tasks
-                </Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Settings Tab */}
-            <TouchableOpacity
-              style={styles.tabButton}
-              onPress={() => setShowSettings(true)}
-            >
-              <Feather
-                name="settings"
-                size={22}
-                color="#9CA3AF"
-              />
-              <Text style={styles.tabLabel}>
-                Settings
-              </Text>
-            </TouchableOpacity>
-
-            {/* Commands Tab - Portable commands synced from Mac */}
-            <TouchableOpacity
-              style={styles.tabButton}
-              onPress={() => pagerRef.current?.setPageWithoutAnimation(4)}
-            >
-              <Feather
-                name="command"
-                size={22}
-                color={pageIndex === 4 ? '#007AFF' : '#9CA3AF'}
-              />
-              <Text style={[styles.tabLabel, pageIndex === 4 && styles.tabLabelActive]}>
-                Commands
-              </Text>
-            </TouchableOpacity>
-          </>
-          )}
-        </View>
-      </KeyboardAvoidingView>
-
-      {/* Settings Modal */}
-      <Modal
-        visible={showSettings}
-        transparent
-        animationType="fade"
-        onRequestClose={closeSettings}
-      >
-        <KeyboardAvoidingView 
-          style={styles.modalOverlay}
-          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        >
-          <View style={styles.modalContent}>
-            <ScrollView 
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-            <Text style={styles.modalTitle}>Settings</Text>
+        <View key="settings" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
+          <ScrollView
+            style={[styles.settingsPageScroll, { backgroundColor: colors.bgPage }]}
+            contentContainerStyle={styles.settingsPageContent}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Settings</Text>
 
             <View style={styles.settingRow}>
-              <Text style={styles.settingLabel}>Start recording on app open</Text>
+              <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>Start recording on app open</Text>
               <Switch
                 value={settings.autoStart}
                 onValueChange={handleToggleAutoStart}
@@ -1754,11 +1486,10 @@ function AppContent() {
               />
             </View>
 
-            {/* Feature Visibility Section */}
-            <Text style={styles.settingsSectionTitle}>Show Features</Text>
-            
+            <Text style={[styles.settingsSectionTitle, { color: colors.textSecondary }]}>Show Features</Text>
+
             <View style={styles.settingRow}>
-              <Text style={styles.settingLabel}>Tasks tab</Text>
+              <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>Tasks tab</Text>
               <Switch
                 value={settings.showTodos}
                 onValueChange={(value) => handleToggleSetting('showTodos', value)}
@@ -1766,33 +1497,14 @@ function AppContent() {
               />
             </View>
 
-            <View style={styles.settingRow}>
-              <Text style={styles.settingLabel}>Observations tab</Text>
-              <Switch
-                value={settings.showObservations}
-                onValueChange={(value) => handleToggleSetting('showObservations', value)}
-                trackColor={{ false: '#d1d5db', true: '#14372A' }}
-              />
-            </View>
+            <Text style={[styles.settingsSectionTitle, { color: colors.textSecondary }]}>Transcript Processing</Text>
 
-            <View style={styles.settingRow}>
-              <Text style={styles.settingLabel}>Cursor tab</Text>
-              <Switch
-                value={settings.showCursor}
-                onValueChange={(value) => handleToggleSetting('showCursor', value)}
-                trackColor={{ false: '#d1d5db', true: '#14372A' }}
-              />
-            </View>
-
-            {/* Separation Section */}
-            <Text style={styles.settingsSectionTitle}>Transcript Processing</Text>
-            
             <View style={styles.settingRow}>
               <View style={styles.settingLabelContainer}>
-                <Text style={styles.settingLabel}>Auto Create Tasks and Observations</Text>
-                <Text style={styles.settingDescription}>
-                  {settings.autoSeparate 
-                    ? 'Fields are automatically processed' 
+                <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>Auto Create Tasks and Observations</Text>
+                <Text style={[styles.settingDescription, { color: colors.textSecondary }]}>
+                  {settings.autoSeparate
+                    ? 'Fields are automatically processed'
                     : 'Use the Create Tasks button on each stack'}
                 </Text>
               </View>
@@ -1804,8 +1516,8 @@ function AppContent() {
             </View>
 
             <View style={styles.syncSection}>
-              <Text style={styles.sectionHeading}>Supabase Sync</Text>
-              <Text style={styles.syncStatusText}>
+              <Text style={[styles.sectionHeading, { color: colors.textPrimary }]}>Supabase Sync</Text>
+              <Text style={[styles.syncStatusText, { color: colors.textSecondary }]}>
                 {session ? `Signed in as ${session.user.email === 'andrew.mfarah@gmail.com' ? 'A. Farah' : session.user.email}` : 'Not signed in'}
               </Text>
 
@@ -1895,24 +1607,235 @@ function AppContent() {
               )}
 
               {syncedAt && (
-                <Text style={styles.syncStatusText}>
+                <Text style={[styles.syncStatusText, { color: colors.textSecondary }]}>
                   Last synced at {formatTime(syncedAt)}
                 </Text>
               )}
-              {syncNotice && <Text style={styles.syncStatusText}>{syncNotice}</Text>}
-              {authNotice && <Text style={styles.syncStatusText}>{authNotice}</Text>}
+              {syncNotice && <Text style={[styles.syncStatusText, { color: colors.textSecondary }]}>{syncNotice}</Text>}
+              {authNotice && <Text style={[styles.syncStatusText, { color: colors.textSecondary }]}>{authNotice}</Text>}
+            </View>
+          </ScrollView>
+        </View>
+        </PagerView>
+
+      {/* BOTTOM BAR - Changes based on mode (create > selection > normal).
+          Hidden entirely when the keyboard is up in plain typing (e.g. search)
+          so the user sees only their content + keyboard. Create/selection modes
+          still render their own action bars because those bars ARE the actions. */}
+      {!createMode.isCreating && !selectionMode && keyboardHeight > 0 ? null : (
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={createMode.isCreating && Platform.OS === 'ios' ? 36 : 0} // 36px offset for iOS suggestion bar when creating
+      >
+        <View style={[styles.bottomBar, { paddingBottom: insets.bottom, backgroundColor: colors.bgElevated, borderTopColor: colors.border }]}>
+          {createMode.isCreating ? (
+            /* Create mode: Cancel | Save */
+            <>
+              <TouchableOpacity
+                onPress={() => createMode.cancel?.()}
+                style={styles.tabButton}
+              >
+                <Feather name="x" size={22} color="#6B7280" />
+                <Text style={styles.tabLabel}>Cancel</Text>
+              </TouchableOpacity>
+              
+              <TouchableOpacity
+                onPress={() => createMode.save?.()}
+                style={[styles.saveTabButton, !createMode.text.trim() && styles.saveTabButtonDisabled]}
+                disabled={!createMode.text.trim()}
+              >
+                <Feather 
+                  name="check" 
+                  size={22} 
+                  color={createMode.text.trim() ? '#fff' : '#9CA3AF'} 
+                />
+                <Text style={[styles.saveTabButtonText, !createMode.text.trim() && styles.saveTabButtonTextDisabled]}>
+                  Save Item
+                </Text>
+              </TouchableOpacity>
+            </>
+          ) : selectionMode ? (
+          /* Selection mode: Back | Stack | Unstack | Delete */
+          <>
+            <TouchableOpacity
+              onPress={exitSelectionMode}
+              style={styles.tabButton}
+            >
+              <Feather name="arrow-left" size={22} color="#6B7280" />
+              <Text style={styles.tabLabel}>Back</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              onPress={handleStackSelected}
+              style={[styles.tabButton, selectedIds.size < 2 && styles.selectionBottomButtonDisabled]}
+              disabled={selectedIds.size < 2}
+            >
+              <Feather name="layers" size={22} color={selectedIds.size >= 2 ? '#2563EB' : '#9CA3AF'} />
+              <Text style={[styles.tabLabel, selectedIds.size >= 2 ? styles.stackTabLabel : styles.tabLabelDisabled]}>
+                Stack
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              onPress={handleUnstackSelected}
+              style={[styles.tabButton, !hasSelectedStacked && styles.selectionBottomButtonDisabled]}
+              disabled={!hasSelectedStacked}
+            >
+              <Feather name="minimize-2" size={22} color={hasSelectedStacked ? '#7C3AED' : '#9CA3AF'} />
+              <Text style={[styles.tabLabel, hasSelectedStacked ? styles.unstackTabLabel : styles.tabLabelDisabled]}>
+                Unstack
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              onPress={() => {
+                // Edit only works with exactly 1 item selected
+                if (selectedIds.size === 1) {
+                  const selectedId = Array.from(selectedIds)[0];
+                  const entry = sortedTranscripts.find(t => t.id === selectedId);
+                  if (entry) {
+                    handleEditTranscript(entry);
+                    exitSelectionMode();
+                  }
+                }
+              }}
+              style={[styles.tabButton, selectedIds.size !== 1 && styles.selectionBottomButtonDisabled]}
+              disabled={selectedIds.size !== 1}
+            >
+              <Feather name="edit-2" size={22} color={selectedIds.size === 1 ? '#059669' : '#9CA3AF'} />
+              <Text style={[styles.tabLabel, selectedIds.size === 1 ? styles.editTabLabel : styles.tabLabelDisabled]}>
+                Edit
+              </Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity
+              onPress={handleDeleteSelected}
+              style={[styles.tabButton, selectedIds.size === 0 && styles.selectionBottomButtonDisabled]}
+              disabled={selectedIds.size === 0}
+            >
+              <Feather name="trash-2" size={22} color={selectedIds.size > 0 ? '#DC2626' : '#9CA3AF'} />
+              <Text style={[styles.tabLabel, selectedIds.size > 0 ? styles.deleteTabLabel : styles.tabLabelDisabled]}>
+                Delete
+              </Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          /* Normal mode: show tab navigation
+           * Layout: Items, Commands, [RECORD], Tasks, Settings
+           * Record button is centered.
+           */
+          <>
+            {/* Items Tab (was iOS Fields / Stacks) */}
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => navigateToPage(0)}
+            >
+              <Feather
+                name="layers"
+                size={22}
+                color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(0))}
+              />
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(0)) },
+                ]}
+              >
+                Items
+              </Text>
+            </TouchableOpacity>
+
+            {/* Commands Tab - Portable commands synced from Mac */}
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => navigateToPage(1)}
+            >
+              <Feather
+                name="command"
+                size={22}
+                color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(1))}
+              />
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(1)) },
+                ]}
+              >
+                Commands
+              </Text>
+            </TouchableOpacity>
+
+            {/* RECORD BUTTON - Floating Center */}
+            <View style={styles.recordButtonContainer}>
+              <TouchableOpacity
+                style={[
+                  styles.recordButton,
+                  isRecording && styles.recordButtonActive,
+                  (!isReady || isProcessing || isProcessingLLM) && styles.recordButtonDisabled,
+                ]}
+                onPress={handleRecordPress}
+                disabled={!isReady || isProcessing || isProcessingLLM}
+              >
+                {isProcessing || isProcessingLLM ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Feather name={isRecording ? "square" : "mic"} size={32} color="#fff" />
+                )}
+              </TouchableOpacity>
             </View>
 
+            {/* Tasks Tab - flashes when tasks are saved */}
+            {settings.showTodos && (
+              <TouchableOpacity
+                style={styles.tabButton}
+                onPress={() => navigateToPage(2)}
+              >
+                <Feather
+                  name="check-square"
+                  size={22}
+                  color={tasksTabFlash ? '#059669' : lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(2))}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    {
+                      color: tasksTabFlash
+                        ? '#059669'
+                        : lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(2)),
+                    },
+                    tasksTabFlash && styles.tabLabelFlash,
+                  ]}
+                >
+                  Tasks
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* Settings Tab */}
             <TouchableOpacity
-              style={styles.modalButton}
-              onPress={closeSettings}
+              style={styles.tabButton}
+              onPress={() => navigateToPage(3)}
             >
-              <Text style={styles.modalButtonText}>Close</Text>
+              <Feather
+                name="settings"
+                size={22}
+                color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(3))}
+              />
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(3)) },
+                ]}
+              >
+                Settings
+              </Text>
             </TouchableOpacity>
-            </ScrollView>
-          </View>
-        </KeyboardAvoidingView>
-      </Modal>
+          </>
+          )}
+        </View>
+      </KeyboardAvoidingView>
+      )}
+
         </View>
       </GestureHandlerRootView>
     </ErrorBoundary>
@@ -1988,6 +1911,49 @@ const styles = StyleSheet.create({
   },
   transcriptListWrapper: {
     flex: 1,
+  },
+  searchHeader: {
+    paddingHorizontal: 12,
+    paddingTop: 4,
+    paddingBottom: 4,
+    backgroundColor: '#F4F5F7',
+  },
+  searchIconButton: {
+    alignSelf: 'flex-end',
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  searchInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#E5E7EB',
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: '#111827',
+    padding: 0,
+  },
+  topFadeOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 10,
+  },
+  settingsPageScroll: {
+    flex: 1,
+    backgroundColor: '#F5F5F5',
+  },
+  settingsPageContent: {
+    padding: 20,
+    paddingBottom: 100,
   },
   pageContainer: {
     flex: 1,

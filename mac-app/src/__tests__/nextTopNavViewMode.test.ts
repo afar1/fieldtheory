@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nextTopNavViewMode } from '../types/clipboard';
+import { nextTopNavViewMode, shouldCycleTopNavWithTab } from '../types/clipboard';
 
 describe('nextTopNavViewMode', () => {
   it('cycles forward through clipboard → librarian → commands → clipboard', () => {
@@ -26,5 +26,16 @@ describe('nextTopNavViewMode', () => {
     expect(nextTopNavViewMode('feedback', 1, true)).toBe('clipboard');
     expect(nextTopNavViewMode('sketch', -1, true)).toBe('clipboard');
     expect(nextTopNavViewMode('todo', 1, false)).toBe('clipboard');
+  });
+
+  it('uses Tab as the nav carousel shortcut from buttons, including the current tab', () => {
+    expect(shouldCycleTopNavWithTab('BUTTON')).toBe(true);
+    expect(shouldCycleTopNavWithTab('DIV')).toBe(true);
+    expect(shouldCycleTopNavWithTab(null)).toBe(true);
+  });
+
+  it('lets text fields keep native Tab behavior', () => {
+    expect(shouldCycleTopNavWithTab('INPUT')).toBe(false);
+    expect(shouldCycleTopNavWithTab('TEXTAREA')).toBe(false);
   });
 });

@@ -286,6 +286,62 @@ ${commandsSection}
   }
 
   /**
+   * Create a new command from raw user input.
+   *
+   * Convention: the first line of `rawText` becomes the display name; the rest
+   * (or the full text if there's only one line) becomes the content. The slug
+   * `name` is derived from the display name. Inserted into Supabase
+   * user_commands and added to the local cache.
+   */
+  static async createCommand(rawText: string): Promise<Command | null> {
+    const session = await getSession();
+    if (!session) {
+      console.warn('CommandsService.createCommand: not signed in');
+      return null;
+    }
+
+    const trimmed = rawText.trim();
+    if (!trimmed) return null;
+
+    const lines = trimmed.split(/\r?\n/);
+    const displayName = (lines[0] ?? '').trim().slice(0, 80) || 'Untitled';
+    const content = lines.length > 1 ? lines.slice(1).join('\n').trim() : trimmed;
+    const slug = displayName
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || `cmd-${Date.now()}`;
+
+    try {
+      const { data, error } = await supabase
+        .from('user_commands')
+        .insert({
+          user_id: session.user.id,
+          name: slug,
+          display_name: displayName,
+          content,
+          source_path: null,
+          content_hash: null,
+        })
+        .select('*')
+        .single();
+
+      if (error || !data) {
+        console.error('CommandsService.createCommand: insert error', error);
+        return null;
+      }
+
+      const cmd = toLocalCommand(data as CommandRow);
+      const cached = await this.getCachedCommands();
+      await this.cacheCommands([...cached, cmd]);
+      return cmd;
+    } catch (err) {
+      console.error('CommandsService.createCommand: network error', err);
+      return null;
+    }
+  }
+
+  /**
    * Clear cached commands (for sign out).
    */
   static async clearCache(): Promise<void> {

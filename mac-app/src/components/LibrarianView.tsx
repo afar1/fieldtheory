@@ -3,7 +3,7 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { useEffect, useState, useRef, useCallback, useMemo, Fragment, memo } from 'react';
+import { Children, cloneElement, isValidElement, useEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import ReactMarkdown from 'react-markdown';
@@ -111,13 +111,58 @@ export function extractMarkdownH1Title(content: string, fallback: string): strin
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
+export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
+export const CARROT_LIST_MARKER = '›';
+const CARROT_LIST_SENTINEL = '\u2060';
+
+export type LibrarianUnorderedListMarker = 'dash' | 'carrot';
+
+export function isLibrarianUnorderedListMarker(value: unknown): value is LibrarianUnorderedListMarker {
+  return value === 'dash' || value === 'carrot';
+}
+
+export function restoreLibrarianUnorderedListMarker(
+  storage: Pick<Storage, 'getItem'>,
+): LibrarianUnorderedListMarker {
+  const saved = storage.getItem(LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY);
+  return isLibrarianUnorderedListMarker(saved) ? saved : 'dash';
+}
+
+export function persistLibrarianUnorderedListMarker(
+  storage: Pick<Storage, 'setItem'>,
+  marker: LibrarianUnorderedListMarker,
+): void {
+  storage.setItem(LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY, marker);
+}
+
+type MarkdownTextEdit = {
+  nextValue: string;
+  selectionStart: number;
+  selectionEnd: number;
+};
+
+function parseCarrotListLine(line: string): { indent: string; markers: string; text: string } | null {
+  const match = line.match(/^(\s*)(›+)(?:[ \t](.*)|[ \t]*)$/);
+  if (!match) return null;
+  return {
+    indent: match[1],
+    markers: match[2],
+    text: match[3] ?? '',
+  };
+}
+
+function isNormalizedCarrotListLine(line: string): boolean {
+  return line.trimStart().startsWith(`- ${CARROT_LIST_SENTINEL}`);
+}
 
 export function preserveMarkdownBlankLines(content: string): string {
   if (!content || !content.trim()) return content;
 
   const output: string[] = [];
+  const lines = content.split('\n');
   let inFence = false;
-  for (const line of content.split('\n')) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     if (/^\s*(```|~~~)/.test(line)) {
       output.push(line);
       inFence = !inFence;
@@ -125,6 +170,10 @@ export function preserveMarkdownBlankLines(content: string): string {
     }
 
     if (!inFence && line.trim() === '') {
+      if (isNormalizedCarrotListLine(lines[index - 1] ?? '') || isNormalizedCarrotListLine(lines[index + 1] ?? '')) {
+        output.push(line);
+        continue;
+      }
       output.push('', PRESERVED_BLANK_MARKDOWN_LINE, '');
       continue;
     }
@@ -160,6 +209,142 @@ export function normalizeMarkdownTodoLines(content: string): string {
   }
 
   return output.join('\n');
+}
+
+export function normalizeMarkdownCarrotLists(content: string): string {
+  if (!content) return content;
+
+  const output: string[] = [];
+  let inFence = false;
+  for (const line of content.split('\n')) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      output.push(line);
+      inFence = !inFence;
+      continue;
+    }
+
+    const carrot = !inFence ? parseCarrotListLine(line) : null;
+    if (!carrot) {
+      output.push(line);
+      continue;
+    }
+
+    const depthIndent = '  '.repeat(Math.max(0, carrot.markers.length - 1));
+    output.push(`${carrot.indent}${depthIndent}- ${CARROT_LIST_SENTINEL}${carrot.text}`);
+  }
+
+  return output.join('\n');
+}
+
+export function getMarkdownBodySelectionRange(value: string): { start: number; end: number } | null {
+  if (!value.startsWith('# ')) return null;
+  const firstLineEnd = value.indexOf('\n');
+  if (firstLineEnd < 0) return null;
+  let bodyStart = firstLineEnd + 1;
+  if (value[bodyStart] === '\n') bodyStart += 1;
+  return { start: Math.min(bodyStart, value.length), end: value.length };
+}
+
+function getSelectedLineBounds(value: string, selectionStart: number, selectionEnd: number): { start: number; end: number } {
+  const start = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const searchFrom = selectionEnd > selectionStart ? selectionEnd - 1 : selectionEnd;
+  const nextNewline = value.indexOf('\n', searchFrom);
+  return {
+    start,
+    end: nextNewline === -1 ? value.length : nextNewline,
+  };
+}
+
+export function getCarrotListEnterEdit(value: string, selectionStart: number, selectionEnd: number): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const carrot = parseCarrotListLine(line);
+  if (!carrot) return null;
+
+  if (carrot.text.trim().length === 0) {
+    const nextValue = `${value.slice(0, lineStart)}${value.slice(lineEnd)}`;
+    return {
+      nextValue,
+      selectionStart: lineStart,
+      selectionEnd: lineStart,
+    };
+  }
+
+  const insertion = `\n${carrot.indent}${carrot.markers} `;
+  const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+  const nextSelection = selectionStart + insertion.length;
+  return {
+    nextValue,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
+}
+
+export function getCarrotListTabEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  direction: 'in' | 'out',
+): MarkdownTextEdit | null {
+  const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+  const selectionIsBlock = selectionStart !== selectionEnd;
+  let changed = false;
+  let handled = false;
+  let collapsedDelta = 0;
+  let blockOffset = 0;
+
+  const transformed = lines.map((line, index) => {
+    const carrot = parseCarrotListLine(line);
+    if (!carrot) {
+      blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
+      return line;
+    }
+    handled = true;
+
+    const markerStart = lineStart + blockOffset + carrot.indent.length;
+    const markerEnd = markerStart + carrot.markers.length;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
+
+    if (direction === 'in') {
+      changed = true;
+      if (!selectionIsBlock && selectionStart > markerStart) collapsedDelta = 1;
+      return `${carrot.indent}${carrot.markers}${CARROT_LIST_MARKER} ${carrot.text}`;
+    }
+
+    if (carrot.markers.length === 1) return line;
+    changed = true;
+    if (!selectionIsBlock && selectionStart > markerStart) {
+      collapsedDelta = selectionStart > markerEnd ? -1 : 0;
+    }
+    return `${carrot.indent}${carrot.markers.slice(1)} ${carrot.text}`;
+  });
+
+  if (!handled) return null;
+  if (!changed) {
+    return { nextValue: value, selectionStart, selectionEnd };
+  }
+
+  const nextBlock = transformed.join('\n');
+  const nextValue = `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`;
+  if (selectionIsBlock) {
+    return {
+      nextValue,
+      selectionStart: lineStart,
+      selectionEnd: lineStart + nextBlock.length,
+    };
+  }
+
+  const nextSelection = Math.max(lineStart, selectionStart + collapsedDelta);
+  return {
+    nextValue,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
 }
 
 export function toggleMarkdownTaskLine(content: string, text: string, checked: boolean): string {
@@ -486,11 +671,15 @@ export function resolveWikiCreateFolder(
 export function formatBreadcrumb(
   itemType: 'wiki' | 'external',
   reading: { path: string; title: string } | null,
+  wikiRelPath?: string | null,
 ): string {
   if (!reading) return '';
-  if (itemType === 'wiki') return reading.title;
-  const parts = reading.path.split('/').filter(Boolean);
-  return parts[parts.length - 1] ?? reading.title;
+  if (itemType === 'wiki') {
+    const parts = normalizeWikiRelPath(wikiRelPath ?? '').split('/').filter(Boolean);
+    return parts.length > 1 ? parts.slice(0, -1).join(' / ') : 'Library';
+  }
+  const parts = reading.path.replace(/\\/g, '/').split('/').filter(Boolean);
+  return parts.length > 1 ? parts[parts.length - 2] : 'External';
 }
 
 function clampScrollRatio(ratio: number): number {
@@ -569,7 +758,7 @@ export function getMarkdownEditorEdgeFades(
   const clampedScrollTop = Math.min(maxScrollTop, Math.max(0, scrollTop));
   return {
     top: clampedScrollTop > 1,
-    bottom: clampedScrollTop < maxScrollTop - 1,
+    bottom: false,
   };
 }
 
@@ -784,15 +973,16 @@ interface LibrarianViewProps {
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
   onFocusChromeActiveChange?: (active: boolean) => void;
+  onBookmarksCanvasActiveChange?: (active: boolean) => void;
+  onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialOpenTarget?: FieldTheoryMarkdownTarget | null;
-  initialFullScreen?: boolean; // Start in fullscreen/immersive mode (for auto-open)
+  initialFullScreen?: boolean; // Start in legacy fullscreen/immersive mode when supported.
   onInitialReadingConsumed?: () => void; // Called after initial reading is consumed
   onInitialOpenTargetConsumed?: () => void;
   // Path of an artifact the librarian just auto-popped. While the user is
-  // still on this artifact, Escape closes the window instead of merely
-  // exiting immersive. Call onAutoPopArtifactSuperseded when the user
-  // navigates away from it.
+  // still on this artifact, Escape can close the popup-style window. Call
+  // onAutoPopArtifactSuperseded when the user navigates away from it.
   autoPopArtifactPath?: string | null;
   onAutoPopArtifactSuperseded?: () => void;
   onOpenCommandPath?: (path: string) => void;
@@ -825,6 +1015,34 @@ function extractMarkdownText(node: unknown): string {
   return '';
 }
 
+function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
+  let stripped = false;
+
+  const stripNode = (node: ReactNode): ReactNode => {
+    if (stripped) return node;
+    if (typeof node === 'string') {
+      if (!node.startsWith(CARROT_LIST_SENTINEL)) return node;
+      stripped = true;
+      return node.slice(CARROT_LIST_SENTINEL.length);
+    }
+    if (Array.isArray(node)) {
+      return Children.map(node, stripNode);
+    }
+    if (isValidElement<{ children?: ReactNode }>(node)) {
+      const childProps = node.props as { children?: ReactNode };
+      if (childProps.children === undefined) return node;
+      return cloneElement(
+        node as ReactElement<{ children?: ReactNode }>,
+        undefined,
+        stripNode(childProps.children),
+      );
+    }
+    return node;
+  };
+
+  return Children.map(children, stripNode);
+}
+
 function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string; offset: number } | null {
   const doc = event.currentTarget.ownerDocument as CaretPointDocument;
   const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
@@ -843,7 +1061,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string;
   };
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -856,8 +1074,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [loading, setLoading] = useState(true);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null); // null = loading
 
-  // Edit state. Auto-save keeps disk in sync; `saveStatus` drives the tiny
-  // inline indicator that replaced the Save button.
+  // Edit state. Auto-save keeps disk in sync; `saveStatus` remains internal so
+  // save flows can settle without flashing toolbar text.
   const [editContent, setEditContent] = useState('');
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   // Populated when there's unsaved content pending — call to flush the
@@ -878,6 +1096,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [lineHeightId, setLineHeightId] = useState<LibrarianLineHeightId>(() => (
     restoreLibrarianLineHeight(localStorage)
   ));
+  const [unorderedListMarker, setUnorderedListMarker] = useState<LibrarianUnorderedListMarker>(() => (
+    restoreLibrarianUnorderedListMarker(localStorage)
+  ));
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
     if (!restoredSelection) return null;
     if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
@@ -885,23 +1106,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return BOOKMARKS_ITEM_ID;
   });
   const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
-  const selectedItemUsesLegacyImmersive = selectedItemType === 'artifact' || selectedItemType === 'bookmarks';
-  const [isFullScreen, setIsFullScreen] = useState(initialFullScreen ?? false);
+  const selectedItemUsesLegacyImmersive = selectedItemType === 'bookmarks';
+  const [isFullScreen, setIsFullScreen] = useState(() => (
+    restoredSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
+  ));
   const [focusImmersive, setFocusImmersive] = useState(false);
   const toggleImmersive = useCallback(() => {
     if (selectedItemUsesLegacyImmersive) {
-      setIsFullScreen((prev) => {
-        const next = !prev;
-        window.librarianAPI?.setImmersiveMode?.(next);
-        return next;
-      });
+      setIsFullScreen((prev) => !prev);
       return;
     }
+    if (!focusImmersive) {
+      onFocusChromeShortcut?.();
+    }
     setFocusImmersive((prev) => !prev);
-  }, [selectedItemUsesLegacyImmersive]);
+  }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive]);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
   const [markdownEditorEdgeFades, setMarkdownEditorEdgeFades] = useState({ top: false, bottom: false });
   const markdownEditorEdgeFadesRef = useRef(markdownEditorEdgeFades);
+  const [renderedDocumentTopFade, setRenderedDocumentTopFade] = useState(false);
   const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
   const [markdownEditorCommandActive, setMarkdownEditorCommandActive] = useState(false);
   const [markdownEditorLinkHover, setMarkdownEditorLinkHover] = useState<MarkdownEditorLinkHover | null>(null);
@@ -938,6 +1161,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const focusMarkdownEditorOnOpenRef = useRef(false);
   const editorSessionPersistTimerRef = useRef<number | null>(null);
   const pendingScrollRatioRef = useRef<number | null>(null);
+  const copyPathFeedbackTimerRef = useRef<number | null>(null);
 
   const activateSidebarKeyboard = useCallback(() => {
     sidebarKeyboardActiveRef.current = true;
@@ -947,6 +1171,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
 
   // Narration state
   const [narrationStatus, setNarrationStatus] = useState<{
@@ -968,9 +1194,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ? restoredEditorSession?.contentMode ?? 'rendered'
       : 'rendered'
   ));
-  const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'external';
+  const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
-  const focusChromeActive = canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden));
+  const focusChromeActive =
+    (selectedItemType === 'bookmarks' && isFullScreen && bookmarksCanvasActive) ||
+    (canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden)));
   const focusToolbarControlsVisible = !focusChromeActive;
   const markWritingActive = useCallback(() => {
     if (isFocusedWritingMode) setWritingChromeHidden(true);
@@ -988,6 +1216,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ? getMarkdownEditorEdgeFades(editor.scrollTop, editor.scrollHeight, editor.clientHeight)
       : { top: false, bottom: false });
   }, [setMarkdownEditorFades]);
+
+  const updateRenderedDocumentTopFade = useCallback((scrollEl: Pick<HTMLDivElement, 'scrollTop' | 'scrollHeight' | 'clientHeight'> | null) => {
+    const next = !!scrollEl && scrollEl.scrollHeight - scrollEl.clientHeight > 1 && scrollEl.scrollTop > 1;
+    setRenderedDocumentTopFade((current) => current === next ? current : next);
+  }, []);
 
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
@@ -1170,16 +1403,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const canNavigateBack = navigationHistory.index > 0;
   const canNavigateForward = navigationHistory.index >= 0 && navigationHistory.index < navigationHistory.entries.length - 1;
 
-  // Handle initial reading path and fullscreen from parent (auto-open flow)
+  // Handle initial reading path from parent (auto-open flow)
   useEffect(() => {
     if (initialReadingPath) {
       selectArtifactPath(initialReadingPath);
-      if (initialFullScreen) {
-        setIsFullScreen(true);
-      }
       onInitialReadingConsumed?.();
     }
-  }, [initialReadingPath, initialFullScreen, onInitialReadingConsumed, selectArtifactPath]);
+  }, [initialReadingPath, onInitialReadingConsumed, selectArtifactPath]);
 
   useEffect(() => {
     if (!initialOpenTarget) return;
@@ -1207,6 +1437,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     persistLibrarianLineHeight(localStorage, lineHeightId);
   }, [lineHeightId]);
+
+  useEffect(() => {
+    persistLibrarianUnorderedListMarker(localStorage, unorderedListMarker);
+  }, [unorderedListMarker]);
 
   // Check mute status on mount
   useEffect(() => {
@@ -1349,17 +1583,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
   useEffect(() => {
-    return () => onFocusChromeActiveChange?.(false);
-  }, [onFocusChromeActiveChange]);
+    onBookmarksCanvasActiveChange?.(active && selectedItemType === 'bookmarks' && bookmarksCanvasActive);
+  }, [active, bookmarksCanvasActive, onBookmarksCanvasActiveChange, selectedItemType]);
 
-  // Bookmarks immersive dismisses on blur (panel-like); artifact/wiki immersive
-  // stays put so users can reference other apps while reading.
+  useEffect(() => {
+    return () => {
+      onFocusChromeActiveChange?.(false);
+      onBookmarksCanvasActiveChange?.(false);
+      onBookmarksCanvasToolbarTopChange?.(null);
+    };
+  }, [onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onFocusChromeActiveChange]);
+
+  // Keep Library fullscreen in the same click-away dismissal path as the panel.
   useEffect(() => {
     if (!active) return;
-    const dismissable = isFullScreen && selectedItemType === 'bookmarks';
+    const dismissable = isFullScreen;
     window.librarianAPI?.setImmersiveDismissable?.(dismissable);
     return () => window.librarianAPI?.setImmersiveDismissable?.(false);
-  }, [active, isFullScreen, selectedItemType]);
+  }, [active, isFullScreen]);
 
   // Push 'library' size-key for every librarian section. BookmarksPane
   // overrides this for its canvas mode so it can share Draw's window mechanics.
@@ -1471,6 +1712,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     fontWeight: 400,
     letterSpacing: 0,
   };
+  const readerTopFadeVisible = contentMode === 'markdown' ? markdownEditorEdgeFades.top : renderedDocumentTopFade;
 
   const wikiDisplay = useMemo(() => {
     if (selectedItemType !== 'wiki' || !activeReading) return null;
@@ -1542,7 +1784,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displayContent = useMemo(() => {
     const raw = wikiDisplay ? wikiDisplay.body : (activeReading?.content ?? '');
     const linked = transformWikiLinks(raw, wikiIndex);
-    return preserveMarkdownBlankLines(normalizeMarkdownTodoLines(linked));
+    return preserveMarkdownBlankLines(normalizeMarkdownCarrotLists(normalizeMarkdownTodoLines(linked)));
   }, [wikiDisplay, activeReading?.content, wikiIndex]);
 
   useEffect(() => {
@@ -1858,10 +2100,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const selStart = editor.selectionStart;
     const selEnd = editor.selectionEnd;
 
-    const lineStart = value.lastIndexOf('\n', selStart - 1) + 1;
-    const searchFrom = selEnd > selStart ? selEnd - 1 : selEnd;
-    const nextNewline = value.indexOf('\n', searchFrom);
-    const lineEnd = nextNewline === -1 ? value.length : nextNewline;
+    const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selStart, selEnd);
 
     const before = value.slice(0, lineStart);
     const block = value.slice(lineStart, lineEnd);
@@ -1870,23 +2109,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     const orderedRe = /^(\s*)(\d+)\.\s/;
     const unorderedRe = /^(\s*)[-*+]\s/;
-    const markerRe = kind === 'ordered' ? orderedRe : unorderedRe;
+    const carrotRe = /^(\s*)›+\s/;
 
     const nonBlank = lines.filter((l) => l.trim().length > 0);
-    const allMarked = nonBlank.length > 0 && nonBlank.every((l) => markerRe.test(l));
+    const allMarked = nonBlank.length > 0 && nonBlank.every((l) => (
+      kind === 'ordered' ? orderedRe.test(l) : (unorderedRe.test(l) || carrotRe.test(l))
+    ));
 
     let counter = 1;
     const transformed = lines.map((line) => {
       if (line.trim().length === 0) return line;
       const orderedMatch = line.match(orderedRe);
       const unorderedMatch = line.match(unorderedRe);
+      const carrotMatch = line.match(carrotRe);
       const stripped = orderedMatch
         ? line.slice(orderedMatch[0].length)
         : unorderedMatch
         ? line.slice(unorderedMatch[0].length)
+        : carrotMatch
+        ? line.slice(carrotMatch[0].length)
         : line;
       if (allMarked) return stripped;
-      return kind === 'ordered' ? `${counter++}. ${stripped}` : `- ${stripped}`;
+      if (kind === 'ordered') return `${counter++}. ${stripped}`;
+      return unorderedListMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
     });
 
     const nextBlock = transformed.join('\n');
@@ -1906,9 +2151,39 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       el.scrollTop = scrollTop;
       updateMarkdownEditorFades(el);
     });
-  }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+  }, [markWritingActive, scheduleEditorSessionPersist, unorderedListMarker, updateMarkdownEditorFades]);
+
+  const applyMarkdownTextEdit = useCallback((editor: HTMLTextAreaElement, edit: MarkdownTextEdit) => {
+    const scrollTop = editor.scrollTop;
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownUrlPasteChoice(null);
+    scheduleEditorSessionPersist();
+    requestAnimationFrame(() => {
+      const el = markdownEditorRef.current;
+      if (!el || el.value !== edit.nextValue) return;
+      el.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      el.scrollTop = scrollTop;
+      updateMarkdownWikiLinkCompletion(el);
+      updateMarkdownEditorFades(el);
+      smoothScrollMarkdownCaretIntoComfortView(el);
+    });
+  }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades, updateMarkdownWikiLinkCompletion]);
 
   const handleMarkdownEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key.toLowerCase() === 'a' && e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+      const range = getMarkdownBodySelectionRange(e.currentTarget.value);
+      if (
+        range &&
+        (e.currentTarget.selectionStart !== range.start || e.currentTarget.selectionEnd !== range.end)
+      ) {
+        e.preventDefault();
+        e.currentTarget.setSelectionRange(range.start, range.end);
+        scheduleEditorSessionPersist();
+        return;
+      }
+    }
+
     if (e.metaKey && e.shiftKey && !e.altKey && !e.ctrlKey) {
       if (e.code === 'Digit7' || e.code === 'Digit8') {
         e.preventDefault();
@@ -1918,47 +2193,76 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     const completion = markdownWikiLinkCompletion;
-    if (!completion) return;
+    if (completion) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        e.nativeEvent.stopImmediatePropagation?.();
+        setMarkdownWikiLinkCompletion(null);
+        return;
+      }
 
-    if (e.key === 'Escape') {
-      e.preventDefault();
-      e.stopPropagation();
-      e.nativeEvent.stopImmediatePropagation?.();
-      setMarkdownWikiLinkCompletion(null);
-      return;
-    }
+      if (markdownWikiLinkSuggestions.length > 0) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index + 1) % markdownWikiLinkSuggestions.length
+          ));
+          return;
+        }
 
-    if (markdownWikiLinkSuggestions.length === 0) return;
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index - 1 + markdownWikiLinkSuggestions.length) % markdownWikiLinkSuggestions.length
+          ));
+          return;
+        }
 
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      setMarkdownWikiLinkSuggestionIndex((index) => (
-        (index + 1) % markdownWikiLinkSuggestions.length
-      ));
-      return;
-    }
-
-    if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      setMarkdownWikiLinkSuggestionIndex((index) => (
-        (index - 1 + markdownWikiLinkSuggestions.length) % markdownWikiLinkSuggestions.length
-      ));
-      return;
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          const suggestion = markdownWikiLinkSuggestions[
+            Math.min(markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length - 1)
+          ];
+          applyMarkdownWikiLinkSuggestion(suggestion, completion);
+          return;
+        }
+      }
     }
 
     if (e.key === 'Enter') {
+      const edit = getCarrotListEnterEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+      );
+      if (!edit) return;
       e.preventDefault();
-      const suggestion = markdownWikiLinkSuggestions[
-        Math.min(markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length - 1)
-      ];
-      applyMarkdownWikiLinkSuggestion(suggestion, completion);
+      setUnorderedListMarker('carrot');
+      applyMarkdownTextEdit(e.currentTarget, edit);
+      return;
+    }
+
+    if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
+      const edit = getCarrotListTabEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+        e.shiftKey ? 'out' : 'in',
+      );
+      if (!edit) return;
+      e.preventDefault();
+      setUnorderedListMarker('carrot');
+      applyMarkdownTextEdit(e.currentTarget, edit);
     }
   }, [
+    applyMarkdownTextEdit,
     applyListToggle,
     applyMarkdownWikiLinkSuggestion,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
+    scheduleEditorSessionPersist,
   ]);
 
   const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -2050,15 +2354,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       );
       if (contentMode === 'markdown') {
         updateMarkdownEditorFades(scrollEl);
+      } else {
+        updateRenderedDocumentTopFade(scrollEl);
       }
     });
 
     return () => cancelAnimationFrame(frame);
-  }, [contentMode, activeReading?.path, updateMarkdownEditorFades]);
+  }, [contentMode, activeReading?.path, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     if (contentMode !== 'markdown') updateMarkdownEditorFades(null);
   }, [contentMode, updateMarkdownEditorFades]);
+
+  useEffect(() => {
+    if (contentMode === 'markdown') {
+      updateRenderedDocumentTopFade(null);
+      return;
+    }
+    const frame = requestAnimationFrame(() => updateRenderedDocumentTopFade(contentScrollRef.current));
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode, displayContent, lineHeightId, textSize, typographyPresetId, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     if (contentMode !== 'markdown') return;
@@ -2210,7 +2525,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => clearTimeout(timer);
   }, [editContent, contentMode, activeReading, selectedItemType, wikiSelectedRelPath]);
 
-  // Fade the "Saved" chip back to idle after a moment so the toolbar settles.
+  // Keep the internal save state from staying in "saved" after auto-save settles.
   // 2.5s is long enough to notice when clicking away to another file without
   // being obtrusive.
   useEffect(() => {
@@ -2399,6 +2714,65 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setLinkCopied(true);
     setTimeout(() => setLinkCopied(false), 2000);
   }, [shareStatus?.url]);
+
+  const flashCopyPathCopied = useCallback(() => {
+    setCopyPathCopied(true);
+    if (copyPathFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyPathFeedbackTimerRef.current);
+    }
+    copyPathFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopyPathCopied(false);
+      copyPathFeedbackTimerRef.current = null;
+    }, 2000);
+  }, []);
+
+  const getRenderedSelectionText = useCallback((): string => {
+    const root = renderedContentRef.current;
+    const selection = window.getSelection();
+    if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return '';
+
+    for (let i = 0; i < selection.rangeCount; i += 1) {
+      const range = selection.getRangeAt(i);
+      const container = range.commonAncestorContainer;
+      const node = container.nodeType === Node.TEXT_NODE ? container.parentNode : container;
+      if (node && root.contains(node)) {
+        return selection.toString();
+      }
+    }
+    return '';
+  }, []);
+
+  const getActiveReadingCopyText = useCallback((): string => {
+    if (contentMode === 'markdown') {
+      const editor = markdownEditorRef.current;
+      if (editor && editor.selectionStart !== editor.selectionEnd) {
+        return editor.value.slice(editor.selectionStart, editor.selectionEnd);
+      }
+    }
+
+    const renderedSelection = getRenderedSelectionText();
+    if (renderedSelection) return renderedSelection;
+    return activeReading?.path ?? '';
+  }, [activeReading?.path, contentMode, getRenderedSelectionText]);
+
+  const copyActiveReadingTextOrPath = useCallback(async () => {
+    const text = getActiveReadingCopyText();
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      flashCopyPathCopied();
+    } catch (err) {
+      console.warn('[Librarian] Failed to copy text or path:', err);
+    }
+  }, [flashCopyPathCopied, getActiveReadingCopyText]);
+
+  useEffect(() => {
+    return () => {
+      if (copyPathFeedbackTimerRef.current !== null) {
+        window.clearTimeout(copyPathFeedbackTimerRef.current);
+      }
+    };
+  }, []);
 
   // Delete current item — branches on selectedItemType. Wiki pages go to
   // macOS Trash via shell.trashItem (recoverable) and the main process
@@ -2621,14 +2995,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => unsubscribe?.();
   }, [selectedPath, selectArtifactPath]);
 
-  // Listen for fullscreen requests from URL scheme
+  // Listen for URL-scheme focus requests. Bookmarks maps to legacy fullscreen;
+  // normal Library documents map to focus chrome without resizing the window.
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onSetFullscreen((fullscreen) => {
-      setIsFullScreen(fullscreen);
+      if (selectedItemUsesLegacyImmersive) {
+        setIsFullScreen(fullscreen);
+      } else {
+        setFocusImmersive(fullscreen);
+      }
     });
 
     return () => unsubscribe?.();
-  }, []);
+  }, [selectedItemUsesLegacyImmersive]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -2636,9 +3015,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     function handleKeyDown(e: KeyboardEvent) {
       if (isImmersiveToggleShortcut(e)) {
         e.preventDefault();
-        if (!isFullScreen && !focusImmersive) {
-          onFocusChromeShortcut?.();
-        }
         toggleImmersive();
         return;
       }
@@ -2677,11 +3053,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Cmd+C - copy file path (when not in textarea)
+      // Cmd+C copies selected file text first, then falls back to the path.
       if (e.key === 'c' && e.metaKey && !e.shiftKey && contentMode !== 'markdown') {
         if (activeReading?.path) {
           e.preventDefault();
-          navigator.clipboard.writeText(activeReading.path);
+          void copyActiveReadingTextOrPath();
           return;
         }
       }
@@ -2748,7 +3124,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
       }
 
-      // Escape hierarchy: edit-mode → auto-popped artifact → immersive-exit → close window.
+      // Escape hierarchy: edit-mode → focus chrome → legacy fullscreen → close window.
       // In markdown mode, Esc just drops back to rendered without closing the
       // window — auto-save already persisted the content.
       if (e.key === 'Escape') {
@@ -2805,7 +3181,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, onFocusChromeShortcut, openFileFind]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, isOnAutoPopArtifact, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -3268,6 +3644,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               active={active && selectedItemType === 'bookmarks'}
               isFullScreen={isFullScreen}
               onToggleFullScreen={toggleImmersive}
+              onCanvasModeActiveChange={setBookmarksCanvasActive}
+              onCanvasToolbarTopChange={onBookmarksCanvasToolbarTopChange}
             />
           </div>
         )}
@@ -3337,7 +3715,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               {/* Breadcrumb — "folder / filename" for wiki, "parent / filename"
                   + External chip for external. Artifacts skip this (title
                   already renders prominently in the content area). */}
-              {(selectedItemType === 'wiki' || selectedItemType === 'external') && activeReading && (
+              {focusToolbarControlsVisible && (selectedItemType === 'wiki' || selectedItemType === 'external') && activeReading && (
                 <div
                   style={{
                     display: 'flex',
@@ -3361,7 +3739,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       fontFamily: 'system-ui, sans-serif',
                     }}
                   >
-                    {formatBreadcrumb(selectedItemType, activeReading)}
+                    {formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)}
                   </span>
                   {selectedItemType === 'external' && (
                     <span
@@ -3406,7 +3784,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     setLineHeightId(lineHeight);
                   }
                 } : undefined}
-                isEditing={contentMode === 'markdown'}
+                unorderedListMarker={unorderedListMarker}
+                onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
                 onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
@@ -3416,7 +3795,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 shareStatus={shareStatus}
                 isSharing={isSharing}
                 showShare={false}
-                onCopyPath={focusToolbarControlsVisible && activeReading?.path ? () => navigator.clipboard.writeText(activeReading.path) : undefined}
+                onCopyPath={focusToolbarControlsVisible && activeReading?.path ? copyActiveReadingTextOrPath : undefined}
+                copyPathCopied={copyPathCopied}
+                copyPathTitle="Copy selected text or file path (⌘C)"
               />
 
               {/* Agent kickoff — opens a popup that dispatches the user's
@@ -3562,25 +3943,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 </button>
               )}
 
-              {/* Auto-save status: only surface the in-flight "Saving…"
-                  state. The "Saved ✓" dwell was visual noise. */}
-              {saveStatus === 'saving' && (
-                <span
-                  style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: '4px',
-                    fontSize: '11px',
-                    fontWeight: 500,
-                    color: theme.textSecondary,
-                    marginRight: '8px',
-                    userSelect: 'none',
-                  }}
-                >
-                  Saving…
-                </span>
-              )}
-
               {/* Content mode toggle - rendered view / raw markdown */}
               {focusToolbarControlsVisible && (
                 <div
@@ -3658,8 +4020,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         )}
 
         {/* Scrollable content area */}
+        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
         <div
           ref={contentScrollRef}
+          onScroll={(e) => {
+            if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
+          }}
           style={{
             flex: 1,
             minHeight: 0,
@@ -3732,6 +4098,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     }
                   }}
                   onPaste={handleMarkdownEditorPaste}
+                  onCopy={flashCopyPathCopied}
                   onClick={handleMarkdownEditorClick}
                   onFocus={(e) => {
                     sidebarKeyboardActiveRef.current = false;
@@ -3933,36 +4300,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     })}
                   </div>
                 )}
-                <div
-                  aria-hidden="true"
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    right: 0,
-                    height: '28px',
-                    pointerEvents: 'none',
-                    background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 18%, transparent 100%)`,
-                    opacity: markdownEditorEdgeFades.top ? 1 : 0,
-                    zIndex: 1,
-                    transition: 'opacity 0.12s ease',
-                  }}
-                />
-                <div
-                  aria-hidden="true"
-                  style={{
-                    position: 'absolute',
-                    bottom: 0,
-                    left: 0,
-                    right: 0,
-                    height: '28px',
-                    pointerEvents: 'none',
-                    background: `linear-gradient(to top, ${theme.bg} 0%, ${theme.bg} 18%, transparent 100%)`,
-                    opacity: markdownEditorEdgeFades.bottom ? 1 : 0,
-                    zIndex: 1,
-                    transition: 'opacity 0.12s ease',
-                  }}
-                />
               </div>
             ) : (
               /* View mode - markdown renderer */
@@ -4034,6 +4371,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   : null;
                 enterEditMode(selectionStart);
               }}
+              onCopy={flashCopyPathCopied}
               style={{
                 ...documentTextStyle,
                 userSelect: 'text',
@@ -4251,6 +4589,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   ),
                   li: ({ children, node }) => {
                     const textContent = extractMarkdownText(node).trim();
+                    const isCarrotListItem = textContent.startsWith(CARROT_LIST_SENTINEL);
                     const taskMatch = textContent.match(/^\[( |x|X)\]\s+(.+)$/);
                     if (taskMatch) {
                       const checked = taskMatch[1].toLowerCase() === 'x';
@@ -4286,6 +4625,35 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             }}
                           />
                           <span>{taskText}</span>
+                        </li>
+                      );
+                    }
+
+                    if (isCarrotListItem) {
+                      return (
+                        <li
+                          style={{
+                            marginBottom: '2px',
+                            listStyle: 'none',
+                            display: 'grid',
+                            gridTemplateColumns: 'auto minmax(0, 1fr)',
+                            columnGap: '8px',
+                            alignItems: 'baseline',
+                          }}
+                        >
+                          <span
+                            aria-hidden="true"
+                            style={{
+                              color: theme.text,
+                              fontWeight: 700,
+                              lineHeight: 'inherit',
+                            }}
+                          >
+                            {CARROT_LIST_MARKER}
+                          </span>
+                          <div style={{ minWidth: 0 }}>
+                            {stripLeadingCarrotListSentinel(children)}
+                          </div>
                         </li>
                       );
                     }
@@ -4490,6 +4858,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             Select a page
           </div>
         )}
+        </div>
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '24px',
+            pointerEvents: 'none',
+            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg} 30%, transparent 100%)`,
+            opacity: activeReading && readerTopFadeVisible ? 0.86 : 0,
+            zIndex: 3,
+            transition: 'opacity 0.12s ease',
+          }}
+        />
         </div>
         </Fragment>
         )}

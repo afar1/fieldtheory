@@ -934,7 +934,7 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
               width: '100%',
             }}
           >
-            {isSavingName ? 'Saving...' : fullName.trim() ? 'Continue' : 'Skip'}
+            {fullName.trim() ? 'Continue' : 'Skip'}
           </button>
         </div>
       </div>
@@ -1100,6 +1100,9 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
       <h1 style={styles.title}>Create Your Free Account</h1>
       <p style={styles.subtitle}>
         Sign in to get started with Field Theory.
+      </p>
+      <p style={{ ...styles.subtitle, opacity: 0.7, fontSize: '0.85em', marginTop: '-4px' }}>
+        Every Pro feature is free for your first 14 days — and your trial resets every 30 days, so you can come back later to try new features without committing.
       </p>
 
       <div style={styles.accountForm}>

@@ -330,23 +330,25 @@ describe('Codex hook script generation', () => {
   it('generates a notify hook that dynamically syncs Stop registration', () => {
     const script = generateCodexNotifyHookScript();
     expect(script).toContain('def sync_stop_hook(enabled):');
-    expect(script).toContain('sync_stop_hook(True)');
+    expect(script).toContain('def should_stop_on_pending(cfg):');
+    expect(script).toContain('sync_stop_hook(should_stop_on_pending(cfg))');
     expect(script).toContain('sync_stop_hook(False)');
   });
 
-  it('generates a Stop hook that blocks on any pending global job and clears stale sentinel state', () => {
+  it('generates a Stop hook that blocks on opted-in pending global jobs and clears stale sentinel state', () => {
     const script = generateCodexStopScript();
     expect(script).toContain('def find_pending_job():');
     expect(script).toContain('pending_job = find_pending_job()');
     expect(script).toContain('SENTINEL_FILE.unlink(missing_ok=True)');
     expect(script).toContain('sync_stop_hook(False)');
     expect(script).toContain('SENTINEL_FILE.write_text');
+    expect(script).toContain('if not should_stop_on_pending(cfg):');
     expect(script).toContain('sync_stop_hook(True)');
     expect(script).toContain('def build_stop_reason(job_file, job):');
     expect(script).toContain('"decision": "block"');
   });
 
-  it('notify creates a pending job and installs Stop only when threshold is reached', () => {
+  it('notify creates a pending job without installing Stop by default', () => {
     withTempHome(homeDir => {
       const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
       writeJson(join(librarianDir, 'config.json'), { enabled: true });
@@ -358,9 +360,37 @@ describe('Codex hook script generation', () => {
       const job = JSON.parse(readFileSync(join(librarianDir, 'jobs', 'job_1.json'), 'utf8'));
 
       expect(stdout).toBe('');
-      expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(true);
+      expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(false);
       expect(sentinel.job_file).toContain('job_1.json');
       expect(job.status).toBe('pending');
+    });
+  });
+
+  it('notify installs Stop for pending jobs when stop_on_pending is enabled', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), { enabled: true, stop_on_pending: true });
+      writeJson(join(librarianDir, 'state.json'), { count: 0, threshold: 1 });
+
+      const stdout = runHook(generateCodexNotifyHookScript(), homeDir);
+      const hooksConfig = JSON.parse(readFileSync(join(homeDir, '.codex', 'hooks.json'), 'utf8'));
+
+      expect(stdout).toBe('');
+      expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(true);
+    });
+  });
+
+  it('notify does not install Stop when stop_on_pending is a non-boolean value', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), { enabled: true, stop_on_pending: 'true' });
+      writeJson(join(librarianDir, 'state.json'), { count: 0, threshold: 1 });
+
+      const stdout = runHook(generateCodexNotifyHookScript(), homeDir);
+      const hooksConfig = JSON.parse(readFileSync(join(homeDir, '.codex', 'hooks.json'), 'utf8'));
+
+      expect(stdout).toBe('');
+      expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(false);
     });
   });
 
@@ -386,19 +416,41 @@ describe('Codex hook script generation', () => {
     });
   });
 
-  it('Stop blocks on a pending job and writes the sentinel for same-session flow', () => {
+  it('Stop does not block on a pending job by default', () => {
     withTempHome(homeDir => {
       const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
-      writeJson(join(librarianDir, 'config.json'), {
-        enabled: true,
-        rule_content: 'Write the artifact.',
-      });
+      writeJson(join(librarianDir, 'config.json'), { enabled: true });
       writeJson(join(librarianDir, 'jobs', 'job_3.json'), {
         schema_version: 1,
         id: 3,
         status: 'pending',
         output: '/tmp/pending.md',
-        rule_file: '/tmp/history_reading.md',
+      });
+
+      const stdout = runHook(generateCodexStopScript(), homeDir);
+
+      expect(stdout).toBe('');
+      expect(existsSync(join(librarianDir, '.codex-pending'))).toBe(true);
+    });
+  });
+
+  it('Stop blocks on an opted-in pending job and writes the sentinel for same-session flow', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      const ruleFile = join(librarianDir, 'rules', 'history_reading.md');
+      writeJson(join(librarianDir, 'config.json'), {
+        enabled: true,
+        stop_on_pending: true,
+        rule_content: 'Write the artifact.',
+      });
+      mkdirSync(dirname(ruleFile), { recursive: true });
+      writeFileSync(ruleFile, 'Write the artifact.');
+      writeJson(join(librarianDir, 'jobs', 'job_3.json'), {
+        schema_version: 1,
+        id: 3,
+        status: 'pending',
+        output: '/tmp/pending.md',
+        rule_file: ruleFile,
       });
 
       const stdout = runHook(generateCodexStopScript(), homeDir);
@@ -409,10 +461,30 @@ describe('Codex hook script generation', () => {
       expect(output.decision).toBe('block');
       expect(output.reason).toContain('job_3.json');
       expect(output.reason).toContain('/tmp/pending.md');
-      expect(output.reason).toContain('/tmp/history_reading.md');
+      expect(output.reason).toContain(ruleFile);
       expect(output.reason).not.toContain('Write the artifact.');
       expect(sentinel.job_file).toContain('job_3.json');
       expect(sentinel.output).toBe('/tmp/pending.md');
+    });
+  });
+
+  it('Stop does not block when the referenced rule file is missing', () => {
+    withTempHome(homeDir => {
+      const librarianDir = join(homeDir, '.fieldtheory', 'librarian');
+      writeJson(join(librarianDir, 'config.json'), { enabled: true, stop_on_pending: true });
+      writeJson(join(librarianDir, 'jobs', 'job_3.json'), {
+        schema_version: 1,
+        id: 3,
+        status: 'pending',
+        output: '/tmp/pending.md',
+        rule_file: join(librarianDir, 'rules', 'missing.md'),
+      });
+
+      const stdout = runHook(generateCodexStopScript(), homeDir);
+      const hooksConfig = JSON.parse(readFileSync(join(homeDir, '.codex', 'hooks.json'), 'utf8'));
+
+      expect(stdout).toBe('');
+      expect(hasCodexCommandHook(hooksConfig, 'Stop', 'codex-stop.py')).toBe(false);
     });
   });
 

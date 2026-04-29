@@ -28,6 +28,34 @@ const QUOTA_LIMITS = {
   },
 };
 
+// Trial cycle: 14 active days, then 16 expired days, repeating forever.
+const TRIAL_ACTIVE_MS = 14 * 24 * 60 * 60 * 1000;
+const TRIAL_CYCLE_MS  = 30 * 24 * 60 * 60 * 1000;
+
+type TrialState = 'pro' | 'trial' | 'expired';
+
+function computeState(profile: { is_paid_subscriber: boolean; trial_started_at: string | null }): {
+  state: TrialState;
+  trialEndsAt: string | null;
+  nextTrialResetAt: string | null;
+} {
+  if (profile.is_paid_subscriber) {
+    return { state: 'pro', trialEndsAt: null, nextTrialResetAt: null };
+  }
+  const startMs = profile.trial_started_at ? new Date(profile.trial_started_at).getTime() : Date.now();
+  const elapsedMs = Date.now() - startMs;
+  const cycleIndex = Math.floor(elapsedMs / TRIAL_CYCLE_MS);
+  const cycleStartMs = startMs + cycleIndex * TRIAL_CYCLE_MS;
+  const cyclePosMs = elapsedMs - cycleIndex * TRIAL_CYCLE_MS;
+  const trialEndsAt = new Date(cycleStartMs + TRIAL_ACTIVE_MS).toISOString();
+  const nextTrialResetAt = new Date(cycleStartMs + TRIAL_CYCLE_MS).toISOString();
+  return {
+    state: cyclePosMs < TRIAL_ACTIVE_MS ? 'trial' : 'expired',
+    trialEndsAt,
+    nextTrialResetAt,
+  };
+}
+
 // CORS headers for Electron app
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -73,14 +101,21 @@ serve(async (req: Request) => {
     });
   }
 
-  // Get user's tier from profile
+  // Get user's profile (state inputs).
   const { data: profile } = await supabase
     .from('profiles')
-    .select('tier')
+    .select('tier, is_paid_subscriber, trial_started_at')
     .eq('id', user.id)
     .single();
 
-  const tier = (profile?.tier as 'free' | 'pro') || 'free';
+  const { state, trialEndsAt, nextTrialResetAt } = computeState({
+    is_paid_subscriber: profile?.is_paid_subscriber ?? false,
+    trial_started_at: profile?.trial_started_at ?? null,
+  });
+
+  // Legacy `tier` field for old mac-app clients: trial users see pro, expired users see free.
+  // New clients should read `state` instead.
+  const tier: 'free' | 'pro' = state === 'expired' ? 'free' : 'pro';
   const limits = QUOTA_LIMITS[tier];
 
   // Get current month in YYYY-MM format
@@ -96,8 +131,11 @@ serve(async (req: Request) => {
 
   // Build response with all usage data and limits
   return new Response(JSON.stringify({
-    tier: tier,
-    monthYear: monthYear,
+    tier,
+    state,
+    trialEndsAt,
+    nextTrialResetAt,
+    monthYear,
     usage: {
       text_improve_words: usage?.text_improve_words || 0,
       priority_mic_seconds: usage?.priority_mic_seconds || 0,

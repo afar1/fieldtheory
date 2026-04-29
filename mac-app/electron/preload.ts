@@ -916,6 +916,10 @@ export interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
 
+  // Click-away dismissal
+  getClickAwayToDismiss?: () => Promise<boolean>;
+  setClickAwayToDismiss?: (enabled: boolean) => Promise<boolean>;
+
   // Show fieldtheory.dev link in footer
   getShowFieldTheoryLink?: () => Promise<boolean>;
   setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
@@ -1844,6 +1848,15 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke('clipboard:setShowInDock', show);
   },
 
+  // Click-away dismissal.
+  getClickAwayToDismiss: async (): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:getClickAwayToDismiss');
+  },
+
+  setClickAwayToDismiss: async (enabled: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke('clipboard:setClickAwayToDismiss', enabled);
+  },
+
   // Show fieldtheory.dev link in footer.
   getShowFieldTheoryLink: async (): Promise<boolean> => {
     return ipcRenderer.invoke('clipboard:getShowFieldTheoryLink');
@@ -2686,6 +2699,24 @@ const quotaAPI = {
   // Manually refresh tier from server (debugging and edge cases).
   refreshTier: () => ipcRenderer.invoke('quota:refreshTier') as Promise<{ tier: 'free' | 'pro'; error: string | null }>,
 
+  // Listen for trial-state changes (pro / trial / expired).
+  // Fires whenever the server-computed state changes. Also immediately emits the
+  // current state on registration (BehaviorSubject pattern).
+  onStateChanged: (callback: (state: 'pro' | 'trial' | 'expired') => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: 'pro' | 'trial' | 'expired') => {
+      callback(state);
+    };
+    ipcRenderer.on('state:changed', handler);
+
+    ipcRenderer.invoke('quota:getQuotas').then((quotas) => {
+      if (quotas?.state) callback(quotas.state);
+    }).catch(() => { /* ignore */ });
+
+    return () => {
+      ipcRenderer.removeListener('state:changed', handler);
+    };
+  },
+
   // Listen for tier changes (e.g., after Stripe checkout upgrades user to pro).
   // Also immediately emits the current tier on registration (BehaviorSubject pattern).
   onTierChanged: (callback: (tier: 'free' | 'pro') => void): (() => void) => {
@@ -2794,6 +2825,7 @@ const CommandsIPCChannels = {
   // Handoffs - global session handoff files
   GET_HANDOFFS: 'commands:getHandoffs',
   GET_HANDOFF_CONTENT: 'commands:getHandoffContent',
+  GET_MARKDOWN_PREVIEW: 'commands:getMarkdownPreview',
 } as const;
 
 type PortableCommandInfo = {
@@ -2836,10 +2868,20 @@ type HandoffInfo = {
   lastModified: number;
 };
 
+type MarkdownPreview = {
+  title: string;
+  filePath: string;
+  content: string;
+};
+
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command';
   path: string;
 };
+
+type LauncherPreviewPayload =
+  | { kind: 'bookmark'; bookmark: Bookmark }
+  | { kind: 'markdown'; title: string; filePath: string; content: string };
 
 const commandsAPI = {
   // Get the currently configured commands directory.
@@ -2937,6 +2979,10 @@ const commandsAPI = {
     return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMAND_BY_PATH, filePath);
   },
 
+  getMarkdownPreview: async (filePath: string): Promise<MarkdownPreview | null> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, filePath);
+  },
+
   // Save/update a command's content.
   saveCommand: async (filePath: string, content: string): Promise<boolean> => {
     return ipcRenderer.invoke(CommandsIPCChannels.SAVE_COMMAND, filePath, content);
@@ -2982,12 +3028,16 @@ const commandsAPI = {
   },
 
   // Show or hide the detached command launcher preview window.
-  launcherPreviewShow: (bookmark: Bookmark): void => {
-    ipcRenderer.send('command-launcher:preview-show', bookmark);
+  launcherPreviewShow: (preview: LauncherPreviewPayload): void => {
+    ipcRenderer.send('command-launcher:preview-show', preview);
   },
 
   launcherPreviewHide: (): void => {
     ipcRenderer.send('command-launcher:preview-hide');
+  },
+
+  launcherPreviewResize: (height: number): void => {
+    ipcRenderer.send('command-launcher:preview-resize', height);
   },
 
   onLauncherPreviewBookmark: (callback: (bookmark: Bookmark) => void): (() => void) => {
@@ -2995,6 +3045,14 @@ const commandsAPI = {
     ipcRenderer.on('command-launcher-preview:bookmark', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher-preview:bookmark', handler);
+    };
+  },
+
+  onLauncherPreview: (callback: (preview: LauncherPreviewPayload) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, preview: LauncherPreviewPayload) => callback(preview);
+    ipcRenderer.on('command-launcher-preview:payload', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher-preview:payload', handler);
     };
   },
 
@@ -3285,6 +3343,8 @@ const librarianAPI = {
   isCodexHookInstalled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isCodexHookInstalled'),
   installCodexHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:installCodexHook'),
   uninstallCodexHook: (): Promise<boolean> => ipcRenderer.invoke('librarian:uninstallCodexHook'),
+  isCodexStopOnPendingEnabled: (): Promise<boolean> => ipcRenderer.invoke('librarian:isCodexStopOnPendingEnabled'),
+  setCodexStopOnPendingEnabled: (enabled: boolean): Promise<boolean> => ipcRenderer.invoke('librarian:setCodexStopOnPendingEnabled', enabled),
 
   // ===========================================================================
   // Discovery Frequency API
@@ -3864,7 +3924,7 @@ interface QuotedTweet {
 }
 interface Bookmark {
   id: string;
-  sourceType: 'x';
+  sourceType: 'x' | 'web';
   text: string;
   url: string;
   authorHandle: string;
@@ -3879,9 +3939,20 @@ interface Bookmark {
   bookmarkCount: number;
   folders: string[];
   quotedTweet?: QuotedTweet;
+  title?: string;
+  domain?: string;
+  excerpt?: string;
+  savedAt?: string;
+  markdownPath?: string;
 }
 interface BookmarkFolder { name: string; id?: string }
 interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+interface ActiveWebPage {
+  url: string;
+  title: string;
+  bundleId: string;
+  appName: string;
+}
 interface BookmarkAuthorSummary {
   handle: string;
   name: string;
@@ -3895,8 +3966,19 @@ const bookmarksAPI = {
   getAuthors: (): Promise<BookmarkAuthorSummary[]> => ipcRenderer.invoke('bookmarks:getAuthors'),
   getAuthorBookmarks: (handle: string): Promise<Bookmark[]> =>
     ipcRenderer.invoke('bookmarks:getAuthorBookmarks', handle),
+  getTaxonomyBookmarks: (filePaths: string[]): Promise<Bookmark[]> =>
+    ipcRenderer.invoke('bookmarks:getTaxonomyBookmarks', filePaths),
+  search: (query: string): Promise<Bookmark[]> => ipcRenderer.invoke('bookmarks:search', query),
+  saveWebUrl: (url: string): Promise<{ success: boolean; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:saveWebUrl', url),
+  getActiveWebPage: (): Promise<{ success: boolean; page?: ActiveWebPage; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:getActiveWebPage'),
+  saveActiveWebPage: (): Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:saveActiveWebPage'),
   invokeBookmark: (id: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('bookmarks:invokeBookmark', id),
+  copyForAgent: (id: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('bookmarks:copyForAgent', id),
   invokeAuthorTimeline: (handle: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('bookmarks:invokeAuthorTimeline', handle),
   onChanged: (callback: () => void): (() => void) => {
@@ -4303,7 +4385,7 @@ contextBridge.exposeInMainWorld('platform', {
 // Stripe configuration - always use live links.
 contextBridge.exposeInMainWorld('stripeConfig', {
   // Payment link for upgrading to Pro
-  paymentLink: 'https://buy.stripe.com/14A00j3iCbyl6aZ3fU3Ru00',
+  paymentLink: 'https://buy.stripe.com/cNi28rg5odGtbvjdUy3Ru01',
   // Customer portal for managing subscription
   portalLink: 'https://billing.stripe.com/p/login/14A00j3iCbyl6aZ3fU3Ru00',
 });

@@ -12,6 +12,7 @@ import {
   QUOTED_PAD_V,
   QUOTED_MARGIN_TOP,
   QUOTED_GAP,
+  DATE_BAND,
 } from '../utils/bookmarkCardHeight';
 
 beforeEach(() => {
@@ -77,6 +78,16 @@ describe('estimateTextCardHeight', () => {
     expect(estimateTextCardHeight(bm, 200)).toBe(expected);
   });
 
+  it('adds the date row when a posted timestamp is present', () => {
+    const bm = { id: 'dated', text: 'abc', postedAt: '2026-04-05T12:34:00' };
+    const expected = Math.round(
+      CARD_PAD * 2 + HANDLE_BAND
+      + CARD_GAP + 1 * BODY_LINE_HEIGHT
+      + CARD_GAP + DATE_BAND
+    );
+    expect(estimateTextCardHeight(bm, 200)).toBe(expected);
+  });
+
   it('buckets widths so nearby pixel values share a cached height', () => {
     // Math.round(width / 16) * 16: widths 712..719 all map to bucket 720.
     const bm = { id: 'bucket', text: 'hello world' };
@@ -99,5 +110,11 @@ describe('estimateTextCardHeight', () => {
     const first = estimateTextCardHeight(bm, 200);
     const second = estimateTextCardHeight(bm, 200);
     expect(first).toBe(second);
+  });
+
+  it('keeps dated and undated cache entries separate', () => {
+    const undated = { id: 'same', text: 'abc' };
+    const dated = { id: 'same', text: 'abc', postedAt: '2026-04-05T12:34:00' };
+    expect(estimateTextCardHeight(dated, 200)).toBe(estimateTextCardHeight(undated, 200) + CARD_GAP + DATE_BAND);
   });
 });
