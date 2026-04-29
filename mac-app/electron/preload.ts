@@ -2837,6 +2837,23 @@ const shellAPI = {
 
 type ShellAPI = typeof shellAPI;
 
+type AgentImproveLaunchRequest = {
+  tool: 'codex' | 'claude';
+  instruction: string;
+  content: string;
+  contextKind: 'selection' | 'markdown-file';
+  filePath?: string | null;
+  title?: string | null;
+  cwd?: string | null;
+};
+
+const agentImproveAPI = {
+  launch: (request: AgentImproveLaunchRequest): Promise<{ promptPath: string; command: string }> =>
+    ipcRenderer.invoke('agent-improve:launch', request),
+};
+
+type AgentImproveAPI = typeof agentImproveAPI;
+
 const diagnosticsAPI: DiagnosticsAPI = {
   getDiagnostics: async (): Promise<unknown> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS);
@@ -4068,6 +4085,7 @@ const agentHooksAPI = {
 };
 contextBridge.exposeInMainWorld('agentHooksAPI', agentHooksAPI);
 
+contextBridge.exposeInMainWorld('agentImproveAPI', agentImproveAPI);
 contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
@@ -4473,6 +4491,7 @@ declare global {
     quotaAPI: QuotaAPI;
     accountAPI: AccountAPI;
     shellAPI: ShellAPI;
+    agentImproveAPI: AgentImproveAPI;
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
