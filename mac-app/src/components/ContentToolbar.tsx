@@ -174,6 +174,8 @@ export default function ContentToolbar({
     (lineHeightOptions?.length && onLineHeightChange) ||
     onUnorderedListMarkerChange
   );
+  const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+  const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
 
   useEffect(() => {
     if (!typographyMenuOpen) return;
@@ -294,16 +296,24 @@ export default function ContentToolbar({
           {showFolder && onShowInFolder && (
             <button
               onClick={onShowInFolder}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = iconHoverBackground;
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = 'transparent';
+              }}
               style={{
                 padding: '4px 6px',
                 color: theme.textSecondary,
                 backgroundColor: 'transparent',
                 border: 'none',
+                borderRadius: '4px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 height: '24px',
+                transition: 'background-color 0.15s ease, color 0.15s ease',
               }}
               title="Show in Finder"
             >
@@ -315,16 +325,24 @@ export default function ContentToolbar({
           {showRename && onRename && (
             <button
               onClick={onRename}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = iconHoverBackground;
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = 'transparent';
+              }}
               style={{
                 padding: '4px 6px',
                 color: theme.textSecondary,
                 backgroundColor: 'transparent',
                 border: 'none',
+                borderRadius: '4px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 height: '24px',
+                transition: 'background-color 0.15s ease, color 0.15s ease',
               }}
               title="Rename"
             >
@@ -336,16 +354,24 @@ export default function ContentToolbar({
           {showDelete && onDelete && (
             <button
               onClick={onDelete}
+              onMouseEnter={(event) => {
+                event.currentTarget.style.backgroundColor = iconHoverBackground;
+              }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = 'transparent';
+              }}
               style={{
                 padding: '4px 6px',
                 color: theme.textSecondary,
                 backgroundColor: 'transparent',
                 border: 'none',
+                borderRadius: '4px',
                 cursor: 'pointer',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 height: '24px',
+                transition: 'background-color 0.15s ease, color 0.15s ease',
               }}
               title="Delete"
             >
@@ -516,7 +542,7 @@ export default function ContentToolbar({
             onClick={() => setTypographyMenuOpen((open) => !open)}
             onMouseEnter={(event) => {
               if (!typographyMenuOpen) {
-                event.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                event.currentTarget.style.backgroundColor = iconHoverBackground;
               }
             }}
             onMouseLeave={(event) => {
@@ -532,7 +558,7 @@ export default function ContentToolbar({
               padding: 0,
               color: typographyMenuOpen ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
               backgroundColor: typographyMenuOpen
-                ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
+                ? iconActiveBackground
                 : 'transparent',
               border: 'none',
               borderRadius: '4px',
@@ -738,7 +764,7 @@ export default function ContentToolbar({
             backgroundColor: copyPathActive
               ? (theme.isDark ? 'rgba(34,197,94,0.16)' : 'rgba(22,163,74,0.12)')
               : copyPathHovered
-              ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+              ? iconHoverBackground
               : 'transparent',
             border: 'none',
             cursor: 'pointer',
@@ -747,6 +773,7 @@ export default function ContentToolbar({
             justifyContent: 'center',
             height: '24px',
             borderRadius: '4px',
+            transition: 'background-color 0.15s ease, color 0.15s ease',
           }}
           onMouseEnter={() => setCopyPathHovered(true)}
           onMouseLeave={() => setCopyPathHovered(false)}
