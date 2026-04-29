@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { buildHotkeyString, formatHotkeyDisplay, shouldDeferCopyShortcutToNative } from './hotkeys';
+import { buildHotkeyString, formatHotkeyDisplay, normalizeHotkeyForComparison, shouldDeferCopyShortcutToNative } from './hotkeys';
 
 describe('buildHotkeyString', () => {
   it('builds hotkeys from physical key codes', () => {
@@ -28,6 +28,13 @@ describe('buildHotkeyString', () => {
 describe('formatHotkeyDisplay', () => {
   it('formats macOS modifiers for display', () => {
     expect(formatHotkeyDisplay('Command+Shift+K')).toBe('⌘ ⇧ K');
+  });
+});
+
+describe('normalizeHotkeyForComparison', () => {
+  it('normalizes modifier aliases and order', () => {
+    expect(normalizeHotkeyForComparison('Control+Option+Command+Space')).toBe('Command+Control+Alt+Space');
+    expect(normalizeHotkeyForComparison('cmd+ctrl+option+space')).toBe('Command+Control+Alt+Space');
   });
 });
 

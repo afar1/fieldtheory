@@ -1602,6 +1602,7 @@ declare global {
     modelSignature: string | null;
     createdAt: number;
     mtime: number;
+    todoState?: MarkdownTodoState;
   }
 
   /**
@@ -1622,12 +1623,15 @@ declare global {
 
   // ── Wiki viewer types ──────────────────────────────────────────────────
 
+  type MarkdownTodoState = 'open' | 'done';
+
   interface WikiPageMeta {
     relPath: string;     // e.g. 'entries/2026-04-15-foo' (no .md)
     absPath: string;     // full filesystem path
     name: string;        // filename slug without date/ext
     title: string;       // from # heading or filename
     lastUpdated: number; // mtime
+    todoState?: MarkdownTodoState;
   }
 
   interface WikiPage extends WikiPageMeta {
@@ -1641,7 +1645,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {
@@ -1712,6 +1716,7 @@ declare global {
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
     createFileWithTitleSuggestion: (folderName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
+    openScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
     rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;

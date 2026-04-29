@@ -1199,6 +1199,7 @@ export default function SettingsPanel({
         setHotkeyError(result.error || 'Failed to register Scratchpad hotkey.');
       } else {
         setScratchpadHotkey(hotkeyString);
+        window.dispatchEvent(new CustomEvent('fieldtheory:scratchpad-hotkey-changed', { detail: hotkeyString }));
       }
     } catch (err) {
       setHotkeyError(err instanceof Error ? err.message : 'Failed to set Scratchpad hotkey');

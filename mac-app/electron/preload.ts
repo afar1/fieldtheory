@@ -3236,6 +3236,8 @@ const themeAPI = {
 
 // Reading metadata (without full content)
 // Path is the identity - no numeric IDs
+type MarkdownTodoState = 'open' | 'done';
+
 interface ReadingMeta {
   path: string;
   title: string;
@@ -3243,6 +3245,7 @@ interface ReadingMeta {
   readingTime: string | null;
   createdAt: number;
   mtime: number;
+  todoState?: MarkdownTodoState;
 }
 
 // Full reading with content (loaded on demand)
@@ -3792,6 +3795,7 @@ interface WikiPageMeta {
   name: string;
   title: string;
   lastUpdated: number;
+  todoState?: MarkdownTodoState;
 }
 interface WikiPage extends WikiPageMeta {
   content: string;
@@ -3801,7 +3805,7 @@ interface WikiFolder {
   files: WikiPageMeta[];
 }
 type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 interface LibraryRoot {
   path: string;
@@ -3877,6 +3881,7 @@ const wikiAPI = {
   createFileWithTitleSuggestion: (folderName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFileWithTitleSuggestion', folderName),
   deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
   createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
+  openScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:openScratchpadDefault'),
   createDir: (dirName: string): Promise<boolean> => ipcRenderer.invoke('wiki:createDir', dirName),
   rename: (relPath: string, newName: string): Promise<string | null> =>
     ipcRenderer.invoke('wiki:rename', relPath, newName),

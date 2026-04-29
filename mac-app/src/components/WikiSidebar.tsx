@@ -23,6 +23,7 @@ interface UnifiedItem {
   relPath?: string;
   rootPath?: string;
   timestamp: number;
+  todoState?: 'open' | 'done';
   taggedDocId?: string;
   hasUnread?: boolean;
 }
@@ -171,6 +172,7 @@ interface WikiSidebarProps {
   active?: boolean;
   onSelectItem: (item: UnifiedItem) => void;
   selectedId: string | null;
+  selectedKeyboardActive?: boolean;
   onCreateFile: (location: LibraryCreateLocation, fileName: string) => boolean | void | Promise<boolean | void>;
   onCreateDefaultFile?: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
   onCreateDir: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
@@ -194,6 +196,8 @@ function matchesLibrarySearch(item: UnifiedItem, normalizedQuery: string): boole
     item.title,
     item.relPath,
     item.absPath,
+    item.todoState,
+    item.todoState ? 'todo task' : undefined,
   ]
     .filter(Boolean)
     .some((value) => value!.toLowerCase().includes(normalizedQuery));
@@ -466,6 +470,7 @@ function wikiNodeToSidebarNode(
         relPath: node.relPath,
         rootPath: root.path,
         timestamp: node.lastUpdated,
+        todoState: node.todoState,
         taggedDocId: taggedDoc?.ulid,
         hasUnread: taggedDoc?.unread ?? false,
       },
@@ -597,6 +602,7 @@ function WikiSidebar({
   active = true,
   onSelectItem,
   selectedId,
+  selectedKeyboardActive = false,
   onCreateFile,
   onCreateDefaultFile,
   onCreateDir,
@@ -1251,6 +1257,7 @@ function WikiSidebar({
           cancelCreate={cancelCreate}
           beginCreateFile={beginCreateFile}
           selectedId={selectedId}
+          selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
@@ -1411,6 +1418,7 @@ function TreeNode({
   cancelCreate,
   beginCreateFile,
   selectedId,
+  selectedKeyboardActive,
   selectedItemRef,
   hoveredId,
   setHoveredId,
@@ -1435,6 +1443,7 @@ function TreeNode({
   cancelCreate: () => void;
   beginCreateFile: (target?: LibraryCreateTarget) => void;
   selectedId: string | null;
+  selectedKeyboardActive: boolean;
   selectedItemRef: MutableRefObject<HTMLDivElement | null>;
   hoveredId: string | null;
   setHoveredId: (id: string | null) => void;
@@ -1453,6 +1462,7 @@ function TreeNode({
         item={node.item}
         depth={depth}
         isSelected={isSel}
+        selectedKeyboardActive={selectedKeyboardActive}
         isHovered={node.item.id === hoveredId}
         theme={theme}
         onSelect={() => onSelectItem(node.item)}
@@ -1653,6 +1663,7 @@ function TreeNode({
           cancelCreate={cancelCreate}
           beginCreateFile={beginCreateFile}
           selectedId={selectedId}
+          selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
           hoveredId={hoveredId}
           setHoveredId={setHoveredId}
@@ -1801,10 +1812,11 @@ function LibraryContextMenu({
   );
 }
 
-function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onHover, onContextMenu, onKeyboardScopeActive, draggable, refProp }: {
+function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHovered, theme, onSelect, onHover, onContextMenu, onKeyboardScopeActive, draggable, refProp }: {
   item: UnifiedItem;
   depth?: number;
   isSelected: boolean;
+  selectedKeyboardActive: boolean;
   isHovered: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelect: () => void;
@@ -1839,6 +1851,9 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
 
   const canShowInFinder = !!item.absPath && item.type !== 'bookmarks';
   const showFinderButton = canShowInFinder && isHovered;
+  const selectedInSidebar = isSelected && selectedKeyboardActive;
+  const selectedInDocument = isSelected && !selectedKeyboardActive;
+  const documentSelectionColor = theme.isDark ? '#38bdf8' : '#0284c7';
 
   return (
     <div
@@ -1883,10 +1898,16 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
         boxSizing: 'border-box',
         padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${showFinderButton ? 28 : 12}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
         cursor: 'pointer',
-        backgroundColor: isSelected
+        backgroundColor: selectedInSidebar
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+          : selectedInDocument
+            ? (theme.isDark ? 'rgba(56,189,248,0.08)' : 'rgba(2,132,199,0.08)')
           : isHovered ? theme.hoverBg : 'transparent',
-        borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
+        borderLeft: selectedInSidebar
+          ? `2px solid ${theme.accent}`
+          : selectedInDocument
+            ? `2px solid ${documentSelectionColor}`
+            : '2px solid transparent',
         transition: 'background-color 0.1s ease',
         outline: 'none',
       }}
@@ -1934,6 +1955,25 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
             }}>
               {item.title}
             </div>
+            {item.todoState && (
+              <span
+                aria-label={item.todoState === 'done' ? 'done task note' : 'open task note'}
+                title={item.todoState === 'done' ? 'done' : 'to do'}
+                style={{
+                  flexShrink: 0,
+                  padding: '0 5px',
+                  borderRadius: '999px',
+                  fontSize: '9px',
+                  lineHeight: '14px',
+                  color: theme.textSecondary,
+                  backgroundColor: item.todoState === 'done'
+                    ? (theme.isDark ? 'rgba(34,197,94,0.16)' : 'rgba(34,197,94,0.12)')
+                    : (theme.isDark ? 'rgba(234,179,8,0.16)' : 'rgba(234,179,8,0.12)'),
+                }}
+              >
+                {item.todoState === 'done' ? 'done' : 'to do'}
+              </span>
+            )}
             {item.hasUnread && (
               <span
                 aria-label="Unread shared document"
