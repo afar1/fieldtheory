@@ -78,8 +78,8 @@ export class CommandLauncherWindow {
   private _isShowing: boolean = false;
 
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 425;
-  private readonly WINDOW_HEIGHT_COLLAPSED = 36;
+  private readonly WINDOW_WIDTH = 366;
+  private readonly WINDOW_HEIGHT_COLLAPSED = 43;
   private readonly WINDOW_HEIGHT_RESULTS = 354;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
@@ -312,7 +312,7 @@ export class CommandLauncherWindow {
     });
     this.window!.hide();
 
-    if (skipActivation) {
+    if (skipActivation || this.fieldTheoryActiveOnShow) {
       appendCommandLauncherTrace('hide-skip-activation');
       return;
     }
@@ -437,7 +437,9 @@ export class CommandLauncherWindow {
     this.window.on('blur', () => {
       appendCommandLauncherTrace('window-blur-event', {
         windowVisible: this.isVisible(),
+        fieldTheoryActiveOnShow: this.fieldTheoryActiveOnShow,
       });
+      if (this.fieldTheoryActiveOnShow) return;
       this.hide();
     });
 
