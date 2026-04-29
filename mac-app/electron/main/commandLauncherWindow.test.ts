@@ -21,6 +21,8 @@ const mockWindow = vi.hoisted(() => ({
 }));
 
 const mockIpcMainHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => void>());
+const LAUNCHER_WIDTH = 366;
+const LAUNCHER_COLLAPSED_HEIGHT = 43;
 
 const mockApp = vi.hoisted(() => ({
   hide: vi.fn(),
@@ -87,10 +89,10 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
-      x: 338,
+      x: Math.round(100 + (900 - LAUNCHER_WIDTH) / 2),
       y: 323,
-      width: 425,
-      height: 36,
+      width: LAUNCHER_WIDTH,
+      height: LAUNCHER_COLLAPSED_HEIGHT,
     });
   });
 
@@ -112,10 +114,10 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
-      x: 338,
+      x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
       y: 273,
-      width: 425,
-      height: 36,
+      width: LAUNCHER_WIDTH,
+      height: LAUNCHER_COLLAPSED_HEIGHT,
     });
   });
 
@@ -216,20 +218,45 @@ describe('CommandLauncherWindow.hide()', () => {
   });
 
   it('hides the window and activates previous app by default', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+
     launcher.hide();
 
     expect(mockWindow.hide).toHaveBeenCalled();
-    // activatePreviousApp is async and uses execFile internally,
-    // but we can verify it wasn't skipped by checking app.hide wasn't called as fallback
+    expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
   it('hides the window without activating when skipActivation is true', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+
     launcher.hide(true);
 
     expect(mockWindow.hide).toHaveBeenCalled();
-    // No activation should happen
+    expect(activatePreviousApp).not.toHaveBeenCalled();
     expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
+  it('does not activate stale previous app when Field Theory was active on show', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    (launcher as any).fieldTheoryActiveOnShow = true;
+
+    launcher.hide();
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
+  it('does not hide on blur when Field Theory was active on show', () => {
+    launcher.preload();
+    (launcher as any).fieldTheoryActiveOnShow = true;
+    const hide = vi.spyOn(launcher, 'hide');
+    const blurHandler = mockWindow.on.mock.calls.find(([event]) => event === 'blur')?.[1];
+
+    blurHandler?.();
+
+    expect(hide).not.toHaveBeenCalled();
   });
 
   it('skips everything when window is already hidden (visibility guard)', () => {
@@ -282,7 +309,7 @@ describe('CommandLauncherWindow resize IPC', () => {
     mockIpcMainHandlers.clear();
     mockWindow.isVisible.mockReturnValue(true);
     mockWindow.isDestroyed.mockReturnValue(false);
-    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 425, height: 36 });
+    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: LAUNCHER_WIDTH, height: LAUNCHER_COLLAPSED_HEIGHT });
   });
 
   it('keeps renderer resize requests inside the normal launcher height', () => {
@@ -294,7 +321,7 @@ describe('CommandLauncherWindow resize IPC', () => {
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
-      width: 425,
+      width: LAUNCHER_WIDTH,
       height: 354,
     });
   });
@@ -308,7 +335,7 @@ describe('CommandLauncherWindow resize IPC', () => {
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
-      width: 425,
+      width: LAUNCHER_WIDTH,
       height: 354,
     });
   });
