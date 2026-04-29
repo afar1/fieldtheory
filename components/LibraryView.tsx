@@ -47,6 +47,13 @@ type MarkdownAction =
   | 'wiki';
 
 const DEFAULT_FOLDER = 'scratchpad';
+const SEEDED_LIBRARY_FOLDERS = [
+  DEFAULT_FOLDER,
+  'artifacts',
+  'Shared Markdown',
+  'debates',
+  'entries',
+] as const;
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const DRAWER_WIDTH = Math.min(340, SCREEN_WIDTH * 0.84);
 
@@ -120,11 +127,11 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
 
   const folders = useMemo(() => {
     const groups = new Map<string, LibraryDocument[]>();
+    SEEDED_LIBRARY_FOLDERS.forEach((folder) => groups.set(folder, []));
     sortedDocs.forEach((doc) => {
       const folder = folderFor(doc);
       groups.set(folder, [...(groups.get(folder) ?? []), doc]);
     });
-    if (!groups.has(DEFAULT_FOLDER)) groups.set(DEFAULT_FOLDER, []);
     return Array.from(groups.entries()).sort(([a], [b]) => {
       if (a === DEFAULT_FOLDER) return -1;
       if (b === DEFAULT_FOLDER) return 1;

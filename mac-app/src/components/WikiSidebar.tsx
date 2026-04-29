@@ -172,10 +172,8 @@ interface WikiSidebarProps {
   onSelectItem: (item: UnifiedItem) => void;
   selectedId: string | null;
   onCreateFile: (location: LibraryCreateLocation, fileName: string) => boolean | void | Promise<boolean | void>;
+  onCreateDefaultFile?: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
   onCreateDir: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
-  // Scratchpad's "+" creates an entry titled with the current date (e.g.
-  // "Monday Apr 20th") so the user doesn't have to name quick captures.
-  onCreateScratchpadDefault?: () => boolean | void | Promise<boolean | void>;
   flatItemsRef?: MutableRefObject<UnifiedItem[]>;
   searchQuery: string;
   onSearchQueryChange: (query: string) => void;
@@ -600,8 +598,8 @@ function WikiSidebar({
   onSelectItem,
   selectedId,
   onCreateFile,
+  onCreateDefaultFile,
   onCreateDir,
-  onCreateScratchpadDefault,
   flatItemsRef,
   searchQuery,
   onSearchQueryChange,
@@ -853,11 +851,11 @@ function WikiSidebar({
   const beginCreateFile = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, SCRATCHPAD_FOLDER_NAME);
     if (!location) return;
-    // Scratchpad has a default-name flow (today's date) — skip the naming
-    // input so quick captures stay one click / shortcut away.
-    if (location.builtin && location.relPath === SCRATCHPAD_FOLDER_NAME && onCreateScratchpadDefault) {
+    // Built-in markdown pages have an editor-side title suggestion, so skip
+    // the sidebar naming input and let the H1 become the live title.
+    if (location.builtin && onCreateDefaultFile) {
       void (async () => {
-        const created = await onCreateScratchpadDefault();
+        const created = await onCreateDefaultFile(location);
         if (created !== false) await reloadTreeAndExpandLocation(location);
       })();
       return;
@@ -865,7 +863,7 @@ function WikiSidebar({
     expandCreateLocation(location);
     setCreating({ kind: 'file', location });
     setNewName('');
-  }, [expandCreateLocation, onCreateScratchpadDefault, reloadTreeAndExpandLocation, resolveCreateTarget]);
+  }, [expandCreateLocation, onCreateDefaultFile, reloadTreeAndExpandLocation, resolveCreateTarget]);
 
   const beginCreateDir = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, '');
