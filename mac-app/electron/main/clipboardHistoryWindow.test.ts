@@ -56,6 +56,7 @@ function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<t
     setAlwaysOnTop: vi.fn(),
     setVisibleOnAllWorkspaces: vi.fn(),
     show: vi.fn(),
+    hide: vi.fn(),
     moveTop: vi.fn(),
     focus: vi.fn(),
     webContents: {
@@ -367,6 +368,17 @@ describe('ClipboardHistoryWindow helper methods', () => {
     window.hideAfterPaste('paste-item');
 
     expect(hide).not.toHaveBeenCalled();
+  });
+
+  it('keeps the Dock visible when hiding the app-mode window', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const existingWindow = attachExistingWindow(window, vi.fn());
+
+    window.hide(true, 'close-window');
+
+    expect(existingWindow.hide).toHaveBeenCalled();
+    expect(mockApp.dock.hide).not.toHaveBeenCalled();
+    expect(mockApp.hide).toHaveBeenCalled();
   });
 
   it('skips activation when no previous app is known', async () => {
