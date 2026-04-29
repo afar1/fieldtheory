@@ -138,6 +138,22 @@ describe('flattenLibraryRootsForLauncher', () => {
     expect(item.keywords).toContain('new title');
   });
 
+  it('carries todo state metadata into launcher search items', () => {
+    const [item] = flattenLibraryRootsForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'scratchpad/task', absPath: '/wiki/scratchpad/task.md', name: 'task', title: 'Task', lastUpdated: 1, todoState: 'open' },
+        ],
+      },
+    ]);
+
+    expect(item.todoState).toBe('open');
+    expect(item.keywords).toEqual(expect.arrayContaining(['todo', 'task', 'open']));
+  });
+
   it('omits generated bookmark taxonomy pages from launcher results', () => {
     const items = flattenLibraryRootsForLauncher([
       {

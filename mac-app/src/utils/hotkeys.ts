@@ -83,6 +83,40 @@ export function buildHotkeyString(event: KeyboardEvent): string {
   return parts.length > 0 ? `${parts.join('+')}+${key}` : key;
 }
 
+export function normalizeHotkeyForComparison(hotkey: string | null | undefined): string {
+  if (!hotkey) return '';
+
+  const modifierOrder = ['Command', 'Control', 'Alt', 'Shift'];
+  const aliases: Record<string, string> = {
+    cmd: 'Command',
+    command: 'Command',
+    meta: 'Command',
+    ctrl: 'Control',
+    control: 'Control',
+    option: 'Alt',
+    alt: 'Alt',
+    shift: 'Shift',
+  };
+  const modifiers = new Set<string>();
+  const keys: string[] = [];
+
+  for (const rawPart of hotkey.replace(/\s+/g, '').split('+')) {
+    if (!rawPart) continue;
+    const normalizedPart = aliases[rawPart.toLowerCase()] ?? rawPart;
+    const part = normalizedPart.charAt(0).toUpperCase() + normalizedPart.slice(1);
+    if (modifierOrder.includes(part)) {
+      modifiers.add(part);
+    } else {
+      keys.push(part.length === 1 ? part.toUpperCase() : part);
+    }
+  }
+
+  return [
+    ...modifierOrder.filter((modifier) => modifiers.has(modifier)),
+    ...keys,
+  ].join('+');
+}
+
 /**
  * Check if a hotkey string contains only modifier keys (no actual key).
  */
