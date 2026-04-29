@@ -1108,11 +1108,10 @@ function registerHotkeysAfterOnboarding(): void {
       };
 
       try {
-        // If Field Theory is visible, hide it first, then explicitly activate
-        // the resolved target. App-window mode can otherwise leave Field Theory
-        // frontmost long enough for the synthetic Cmd+V to paste back into us.
+        // If Field Theory is visible, use the normal paste-dismiss path, then
+        // explicitly activate the resolved target so Cmd+V does not paste into us.
         if (clipboardHistoryWindow?.isVisible()) {
-          clipboardHistoryWindow.hide();
+          clipboardHistoryWindow.hideAfterPaste('super-paste');
         }
         if (bundleId && clipboardHistoryWindow && !isFinder(bundleId)) {
           await clipboardHistoryWindow.activateApp(bundleId);
@@ -1282,7 +1281,7 @@ function createWindow(): void {
 
   // Load saved window state from preferences
   const savedState = preferencesManager?.get().windowState;
-  const showInDock = preferencesManager?.getPreference('showInDock') ?? false;
+  const showInDock = shouldUseClipboardAppWindowMode();
   const defaultWidth = 800;
   const defaultHeight = 600;
 
