@@ -302,6 +302,8 @@ export interface ClipboardAPI {
   separateIntoTasks: (id: number) => Promise<void>;
   getPerformanceHudEnabled?: () => Promise<boolean>;
   setPerformanceHudEnabled?: (enabled: boolean) => Promise<boolean>;
+  getClickAwayToDismiss?: () => Promise<boolean>;
+  setClickAwayToDismiss?: (enabled: boolean) => Promise<boolean>;
   getPerformanceSnapshot?: () => Promise<{
     timestampMs: number;
     cpuPercent: number;

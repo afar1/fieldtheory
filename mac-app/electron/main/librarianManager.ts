@@ -1005,6 +1005,10 @@ def load_config():
         return None
 
 
+def should_stop_on_pending(cfg):
+    return cfg.get("stop_on_pending") is True
+
+
 def is_muted():
     state_file = LIBRARIAN_DIR / "state.json"
     if not state_file.exists():
@@ -1164,7 +1168,7 @@ def main():
             "output": job.get("output", ""),
             "created_at": datetime.now().isoformat()
         }, indent=2))
-        sync_stop_hook(True)
+        sync_stop_hook(should_stop_on_pending(cfg))
         return
 
     jobs_dir.mkdir(parents=True, exist_ok=True)
@@ -1239,7 +1243,7 @@ def main():
             "output": str(out_file),
             "created_at": datetime.now().isoformat()
         }, indent=2))
-        sync_stop_hook(True)
+        sync_stop_hook(should_stop_on_pending(cfg))
 
 
 if __name__ == "__main__":
@@ -1278,6 +1282,16 @@ def main():
         "job_file": str(job_file),
         "output": job.get("output", "")
     }, indent=2))
+
+    if not should_stop_on_pending(cfg):
+        sync_stop_hook(False)
+        return
+
+    rule_file = Path(get_rule_file_path(job)).expanduser()
+    if not rule_file.exists():
+        sync_stop_hook(False)
+        return
+
     sync_stop_hook(True)
 
     # Job still pending - block with structured stop-hook output
@@ -1618,6 +1632,7 @@ interface LibrarianSettings {
   stateEnforcedRuleContent?: string;   // Custom rule content (the "job language")
   // Discovery cadence settings
   discoveryFrequency?: DiscoveryFrequency;  // Controls discovery timing (default: 'sometimes')
+  codexStopOnPending?: boolean;       // If true, Codex Stop hook blocks on pending jobs
   // User expertise context
   userExpertiseContext?: string;       // User's background/interests (max 400 chars)
   // Legacy fields (kept for migration only)
@@ -1878,6 +1893,7 @@ export class LibrarianManager extends EventEmitter {
       librarianSetupComplete: undefined,
       stateEnforcedThreshold: 7,  // Default to 'sometimes' frequency (7-13 prompts)
       stateEnforcedRuleContent: undefined,
+      codexStopOnPending: false,
     };
 
     try {
@@ -1908,6 +1924,7 @@ export class LibrarianManager extends EventEmitter {
           stateEnforcedRuleContent: data.stateEnforcedRuleContent || undefined,
           // Discovery and expertise settings
           discoveryFrequency: data.discoveryFrequency,
+          codexStopOnPending: data.codexStopOnPending ?? true,
           userExpertiseContext: data.userExpertiseContext,
         };
       }
@@ -2366,7 +2383,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private startLibraryRootWatchers(): void {
-    for (const dirPath of this.settings.libraryRoots ?? []) {
+    for (const dirPath of this.getSafeLibraryRootPaths()) {
       this.watchLibraryRoot(dirPath);
     }
   }
@@ -2570,6 +2587,54 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private getUnsafeBroadDirectoryMessage(dirPath: string): string | null {
+    const homePath = this.normalizePath(app.getPath('home'));
+    const usersPath = path.dirname(homePath);
+    const rootPath = path.parse(homePath).root;
+    const dirKey = this.libraryRootKey(dirPath);
+
+    if (dirKey === this.libraryRootKey(homePath)) {
+      return 'Choose a specific project or notes folder, not your whole home folder.';
+    }
+    if (dirKey === this.libraryRootKey(usersPath)) {
+      return 'Choose a specific project or notes folder, not the whole Users folder.';
+    }
+    if (dirKey === this.libraryRootKey(rootPath)) {
+      return 'Choose a specific project or notes folder, not the system root.';
+    }
+    return null;
+  }
+
+  private getSafeLibraryRootPaths(): string[] {
+    const roots = this.settings.libraryRoots ?? [];
+    const safeRoots = roots.filter((rootPath) => {
+      const expandedPath = this.expandPath(rootPath.trim());
+      const normalizedPath = this.normalizePath(expandedPath);
+      const message = this.getUnsafeBroadDirectoryMessage(normalizedPath);
+      if (message) log.warn(`Skipping unsafe library root ${normalizedPath}: ${message}`);
+      return !message;
+    });
+
+    if (safeRoots.length !== roots.length) {
+      this.settings.libraryRoots = safeRoots;
+      this.saveSettings();
+    }
+
+    return safeRoots;
+  }
+
+  private updateMarkdownH1Title(absPath: string, title: string): void {
+    const content = fs.readFileSync(absPath, 'utf-8');
+    const lines = content.split('\n');
+    const h1Index = lines.findIndex((line, index) => index < 20 && /^#\s+/.test(line));
+    if (h1Index === -1) {
+      fs.writeFileSync(absPath, `# ${title}\n\n${content}`, 'utf-8');
+      return;
+    }
+    lines[h1Index] = `# ${title}`;
+    fs.writeFileSync(absPath, lines.join('\n'), 'utf-8');
+  }
+
   private ensureFolderReadme(folderId: LibraryReadmeFolderId, absDir: string, content: string, legacyContents: string[] = []): boolean {
     const seeded = normalizeSeededReadmes(this.settings.readmesSeeded);
 
@@ -2745,7 +2810,7 @@ export class LibrarianManager extends EventEmitter {
     ];
     const seen = new Set<string>([this.libraryRootKey(this.wikiDir)]);
 
-    for (const savedRoot of this.settings.libraryRoots ?? []) {
+    for (const savedRoot of this.getSafeLibraryRootPaths()) {
       const normalizedRoot = this.normalizePath(savedRoot);
       const key = this.libraryRootKey(normalizedRoot);
       if (seen.has(key)) continue;
@@ -2766,6 +2831,9 @@ export class LibrarianManager extends EventEmitter {
   addLibraryRoot(dirPath: string): LibraryRoot | null {
     const canonicalPath = this.resolveExistingDirectoryPath(dirPath);
     if (!canonicalPath) return null;
+
+    const unsafeMessage = this.getUnsafeBroadDirectoryMessage(canonicalPath);
+    if (unsafeMessage) throw new Error(unsafeMessage);
 
     const newKey = this.libraryRootKey(canonicalPath);
     if (newKey === this.libraryRootKey(this.wikiDir)) return null;
@@ -2891,14 +2959,24 @@ export class LibrarianManager extends EventEmitter {
     if (!slug) return null;
     const folder = path.posix.dirname(relPath);
     const newRelPath = folder && folder !== '.' ? `${folder}/${slug}` : slug;
-    if (newRelPath === relPath) return relPath;
     const oldAbs = path.resolve(this.wikiDir, `${relPath}.md`);
     const newAbs = path.resolve(this.wikiDir, `${newRelPath}.md`);
     if (!this.isInsidePath(this.wikiDir, oldAbs) || !this.isInsidePath(this.wikiDir, newAbs)) return null;
     if (!fs.existsSync(oldAbs)) return null;
+    if (newRelPath === relPath) {
+      try {
+        this.updateMarkdownH1Title(oldAbs, trimmed);
+        this.emit('wiki:changed');
+        return relPath;
+      } catch (error) {
+        log.error(`Error renaming wiki page title ${relPath}:`, error);
+        return null;
+      }
+    }
     if (fs.existsSync(newAbs)) return null;
     try {
       fs.renameSync(oldAbs, newAbs);
+      this.updateMarkdownH1Title(newAbs, trimmed);
       this.emit('wiki:changed');
       // Let RecentManager prune the stale entry for the old relPath.
       this.emit('wiki:deleted', relPath);
@@ -3438,6 +3516,18 @@ Avoid maximalism.`;
     return true;
   }
 
+  isCodexStopOnPendingEnabled(): boolean {
+    return this.settings.codexStopOnPending ?? false;
+  }
+
+  setCodexStopOnPendingEnabled(enabled: boolean): boolean {
+    this.settings.codexStopOnPending = enabled;
+    this.saveSettings();
+    this.syncToGlobalConfig(false);
+    this.syncCodexStopHookRegistration(enabled && this.hasPendingCodexArtifactJob());
+    return true;
+  }
+
   // ===========================================================================
   // User Expertise Context
   // ===========================================================================
@@ -3492,6 +3582,7 @@ Avoid maximalism.`;
     const config = {
       enabled: this.settings.enabled,
       frequency: this.settings.discoveryFrequency || 'sometimes',
+      stop_on_pending: this.settings.codexStopOnPending ?? false,
       rule_content: effectiveRuleContent,  // Includes expertise!
     };
     fs.writeFileSync(globalConfigPath, JSON.stringify(config, null, 2));
@@ -3703,7 +3794,7 @@ Avoid maximalism.`;
       || fs.existsSync(this.getCodexNotifyScriptPath())
       || fs.existsSync(this.getCodexStopScriptPath());
 
-    const shouldHaveDynamicStop = this.hasPendingCodexArtifactJob();
+    const shouldHaveDynamicStop = this.isCodexStopOnPendingEnabled() && this.hasPendingCodexArtifactJob();
     if (hasManagedCodexInstall && (hasLegacySessionStart || !this.isCodexHookInstalled() || hasDynamicStopHook !== shouldHaveDynamicStop)) {
       this.installCodexHook();
     }
@@ -6620,14 +6711,15 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
     // Ensure config file exists and is enabled
     const configFile = path.join(centralDir, 'config.json');
     if (!fs.existsSync(configFile)) {
-      fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
+      fs.writeFileSync(configFile, JSON.stringify({ enabled: true, stop_on_pending: this.isCodexStopOnPendingEnabled() }, null, 2));
     } else {
       try {
         const config = JSON.parse(fs.readFileSync(configFile, 'utf-8'));
         config.enabled = true;
+        config.stop_on_pending = config.stop_on_pending ?? this.isCodexStopOnPendingEnabled();
         fs.writeFileSync(configFile, JSON.stringify(config, null, 2));
       } catch {
-        fs.writeFileSync(configFile, JSON.stringify({ enabled: true }, null, 2));
+        fs.writeFileSync(configFile, JSON.stringify({ enabled: true, stop_on_pending: this.isCodexStopOnPendingEnabled() }, null, 2));
       }
     }
 
@@ -7080,9 +7172,9 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
         fs.unlinkSync(sessionStartPath);
       }
 
-      // 4. Reconcile ~/.codex/hooks.json. Stop stays installed only while a
-      // pending Librarian job exists.
-      this.syncCodexStopHookRegistration(this.hasPendingCodexArtifactJob());
+      // 4. Reconcile ~/.codex/hooks.json. Stop is opt-in and only installed
+      // while a pending Librarian job exists.
+      this.syncCodexStopHookRegistration(this.isCodexStopOnPendingEnabled() && this.hasPendingCodexArtifactJob());
 
       // 6. Add notify line and writable_roots to ~/.codex/config.toml
       const configTomlPath = this.getCodexConfigPath();

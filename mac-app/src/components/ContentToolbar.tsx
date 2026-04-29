@@ -57,6 +57,9 @@ interface ContentToolbarProps {
   }>;
   onLineHeightChange?: (lineHeight: string) => void;
 
+  unorderedListMarker?: 'dash' | 'carrot';
+  onUnorderedListMarkerChange?: (marker: 'dash' | 'carrot') => void;
+
   // Edit state
   isEditing?: boolean;
   isDirty?: boolean;
@@ -88,7 +91,9 @@ interface ContentToolbarProps {
   onToggleShare?: () => void;
   showShare?: boolean;
 
-  onCopyPath?: () => void;
+  onCopyPath?: () => void | Promise<void>;
+  copyPathCopied?: boolean;
+  copyPathTitle?: string;
 
 }
 
@@ -109,6 +114,8 @@ export default function ContentToolbar({
   lineHeight,
   lineHeightOptions,
   onLineHeightChange,
+  unorderedListMarker,
+  onUnorderedListMarkerChange,
   isEditing = false,
   isDirty = false,
   isSaving = false,
@@ -129,9 +136,13 @@ export default function ContentToolbar({
   onToggleShare,
   showShare = false,
   onCopyPath,
+  copyPathCopied = false,
+  copyPathTitle = 'Copy file path (⌘C)',
 }: ContentToolbarProps) {
   const { theme } = useTheme();
   const [copied, setCopied] = useState(false);
+  const [copyPathLocalCopied, setCopyPathLocalCopied] = useState(false);
+  const [copyPathHovered, setCopyPathHovered] = useState(false);
   const [typographyMenuOpen, setTypographyMenuOpen] = useState(false);
   const typographyMenuRef = useRef<HTMLDivElement | null>(null);
 
@@ -144,10 +155,24 @@ export default function ContentToolbar({
     }
   };
 
+  const handleCopyPath = async () => {
+    if (!onCopyPath) return;
+    try {
+      await onCopyPath();
+      setCopyPathLocalCopied(true);
+      setTimeout(() => setCopyPathLocalCopied(false), 2000);
+    } catch {
+      // The caller owns copy failure reporting.
+    }
+  };
+
+  const copyPathActive = copyPathCopied || copyPathLocalCopied;
+
   const hasTypographyMenu = Boolean(
     (typographyPresetOptions?.length && onTypographyPresetChange) ||
     (showTextSize && onTextSizeChange) ||
-    (lineHeightOptions?.length && onLineHeightChange)
+    (lineHeightOptions?.length && onLineHeightChange) ||
+    onUnorderedListMarkerChange
   );
 
   useEffect(() => {
@@ -181,6 +206,8 @@ export default function ContentToolbar({
         margin: '0 -4px',
         padding: '0 4px',
         position: 'relative',
+        // @ts-ignore - toolbar controls should be clickable/focusable; the spacer below owns dragging.
+        WebkitAppRegion: 'no-drag',
       }}
     >
       {(onNavigateBack || onNavigateForward) && (
@@ -256,6 +283,224 @@ export default function ContentToolbar({
         }}
       />
 
+      {/* Icon buttons group (folder, rename, delete) */}
+      {(showFolder || showRename || showDelete) && !isEditing && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+          }}
+        >
+          {showFolder && onShowInFolder && (
+            <button
+              onClick={onShowInFolder}
+              style={{
+                padding: '4px 6px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+              title="Show in Finder"
+            >
+              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+                <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
+              </svg>
+            </button>
+          )}
+          {showRename && onRename && (
+            <button
+              onClick={onRename}
+              style={{
+                padding: '4px 6px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+              title="Rename"
+            >
+              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+                <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
+              </svg>
+            </button>
+          )}
+          {showDelete && onDelete && (
+            <button
+              onClick={onDelete}
+              style={{
+                padding: '4px 6px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+              title="Delete"
+            >
+              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
+                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
+                <path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
+              </svg>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Generic copy action — distinct from the file-path/link icon at the far right. */}
+      {showCopy && onCopy && (
+        <button
+          type="button"
+          onClick={handleCopy}
+          title={copyLabel ?? 'Copy'}
+          aria-label={copyLabel ?? 'Copy'}
+          style={{
+            padding: '3px 8px',
+            fontSize: '11px',
+            color: copied ? (theme.success ?? '#16a34a') : theme.textSecondary,
+            backgroundColor: copied
+              ? (theme.isDark ? 'rgba(34,197,94,0.16)' : 'rgba(22,163,74,0.12)')
+              : 'transparent',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '24px',
+          }}
+          onMouseEnter={(e) => {
+            if (!copied) e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+          }}
+          onMouseLeave={(e) => {
+            if (!copied) e.currentTarget.style.backgroundColor = 'transparent';
+          }}
+        >
+          {copied ? 'Copied' : (copyLabel ?? 'Copy')}
+        </button>
+      )}
+
+      {/* Share button */}
+      {showShare && onToggleShare && !isEditing && (
+        <button
+          onClick={onToggleShare}
+          disabled={isSharing}
+          style={{
+            padding: '3px 8px',
+            fontSize: '11px',
+            color: shareStatus?.shared ? theme.accent : theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: isSharing ? 'default' : 'pointer',
+            opacity: isSharing ? 0.6 : 1,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '24px',
+          }}
+          title={shareStatus?.shared ? 'Remove from Shared' : 'Add to Shared'}
+        >
+          {isSharing ? 'Sharing...' : shareStatus?.shared ? 'Shared' : 'Share'}
+        </button>
+      )}
+
+      {/* Optional edit controls for callers that use a manual save model. */}
+      {isEditing ? (
+        <>
+          {isDirty && (
+            <span
+              style={{
+                width: '5px',
+                height: '5px',
+                borderRadius: '50%',
+                backgroundColor: theme.accent,
+                marginRight: '4px',
+              }}
+              title="Unsaved changes"
+            />
+          )}
+          {onSave && (
+            <button
+              onClick={onSave}
+              disabled={!isDirty || isSaving}
+              style={{
+                padding: '3px 8px',
+                fontSize: '11px',
+                color: isDirty ? '#fff' : theme.textSecondary,
+                backgroundColor: isDirty ? theme.accent : 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: isDirty ? 'pointer' : 'default',
+                opacity: isSaving ? 0.6 : 1,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+            >
+              Save
+            </button>
+          )}
+          {onCancel && (
+            <button
+              onClick={onCancel}
+              style={{
+                padding: '3px 8px',
+                fontSize: '11px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                height: '24px',
+              }}
+            >
+              Cancel
+            </button>
+          )}
+        </>
+      ) : onEdit && (
+        <button
+          onClick={onEdit}
+          style={{
+            padding: '3px 8px',
+            fontSize: '11px',
+            color: theme.textSecondary,
+            backgroundColor: 'transparent',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            height: '24px',
+          }}
+          title="Edit (⌘E)"
+        >
+          Edit
+        </button>
+      )}
+
+      {/* Immersive toggle — standardized top-right position across views. */}
+      {onToggleFullScreen && (
+        <ImmersiveToggle isFullScreen={isFullScreen} onToggle={onToggleFullScreen} />
+      )}
+
       {hasTypographyMenu && (
         <div
           ref={typographyMenuRef}
@@ -263,7 +508,6 @@ export default function ContentToolbar({
             position: 'relative',
             display: 'flex',
             alignItems: 'center',
-            order: 20,
             marginLeft: '2px',
           }}
         >
@@ -435,209 +679,67 @@ export default function ContentToolbar({
                   </div>
                 </div>
               )}
+
+              {onUnorderedListMarkerChange && (
+                <div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
+                    Bullets
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+                    {[
+                      { id: 'dash' as const, label: '-', title: 'Dash unordered lists' },
+                      { id: 'carrot' as const, label: '›', title: 'Carrot unordered lists' },
+                    ].map((option) => {
+                      const isSelected = option.id === unorderedListMarker;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onUnorderedListMarkerChange(option.id)}
+                          title={option.title}
+                          style={{
+                            height: '26px',
+                            padding: '0 6px',
+                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: isSelected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            border: 'none',
+                            borderRadius: '5px',
+                            cursor: 'pointer',
+                            fontSize: option.id === 'carrot' ? '15px' : '12px',
+                            fontWeight: isSelected ? 700 : 500,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       )}
 
-      {/* Icon buttons group (folder, rename, delete) */}
-      {(showFolder || showRename || showDelete) && !isEditing && (
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-          }}
-        >
-          {showFolder && onShowInFolder && (
-            <button
-              onClick={onShowInFolder}
-              style={{
-                padding: '4px 6px',
-                color: theme.textSecondary,
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '24px',
-              }}
-              title="Show in Finder"
-            >
-              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
-                <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
-              </svg>
-            </button>
-          )}
-          {showRename && onRename && (
-            <button
-              onClick={onRename}
-              style={{
-                padding: '4px 6px',
-                color: theme.textSecondary,
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '24px',
-              }}
-              title="Rename"
-            >
-              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
-                <path d="M12.146.146a.5.5 0 0 1 .708 0l3 3a.5.5 0 0 1 0 .708l-10 10a.5.5 0 0 1-.168.11l-5 2a.5.5 0 0 1-.65-.65l2-5a.5.5 0 0 1 .11-.168l10-10zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5zm-9.761 5.175-.106.106-1.528 3.821 3.821-1.528.106-.106A.5.5 0 0 1 5 12.5V12h-.5a.5.5 0 0 1-.5-.5V11h-.5a.5.5 0 0 1-.468-.325z"/>
-              </svg>
-            </button>
-          )}
-          {showDelete && onDelete && (
-            <button
-              onClick={onDelete}
-              style={{
-                padding: '4px 6px',
-                color: theme.textSecondary,
-                backgroundColor: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '24px',
-              }}
-              title="Delete"
-            >
-              <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="currentColor">
-                <path d="M5.5 5.5A.5.5 0 0 1 6 6v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm2.5 0a.5.5 0 0 1 .5.5v6a.5.5 0 0 1-1 0V6a.5.5 0 0 1 .5-.5zm3 .5a.5.5 0 0 0-1 0v6a.5.5 0 0 0 1 0V6z"/>
-                <path fillRule="evenodd" d="M14.5 3a1 1 0 0 1-1 1H13v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V4h-.5a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1H6a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1h3.5a1 1 0 0 1 1 1v1zM4.118 4 4 4.059V13a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1V4.059L11.882 4H4.118zM2.5 3V2h11v1h-11z"/>
-              </svg>
-            </button>
-          )}
-        </div>
-      )}
-
-      {/* Share button */}
-      {showShare && onToggleShare && !isEditing && (
-        <button
-          onClick={onToggleShare}
-          disabled={isSharing}
-          style={{
-            padding: '3px 8px',
-            fontSize: '11px',
-            color: shareStatus?.shared ? theme.accent : theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: isSharing ? 'default' : 'pointer',
-            opacity: isSharing ? 0.6 : 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
-          }}
-          title={shareStatus?.shared ? 'Remove from Shared' : 'Add to Shared'}
-        >
-          {isSharing ? 'Sharing...' : shareStatus?.shared ? 'Shared' : 'Share'}
-        </button>
-      )}
-
-      {/* Edit controls. Save/Cancel only render when their callbacks are
-          provided — LibrarianView dropped them in favor of auto-save, but
-          CommandsView still uses the manual save model. */}
-      {isEditing ? (
-        <>
-          {isDirty && (
-            <span
-              style={{
-                width: '5px',
-                height: '5px',
-                borderRadius: '50%',
-                backgroundColor: theme.accent,
-                marginRight: '4px',
-              }}
-              title="Unsaved changes"
-            />
-          )}
-          {onSave && (
-            <button
-              onClick={onSave}
-              disabled={!isDirty || isSaving}
-              style={{
-                padding: '3px 8px',
-                fontSize: '11px',
-                color: isDirty ? '#fff' : theme.textSecondary,
-                backgroundColor: isDirty ? theme.accent : 'transparent',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: isDirty ? 'pointer' : 'default',
-                opacity: isSaving ? 0.6 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '24px',
-              }}
-            >
-              {isSaving ? 'Saving...' : 'Save'}
-            </button>
-          )}
-          {onCancel && (
-            <button
-              onClick={onCancel}
-              style={{
-                padding: '3px 8px',
-                fontSize: '11px',
-                color: theme.textSecondary,
-                backgroundColor: 'transparent',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                height: '24px',
-              }}
-            >
-              Cancel
-            </button>
-          )}
-        </>
-      ) : onEdit && (
-        <button
-          onClick={onEdit}
-          style={{
-            padding: '3px 8px',
-            fontSize: '11px',
-            color: theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            height: '24px',
-          }}
-          title="Edit (⌘E)"
-        >
-          Edit
-        </button>
-      )}
-
-      {/* Immersive toggle — standardized top-right position across views. */}
-      {onToggleFullScreen && (
-        <ImmersiveToggle isFullScreen={isFullScreen} onToggle={onToggleFullScreen} />
-      )}
-
       {/* Copy-path link icon — visually follows the text-style button. */}
       {onCopyPath && (
         <button
-          onClick={onCopyPath}
-          title="Copy file path (⌘C)"
-          aria-label="Copy file path"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={handleCopyPath}
+          title={copyPathActive ? 'Copied' : copyPathTitle}
+          aria-label={copyPathActive ? 'Copied' : copyPathTitle}
           style={{
             padding: '4px 6px',
             marginLeft: '2px',
-            color: theme.textSecondary,
-            backgroundColor: 'transparent',
+            color: copyPathActive ? (theme.success ?? '#16a34a') : theme.textSecondary,
+            backgroundColor: copyPathActive
+              ? (theme.isDark ? 'rgba(34,197,94,0.16)' : 'rgba(22,163,74,0.12)')
+              : copyPathHovered
+              ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
+              : 'transparent',
             border: 'none',
             cursor: 'pointer',
             display: 'flex',
@@ -645,15 +747,20 @@ export default function ContentToolbar({
             justifyContent: 'center',
             height: '24px',
             borderRadius: '4px',
-            order: 30,
           }}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = 'transparent')}
+          onMouseEnter={() => setCopyPathHovered(true)}
+          onMouseLeave={() => setCopyPathHovered(false)}
         >
           <svg width={ICON_SIZE_SMALL} height={ICON_SIZE_SMALL} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M6.5 9.5l3-3" />
-            <path d="M7.5 4.5l1-1a3 3 0 0 1 4.2 4.2l-1 1" />
-            <path d="M8.5 11.5l-1 1a3 3 0 0 1-4.2-4.2l1-1" />
+            {copyPathActive ? (
+              <path d="M3.5 8.3l2.8 2.8 6.2-6.2" />
+            ) : (
+              <>
+                <path d="M6.5 9.5l3-3" />
+                <path d="M7.5 4.5l1-1a3 3 0 0 1 4.2 4.2l-1 1" />
+                <path d="M8.5 11.5l-1 1a3 3 0 0 1-4.2-4.2l1-1" />
+              </>
+            )}
           </svg>
         </button>
       )}

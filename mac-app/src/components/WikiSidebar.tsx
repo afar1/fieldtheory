@@ -1,6 +1,17 @@
 import { memo, useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
+import {
+  SIDEBAR_DARK_ICON_COLOR,
+  SIDEBAR_DARK_TEXT_COLOR,
+  SIDEBAR_ICON_TEXT_GAP,
+  SIDEBAR_LIGHT_ICON_COLOR,
+  SIDEBAR_LIGHT_TEXT_COLOR,
+  SidebarBookmarkIcon,
+  SidebarFolderIcon,
+  SidebarMarkdownIcon,
+  SidebarRecentIcon,
+} from './SidebarIcons';
 
 type SortMode = 'alpha' | 'time';
 
@@ -31,8 +42,22 @@ export const LIBRARY_DEFAULT_FOLDER_IDS = [
 ] as const;
 export type LibraryDefaultFolderId = typeof LIBRARY_DEFAULT_FOLDER_IDS[number];
 const LIBRARY_DEFAULT_FOLDER_ID_SET = new Set<string>(LIBRARY_DEFAULT_FOLDER_IDS);
+const LEGACY_HIDDEN_DEFAULT_FOLDER_IDS = ['concepts'] as const;
 const LIBRARY_DRAG_DATA_TYPE = 'application/x-fieldtheory-library-item';
 const LIBRARY_DRAG_TEXT_PREFIX = 'fieldtheory-library-item:';
+const LIBRARY_SIDEBAR_ROW_PADDING_Y = '6px';
+const LIBRARY_SIDEBAR_ROW_LINE_HEIGHT = '16px';
+const LIBRARY_SIDEBAR_ROW_MIN_HEIGHT = '28px';
+const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
+const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
+const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): React.CSSProperties => ({
+  flex: 1,
+  minWidth: 0,
+  overflow: 'hidden',
+  whiteSpace: 'nowrap',
+  WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
+  maskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
+});
 
 type LibraryDragItem = {
   rootPath: string;
@@ -256,6 +281,10 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
   });
 }
 
+export function orderTopLevelSidebarNodes(nodes: SidebarNode[], _sortMode: SortMode = 'alpha'): SidebarNode[] {
+  return sortSidebarNodes(nodes, 'alpha');
+}
+
 function getLibraryFolderVisibilityId(node: SidebarNode): string | null {
   if (node.kind !== 'dir') return null;
   if (node.id === 'artifacts') return 'artifacts';
@@ -275,7 +304,7 @@ function getUserFolderVisibilityId(node: SidebarNode): string | null {
 }
 
 export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFolderIds: string[]): SidebarNode[] {
-  const hidden = new Set(hiddenFolderIds);
+  const hidden = new Set([...LEGACY_HIDDEN_DEFAULT_FOLDER_IDS, ...hiddenFolderIds]);
   const filterNodes = (items: SidebarNode[]): { nodes: SidebarNode[]; changed: boolean } => {
     let changed = false;
     const filtered: SidebarNode[] = [];
@@ -311,6 +340,9 @@ export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFold
 
 export function flattenBuiltinSidebarRoots(nodes: SidebarNode[]): SidebarNode[] {
   return nodes.flatMap((node) => {
+    if (node.kind === 'dir' && node.children.some((child) => child.id === BOOKMARKS_ITEM_ID)) {
+      return node.children;
+    }
     if (node.kind === 'dir' && node.builtin && node.relPath === '' && node.id.startsWith('root:')) {
       return node.children;
     }
@@ -493,40 +525,45 @@ export function getWikiSidebarExpansionIds(rootPath: string, relPath: string): s
   return ids;
 }
 
+export function getSelectedWikiAutoExpandKey(
+  selectedId: string | null | undefined,
+  rootPath: string | null | undefined
+): string | null {
+  if (!selectedId?.startsWith('wiki:') || !rootPath) return null;
+  return `${rootPath}::${selectedId}`;
+}
+
 export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot, sortMode: SortMode = 'alpha'): SidebarNode[] {
   if (!root.builtin) return nodes;
 
   const bookmarkFolderNames = new Set(['categories', 'domains', 'entities']);
-  const bookmarkNodes: SidebarNode[] = [];
+  const isBookmarkSourceNode = (node: SidebarNode): boolean => {
+    if (node.kind === 'file') return node.id === BOOKMARKS_ITEM_ID;
+    // These directories remain on disk; the sidebar renders them through the
+    // dedicated bookmarks canvas/list entry instead of as ordinary folders.
+    if (bookmarkFolderNames.has(node.name) || node.name === 'bookmarks-from-x' || node.name.toLowerCase() === 'bookmarks') return true;
+    return node.children.some(isBookmarkSourceNode);
+  };
   const remainingNodes: SidebarNode[] = [];
+  let foundBookmarkSourceNode = false;
 
   for (const node of nodes) {
-    if (node.kind === 'dir' && bookmarkFolderNames.has(node.name)) {
-      bookmarkNodes.push(node);
-    } else {
+    if (node.kind !== 'dir') {
       remainingNodes.push(node);
+      continue;
     }
+    if (isBookmarkSourceNode(node)) {
+      foundBookmarkSourceNode = true;
+      continue;
+    }
+    remainingNodes.push(node);
   }
 
-  if (bookmarkNodes.length === 0) return nodes;
+  if (!foundBookmarkSourceNode) return nodes;
 
   return sortSidebarNodes([
     ...remainingNodes,
-    {
-      kind: 'dir',
-      id: `${root.path}::bookmarks-from-x`,
-      name: 'bookmarks-from-x',
-      label: 'Bookmarks from x.com',
-      relPath: 'bookmarks-from-x',
-      rootPath: root.path,
-      builtin: true,
-      canCreateFile: false,
-      hasUnread: bookmarkNodes.some(sidebarNodeHasUnread),
-      children: [
-        { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
-        ...sortSidebarNodes(bookmarkNodes, sortMode),
-      ],
-    },
+    { kind: 'file', id: BOOKMARKS_ITEM_ID, item: makeBookmarksItem() },
   ], sortMode);
 }
 
@@ -613,15 +650,23 @@ function WikiSidebar({
     y: number;
     node: SidebarNode | null;
   } | null>(null);
+  const autoExpandedSelectedWikiKeyRef = useRef<string | null>(null);
 
   // Auto-expand the parent folder of the selected wiki item so programmatic
   // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
-  // of leaving it hidden under a collapsed folder.
+  // of leaving it hidden under a collapsed folder. Track the selection so
+  // focus-triggered tree reloads do not reopen a folder the user collapsed.
   useEffect(() => {
-    if (!selectedId?.startsWith('wiki:')) return;
+    if (!selectedId?.startsWith('wiki:')) {
+      autoExpandedSelectedWikiKeyRef.current = null;
+      return;
+    }
     const relPath = selectedId.slice('wiki:'.length);
     const builtinRoot = libraryRoots.find((root) => root.builtin);
     if (!builtinRoot) return;
+    const autoExpandKey = getSelectedWikiAutoExpandKey(selectedId, builtinRoot.path);
+    if (!autoExpandKey || autoExpandedSelectedWikiKeyRef.current === autoExpandKey) return;
+    autoExpandedSelectedWikiKeyRef.current = autoExpandKey;
     setExpandedFolders((prev) => {
       const next = new Set(prev);
       let changed = false;
@@ -895,12 +940,20 @@ function WikiSidebar({
 
     const libraryRootNodes = libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath));
     roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
-    return filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
+    return orderTopLevelSidebarNodes(filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders), sortMode);
   }, [artifacts, hiddenDefaultFolders, libraryRoots, sortMode, taggedDocs]);
 
   const filteredSidebarRoots = useMemo(
     () => filterSidebarNodes(sidebarRoots, searchQuery),
     [sidebarRoots, searchQuery]
+  );
+  const bookmarksActionItem = useMemo(() => {
+    const node = sidebarRoots.find((item) => item.id === BOOKMARKS_ITEM_ID);
+    return node?.kind === 'file' ? node.item : null;
+  }, [sidebarRoots]);
+  const visibleSidebarRoots = useMemo(
+    () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
+    [filteredSidebarRoots]
   );
 
   const flatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots), [filteredSidebarRoots]);
@@ -914,7 +967,7 @@ function WikiSidebar({
   const visiblePages = flatItems.length;
   const isSearching = searchQuery.trim().length > 0;
 
-  const emptyWiki = sidebarRoots.length === 0;
+  const emptyWiki = visibleSidebarRoots.length === 0 && !bookmarksActionItem;
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -955,8 +1008,18 @@ function WikiSidebar({
     closeContextMenu();
     const picked = await window.libraryAPI?.pickFolder();
     if (!picked) return;
-    const root = await window.libraryAPI?.addRoot(picked);
-    if (!root) return;
+    let root: LibraryRoot | null | undefined;
+    try {
+      root = await window.libraryAPI?.addRoot(picked);
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : 'Could not add folder.');
+      return;
+    }
+    if (!root) {
+      setMoveError('Could not add folder. Choose an existing folder that is not already in Library.');
+      return;
+    }
+    setMoveError(null);
     await loadTree();
     setExpandedFolders((prev) => {
       const next = new Set(prev);
@@ -1160,11 +1223,11 @@ function WikiSidebar({
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
         </div>
-      ) : filteredSidebarRoots.length === 0 ? (
+      ) : visibleSidebarRoots.length === 0 ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages match that search.
         </div>
-      ) : filteredSidebarRoots.map((node) => (
+      ) : visibleSidebarRoots.map((node) => (
         <TreeNode
           key={node.id}
           node={node}
@@ -1241,6 +1304,15 @@ function WikiSidebar({
         </div>
       )}
 
+      {!isSearching && bookmarksActionItem && (
+        <BookmarksShortcutBlock
+          item={bookmarksActionItem}
+          isSelected={selectedId === bookmarksActionItem.id}
+          theme={theme}
+          onOpen={() => onSelectItem(bookmarksActionItem)}
+        />
+      )}
+
       {!isSearching && recent.length > 0 && (
         <RecentBlock
           recent={filterStaleRecent(recent, wikiTree)}
@@ -1248,6 +1320,7 @@ function WikiSidebar({
           onExpand={setRecentExpanded}
           collapsed={recentCollapsed}
           onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
+          showDivider={!bookmarksActionItem}
           selectedId={selectedId}
           theme={theme}
           onOpenWiki={(relPath, title) =>
@@ -1390,6 +1463,8 @@ function TreeNode({
   const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
   const isDropTarget = dropTargetId === node.id;
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -1447,32 +1522,36 @@ function TreeNode({
         style={{
           display: 'flex',
           alignItems: 'center',
-          gap: '6px',
-          padding: `6px 12px 6px ${12 + depth * 12}px`,
+          gap: SIDEBAR_ICON_TEXT_GAP,
+          padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
           cursor: 'pointer',
           fontSize: '12px',
-          fontWeight: 500,
-          color: theme.text,
+          fontWeight: 400,
+          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+          color: sidebarTextColor,
           userSelect: 'none',
           backgroundColor: isDropTarget ? dropBg : 'transparent',
         }}
       >
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          fill="currentColor"
-          style={{
-            transition: 'transform 0.15s ease',
-            transform: isExpanded ? 'rotate(90deg)' : 'rotate(0deg)',
-            flexShrink: 0,
-            color: theme.textSecondary,
-          }}
-        >
-          <path d="M2 1l4 3-4 3V1z" />
-        </svg>
-        <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node.label}</span>
-        <span style={{ color: theme.textSecondary, fontWeight: 400, fontSize: '11px', opacity: 0.5 }}>
+        <SidebarFolderIcon color={sidebarIconColor} />
+        <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>{node.label}</span>
+        <span style={{
+          minWidth: '14px',
+          height: '14px',
+          padding: '0 4px',
+          borderRadius: '999px',
+          boxSizing: 'border-box',
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          color: theme.textSecondary,
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
+          fontWeight: 400,
+          fontSize: '9px',
+          lineHeight: '14px',
+          opacity: 0.72,
+        }}>
           {itemCount}
         </span>
         {node.hasUnread && (
@@ -1739,6 +1818,8 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
   }, [renaming]);
 
   const canRename = item.type === 'wiki' && !!item.relPath;
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   const commitRename = async () => {
     if (!renaming) return;
@@ -1749,6 +1830,7 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
   };
 
   const canShowInFinder = !!item.absPath && item.type !== 'bookmarks';
+  const showFinderButton = canShowInFinder && isHovered;
 
   return (
     <div
@@ -1789,13 +1871,13 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
       onMouseLeave={() => onHover(null)}
       style={{
         position: 'relative',
-        minHeight: '28px',
+        minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
         boxSizing: 'border-box',
-        padding: `6px 28px 6px ${28 + depth * 12}px`,
+        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${showFinderButton ? 28 : 12}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
         cursor: 'pointer',
         backgroundColor: isSelected
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
-          : 'transparent',
+          : isHovered ? theme.hoverBg : 'transparent',
         borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
         transition: 'background-color 0.1s ease',
         outline: 'none',
@@ -1804,8 +1886,8 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
       <div style={{
         display: 'flex',
         alignItems: 'center',
-        gap: '4px',
-        minHeight: '16px',
+        gap: SIDEBAR_ICON_TEXT_GAP,
+        minHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
       }}>
         {renaming ? (
           <input
@@ -1834,16 +1916,13 @@ function FileItem({ item, depth = 0, isSelected, isHovered, theme, onSelect, onH
           />
         ) : (
           <>
+            <SidebarMarkdownIcon color={sidebarIconColor} />
             <div style={{
               fontSize: '12px',
-              fontWeight: 500,
-              color: theme.text,
-              lineHeight: '16px',
-              flex: 1,
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
+              fontWeight: 400,
+              color: sidebarTextColor,
+              lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+              ...librarySidebarFadeTextStyle(showFinderButton ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH),
             }}>
               {item.title}
             </div>
@@ -1914,34 +1993,46 @@ interface RecentBlockProps {
   onExpand: (expanded: boolean) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
+  showDivider?: boolean;
   selectedId: string | null;
   theme: ReturnType<typeof useTheme>['theme'];
   onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
   if (visibleRecent.total === 0) return null;
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   const headerStyle: React.CSSProperties = {
-    padding: '6px 12px',
+    boxSizing: 'border-box',
+    minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px`,
     fontSize: '12px',
-    fontWeight: 500,
-    color: theme.textSecondary,
+    fontWeight: 400,
+    lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+    color: sidebarTextColor,
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: SIDEBAR_ICON_TEXT_GAP,
     cursor: 'pointer',
     userSelect: 'none',
   };
   const itemStyle = (isSelected: boolean): React.CSSProperties => ({
-    padding: '5px 12px 5px 20px',
-    fontSize: '11.5px',
+    boxSizing: 'border-box',
+    minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+    display: 'flex',
+    alignItems: 'center',
+    gap: SIDEBAR_ICON_TEXT_GAP,
+    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} 24px`,
+    fontSize: '12px',
+    fontWeight: 400,
+    lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
     cursor: 'pointer',
-    color: theme.text,
+    color: sidebarTextColor,
     overflow: 'hidden',
-    textOverflow: 'ellipsis',
     whiteSpace: 'nowrap',
     userSelect: 'none',
     backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
@@ -1957,29 +2048,24 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
 
   return (
     <div style={{ marginBottom: '4px' }}>
-      <hr
-        style={{
-          border: 'none',
-          height: '1px',
-          margin: '8px 12px 4px',
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-        }}
-      />
-      <div style={headerStyle} onClick={onToggleCollapsed}>
-        <svg
-          width="8"
-          height="8"
-          viewBox="0 0 8 8"
-          fill="currentColor"
+      {showDivider && (
+        <hr
           style={{
-            transition: 'transform 0.15s ease',
-            transform: collapsed ? 'rotate(0deg)' : 'rotate(90deg)',
-            flexShrink: 0,
+            border: 'none',
+            height: '1px',
+            margin: '8px 12px 4px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
           }}
-        >
-          <path d="M2 1l4 3-4 3V1z" />
-        </svg>
-        <span>Recent</span>
+        />
+      )}
+      <div
+        style={headerStyle}
+        onClick={onToggleCollapsed}
+        onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+        onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
+      >
+        <SidebarRecentIcon color={sidebarIconColor} />
+        <span>Recents</span>
       </div>
       {!collapsed && visibleRecent.entries.map((e) => {
         const id = `${e.kind}:${e.path}`;
@@ -1993,7 +2079,10 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
             onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
             onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
           >
-            {e.title}
+            <SidebarMarkdownIcon color={sidebarIconColor} />
+            <span style={librarySidebarFadeTextStyle()}>
+              {e.title}
+            </span>
           </div>
         );
       })}
@@ -2003,6 +2092,55 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
       {!collapsed && expanded && (
         <div onClick={() => onExpand(false)} style={showMoreStyle}>Show less</div>
       )}
+    </div>
+  );
+}
+
+function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
+  item: UnifiedItem;
+  isSelected: boolean;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onOpen: () => void;
+}) {
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+
+  return (
+    <div>
+      <hr
+        style={{
+          border: 'none',
+          height: '1px',
+          margin: '8px 12px 4px',
+          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+        }}
+      />
+      <div
+        onClick={onOpen}
+        style={{
+          boxSizing: 'border-box',
+          minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+          padding: '6px 12px 6px 10px',
+          fontSize: '12px',
+          fontWeight: 400,
+          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+          color: sidebarTextColor,
+          display: 'flex',
+          alignItems: 'center',
+          gap: SIDEBAR_ICON_TEXT_GAP,
+          cursor: 'pointer',
+          userSelect: 'none',
+          backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
+          borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
+        }}
+        onMouseEnter={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+        onMouseLeave={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = 'transparent'; }}
+      >
+        <SidebarBookmarkIcon color={sidebarIconColor} />
+        <span style={librarySidebarFadeTextStyle()}>
+          {item.title}
+        </span>
+      </div>
     </div>
   );
 }

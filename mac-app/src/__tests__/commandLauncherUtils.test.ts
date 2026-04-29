@@ -2,16 +2,26 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   buildBuiltInLauncherActions,
   DEFAULT_LAUNCHER_HOTKEYS,
+  flattenBookmarkTaxonomyRootsForLauncher,
+  flattenLibraryDirectoriesForLauncher,
   formatHotkeyDisplay,
   formatTimeAgo,
+  filterLauncherDirectoryNamespaceItems,
   filterLauncherNamespaceItems,
   flattenLibraryRootsForLauncher,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
+  getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
+  isGeneratedBookmarkTaxonomyPath,
   isLauncherPreviewToggleKey,
+  nextLauncherArrowIndex,
+  resolveLauncherEnterIndex,
   resolveLauncherAuthorNamespaceHandle,
+  resolveLauncherBookmarkFacetNamespace,
+  resolveLauncherDirectoryNamespace,
+  shouldHandleLauncherPreviewShortcut,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -111,6 +121,183 @@ describe('flattenLibraryRootsForLauncher', () => {
     expect(items[1]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
     expect(items[1].keywords).toContain('docs');
   });
+
+  it('indexes a readable form of slugged wiki filenames', () => {
+    const [item] = flattenLibraryRootsForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'entries/new-title', absPath: '/wiki/entries/new-title.md', name: 'new-title', title: 'Untitled', lastUpdated: 1 },
+        ],
+      },
+    ]);
+
+    expect(item.keywords).toContain('new title');
+  });
+
+  it('omits generated bookmark taxonomy pages from launcher results', () => {
+    const items = flattenLibraryRootsForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'bookmarks-from-x/categories/commerce', absPath: '/wiki/bookmarks-from-x/categories/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+          { kind: 'file', relPath: 'bookmarks-from-x/domains/example.com', absPath: '/wiki/bookmarks-from-x/domains/example.com.md', name: 'example.com', title: 'example.com', lastUpdated: 1 },
+          { kind: 'file', relPath: 'bookmarks-from-x/entities/commerce', absPath: '/wiki/bookmarks-from-x/entities/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+          { kind: 'file', relPath: 'entries/commerce', absPath: '/wiki/entries/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+        ],
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ relPath: 'entries/commerce', displayName: 'Commerce' });
+  });
+
+  it('omits root bookmark taxonomy pages from launcher wiki results', () => {
+    const items = flattenLibraryRootsForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'categories/commerce', absPath: '/wiki/categories/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+          { kind: 'file', relPath: 'domains/commerce', absPath: '/wiki/domains/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+          { kind: 'file', relPath: 'entities/paulg', absPath: '/wiki/entities/paulg.md', name: 'paulg', title: '@paulg', lastUpdated: 1 },
+          { kind: 'file', relPath: 'entries/commerce', absPath: '/wiki/entries/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+        ],
+      },
+    ]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ relPath: 'entries/commerce', displayName: 'Commerce' });
+  });
+});
+
+describe('flattenLibraryDirectoriesForLauncher', () => {
+  it('builds namespace rows for parent and nested library directories', () => {
+    const items = flattenLibraryDirectoriesForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          {
+            kind: 'dir',
+            name: 'scratchpad',
+            relPath: 'scratchpad',
+            children: [
+              {
+                kind: 'dir',
+                name: 'projects',
+                relPath: 'scratchpad/projects',
+                children: [
+                  { kind: 'file', relPath: 'scratchpad/projects/plan', absPath: '/wiki/scratchpad/projects/plan.md', name: 'plan', title: 'Plan', lastUpdated: 1 },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        type: 'directory',
+        name: 'scratchpad',
+        displayName: 'scratchpad',
+        directoryPath: '/wiki/scratchpad',
+        directoryRelPath: 'scratchpad',
+      }),
+      expect.objectContaining({
+        type: 'directory',
+        name: 'projects',
+        displayName: 'scratchpad/projects',
+        directoryPath: '/wiki/scratchpad/projects',
+        directoryRelPath: 'scratchpad/projects',
+      }),
+    ]);
+  });
+
+  it('infers directory rows from file paths when the tree is flat', () => {
+    const items = flattenLibraryDirectoriesForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'scratchpad/projects/plan', absPath: '/wiki/scratchpad/projects/plan.md', name: 'plan', title: 'Plan', lastUpdated: 1 },
+        ],
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        type: 'directory',
+        name: 'scratchpad',
+        displayName: 'scratchpad',
+        directoryPath: '/wiki/scratchpad',
+        directoryRelPath: 'scratchpad',
+      }),
+      expect.objectContaining({
+        type: 'directory',
+        name: 'projects',
+        displayName: 'scratchpad/projects',
+        directoryPath: '/wiki/scratchpad/projects',
+        directoryRelPath: 'scratchpad/projects',
+      }),
+    ]);
+  });
+});
+
+describe('flattenBookmarkTaxonomyRootsForLauncher', () => {
+  it('builds merged bookmark facet rows for duplicate category and domain labels', () => {
+    const items = flattenBookmarkTaxonomyRootsForLauncher([
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [
+          { kind: 'file', relPath: 'categories/commerce', absPath: '/wiki/categories/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+          { kind: 'file', relPath: 'domains/commerce', absPath: '/wiki/domains/commerce.md', name: 'commerce', title: 'Commerce', lastUpdated: 1 },
+          { kind: 'file', relPath: 'entities/paulg', absPath: '/wiki/entities/paulg.md', name: 'paulg', title: '@paulg', lastUpdated: 1 },
+        ],
+      },
+    ]);
+
+    const commerce = items.find((item) => item.displayName === 'Commerce');
+    expect(commerce).toMatchObject({
+      type: 'bookmark-facet',
+      facetPaths: ['/wiki/categories/commerce.md', '/wiki/domains/commerce.md'],
+      hotkeyDisplay: 'category/domain',
+    });
+    expect(items.find((item) => item.displayName === '@paulg')).toMatchObject({
+      facetPaths: ['/wiki/entities/paulg.md'],
+      hotkeyDisplay: 'entity',
+    });
+  });
+});
+
+describe('isGeneratedBookmarkTaxonomyPath', () => {
+  it('matches generated bookmark category, domain, and entity paths from relative or absolute paths', () => {
+    expect(isGeneratedBookmarkTaxonomyPath('bookmarks-from-x/categories/commerce')).toBe(true);
+    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/bookmarks-from-x/domains/example.com.md')).toBe(true);
+    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/bookmarks-from-x/entities/commerce.md')).toBe(true);
+    expect(isGeneratedBookmarkTaxonomyPath('categories/commerce')).toBe(true);
+    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/domains/commerce.md')).toBe(true);
+    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/entries/commerce.md')).toBe(false);
+    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/commands/categories/commerce.md')).toBe(false);
+  });
+});
+
+describe('getGeneratedBookmarkTaxonomyPathInfo', () => {
+  it('returns the taxonomy kind and value for generated bookmark taxonomy pages', () => {
+    expect(getGeneratedBookmarkTaxonomyPathInfo('categories/commerce')).toEqual({ kind: 'category', value: 'commerce' });
+    expect(getGeneratedBookmarkTaxonomyPathInfo('/Users/a/.fieldtheory/library/domains/commerce.md')).toEqual({ kind: 'domain', value: 'commerce' });
+    expect(getGeneratedBookmarkTaxonomyPathInfo('bookmarks-from-x/entities/paulg')).toEqual({ kind: 'entity', value: 'paulg' });
+  });
 });
 
 describe('filterLauncherNamespaceItems', () => {
@@ -128,6 +315,52 @@ describe('filterLauncherNamespaceItems', () => {
     expect(filterLauncherNamespaceItems(items, 'DAILY')).toEqual([items[0]]);
     expect(filterLauncherNamespaceItems(items, 'product')).toEqual([items[1]]);
     expect(filterLauncherNamespaceItems(items, 'scratch')).toEqual([items[0]]);
+  });
+});
+
+describe('filterLauncherDirectoryNamespaceItems', () => {
+  const items = [
+    {
+      name: 'plan',
+      displayName: 'Project Plan',
+      keywords: ['plan'],
+      relPath: 'scratchpad/projects/plan',
+      filePath: '/wiki/scratchpad/projects/plan.md',
+    },
+    {
+      name: 'other',
+      displayName: 'Other Note',
+      keywords: ['other'],
+      relPath: 'scratchpad-other/other',
+      filePath: '/wiki/scratchpad-other/other.md',
+    },
+    {
+      name: 'root',
+      displayName: 'Root Note',
+      keywords: ['root'],
+      relPath: 'scratchpad/root',
+      filePath: '/wiki/scratchpad/root.md',
+    },
+  ];
+
+  it('filters recursively within the selected directory only', () => {
+    const results = filterLauncherDirectoryNamespaceItems(items, {
+      label: 'scratchpad',
+      directoryPath: '/wiki/scratchpad',
+      directoryRelPath: 'scratchpad',
+    }, '');
+
+    expect(results.map((item) => item.name)).toEqual(['plan', 'root']);
+  });
+
+  it('applies the typed search after directory filtering', () => {
+    const results = filterLauncherDirectoryNamespaceItems(items, {
+      label: 'scratchpad',
+      directoryPath: '/wiki/scratchpad',
+      directoryRelPath: 'scratchpad',
+    }, 'root');
+
+    expect(results.map((item) => item.name)).toEqual(['root']);
   });
 });
 
@@ -200,6 +433,31 @@ describe('buildBookmarkPostLauncherItems', () => {
     expect(item.displayName).toHaveLength(120);
     expect(item.displayName.endsWith('...')).toBe(true);
   });
+
+  it('builds searchable web bookmark rows from title and excerpt', () => {
+    const [item] = buildBookmarkPostLauncherItems([
+      {
+        id: 'web:abc',
+        sourceType: 'web',
+        text: 'Fallback text',
+        title: 'Readable Article',
+        domain: 'example.com',
+        excerpt: 'A useful article about durable notes.',
+        url: 'https://example.com/readable',
+        authorHandle: '',
+        authorName: '',
+        postedAt: '2026-04-25T12:00:00Z',
+      },
+    ]);
+
+    expect(item.displayName).toBe('Readable Article');
+    expect(item.keywords).toEqual(expect.arrayContaining([
+      'Readable Article',
+      'example.com',
+      'A useful article about durable notes.',
+      'https://example.com/readable',
+    ]));
+  });
 });
 
 describe('dedupeLauncherPersonItems', () => {
@@ -244,6 +502,54 @@ describe('isLauncherPreviewToggleKey', () => {
   });
 });
 
+describe('shouldHandleLauncherPreviewShortcut', () => {
+  it('does not capture space before a result is explicitly selected', () => {
+    expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, false, false)).toBe(false);
+  });
+
+  it('captures space after arrow or mouse selection', () => {
+    expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, true, false)).toBe(true);
+  });
+
+  it('captures space while preview is open so it can close', () => {
+    expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, false, true)).toBe(true);
+  });
+
+  it('ignores non-space keys even after selection', () => {
+    expect(shouldHandleLauncherPreviewShortcut({ key: 'Enter' }, true, true)).toBe(false);
+  });
+});
+
+describe('nextLauncherArrowIndex', () => {
+  it('keeps the implicit first row selected on the first ArrowDown', () => {
+    expect(nextLauncherArrowIndex(0, 3, 'down', false)).toBe(0);
+  });
+
+  it('moves down after a row has been explicitly selected', () => {
+    expect(nextLauncherArrowIndex(0, 3, 'down', true)).toBe(1);
+  });
+
+  it('clamps arrow movement to available rows', () => {
+    expect(nextLauncherArrowIndex(2, 3, 'down', true)).toBe(2);
+    expect(nextLauncherArrowIndex(0, 3, 'up', true)).toBe(0);
+  });
+});
+
+describe('resolveLauncherEnterIndex', () => {
+  it('uses the first row when the user has only typed', () => {
+    expect(resolveLauncherEnterIndex(2, 4, false)).toBe(0);
+  });
+
+  it('uses the navigated row after keyboard navigation', () => {
+    expect(resolveLauncherEnterIndex(2, 4, true)).toBe(2);
+  });
+
+  it('clamps navigated selection to available rows', () => {
+    expect(resolveLauncherEnterIndex(9, 4, true)).toBe(3);
+    expect(resolveLauncherEnterIndex(-2, 4, true)).toBe(0);
+  });
+});
+
 describe('resolveLauncherAuthorNamespaceHandle', () => {
   const authorItems = [
     {
@@ -264,17 +570,83 @@ describe('resolveLauncherAuthorNamespaceHandle', () => {
     expect(resolveLauncherAuthorNamespaceHandle(filtered, authorItems, 0, 'elon')).toBe('elonmusk');
   });
 
-  it('promotes the first matching author row when selected item is not a handle', () => {
+  it('does not promote an unselected matching author row', () => {
     const filtered = [
       { id: 'unrelated', type: 'markdown-file', name: 'Elon notes', displayName: 'Elon notes', keywords: ['elon'] },
       authorItems[0],
     ];
 
-    expect(resolveLauncherAuthorNamespaceHandle(filtered, authorItems, 0, 'elon')).toBe('elonmusk');
+    expect(resolveLauncherAuthorNamespaceHandle(filtered, authorItems, 0, 'elon')).toBeNull();
   });
 
   it('promotes an exact typed handle even before it is selected', () => {
     expect(resolveLauncherAuthorNamespaceHandle([], authorItems, 0, '@elonmusk')).toBe('elonmusk');
+  });
+
+  it('prefers an exact typed handle over a stale selected handle row', () => {
+    const filtered = [
+      { id: 'entity-old', type: 'markdown-file', name: 'oldhandle', displayName: '@oldhandle', keywords: ['oldhandle'] },
+    ];
+    const authors = [
+      ...authorItems,
+      {
+        id: 'bookmark-author-newhandle',
+        type: 'bookmark-author',
+        name: '@newhandle',
+        displayName: '@newhandle',
+        authorHandle: 'newhandle',
+        keywords: ['newhandle', '@newhandle'],
+      },
+    ];
+
+    expect(resolveLauncherAuthorNamespaceHandle(filtered, authors, 0, '@newhandle')).toBe('newhandle');
+  });
+});
+
+describe('resolveLauncherDirectoryNamespace', () => {
+  const directoryItems = [
+    {
+      id: 'directory-/wiki-scratchpad',
+      type: 'directory',
+      name: 'scratchpad',
+      displayName: 'scratchpad',
+      directoryPath: '/wiki/scratchpad',
+      directoryRelPath: 'scratchpad',
+      keywords: ['scratchpad'],
+    },
+  ];
+
+  it('uses the selected directory row', () => {
+    expect(resolveLauncherDirectoryNamespace(directoryItems, directoryItems, 0, 'scratch')).toBe(directoryItems[0]);
+  });
+
+  it('finds an exact typed directory name', () => {
+    expect(resolveLauncherDirectoryNamespace([], directoryItems, 0, 'scratchpad')).toBe(directoryItems[0]);
+  });
+
+  it('does not use a fuzzy directory match without selecting that row', () => {
+    expect(resolveLauncherDirectoryNamespace([], directoryItems, 0, 'scr')).toBeNull();
+  });
+});
+
+describe('resolveLauncherBookmarkFacetNamespace', () => {
+  const facetItems = [
+    {
+      id: 'bookmark-facet-commerce',
+      type: 'bookmark-facet',
+      name: 'Commerce',
+      displayName: 'Commerce',
+      facetPaths: ['/wiki/categories/commerce.md', '/wiki/domains/commerce.md'],
+      keywords: ['commerce', 'category', 'domain'],
+    },
+  ];
+
+  it('uses the selected bookmark facet row', () => {
+    expect(resolveLauncherBookmarkFacetNamespace(facetItems, facetItems, 0, 'commerce')).toBe(facetItems[0]);
+  });
+
+  it('finds a matching bookmark facet row from the raw query', () => {
+    expect(resolveLauncherBookmarkFacetNamespace([], facetItems, 0, 'comm')).toBe(facetItems[0]);
   });
 });
 
@@ -314,7 +686,8 @@ describe('SQUARES_ACTION_DEFS', () => {
   it('SQUARES_ACTION_IDS does not contain non-squares actions', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
-      'active-window-screenshot', 'start-recording', 'super-paste', 'open-history', 'toggle-theme'];
+      'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
+      'save-current-website', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -352,5 +725,16 @@ describe('buildBuiltInLauncherActions', () => {
       .toBe('Toggle Light Mode (Field Theory)');
     expect(lightActions.find((action) => action.actionId === 'toggle-theme')?.displayName)
       .toBe('Toggle Dark Mode (Field Theory)');
+  });
+
+  it('includes a Save Website action searchable by the expected phrase', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const saveAction = actions.find((action) => action.actionId === 'save-current-website');
+
+    expect(saveAction).toEqual(expect.objectContaining({
+      name: 'save website',
+      displayName: 'Save Website',
+    }));
+    expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
   });
 });

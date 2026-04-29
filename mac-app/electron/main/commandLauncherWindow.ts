@@ -73,11 +73,12 @@ export class CommandLauncherWindow {
   private _isShowing: boolean = false;
 
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 320;
+  private readonly WINDOW_WIDTH = 425;
   private readonly WINDOW_HEIGHT_COLLAPSED = 36;
-  private readonly WINDOW_HEIGHT_RESULTS = 300;
+  private readonly WINDOW_HEIGHT_RESULTS = 354;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
-  private readonly PREVIEW_WINDOW_HEIGHT = 560;
+  private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
+  private readonly PREVIEW_WINDOW_MIN_HEIGHT = 120;
 
   private resizeBurstCount = 0;
   private resizeBurstStartedAt = 0;
@@ -85,7 +86,7 @@ export class CommandLauncherWindow {
   private resizeBurstHeights = new Set<number>();
   private resizeBurstTimer: NodeJS.Timeout | null = null;
   private previewWindow: BrowserWindow | null = null;
-  private previewBookmark: Record<string, unknown> | null = null;
+  private previewPayload: Record<string, unknown> | null = null;
   private previewAnchorBounds: AnchorBounds | null = null;
 
   constructor(nativeHelper?: NativeHelper) {
@@ -131,12 +132,16 @@ export class CommandLauncherWindow {
       this.hide();
     });
 
-    ipcMain.on('command-launcher:preview-show', (_event, bookmark: Record<string, unknown>) => {
-      this.showPreview(bookmark);
+    ipcMain.on('command-launcher:preview-show', (_event, preview: Record<string, unknown>) => {
+      this.showPreview(preview);
     });
 
     ipcMain.on('command-launcher:preview-hide', () => {
       this.hidePreview();
+    });
+
+    ipcMain.on('command-launcher:preview-resize', (_event, height: number) => {
+      this.resizePreview(height);
     });
 
     ipcMain.on('command-launcher:trace', (_event, event: string, details: Record<string, unknown> = {}) => {
@@ -451,14 +456,14 @@ export class CommandLauncherWindow {
     appendCommandLauncherTrace('preview-create-window-start');
     this.previewWindow = new BrowserWindow({
       width: this.PREVIEW_WINDOW_WIDTH,
-      height: this.PREVIEW_WINDOW_HEIGHT,
+      height: this.PREVIEW_WINDOW_MAX_HEIGHT,
       frame: false,
       transparent: true,
       resizable: false,
       skipTaskbar: true,
       alwaysOnTop: true,
       show: false,
-      hasShadow: true,
+      hasShadow: false,
       focusable: false,
       webPreferences: {
         nodeIntegration: false,
@@ -486,8 +491,8 @@ export class CommandLauncherWindow {
 
     this.previewWindow.webContents.on('did-finish-load', () => {
       appendCommandLauncherTrace('preview-renderer-did-finish-load');
-      if (this.previewBookmark) {
-        this.previewWindow?.webContents.send('command-launcher-preview:bookmark', this.previewBookmark);
+      if (this.previewPayload) {
+        this.previewWindow?.webContents.send('command-launcher-preview:payload', this.previewPayload);
       }
     });
 
@@ -509,45 +514,59 @@ export class CommandLauncherWindow {
     }
   }
 
-  private showPreview(bookmark: Record<string, unknown> | null | undefined): void {
-    if (!bookmark || typeof bookmark !== 'object') {
-      appendCommandLauncherTrace('preview-show-ignored', { reason: 'invalid-bookmark' });
+  private showPreview(preview: Record<string, unknown> | null | undefined): void {
+    if (!preview || typeof preview !== 'object') {
+      appendCommandLauncherTrace('preview-show-ignored', { reason: 'invalid-preview' });
       return;
     }
 
-    this.previewBookmark = bookmark;
+    this.previewPayload = preview;
     if (!this.previewWindow || this.previewWindow.isDestroyed()) {
       this.createPreviewWindow();
     }
 
-    const anchor = this.previewAnchorBounds ?? (() => {
-      const cursorPoint = screen.getCursorScreenPoint();
-      return screen.getDisplayNearestPoint(cursorPoint).bounds;
-    })();
-    const x = Math.round(anchor.x + (anchor.width - this.PREVIEW_WINDOW_WIDTH) / 2);
-    const y = Math.round(anchor.y + (anchor.height - this.PREVIEW_WINDOW_HEIGHT) / 2);
+    const bounds = this.getPreviewBounds(this.PREVIEW_WINDOW_MAX_HEIGHT);
 
-    this.previewWindow!.setBounds({
-      x,
-      y,
-      width: this.PREVIEW_WINDOW_WIDTH,
-      height: this.PREVIEW_WINDOW_HEIGHT,
-    });
+    this.previewWindow!.setBounds(bounds);
     appendCommandLauncherTrace('preview-show', {
-      bookmarkId: bookmark.id ?? null,
-      x,
-      y,
-      width: this.PREVIEW_WINDOW_WIDTH,
-      height: this.PREVIEW_WINDOW_HEIGHT,
+      previewKind: preview.kind ?? null,
+      bookmarkId: typeof preview.bookmark === 'object' && preview.bookmark ? (preview.bookmark as Record<string, unknown>).id ?? null : null,
+      filePath: preview.filePath ?? null,
+      ...bounds,
     });
 
     this.previewWindow!.showInactive();
     this.previewWindow!.moveTop();
-    this.previewWindow!.webContents.send('command-launcher-preview:bookmark', bookmark);
+    this.previewWindow!.webContents.send('command-launcher-preview:payload', preview);
+  }
+
+  private getPreviewBounds(requestedHeight: number): Electron.Rectangle {
+    const anchor = this.previewAnchorBounds ?? (() => {
+      const cursorPoint = screen.getCursorScreenPoint();
+      return screen.getDisplayNearestPoint(cursorPoint).bounds;
+    })();
+    const height = Math.max(
+      this.PREVIEW_WINDOW_MIN_HEIGHT,
+      Math.min(Math.ceil(requestedHeight), this.PREVIEW_WINDOW_MAX_HEIGHT)
+    );
+    return {
+      x: Math.round(anchor.x + (anchor.width - this.PREVIEW_WINDOW_WIDTH) / 2),
+      y: Math.round(anchor.y + (anchor.height - height) / 2),
+      width: this.PREVIEW_WINDOW_WIDTH,
+      height,
+    };
+  }
+
+  private resizePreview(height: number): void {
+    if (!Number.isFinite(height)) return;
+    if (!this.previewWindow || this.previewWindow.isDestroyed() || !this.previewWindow.isVisible()) return;
+    const bounds = this.getPreviewBounds(height);
+    appendCommandLauncherTrace('preview-resize', { ...bounds });
+    this.previewWindow.setBounds(bounds);
   }
 
   private hidePreview(): void {
-    this.previewBookmark = null;
+    this.previewPayload = null;
     if (!this.previewWindow || this.previewWindow.isDestroyed() || !this.previewWindow.isVisible()) return;
     appendCommandLauncherTrace('preview-hide');
     this.previewWindow.hide();
@@ -559,7 +578,7 @@ export class CommandLauncherWindow {
   destroy(): void {
     appendCommandLauncherTrace('destroy');
     this.flushResizeBurst('destroy');
-    this.previewBookmark = null;
+    this.previewPayload = null;
     if (this.previewWindow && !this.previewWindow.isDestroyed()) {
       this.previewWindow.destroy();
       this.previewWindow = null;

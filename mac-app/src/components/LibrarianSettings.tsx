@@ -68,6 +68,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
   const [cursorHookInstalling, setCursorHookInstalling] = useState(false);
   const [codexHookInstalled, setCodexHookInstalled] = useState(false);
   const [codexHookInstalling, setCodexHookInstalling] = useState(false);
+  const [codexStopOnPending, setCodexStopOnPending] = useState(false);
 
   // Discovery frequency (often/sometimes/rarely)
   const [discoveryFrequency, setDiscoveryFrequency] = useState<'often' | 'sometimes' | 'rarely'>('sometimes');
@@ -149,11 +150,12 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       window.librarianAPI.getUserExpertiseContext(),
       window.librarianAPI.getResumeAfterClose(),
       window.librarianAPI.getImmersiveHeightPercent(),
+      window.librarianAPI.isCodexStopOnPendingEnabled(),
       // Mute status
       window.librarianAPI.isMutedForToday(),
       window.libraryAPI?.getHiddenFolders() ?? Promise.resolve([]),
     ])
-      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, immersiveHeight, mutedStatus, hiddenFolders]) => {
+      .then(([dirs, readingsList, isEnabled, autoShow, autoShowFocus, ccStatus, seThreshold, defaultRule, customRule, discFreq, expertiseCtx, resumeClose, immersiveHeight, codexStopPending, mutedStatus, hiddenFolders]) => {
         setWatchedDirs(dirs);
         setReadings(readingsList);
         setEnabled(isEnabled);
@@ -176,6 +178,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         setExpertiseText(expertiseCtx || '');
         setResumeAfterClose(resumeClose);
         setImmersiveHeightPercent(typeof immersiveHeight === 'number' ? immersiveHeight : 85);
+        setCodexStopOnPending(codexStopPending);
         setIsMutedForToday(mutedStatus);
         setHiddenLibraryFolders(hiddenFolders);
         setLoading(false);
@@ -742,6 +745,64 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
               }}
             >
               Connect once and Field Theory will configure Codex hooks automatically.
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+              }}
+            >
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+                  Codex stop blocking
+                </span>
+                <span style={{ fontSize: '10px', color: theme.textSecondary }}>
+                  Block Codex replies while a Librarian job is pending
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={async () => {
+                  const next = !codexStopOnPending;
+                  setCodexStopOnPending(next);
+                  const success = await window.librarianAPI?.setCodexStopOnPendingEnabled(next);
+                  if (!success) {
+                    setCodexStopOnPending(!next);
+                  }
+                }}
+                style={{
+                  position: 'relative',
+                  width: '36px',
+                  minWidth: '36px',
+                  height: '20px',
+                  minHeight: '20px',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  border: 'none',
+                  padding: 0,
+                  backgroundColor: codexStopOnPending ? theme.accent : '#d1d5db',
+                }}
+              >
+                <span
+                  style={{
+                    position: 'absolute',
+                    top: '2px',
+                    left: 0,
+                    width: '16px',
+                    height: '16px',
+                    borderRadius: '8px',
+                    backgroundColor: '#fff',
+                    boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                    transition: 'transform 0.2s',
+                    transform: codexStopOnPending ? 'translateX(18px)' : 'translateX(2px)',
+                  }}
+                />
+              </button>
             </div>
           </div>
         </div>

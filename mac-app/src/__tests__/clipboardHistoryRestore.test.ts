@@ -38,7 +38,7 @@ describe('clipboardHistoryRestore', () => {
     });
   });
 
-  it('forces Fields on reopen when the transcription override is set', () => {
+  it('clears a stale transcription override without losing the previous surface', () => {
     const storage = createStorage({
       [FIELD_THEORY_VIEW_STORAGE_KEY]: 'feedback',
       [FIELD_THEORY_LAST_SURFACE_STORAGE_KEY]: 'settings',
@@ -46,12 +46,12 @@ describe('clipboardHistoryRestore', () => {
     });
 
     expect(resolveClipboardRestoreState(storage)).toEqual({
-      viewMode: 'clipboard',
-      showSettings: false,
+      viewMode: 'feedback',
+      showSettings: true,
     });
     expect(storage.state[SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY]).toBeUndefined();
-    expect(storage.state[FIELD_THEORY_VIEW_STORAGE_KEY]).toBe('clipboard');
-    expect(storage.state[FIELD_THEORY_LAST_SURFACE_STORAGE_KEY]).toBe('clipboard');
+    expect(storage.state[FIELD_THEORY_VIEW_STORAGE_KEY]).toBe('feedback');
+    expect(storage.state[FIELD_THEORY_LAST_SURFACE_STORAGE_KEY]).toBe('settings');
   });
 
   it('falls back to the stored base view when no last surface is recorded yet', () => {

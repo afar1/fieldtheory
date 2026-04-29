@@ -60,6 +60,85 @@ export interface LauncherLibraryMarkdownItem {
   relPath?: string;
 }
 
+export interface LauncherDirectoryItem extends LauncherSearchableItem {
+  id: string;
+  type: 'directory';
+  directoryPath: string;
+  directoryRelPath?: string;
+  hotkeyDisplay: string;
+}
+
+export type LauncherBookmarkFacetKind = 'category' | 'domain' | 'entity';
+
+export interface LauncherBookmarkTaxonomyInfo {
+  kind: LauncherBookmarkFacetKind;
+  value: string;
+}
+
+export interface LauncherBookmarkFacetItem extends LauncherSearchableItem {
+  id: string;
+  type: 'bookmark-facet';
+  facetPaths: string[];
+  facetKinds: LauncherBookmarkFacetKind[];
+  hotkeyDisplay: string;
+}
+
+const BOOKMARK_TAXONOMY_SEGMENTS: Array<{ segment: string; kind: LauncherBookmarkFacetKind }> = [
+  { segment: 'categories', kind: 'category' },
+  { segment: 'domains', kind: 'domain' },
+  { segment: 'entities', kind: 'entity' },
+];
+
+function stripMarkdownExtension(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\.md$/i, '');
+}
+
+function taxonomyValueFromPath(path: string, prefix: string): string | null {
+  if (!path.startsWith(prefix)) return null;
+  const value = path.slice(prefix.length);
+  if (!value || value.includes('/')) return null;
+  return value;
+}
+
+export function getGeneratedBookmarkTaxonomyPathInfo(path: string | undefined | null): LauncherBookmarkTaxonomyInfo | null {
+  if (!path) return null;
+  const normalized = stripMarkdownExtension(path);
+
+  for (const { segment, kind } of BOOKMARK_TAXONOMY_SEGMENTS) {
+    const nestedValue = taxonomyValueFromPath(normalized, `bookmarks-from-x/${segment}/`);
+    if (nestedValue) return { kind, value: nestedValue };
+
+    const nestedMarker = `/bookmarks-from-x/${segment}/`;
+    const nestedIndex = normalized.indexOf(nestedMarker);
+    if (nestedIndex >= 0) {
+      const value = normalized.slice(nestedIndex + nestedMarker.length);
+      if (value && !value.includes('/')) return { kind, value };
+    }
+
+    const rootValue = taxonomyValueFromPath(normalized, `${segment}/`);
+    if (rootValue) return { kind, value: rootValue };
+
+    for (const rootMarker of [`/.fieldtheory/library/${segment}/`, `/.ft-bookmarks/md/${segment}/`]) {
+      const rootIndex = normalized.indexOf(rootMarker);
+      if (rootIndex < 0) continue;
+      const value = normalized.slice(rootIndex + rootMarker.length);
+      if (value && !value.includes('/')) return { kind, value };
+    }
+  }
+
+  return null;
+}
+
+export function isGeneratedBookmarkTaxonomyPath(path: string | undefined | null): boolean {
+  return getGeneratedBookmarkTaxonomyPathInfo(path) !== null;
+}
+
+function shouldIndexLibraryNodeForLauncher(root: LauncherLibraryRoot, node: LauncherLibraryNode): boolean {
+  if (node.kind !== 'file') return false;
+  if (!root.builtin) return true;
+  return !isGeneratedBookmarkTaxonomyPath(node.relPath);
+}
+
 export interface LauncherSearchableItem {
   name: string;
   displayName: string;
@@ -76,11 +155,15 @@ export interface LauncherBookmarkAuthorItem extends LauncherSearchableItem {
 
 export interface LauncherBookmarkPostSource {
   id: string;
+  sourceType?: 'x' | 'web';
   text: string;
   url: string;
   authorHandle: string;
   authorName: string;
   postedAt: string;
+  title?: string;
+  domain?: string;
+  excerpt?: string;
 }
 
 export interface LauncherBookmarkPostItem extends LauncherSearchableItem {
@@ -104,8 +187,56 @@ export interface LauncherAuthorNamespaceCandidate extends LauncherVisibleItem {
   keywords?: string[];
 }
 
+export interface LauncherBookmarkFacetNamespaceCandidate extends LauncherVisibleItem {
+  facetPaths?: string[];
+  keywords?: string[];
+}
+
+export interface LauncherDirectoryNamespaceCandidate extends LauncherVisibleItem {
+  directoryPath?: string;
+  directoryRelPath?: string;
+  keywords?: string[];
+}
+
+export interface LauncherDirectoryNamespace {
+  label: string;
+  directoryPath: string;
+  directoryRelPath?: string;
+}
+
 export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
   return event.key === ' ' || event.key === 'Space' || event.key === 'Spacebar' || event.code === 'Space';
+}
+
+export function shouldHandleLauncherPreviewShortcut(
+  event: { key?: string; code?: string },
+  hasExplicitSelection: boolean,
+  previewOpen: boolean,
+): boolean {
+  return isLauncherPreviewToggleKey(event) && (hasExplicitSelection || previewOpen);
+}
+
+export function nextLauncherArrowIndex(
+  currentIndex: number,
+  itemCount: number,
+  direction: 'down' | 'up',
+  hasExplicitSelection: boolean,
+): number {
+  if (itemCount <= 0) return 0;
+  if (!hasExplicitSelection) return Math.max(0, Math.min(currentIndex, itemCount - 1));
+  return direction === 'down'
+    ? Math.min(currentIndex + 1, itemCount - 1)
+    : Math.max(currentIndex - 1, 0);
+}
+
+export function resolveLauncherEnterIndex(
+  currentIndex: number,
+  itemCount: number,
+  hasKeyboardNavigation: boolean,
+): number {
+  if (itemCount <= 0) return 0;
+  if (!hasKeyboardNavigation) return 0;
+  return Math.max(0, Math.min(currentIndex, itemCount - 1));
 }
 
 function formatLauncherBookmarkDate(postedAt: string): string {
@@ -136,13 +267,22 @@ function handleFromLauncherItem(item: LauncherAuthorNamespaceCandidate | undefin
   return handleFromLauncherLabel(item.displayName) ?? handleFromLauncherLabel(item.name);
 }
 
-function itemMatchesQuery(item: LauncherAuthorNamespaceCandidate, query: string): boolean {
+function facetItemMatchesQuery(item: LauncherBookmarkFacetNamespaceCandidate, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return false;
   return item.name.toLowerCase().includes(q) ||
     item.displayName.toLowerCase().includes(q) ||
-    item.authorHandle?.toLowerCase().includes(q) ||
     item.keywords?.some(keyword => keyword.toLowerCase().includes(q)) ||
+    false;
+}
+
+function directoryItemMatchesQuery(item: LauncherDirectoryNamespaceCandidate, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return false;
+  return item.name.toLowerCase() === q ||
+    item.displayName.toLowerCase() === q ||
+    item.directoryRelPath?.toLowerCase() === q ||
+    item.keywords?.some(keyword => keyword.toLowerCase() === q) ||
     false;
 }
 
@@ -156,6 +296,72 @@ export function filterLauncherNamespaceItems<T extends LauncherSearchableItem>(i
   );
 }
 
+function joinLauncherPath(parent: string, child: string): string {
+  const cleanParent = parent.replace(/\/+$/, '');
+  const cleanChild = child.replace(/^\/+/, '');
+  return cleanChild ? `${cleanParent}/${cleanChild}` : cleanParent;
+}
+
+function directoryDisplayName(root: LauncherLibraryRoot, relPath: string): string {
+  if (!relPath) return root.label;
+  return root.builtin ? relPath : `${relPath} — ${root.label}`;
+}
+
+export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[]): LauncherDirectoryItem[] {
+  const items: LauncherDirectoryItem[] = [];
+  const seen = new Set<string>();
+
+  const addDirectory = (root: LauncherLibraryRoot, relPath: string, name: string) => {
+    if (!relPath) return;
+    const key = `${root.path}:${relPath}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+
+    const displayName = directoryDisplayName(root, relPath);
+    items.push({
+      id: `directory-${root.path}-${relPath}`,
+      type: 'directory',
+      name,
+      displayName,
+      keywords: [
+        name,
+        relPath,
+        displayName,
+        root.label,
+        ...name.split(/[-_]/),
+        ...relPath.split('/'),
+      ].filter(Boolean),
+      directoryPath: joinLauncherPath(root.path, relPath),
+      directoryRelPath: root.builtin ? relPath : undefined,
+      hotkeyDisplay: 'folder',
+    });
+  };
+
+  const addParentDirectories = (root: LauncherLibraryRoot, fileRelPath: string) => {
+    const parts = fileRelPath.split('/').filter(Boolean);
+    for (let i = 1; i < parts.length; i += 1) {
+      const relPath = parts.slice(0, i).join('/');
+      addDirectory(root, relPath, parts[i - 1]);
+    }
+  };
+
+  const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
+    if (node.kind === 'file') {
+      addParentDirectories(root, node.relPath);
+      return;
+    }
+
+    addDirectory(root, node.relPath, node.name);
+    for (const child of node.children) visit(root, child);
+  };
+
+  for (const root of roots) {
+    for (const node of root.tree) visit(root, node);
+  }
+
+  return items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
 export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): LauncherLibraryMarkdownItem[] {
   const items: LauncherLibraryMarkdownItem[] = [];
 
@@ -164,9 +370,11 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       for (const child of node.children) visit(root, child);
       return;
     }
+    if (!shouldIndexLibraryNodeForLauncher(root, node)) return;
 
     const type = root.builtin ? 'wiki-page' : 'markdown-file';
     const rootLabel = root.builtin ? 'wiki' : root.label;
+    const readableName = node.name.replace(/[-_]+/g, ' ');
     items.push({
       id: `${type}-${root.path}-${node.relPath}`,
       type,
@@ -174,6 +382,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       displayName: root.builtin ? node.title : `${node.title} — ${root.label}`,
       keywords: [
         node.name,
+        readableName,
         node.title,
         node.relPath,
         rootLabel,
@@ -190,6 +399,99 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
   }
 
   return items;
+}
+
+function isDescendantPath(path: string | undefined, directoryPath: string): boolean {
+  if (!path) return false;
+  const normalizedPath = path.replace(/\\/g, '/');
+  const normalizedDirectory = directoryPath.replace(/\\/g, '/').replace(/\/+$/, '');
+  return normalizedPath.startsWith(`${normalizedDirectory}/`);
+}
+
+function isDescendantRelPath(relPath: string | undefined, directoryRelPath: string | undefined): boolean {
+  if (!relPath || !directoryRelPath) return false;
+  const normalizedDirectory = directoryRelPath.replace(/\/+$/, '');
+  return relPath.startsWith(`${normalizedDirectory}/`);
+}
+
+export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchableItem & { filePath?: string; relPath?: string }>(
+  items: T[],
+  namespace: LauncherDirectoryNamespace,
+  search: string,
+): T[] {
+  const descendants = items.filter((item) =>
+    isDescendantRelPath(item.relPath, namespace.directoryRelPath) ||
+    isDescendantPath(item.filePath, namespace.directoryPath)
+  );
+  return filterLauncherNamespaceItems(descendants, search);
+}
+
+function formatBookmarkFacetKind(kind: LauncherBookmarkFacetKind): string {
+  return kind;
+}
+
+function normalizeBookmarkFacetLabel(label: string): string {
+  return label.trim().replace(/^@+/, '').toLowerCase();
+}
+
+function bookmarkFacetDisplayName(node: Extract<LauncherLibraryNode, { kind: 'file' }>, info: LauncherBookmarkTaxonomyInfo): string {
+  const title = node.title.trim();
+  if (title && title.toLowerCase() !== 'readme') return title;
+  return info.value.replace(/[-_]+/g, ' ');
+}
+
+export function flattenBookmarkTaxonomyRootsForLauncher(roots: LauncherLibraryRoot[]): LauncherBookmarkFacetItem[] {
+  const byLabel = new Map<string, LauncherBookmarkFacetItem>();
+
+  const visit = (root: LauncherLibraryRoot, node: LauncherLibraryNode) => {
+    if (node.kind === 'dir') {
+      for (const child of node.children) visit(root, child);
+      return;
+    }
+    if (!root.builtin) return;
+
+    const info = getGeneratedBookmarkTaxonomyPathInfo(node.relPath) ?? getGeneratedBookmarkTaxonomyPathInfo(node.absPath);
+    if (!info || info.value.toLowerCase() === 'readme') return;
+
+    const displayName = bookmarkFacetDisplayName(node, info);
+    const labelKey = normalizeBookmarkFacetLabel(displayName || info.value);
+    if (!labelKey) return;
+
+    const pathKey = node.absPath;
+    const existing = byLabel.get(labelKey);
+    if (existing) {
+      if (!existing.facetPaths.includes(pathKey)) existing.facetPaths.push(pathKey);
+      if (!existing.facetKinds.includes(info.kind)) existing.facetKinds.push(info.kind);
+      existing.keywords.push(info.value, info.kind, node.relPath, node.name);
+      existing.hotkeyDisplay = existing.facetKinds.map(formatBookmarkFacetKind).join('/');
+      return;
+    }
+
+    byLabel.set(labelKey, {
+      id: `bookmark-facet-${labelKey}`,
+      type: 'bookmark-facet',
+      name: displayName,
+      displayName,
+      keywords: [
+        displayName,
+        info.value,
+        node.name,
+        node.relPath,
+        info.kind,
+        'bookmark',
+        'bookmarks',
+      ].filter(Boolean),
+      facetPaths: [pathKey],
+      facetKinds: [info.kind],
+      hotkeyDisplay: formatBookmarkFacetKind(info.kind),
+    });
+  };
+
+  for (const root of roots) {
+    for (const node of root.tree) visit(root, node);
+  }
+
+  return [...byLabel.values()].sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 export function buildBookmarkAuthorLauncherItems(authors: BookmarkAuthorSummary[]): LauncherBookmarkAuthorItem[] {
@@ -221,7 +523,11 @@ export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSo
   return bookmarks.map((bookmark) => {
     const date = formatLauncherBookmarkDate(bookmark.postedAt);
     const handle = bookmark.authorHandle.trim().replace(/^@+/, '');
-    const displayName = truncateLauncherBookmarkText(bookmark.text);
+    const displayName = truncateLauncherBookmarkText(
+      bookmark.sourceType === 'web'
+        ? (bookmark.title || bookmark.excerpt || bookmark.text || bookmark.url)
+        : bookmark.text
+    );
     return {
       id: `bookmark-${bookmark.id}`,
       type: 'bookmark',
@@ -229,6 +535,9 @@ export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSo
       displayName,
       keywords: [
         bookmark.text,
+        bookmark.title ?? '',
+        bookmark.domain ?? '',
+        bookmark.excerpt ?? '',
         bookmark.url,
         bookmark.authorName,
         handle,
@@ -278,9 +587,6 @@ export function resolveLauncherAuthorNamespaceHandle<T extends LauncherAuthorNam
   selectedIndex: number,
   query: string,
 ): string | null {
-  const selectedHandle = handleFromLauncherItem(filteredItems[selectedIndex]);
-  if (selectedHandle) return selectedHandle;
-
   const rawQuery = query.trim();
   const rawHandle = handleFromLauncherLabel(rawQuery);
   if (rawHandle) {
@@ -288,13 +594,39 @@ export function resolveLauncherAuthorNamespaceHandle<T extends LauncherAuthorNam
     return cleanLauncherHandle(exactAuthor?.authorHandle ?? rawHandle);
   }
 
-  const filteredAuthor = filteredItems.find((item) => item.type === 'bookmark-author' && item.authorHandle);
-  if (filteredAuthor?.authorHandle) return cleanLauncherHandle(filteredAuthor.authorHandle);
-
-  const matchingAuthor = authorItems.find((item) => itemMatchesQuery(item, rawQuery));
-  if (matchingAuthor?.authorHandle) return cleanLauncherHandle(matchingAuthor.authorHandle);
+  const selectedHandle = handleFromLauncherItem(filteredItems[selectedIndex]);
+  if (selectedHandle) return selectedHandle;
 
   return null;
+}
+
+export function resolveLauncherDirectoryNamespace(
+  filteredItems: LauncherDirectoryNamespaceCandidate[],
+  directoryItems: LauncherDirectoryNamespaceCandidate[],
+  selectedIndex: number,
+  query: string,
+): LauncherDirectoryNamespaceCandidate | null {
+  const selected = filteredItems[selectedIndex];
+  if (selected?.type === 'directory' && selected.directoryPath) return selected;
+
+  const rawQuery = query.trim();
+  return directoryItems.find((item) => item.directoryPath && directoryItemMatchesQuery(item, rawQuery)) ?? null;
+}
+
+export function resolveLauncherBookmarkFacetNamespace(
+  filteredItems: LauncherBookmarkFacetNamespaceCandidate[],
+  facetItems: LauncherBookmarkFacetNamespaceCandidate[],
+  selectedIndex: number,
+  query: string,
+): LauncherBookmarkFacetNamespaceCandidate | null {
+  const selected = filteredItems[selectedIndex];
+  if (selected?.type === 'bookmark-facet' && selected.facetPaths?.length) return selected;
+
+  const rawQuery = query.trim();
+  const filteredFacet = filteredItems.find((item) => item.type === 'bookmark-facet' && item.facetPaths?.length);
+  if (filteredFacet) return filteredFacet;
+
+  return facetItems.find((item) => item.facetPaths?.length && facetItemMatchesQuery(item, rawQuery)) ?? null;
 }
 
 // =============================================================================
@@ -397,6 +729,14 @@ export function buildBuiltInLauncherActions(
       hotkey: hotkeys.history,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
       actionId: 'open-history',
+    },
+    {
+      id: 'action-save-current-website',
+      type: 'action',
+      name: 'save website',
+      displayName: 'Save Website',
+      keywords: ['save website', 'save web page', 'save page', 'bookmark page', 'bookmark website', 'current tab', 'browser', 'markdown'],
+      actionId: 'save-current-website',
     },
     {
       id: 'action-theme',

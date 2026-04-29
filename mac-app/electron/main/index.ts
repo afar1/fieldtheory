@@ -80,7 +80,16 @@ import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
+import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
+import { bookmarksForTaxonomyFiles, searchBookmarks } from './bookmarkCollections';
 import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
+import { getActiveBrowserPage } from './browserPageLocator';
+import {
+  COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+  captureClipboardSnapshot,
+  restoreClipboardSnapshot,
+  waitForCommandClipboardPasteRead,
+} from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
 import { MESSAGES } from './messages';
@@ -109,6 +118,7 @@ const log = createLogger('Main');
 
 const BOOT_MARK = Date.now();
 const VISION_BUILD_ENABLED = false;
+const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
 const { exec, execFile: execFileCp } = require('child_process');
@@ -597,8 +607,8 @@ function logUserState(_context: string) {
   // Silenced for production - enable for debugging auth issues
 }
 
-// Track pending reading to show in immersive mode. Renderer polls for this.
-let pendingImmersiveReading: string | null = null;
+// Track pending reading to auto-open in Library. Renderer polls for this.
+let pendingAutoOpenReading: string | null = null;
 
 /**
  * Lightweight process performance snapshot for in-app HUD rendering.
@@ -1920,6 +1930,106 @@ function setupLibrarianIPCHandlers(): void {
     return bookmarksForAuthor(handle, bookmarksManager.getSnapshot().bookmarks);
   });
 
+  ipcMain.handle('bookmarks:getTaxonomyBookmarks', (_event, filePaths: string[]) => {
+    if (!bookmarksManager) return [];
+    if (!Array.isArray(filePaths)) return [];
+    return bookmarksForTaxonomyFiles(filePaths, bookmarksManager.getSnapshot().bookmarks);
+  });
+
+  ipcMain.handle('bookmarks:search', (_event, query: string) => {
+    if (!bookmarksManager || typeof query !== 'string') return [];
+    return searchBookmarks(query, bookmarksManager.getSnapshot().bookmarks);
+  });
+
+  ipcMain.handle('bookmarks:saveWebUrl', async (_event, url: string) => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+    if (typeof url !== 'string' || !url.trim()) {
+      return { success: false, error: 'URL is required' };
+    }
+
+    try {
+      const result = await bookmarksManager.saveWebBookmarkFromUrl(url);
+      return { success: true, ...result };
+    } catch (error) {
+      log.error('Error saving web bookmark:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
+  const getActiveWebPageForLauncher = async (tracePrefix: string) => {
+    const targetApp = getCommandLauncherTargetApp();
+    appendCommandLauncherTrace(`${tracePrefix}-start`, {
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
+    });
+
+    if (!targetApp) {
+      appendCommandLauncherTrace(`${tracePrefix}-no-target`);
+      return { success: false, error: 'No browser app was active before the launcher opened' };
+    }
+
+    try {
+      const page = await getActiveBrowserPage(targetApp);
+      if (!page) {
+        appendCommandLauncherTrace(`${tracePrefix}-no-page`, {
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+        });
+        return { success: false, error: `No active browser page found in ${targetApp.name}` };
+      }
+      appendCommandLauncherTrace(`${tracePrefix}-success`, {
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        url: page.url,
+      });
+      return { success: true, page };
+    } catch (error) {
+      log.error(`Error resolving active browser page for ${tracePrefix}:`, error);
+      appendCommandLauncherTrace(`${tracePrefix}-error`, {
+        targetBundleId: targetApp.bundleId,
+        targetName: targetApp.name,
+        error,
+      });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  };
+
+  ipcMain.handle('bookmarks:getActiveWebPage', async () => getActiveWebPageForLauncher('get-active-web-page'));
+
+  ipcMain.handle('bookmarks:saveActiveWebPage', async () => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+
+    const activePage = await getActiveWebPageForLauncher('save-active-web-page');
+    if (!activePage.success || !activePage.page) {
+      return activePage;
+    }
+
+    try {
+      const { page } = activePage;
+      const result = await bookmarksManager.saveWebBookmarkFromUrl(page.url);
+      appendCommandLauncherTrace('save-active-web-page-success', {
+        targetBundleId: page.bundleId,
+        targetName: page.appName,
+        url: page.url,
+        created: result.created,
+        markdownPath: result.markdownPath,
+      });
+      return { success: true, page, ...result };
+    } catch (error) {
+      log.error('Error saving active browser page:', error);
+      appendCommandLauncherTrace('save-active-web-page-error', {
+        targetBundleId: activePage.page.bundleId,
+        targetName: activePage.page.appName,
+        error,
+      });
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
+  });
+
   ipcMain.handle('bookmarks:invokeBookmark', async (_event, id: string) => {
     if (!bookmarksManager) {
       return { success: false, error: 'Bookmarks not initialized' };
@@ -1931,6 +2041,26 @@ function setupLibrarianIPCHandlers(): void {
     }
 
     return pasteBookmarkTextFromLauncher('invoke-bookmark-post', { id }, formatBookmarkPost(bookmark));
+  });
+
+  ipcMain.handle('bookmarks:copyForAgent', async (_event, id: string) => {
+    if (!bookmarksManager) {
+      return { success: false, error: 'Bookmarks not initialized' };
+    }
+
+    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    if (!bookmark) {
+      return { success: false, error: 'Bookmark not found' };
+    }
+
+    try {
+      clipboard.writeText(buildBookmarkAgentCopyText(bookmark, bookmarkMediaDir()));
+      clipboardManager?.syncClipboardHash();
+      return { success: true };
+    } catch (error) {
+      log.error('Error copying bookmark for agent:', error);
+      return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
+    }
   });
 
   ipcMain.handle('bookmarks:invokeAuthorTimeline', async (_event, handle: string) => {
@@ -2116,6 +2246,14 @@ function setupLibrarianIPCHandlers(): void {
   // Uninstall Codex hook
   ipcMain.handle('librarian:uninstallCodexHook', (): boolean => {
     return librarianManager?.uninstallCodexHook() ?? false;
+  });
+
+  ipcMain.handle('librarian:isCodexStopOnPendingEnabled', (): boolean => {
+    return librarianManager?.isCodexStopOnPendingEnabled() ?? false;
+  });
+
+  ipcMain.handle('librarian:setCodexStopOnPendingEnabled', (_event, enabled: boolean): boolean => {
+    return librarianManager?.setCodexStopOnPendingEnabled(enabled) ?? false;
   });
 
   // ===========================================================================
@@ -2381,9 +2519,9 @@ function setupLibrarianIPCHandlers(): void {
     // Get current counter state (no reset logic here)
     const status = librarianManager?.checkAndResetIfNeeded() ?? { edits: 0, threshold: 5, didReset: false };
 
-    // Get and clear pending immersive reading
-    const p = pendingImmersiveReading;
-    pendingImmersiveReading = null;
+    // Get and clear pending auto-open reading
+    const p = pendingAutoOpenReading;
+    pendingAutoOpenReading = null;
 
     return {
       pendingPath: p,
@@ -4881,6 +5019,22 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
+  // Click-away dismissal - controls whether the panel hides when another app gets focus.
+  ipcMain.handle('clipboard:getClickAwayToDismiss', async () => {
+    if (!preferencesManager) {
+      return true;
+    }
+    return preferencesManager.getPreference('clickAwayToDismiss') ?? true;
+  });
+
+  ipcMain.handle('clipboard:setClickAwayToDismiss', async (_event, enabled: boolean) => {
+    if (!preferencesManager) {
+      return false;
+    }
+    await preferencesManager.save({ clickAwayToDismiss: enabled });
+    return true;
+  });
+
   // Show fieldtheory.dev link in footer - toggleable per user preference.
   ipcMain.handle('clipboard:getShowFieldTheoryLink', async () => {
     if (!preferencesManager) {
@@ -5260,6 +5414,31 @@ function setupClipboardIPCHandlers(): void {
     return { content: loaded.content, filePath: loaded.filePath };
   });
 
+  ipcMain.handle(CommandsIPCChannels.GET_MARKDOWN_PREVIEW, async (_event, filePath: string) => {
+    if (typeof filePath !== 'string' || !isAllowedMarkdownExt(filePath)) {
+      return null;
+    }
+    try {
+      const canonicalPath = fs.realpathSync(filePath);
+      const stat = fs.statSync(canonicalPath);
+      if (!stat.isFile()) return null;
+
+      let content = fs.readFileSync(canonicalPath, 'utf-8');
+      if (Buffer.byteLength(content, 'utf-8') > MARKDOWN_PREVIEW_MAX_BYTES) {
+        content = content.slice(0, MARKDOWN_PREVIEW_MAX_BYTES) + '\n\n[preview truncated]';
+      }
+
+      return {
+        title: path.basename(canonicalPath),
+        filePath: canonicalPath,
+        content,
+      };
+    } catch (error) {
+      log.warn('Failed to load markdown preview:', error);
+      return null;
+    }
+  });
+
   // =========================================================================
   // Multi-Directory Management
   // =========================================================================
@@ -5562,16 +5741,32 @@ function setupClipboardIPCHandlers(): void {
 
       commandLauncherWindow?.hide(true);
 
-      if (isTerminal || isIDE) {
-        clipboard.writeText(`[${command.name}.md]\n${command.filePath} `);
-        clipboardManager?.syncClipboardHash();
-      } else {
-        const plistData = plist.build([command.filePath]);
-        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
-        clipboardManager?.syncClipboardHash();
-      }
+      const clipboardSnapshot = captureClipboardSnapshot();
+      try {
+        if (isTerminal || isIDE) {
+          clipboard.writeText(`[${command.name}.md]\n${command.filePath} `);
+          clipboardManager?.syncClipboardHash();
+        } else {
+          const plistData = plist.build([command.filePath]);
+          clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+          clipboardManager?.syncClipboardHash();
+        }
 
-      await activateAndPaste(targetApp);
+        await activateAndPaste(targetApp);
+      } finally {
+        appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
+          commandName,
+          commandPath: command.filePath,
+          delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+        });
+        await waitForCommandClipboardPasteRead();
+        restoreClipboardSnapshot(clipboardSnapshot);
+        clipboardManager?.syncClipboardHash();
+        appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+          commandName,
+          commandPath: command.filePath,
+        });
+      }
       appendCommandLauncherTrace('invoke-command-success', {
         commandName,
         commandPath: command.filePath,
@@ -6571,7 +6766,7 @@ async function initTranscriberSystem(): Promise<void> {
     // Auto-show the window if enabled
     if (librarianManager!.isAutoShowEnabled()) {
       const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
-      pendingImmersiveReading = reading.path;
+      pendingAutoOpenReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
       }
@@ -6633,6 +6828,15 @@ async function initTranscriberSystem(): Promise<void> {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('tier:changed', tier);
+      }
+    });
+  });
+
+  // Broadcast trial-state changes (pro / trial / expired) to all windows.
+  quotaManager.on('stateChanged', (state) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('state:changed', state);
       }
     });
   });
@@ -6858,7 +7062,7 @@ async function initTranscriberSystem(): Promise<void> {
         clipboardHistoryWindow.playOpenSound();
         const boundsToUse = restoreClipboardHistoryBounds();
         suspendDynamicIslandFocusForClipboardHistory('show-open-field-theory');
-        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true, true);
+        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
         // Opening clipboard history while recording can affect overlay transparency;
         // refresh transparent overlay window properties to keep them stable.
         cursorStatusManager?.refreshWindowProperties();
@@ -8378,16 +8582,19 @@ if (!gotTheLock) {
     // Check if the configured transcription engine is ready
     const modelDownloaded = await isTranscriptionEngineReady();
 
-    // Check if user is authenticated
+    // Check if user is authenticated. A returning user with a stored local
+    // session can use offline/local features while token refresh catches up.
     const isAuthenticated = authManager?.isAuthenticated() ?? false;
+    const canUseLocalAccount = isAuthenticated || (authManager?.hasEverBeenAuthenticated() ?? false);
 
-    // All three permissions, model download, AND authentication are required for full app functionality
+    // All three permissions, model download, and a known local account are
+    // required for full local app functionality.
     const isFullyReady =
       micStatus === 'granted' &&
       accessibilityStatus &&
       screenStatus === 'granted' &&
       modelDownloaded &&
-      isAuthenticated;
+      canUseLocalAccount;
 
     if (isFullyReady) {
       // All requirements met - mark onboarding complete and allow app access
@@ -8420,9 +8627,9 @@ if (!gotTheLock) {
       const hasAllPermissionsAndModel = hasAllPermissions && modelDownloaded;
 
       let startStep: number;
-      if (hasAllPermissionsAndModel && !isAuthenticated) {
+      if (hasAllPermissionsAndModel && !canUseLocalAccount) {
         // Only auth is missing - go straight to account phase
-        startStep = 2; // account phase
+        startStep = OnboardingStep.ACCOUNT;
       } else if (hasAllPermissions && !modelDownloaded) {
         // Only model is missing - go straight to model download phase
         startStep = OnboardingStep.MODEL;
