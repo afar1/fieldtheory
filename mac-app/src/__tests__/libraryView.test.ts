@@ -33,12 +33,15 @@ import {
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
+  shouldHandleMarkdownTodoTabShortcut,
+  isTextEntryInputType,
   splitFrontmatter,
   setMarkdownTodoState,
   toggleMarkdownTaskLine,
   toggleMarkdownTaskLineAtIndex,
 } from '../components/LibrarianView';
 import {
+  applyTodoStateOverrideToItem,
   ensureScratchpadNodePinned,
   ensureScratchpadPinned,
   filterHiddenDefaultSidebarNodes,
@@ -170,6 +173,58 @@ describe('extractMarkdownH1Title', () => {
 
   it('falls back when no H1 exists', () => {
     expect(extractMarkdownH1Title('## H2 only\n\nBody', 'Old Title')).toBe('Old Title');
+  });
+});
+
+describe('shouldHandleMarkdownTodoTabShortcut', () => {
+  it('uses plain Tab for wiki and external markdown files', () => {
+    expect(shouldHandleMarkdownTodoTabShortcut({
+      key: 'Tab',
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      selectedItemType: 'wiki',
+    })).toBe(true);
+    expect(shouldHandleMarkdownTodoTabShortcut({
+      key: 'Tab',
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      selectedItemType: 'external',
+    })).toBe(true);
+  });
+
+  it('ignores modified Tab and non-markdown selections', () => {
+    expect(shouldHandleMarkdownTodoTabShortcut({
+      key: 'Tab',
+      shiftKey: true,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      selectedItemType: 'wiki',
+    })).toBe(false);
+    expect(shouldHandleMarkdownTodoTabShortcut({
+      key: 'Tab',
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      selectedItemType: 'artifact',
+    })).toBe(false);
+  });
+});
+
+describe('isTextEntryInputType', () => {
+  it('treats text-like inputs as text entry', () => {
+    expect(isTextEntryInputType('text')).toBe(true);
+    expect(isTextEntryInputType('search')).toBe(true);
+    expect(isTextEntryInputType(undefined)).toBe(true);
+  });
+
+  it('does not treat checkboxes as text entry', () => {
+    expect(isTextEntryInputType('checkbox')).toBe(false);
   });
 });
 
@@ -873,6 +928,26 @@ describe('ensureScratchpadPinned', () => {
     const result = ensureScratchpadPinned([existing]);
     expect(result).toHaveLength(1);
     expect(result[0]).toBe(existing);
+  });
+});
+
+describe('applyTodoStateOverrideToItem', () => {
+  const item = {
+    id: 'wiki:scratchpad/task',
+    title: 'Task',
+    type: 'wiki' as const,
+    absPath: '/wiki/scratchpad/task.md',
+    relPath: 'scratchpad/task',
+    timestamp: 1,
+    todoState: 'open' as const,
+  };
+
+  it('applies a realtime sidebar todo state override', () => {
+    expect(applyTodoStateOverrideToItem(item, { [item.id]: 'done' }).todoState).toBe('done');
+  });
+
+  it('removes the sidebar todo state when the override is null', () => {
+    expect(applyTodoStateOverrideToItem(item, { [item.id]: null }).todoState).toBeUndefined();
   });
 });
 
