@@ -51,6 +51,7 @@ import { buildClipboardContextMenuTemplate, ClipboardHistoryWindow } from './cli
 function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<typeof vi.fn>) {
   (window as any).window = {
     isDestroyed: vi.fn(() => false),
+    isVisible: vi.fn(() => true),
     setFocusable: vi.fn(),
     setAlwaysOnTop: vi.fn(),
     setVisibleOnAllWorkspaces: vi.fn(),
@@ -64,6 +65,7 @@ function attachExistingWindow(window: ClipboardHistoryWindow, send: ReturnType<t
 
   vi.spyOn(window as any, 'sendTargetAppInfo').mockImplementation(() => {});
   vi.spyOn(window as any, 'refreshAppDataInBackground').mockResolvedValue(undefined);
+  return (window as any).window;
 }
 
 function attachWindowWithBounds(window: ClipboardHistoryWindow, bounds: Electron.Rectangle) {
@@ -184,6 +186,40 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.shouldAutoHideOnBlur()).toBe(false);
   });
 
+  it('uses explicit Field Theory window mode before legacy show-in-dock settings', () => {
+    (window as any).preferencesManager.get.mockReturnValue({
+      fieldTheoryWindowMode: 'app',
+      clickAwayToDismiss: true,
+    });
+    (window as any).preferencesManager.getPreference.mockImplementation((key: string) => {
+      if (key === 'clickAwayToDismiss') return true;
+      return false;
+    });
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+
+    (window as any).preferencesManager.get.mockReturnValue({
+      fieldTheoryWindowMode: 'panel',
+      showInDock: true,
+      clickAwayToDismiss: true,
+    });
+    (window as any).preferencesManager.getPreference.mockImplementation((key: string) => {
+      if (key === 'showInDock') return true;
+      if (key === 'clickAwayToDismiss') return true;
+      return false;
+    });
+    expect(window.shouldAutoHideOnBlur()).toBe(true);
+  });
+
+  it('keeps legacy click-away-off users in app-window mode before migration is saved', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ clickAwayToDismiss: false });
+    (window as any).preferencesManager.getPreference.mockImplementation((key: string) => {
+      if (key === 'clickAwayToDismiss') return false;
+      return false;
+    });
+
+    expect(window.shouldAutoHideOnBlur()).toBe(false);
+  });
+
   it('expands vertically in immersive mode and restores the original bounds on exit', () => {
     const { windowRef } = attachWindowWithBounds(window, { x: 100, y: 100, width: 900, height: 600 });
     const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
@@ -300,6 +336,21 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.activateApp).toHaveBeenCalledWith('com.apple.Safari');
   });
 
+  it('does not restore the previous app when hiding the app-mode window', async () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const activateApp = vi.spyOn(window, 'activateApp').mockResolvedValue(true);
+    vi.spyOn(window, 'getPreviousApp').mockReturnValue({
+      bundleId: 'com.apple.Safari',
+      name: 'Safari',
+    });
+    vi.spyOn(window, 'hide').mockImplementation(() => {});
+
+    await window.hideAndRestorePreviousApp('hotkey-toggle-hide');
+
+    expect(window.hide).toHaveBeenCalledWith(false, 'hotkey-toggle-hide');
+    expect(activateApp).not.toHaveBeenCalled();
+  });
+
   it('skips activation when no previous app is known', async () => {
     vi.spyOn(window, 'getPreviousApp').mockReturnValue(null);
     vi.spyOn(window, 'hide').mockImplementation(() => {});
@@ -382,6 +433,20 @@ describe('ClipboardHistoryWindow helper methods', () => {
 
     expect(mockApp.focus).toHaveBeenCalledWith({ steal: true });
     expect(mockApp.show).not.toHaveBeenCalled();
+  });
+
+  it('focuses a visible app-mode window without resetting renderer state', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+
+    expect(window.focusExistingWindow()).toBe(true);
+
+    expect(windowRef.show).toHaveBeenCalled();
+    expect(windowRef.moveTop).toHaveBeenCalled();
+    expect(windowRef.focus).toHaveBeenCalled();
+    expect(mockApp.show).toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
   });
 
   it('sends showHistory before showTranscriptHistory when reusing an existing window', () => {

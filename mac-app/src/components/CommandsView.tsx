@@ -21,7 +21,8 @@ import {
   SidebarFolderIcon,
   SidebarMarkdownIcon,
 } from './SidebarIcons';
-import { isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isSearchFocusShortcut, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -185,6 +186,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     const saved = localStorage.getItem('commands-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
+  const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
 
   // Layout
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -216,6 +218,44 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     }
     setFocusImmersive((prev) => !prev);
   }, [focusImmersive, onFocusChromeShortcut]);
+  const handleEditTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (isImmersiveToggleShortcut(e)) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.nativeEvent.stopImmediatePropagation?.();
+      toggleFocusImmersive();
+      return;
+    }
+
+    const isTaskToggle = isMarkdownTaskToggleShortcut(e);
+    const isTaskCreate = isMarkdownTaskShortcut(e);
+    const taskEdit = isTaskToggle
+      ? getMarkdownTaskToggleEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+      )
+      : isTaskCreate
+        ? getMarkdownTaskShortcutEdit(
+          e.currentTarget.value,
+          e.currentTarget.selectionStart,
+          e.currentTarget.selectionEnd,
+        )
+        : null;
+    if (isTaskToggle || isTaskCreate) {
+      e.preventDefault();
+      if (!taskEdit) return;
+      const scrollTop = e.currentTarget.scrollTop;
+      setEditContent(taskEdit.nextValue);
+      requestAnimationFrame(() => {
+        const editor = editTextareaRef.current;
+        if (!editor || editor.value !== taskEdit.nextValue) return;
+        editor.setSelectionRange(taskEdit.selectionStart, taskEdit.selectionEnd);
+        editor.scrollTop = scrollTop;
+      });
+      return;
+    }
+  }, [toggleFocusImmersive]);
 
   // Context menu
   const [contextMenu, setContextMenu] = useState<CommandsContextMenu | null>(null);
@@ -249,6 +289,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   useEffect(() => {
     localStorage.setItem('commands-text-size', textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
+    window.addEventListener('storage', syncRenderedEditClickMode);
+    window.addEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    return () => {
+      window.removeEventListener('storage', syncRenderedEditClickMode);
+      window.removeEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
+    };
+  }, []);
 
   useEffect(() => {
     onFocusChromeActiveChange?.(focusImmersive);
@@ -414,6 +464,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       console.error('Failed to copy command text or path:', err);
     }
   }, [flashCopyPathCopied, getSelectedCommandTextOrPath]);
+
+  const copySelectedCommandPath = useCallback(async () => {
+    if (!selectedCommand?.filePath) return;
+    try {
+      await navigator.clipboard.writeText(selectedCommand.filePath);
+      flashCopyPathCopied();
+    } catch (err) {
+      console.error('Failed to copy command path:', err);
+    }
+  }, [flashCopyPathCopied, selectedCommand?.filePath]);
 
   useEffect(() => {
     return () => {
@@ -755,13 +815,15 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
-      // Cmd+F or / — focus sidebar search. Gated on active element so `/`
-      // still works while the editor is on screen, just not when it's focused.
+      // / focuses sidebar search. Cmd+F is reserved for in-file find.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
         sidebarKeyboardActiveRef.current = false;
-        searchInputRef.current?.focus();
-        searchInputRef.current?.select();
+        setSearchOpen(true);
+        window.requestAnimationFrame(() => {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        });
         return;
       }
 
@@ -769,6 +831,12 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       const activeElement = document.activeElement;
       const isFormField = activeElement instanceof HTMLInputElement || activeElement instanceof HTMLTextAreaElement;
       const isCommandEditor = activeElement === editTextareaRef.current;
+      if (e.key === 'c' && e.metaKey && e.shiftKey && viewMode === 'mine' && selectedCommand?.filePath && (!isFormField || isCommandEditor)) {
+        e.preventDefault();
+        void copySelectedCommandPath();
+        return;
+      }
+
       if (e.key === 'c' && e.metaKey && !e.shiftKey && viewMode === 'mine' && selectedCommand?.filePath && (!isFormField || isCommandEditor)) {
         e.preventDefault();
         void copySelectedCommandTextOrPath();
@@ -807,7 +875,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1075,6 +1143,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         minHeight: 0,
         outline: 'none',
         backgroundColor: theme.bg,
+        position: 'relative',
       }}
     >
       {/* Sidebar - kept in DOM when collapsed for instant transition */}
@@ -1184,12 +1253,16 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Search..."
+              placeholder="Search commands (/)"
+              onBlur={(e) => {
+                if (!e.currentTarget.value.trim()) setSearchOpen(false);
+              }}
               value={searchQuery}
               onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') {
+                  e.stopPropagation();
                   setSearchOpen(false);
                   setSearchQuery('');
                 }
@@ -1695,7 +1768,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: '24px 20px',
+            padding: isEditing ? '8px 20px 12px 20px' : '24px 20px',
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -1717,19 +1790,21 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   value={editContent}
                   onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}
+                  onKeyDown={handleEditTextareaKeyDown}
                   style={{
                     flex: 1,
-                    minHeight: '400px',
-                    padding: '16px',
-                    fontSize: '14px',
-                    lineHeight: 1.6,
-                    fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.02)',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '8px',
+                    minHeight: 0,
+                    padding: 0,
+                    fontSize: textSizes[textSize].base,
+                    lineHeight: 1.5,
+                    fontFamily: fonts.sans,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: 0,
                     color: theme.text,
                     resize: 'none',
                     outline: 'none',
+                    boxShadow: 'none',
                   }}
                   placeholder="Write your command markdown here..."
                   autoFocus
@@ -1757,7 +1832,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                     // active still do their normal thing.
                     onClick={(e) => {
                       if (viewMode !== 'mine' || !selectedCommand) return;
-                      if (!shouldEnterEditOnClick(e)) return;
+                      if (!shouldEnterEditOnClick(e, renderedEditClickMode)) return;
                       enterEditMode();
                     }}
                     style={{
@@ -2066,6 +2141,28 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         </div>
       )}
       {deleteConfirmationDialog}
+
+      {copyPathCopied && (
+        <div
+          role="status"
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: '14px',
+            transform: 'translateX(-50%)',
+            padding: '4px 8px',
+            borderRadius: '5px',
+            fontSize: '11px',
+            color: theme.isDark ? '#d1fae5' : '#065f46',
+            backgroundColor: theme.isDark ? 'rgba(6, 95, 70, 0.7)' : 'rgba(209, 250, 229, 0.95)',
+            border: `1px solid ${theme.isDark ? 'rgba(110, 231, 183, 0.28)' : 'rgba(5, 150, 105, 0.2)'}`,
+            pointerEvents: 'none',
+            zIndex: 6,
+          }}
+        >
+          Copied path
+        </div>
+      )}
     </div>
   );
 }

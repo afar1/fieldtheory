@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection, shouldRevealFocusChrome } from './LibrarianView';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
@@ -72,6 +72,8 @@ import {
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
+
+const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command';
@@ -291,6 +293,10 @@ export default function ClipboardHistory() {
   const { theme, toggleDarkMode } = useTheme();
   const [isVisible, setIsVisible] = useState(false);
   const [isWindowVisible, setIsWindowVisible] = useState(document.visibilityState === 'visible');
+  const [windowStyleTransition, setWindowStyleTransition] = useState<'idle' | 'out' | 'in'>(() => {
+    if (localStorage.getItem(WINDOW_STYLE_TRANSITION_IN_KEY) === 'true') return 'in';
+    return 'idle';
+  });
 
   // When the window hides, the auto-popped-artifact exception expires: next
   // open is a fresh session and Escape should follow the normal hierarchy.
@@ -301,6 +307,23 @@ export default function ClipboardHistory() {
     const handler = () => setIsWindowVisible(document.visibilityState === 'visible');
     document.addEventListener('visibilitychange', handler);
     return () => document.removeEventListener('visibilitychange', handler);
+  }, []);
+  useEffect(() => {
+    if (windowStyleTransition !== 'in') return;
+    localStorage.removeItem(WINDOW_STYLE_TRANSITION_IN_KEY);
+    const frame = requestAnimationFrame(() => {
+      setWindowStyleTransition('idle');
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [windowStyleTransition]);
+  useEffect(() => {
+    const unsubscribe = window.clipboardAPI?.onWindowStyleTransitionOut?.(() => {
+      setWindowStyleTransition('out');
+      window.setTimeout(() => {
+        window.clipboardAPI?.windowStyleTransitionReady?.();
+      }, 140);
+    });
+    return () => unsubscribe?.();
   }, []);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
@@ -364,6 +387,7 @@ export default function ClipboardHistory() {
   });
   const topNavPaintTraceRef = useRef<TopNavPaintTrace | null>(null);
   const viewModeRef = useRef(viewMode);
+  const [libraryKeepsCurrentSizeKey, setLibraryKeepsCurrentSizeKey] = useState(false);
   useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
@@ -398,6 +422,7 @@ export default function ClipboardHistory() {
       startedAt,
       highlightAppliedAt,
     };
+    setLibraryKeepsCurrentSizeKey(next === 'librarian' && previous === 'clipboard');
     setViewMode(next);
   }, [applyTopNavVisualMode, librarianEnabled]);
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
@@ -409,12 +434,13 @@ export default function ClipboardHistory() {
   // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
+  const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
   const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
-  const appChromeHidden = isFocusChromeSurface && focusChromeActive;
-  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive;
+  const appChromeHidden = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
+  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
   const footerChromeHidden = appChromeHidden || bookmarksCanvasChromeActive;
   const collapseSidebarForFocusChrome = useCallback(() => {
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
@@ -422,6 +448,7 @@ export default function ClipboardHistory() {
   }, [navSidebarCollapsed]);
   const handleFocusChromeActiveChange = useCallback((active: boolean) => {
     setFocusChromeActive(active);
+    if (!active) setFocusChromeProximityVisible(false);
     if (active) return;
 
     const previous = focusChromePreviousSidebarCollapsedRef.current;
@@ -429,7 +456,27 @@ export default function ClipboardHistory() {
     focusChromePreviousSidebarCollapsedRef.current = null;
     setNavSidebarCollapsed(previous);
   }, []);
-  const handleLibrarianSwitchToClipboard = useCallback(() => setViewMode('clipboard'), []);
+
+  useEffect(() => {
+    if (!isFocusChromeSurface || !focusChromeActive) {
+      setFocusChromeProximityVisible(false);
+      return;
+    }
+
+    const updateProximity = (event: MouseEvent) => setFocusChromeProximityVisible(shouldRevealFocusChrome(event.clientY, 0));
+    const hideProximityChrome = () => setFocusChromeProximityVisible(false);
+
+    window.addEventListener('mousemove', updateProximity);
+    window.addEventListener('mouseleave', hideProximityChrome);
+    return () => {
+      window.removeEventListener('mousemove', updateProximity);
+      window.removeEventListener('mouseleave', hideProximityChrome);
+    };
+  }, [focusChromeActive, isFocusChromeSurface]);
+  const handleLibrarianSwitchToClipboard = useCallback(() => {
+    setLibraryKeepsCurrentSizeKey(false);
+    setViewMode('clipboard');
+  }, []);
   const handleLibrarianSwitchToSettings = useCallback(() => setShowSettings(true), []);
   const handleLibrarianReadingConsumed = useCallback(() => setPendingReadingPath(null), []);
   const handleLibrarianOpenTargetConsumed = useCallback(() => setPendingLibraryOpenTarget(null), []);
@@ -459,6 +506,7 @@ export default function ClipboardHistory() {
         highlightAppliedAt,
       };
     }
+    setLibraryKeepsCurrentSizeKey(mode === 'librarian' && previous === 'clipboard');
     setViewMode(mode);
     setShowSettings(false);
   }, [applyTopNavVisualMode, showSettings]);
@@ -618,15 +666,17 @@ export default function ClipboardHistory() {
     return previewItems;
   }, []);
   
+  const clearPreview = useCallback(() => {
+    setPreview(null);
+    setPreviewClosing(false);
+    setStackPreviewIndex(0);
+    setStackPreviewItems([]);
+  }, []);
+
   const dismissPreview = () => {
     if (!preview || previewClosing) return;
     setPreviewClosing(true);
-    setTimeout(() => {
-      setPreview(null);
-      setPreviewClosing(false);
-      setStackPreviewIndex(0);
-      setStackPreviewItems([]);
-    }, 150);
+    setTimeout(clearPreview, 150);
   };
   
   // Get preview for a row, using cache if available.
@@ -1371,6 +1421,7 @@ export default function ClipboardHistory() {
       showFeedback(`saved to ${page.relPath}.md`);
       setPendingLibraryOpenTarget({ kind: 'wiki', path: page.relPath, contentMode: 'markdown' });
       setShowSettings(false);
+      setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
     } catch (error) {
       console.error('Failed to create clipboard markdown:', error);
@@ -1972,6 +2023,7 @@ export default function ClipboardHistory() {
         return;
       }
       setPendingLibraryOpenTarget(target);
+      setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
     });
 
@@ -1982,11 +2034,13 @@ export default function ClipboardHistory() {
   // LibrarianView's own onOpenScratchpad listener can open the new page.
   useEffect(() => {
     const unsubscribe = window.wikiAPI?.onOpenScratchpad(() => {
+      clearPreview();
       setShowSettings(false);
+      setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
     });
     return () => unsubscribe?.();
-  }, []);
+  }, [clearPreview]);
 
   // Poll for pending readings and handle Library auto-open handoff.
   useEffect(() => {
@@ -2001,6 +2055,7 @@ export default function ClipboardHistory() {
         setPendingReadingPath(status.pendingPath);
         setAutoPopArtifactPath(status.pendingPath);
         setShowSettings(false);
+        setLibraryKeepsCurrentSizeKey(false);
         setViewMode('librarian');
         setLibrarianImmersive(false);
       }
@@ -2031,6 +2086,7 @@ export default function ClipboardHistory() {
       // Update the reading being displayed without changing the window size.
       setPendingReadingPath(readingPath);
       setShowSettings(false);
+      setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
       setLibrarianImmersive(false);
     });
@@ -3474,6 +3530,9 @@ export default function ClipboardHistory() {
           position: 'relative',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           cursor: 'default',
+          opacity: windowStyleTransition === 'idle' ? 1 : 0,
+          filter: windowStyleTransition === 'idle' ? 'none' : 'blur(6px)',
+          transition: 'opacity 140ms ease, filter 140ms ease',
         }}
       >
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
@@ -3757,7 +3816,7 @@ export default function ClipboardHistory() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            gap: '2px',
+            gap: '6px',
             padding: '0 16px',
             marginTop: '4px',
             marginBottom: '8px',
@@ -4314,6 +4373,7 @@ export default function ClipboardHistory() {
             onAutoPopArtifactSuperseded={handleAutoPopArtifactSuperseded}
             onOpenCommandPath={handleLibrarianOpenCommandPath}
             onFocusChromeShortcut={collapseSidebarForFocusChrome}
+            preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
           />
         </div>

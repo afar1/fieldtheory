@@ -66,7 +66,7 @@ export type RunningApp = {
 };
 
 export const TAB_LABELS: Record<ViewMode, string> = {
-  clipboard: 'Items',
+  clipboard: 'Clipboard',
   librarian: 'Librarian',
   todo: 'Tasks',
   feedback: 'Feedback',

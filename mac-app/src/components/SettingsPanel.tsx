@@ -37,6 +37,8 @@ type SettingsSection =
   | 'hot-mic'
   | 'rectangle';
 
+type FieldTheoryWindowMode = 'panel' | 'app';
+
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
   | 'screenshot'
@@ -50,6 +52,7 @@ type HotkeyCapture =
   | 'abandon'
   | 'superPaste'
   | 'commandLauncher'
+  | 'scratchpad'
   | 'hotMic'
   | null;
 
@@ -376,9 +379,10 @@ export default function SettingsPanel({
   const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
   const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Command+4');
 
-  // Additional hotkeys (SuperPaste, CommandLauncher, ImproveText, AutoImprove)
+  // Additional hotkeys (SuperPaste, CommandLauncher, Scratchpad)
   const [superPasteHotkey, setSuperPasteHotkey] = useState('Command+Shift+V');
   const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
+  const [scratchpadHotkey, setScratchpadHotkey] = useState('Control+Option+Command+Space');
 
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
@@ -433,11 +437,8 @@ export default function SettingsPanel({
   // Cursor status window color debug - shows magenta native window background.
   const [cursorStatusWindowColorDebug, setCursorStatusWindowColorDebug] = useState(false);
 
-  // Show in Dock - whether app appears in Dock and Cmd+Tab.
-  const [showInDock, setShowInDock] = useState(false);
-
-  // Click-away dismissal - whether the panel hides when another app gets focus.
-  const [clickAwayToDismiss, setClickAwayToDismiss] = useState(true);
+  // Field Theory window behavior - panel uses current overlay mechanics, app behaves like a normal app.
+  const [fieldTheoryWindowMode, setFieldTheoryWindowMode] = useState<FieldTheoryWindowMode>('panel');
 
   // Show fieldtheory.dev link in footer.
   // showFieldTheoryLink always true — toggle removed from UI
@@ -545,14 +546,9 @@ export default function SettingsPanel({
         setDataRetentionDays(days);
       });
       
-      // Load show in dock setting
-      window.clipboardAPI.getShowInDock?.().then(show => {
-        setShowInDock(show);
-      });
-
-      // Load click-away dismissal setting
-      window.clipboardAPI.getClickAwayToDismiss?.().then(enabled => {
-        setClickAwayToDismiss(enabled);
+      // Load Field Theory window behavior.
+      window.clipboardAPI.getFieldTheoryWindowMode?.().then(mode => {
+        setFieldTheoryWindowMode(mode);
       });
 
       // Load in-app performance HUD setting.
@@ -578,6 +574,9 @@ export default function SettingsPanel({
       });
       window.hotkeyAPI.getHotkey('commandLauncher').then(hotkey => {
         if (hotkey) setCommandLauncherHotkey(hotkey);
+      });
+      window.hotkeyAPI.getHotkey('scratchpad').then(hotkey => {
+        if (hotkey) setScratchpadHotkey(hotkey);
       });
     }
 
@@ -786,17 +785,16 @@ export default function SettingsPanel({
     }
   };
 
-  // Handler for toggling click-away dismissal.
-  const handleToggleClickAwayToDismiss = async (enabled: boolean) => {
-    if (!window.clipboardAPI?.setClickAwayToDismiss) return;
+  const handleSetFieldTheoryWindowMode = async (mode: FieldTheoryWindowMode) => {
+    if (!window.clipboardAPI?.setFieldTheoryWindowMode) return;
 
     try {
-      const success = await window.clipboardAPI.setClickAwayToDismiss(enabled);
+      const success = await window.clipboardAPI.setFieldTheoryWindowMode(mode);
       if (success) {
-        setClickAwayToDismiss(enabled);
+        setFieldTheoryWindowMode(mode);
       }
     } catch (err) {
-      console.error('Failed to toggle click-away dismissal:', err);
+      console.error('Failed to change Field Theory window behavior:', err);
     }
   };
 
@@ -1184,6 +1182,30 @@ export default function SettingsPanel({
     }
   }, []);
 
+  const handleSetScratchpadHotkey = useCallback(async (hotkeyString: string) => {
+    setCapturingHotkey(null);
+    setHotkeyError(null);
+
+    if (!window.hotkeyAPI?.setHotkey) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const result = await window.hotkeyAPI.setHotkey('scratchpad', hotkeyString);
+      if (!result.success) {
+        setHotkeyError(result.error || 'Failed to register Scratchpad hotkey.');
+      } else {
+        setScratchpadHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set Scratchpad hotkey');
+      console.error('Failed to set Scratchpad hotkey:', err);
+    }
+  }, []);
+
   // Handler for setting Hot Mic hotkey
   const handleSetHotMicHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1329,6 +1351,8 @@ export default function SettingsPanel({
           handleSetSuperPasteHotkey(hotkeyString);
         } else if (capturingHotkey === 'commandLauncher') {
           handleSetCommandLauncherHotkey(hotkeyString);
+        } else if (capturingHotkey === 'scratchpad') {
+          handleSetScratchpadHotkey(hotkeyString);
         } else if (capturingHotkey === 'hotMic') {
           handleSetHotMicHotkey(hotkeyString);
         }
@@ -1337,7 +1361,7 @@ export default function SettingsPanel({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetHotMicHotkey]);
+  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
 
   // Section header component for consistent divider styling
   const SectionHeader = ({ title }: { title: string }) => (
@@ -1483,16 +1507,16 @@ export default function SettingsPanel({
 
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
-            <span style={styles.rowLabel}>Click away to dismiss</span>
+            <span style={styles.rowLabel}>Normal app window</span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Turn off to keep Field Theory open until Escape, the menu button, or the shortcut
+              Show Field Theory in the Dock and let it behave like a regular macOS window
             </span>
           </div>
           <button
-            onClick={() => handleToggleClickAwayToDismiss(!clickAwayToDismiss)}
-            style={{ ...styles.toggle, backgroundColor: clickAwayToDismiss ? theme.success : '#d1d5db' }}
+            onClick={() => handleSetFieldTheoryWindowMode(fieldTheoryWindowMode === 'app' ? 'panel' : 'app')}
+            style={{ ...styles.toggle, backgroundColor: fieldTheoryWindowMode === 'app' ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: clickAwayToDismiss ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
       </div>
@@ -1821,6 +1845,28 @@ export default function SettingsPanel({
               {capturingHotkey === 'commandLauncher' ? 'Press keys...' : (commandLauncherHotkey || 'Not set')}
             </button>
             {capturingHotkey === 'commandLauncher' && (
+              <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Scratchpad */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>
+            New Scratchpad
+            <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+              (create a markdown note)
+            </span>
+          </span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setCapturingHotkey('scratchpad'); setHotkeyError(null); }}
+              disabled={capturingHotkey !== null}
+              style={{ ...styles.btn, ...(capturingHotkey === 'scratchpad' ? styles.btnActive : {}) }}
+            >
+              {capturingHotkey === 'scratchpad' ? 'Press keys...' : (scratchpadHotkey || 'Not set')}
+            </button>
+            {capturingHotkey === 'scratchpad' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
           </div>

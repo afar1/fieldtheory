@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment } from '../types';
+import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, LibraryDocument } from '../types';
 
 // Normalize saved records so new fields are always present.
 const normalizeTodo = (raw: Todo): Todo => ({
@@ -23,11 +23,22 @@ const normalizeTranscript = (raw: TranscriptEntry): TranscriptEntry => ({
   stackSegments: raw.stackSegments?.map(normalizeSegment),
 });
 
+const normalizeLibraryDocument = (raw: LibraryDocument): LibraryDocument => ({
+  ...raw,
+  folderPath: raw.folderPath ?? 'scratchpad',
+  fileName: raw.fileName ?? `${(raw.title.trim() || 'Untitled').replace(/[/:]/g, '-')}.md`,
+  sourceKind: raw.sourceKind ?? 'mobile',
+  tags: raw.tags ?? [],
+  isPinned: raw.isPinned ?? false,
+  updatedAt: raw.updatedAt ?? raw.createdAt,
+});
+
 // Storage keys
 const TODOS_KEY = '@littleai/todos';
 const OBSERVATIONS_KEY = '@littleai/observations';
 const SETTINGS_KEY = '@littleai/settings';
 const TRANSCRIPTS_KEY = '@littleai/transcripts';
+const LIBRARY_DOCUMENTS_KEY = '@littleai/library-documents';
 
 /**
  * Storage service for persisting todos, observations, and settings.
@@ -93,8 +104,7 @@ export class StorageService {
     const defaultSettings: Settings = {
       autoStart: false,
       showTodos: true,
-      showObservations: true,
-      showCursor: true,
+      showLibrary: true,
       autoSeparate: true,
     };
     
@@ -145,6 +155,31 @@ export class StorageService {
       await AsyncStorage.setItem(TRANSCRIPTS_KEY, JSON.stringify(transcripts));
     } catch (error) {
       console.error('Failed to save transcripts:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Load Library documents from storage.
+   */
+  static async getLibraryDocuments(): Promise<LibraryDocument[]> {
+    try {
+      const data = await AsyncStorage.getItem(LIBRARY_DOCUMENTS_KEY);
+      return data ? JSON.parse(data).map(normalizeLibraryDocument) : [];
+    } catch (error) {
+      console.error('Failed to load library documents:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save Library documents to storage.
+   */
+  static async saveLibraryDocuments(documents: LibraryDocument[]): Promise<void> {
+    try {
+      await AsyncStorage.setItem(LIBRARY_DOCUMENTS_KEY, JSON.stringify(documents));
+    } catch (error) {
+      console.error('Failed to save library documents:', error);
       throw error;
     }
   }

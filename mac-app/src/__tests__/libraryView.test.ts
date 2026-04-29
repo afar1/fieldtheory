@@ -6,6 +6,7 @@ import {
   findNextMarkdownMatch,
   getCarrotListEnterEdit,
   getCarrotListTabEdit,
+  getMarkdownListEnterEdit,
   getMarkdownBodySelectionRange,
   getNewlyCheckedMarkdownTasks,
   highlightFileFindMatches,
@@ -22,12 +23,14 @@ import {
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
+  rankMarkdownWikiLinkSuggestions,
   replaceLibrarianNavigationEntry,
   resolveMarkdownCaretOffsetFromRenderedText,
   restoreLibrarianEditorSession,
   restoreLibrarianUnorderedListMarker,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
+  shouldRevealFocusChrome,
   splitFrontmatter,
   toggleMarkdownTaskLine,
 } from '../components/LibrarianView';
@@ -56,6 +59,32 @@ import {
 
 afterEach(() => {
   clearLibraryDragData();
+});
+
+describe('rankMarkdownWikiLinkSuggestions', () => {
+  it('keeps username-like matches searchable but ranks local content first', () => {
+    const results = rankMarkdownWikiLinkSuggestions([
+      { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
+      { title: 'Paul Graham notes', detail: 'entries/paul-graham-notes', kind: 'wiki' },
+      { title: 'Paul Graham interview', detail: '/artifacts/paul-graham-interview.md', kind: 'artifact' },
+    ], 'paul');
+
+    expect(results.map((item) => item.title)).toEqual([
+      'Paul Graham interview',
+      'Paul Graham notes',
+      '@paulg',
+    ]);
+  });
+
+  it('returns username-like matches when they are the only match', () => {
+    const results = rankMarkdownWikiLinkSuggestions([
+      { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
+    ], 'paul');
+
+    expect(results).toEqual([
+      { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
+    ]);
+  });
 });
 
 describe('splitFrontmatter', () => {
@@ -190,6 +219,64 @@ describe('carrot list editor helpers', () => {
       nextValue: '› item',
       selectionStart: 6,
       selectionEnd: 6,
+    });
+  });
+});
+
+describe('markdown list editor helpers', () => {
+  it('continues a dash list on Enter', () => {
+    expect(getMarkdownListEnterEdit('- first', 7, 7)).toEqual({
+      nextValue: '- first\n- ',
+      selectionStart: 10,
+      selectionEnd: 10,
+    });
+  });
+
+  it('continues a task list on Enter with a fresh unchecked task', () => {
+    expect(getMarkdownListEnterEdit('- [x] first', 11, 11)).toEqual({
+      nextValue: '- [x] first\n- [ ] ',
+      selectionStart: 18,
+      selectionEnd: 18,
+    });
+  });
+
+  it('continues a bare [] task on Enter without turning it into a bullet task', () => {
+    expect(getMarkdownListEnterEdit('[] first', 8, 8)).toEqual({
+      nextValue: '[] first\n[] ',
+      selectionStart: 12,
+      selectionEnd: 12,
+    });
+  });
+
+  it('continues a bare [ ] task on Enter without turning it into a bullet task', () => {
+    expect(getMarkdownListEnterEdit('[ ] first', 9, 9)).toEqual({
+      nextValue: '[ ] first\n[ ] ',
+      selectionStart: 14,
+      selectionEnd: 14,
+    });
+  });
+
+  it('exits an empty dash list item on Enter', () => {
+    expect(getMarkdownListEnterEdit('- first\n- ', 10, 10)).toEqual({
+      nextValue: '- first\n',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+  });
+
+  it('exits an empty task item on Enter', () => {
+    expect(getMarkdownListEnterEdit('- first\n- [ ] ', 14, 14)).toEqual({
+      nextValue: '- first\n',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+  });
+
+  it('exits an empty bare task item on Enter', () => {
+    expect(getMarkdownListEnterEdit('[] first\n[] ', 12, 12)).toEqual({
+      nextValue: '[] first\n',
+      selectionStart: 9,
+      selectionEnd: 9,
     });
   });
 });
@@ -537,6 +624,20 @@ describe('markdown editor edge fades', () => {
 
   it('shows only the top fade at the bottom of overflowing content', () => {
     expect(getMarkdownEditorEdgeFades(500, 1000, 500)).toEqual({ top: true, bottom: false });
+  });
+});
+
+describe('focus chrome proximity', () => {
+  it('reveals controls when the cursor is near the top of the reader pane', () => {
+    expect(shouldRevealFocusChrome(80, 20, 96)).toBe(true);
+  });
+
+  it('keeps controls faded when the cursor is away from the top controls', () => {
+    expect(shouldRevealFocusChrome(140, 20, 96)).toBe(false);
+  });
+
+  it('does not reveal controls above the reader pane', () => {
+    expect(shouldRevealFocusChrome(12, 20, 96)).toBe(false);
   });
 });
 

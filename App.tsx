@@ -32,6 +32,7 @@ import { TranscriptItem } from './components/TranscriptItem';
 import { SketchCanvas } from './components/SketchCanvas';
 import { SketchList } from './components/SketchList';
 import { CommandsList } from './components/CommandsList';
+import { LibraryView } from './components/LibraryView';
 import { StorageService } from './services/storage';
 import { SketchStorageService } from './services/sketchStorage';
 import { syncAllPendingSketches } from './services/sketchSync';
@@ -44,12 +45,12 @@ import {
   subscribeToSpeechPlaybackState,
 } from './services/speech';
 import { processTranscription } from './services/llm';
-import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, SketchEntry } from './types';
+import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, SketchEntry, LibraryDocument } from './types';
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
-import { syncAll, seedRemoteFromLocal } from './services/sync';
+import { syncAll, seedRemoteFromLocal, syncLibraryDocuments } from './services/sync';
 import { supabase } from './services/supabase';
 import { CommandsService } from './services/commands';
-import { useThemeColors } from './services/theme';
+import { useIsDark, useThemeColors } from './services/theme';
 import type { Session } from '@supabase/supabase-js';
 
 // Error boundary component to catch and display errors
@@ -207,6 +208,7 @@ function AppContent() {
 
   const insets = useSafeAreaInsets();
   const colors = useThemeColors();
+  const isDark = useIsDark();
 
   const [modelDownloadProgress, setModelDownloadProgress] = useState<number | null>(null);
   const [isDownloadingModel, setIsDownloadingModel] = useState(false);
@@ -220,6 +222,7 @@ function AppContent() {
   const [settings, setSettings] = useState<Settings>({
     autoStart: false,
     showTodos: true,
+    showLibrary: true,
     autoSeparate: true,
   });
   const [isProcessingLLM, setIsProcessingLLM] = useState(false);
@@ -227,6 +230,7 @@ function AppContent() {
   
   // Transcript history state
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
+  const [libraryDocuments, setLibraryDocuments] = useState<LibraryDocument[]>([]);
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [todosSortOrder, setTodosSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
@@ -279,6 +283,9 @@ function AppContent() {
   const [isSyncingData, setIsSyncingData] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [syncedAt, setSyncedAt] = useState<number | null>(null);
+  const [librarySyncedAt, setLibrarySyncedAt] = useState<number | null>(null);
+  const [isLibrarySyncing, setIsLibrarySyncing] = useState(false);
+  const [callsign, setCallsign] = useState<string | null>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(null);
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   
@@ -290,23 +297,26 @@ function AppContent() {
   const appStateRef = useRef<string>(AppState.currentState);
   // Track if user manually stopped recording (prevents auto-start until they manually start again)
   const manuallyStoppedRef = useRef<boolean>(false);
+  const librarySyncInFlightRef = useRef(false);
 
   // Load data from storage on mount
   useEffect(() => {
     async function loadData() {
       try {
-        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts, loadedSketches] = await Promise.all([
+        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts, loadedSketches, loadedLibraryDocuments] = await Promise.all([
           StorageService.getTodos(),
           StorageService.getObservations(),
           StorageService.getSettings(),
           StorageService.getTranscripts(),
           SketchStorageService.getSketches(),
+          StorageService.getLibraryDocuments(),
         ]);
         setTodos(loadedTodos);
         setObservations(loadedObservations);
         setSettings(loadedSettings);
         setTranscripts(loadedTranscripts);
         setSketches(loadedSketches);
+        setLibraryDocuments(loadedLibraryDocuments);
 
         // Pre-fetch commands for voice command detection (runs in background)
         CommandsService.fetchCommands().catch((err) => {
@@ -358,6 +368,8 @@ function AppContent() {
       setSession(newSession);
       if (!newSession) {
         setSyncedAt(null);
+        setLibrarySyncedAt(null);
+        setCallsign(null);
       }
     });
 
@@ -366,6 +378,52 @@ function AppContent() {
       subscription.subscription.unsubscribe();
     };
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+
+    const metadata = session.user.user_metadata as { callsign?: string } | undefined;
+    setCallsign(metadata?.callsign ?? null);
+
+    supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', session.user.id)
+      .maybeSingle()
+      .then(({ data, error }) => {
+        if (error) {
+          console.error('Failed to fetch callsign:', error);
+          return;
+        }
+        setCallsign(data?.callsign ?? metadata?.callsign ?? null);
+      });
+  }, [session]);
+
+  const handleLibrarySyncQuiet = useCallback(async () => {
+    if (!session || librarySyncInFlightRef.current) return;
+
+    librarySyncInFlightRef.current = true;
+    setIsLibrarySyncing(true);
+    try {
+      const result = await syncLibraryDocuments();
+      const nextLibraryDocuments = await StorageService.getLibraryDocuments();
+      setLibraryDocuments(nextLibraryDocuments);
+      setLibrarySyncedAt(result.syncedAt);
+    } catch (error) {
+      console.error('Library background sync failed:', error);
+    } finally {
+      librarySyncInFlightRef.current = false;
+      setIsLibrarySyncing(false);
+    }
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    handleLibrarySyncQuiet();
+    const interval = setInterval(handleLibrarySyncQuiet, 90_000);
+    return () => clearInterval(interval);
+  }, [handleLibrarySyncQuiet, session]);
 
   // Keep copying feedback timers tidy.
   useEffect(() => {
@@ -450,10 +508,7 @@ function AppContent() {
         nextAppState === 'active' &&
         session
       ) {
-        syncAll().catch((error) => {
-          // Log error but don't interrupt user experience
-          console.error('Background sync failed:', error);
-        });
+        handleLibrarySyncQuiet();
 
         // Also sync any pending sketches.
         syncAllPendingSketches().catch((error) => {
@@ -472,7 +527,7 @@ function AppContent() {
     return () => {
       subscription.remove();
     };
-  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording, session]);
+  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording, session, handleLibrarySyncQuiet]);
 
   // Capture every finished transcription so we can build the timeline.
   // Detects and expands portable commands (e.g., "use the review command").
@@ -715,6 +770,8 @@ function AppContent() {
       await supabaseSignOut();
       setSession(null);
       setSyncNotice(null);
+      setLibrarySyncedAt(null);
+      setCallsign(null);
       setAuthNotice('Signed out.');
     } catch (err) {
       console.error('Failed to sign out:', err);
@@ -728,16 +785,19 @@ function AppContent() {
 
     try {
       const result = await syncAll();
-      const [nextTodos, nextObservations, nextTranscripts] = await Promise.all([
+      const [nextTodos, nextObservations, nextTranscripts, nextLibraryDocuments] = await Promise.all([
         StorageService.getTodos(),
         StorageService.getObservations(),
         StorageService.getTranscripts(),
+        StorageService.getLibraryDocuments(),
       ]);
 
       setTodos(nextTodos);
       setObservations(nextObservations);
       setTranscripts(nextTranscripts);
+      setLibraryDocuments(nextLibraryDocuments);
       setSyncedAt(result.syncedAt);
+      setLibrarySyncedAt(result.syncedAt);
       setSyncNotice('Synced with Supabase.');
     } catch (err: unknown) {
       console.error('Sync failed:', err);
@@ -889,6 +949,11 @@ function AppContent() {
     setSettings(newSettings);
     StorageService.saveSettings(newSettings).catch(console.error);
   }, [settings]);
+
+  const handleLibraryDocumentsChange = useCallback((documents: LibraryDocument[]) => {
+    setLibraryDocuments(documents);
+    StorageService.saveLibraryDocuments(documents).catch(console.error);
+  }, []);
 
   const handleCopyTranscript = async (entry: TranscriptEntry) => {
     await Clipboard.setStringAsync(entry.text);
@@ -1323,7 +1388,7 @@ function AppContent() {
   if (!isInitialized) {
     return (
       <View style={styles.container}>
-        <StatusBar style="auto" />
+        <StatusBar style={isDark ? 'light' : 'dark'} />
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#007AFF" />
           <Text style={styles.loadingText}>Loading...</Text>
@@ -1336,7 +1401,7 @@ function AppContent() {
     <ErrorBoundary>
       <GestureHandlerRootView style={{ flex: 1 }}>
         <View style={[styles.container, { paddingTop: insets.top, backgroundColor: colors.bgPage }]}>
-          <StatusBar style="auto" />
+          <StatusBar style={isDark ? 'light' : 'dark'} />
 
       {/* Header removed - moved settings to bottom tab */}
 
@@ -1374,7 +1439,7 @@ function AppContent() {
         </View>
       )}
 
-      {/* Pager View - Order: Items → Commands → Tasks → Settings */}
+      {/* Pager View - Order: Library → Items → Commands → Tasks → Settings */}
       <PagerView
         ref={pagerRef}
         style={styles.pager}
@@ -1396,6 +1461,16 @@ function AppContent() {
           }
         }}
       >
+        <View key="library" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
+          <LibraryView
+            documents={libraryDocuments}
+            onChange={handleLibraryDocumentsChange}
+            callsign={callsign}
+            lastSyncedAt={librarySyncedAt}
+            isSyncing={isLibrarySyncing}
+            onSyncPress={handleLibrarySyncQuiet}
+          />
+        </View>
         <View key="transcripts" style={[styles.transcriptContainer, { backgroundColor: colors.bgPage }]}>
           <View style={styles.transcriptListWrapper}>
             {/* Top fade overlay — items gently fade as they scroll past the top. */}
@@ -1451,7 +1526,7 @@ function AppContent() {
         </View>
         <View key="commands" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
           <CommandsList
-            searchOpacity={proximityToPage(1)}
+            searchOpacity={proximityToPage(2)}
             onCreateModeChange={handleCommandCreateModeChange}
           />
         </View>
@@ -1465,7 +1540,7 @@ function AppContent() {
             formatDateHeader={formatDateHeader}
             onCreateTask={handleCreateTask}
             onCreateModeChange={handleTaskCreateModeChange}
-            searchOpacity={proximityToPage(2)}
+            searchOpacity={proximityToPage(3)}
           />
         </View>
         <View key="settings" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
@@ -1493,6 +1568,15 @@ function AppContent() {
               <Switch
                 value={settings.showTodos}
                 onValueChange={(value) => handleToggleSetting('showTodos', value)}
+                trackColor={{ false: '#d1d5db', true: '#14372A' }}
+              />
+            </View>
+
+            <View style={styles.settingRow}>
+              <Text style={[styles.settingLabel, { color: colors.textPrimary }]}>Library tab</Text>
+              <Switch
+                value={settings.showLibrary}
+                onValueChange={(value) => handleToggleSetting('showLibrary', value)}
                 trackColor={{ false: '#d1d5db', true: '#14372A' }}
               />
             </View>
@@ -1721,37 +1805,38 @@ function AppContent() {
           </>
         ) : (
           /* Normal mode: show tab navigation
-           * Layout: Items, Commands, [RECORD], Tasks, Settings
-           * Record button is centered.
+           * Layout: Library, Items, [RECORD], Commands, Tasks, Settings
+           * Library stays left of Items while Record remains near center.
            */
           <>
-            {/* Items Tab (was iOS Fields / Stacks) */}
-            <TouchableOpacity
-              style={styles.tabButton}
-              onPress={() => navigateToPage(0)}
-            >
-              <Feather
-                name="layers"
-                size={22}
-                color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(0))}
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(0)) },
-                ]}
+            {settings.showLibrary && (
+              <TouchableOpacity
+                style={styles.tabButton}
+                onPress={() => navigateToPage(0)}
               >
-                Items
-              </Text>
-            </TouchableOpacity>
+                <Feather
+                  name="book-open"
+                  size={22}
+                  color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(0))}
+                />
+                <Text
+                  style={[
+                    styles.tabLabel,
+                    { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(0)) },
+                  ]}
+                >
+                  Library
+                </Text>
+              </TouchableOpacity>
+            )}
 
-            {/* Commands Tab - Portable commands synced from Mac */}
+            {/* Items Tab (was iOS Fields / Stacks) */}
             <TouchableOpacity
               style={styles.tabButton}
               onPress={() => navigateToPage(1)}
             >
               <Feather
-                name="command"
+                name="layers"
                 size={22}
                 color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(1))}
               />
@@ -1761,7 +1846,7 @@ function AppContent() {
                   { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(1)) },
                 ]}
               >
-                Commands
+                Items
               </Text>
             </TouchableOpacity>
 
@@ -1784,16 +1869,38 @@ function AppContent() {
               </TouchableOpacity>
             </View>
 
+            {/* Commands Tab - Portable commands synced from Mac */}
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => navigateToPage(2)}
+            >
+              <Feather
+                name="command"
+                size={22}
+                color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(2))}
+              />
+              <Text
+                style={[
+                  styles.tabLabel,
+                  { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(2)) },
+                ]}
+              >
+                Commands
+              </Text>
+            </TouchableOpacity>
+
             {/* Tasks Tab - flashes when tasks are saved */}
             {settings.showTodos && (
               <TouchableOpacity
                 style={styles.tabButton}
-                onPress={() => navigateToPage(2)}
+                onPress={() => navigateToPage(3)}
+                onLongPress={() => navigateToPage(4)}
+                delayLongPress={450}
               >
                 <Feather
                   name="check-square"
                   size={22}
-                  color={tasksTabFlash ? '#059669' : lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(2))}
+                  color={tasksTabFlash ? '#059669' : lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(3))}
                 />
                 <Text
                   style={[
@@ -1801,7 +1908,7 @@ function AppContent() {
                     {
                       color: tasksTabFlash
                         ? '#059669'
-                        : lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(2)),
+                        : lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(3)),
                     },
                     tasksTabFlash && styles.tabLabelFlash,
                   ]}
@@ -1811,25 +1918,6 @@ function AppContent() {
               </TouchableOpacity>
             )}
 
-            {/* Settings Tab */}
-            <TouchableOpacity
-              style={styles.tabButton}
-              onPress={() => navigateToPage(3)}
-            >
-              <Feather
-                name="settings"
-                size={22}
-                color={lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(3))}
-              />
-              <Text
-                style={[
-                  styles.tabLabel,
-                  { color: lerpHex(TAB_INACTIVE, TAB_ACTIVE, proximityToPage(3)) },
-                ]}
-              >
-                Settings
-              </Text>
-            </TouchableOpacity>
           </>
           )}
         </View>
