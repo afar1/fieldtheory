@@ -395,6 +395,7 @@ let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
+let lastScratchpadOpenAt = 0;
 
 function canWriteFieldTheoryContent(): boolean {
   return accountStatusManager?.getCapabilityMode() !== 'read_only';
@@ -407,6 +408,29 @@ function blockWrite(reason: string = 'read_only'): { blocked: true; reason: stri
     }
   });
   return { blocked: true, reason };
+}
+
+function openScratchpadDefaultFromHotkey(): WikiPage | null {
+  if (!librarianManager || !clipboardHistoryWindow) return null;
+  if (!canWriteFieldTheoryContent()) {
+    blockWrite();
+    return null;
+  }
+
+  const now = Date.now();
+  if (now - lastScratchpadOpenAt < 750) return null;
+  lastScratchpadOpenAt = now;
+
+  const page = librarianManager.createScratchpadDefault();
+  if (!page) return null;
+  const boundsToUse = restoreClipboardHistoryBounds('library');
+  suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
+  clipboardHistoryWindow.show(boundsToUse);
+  clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', {
+    relPath: page.relPath,
+    titleSuggestion: page.titleSuggestion,
+  });
+  return page;
 }
 
 function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
@@ -1217,16 +1241,7 @@ function registerHotkeysAfterOnboarding(): void {
   // scratchpad doc, and drop into edit mode.
   const scratchpadHotkey = prefs.scratchpadHotkey || 'Control+Option+Command+Space';
   const scratchpadRegistered = hotkeyManager.register('scratchpad', scratchpadHotkey, () => {
-    if (!librarianManager) return;
-    const page = librarianManager.createScratchpadDefault();
-    if (!page || !clipboardHistoryWindow) return;
-    const boundsToUse = restoreClipboardHistoryBounds('library');
-    suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
-    clipboardHistoryWindow.show(boundsToUse);
-    clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', {
-      relPath: page.relPath,
-      titleSuggestion: page.titleSuggestion,
-    });
+    openScratchpadDefaultFromHotkey();
   });
   if (!scratchpadRegistered.success) {
     log.warn(`Scratchpad hotkey (${scratchpadHotkey}) registration failed — likely claimed by another app.`);
@@ -2012,6 +2027,10 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     return librarianManager.createScratchpadDefault();
+  });
+
+  ipcMain.handle('wiki:openScratchpadDefault', (): WikiPage | null => {
+    return openScratchpadDefaultFromHotkey();
   });
 
   ipcMain.handle('wiki:createDir', (_event, dirName: string): boolean => {
@@ -3996,7 +4015,7 @@ function setupClipboardIPCHandlers(): void {
       if (isFinder(effectiveBundleId)) {
         log.info('pasteItem: skipping paste to Finder');
         if (clipboardHistoryWindow) {
-          clipboardHistoryWindow.hide(false, 'paste-item-finder-skip');
+          clipboardHistoryWindow.hideAfterPaste('paste-item-finder-skip');
         }
         return;
       }
@@ -4071,10 +4090,9 @@ function setupClipboardIPCHandlers(): void {
         }
       }
 
-      // Hide window first.
+      // Dismiss panel mode before paste; app mode stays visible.
       if (clipboardHistoryWindow) {
-        // Keep app alive and explicitly target the destination app for paste.
-        clipboardHistoryWindow.hide(false, 'paste-item');
+        clipboardHistoryWindow.hideAfterPaste('paste-item');
       }
 
       // If a specific target app was provided, activate it and paste there.
@@ -4156,9 +4174,9 @@ function setupClipboardIPCHandlers(): void {
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
-      // Hide only the window to avoid compositor instability on transparent overlays.
+      // Dismiss panel mode before paste; app mode stays visible.
       if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hide(false, 'paste-stack');
+        clipboardHistoryWindow.hideAfterPaste('paste-stack');
       }
       
       const { nativeImage } = require('electron');
@@ -4329,14 +4347,14 @@ function setupClipboardIPCHandlers(): void {
       if (isFinder(effectiveBundleId)) {
         log.info('pasteText: skipping paste to Finder');
         if (clipboardHistoryWindow) {
-          clipboardHistoryWindow.hide(false, 'paste-text-finder-skip');
+          clipboardHistoryWindow.hideAfterPaste('paste-text-finder-skip');
         }
         return;
       }
 
-      // Hide only the window; paste will explicitly target an app.
+      // Dismiss panel mode before paste; app mode stays visible.
       if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hide(false, 'paste-text');
+        clipboardHistoryWindow.hideAfterPaste('paste-text');
       }
       
       // If a specific target app was provided, activate it and paste there
@@ -4402,12 +4420,12 @@ function setupClipboardIPCHandlers(): void {
     // Skip pasting to Finder - it doesn't handle Cmd+V well and causes stalls
     if (isFinder(bundleId)) {
       log.info('pasteToApp: skipping paste to Finder');
-      clipboardHistoryWindow.hide(false, 'paste-to-app-finder-skip');
+      clipboardHistoryWindow.hideAfterPaste('paste-to-app-finder-skip');
       return false;
     }
 
-    // Hide our window first.
-    clipboardHistoryWindow.hide(false, 'paste-to-app');
+    // Dismiss panel mode before paste; app mode stays visible.
+    clipboardHistoryWindow.hideAfterPaste('paste-to-app');
 
     // Paste to the target app.
     return clipboardHistoryWindow.pasteToApp(bundleId);

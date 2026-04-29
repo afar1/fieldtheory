@@ -40,7 +40,7 @@ export function formatTimeAgo(timestamp: number): string {
 // =============================================================================
 
 export type LauncherLibraryNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: 'open' | 'done' }
   | { kind: 'dir'; name: string; relPath: string; children: LauncherLibraryNode[] };
 
 export interface LauncherLibraryRoot {
@@ -59,6 +59,7 @@ export interface LauncherLibraryMarkdownItem {
   filePath: string;
   relPath?: string;
   lastUpdated?: number;
+  todoState?: 'open' | 'done';
 }
 
 export interface LauncherDirectoryItem extends LauncherSearchableItem {
@@ -379,6 +380,9 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     const type = root.builtin ? 'wiki-page' : 'markdown-file';
     const rootLabel = root.builtin ? 'wiki' : root.label;
     const readableName = node.name.replace(/[-_]+/g, ' ');
+    const todoKeywords = node.todoState
+      ? ['todo', 'task', node.todoState, node.todoState === 'done' ? 'completed' : 'open']
+      : [];
     items.push({
       id: `${type}-${root.path}-${node.relPath}`,
       type,
@@ -392,10 +396,12 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
         rootLabel,
         ...node.name.split('-'),
         ...node.title.split(/\s+/),
+        ...todoKeywords,
       ].filter(Boolean),
       filePath: node.absPath,
       relPath: root.builtin ? node.relPath : undefined,
       lastUpdated: Number.isFinite(node.lastUpdated) ? node.lastUpdated : undefined,
+      todoState: node.todoState,
     });
   };
 

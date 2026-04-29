@@ -1,4 +1,5 @@
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 
 interface MarkdownPreviewCardProps {
   title: string;
@@ -56,6 +57,7 @@ export default function MarkdownPreviewCard({ title, filePath, content, isDark =
         }}
       >
         <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
           components={{
             hr: () => (
               <hr style={{ border: 'none', borderTop: `1px solid ${colors.border}`, margin: '14px 0' }} />

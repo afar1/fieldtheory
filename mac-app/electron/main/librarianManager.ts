@@ -1317,6 +1317,60 @@ export interface ParsedMarkdownHeader {
   modelSignature: string | null;
 }
 
+export type MarkdownTodoState = 'open' | 'done';
+
+function stripYamlScalar(value: string): string {
+  const trimmed = value.trim();
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1).trim();
+  }
+  return trimmed;
+}
+
+function parseSimpleFrontmatterScalars(content: string): Record<string, string> {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+  if (!match) return {};
+
+  const data: Record<string, string> = {};
+  for (const rawLine of match[1].split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    const field = line.match(/^([A-Za-z][\w-]*):\s*(.*?)\s*$/);
+    if (!field) continue;
+    data[field[1].replace(/-/g, '_').toLowerCase()] = stripYamlScalar(field[2]);
+  }
+  return data;
+}
+
+function normalizeMarkdownTodoState(value: string | undefined): MarkdownTodoState | null {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'open') return 'open';
+  if (normalized === 'done') return 'done';
+  return null;
+}
+
+function isTruthyYamlScalar(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === 'true' || normalized === 'yes' || normalized === '1';
+}
+
+function isFalsyYamlScalar(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === 'false' || normalized === 'no' || normalized === '0';
+}
+
+export function parseMarkdownTodoState(content: string): MarkdownTodoState | null {
+  const meta = parseSimpleFrontmatterScalars(content);
+  const declaredTodo = meta.todo ?? meta.task;
+  if (isFalsyYamlScalar(declaredTodo)) return null;
+
+  const state = normalizeMarkdownTodoState(meta.todo_state ?? meta.task_state)
+    ?? normalizeMarkdownTodoState(declaredTodo);
+  if (state) return state;
+
+  return isTruthyYamlScalar(declaredTodo) ? 'open' : null;
+}
+
 export function extractArtifactModelSignature(line: string): string | null {
   const match = line.trim().match(ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE);
   return match ? match[1].trim() : null;
@@ -1562,6 +1616,7 @@ export interface WikiPageMeta {
   name: string;     // filename slug
   title: string;    // from # heading or filename fallback
   lastUpdated: number;
+  todoState?: MarkdownTodoState;
 }
 
 export interface WikiPage extends WikiPageMeta {
@@ -1575,7 +1630,7 @@ export interface WikiFolder {
 }
 
 export type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
 export interface LibraryRoot {
@@ -2493,17 +2548,32 @@ export class LibrarianManager extends EventEmitter {
   private wikiWatcher: chokidar.FSWatcher | null = null;
   private wikiWatcherPending = false;
 
-  private parseWikiTitle(filePath: string): string {
+  private parseWikiMetadata(content: string, filePath: string): { title: string; todoState?: MarkdownTodoState } {
+    let title = path.basename(filePath, '.md');
+    const lines = content.split('\n').slice(0, 20);
+    for (const line of lines) {
+      if (/^#\s*$/.test(line)) {
+        title = '';
+        break;
+      }
+      const match = line.match(/^#\s+(.+)/);
+      if (match) {
+        title = match[1].trim();
+        break;
+      }
+    }
+    return {
+      title,
+      todoState: parseMarkdownTodoState(content) ?? undefined,
+    };
+  }
+
+  private parseWikiFileMetadata(filePath: string): { title: string; todoState?: MarkdownTodoState } {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const lines = content.split('\n').slice(0, 20);
-      for (const line of lines) {
-        if (/^#\s*$/.test(line)) return '';
-        const match = line.match(/^#\s+(.+)/);
-        if (match) return match[1].trim();
-      }
+      return this.parseWikiMetadata(content, filePath);
     } catch {}
-    return path.basename(filePath, '.md');
+    return { title: path.basename(filePath, '.md') };
   }
 
   private toPortableRelPath(relPath: string): string {
@@ -2729,13 +2799,15 @@ export class LibrarianManager extends EventEmitter {
 
       const nameWithoutExt = entry.name.replace(/\.md$/i, '');
       const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, nameWithoutExt)));
+      const metadata = this.parseWikiFileMetadata(absPath);
       nodes.push({
         kind: 'file',
         relPath,
         absPath,
         name: nameWithoutExt,
-        title: this.parseWikiTitle(absPath),
+        title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
+        todoState: metadata.todoState,
       });
     }
 
@@ -2755,6 +2827,7 @@ export class LibrarianManager extends EventEmitter {
           name: node.name,
           title: node.title,
           lastUpdated: node.lastUpdated,
+          todoState: node.todoState,
         }];
       }
       return this.flattenWikiFiles(node.children);
@@ -2882,12 +2955,14 @@ export class LibrarianManager extends EventEmitter {
       const content = fs.readFileSync(absPath, 'utf-8');
       const stats = fs.statSync(absPath);
       const nameWithoutExt = path.basename(absPath, '.md');
+      const metadata = this.parseWikiMetadata(content, absPath);
       return {
         relPath,
         absPath,
         name: nameWithoutExt,
-        title: this.parseWikiTitle(absPath),
+        title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
+        todoState: metadata.todoState,
         content,
       };
     } catch (error) {

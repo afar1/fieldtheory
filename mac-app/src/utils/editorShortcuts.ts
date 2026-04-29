@@ -22,7 +22,7 @@ export function isImmersiveToggleShortcut(e: KeyboardEvent | React.KeyboardEvent
 }
 
 export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
-  return (e.key === ',' || e.code === 'Comma') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+  return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
 export function isMarkdownTaskShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
@@ -35,7 +35,11 @@ export function isMarkdownTaskToggleShortcut(e: KeyboardEvent | React.KeyboardEv
 }
 
 export function isSidebarToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
-  return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+  return (e.key === ',' || e.code === 'Comma') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
+export function isCommandDeleteShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return (e.key === 'Backspace' || e.key === 'Delete') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
 export function isThemeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
