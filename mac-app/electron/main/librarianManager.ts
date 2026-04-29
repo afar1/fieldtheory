@@ -1566,6 +1566,7 @@ export interface WikiPageMeta {
 
 export interface WikiPage extends WikiPageMeta {
   content: string;
+  titleSuggestion?: string;
 }
 
 export interface WikiFolder {
@@ -2497,6 +2498,7 @@ export class LibrarianManager extends EventEmitter {
       const content = fs.readFileSync(filePath, 'utf-8');
       const lines = content.split('\n').slice(0, 20);
       for (const line of lines) {
+        if (/^#\s*$/.test(line)) return '';
         const match = line.match(/^#\s+(.+)/);
         if (match) return match[1].trim();
       }
@@ -3085,7 +3087,7 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  createWikiFile(folderName: string, fileName: string): WikiPage | null {
+  private createWikiFileWithInitialTitle(folderName: string, fileName: string, initialTitle: string, titleSuggestion?: string): WikiPage | null {
     const title = this.stripMarkdownFileExtension(fileName).trim();
     const slug = this.slugifyMarkdownFileName(fileName);
     const folderRelPath = this.normalizeLibraryRelPath(folderName);
@@ -3096,7 +3098,7 @@ export class LibrarianManager extends EventEmitter {
     if (fs.existsSync(absPath)) return null;
     const dirPath = path.dirname(absPath);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-    const content = `# ${title}\n`;
+    const content = initialTitle ? `# ${initialTitle}\n` : '# \n';
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
@@ -3104,23 +3106,37 @@ export class LibrarianManager extends EventEmitter {
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
       this.emit('wiki:changed');
-      return { relPath, absPath, name: slug, title, lastUpdated: Math.floor(stats.mtimeMs), content };
+      return { relPath, absPath, name: slug, title: initialTitle, lastUpdated: Math.floor(stats.mtimeMs), content, titleSuggestion };
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
     }
   }
 
-  // Friendly default name for a scratchpad entry, e.g. "Monday Apr 20th".
-  // Collision fallback appends " at 11:30am" so rapid repeat creations still
-  // succeed without users having to type a name. Capture `now` once so the
-  // fallback's time matches the first attempt's date even if the clock ticks
-  // mid-write.
-  createScratchpadDefault(): WikiPage | null {
+  createWikiFile(folderName: string, fileName: string): WikiPage | null {
+    const title = this.stripMarkdownFileExtension(fileName).trim();
+    return this.createWikiFileWithInitialTitle(folderName, fileName, title);
+  }
+
+  createWikiFileWithTitleSuggestion(folderName: string, titleSuggestion: string): WikiPage | null {
+    const suggested = titleSuggestion.trim();
+    if (!suggested) return null;
+    return this.createWikiFileWithInitialTitle(folderName, suggested, '', suggested);
+  }
+
+  createWikiFileWithDefaultTitleSuggestion(folderName: string): WikiPage | null {
     const now = new Date();
-    const first = this.createWikiFile('scratchpad', defaultScratchpadName(now));
+    const firstTitle = defaultScratchpadName(now);
+    const first = this.createWikiFileWithTitleSuggestion(folderName, firstTitle);
     if (first) return first;
-    return this.createWikiFile('scratchpad', defaultScratchpadNameWithTime(now));
+    const fallbackTitle = defaultScratchpadNameWithTime(now);
+    return this.createWikiFileWithTitleSuggestion(folderName, fallbackTitle);
+  }
+
+  // Scratchpad hotkey flow uses a friendly date suggestion, with a time fallback
+  // if today's suggested filename already exists.
+  createScratchpadDefault(): WikiPage | null {
+    return this.createWikiFileWithDefaultTitleSuggestion('scratchpad');
   }
 
   createWikiDir(dirName: string): boolean {
