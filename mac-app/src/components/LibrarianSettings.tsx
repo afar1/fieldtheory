@@ -8,6 +8,7 @@
 import { useEffect, useState, useCallback, useRef, useMemo, type MouseEvent } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, persistRenderedEditClickMode, restoreRenderedEditClickMode } from '../utils/editorShortcuts';
 import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
 
 interface LibrarianSettingsProps {
@@ -55,6 +56,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
 
   // Settings
   const [enabled, setEnabled] = useState(true);
+  const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
 
   // State-enforced mode settings
   const [stateEnforcedThreshold, setStateEnforcedThreshold] = useState<number>(3);
@@ -366,6 +368,13 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
     setAutoShowStealsFocus(newValue);
     await window.librarianAPI.setAutoShowStealsFocus(newValue);
   }, [autoShowStealsFocus]);
+
+  const handleRenderedEditClickModeToggle = useCallback(() => {
+    const nextMode = renderedEditClickMode === 'click' ? 'command-click' : 'click';
+    setRenderedEditClickMode(nextMode);
+    persistRenderedEditClickMode(localStorage, nextMode);
+    window.dispatchEvent(new Event(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT));
+  }, [renderedEditClickMode]);
 
   // Handle showing Cursor instructions
   const handleShowCursorInstructions = useCallback(async () => {
@@ -830,6 +839,31 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
             type="checkbox"
             checked={autoShowEnabled}
             onChange={handleAutoShowToggle}
+            style={{ width: '18px', height: '18px', cursor: 'pointer' }}
+          />
+        </label>
+
+        <label
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '8px 0',
+            cursor: 'pointer',
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
+              Click rendered markdown to edit
+            </span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Turn off to require Command-click before entering edit mode
+            </span>
+          </div>
+          <input
+            type="checkbox"
+            checked={renderedEditClickMode === 'click'}
+            onChange={handleRenderedEditClickModeToggle}
             style={{ width: '18px', height: '18px', cursor: 'pointer' }}
           />
         </label>

@@ -2,7 +2,7 @@ import { app, BrowserWindow, BrowserWindowConstructorOptions, screen, Menu } fro
 import path from 'path';
 import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistoryBounds, type ClipboardHistorySizeKey } from './preferences';
+import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, resolveFieldTheoryWindowMode, type ClipboardHistoryBounds, type ClipboardHistorySizeKey } from './preferences';
 import { SoundManager } from './soundManager';
 import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
@@ -465,10 +465,10 @@ export class ClipboardHistoryWindow {
   }
 
   private getBlurDismissState() {
-    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const appWindowMode = this.shouldUseAppWindow();
     const clickAwayToDismiss = this.preferencesManager.getPreference('clickAwayToDismiss') ?? true;
     return {
-      showInDock,
+      showInDock: appWindowMode,
       clickAwayToDismiss,
       // Only treat legacy immersive as blur-blocking when the renderer has not
       // opted into panel-like blur dismissal.
@@ -477,6 +477,10 @@ export class ClipboardHistoryWindow {
       scenario: this.scenarioTestingActive,
       recording: this.isRecordingActive,
     };
+  }
+
+  private shouldUseAppWindow(): boolean {
+    return resolveFieldTheoryWindowMode(this.preferencesManager.get()) === 'app';
   }
 
   setImmersiveDismissableOnBlur(dismissable: boolean): void {
@@ -649,7 +653,7 @@ export class ClipboardHistoryWindow {
     );
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
-    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const showInDock = this.shouldUseAppWindow();
 
     if (!showInDock && process.platform === 'darwin') {
       app.dock.hide();
@@ -787,9 +791,9 @@ export class ClipboardHistoryWindow {
     windowX = Math.max(displayBounds.x, Math.min(windowX, displayBounds.x + displayBounds.width - windowWidth));
     windowY = Math.max(displayBounds.y, Math.min(windowY, displayBounds.y + displayBounds.height - windowHeight));
 
-    // Check if we're in "normal app" mode (showInDock) or "panel" mode at creation time.
+    // Check if we're in "normal app" mode or "panel" mode at creation time.
     // These options can't be changed after window creation.
-    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const showInDock = this.shouldUseAppWindow();
 
     // Native vibrancy window options.
     const options: BrowserWindowConstructorOptions = {
@@ -952,13 +956,24 @@ export class ClipboardHistoryWindow {
       return;
     }
 
-    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const showInDock = this.shouldUseAppWindow();
     if (!showInDock) {
       this.window.setAlwaysOnTop(true, 'screen-saver', 1);
     }
 
     this.window.showInactive();
     this.window.moveTop();
+  }
+
+  focusExistingWindow(): boolean {
+    if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+      return false;
+    }
+
+    this._isShowing = true;
+    this.revealWindow(true, this.shouldUseAppWindow());
+    this.logLifecycle('focus-existing-window');
+    return true;
   }
 
   /**
@@ -1034,7 +1049,7 @@ export class ClipboardHistoryWindow {
       // Even when not hiding the whole app, ensure dock stays hidden.
       // Immersive mode (alwaysOnTop:false) or dock.bounce() can cause the
       // dock icon to reappear; re-hide it on every window dismiss.
-      const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+      const showInDock = this.shouldUseAppWindow();
       if (!showInDock && process.platform === 'darwin') {
         app.dock.hide();
       }
@@ -1054,6 +1069,7 @@ export class ClipboardHistoryWindow {
     let previousApp = this.getPreviousApp();
     const pendingCapture = !previousApp?.bundleId ? this.previousAppCapturePromise : null;
     this.hide(false, reason);
+    if (this.shouldUseAppWindow()) return;
     if (!previousApp?.bundleId) {
       previousApp = await this.resolvePreviousAppForRestore(pendingCapture);
     }
@@ -1345,7 +1361,7 @@ export class ClipboardHistoryWindow {
     // Don't show dock when entering immersive mode.
 
     // Only adjust alwaysOnTop in panel mode (not showInDock mode)
-    const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
+    const showInDock = this.shouldUseAppWindow();
     if (!showInDock && this.window && !this.window.isDestroyed()) {
       if (immersive) {
         // In immersive mode, disable alwaysOnTop so window behaves normally

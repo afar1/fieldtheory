@@ -100,12 +100,13 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   useEffect(() => {
     if (!active) return;
     let cancelled = false;
+    const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
     getBookmarks().then((data) => {
       if (!cancelled) setSnapshot(data);
     });
-    const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
+    void window.bookmarksAPI?.syncIfStale?.();
     return () => { cancelled = true; unsub(); };
-  }, [active]);
+  }, [active, mode]);
 
   // Debounce search input; 7k substring scans is fast but avoid churn while typing.
   useEffect(() => {
