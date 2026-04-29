@@ -621,6 +621,7 @@ export class HotMicManager extends EventEmitter {
   setAudioManager(manager: AudioManager): void {
     this.audioManager = manager;
     manager.on('deviceEnforced', () => this.handleDeviceEnforced());
+    manager.on('priorityDeviceUnavailable', () => this.handlePriorityDeviceUnavailable());
     log.info('Hot Mic: AudioManager wired for priority mic enforcement');
   }
 
@@ -632,6 +633,24 @@ export class HotMicManager extends EventEmitter {
       await this.nativeHelper.startRecording();
     } catch (error) {
       log.error('Hot Mic: failed to restart recording after device enforcement:', error);
+    }
+  }
+
+  private async handlePriorityDeviceUnavailable(): Promise<void> {
+    if (this.state === 'idle' || this.muted || !this.nativeHelper.isRecordingActive()) return;
+
+    const defaultInputId = this.audioManager?.getState().defaultInputId ?? null;
+    log.warn('Hot Mic: priority input disappeared; restarting recording on current default input');
+
+    try {
+      await this.nativeHelper.stopRecording();
+      if (!defaultInputId) {
+        log.warn('Hot Mic: priority input disappeared and no fallback input is available; recording stopped');
+        return;
+      }
+      await this.nativeHelper.startRecording();
+    } catch (error) {
+      log.error('Hot Mic: failed to recover after priority input disappeared:', error);
     }
   }
 

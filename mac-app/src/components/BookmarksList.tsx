@@ -16,6 +16,21 @@ function formatPostedAt(raw: string): string {
   return new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+function bookmarkPrimaryLabel(bm: Bookmark): string {
+  if (bm.sourceType === 'web') return bm.title || bm.domain || bm.url;
+  return bm.authorName || bm.authorHandle || 'Unknown author';
+}
+
+function bookmarkSecondaryLabel(bm: Bookmark): string {
+  if (bm.sourceType === 'web') return bm.domain || 'web';
+  return bm.authorHandle ? `@${bm.authorHandle}` : '';
+}
+
+function bookmarkBodyText(bm: Bookmark): string {
+  if (bm.sourceType === 'web') return bm.excerpt || bm.text;
+  return bm.text;
+}
+
 // Virtualization constants. Height is estimated from char count so we avoid
 // mounting all 7k+ list items on first paint (was ~400ms of React
 // reconciliation). Approximate heights cause no layout jump because each
@@ -30,8 +45,9 @@ const IMAGE_BLOCK = 148;
 const GAP_BELOW = 8;
 
 export function estimateRowHeight(bm: Bookmark): number {
-  const bodyLines = bm.text ? wrapLines(bm.text, AVG_CHAR, BODY_WIDTH_ESTIMATE) : 0;
-  const bodyHeight = bodyLines * BODY_LINE_HEIGHT + (bm.text ? 4 : 0);
+  const text = bookmarkBodyText(bm);
+  const bodyLines = text ? wrapLines(text, AVG_CHAR, BODY_WIDTH_ESTIMATE) : 0;
+  const bodyHeight = bodyLines * BODY_LINE_HEIGHT + (text ? 4 : 0);
   const imageHeight = localMediaUrls(bm.images).length > 0 ? IMAGE_BLOCK : 0;
   return Math.round(CARD_PAD * 2 + CARD_BORDER * 2 + HEADER_ROW + bodyHeight + imageHeight + GAP_BELOW);
 }
@@ -57,6 +73,8 @@ function Row({ index, style, bookmarks, theme }: RowComponentProps<RowProps>) {
   const bm = bookmarks[index];
   const mediaUrls = localMediaUrls(bm.images).slice(0, 4);
   const avatarUrl = localAvatarUrl(bm);
+  const secondary = bookmarkSecondaryLabel(bm);
+  const bodyText = bookmarkBodyText(bm);
   return (
     <div style={style}>
       <a
@@ -94,14 +112,14 @@ function Row({ index, style, bookmarks, theme }: RowComponentProps<RowProps>) {
                 style={{ width: '16px', height: '16px', borderRadius: '50%', objectFit: 'cover', flexShrink: 0 }}
               />
             )}
-            <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>{bm.authorName || bm.authorHandle}</span>
-            {bm.authorHandle && (
-              <span style={{ fontSize: '11px', color: theme.textSecondary }}>@{bm.authorHandle}</span>
+            <span style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>{bookmarkPrimaryLabel(bm)}</span>
+            {secondary && (
+              <span style={{ fontSize: '11px', color: theme.textSecondary }}>{secondary}</span>
             )}
             <span style={{ fontSize: '11px', color: theme.textSecondary, opacity: 0.7 }}>· {formatPostedAt(bm.postedAt)}</span>
           </div>
           <div style={{ fontSize: '13px', color: theme.text, lineHeight: 1.45, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {bm.text}
+            {bodyText}
           </div>
           {mediaUrls.length > 0 && (
             <div

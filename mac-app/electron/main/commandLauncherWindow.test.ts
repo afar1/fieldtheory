@@ -10,7 +10,7 @@ const mockWindow = vi.hoisted(() => ({
   focus: vi.fn(),
   moveTop: vi.fn(),
   setBounds: vi.fn(),
-  getBounds: vi.fn(() => ({ x: 0, y: 0, width: 320, height: 36 })),
+  getBounds: vi.fn(() => ({ x: 0, y: 0, width: 425, height: 36 })),
   setAlwaysOnTop: vi.fn(),
   setVisibleOnAllWorkspaces: vi.fn(),
   loadURL: vi.fn(),
@@ -63,6 +63,7 @@ vi.mock('child_process', () => ({
 }));
 
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { BrowserWindow } from 'electron';
 
 describe('CommandLauncherWindow.show()', () => {
   beforeEach(() => {
@@ -86,9 +87,9 @@ describe('CommandLauncherWindow.show()', () => {
 
     expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
-      x: 390,
-      y: 350,
-      width: 320,
+      x: 338,
+      y: 323,
+      width: 425,
       height: 36,
     });
   });
@@ -208,7 +209,7 @@ describe('CommandLauncherWindow resize IPC', () => {
     mockIpcMainHandlers.clear();
     mockWindow.isVisible.mockReturnValue(true);
     mockWindow.isDestroyed.mockReturnValue(false);
-    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 320, height: 36 });
+    mockWindow.getBounds.mockReturnValue({ x: 10, y: 20, width: 425, height: 36 });
   });
 
   it('keeps renderer resize requests inside the normal launcher height', () => {
@@ -220,8 +221,8 @@ describe('CommandLauncherWindow resize IPC', () => {
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
-      width: 320,
-      height: 300,
+      width: 425,
+      height: 354,
     });
   });
 
@@ -234,8 +235,8 @@ describe('CommandLauncherWindow resize IPC', () => {
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
-      width: 320,
-      height: 300,
+      width: 425,
+      height: 354,
     });
   });
 });
@@ -250,10 +251,13 @@ describe('CommandLauncherWindow preview IPC', () => {
 
   it('shows the detached preview centered on the active display', () => {
     new CommandLauncherWindow();
-    const bookmark = { id: 'bookmark-1', text: 'hello' };
+    const preview = { kind: 'bookmark', bookmark: { id: 'bookmark-1', text: 'hello' } };
 
-    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, bookmark);
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
 
+    expect(BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({
+      hasShadow: false,
+    }));
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 700,
       y: 260,
@@ -261,7 +265,7 @@ describe('CommandLauncherWindow preview IPC', () => {
       height: 560,
     });
     expect(mockWindow.showInactive).toHaveBeenCalled();
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher-preview:bookmark', bookmark);
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher-preview:payload', preview);
   });
 
   it('centers the detached preview over the launcher anchor bounds', async () => {
@@ -277,13 +281,57 @@ describe('CommandLauncherWindow preview IPC', () => {
     });
 
     mockWindow.setBounds.mockClear();
-    const bookmark = { id: 'bookmark-2', text: 'anchored' };
+    const preview = { kind: 'markdown', title: 'refactor.md', filePath: '/tmp/refactor.md', content: '# Refactor' };
 
-    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, bookmark);
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
 
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 290,
       y: 270,
+      width: 520,
+      height: 560,
+    });
+  });
+
+  it('resizes the detached preview around measured content height', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    const preview = { kind: 'bookmark', bookmark: { id: 'bookmark-1', text: 'short' } };
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
+    mockWindow.setBounds.mockClear();
+    mockWindow.isVisible.mockReturnValue(true);
+
+    mockIpcMainHandlers.get('command-launcher:preview-resize')?.({}, 360);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 290,
+      y: 370,
+      width: 520,
+      height: 360,
+    });
+  });
+
+  it('clamps detached preview resize requests to the maximum preview height', () => {
+    new CommandLauncherWindow();
+    const preview = { kind: 'bookmark', bookmark: { id: 'bookmark-1', text: 'hello' } };
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
+    mockWindow.setBounds.mockClear();
+    mockWindow.isVisible.mockReturnValue(true);
+
+    mockIpcMainHandlers.get('command-launcher:preview-resize')?.({}, 1200);
+
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: 700,
+      y: 260,
       width: 520,
       height: 560,
     });

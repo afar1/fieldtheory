@@ -151,6 +151,9 @@ interface Preferences {
   // Show in Dock and Cmd+Tab - when enabled, app appears in Dock and application switcher.
   showInDock?: boolean;
 
+  // Click-away dismissal - when enabled, the panel hides after focus moves to another app.
+  clickAwayToDismiss?: boolean;
+
   // Show fieldtheory.dev link in footer - toggleable per user preference.
   showFieldTheoryLink?: boolean;
 
@@ -294,6 +297,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Show in Dock - disabled by default (panel mode). WIP feature.
   showInDock: false,
+
+  // Click-away dismissal matches the existing panel behavior by default.
+  clickAwayToDismiss: true,
 
   // Dark mode - disabled by default (light mode).
   darkMode: false,

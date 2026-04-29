@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection } from './LibrarianView';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
@@ -47,6 +47,7 @@ import {
   RunningApp,
   TAB_LABELS,
   nextTopNavViewMode,
+  shouldCycleTopNavWithTab,
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
@@ -92,6 +93,15 @@ function isTopNavMode(mode: ViewMode): mode is TopNavMode {
   return mode === 'clipboard' || mode === 'librarian' || mode === 'commands';
 }
 
+function traceTopNav(event: string, details: Record<string, unknown> = {}) {
+  window.commandsAPI?.launcherTrace?.(event, details);
+}
+
+function shouldRestoreLibrarianImmersive(storage: Pick<Storage, 'getItem'>): boolean {
+  return storage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+    && restoreLibrarianSelection(storage)?.type === 'bookmarks';
+}
+
 function cssTimeToMs(value: string): number {
   const trimmed = value.trim();
   if (!trimmed) return 0;
@@ -110,8 +120,8 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
 }
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
-const FOCUS_CHROME_ICON_TOP_PX = 64;
-const FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX = 84;
+const FOCUS_CHROME_ICON_TOP_PX = 48;
+const FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX = 70;
 
 /**
  * Check if any items in a stack have improved content.
@@ -323,9 +333,9 @@ export default function ClipboardHistory() {
   const [undoStack, setUndoStack] = useState<UndoAction[]>([]);
   const [redoStack, setRedoStack] = useState<UndoAction[]>([]);
 
-  // Librarian immersive mode - when in full-screen reading, fade the header
+  // Librarian legacy immersive mode. Kept for Bookmarks; normal Library docs use focus chrome.
   const [librarianImmersive, setLibrarianImmersive] = useState(
-    () => localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+    () => shouldRestoreLibrarianImmersive(localStorage)
   );
   // Sidebar collapse state lives here so the footer toggle can drive it
   // regardless of which view is currently active. Shared between Library and
@@ -374,6 +384,13 @@ export default function ClipboardHistory() {
 
     const highlightAppliedAt = applyTopNavVisualMode(next);
     viewModeRef.current = next;
+    traceTopNav('top-nav-switch-start', {
+      source: 'keyboard-tab',
+      from: previous,
+      to: next,
+      activeTag: document.activeElement?.tagName ?? null,
+      activeTopNavMode: (document.activeElement as HTMLElement | null)?.dataset?.topNavMode ?? null,
+    });
     topNavPaintTraceRef.current = {
       from: previous,
       to: next,
@@ -389,15 +406,16 @@ export default function ClipboardHistory() {
   const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(null);
   const [pendingCommandPath, setPendingCommandPath] = useState<string | null>(null);
   // Path of an artifact the librarian auto-popped that the user hasn't navigated
-  // away from yet. While this is set, Escape dismisses the window (preserving
-  // the artifact-popup UX) rather than merely exiting immersive.
+  // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
+  const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
+  const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
   const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
   const appChromeHidden = isFocusChromeSurface && focusChromeActive;
   const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive;
-  const footerChromeHidden = appChromeHidden;
+  const footerChromeHidden = appChromeHidden || bookmarksCanvasChromeActive;
   const collapseSidebarForFocusChrome = useCallback(() => {
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
     setNavSidebarCollapsed(true);
@@ -426,6 +444,13 @@ export default function ClipboardHistory() {
       const startedAt = performance.now();
       const highlightAppliedAt = applyTopNavVisualMode(mode);
       viewModeRef.current = mode;
+      traceTopNav('top-nav-switch-start', {
+        source: 'tab-click',
+        from: previous,
+        to: mode,
+        activeTag: document.activeElement?.tagName ?? null,
+        activeTopNavMode: (document.activeElement as HTMLElement | null)?.dataset?.topNavMode ?? null,
+      });
       topNavPaintTraceRef.current = {
         from: previous,
         to: mode,
@@ -784,6 +809,9 @@ export default function ClipboardHistory() {
   
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
+  const focusChromeIconTop = bookmarksCanvasToolbarTop === null
+    ? (showInDock ? FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX : FOCUS_CHROME_ICON_TOP_PX)
+    : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
   // Show fieldtheory.dev link in footer.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
@@ -1257,10 +1285,24 @@ export default function ClipboardHistory() {
     );
     const selectedStyle = selectedButton ? window.getComputedStyle(selectedButton) : null;
     const transitionMs = selectedStyle ? maxTransitionMs(selectedStyle) : null;
+    const timingDetails = {
+      source: trace.source,
+      from: trace.from,
+      to: trace.to,
+      highlightMs: trace.highlightAppliedAt === undefined ? null : Number((trace.highlightAppliedAt - trace.startedAt).toFixed(1)),
+      commitMs: Number((commitAt - trace.startedAt).toFixed(1)),
+      cssTransitionMs: transitionMs === null ? null : Number(transitionMs.toFixed(0)),
+    };
+    traceTopNav('top-nav-switch-commit', timingDetails);
 
-    if (import.meta.env.DEV) {
-      requestAnimationFrame(() => {
-        const frameAt = performance.now();
+    requestAnimationFrame(() => {
+      const frameAt = performance.now();
+      const frameDetails = {
+        ...timingDetails,
+        nextFrameMs: Number((frameAt - trace.startedAt).toFixed(1)),
+      };
+      traceTopNav('top-nav-switch-frame', frameDetails);
+      if (import.meta.env.DEV) {
         console.info(
           `[TopNavTiming] ${trace.source} ${trace.from} -> ${trace.to}: ` +
           `highlight=${trace.highlightAppliedAt === undefined ? 'n/a' : `${(trace.highlightAppliedAt - trace.startedAt).toFixed(1)}ms`} ` +
@@ -1268,8 +1310,8 @@ export default function ClipboardHistory() {
           `nextFrame=${(frameAt - trace.startedAt).toFixed(1)}ms ` +
           `cssTransition=${transitionMs === null ? 'n/a' : `${transitionMs.toFixed(0)}ms`}`
         );
-      });
-    }
+      }
+    });
 
     topNavPaintTraceRef.current = null;
   }, [applyTopNavVisualMode, showSettings, viewMode]);
@@ -1650,8 +1692,8 @@ export default function ClipboardHistory() {
 
   useEffect(() => {
     localStorage.setItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY, librarianImmersive ? 'true' : 'false');
-    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive);
-  }, [librarianImmersive, showSettings, viewMode]);
+    window.librarianAPI?.setImmersiveMode(viewMode === 'librarian' && !showSettings && librarianImmersive && !focusChromeActive);
+  }, [focusChromeActive, librarianImmersive, showSettings, viewMode]);
 
   useEffect(() => {
     if ((showSettings || viewMode !== 'librarian') && librarianImmersive) {
@@ -1777,7 +1819,7 @@ export default function ClipboardHistory() {
       setLibrarianImmersive(
         restoreState.viewMode === 'librarian' &&
         !restoreState.showSettings &&
-        localStorage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
+        shouldRestoreLibrarianImmersive(localStorage)
       );
     });
 
@@ -1946,7 +1988,7 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
-  // Poll for pending readings and handle immersive librarian handoff.
+  // Poll for pending readings and handle Library auto-open handoff.
   useEffect(() => {
     if (!isWindowVisible) return;
 
@@ -1954,13 +1996,13 @@ export default function ClipboardHistory() {
       const status = await window.librarianAPI?.pollStatus?.();
       if (!status) return;
 
-      // If there's a pending reading, show it in immersive mode
+      // If there's a pending reading, show it in Library without changing the window size.
       if (status.pendingPath) {
         setPendingReadingPath(status.pendingPath);
         setAutoPopArtifactPath(status.pendingPath);
         setShowSettings(false);
         setViewMode('librarian');
-        setLibrarianImmersive(true);
+        setLibrarianImmersive(false);
       }
 
     };
@@ -1983,14 +2025,14 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, [viewMode]);
 
-  // Handle new reading to show immediately (when already in immersive mode)
+  // Handle new reading to show immediately when Library is already active.
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onShowNewReading((readingPath: string) => {
-      // Update the reading being displayed in immersive mode
+      // Update the reading being displayed without changing the window size.
       setPendingReadingPath(readingPath);
       setShowSettings(false);
       setViewMode('librarian');
-      setLibrarianImmersive(true);
+      setLibrarianImmersive(false);
     });
 
     return () => unsubscribe?.();
@@ -2275,14 +2317,13 @@ export default function ClipboardHistory() {
       }
 
       // Tab/Shift+Tab cycles through view modes (global shortcut, works from any view).
-      // But allow normal Tab navigation when focused on tab buttons or input fields.
+      // But allow normal Tab navigation when focused on input fields.
       if (key === 'Tab' && !hasCtrl && !hasMeta) {
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+        if (!shouldCycleTopNavWithTab(document.activeElement?.tagName)) {
+          traceTopNav('top-nav-tab-native', {
+            activeTag: document.activeElement?.tagName ?? null,
+          });
           return; // Let Tab navigate between form fields naturally.
-        }
-        // If focused on a tab button, let Tab work normally to navigate between buttons.
-        if (tabsRef.current && tabsRef.current.contains(document.activeElement)) {
-          return; // Let Tab navigate between tab buttons naturally.
         }
         e.preventDefault();
 
@@ -3439,12 +3480,15 @@ export default function ClipboardHistory() {
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
           style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
             height: '8px',
-            minHeight: '8px',
+            zIndex: 30,
             // @ts-ignore - webkit vendor prefix for Electron draggable region
             WebkitAppRegion: 'drag',
             cursor: 'grab',
-            flexShrink: 0,
           }}
         />
       )}
@@ -3681,7 +3725,7 @@ export default function ClipboardHistory() {
           aria-hidden="true"
           style={{
             position: 'absolute',
-            top: showInDock ? FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX : FOCUS_CHROME_ICON_TOP_PX,
+            top: focusChromeIconTop,
             left: '50%',
             transform: 'translateX(-50%)',
             zIndex: 20,
@@ -4259,6 +4303,8 @@ export default function ClipboardHistory() {
             onSwitchToSettings={handleLibrarianSwitchToSettings}
             onFullScreenChange={setLibrarianImmersive}
             onFocusChromeActiveChange={handleFocusChromeActiveChange}
+            onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
+            onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
             initialReadingPath={pendingReadingPath}
             initialOpenTarget={pendingLibraryOpenTarget}
             initialFullScreen={librarianImmersive}
@@ -6405,16 +6451,13 @@ export default function ClipboardHistory() {
           borderTop: `1px solid ${theme.border}`,
           backgroundColor: theme.bgSecondary,
           backdropFilter: theme.isDark && theme.glassEnabled ? 'blur(10px)' : 'none',
-          display: 'flex',
+          display: footerChromeHidden ? 'none' : 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
           fontSize: '11px',
           color: theme.textSecondary,
           userSelect: 'none',
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-          opacity: footerChromeHidden ? 0 : 1,
-          pointerEvents: footerChromeHidden ? 'none' : 'auto',
-          transition: 'opacity 0.18s ease',
         }}
       >
         {/* Left side: sidebar toggle + plan info (quotas or stats) */}
@@ -6922,7 +6965,9 @@ export default function ClipboardHistory() {
           style={{
             position: 'absolute',
             right: '16px',
-            bottom: '8px',
+            ...(bookmarksCanvasChromeActive
+              ? { top: showInDock ? '38px' : '10px' }
+              : { bottom: '8px' }),
             zIndex: 20,
             pointerEvents: 'auto',
           }}

@@ -527,6 +527,10 @@ interface ClipboardAPI {
   getShowInDock?: () => Promise<boolean>;
   setShowInDock?: (show: boolean) => Promise<boolean>;
 
+  // Click-away dismissal
+  getClickAwayToDismiss?: () => Promise<boolean>;
+  setClickAwayToDismiss?: (enabled: boolean) => Promise<boolean>;
+
   // Show fieldtheory.dev link in footer
   getShowFieldTheoryLink?: () => Promise<boolean>;
   setShowFieldTheoryLink?: (show: boolean) => Promise<boolean>;
@@ -1056,8 +1060,19 @@ interface QuotaLimits {
  * API for tracking and displaying quota usage.
  * Free users have monthly limits on priority mic, auto-stacking, and text improvements.
  */
+type TrialState = 'pro' | 'trial' | 'expired';
+
 interface QuotaAPI {
-  getQuotas: () => Promise<{ priorityMic: QuotaStatus; autoStack: QuotaStatus; textImprove: QuotaStatus; portableCommands: QuotaStatus; tier: 'free' | 'pro' } | null>;
+  getQuotas: () => Promise<{
+    priorityMic: QuotaStatus;
+    autoStack: QuotaStatus;
+    textImprove: QuotaStatus;
+    portableCommands: QuotaStatus;
+    tier: 'free' | 'pro';
+    state: TrialState;
+    trialEndsAt: string | null;
+    nextTrialResetAt: string | null;
+  } | null>;
   checkQuota: (feature: 'priorityMic' | 'autoStack' | 'textImprove' | 'portableCommands') => Promise<QuotaCheckResult>;
   getFormattedUsage: () => Promise<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }>;
   getResetDate: () => Promise<Date>;
@@ -1065,6 +1080,7 @@ interface QuotaAPI {
   getLimits: () => Promise<QuotaLimits>;
   refreshTier: () => Promise<{ tier: 'free' | 'pro'; error: string | null }>;
   onTierChanged: (callback: (tier: 'free' | 'pro') => void) => () => void;
+  onStateChanged: (callback: (state: TrialState) => void) => () => void;
   onQuotaExhausted: (callback: (data: QuotaExhaustedData) => void) => () => void;
   onQuotaChanged: (callback: (data: { priorityMic: string; autoStack: string; textImprove: string; portableCommands: string }) => void) => () => void;
 }
@@ -1158,6 +1174,16 @@ interface FieldTheoryMarkdownTarget {
   path: string;
 }
 
+interface MarkdownPreview {
+  title: string;
+  filePath: string;
+  content: string;
+}
+
+type LauncherPreviewPayload =
+  | { kind: 'bookmark'; bookmark: Bookmark }
+  | { kind: 'markdown'; title: string; filePath: string; content: string };
+
 /**
  * Commands API for managing portable commands (markdown files).
  * Allows users to bring their commands from other tools like Claude, Cursor, etc.
@@ -1184,6 +1210,7 @@ interface CommandsAPI {
 
   // CRUD operations
   getCommandByPath: (filePath: string) => Promise<CommandWithContent | null>;
+  getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   saveCommand: (filePath: string, content: string) => Promise<boolean>;
   createCommand: (directoryPath: string, name: string, content?: string) => Promise<{ path: string; name: string } | null>;
   deleteCommand: (filePath: string) => Promise<boolean>;
@@ -1194,9 +1221,11 @@ interface CommandsAPI {
   launcherResize?: (height: number) => void;
   launcherClose?: () => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
-  launcherPreviewShow?: (bookmark: Bookmark) => void;
+  launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
+  launcherPreviewResize?: (height: number) => void;
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
+  onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: () => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
@@ -1451,6 +1480,8 @@ interface LibrarianAPI {
   isCodexHookInstalled: () => Promise<boolean>;
   installCodexHook: () => Promise<boolean>;
   uninstallCodexHook: () => Promise<boolean>;
+  isCodexStopOnPendingEnabled: () => Promise<boolean>;
+  setCodexStopOnPendingEnabled: (enabled: boolean) => Promise<boolean>;
   // Discovery Frequency API
   getDiscoveryFrequency: () => Promise<string>;
   setDiscoveryFrequency: (frequency: string) => Promise<boolean>;
@@ -1709,7 +1740,7 @@ declare global {
   }
   interface Bookmark {
     id: string;
-    sourceType: 'x';
+    sourceType: 'x' | 'web';
     text: string;
     url: string;
     authorHandle: string;
@@ -1724,6 +1755,11 @@ declare global {
     bookmarkCount: number;
     folders: string[];
     quotedTweet?: QuotedTweet;
+    title?: string;
+    domain?: string;
+    excerpt?: string;
+    savedAt?: string;
+    markdownPath?: string;
   }
   interface BookmarkFolder {
     name: string;
@@ -1732,6 +1768,12 @@ declare global {
   interface BookmarksSnapshot {
     bookmarks: Bookmark[];
     folders: BookmarkFolder[];
+  }
+  interface ActiveWebPage {
+    url: string;
+    title: string;
+    bundleId: string;
+    appName: string;
   }
   interface BookmarkAuthorSummary {
     handle: string;
@@ -1744,7 +1786,13 @@ declare global {
     getAll: () => Promise<BookmarksSnapshot>;
     getAuthors: () => Promise<BookmarkAuthorSummary[]>;
     getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
+    getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;
+    search: (query: string) => Promise<Bookmark[]>;
+    saveWebUrl: (url: string) => Promise<{ success: boolean; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
+    getActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; error?: string }>;
+    saveActiveWebPage: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
     invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
+    copyForAgent: (id: string) => Promise<{ success: boolean; error?: string }>;
     invokeAuthorTimeline: (handle: string) => Promise<{ success: boolean; error?: string }>;
     onChanged: (callback: () => void) => () => void;
   }
