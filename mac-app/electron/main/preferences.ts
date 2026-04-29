@@ -138,6 +138,7 @@ interface Preferences {
   // Previously hardcoded hotkeys - now customizable
   superPasteHotkey?: string;
   commandLauncherHotkey?: string;
+  scratchpadHotkey?: string;
   autoImproveHotkey?: string;
   
   // Note: improvedPromptsCount removed - server tracks text improve usage via improve-text edge function
@@ -314,6 +315,7 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Previously hardcoded hotkeys - now customizable
   superPasteHotkey: 'Command+Shift+V',
   commandLauncherHotkey: 'Command+Shift+K',
+  scratchpadHotkey: 'Control+Option+Command+Space',
   autoImproveHotkey: 'Command+Shift+\\',
   autoImproveTranscripts: false,
 

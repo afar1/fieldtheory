@@ -52,6 +52,7 @@ type HotkeyCapture =
   | 'abandon'
   | 'superPaste'
   | 'commandLauncher'
+  | 'scratchpad'
   | 'hotMic'
   | null;
 
@@ -378,9 +379,10 @@ export default function SettingsPanel({
   const [continuousContextEnabled, setContinuousContextEnabled] = useState(false);
   const [continuousContextHotkey, setContinuousContextHotkey] = useState('Shift+Command+4');
 
-  // Additional hotkeys (SuperPaste, CommandLauncher, ImproveText, AutoImprove)
+  // Additional hotkeys (SuperPaste, CommandLauncher, Scratchpad)
   const [superPasteHotkey, setSuperPasteHotkey] = useState('Command+Shift+V');
   const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
+  const [scratchpadHotkey, setScratchpadHotkey] = useState('Control+Option+Command+Space');
 
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
@@ -572,6 +574,9 @@ export default function SettingsPanel({
       });
       window.hotkeyAPI.getHotkey('commandLauncher').then(hotkey => {
         if (hotkey) setCommandLauncherHotkey(hotkey);
+      });
+      window.hotkeyAPI.getHotkey('scratchpad').then(hotkey => {
+        if (hotkey) setScratchpadHotkey(hotkey);
       });
     }
 
@@ -1177,6 +1182,30 @@ export default function SettingsPanel({
     }
   }, []);
 
+  const handleSetScratchpadHotkey = useCallback(async (hotkeyString: string) => {
+    setCapturingHotkey(null);
+    setHotkeyError(null);
+
+    if (!window.hotkeyAPI?.setHotkey) return;
+
+    if (!hotkeyString || isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+
+    try {
+      const result = await window.hotkeyAPI.setHotkey('scratchpad', hotkeyString);
+      if (!result.success) {
+        setHotkeyError(result.error || 'Failed to register Scratchpad hotkey.');
+      } else {
+        setScratchpadHotkey(hotkeyString);
+      }
+    } catch (err) {
+      setHotkeyError(err instanceof Error ? err.message : 'Failed to set Scratchpad hotkey');
+      console.error('Failed to set Scratchpad hotkey:', err);
+    }
+  }, []);
+
   // Handler for setting Hot Mic hotkey
   const handleSetHotMicHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1322,6 +1351,8 @@ export default function SettingsPanel({
           handleSetSuperPasteHotkey(hotkeyString);
         } else if (capturingHotkey === 'commandLauncher') {
           handleSetCommandLauncherHotkey(hotkeyString);
+        } else if (capturingHotkey === 'scratchpad') {
+          handleSetScratchpadHotkey(hotkeyString);
         } else if (capturingHotkey === 'hotMic') {
           handleSetHotMicHotkey(hotkeyString);
         }
@@ -1330,7 +1361,7 @@ export default function SettingsPanel({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetHotMicHotkey]);
+  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
 
   // Section header component for consistent divider styling
   const SectionHeader = ({ title }: { title: string }) => (
@@ -1814,6 +1845,28 @@ export default function SettingsPanel({
               {capturingHotkey === 'commandLauncher' ? 'Press keys...' : (commandLauncherHotkey || 'Not set')}
             </button>
             {capturingHotkey === 'commandLauncher' && (
+              <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+            )}
+          </div>
+        </div>
+
+        {/* Scratchpad */}
+        <div style={styles.row}>
+          <span style={styles.rowLabel}>
+            New Scratchpad
+            <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+              (create a markdown note)
+            </span>
+          </span>
+          <div style={styles.rowControls}>
+            <button
+              onClick={() => { setCapturingHotkey('scratchpad'); setHotkeyError(null); }}
+              disabled={capturingHotkey !== null}
+              style={{ ...styles.btn, ...(capturingHotkey === 'scratchpad' ? styles.btnActive : {}) }}
+            >
+              {capturingHotkey === 'scratchpad' ? 'Press keys...' : (scratchpadHotkey || 'Not set')}
+            </button>
+            {capturingHotkey === 'scratchpad' && (
               <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
             )}
           </div>

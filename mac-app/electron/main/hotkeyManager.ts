@@ -18,6 +18,7 @@ export type HotkeyId =
   | 'abandonRecording'
   | 'superPaste'
   | 'commandLauncher'
+  | 'scratchpad'
   | 'hotMic';
 
 /**
@@ -104,6 +105,13 @@ export const HOTKEY_CONFIGS: Record<HotkeyId, HotkeyConfig> = {
     defaultKey: 'Command+Shift+K',
     preferenceKey: 'commandLauncherHotkey',
     description: 'Open command launcher',
+    category: 'navigation',
+  },
+  scratchpad: {
+    id: 'scratchpad',
+    defaultKey: 'Control+Option+Command+Space',
+    preferenceKey: 'scratchpadHotkey',
+    description: 'Create scratchpad note',
     category: 'navigation',
   },
   hotMic: {

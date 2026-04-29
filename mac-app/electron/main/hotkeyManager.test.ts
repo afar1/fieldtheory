@@ -33,6 +33,14 @@ describe('HotkeyManager config', () => {
   it('does not expose the removed improveText hotkey', () => {
     expect(Object.prototype.hasOwnProperty.call(HOTKEY_CONFIGS, 'improveText')).toBe(false);
   });
+
+  it('exposes scratchpad as a configurable navigation hotkey', () => {
+    expect(HOTKEY_CONFIGS.scratchpad).toMatchObject({
+      defaultKey: 'Control+Option+Command+Space',
+      preferenceKey: 'scratchpadHotkey',
+      category: 'navigation',
+    });
+  });
 });
 
 describe('HotkeyManager policy', () => {

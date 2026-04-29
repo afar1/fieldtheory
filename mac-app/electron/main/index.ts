@@ -1205,11 +1205,10 @@ function registerHotkeysAfterOnboarding(): void {
       }
   });
 
-  // Control+Option+Command+Space: show Field Theory, jump to Library, create
-  // a new scratchpad doc, and drop into edit mode. One keystroke → ready to
-  // type an ad-hoc thought.
-  const scratchpadHotkey = 'Control+Option+Command+Space';
-  const scratchpadRegistered = globalShortcut.register(scratchpadHotkey, () => {
+  // Scratchpad hotkey: show Field Theory, jump to Library, create a new
+  // scratchpad doc, and drop into edit mode.
+  const scratchpadHotkey = prefs.scratchpadHotkey || 'Control+Option+Command+Space';
+  const scratchpadRegistered = hotkeyManager.register('scratchpad', scratchpadHotkey, () => {
     if (!librarianManager) return;
     const page = librarianManager.createScratchpadDefault();
     if (!page || !clipboardHistoryWindow) return;
@@ -1218,7 +1217,7 @@ function registerHotkeysAfterOnboarding(): void {
     clipboardHistoryWindow.show(boundsToUse);
     clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', page.relPath);
   });
-  if (!scratchpadRegistered) {
+  if (!scratchpadRegistered.success) {
     log.warn(`Scratchpad hotkey (${scratchpadHotkey}) registration failed — likely claimed by another app.`);
   }
 
@@ -4914,12 +4913,14 @@ function setupClipboardIPCHandlers(): void {
   const hotkeyPreferenceKeys: Record<string, string> = {
     superPaste: 'superPasteHotkey',
     commandLauncher: 'commandLauncherHotkey',
+    scratchpad: 'scratchpadHotkey',
   };
 
   // Default values for each hotkey
   const hotkeyDefaults: Record<string, string> = {
     superPaste: 'Command+Shift+V',
     commandLauncher: 'Command+Shift+K',
+    scratchpad: 'Control+Option+Command+Space',
   };
 
   ipcMain.handle('hotkey:get', async (_event, id: string) => {

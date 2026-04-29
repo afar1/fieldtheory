@@ -238,15 +238,9 @@ export function nextLauncherArrowIndex(
     : Math.max(currentIndex - 1, 0);
 }
 
-export function resolveLauncherEnterIndex(
-  currentIndex: number,
-  itemCount: number,
-  hasExplicitSelection: boolean,
-  bestTypedMatchIndex: number = 0,
-): number {
+export function resolveHighlightedLauncherIndex(currentIndex: number, itemCount: number): number {
   if (itemCount <= 0) return 0;
-  const index = hasExplicitSelection ? currentIndex : bestTypedMatchIndex;
-  return Math.max(0, Math.min(index, itemCount - 1));
+  return Math.max(0, Math.min(currentIndex, itemCount - 1));
 }
 
 function formatLauncherBookmarkDate(postedAt: string): string {
