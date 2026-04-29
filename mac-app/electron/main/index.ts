@@ -67,6 +67,7 @@ import {
   type AgentKickoffResult,
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
+import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
 import { QuotaManager } from './quotaManager';
 import { AccountStatusManager } from './accountStatusManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
@@ -1222,7 +1223,10 @@ function registerHotkeysAfterOnboarding(): void {
     const boundsToUse = restoreClipboardHistoryBounds('library');
     suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
     clipboardHistoryWindow.show(boundsToUse);
-    clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', page.relPath);
+    clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', {
+      relPath: page.relPath,
+      titleSuggestion: page.titleSuggestion,
+    });
   });
   if (!scratchpadRegistered.success) {
     log.warn(`Scratchpad hotkey (${scratchpadHotkey}) registration failed — likely claimed by another app.`);
@@ -1981,6 +1985,15 @@ function setupLibrarianIPCHandlers(): void {
       return null;
     }
     return librarianManager.createWikiFile(folderName, fileName);
+  });
+
+  ipcMain.handle('wiki:createFileWithTitleSuggestion', (_event, folderName: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
+    return librarianManager.createWikiFileWithDefaultTitleSuggestion(folderName);
   });
 
   ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
@@ -4910,6 +4923,10 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     win?.setRepresentedFilename(fullPath || '');
+  });
+
+  ipcMain.handle('agent-improve:launch', async (_event, request: AgentImproveLaunchRequest) => {
+    return launchAgentImproveInTerminal(request);
   });
 
   // =========================================================================
