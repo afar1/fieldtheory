@@ -1100,6 +1100,28 @@ interface ShellAPI {
   setRepresentedFilename: (fullPath: string) => Promise<void>;
 }
 
+type AgentImproveTool = 'codex' | 'claude';
+type AgentImproveContextKind = 'selection' | 'markdown-file';
+
+interface AgentImproveLaunchRequest {
+  tool: AgentImproveTool;
+  instruction: string;
+  content: string;
+  contextKind: AgentImproveContextKind;
+  filePath?: string | null;
+  title?: string | null;
+  cwd?: string | null;
+}
+
+interface AgentImproveLaunchResult {
+  promptPath: string;
+  command: string;
+}
+
+interface AgentImproveAPI {
+  launch: (request: AgentImproveLaunchRequest) => Promise<AgentImproveLaunchResult>;
+}
+
 /**
  * Diagnostics API for system diagnostics.
  */
@@ -2131,6 +2153,7 @@ declare global {
     cursorStatusAPI?: CursorStatusAPI;
     quotaAPI?: QuotaAPI;
     shellAPI?: ShellAPI;
+    agentImproveAPI?: AgentImproveAPI;
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;

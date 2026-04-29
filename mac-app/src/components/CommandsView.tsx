@@ -1787,6 +1787,9 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               {isEditing && selectedCommand ? (
                 <textarea
                   ref={editTextareaRef}
+                  data-ft-agent-context="markdown"
+                  data-ft-agent-file-path={selectedCommand.filePath}
+                  data-ft-agent-title={selectedCommand.displayName}
                   value={editContent}
                   onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
                   onChange={(e) => setEditContent(e.target.value)}

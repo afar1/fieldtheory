@@ -53,6 +53,7 @@ import {
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
 import { isSidebarToggleShortcut, isThemeToggleShortcut } from '../utils/editorShortcuts';
+import { getAgentImproveContext, type AgentImproveContext } from '../utils/agentImproveContext';
 import {
   buildClipboardListRows,
   getStackHydrationIds,
@@ -1235,6 +1236,12 @@ export default function ClipboardHistory() {
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackModalFocus, setFeedbackModalFocus] = useState<'share' | 'cancel'>('share');
+  const [showAgentImproveDialog, setShowAgentImproveDialog] = useState(false);
+  const [agentImproveContext, setAgentImproveContext] = useState<AgentImproveContext | null>(null);
+  const [agentImproveInstruction, setAgentImproveInstruction] = useState('');
+  const [agentImproveTool, setAgentImproveTool] = useState<'codex' | 'claude'>('codex');
+  const [agentImproveLaunching, setAgentImproveLaunching] = useState(false);
+  const [agentImproveStatus, setAgentImproveStatus] = useState<string | null>(null);
 
   // DM modal state - for sending DMs to contacts.
   const [showDMModal, setShowDMModal] = useState(false);
@@ -2317,7 +2324,7 @@ export default function ClipboardHistory() {
   // Reset keyboard nav state when mouse moves (re-enables hover selection)
   useEffect(() => {
     if (!isVisible) return;
-    
+
     const handleMouseMove = () => {
       if (keyboardNavActive) {
         setKeyboardNavActive(false);
@@ -2327,6 +2334,65 @@ export default function ClipboardHistory() {
     window.addEventListener('mousemove', handleMouseMove);
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [isVisible, keyboardNavActive]);
+
+  useEffect(() => {
+    if (!agentImproveStatus) return;
+    const timeout = window.setTimeout(() => setAgentImproveStatus(null), 90000);
+    return () => window.clearTimeout(timeout);
+  }, [agentImproveStatus]);
+
+  const openAgentImproveDialog = useCallback(() => {
+    const context = getAgentImproveContext();
+    if (!context) {
+      setAgentImproveStatus('Select text or open a markdown file');
+      return;
+    }
+
+    setAgentImproveContext(context);
+    setAgentImproveInstruction('');
+    setShowAgentImproveDialog(true);
+  }, []);
+
+  const closeAgentImproveDialog = useCallback(() => {
+    if (agentImproveLaunching) return;
+    setShowAgentImproveDialog(false);
+    setAgentImproveContext(null);
+    setAgentImproveInstruction('');
+  }, [agentImproveLaunching]);
+
+  const launchAgentImprove = useCallback(async () => {
+    if (!agentImproveContext || agentImproveLaunching) return;
+
+    if (!window.agentImproveAPI?.launch) {
+      setAgentImproveStatus('Agent improve is unavailable');
+      return;
+    }
+
+    const tool = agentImproveTool;
+    const toolLabel = tool === 'claude' ? 'Claude' : 'Codex';
+    const instruction = agentImproveInstruction.trim() || 'Improve this content.';
+
+    setAgentImproveLaunching(true);
+    try {
+      await window.agentImproveAPI.launch({
+        tool,
+        instruction,
+        content: agentImproveContext.content,
+        contextKind: agentImproveContext.kind,
+        filePath: agentImproveContext.filePath,
+        title: agentImproveContext.title,
+      });
+      setShowAgentImproveDialog(false);
+      setAgentImproveContext(null);
+      setAgentImproveInstruction('');
+      setAgentImproveStatus(`${toolLabel} running in Terminal`);
+    } catch (error) {
+      console.error('Failed to launch agent improve:', error);
+      setAgentImproveStatus(`Could not start ${toolLabel}`);
+    } finally {
+      setAgentImproveLaunching(false);
+    }
+  }, [agentImproveContext, agentImproveInstruction, agentImproveLaunching, agentImproveTool]);
 
   // Handle keyboard input via standard DOM events (window is focusable).
   useEffect(() => {
@@ -2339,10 +2405,10 @@ export default function ClipboardHistory() {
       const hasAlt = e.altKey;
       const key = e.key;
 
-      // Secret shortcut: Cmd+Shift+I to toggle Developer Tools
+      // Cmd+Shift+I: improve selected text, or the whole open markdown file.
       if (key === 'i' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
         e.preventDefault();
-        window.electronAPI?.toggleDevTools?.();
+        openAgentImproveDialog();
         return;
       }
 
@@ -2719,6 +2785,12 @@ export default function ClipboardHistory() {
         if (showFeedbackModal) {
           e.preventDefault();
           setShowFeedbackModal(false);
+          return;
+        }
+        // If agent improve dialog is open, close it (don't close window)
+        if (showAgentImproveDialog) {
+          e.preventDefault();
+          closeAgentImproveDialog();
           return;
         }
         // If search input is focused, blur it and select first item instead of closing
@@ -3237,7 +3309,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -6694,6 +6766,20 @@ export default function ClipboardHistory() {
               ) : null}
         </div>
 
+        {agentImproveStatus && (
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
+            <span
+              style={{
+                fontSize: '9px',
+                color: theme.textSecondary,
+                opacity: 0.85,
+              }}
+            >
+              {agentImproveStatus}
+            </span>
+          </div>
+        )}
+
         {/* Center: fieldtheory.dev link (hidden when quota warnings show for basic users) */}
         {(() => {
           // Check if any quota is at 85% or higher (only relevant for basic users)
@@ -6706,6 +6792,7 @@ export default function ClipboardHistory() {
 
           // Show link when: preference is on, no quota warnings, not hovering usage, not showing narration
           const showLink = showFieldTheoryLink &&
+            !agentImproveStatus &&
             !hasQuotaWarnings &&
             !usageHovered &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
@@ -7035,8 +7122,144 @@ export default function ClipboardHistory() {
           {renderThemeToggleButton()}
         </div>
       )}
-      
+
       {/* Quota exhausted modal removed - users should be able to continue using other features */}
+
+      {showAgentImproveDialog && agentImproveContext && (
+        <div
+          onClick={closeAgentImproveDialog}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.45)',
+            backdropFilter: 'blur(4px)',
+            WebkitBackdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 10002,
+          }}
+        >
+          <form
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault();
+              void launchAgentImprove();
+            }}
+            style={{
+              backgroundColor: theme.bg,
+              borderRadius: '8px',
+              padding: '20px',
+              maxWidth: '420px',
+              width: '90%',
+              boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
+              border: `1px solid ${theme.border}`,
+            }}
+          >
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '15px', color: theme.text, fontWeight: 600 }}>
+              Improve with agent
+            </h3>
+            <div
+              style={{
+                marginBottom: '12px',
+                fontSize: '11px',
+                color: theme.textSecondary,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}
+              title={agentImproveContext.filePath || undefined}
+            >
+              {agentImproveContext.kind === 'markdown-file' ? 'Whole file' : 'Selection'}
+              {agentImproveContext.title ? `: ${agentImproveContext.title}` : ''}
+            </div>
+            <textarea
+              autoFocus
+              value={agentImproveInstruction}
+              onChange={(e) => setAgentImproveInstruction(e.currentTarget.value)}
+              placeholder="What should the agent do?"
+              rows={4}
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '10px',
+                marginBottom: '12px',
+                fontSize: '13px',
+                lineHeight: 1.4,
+                color: theme.text,
+                backgroundColor: theme.bgSecondary,
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                resize: 'vertical',
+                outline: 'none',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+              }}
+            />
+            <div style={{ display: 'flex', gap: '6px', marginBottom: '14px' }}>
+              {(['codex', 'claude'] as const).map((tool) => {
+                const selected = agentImproveTool === tool;
+                return (
+                  <button
+                    key={tool}
+                    type="button"
+                    onClick={() => setAgentImproveTool(tool)}
+                    style={{
+                      padding: '6px 10px',
+                      fontSize: '12px',
+                      backgroundColor: selected ? theme.accent : 'transparent',
+                      border: `1px solid ${selected ? theme.accent : theme.border}`,
+                      borderRadius: '6px',
+                      color: selected ? '#fff' : theme.textSecondary,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {tool === 'codex' ? 'Codex' : 'Claude'}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={closeAgentImproveDialog}
+                disabled={agentImproveLaunching}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  backgroundColor: 'transparent',
+                  border: `1px solid ${theme.border}`,
+                  borderRadius: '6px',
+                  color: theme.textSecondary,
+                  cursor: agentImproveLaunching ? 'default' : 'pointer',
+                  opacity: agentImproveLaunching ? 0.6 : 1,
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={agentImproveLaunching}
+                style={{
+                  padding: '8px 14px',
+                  fontSize: '12px',
+                  backgroundColor: theme.accent,
+                  border: 'none',
+                  borderRadius: '6px',
+                  color: '#fff',
+                  cursor: agentImproveLaunching ? 'default' : 'pointer',
+                  fontWeight: 500,
+                  opacity: agentImproveLaunching ? 0.7 : 1,
+                }}
+              >
+                {agentImproveLaunching ? 'Starting...' : 'Start'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       {/* Sign-in prompt modal - shown when user tries to share without being logged in */}
       {showSignInPrompt && (

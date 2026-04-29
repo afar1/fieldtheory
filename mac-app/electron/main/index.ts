@@ -67,6 +67,7 @@ import {
   type AgentKickoffResult,
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
+import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
 import { QuotaManager } from './quotaManager';
 import { AccountStatusManager } from './accountStatusManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
@@ -4922,6 +4923,10 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle('shell:setRepresentedFilename', (event, fullPath: string) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     win?.setRepresentedFilename(fullPath || '');
+  });
+
+  ipcMain.handle('agent-improve:launch', async (_event, request: AgentImproveLaunchRequest) => {
+    return launchAgentImproveInTerminal(request);
   });
 
   // =========================================================================
