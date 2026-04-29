@@ -1,6 +1,6 @@
 import { app, BrowserWindow, screen, systemPreferences, shell, desktopCapturer, dialog } from 'electron';
 import path from 'path';
-import type { PreferencesManager } from './preferences';
+import { resolveFieldTheoryWindowMode, type PreferencesManager } from './preferences';
 import { createLogger } from './logger';
 
 const log = createLogger('Onboarding');
@@ -258,8 +258,8 @@ export class OnboardingWindow {
       this.window = null;
       // Restore dock to user's preference (onboarding show() called app.dock.show())
       if (process.platform === 'darwin' && this.preferencesManager) {
-        const showInDock = this.preferencesManager.getPreference('showInDock') ?? false;
-        if (!showInDock) {
+        const windowMode = resolveFieldTheoryWindowMode(this.preferencesManager.get());
+        if (windowMode !== 'app') {
           app.dock.hide();
         }
       }
@@ -293,4 +293,3 @@ export class OnboardingWindow {
   }
 
 }
-
