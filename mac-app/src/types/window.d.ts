@@ -2146,6 +2146,7 @@ declare global {
     hotMicAPI?: HotMicAPI;
     squaresAPI?: SquaresAPI;
     agentHooksAPI?: AgentHooksAPI;
+    agentKickoffAPI?: AgentKickoffAPI;
 
     stripeConfig?: StripeConfig;
     platform?: PlatformInfo;
@@ -2160,6 +2161,33 @@ interface AgentHooksAPI {
   install: (targets: AgentHookTargets) => Promise<AgentHookResult>;
   uninstall: (targets: AgentHookTargets) => Promise<AgentHookResult>;
   getStatus: () => Promise<AgentHookStatus>;
+}
+
+type AgentKickoffModel = 'claude' | 'codex';
+interface AgentKickoffArgs {
+  absPath: string;
+  instruction: string;
+  model: AgentKickoffModel;
+}
+interface AgentKickoffResult {
+  ok: boolean;
+  runId: string;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  summary: string;
+  appendedFooter: boolean;
+  error?: string;
+}
+interface AgentKickoffProgressEvent {
+  runId: string;
+  kind: 'stdout' | 'stderr';
+  chunk: string;
+}
+interface AgentKickoffAPI {
+  kickoff: (args: AgentKickoffArgs) => Promise<AgentKickoffResult>;
+  cancel: (runId: string) => Promise<boolean>;
+  onProgress: (callback: (event: AgentKickoffProgressEvent) => void) => () => void;
 }
 
 export {};

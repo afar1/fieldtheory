@@ -11,6 +11,7 @@ import remarkBreaks from 'remark-breaks';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
+import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
@@ -1345,6 +1346,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => restoredSelection?.type === 'bookmarks');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
+  // Local agent kickoff modal — opened by the toolbar agent button. Dispatches
+  // the user's locally-installed Claude Code or Codex CLI against the active
+  // markdown file and appends a summary footer on success.
+  const [agentKickoffOpen, setAgentKickoffOpen] = useState(false);
   // External markdown files opened via macOS file-association (`open-file`)
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
@@ -4054,6 +4059,57 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 copyPathTitle="Copy selected text or file path (⌘C)"
               />
 
+              {/* Agent kickoff — opens a popup that dispatches the user's
+                  locally-installed Claude Code / Codex CLI against this file. */}
+              {focusToolbarControlsVisible && activeReading?.path
+                && (selectedItemType === 'wiki' || selectedItemType === 'external')
+                && contentMode !== 'markdown' && (
+                <button
+                  type="button"
+                  onClick={() => setAgentKickoffOpen(true)}
+                  title="Run a local agent on this file (Claude Code or Codex)"
+                  aria-label="Run agent on this file"
+                  style={{
+                    height: '24px',
+                    padding: '0 8px',
+                    fontSize: '12px',
+                    fontWeight: 500,
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    transition: 'background-color 0.15s ease, color 0.15s ease',
+                    // @ts-ignore - opt out of the drag region so the click lands.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                    e.currentTarget.style.color = theme.text;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = theme.textSecondary;
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12 2v4" />
+                    <path d="m6.41 6.41-2.83-2.83" />
+                    <path d="M2 12h4" />
+                    <path d="m6.41 17.59-2.83 2.83" />
+                    <path d="M12 18v4" />
+                    <path d="m17.59 17.59 2.83 2.83" />
+                    <path d="M18 12h4" />
+                    <path d="m17.59 6.41 2.83-2.83" />
+                    <circle cx="12" cy="12" r="4" />
+                  </svg>
+                  Agent
+                </button>
+              )}
+
               {fileFindOpen && (
                 <input
                   ref={fileFindInputRef}
@@ -5109,6 +5165,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       )}
 
       {deleteConfirmationDialog}
+
+      <AgentKickoffModal
+        isOpen={agentKickoffOpen}
+        onClose={() => setAgentKickoffOpen(false)}
+        filePath={activeReading?.path ?? null}
+        fileTitle={activeReading?.title ?? null}
+      />
     </div>
   );
 }

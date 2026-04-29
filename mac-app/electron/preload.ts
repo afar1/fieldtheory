@@ -3883,6 +3883,42 @@ const wikiAPI = {
 contextBridge.exposeInMainWorld('libraryAPI', libraryAPI);
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
 
+// Local agent kickoff — invoke `claude` or `codex` CLI on a markdown file.
+type AgentKickoffModel = 'claude' | 'codex';
+interface AgentKickoffArgs {
+  absPath: string;
+  instruction: string;
+  model: AgentKickoffModel;
+}
+interface AgentKickoffResult {
+  ok: boolean;
+  runId: string;
+  stdout: string;
+  stderr: string;
+  durationMs: number;
+  summary: string;
+  appendedFooter: boolean;
+  error?: string;
+}
+interface AgentKickoffProgressEvent {
+  runId: string;
+  kind: 'stdout' | 'stderr';
+  chunk: string;
+}
+const agentKickoffAPI = {
+  kickoff: (args: AgentKickoffArgs): Promise<AgentKickoffResult> =>
+    ipcRenderer.invoke('agent:kickoff', args),
+  cancel: (runId: string): Promise<boolean> =>
+    ipcRenderer.invoke('agent:cancelKickoff', runId),
+  onProgress: (callback: (event: AgentKickoffProgressEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: AgentKickoffProgressEvent) =>
+      callback(payload);
+    ipcRenderer.on('agent:kickoffProgress', handler);
+    return () => ipcRenderer.removeListener('agent:kickoffProgress', handler);
+  },
+};
+contextBridge.exposeInMainWorld('agentKickoffAPI', agentKickoffAPI);
+
 interface ExternalMarkdownFile {
   path: string;
   name: string;

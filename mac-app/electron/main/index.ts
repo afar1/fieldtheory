@@ -60,6 +60,12 @@ import {
   type DynamicIslandGeometryTuning,
 } from './dynamicIslandManager';
 import { AgentAttentionManager } from './agentAttentionManager';
+import {
+  AgentKickoffManager,
+  type AgentKickoffArgs,
+  type AgentKickoffProgressEvent,
+  type AgentKickoffResult,
+} from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { QuotaManager } from './quotaManager';
 import { AccountStatusManager } from './accountStatusManager';
@@ -370,6 +376,7 @@ let onboardingWindow: OnboardingWindow | null = null;
 let cursorStatusManager: CursorStatusManager | null = null;
 let dynamicIslandManager: DynamicIslandManager | null = null;
 let agentAttentionManager: AgentAttentionManager | null = null;
+let agentKickoffManager: AgentKickoffManager | null = null;
 let agentHookInstaller: AgentHookInstaller | null = null;
 let quotaManager: QuotaManager | null = null;
 let accountStatusManager: AccountStatusManager | null = null;
@@ -7212,6 +7219,34 @@ async function initTranscriberSystem(): Promise<void> {
   });
   ipcMain.handle('agent:setSynthetic', async (_e, count: number) => {
     agentAttentionManager?.setSynthetic(Math.max(0, Math.floor(count)));
+  });
+
+  // Local agent kickoff — invokes the locally-installed Claude Code or Codex
+  // CLI against a markdown file in the user's library, then appends a summary
+  // footer to the file. Progress events stream to whichever window invoked it.
+  agentKickoffManager = new AgentKickoffManager();
+  agentKickoffManager.on('progress', (event: AgentKickoffProgressEvent) => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('agent:kickoffProgress', event);
+    });
+  });
+  ipcMain.handle('agent:kickoff', async (_e, args: AgentKickoffArgs): Promise<AgentKickoffResult> => {
+    if (!agentKickoffManager) {
+      return {
+        ok: false,
+        runId: '',
+        stdout: '',
+        stderr: '',
+        durationMs: 0,
+        summary: '',
+        appendedFooter: false,
+        error: 'Agent kickoff manager unavailable',
+      };
+    }
+    return agentKickoffManager.kickoff(args);
+  });
+  ipcMain.handle('agent:cancelKickoff', async (_e, runId: string): Promise<boolean> => {
+    return agentKickoffManager?.cancel(runId) ?? false;
   });
 
   // Dev-only: cycle synthetic waiting-agent count to stress-test Dynamic
