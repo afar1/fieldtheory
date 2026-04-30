@@ -25,6 +25,7 @@ vi.mock('./logger', () => ({
 }));
 
 import { CommandsManager } from './commandsManager';
+import { readDocumentVersion } from './documentSaveGuard';
 import { shell } from 'electron';
 
 describe('CommandsManager default internal commands', () => {
@@ -134,9 +135,29 @@ describe('CommandsManager default internal commands', () => {
     writeFileSync(outsidePath, 'original\n');
     await manager.addWatchedDir(defaultDir);
 
-    expect(manager.saveCommand(outsidePath, 'changed\n')).toBe(false);
+    expect(manager.saveCommand(outsidePath, 'changed\n')).toEqual({ ok: false, reason: 'not-found' });
 
     expect(readFileSync(outsidePath, 'utf8')).toBe('original\n');
+  });
+
+  it('reports a conflict when a command changed since it was opened', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'conflict', 'original\n');
+
+    expect(command).not.toBeNull();
+    const expectedVersion = readDocumentVersion(command!.path);
+    writeFileSync(command!.path, 'external\n');
+
+    const result = manager.saveCommand(command!.path, 'mine\n', expectedVersion);
+
+    expect(result).toEqual(expect.objectContaining({
+      ok: false,
+      reason: 'conflict',
+      currentContent: 'external\n',
+    }));
+    expect(readFileSync(command!.path, 'utf8')).toBe('external\n');
   });
 
   it('moves deleted commands to Trash only when they are inside a watched directory', async () => {

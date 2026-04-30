@@ -35,6 +35,7 @@ import {
   parseMarkdownTodoState,
   type WikiNode,
 } from './librarianManager';
+import { readDocumentVersion } from './documentSaveGuard';
 
 const tempDirs: string[] = [];
 
@@ -375,7 +376,7 @@ describe('recursive wiki tree scan', () => {
     Object.defineProperty(manager, 'wikiDir', { value: root });
     manager.emit = emit;
 
-    expect(manager.saveWikiPage('entries/note', '# New title\n')).toBe(true);
+    expect(manager.saveWikiPage('entries/note', '# New title\n')).toEqual(expect.objectContaining({ ok: true }));
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
@@ -394,10 +395,35 @@ describe('recursive wiki tree scan', () => {
     Object.defineProperty(manager, 'wikiDir', { value: root });
     manager.emit = emit;
 
-    expect(manager.saveWikiPage('entries/note', '# New title\n')).toBe(true);
+    expect(manager.saveWikiPage('entries/note', '# New title\n')).toEqual(expect.objectContaining({ ok: true }));
     expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
     expect(fs.existsSync(path.join(root, 'entries', 'note.md'))).toBe(false);
     expect(emit).toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('reports a conflict when a wiki page changed since it was opened', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const filePath = path.join(root, 'entries', 'note.md');
+    fs.writeFileSync(filePath, '# Original\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      saveWikiPage: (relPath: string, content: string, expectedVersion?: ReturnType<typeof readDocumentVersion>) => unknown;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+    const expectedVersion = readDocumentVersion(filePath);
+    fs.writeFileSync(filePath, '# External\n');
+
+    expect(manager.saveWikiPage('entries/note', '# Mine\n', expectedVersion)).toEqual(expect.objectContaining({
+      ok: false,
+      reason: 'conflict',
+      currentContent: '# External\n',
+    }));
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# External\n');
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('renames root-level wiki pages now that library roots can create them', () => {
@@ -705,13 +731,42 @@ describe('recursive wiki tree scan', () => {
     manager.saveIndex = vi.fn();
     manager.emit = emit;
 
-    expect(manager.saveReading(outsidePath, '# Changed\n')).toBe(false);
+    expect(manager.saveReading(outsidePath, '# Changed\n')).toEqual({ ok: false, reason: 'not-found' });
     expect(fs.readFileSync(outsidePath, 'utf-8')).toBe('# Outside\n');
 
-    expect(manager.saveReading(readingPath, '# Changed\n')).toBe(true);
+    expect(manager.saveReading(readingPath, '# Changed\n')).toEqual(expect.objectContaining({ ok: true }));
     expect(fs.readFileSync(readingPath, 'utf-8')).toBe('# Changed\n');
     expect(manager.cache.has(readingPath)).toBe(true);
     expect(emit).toHaveBeenCalledWith('reading-updated', expect.objectContaining({ path: readingPath, title: 'Changed' }));
+  });
+
+  it('reports a conflict when a watched reading changed since it was opened', () => {
+    const root = makeTempDir();
+    const readingPath = path.join(root, 'reading.md');
+    fs.writeFileSync(readingPath, '# Reading\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, unknown>;
+      saveIndex: () => void;
+      saveReading: (filePath: string, content: string, expectedVersion?: ReturnType<typeof readDocumentVersion>) => unknown;
+      emit: typeof emit;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map();
+    manager.saveIndex = vi.fn();
+    manager.emit = emit;
+    const expectedVersion = readDocumentVersion(readingPath);
+    fs.writeFileSync(readingPath, '# External\n');
+
+    expect(manager.saveReading(readingPath, '# Mine\n', expectedVersion)).toEqual(expect.objectContaining({
+      ok: false,
+      reason: 'conflict',
+      currentContent: '# External\n',
+    }));
+    expect(fs.readFileSync(readingPath, 'utf-8')).toBe('# External\n');
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('moves existing readings inside watched folders to Trash', async () => {

@@ -23,6 +23,7 @@ import {
   SidebarMarkdownIcon,
 } from './SidebarIcons';
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 
 /** Inline text input used for both "new command" and "rename command" flows.
@@ -120,6 +121,7 @@ interface CommandItem {
 interface CommandWithContent extends CommandItem {
   lastModified: number;
   content: string;
+  documentVersion: DocumentVersion;
 }
 
 /**
@@ -167,6 +169,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const [editContent, setEditContent] = useState('');
   const flushSaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const lastSavedContentRef = useRef<string | null>(null);
+  const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
   const lastSeededPathRef = useRef<string | null>(null);
 
   // Inline new command input
@@ -558,13 +561,44 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
   const saveCommandContent = useCallback(async (filePath: string, content: string) => {
     try {
-      const success = await window.commandsAPI?.saveCommand(filePath, content);
-      if (success) {
+      const expectedVersion = lastSavedVersionRef.current;
+      const result = expectedVersion
+        ? await window.commandsAPI?.saveCommand(filePath, content, expectedVersion)
+        : await window.commandsAPI?.saveCommand(filePath, content);
+      if (isDocumentSaveConflict(result)) {
+        const reload = window.confirm('This command changed on disk outside Field Theory. Press OK to reload the disk version, or Cancel to overwrite it with your current edit.');
+        if (reload && result.currentContent !== undefined && result.currentVersion) {
+          setSelectedCommand((prev) => prev && prev.filePath === filePath
+            ? { ...prev, content: result.currentContent, documentVersion: result.currentVersion }
+            : prev
+          );
+          setEditContent(result.currentContent);
+          lastSavedContentRef.current = result.currentContent;
+          lastSavedVersionRef.current = result.currentVersion;
+          return true;
+        }
+        if (result.currentVersion) {
+          const overwrite = await window.commandsAPI?.saveCommand(filePath, content, result.currentVersion);
+          if (!isDocumentSaveOk(overwrite)) return false;
+          const nextVersion = getDocumentSaveVersion(overwrite);
+          setSelectedCommand((prev) => prev && prev.filePath === filePath
+            ? { ...prev, content, ...(nextVersion ? { documentVersion: nextVersion } : {}) }
+            : prev
+          );
+          lastSavedContentRef.current = content;
+          lastSavedVersionRef.current = nextVersion ?? result.currentVersion;
+          return true;
+        }
+        return false;
+      }
+      if (isDocumentSaveOk(result)) {
+        const nextVersion = getDocumentSaveVersion(result);
         setSelectedCommand((prev) => prev && prev.filePath === filePath
-          ? { ...prev, content }
+          ? { ...prev, content, ...(nextVersion ? { documentVersion: nextVersion } : {}) }
           : prev
         );
         lastSavedContentRef.current = content;
+        if (nextVersion) lastSavedVersionRef.current = nextVersion;
         return true;
       }
     } catch (err) {
@@ -659,6 +693,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     if (lastSeededPathRef.current === selectedCommand.filePath) return;
     setEditContent(selectedCommand.content);
     lastSavedContentRef.current = selectedCommand.content;
+    lastSavedVersionRef.current = selectedCommand.documentVersion;
     lastSeededPathRef.current = selectedCommand.filePath;
   }, [isEditing, selectedCommand]);
 
