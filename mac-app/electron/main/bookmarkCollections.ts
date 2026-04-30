@@ -66,12 +66,6 @@ function isBookmarkTaxonomyFilePath(filePath: string): boolean {
     '/.fieldtheory/library/bookmarks-from-x/categories/',
     '/.fieldtheory/library/bookmarks-from-x/domains/',
     '/.fieldtheory/library/bookmarks-from-x/entities/',
-    '/.ft-bookmarks/md/categories/',
-    '/.ft-bookmarks/md/domains/',
-    '/.ft-bookmarks/md/entities/',
-    '/.ft-bookmarks/md/bookmarks-from-x/categories/',
-    '/.ft-bookmarks/md/bookmarks-from-x/domains/',
-    '/.ft-bookmarks/md/bookmarks-from-x/entities/',
   ].some((marker) => normalized.includes(marker));
 }
 
