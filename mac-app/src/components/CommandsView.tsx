@@ -212,7 +212,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
 
   const [focusImmersive, setFocusImmersive] = useState(false);
-  const focusToolbarControlsVisible = !focusImmersive;
+  const focusChromeActive = focusImmersive && sidebarCollapsed;
+  const focusToolbarControlsVisible = !focusChromeActive;
   const toggleFocusImmersive = useCallback(() => {
     if (!focusImmersive) {
       onFocusChromeShortcut?.();
@@ -302,8 +303,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   }, []);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(focusImmersive);
-  }, [focusImmersive, onFocusChromeActiveChange]);
+    onFocusChromeActiveChange?.(focusChromeActive);
+  }, [focusChromeActive, onFocusChromeActiveChange]);
 
   useEffect(() => {
     return () => onFocusChromeActiveChange?.(false);
