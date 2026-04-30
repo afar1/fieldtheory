@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const homeDir = os.homedir();
-const wikiRoot = path.join(process.env.FT_DATA_DIR ?? path.join(homeDir, '.ft-bookmarks'), 'md');
+const wikiRoot = process.env.FT_LIBRARY_DIR ?? path.join(homeDir, '.fieldtheory', 'library');
 const debatesDir = path.join(wikiRoot, 'debates');
 const councilRoot = path.join(homeDir, 'council-transcripts');
 const consensusDir = path.join(councilRoot, '.council-bg');

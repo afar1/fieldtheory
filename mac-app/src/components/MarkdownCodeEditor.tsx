@@ -39,6 +39,7 @@ export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
   blur: () => void;
   getValue: () => string;
+  getSelectionRange: () => { start: number; end: number };
   setSelectionRange: (start: number, end: number) => void;
   scrollTop: number;
 }
@@ -283,6 +284,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           viewRef.current?.contentDOM.blur();
         },
         getValue: () => viewRef.current?.state.doc.toString() ?? '',
+        getSelectionRange: () => {
+          const range = viewRef.current?.state.selection.main;
+          return {
+            start: range?.from ?? 0,
+            end: range?.to ?? 0,
+          };
+        },
         setSelectionRange: (start, end) => {
           const view = viewRef.current;
           if (!view) return;

@@ -21,6 +21,7 @@ import {
   resolveHighlightedLauncherIndex,
   resolveLauncherAuthorNamespaceHandle,
   resolveLauncherBookmarkFacetNamespace,
+  resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
   SQUARES_ACTION_DEFS,
@@ -712,6 +713,43 @@ describe('resolveLauncherBookmarkFacetNamespace', () => {
 
   it('finds a matching bookmark facet row from the raw query', () => {
     expect(resolveLauncherBookmarkFacetNamespace([], facetItems, 0, 'comm')).toBe(facetItems[0]);
+  });
+});
+
+describe('resolveLauncherCommandOpenTarget', () => {
+  const commandItems = [
+    {
+      id: 'cmd-assess',
+      type: 'command',
+      name: 'assess',
+      displayName: 'assess.md',
+      filePath: '/Users/afar/.fieldtheory/commands/assess.md',
+      keywords: ['assess'],
+    },
+    {
+      id: 'cmd-refactor',
+      type: 'command',
+      name: 'refactor',
+      displayName: 'refactor.md',
+      filePath: '/Users/afar/.fieldtheory/commands/refactor.md',
+      keywords: ['refactor'],
+    },
+  ];
+
+  it('uses the typed command instead of stale row-zero selection', () => {
+    expect(resolveLauncherCommandOpenTarget([commandItems[0]], commandItems, 0, 'refactor', false)).toBe(commandItems[1]);
+  });
+
+  it('matches a typed markdown filename', () => {
+    expect(resolveLauncherCommandOpenTarget([commandItems[0]], commandItems, 0, 'refactor.md', false)).toBe(commandItems[1]);
+  });
+
+  it('honors an explicit selected command row', () => {
+    expect(resolveLauncherCommandOpenTarget(commandItems, commandItems, 0, 'refactor', true)).toBe(commandItems[0]);
+  });
+
+  it('does not open row zero for an unrelated query', () => {
+    expect(resolveLauncherCommandOpenTarget([commandItems[0]], commandItems, 0, 'scratchpad', false)).toBeNull();
   });
 });
 

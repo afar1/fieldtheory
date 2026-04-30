@@ -1,11 +1,9 @@
-import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
 export interface FieldTheoryPathOptions {
   env?: NodeJS.ProcessEnv;
   homeDir?: string;
-  existsSync?: (filePath: string) => boolean;
 }
 
 function pathEnv(options?: FieldTheoryPathOptions): NodeJS.ProcessEnv {
@@ -14,10 +12,6 @@ function pathEnv(options?: FieldTheoryPathOptions): NodeJS.ProcessEnv {
 
 function homeDir(options?: FieldTheoryPathOptions): string {
   return options?.homeDir ?? os.homedir();
-}
-
-function exists(filePath: string, options?: FieldTheoryPathOptions): boolean {
-  return (options?.existsSync ?? fs.existsSync)(filePath);
 }
 
 export function fieldTheoryDir(options?: FieldTheoryPathOptions): string {
@@ -46,18 +40,9 @@ export function commandsDir(options?: FieldTheoryPathOptions): string {
 }
 
 export function bookmarkDataDir(options?: FieldTheoryPathOptions): string {
-  const canonical = canonicalBookmarkDataDir(options);
-  if (pathEnv(options).FT_DATA_DIR || exists(canonical, options) || !exists(legacyBookmarkDataDir(options), options)) {
-    return canonical;
-  }
-  return legacyBookmarkDataDir(options);
+  return canonicalBookmarkDataDir(options);
 }
 
 export function libraryDir(options?: FieldTheoryPathOptions): string {
-  const canonical = canonicalLibraryDir(options);
-  const legacy = legacyLibraryDir(options);
-  if (pathEnv(options).FT_LIBRARY_DIR || exists(canonical, options) || !exists(legacy, options)) {
-    return canonical;
-  }
-  return legacy;
+  return canonicalLibraryDir(options);
 }
