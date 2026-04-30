@@ -5301,10 +5301,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         style={{
                           ...props.style,
                           cursor: taskLine ? 'pointer' : 'default',
-                          width: '0.95em',
-                          height: '0.95em',
                           margin: 0,
-                          accentColor: theme.accent,
                         }}
                       />
                     );
@@ -5324,13 +5321,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         <li
                           className={animateCompletion ? 'ft-rendered-task-completed-live' : undefined}
                           style={{
-                            marginBottom: '0.55em',
+                            marginBottom: '0.22em',
                             listStyle: 'none',
                             display: 'grid',
-                            gridTemplateColumns: '1.15em minmax(0, 1fr)',
-                            columnGap: '0.5em',
+                            gridTemplateColumns: '0.78em minmax(0, 1fr)',
+                            columnGap: '0.6em',
                             alignItems: 'baseline',
-                            opacity: checked ? 0.62 : 1,
+                            opacity: checked ? 0.68 : 1,
                           }}
                         >
                           <span
