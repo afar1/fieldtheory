@@ -1,13 +1,12 @@
 // =============================================================================
 // AgentKickoffManager — invokes a locally-installed agent CLI (Claude Code or
-// Codex) against a markdown file and appends a summary footer to that file
-// when the run succeeds.
+// Codex) against a markdown file and writes a live status footer to that file.
 //
 // The user picks a file in the Librarian, clicks the "Agent" button, types an
 // instruction, picks a model, and hits go. This manager spawns the chosen CLI
 // in non-interactive mode with the file path baked into the prompt, captures
-// stdout, and writes a "## Agent run — <ts> (<model>)" footer with the final
-// summary so the markdown carries a record of what was done.
+// stdout, and updates a "## Agent run" footer so the markdown carries a record
+// of what was done even if the run fails.
 // =============================================================================
 
 import { EventEmitter } from 'events';
@@ -38,10 +37,29 @@ export interface AgentKickoffResult {
   error?: string;
 }
 
+export interface AgentKickoffStartResult {
+  ok: boolean;
+  runId: string;
+  absPath?: string;
+  model?: AgentKickoffModel;
+  error?: string;
+}
+
 export interface AgentKickoffProgressEvent {
   runId: string;
+  absPath: string;
+  model: AgentKickoffModel;
   kind: 'stdout' | 'stderr';
   chunk: string;
+}
+
+export interface AgentKickoffStatusEvent {
+  runId: string;
+  absPath: string;
+  model: AgentKickoffModel;
+  status: 'started' | 'done' | 'error';
+  message: string;
+  error?: string;
 }
 
 type SpawnFn = (
@@ -86,12 +104,50 @@ export class AgentKickoffManager extends EventEmitter {
       return makeError(runId, validation, startedAt);
     }
 
+    return this.run(runId, startedAt, args);
+  }
+
+  /** Start a run and return immediately. Progress and completion are emitted as
+   *  events and written into the file footer. */
+  start(args: AgentKickoffArgs): AgentKickoffStartResult {
+    const runId = generateRunId();
+    const startedAt = Date.now();
+
+    const validation = validateArgs(args);
+    if (validation) {
+      return { ok: false, runId, error: validation };
+    }
+
+    void this.run(runId, startedAt, args).catch((err) => {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`Background agent run ${runId} failed:`, message);
+    });
+
+    return { ok: true, runId, absPath: args.absPath, model: args.model };
+  }
+
+  private async run(runId: string, startedAt: number, args: AgentKickoffArgs): Promise<AgentKickoffResult> {
     const instruction = args.instruction.trim();
     const prompt = buildPrompt(args.absPath, instruction);
     const cwd = path.dirname(args.absPath);
     const { command, commandArgs } = buildCommand(args.model, prompt);
 
     this.emit('start', { runId, model: args.model, absPath: args.absPath });
+    writeAgentFooter(args.absPath, {
+      runId,
+      model: args.model,
+      instruction,
+      status: 'Running',
+      message: 'Started. Waiting for agent output.',
+      startedAt: new Date(startedAt),
+    });
+    this.emit('status', {
+      runId,
+      absPath: args.absPath,
+      model: args.model,
+      status: 'started',
+      message: 'Started. Waiting for agent output.',
+    } satisfies AgentKickoffStatusEvent);
 
     return new Promise<AgentKickoffResult>((resolve) => {
       let stdout = '';
@@ -104,11 +160,30 @@ export class AgentKickoffManager extends EventEmitter {
           cwd,
           env: buildEnv(),
           shell: false,
+          stdio: ['ignore', 'pipe', 'pipe'],
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         log.error(`Failed to spawn ${command}:`, message);
-        resolve(makeError(runId, friendlySpawnError(args.model, command, message), startedAt));
+        const error = friendlySpawnError(args.model, command, message);
+        writeAgentFooter(args.absPath, {
+          runId,
+          model: args.model,
+          instruction,
+          status: 'Error',
+          message: error,
+          startedAt: new Date(startedAt),
+          finishedAt: new Date(),
+        });
+        this.emit('status', {
+          runId,
+          absPath: args.absPath,
+          model: args.model,
+          status: 'error',
+          message: error,
+          error,
+        } satisfies AgentKickoffStatusEvent);
+        resolve(makeError(runId, error, startedAt));
         return;
       }
 
@@ -127,7 +202,7 @@ export class AgentKickoffManager extends EventEmitter {
           return;
         }
         if (kind === 'stdout') stdout += text; else stderr += text;
-        const event: AgentKickoffProgressEvent = { runId, kind, chunk: text };
+        const event: AgentKickoffProgressEvent = { runId, absPath: args.absPath, model: args.model, kind, chunk: text };
         this.emit('progress', event);
       };
 
@@ -139,6 +214,23 @@ export class AgentKickoffManager extends EventEmitter {
         this.runs.delete(runId);
         const message = friendlySpawnError(args.model, command, err.message);
         const result = makeError(runId, message, startedAt, stdout, stderr);
+        writeAgentFooter(args.absPath, {
+          runId,
+          model: args.model,
+          instruction,
+          status: 'Error',
+          message,
+          startedAt: new Date(startedAt),
+          finishedAt: new Date(),
+        });
+        this.emit('status', {
+          runId,
+          absPath: args.absPath,
+          model: args.model,
+          status: 'error',
+          message,
+          error: message,
+        } satisfies AgentKickoffStatusEvent);
         this.emit('end', result);
         resolve(result);
       });
@@ -148,9 +240,20 @@ export class AgentKickoffManager extends EventEmitter {
         this.runs.delete(runId);
         const ok = code === 0;
         const summary = ok ? extractSummary(stdout) : '';
-        const appendedFooter = ok && summary
-          ? appendFooterToFile(args.absPath, args.model, instruction, summary)
-          : false;
+        const finalMessage = ok
+          ? (summary || 'Agent finished successfully.')
+          : signal
+            ? `Agent terminated by signal ${signal}`
+            : `Agent exited with code ${code ?? 'unknown'}`;
+        const appendedFooter = writeAgentFooter(args.absPath, {
+          runId,
+          model: args.model,
+          instruction,
+          status: ok ? 'Done' : 'Error',
+          message: finalMessage,
+          startedAt: new Date(startedAt),
+          finishedAt: new Date(),
+        });
         const result: AgentKickoffResult = {
           ok,
           runId,
@@ -165,6 +268,14 @@ export class AgentKickoffManager extends EventEmitter {
               ? `Agent terminated by signal ${signal}`
               : `Agent exited with code ${code ?? 'unknown'}`,
         };
+        this.emit('status', {
+          runId,
+          absPath: args.absPath,
+          model: args.model,
+          status: ok ? 'done' : 'error',
+          message: finalMessage,
+          error: ok ? undefined : result.error,
+        } satisfies AgentKickoffStatusEvent);
         this.emit('end', result);
         resolve(result);
       });
@@ -232,7 +343,7 @@ export function buildCommand(
   if (model === 'claude') {
     return { command: 'claude', commandArgs: ['-p', prompt] };
   }
-  return { command: 'codex', commandArgs: ['exec', prompt] };
+  return { command: 'codex', commandArgs: ['exec', '--skip-git-repo-check', prompt] };
 }
 
 export function extractSummary(stdout: string): string {
@@ -286,6 +397,60 @@ export function appendFooterToFile(
     log.error(`Failed to append agent footer to ${absPath}:`, err);
     return false;
   }
+}
+
+interface AgentFooterUpdate {
+  runId: string;
+  model: AgentKickoffModel;
+  instruction: string;
+  status: 'Running' | 'Done' | 'Error';
+  message: string;
+  startedAt: Date;
+  finishedAt?: Date;
+}
+
+function writeAgentFooter(absPath: string, update: AgentFooterUpdate): boolean {
+  try {
+    const content = fs.readFileSync(absPath, 'utf-8');
+    const footer = buildLiveFooter(update);
+    const marker = `<!-- fieldtheory-agent-run:${update.runId} -->`;
+    const markerIndex = content.indexOf(marker);
+    if (markerIndex >= 0) {
+      const footerStart = content.lastIndexOf('\n---\n\n## Agent run', markerIndex);
+      const start = footerStart >= 0 ? footerStart + 1 : markerIndex;
+      const prefix = content.slice(0, start);
+      const separator = prefix.endsWith('\n\n') || prefix.endsWith('\n') ? '' : '\n\n';
+      fs.writeFileSync(absPath, `${prefix}${separator}${footer}`, 'utf-8');
+      return true;
+    }
+    const separator = content.endsWith('\n\n') ? '' : content.endsWith('\n') ? '\n' : '\n\n';
+    fs.writeFileSync(absPath, `${content}${separator}${footer}`, 'utf-8');
+    return true;
+  } catch (err) {
+    log.error(`Failed to write agent footer to ${absPath}:`, err);
+    return false;
+  }
+}
+
+function buildLiveFooter(update: AgentFooterUpdate): string {
+  const lines = [
+    '---',
+    '',
+    `## Agent run — ${formatTimestamp(update.startedAt)} (${update.model})`,
+    '',
+    `<!-- fieldtheory-agent-run:${update.runId} -->`,
+    '',
+    `**Status:** ${update.status}`,
+    '',
+    `**Instruction:** ${truncate(update.instruction.trim(), 400)}`,
+    '',
+    `**Progress:** ${truncate(update.message.trim(), 800)}`,
+  ];
+  if (update.finishedAt) {
+    lines.push('', `**Finished:** ${formatTimestamp(update.finishedAt)}`);
+  }
+  lines.push('');
+  return lines.join('\n');
 }
 
 function buildEnv(): NodeJS.ProcessEnv {
