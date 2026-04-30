@@ -428,6 +428,26 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
 
+  it('rejects hidden or path-like wiki file names before slugging', () => {
+    const root = makeTempDir();
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      createWikiFile: (folderName: string, fileName: string) => unknown;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.createWikiFile('', '../escape')).toBeNull();
+    expect(manager.createWikiFile('', '.hidden')).toBeNull();
+    expect(manager.createWikiFile('', '_draft')).toBeNull();
+    expect(fs.existsSync(path.join(root, 'escape.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, '-hidden.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, '-draft.md'))).toBe(false);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('creates suggested-title wiki files with a blank editable H1', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
@@ -484,6 +504,28 @@ describe('recursive wiki tree scan', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
+  it('rejects hidden or path-like library file names before slugging', () => {
+    const root = makeTempDir();
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      createLibraryFile: (rootPath: string, folderRelPath: string, fileName: string) => unknown;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(manager.createLibraryFile(root, '', '../escape')).toBeNull();
+    expect(manager.createLibraryFile(root, '', '.hidden')).toBeNull();
+    expect(manager.createLibraryFile(root, '', '_draft')).toBeNull();
+    expect(fs.existsSync(path.join(root, 'escape.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, '-hidden.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, '-draft.md'))).toBe(false);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('creates external library folders without slugging their names', () => {
     const root = makeTempDir();
 
@@ -500,6 +542,26 @@ describe('recursive wiki tree scan', () => {
     expect(manager.createLibraryDir(root, 'Client Notes')).toBe(true);
     expect(fs.statSync(path.join(root, 'Client Notes')).isDirectory()).toBe(true);
     expect(emit).toHaveBeenCalledWith('library:changed', root);
+  });
+
+  it('rejects hidden library folders because they would not display', () => {
+    const root = makeTempDir();
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      createLibraryDir: (rootPath: string, dirRelPath: string) => boolean;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(manager.createLibraryDir(root, '.hidden')).toBe(false);
+    expect(manager.createLibraryDir(root, '_drafts')).toBe(false);
+    expect(fs.existsSync(path.join(root, '.hidden'))).toBe(false);
+    expect(fs.existsSync(path.join(root, '_drafts'))).toBe(false);
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('moves user-created wiki folders to Trash and emits deleted page relPaths', async () => {
