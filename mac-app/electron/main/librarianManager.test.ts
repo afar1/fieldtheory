@@ -297,6 +297,20 @@ describe('recursive wiki tree scan', () => {
     ]);
   });
 
+  it('includes .markdown files in the library tree', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'alpha.markdown'), '# Alpha\n');
+    fs.writeFileSync(path.join(root, 'entries', 'index.markdown'), '# Index\n');
+
+    const tree = scan(root);
+    const entries = tree.find((node) => node.kind === 'dir' && node.name === 'entries');
+    expect(entries?.kind).toBe('dir');
+    if (entries?.kind !== 'dir') return;
+    expect(entries.children.map((node) => node.name)).toEqual(['alpha']);
+    expect(flatten(tree)).toEqual(['entries/alpha']);
+  });
+
   it('reuses the wiki tree until a wiki change invalidates it', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
@@ -366,6 +380,26 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
 
+  it('saves existing .markdown wiki pages without creating a duplicate .md file', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    const filePath = path.join(root, 'entries', 'note.markdown');
+    fs.writeFileSync(filePath, '# Old title\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      saveWikiPage: (relPath: string, content: string) => boolean;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.saveWikiPage('entries/note', '# New title\n')).toBe(true);
+    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
+    expect(fs.existsSync(path.join(root, 'entries', 'note.md'))).toBe(false);
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+  });
+
   it('renames root-level wiki pages now that library roots can create them', () => {
     const root = makeTempDir();
     fs.writeFileSync(path.join(root, 'note.md'), '# Note\n');
@@ -383,6 +417,24 @@ describe('recursive wiki tree scan', () => {
     expect(fs.existsSync(path.join(root, 'better-note.md'))).toBe(true);
     expect(emit).toHaveBeenCalledWith('wiki:changed');
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
+  });
+
+  it('renames .markdown wiki pages without changing their extension', () => {
+    const root = makeTempDir();
+    fs.writeFileSync(path.join(root, 'note.markdown'), '# Note\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      renameWikiPage: (relPath: string, newName: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
+
+    expect(manager.renameWikiPage('note', 'Better Note')).toBe('better-note');
+    expect(fs.existsSync(path.join(root, 'note.markdown'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'better-note.markdown'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'better-note.md'))).toBe(false);
   });
 
   it('creates markdown files inside external library roots', () => {
@@ -632,10 +684,10 @@ describe('recursive wiki tree scan', () => {
     expect(trashItem).not.toHaveBeenCalled();
   });
 
-  it('only saves cached readings inside watched reading folders', () => {
+  it('only saves existing readings inside watched reading folders', () => {
     const root = makeTempDir();
     const outside = makeTempDir();
-    const readingPath = path.join(root, 'reading.md');
+    const readingPath = path.join(root, 'reading.markdown');
     const outsidePath = path.join(outside, 'outside.md');
     fs.writeFileSync(readingPath, '# Reading\n');
     fs.writeFileSync(outsidePath, '# Outside\n');
@@ -649,15 +701,7 @@ describe('recursive wiki tree scan', () => {
       emit: typeof emit;
     };
     manager.settings = { watchedDirs: [root] };
-    manager.cache = new Map([[readingPath, {
-      path: readingPath,
-      title: 'Reading',
-      context: null,
-      readingTime: null,
-      modelSignature: null,
-      createdAt: Date.now(),
-      mtime: Date.now(),
-    }]]);
+    manager.cache = new Map();
     manager.saveIndex = vi.fn();
     manager.emit = emit;
 
@@ -666,13 +710,14 @@ describe('recursive wiki tree scan', () => {
 
     expect(manager.saveReading(readingPath, '# Changed\n')).toBe(true);
     expect(fs.readFileSync(readingPath, 'utf-8')).toBe('# Changed\n');
+    expect(manager.cache.has(readingPath)).toBe(true);
     expect(emit).toHaveBeenCalledWith('reading-updated', expect.objectContaining({ path: readingPath, title: 'Changed' }));
   });
 
-  it('moves cached readings inside watched folders to Trash', async () => {
+  it('moves existing readings inside watched folders to Trash', async () => {
     const root = makeTempDir();
     const outside = makeTempDir();
-    const readingPath = path.join(root, 'reading.md');
+    const readingPath = path.join(root, 'reading.markdown');
     const outsidePath = path.join(outside, 'outside.md');
     fs.writeFileSync(readingPath, '# Reading\n');
     fs.writeFileSync(outsidePath, '# Outside\n');
@@ -687,15 +732,7 @@ describe('recursive wiki tree scan', () => {
       emit: typeof emit;
     };
     manager.settings = { watchedDirs: [root] };
-    manager.cache = new Map([[readingPath, {
-      path: readingPath,
-      title: 'Reading',
-      context: null,
-      readingTime: null,
-      modelSignature: null,
-      createdAt: Date.now(),
-      mtime: Date.now(),
-    }]]);
+    manager.cache = new Map();
     manager.saveIndex = vi.fn();
     manager.emit = emit;
 
