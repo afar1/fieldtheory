@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isKeyboardShortcutsHelpShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -168,6 +168,18 @@ describe('isThemeToggleShortcut', () => {
 
   it('rejects Shift+Cmd+D so it does not collide with debug console', () => {
     expect(isThemeToggleShortcut(mkKey({ key: 'D', code: 'KeyD', metaKey: true, shiftKey: true }))).toBe(false);
+  });
+});
+
+describe('isKeyboardShortcutsHelpShortcut', () => {
+  it('accepts Shift+?', () => {
+    expect(isKeyboardShortcutsHelpShortcut(mkKey({ key: '?', code: 'Slash', shiftKey: true }))).toBe(true);
+    expect(isKeyboardShortcutsHelpShortcut(mkKey({ key: '/', code: 'Slash', shiftKey: true }))).toBe(true);
+  });
+
+  it('rejects bare slash and modified variants', () => {
+    expect(isKeyboardShortcutsHelpShortcut(mkKey({ key: '/', code: 'Slash' }))).toBe(false);
+    expect(isKeyboardShortcutsHelpShortcut(mkKey({ key: '?', code: 'Slash', shiftKey: true, metaKey: true }))).toBe(false);
   });
 });
 

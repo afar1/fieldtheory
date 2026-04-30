@@ -1160,15 +1160,18 @@ interface CommandWithContent extends PortableCommandInfo {
   documentVersion: DocumentVersion;
 }
 
-interface DocumentVersion {
-  mtimeMs: number;
-  size: number;
-  sha256: string;
-}
+declare global {
+  interface DocumentVersion {
+    mtimeMs: number;
+    size: number;
+    sha256: string;
+  }
 
-type DocumentSaveResult =
-  | { ok: true; version: DocumentVersion }
-  | { ok: false; reason: 'blocked' | 'conflict' | 'error' | 'not-found'; currentContent?: string; currentVersion?: DocumentVersion };
+  type DocumentSaveResult =
+    | { ok: true; version: DocumentVersion }
+    | { ok: false; reason: 'conflict'; currentContent: string; currentVersion: DocumentVersion }
+    | { ok: false; reason: 'blocked' | 'error' | 'not-found'; currentContent?: string; currentVersion?: DocumentVersion };
+}
 
 /**
  * Watched directory for commands.

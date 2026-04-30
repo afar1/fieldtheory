@@ -186,6 +186,7 @@ export class AuthManager extends EventEmitter {
 
   // Timer for scheduled token refresh (replaces SDK's autoRefreshToken)
   private refreshTimer: NodeJS.Timeout | null = null;
+  private wakeRefreshRetryTimer: NodeJS.Timeout | null = null;
 
   // Constants for refresh scheduling
   private static readonly REFRESH_MARGIN_MS = 60 * 1000; // 60 seconds before expiry
@@ -677,14 +678,18 @@ export class AuthManager extends EventEmitter {
       const refreshPromise = this.supabase!.auth.refreshSession({
         refresh_token: refreshToken,
       });
+      let refreshTimeout: ReturnType<typeof setTimeout> | null = null;
       const timeoutPromise = new Promise<{ data: { session: null }; error: { message: string } }>((resolve) => {
-        setTimeout(() => {
-          log.warn(`refreshSession timeout after ${REFRESH_TIMEOUT_MS}ms`);
+        refreshTimeout = setTimeout(() => {
+          log.warn(`refreshSession timeout after ${REFRESH_TIMEOUT_MS}ms (${source})`);
           resolve({ data: { session: null }, error: { message: 'Refresh timeout' } });
         }, REFRESH_TIMEOUT_MS);
       });
 
       const { data: refreshData, error: refreshError } = await Promise.race([refreshPromise, timeoutPromise]);
+      if (refreshTimeout) {
+        clearTimeout(refreshTimeout);
+      }
       log.debug('refreshSession returned, error:', refreshError?.message || 'none', 'hasSession:', !!refreshData?.session);
 
       if (refreshError) {
@@ -708,6 +713,7 @@ export class AuthManager extends EventEmitter {
               }, 'recovery');
               this.session = currentSession.session;
               this.writeCliSessionMirror(this.session);
+              this.clearWakeRefreshRetryTimer();
               this.scheduleTokenRefresh();
               return true; // Recovered!
             }
@@ -762,6 +768,7 @@ export class AuthManager extends EventEmitter {
         this.emit('sessionChanged', this.session);
 
         // Schedule next refresh
+        this.clearWakeRefreshRetryTimer();
         this.scheduleTokenRefresh();
 
         return true;
@@ -1419,6 +1426,26 @@ export class AuthManager extends EventEmitter {
     }
   }
 
+  private clearWakeRefreshRetryTimer(): void {
+    if (this.wakeRefreshRetryTimer) {
+      clearTimeout(this.wakeRefreshRetryTimer);
+      this.wakeRefreshRetryTimer = null;
+    }
+  }
+
+  private scheduleWakeRefreshRetry(): void {
+    this.clearWakeRefreshRetryTimer();
+    this.emitDebug('WAKE_REFRESH_RETRY_SCHEDULED', {
+      retryInSeconds: AuthManager.RETRY_DELAY_MS / 1000,
+    }, 'warn');
+
+    this.wakeRefreshRetryTimer = setTimeout(() => {
+      this.wakeRefreshRetryTimer = null;
+      if (!this.session?.refresh_token || !this.isTokenExpiringSoon()) return;
+      void this.coordinatedRefresh(this.session.refresh_token, 'wake-retry');
+    }, AuthManager.RETRY_DELAY_MS);
+  }
+
   /**
    * Check if the current token is expiring soon (within REFRESH_MARGIN_MS).
    * Used by power monitor wake handler.
@@ -1436,7 +1463,10 @@ export class AuthManager extends EventEmitter {
   async refreshIfExpiringSoon(): Promise<void> {
     if (this.session?.refresh_token && this.isTokenExpiringSoon()) {
       log.info('Token expiring soon after wake, refreshing...');
-      await this.coordinatedRefresh(this.session.refresh_token, 'wake');
+      const success = await this.coordinatedRefresh(this.session.refresh_token, 'wake');
+      if (!success && this.session?.refresh_token && this.isTokenExpiringSoon()) {
+        this.scheduleWakeRefreshRetry();
+      }
     }
   }
 
@@ -1445,6 +1475,7 @@ export class AuthManager extends EventEmitter {
    */
   destroy(): void {
     this.clearRefreshTimer();
+    this.clearWakeRefreshRetryTimer();
     this.session = null;
     this.removeAllListeners();
     log.info('Destroyed');

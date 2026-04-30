@@ -27,6 +27,7 @@ import {
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
   rankMarkdownWikiLinkSuggestions,
+  rebaseMarkdownTodoStateChange,
   replaceLibrarianNavigationEntry,
   resolveMarkdownCaretOffsetFromRenderedText,
   restoreLibrarianEditorSession,
@@ -35,6 +36,7 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
   splitFrontmatter,
   setMarkdownTodoState,
@@ -137,6 +139,18 @@ Body text here.`;
     expect(none.content).toBe('# Task\n');
   });
 
+  it('cycles todo state backward from none to done to open to none', () => {
+    const done = cycleMarkdownTodoState('# Task\n', 'backward');
+    expect(done.state).toBe('done');
+
+    const open = cycleMarkdownTodoState(done.content, 'backward');
+    expect(open.state).toBe('open');
+
+    const none = cycleMarkdownTodoState(open.content, 'backward');
+    expect(none.state).toBeNull();
+    expect(none.content).toBe('# Task\n');
+  });
+
   it('returns raw content when no frontmatter present', () => {
     const content = '# Just a heading\n\nNo frontmatter.';
     const result = splitFrontmatter(content);
@@ -178,7 +192,7 @@ describe('extractMarkdownH1Title', () => {
 });
 
 describe('shouldHandleMarkdownTodoTabShortcut', () => {
-  it('uses plain Tab for wiki and external markdown files', () => {
+  it('uses Tab and Shift+Tab for wiki and external markdown files', () => {
     expect(shouldHandleMarkdownTodoTabShortcut({
       key: 'Tab',
       shiftKey: false,
@@ -195,13 +209,21 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
       altKey: false,
       selectedItemType: 'external',
     })).toBe(true);
-  });
-
-  it('ignores modified Tab and non-markdown selections', () => {
     expect(shouldHandleMarkdownTodoTabShortcut({
       key: 'Tab',
       shiftKey: true,
       metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      selectedItemType: 'wiki',
+    })).toBe(true);
+  });
+
+  it('ignores command-modified Tab and non-markdown selections', () => {
+    expect(shouldHandleMarkdownTodoTabShortcut({
+      key: 'Tab',
+      shiftKey: true,
+      metaKey: true,
       ctrlKey: false,
       altKey: false,
       selectedItemType: 'wiki',
@@ -226,6 +248,14 @@ describe('isTextEntryInputType', () => {
 
   it('does not treat checkboxes as text entry', () => {
     expect(isTextEntryInputType('checkbox')).toBe(false);
+  });
+});
+
+describe('shouldInsertClipboardImagePathForPaste', () => {
+  it('only inserts a clipboard image path when the paste event has an image', () => {
+    expect(shouldInsertClipboardImagePathForPaste({ pastedText: '', hasImage: false })).toBe(false);
+    expect(shouldInsertClipboardImagePathForPaste({ pastedText: 'hello', hasImage: false })).toBe(false);
+    expect(shouldInsertClipboardImagePathForPaste({ pastedText: '', hasImage: true })).toBe(true);
   });
 });
 
@@ -419,6 +449,27 @@ describe('markdown task line indexing', () => {
 
   it('toggles a task by source line index instead of duplicate text', () => {
     expect(toggleMarkdownTaskLineAtIndex('- [ ] same\n- [ ] same', 1, true)).toBe('- [ ] same\n- [x] same');
+  });
+});
+
+describe('rebaseMarkdownTodoStateChange', () => {
+  it('reapplies a note todo-state change onto newer disk content', () => {
+    const previous = '---\ntodo: true\ntodo_state: open\n---\n\n# Note\n\nOld body';
+    const target = '---\ntodo: true\ntodo_state: done\n---\n\n# Note\n\nOld body';
+    const disk = '---\ntodo: true\ntodo_state: open\n---\n\n# Note\n\nNew body';
+
+    expect(rebaseMarkdownTodoStateChange(previous, target, disk)).toEqual({
+      content: '---\ntodo: true\ntodo_state: done\n---\n\n# Note\n\nNew body',
+      state: 'done',
+    });
+  });
+
+  it('does not rebase when the target changed document body content too', () => {
+    const previous = '---\ntodo_state: open\n---\n\nOld body';
+    const target = '---\ntodo_state: done\n---\n\nEdited body';
+    const disk = '---\ntodo_state: open\n---\n\nDisk body';
+
+    expect(rebaseMarkdownTodoStateChange(previous, target, disk)).toBeNull();
   });
 });
 

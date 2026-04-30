@@ -16,21 +16,27 @@ function selectedLineBounds(value: string, selectionStart: number, selectionEnd:
   };
 }
 
-function cycleTaskLine(line: string): string {
+type MarkdownTaskCycleDirection = 'forward' | 'backward';
+
+function cycleTaskLine(line: string, direction: MarkdownTaskCycleDirection): string {
   if (!line.trim()) return line;
 
   const task = line.match(/^(\s*)(?:([-*+])\s*)?(\[( |x|X)?\])\s+(.+)$/);
   if (task) {
     const checked = task[4]?.toLowerCase() === 'x';
+    if (direction === 'backward') {
+      if (checked) return task[2] ? `${task[1]}${task[2]} [ ] ${task[5]}` : `${task[1]}[ ] ${task[5]}`;
+      return `${task[1]}${task[5]}`;
+    }
     if (checked) return `${task[1]}${task[5]}`;
     return task[2] ? `${task[1]}${task[2]} [x] ${task[5]}` : `${task[1]}[x] ${task[5]}`;
   }
 
   const list = line.match(/^(\s*)(?:[-*+]|\d+\.)\s+(.+)$/);
-  if (list) return `${list[1]}- [ ] ${list[2]}`;
+  if (list) return `${list[1]}- [${direction === 'backward' ? 'x' : ' '}] ${list[2]}`;
 
   const plain = line.match(/^(\s*)(.*)$/);
-  return plain ? `${plain[1]}- [ ] ${plain[2]}` : line;
+  return plain ? `${plain[1]}- [${direction === 'backward' ? 'x' : ' '}] ${plain[2]}` : line;
 }
 
 function toggleTaskCheckLine(line: string): string | null {
@@ -77,12 +83,13 @@ export function getMarkdownTaskShortcutEdit(
   value: string,
   selectionStart: number,
   selectionEnd: number,
+  direction: MarkdownTaskCycleDirection = 'forward',
 ): MarkdownTaskShortcutEdit | null {
   const { start, end } = selectedLineBounds(value, selectionStart, selectionEnd);
   const block = value.slice(start, end);
   if (!block.trim()) return null;
 
-  const nextBlock = block.split('\n').map(cycleTaskLine).join('\n');
+  const nextBlock = block.split('\n').map((line) => cycleTaskLine(line, direction)).join('\n');
   if (nextBlock === block) return null;
 
   const nextValue = `${value.slice(0, start)}${nextBlock}${value.slice(end)}`;

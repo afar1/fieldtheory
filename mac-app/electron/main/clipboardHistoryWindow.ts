@@ -6,6 +6,7 @@ import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsBy
 import { SoundManager } from './soundManager';
 import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
+import { isDevServerConnectionRefused, loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { NativeHelper } from './nativeHelper';
 
 const log = createLogger('ClipboardHistory');
@@ -884,7 +885,11 @@ export class ClipboardHistoryWindow {
       this.emitBoundsChanged();
     });
 
-    this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    this.window.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+      if (process.env.ELECTRON_START_URL && isDevServerConnectionRefused(errorCode)) {
+        log.warn('Dev server load failed; retry handler will reload:', errorCode, errorDescription, validatedURL);
+        return;
+      }
       log.error('Load failed:', errorCode, errorDescription);
     });
 
@@ -935,8 +940,10 @@ export class ClipboardHistoryWindow {
     // Load clipboard history HTML.
     const startUrl = process.env.ELECTRON_START_URL;
     if (startUrl) {
-      const url = startUrl.endsWith('/') ? startUrl : `${startUrl}/`;
-      this.window.loadURL(`${url}clipboard-history.html`);
+      loadDevServerURLWithRetry(this.window, startUrl, 'clipboard-history.html', {
+        label: 'ClipboardHistory',
+        logger: log,
+      });
     } else {
       const htmlPath = path.join(app.getAppPath(), 'dist', 'clipboard-history.html');
       this.window.loadFile(htmlPath);
