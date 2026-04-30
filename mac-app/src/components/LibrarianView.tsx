@@ -5358,7 +5358,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             animateCompletion ? 'ft-rendered-task-completed-live' : null,
                           ].filter(Boolean).join(' ')}
                           style={{
-                            marginBottom: 'var(--ft-prose-list-item-spacing)',
+                            margin: 'calc(var(--ft-prose-list-item-spacing) * 0.55) 0',
                             listStyle: 'none',
                             display: 'grid',
                             gridTemplateColumns: '0.78em minmax(0, 1fr)',
