@@ -3919,23 +3919,30 @@ interface AgentKickoffArgs {
   instruction: string;
   model: AgentKickoffModel;
 }
-interface AgentKickoffResult {
+interface AgentKickoffStartResult {
   ok: boolean;
   runId: string;
-  stdout: string;
-  stderr: string;
-  durationMs: number;
-  summary: string;
-  appendedFooter: boolean;
+  absPath?: string;
+  model?: AgentKickoffModel;
   error?: string;
 }
 interface AgentKickoffProgressEvent {
   runId: string;
+  absPath: string;
+  model: AgentKickoffModel;
   kind: 'stdout' | 'stderr';
   chunk: string;
 }
+interface AgentKickoffStatusEvent {
+  runId: string;
+  absPath: string;
+  model: AgentKickoffModel;
+  status: 'started' | 'done' | 'error';
+  message: string;
+  error?: string;
+}
 const agentKickoffAPI = {
-  kickoff: (args: AgentKickoffArgs): Promise<AgentKickoffResult> =>
+  kickoff: (args: AgentKickoffArgs): Promise<AgentKickoffStartResult> =>
     ipcRenderer.invoke('agent:kickoff', args),
   cancel: (runId: string): Promise<boolean> =>
     ipcRenderer.invoke('agent:cancelKickoff', runId),
@@ -3944,6 +3951,12 @@ const agentKickoffAPI = {
       callback(payload);
     ipcRenderer.on('agent:kickoffProgress', handler);
     return () => ipcRenderer.removeListener('agent:kickoffProgress', handler);
+  },
+  onStatus: (callback: (event: AgentKickoffStatusEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: AgentKickoffStatusEvent) =>
+      callback(payload);
+    ipcRenderer.on('agent:kickoffStatus', handler);
+    return () => ipcRenderer.removeListener('agent:kickoffStatus', handler);
   },
 };
 contextBridge.exposeInMainWorld('agentKickoffAPI', agentKickoffAPI);
