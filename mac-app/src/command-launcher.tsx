@@ -1345,6 +1345,12 @@ function CommandLauncher() {
       const q = rawQuery.toLowerCase();
       const currentIndex = selectedIndexRef.current;
 
+      const selectedItem = filtered[currentIndex];
+      if (selectedItem?.type === 'command') {
+        void invokeItem(selectedItem, { openFieldTheoryTarget: true });
+        return;
+      }
+
       if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) {
         const authorHandle = resolveLauncherAuthorNamespaceHandle([], bookmarkAuthorItems, 0, rawQuery);
         if (authorHandle) {
@@ -1481,14 +1487,17 @@ function CommandLauncher() {
   };
 
   // Invoke the selected item.
-  const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean } = {}) => {
+  const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean; openFieldTheoryTarget?: boolean } = {}) => {
     noteItemUsage(item.id);
     dismissPreview();
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
     const fieldTheoryTarget = latestContext?.fieldTheoryActive ? getFieldTheoryTarget(item) : null;
+    if (options.openFieldTheoryTarget && !fieldTheoryTarget) return;
     if (fieldTheoryTarget) {
-      if (options.insertWikiLink) {
-        await commandsAPI.insertMarkdownText(getWikiLinkText(item));
+      if (options.openFieldTheoryTarget) {
+        await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
+      } else if (options.insertWikiLink || item.type === 'command') {
+        await commandsAPI.insertMarkdownText(getWikiLinkText(item)).catch(() => null);
       } else {
         await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
       }

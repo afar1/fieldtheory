@@ -23,7 +23,7 @@ import WikiSidebar, {
 import BookmarksPane from './BookmarksPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
-import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { LIBRARIAN_KEYBOARD_SHORTCUTS, RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isKeyboardShortcutsHelpShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import {
   getMarkdownTodoState,
   parseMarkdownFrontmatter,
@@ -146,14 +146,34 @@ export function getNextMarkdownTodoState(current: MarkdownTodoState | null): Mar
   return null;
 }
 
+export function getPreviousMarkdownTodoState(current: MarkdownTodoState | null): MarkdownTodoState | null {
+  if (current === null) return 'done';
+  if (current === 'done') return 'open';
+  return null;
+}
+
 export function setMarkdownTodoState(content: string, nextState: MarkdownTodoState | null): string {
   return setFrontmatterMarkdownTodoState(content, nextState);
 }
 
-export function cycleMarkdownTodoState(content: string): { content: string; state: MarkdownTodoState | null } {
+export function cycleMarkdownTodoState(content: string, direction: 'forward' | 'backward' = 'forward'): { content: string; state: MarkdownTodoState | null } {
   const currentState = splitFrontmatter(content).todoState;
-  const state = getNextMarkdownTodoState(currentState);
+  const state = direction === 'backward' ? getPreviousMarkdownTodoState(currentState) : getNextMarkdownTodoState(currentState);
   return { content: setMarkdownTodoState(content, state), state };
+}
+
+export function rebaseMarkdownTodoStateChange(
+  previousContent: string,
+  targetContent: string,
+  diskContent: string,
+): { content: string; state: MarkdownTodoState | null } | null {
+  const targetState = splitFrontmatter(targetContent).todoState;
+  if (targetContent !== setMarkdownTodoState(previousContent, targetState)) return null;
+  if (targetState === splitFrontmatter(previousContent).todoState) return null;
+  return {
+    content: setMarkdownTodoState(diskContent, targetState),
+    state: targetState,
+  };
 }
 
 export function shouldHandleMarkdownTodoTabShortcut(input: {
@@ -165,7 +185,6 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
   selectedItemType: LibrarianSelectedItemType;
 }): boolean {
   return input.key === 'Tab'
-    && !input.shiftKey
     && !input.metaKey
     && !input.ctrlKey
     && !input.altKey
@@ -695,6 +714,10 @@ function clipboardDataHasImage(data: DataTransfer): boolean {
     return true;
   }
   return Array.from(data.items).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
+}
+
+export function shouldInsertClipboardImagePathForPaste(input: { pastedText: string; hasImage: boolean }): boolean {
+  return input.hasImage;
 }
 
 export const LIBRARIAN_SELECTION_STORAGE_KEY = 'librarian-last-selection';
@@ -1496,6 +1519,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [isSharing, setIsSharing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
   const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
 
   // Narration state
@@ -2293,12 +2317,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     void saveRenderedContent(nextContent);
   }, [activeReading, saveRenderedContent]);
 
-  const cycleSelectedMarkdownTodoState = useCallback(async (): Promise<boolean> => {
+  const cycleSelectedMarkdownTodoState = useCallback(async (direction: 'forward' | 'backward' = 'forward'): Promise<boolean> => {
     if (!activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) return false;
     if (selectedItemType === 'wiki' && !wikiSelectedRelPath) return false;
 
     const sourceContent = contentMode === 'markdown' ? editContent : activeReading.content;
-    const next = cycleMarkdownTodoState(sourceContent);
+    const next = cycleMarkdownTodoState(sourceContent, direction);
     if (next.content === sourceContent) return false;
 
     const previousState = splitFrontmatter(sourceContent).todoState;
@@ -2313,6 +2337,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
       setEditContent(content);
     };
+    const applyRebasedConflict = async (
+      conflict: Extract<DocumentSaveResult, { ok: false; reason: 'conflict' }>,
+      save: (content: string, version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>,
+    ): Promise<boolean> => {
+      if (!conflict.currentVersion || conflict.currentContent === undefined) return false;
+      const rebased = rebaseMarkdownTodoStateChange(sourceContent, next.content, conflict.currentContent);
+      if (!rebased) return false;
+      const saved = await save(rebased.content, conflict.currentVersion);
+      if (!isDocumentSaveOk(saved)) return false;
+      applySavedDocumentState(selectedItemType, activeReading.path, rebased.content, getDocumentSaveVersion(saved), activeReading.title);
+      updateSelectedSidebarTodoState(rebased.state);
+      setEditContent(rebased.content);
+      setSaveStatus('saved');
+      return true;
+    };
 
     applyLocalState(nextTitle, next.content, next.state);
     setSaveStatus('saving');
@@ -2321,6 +2360,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
         const saved = await window.wikiAPI?.save(wikiSelectedRelPath, next.content, expectedVersion);
         if (isDocumentSaveConflict(saved)) {
+          if (await applyRebasedConflict(
+            saved,
+            (content, version) => window.wikiAPI?.save(wikiSelectedRelPath, content, version) ?? Promise.resolve(undefined),
+          )) {
+            return true;
+          }
           const resolved = await resolveSaveConflict(
             saved,
             selectedItemType,
@@ -2340,6 +2385,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       } else if (selectedItemType === 'external') {
         const saved = await window.externalAPI?.save(activeReading.path, next.content, expectedVersion);
         if (isDocumentSaveConflict(saved)) {
+          if (await applyRebasedConflict(
+            saved,
+            (content, version) => window.externalAPI?.save(activeReading.path, content, version) ?? Promise.resolve(undefined),
+          )) {
+            return true;
+          }
           const resolved = await resolveSaveConflict(
             saved,
             selectedItemType,
@@ -2590,11 +2641,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleMarkdownEditorPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
     const pastedText = e.clipboardData.getData('text/plain');
-    if (!pastedText || clipboardDataHasImage(e.clipboardData)) {
+    if (shouldInsertClipboardImagePathForPaste({ pastedText, hasImage: clipboardDataHasImage(e.clipboardData) })) {
       e.preventDefault();
       void insertCurrentClipboardImagePath();
       return;
     }
+    if (!pastedText) return;
 
     const editor = e.currentTarget;
     const pasteEdit = getMarkdownUrlPasteEdit(
@@ -3841,7 +3893,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       // In markdown mode, Esc just drops back to rendered without closing the
       // window — auto-save already persisted the content.
       if (e.key === 'Escape') {
-        if (contentMode === 'markdown') {
+        if (shortcutsHelpOpen) {
+          setShortcutsHelpOpen(false);
+        } else if (contentMode === 'markdown') {
           void exitEditMode();
         } else if (focusImmersive) {
           setFocusImmersive(false);
@@ -3863,6 +3917,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         || (activeEl instanceof HTMLElement && activeEl.isContentEditable);
       if (inTextInput) return;
 
+      if (isKeyboardShortcutsHelpShortcut(e)) {
+        e.preventDefault();
+        setShortcutsHelpOpen((open) => !open);
+        return;
+      }
+
       if (isCommandDeleteShortcut(e) && sidebarKeyboardActiveRef.current && selectedItemType === 'wiki') {
         e.preventDefault();
         handleDelete();
@@ -3871,7 +3931,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
       if (shouldHandleMarkdownTodoTabShortcut({ key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, selectedItemType })) {
         e.preventDefault();
-        void cycleSelectedMarkdownTodoState();
+        void cycleSelectedMarkdownTodoState(e.shiftKey ? 'backward' : 'forward');
         return;
       }
 
@@ -3898,7 +3958,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -4543,15 +4603,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   locally-installed Claude Code / Codex CLI against this file. */}
               {focusToolbarControlsVisible && activeReading?.path
                 && (selectedItemType === 'wiki' || selectedItemType === 'external')
-                && contentMode !== 'markdown' && (
+                && (
                 <button
                   type="button"
                   onClick={() => setAgentKickoffOpen(true)}
                   title="Run a local agent on this file (Claude Code or Codex)"
                   aria-label="Run agent on this file"
                   style={{
+                    width: '26px',
                     height: '24px',
-                    padding: '0 8px',
+                    padding: 0,
                     fontSize: '12px',
                     fontWeight: 500,
                     color: theme.textSecondary,
@@ -4561,6 +4622,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     cursor: 'pointer',
                     display: 'flex',
                     alignItems: 'center',
+                    justifyContent: 'center',
                     gap: '4px',
                     transition: 'background-color 0.15s ease, color 0.15s ease',
                     // @ts-ignore - opt out of the drag region so the click lands.
@@ -4586,7 +4648,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     <path d="m17.59 6.41 2.83-2.83" />
                     <circle cx="12" cy="12" r="4" />
                   </svg>
-                  Agent
                 </button>
               )}
 
@@ -5685,6 +5746,70 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </Fragment>
         )}
       </div>
+
+      {shortcutsHelpOpen && (
+        <div
+          role="dialog"
+          aria-label="Keyboard shortcuts"
+          onMouseDown={(event) => event.stopPropagation()}
+          style={{
+            position: 'absolute',
+            right: '18px',
+            bottom: '18px',
+            width: 'min(360px, calc(100% - 36px))',
+            maxHeight: 'min(520px, calc(100% - 36px))',
+            overflowY: 'auto',
+            padding: '10px',
+            borderRadius: '6px',
+            color: theme.text,
+            backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.97)',
+            border: `1px solid ${theme.border}`,
+            boxShadow: theme.isDark ? '0 18px 50px rgba(0,0,0,0.42)' : '0 18px 50px rgba(0,0,0,0.16)',
+            zIndex: 30,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 600 }}>Keyboard shortcuts</div>
+            <button
+              type="button"
+              onClick={() => setShortcutsHelpOpen(false)}
+              aria-label="Close keyboard shortcuts"
+              style={{
+                width: '22px',
+                height: '22px',
+                border: 'none',
+                borderRadius: '4px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                cursor: 'pointer',
+              }}
+              onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+              onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
+            >
+              ×
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', columnGap: '14px', rowGap: '6px' }}>
+            {LIBRARIAN_KEYBOARD_SHORTCUTS.map((shortcut) => (
+              <Fragment key={`${shortcut.keys}-${shortcut.label}`}>
+                <kbd
+                  style={{
+                    fontSize: '11px',
+                    fontFamily: fonts.mono,
+                    color: theme.textSecondary,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {shortcut.keys}
+                </kbd>
+                <span style={{ fontSize: '12px', color: theme.text, minWidth: 0 }}>
+                  {shortcut.label}
+                </span>
+              </Fragment>
+            ))}
+          </div>
+        </div>
+      )}
 
       {copyPathCopied && (
         <div

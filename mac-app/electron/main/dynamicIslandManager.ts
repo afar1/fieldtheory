@@ -4,6 +4,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createLogger } from './logger';
+import { loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { WaitingAgent } from './types/agentAttention';
 import type { AgentLayout } from './agentLayout';
 
@@ -876,8 +877,10 @@ export class DynamicIslandManager extends EventEmitter {
   private loadWindowUrl(win: BrowserWindow, htmlFile: string): void {
     const startUrl = process.env.ELECTRON_START_URL;
     if (startUrl) {
-      const baseUrl = startUrl.endsWith('/') ? startUrl : `${startUrl}/`;
-      win.loadURL(`${baseUrl}${htmlFile}`);
+      loadDevServerURLWithRetry(win, startUrl, htmlFile, {
+        label: `DynamicIsland:${htmlFile}`,
+        logger: log,
+      });
     } else {
       const [fileName, query] = htmlFile.split('?');
       const filePath = path.join(app.getAppPath(), 'dist', fileName);
