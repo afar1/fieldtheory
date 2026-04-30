@@ -76,6 +76,12 @@ export function resolveLibrarianLineHeight(
   return option?.value ?? preset.lineHeight;
 }
 
+export function resolveLibrarianParagraphSpacing(lineHeight: LibrarianLineHeightId): string {
+  if (lineHeight === 'tight') return '0.52em';
+  if (lineHeight === 'loose') return '1.08em';
+  return '0.78em';
+}
+
 export function restoreLibrarianTypographyPreset(
   storage: Pick<Storage, 'getItem'>,
 ): LibrarianTypographyPresetId {

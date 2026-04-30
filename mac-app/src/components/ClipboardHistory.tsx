@@ -49,7 +49,7 @@ import {
   RunningApp,
   TAB_LABELS,
   nextTopNavViewMode,
-  shouldCycleTopNavWithAltTab,
+  shouldCycleTopNavWithControlTab,
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
@@ -89,7 +89,7 @@ type TopNavMode = 'clipboard' | 'librarian' | 'commands';
 type TopNavPaintTrace = {
   from: ViewMode;
   to: TopNavMode;
-  source: 'keyboard-alt-tab' | 'tab-click';
+  source: 'keyboard-control-tab' | 'tab-click';
   startedAt: number;
   highlightAppliedAt?: number;
 };
@@ -440,7 +440,7 @@ export default function ClipboardHistory() {
     const highlightAppliedAt = applyTopNavVisualMode(next);
     viewModeRef.current = next;
     traceTopNav('top-nav-switch-start', {
-      source: 'keyboard-alt-tab',
+      source: 'keyboard-control-tab',
       from: previous,
       to: next,
       activeTag: document.activeElement?.tagName ?? null,
@@ -449,7 +449,7 @@ export default function ClipboardHistory() {
     topNavPaintTraceRef.current = {
       from: previous,
       to: next,
-      source: 'keyboard-alt-tab',
+      source: 'keyboard-control-tab',
       startedAt,
       highlightAppliedAt,
     };
@@ -466,13 +466,14 @@ export default function ClipboardHistory() {
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
   const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
+  const [focusChromeChildVisible, setFocusChromeChildVisible] = useState(false);
   const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
   const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
   const appChromeHidden = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
-  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
+  const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible && !focusChromeChildVisible;
   const footerChromeHidden = appChromeHidden || bookmarksCanvasChromeActive;
   const collapseSidebarForFocusChrome = useCallback(() => {
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
@@ -487,8 +488,9 @@ export default function ClipboardHistory() {
       return !collapsed;
     });
   }, [focusChromeActive]);
-  const handleFocusChromeActiveChange = useCallback((active: boolean) => {
+  const handleFocusChromeActiveChange = useCallback((active: boolean, visualVisible: boolean = false) => {
     setFocusChromeActive(active);
+    setFocusChromeChildVisible(active && visualVisible);
     if (!active) setFocusChromeProximityVisible(false);
     if (active) return;
 
@@ -2491,10 +2493,10 @@ export default function ClipboardHistory() {
         }
       }
 
-      // Option+Tab/Shift+Option+Tab cycles through the left-group top-nav tabs.
+      // Control+Tab/Shift+Control+Tab cycles through the left-group top-nav tabs.
       // Plain Tab is left to focused surfaces such as the Library sidebar.
-      if (key === 'Tab' && hasAlt && !hasCtrl && !hasMeta) {
-        if (!shouldCycleTopNavWithAltTab(document.activeElement?.tagName)) {
+      if (key === 'Tab' && hasCtrl && !hasAlt && !hasMeta) {
+        if (!shouldCycleTopNavWithControlTab(document.activeElement?.tagName)) {
           traceTopNav('top-nav-tab-native', {
             activeTag: document.activeElement?.tagName ?? null,
           });

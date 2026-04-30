@@ -1089,7 +1089,23 @@ export class TranscriberManager extends EventEmitter {
     cleanedText = cleanedText.replace(/\b(mm[-\s]?hmm|mm+|hmm+)\b/gi, ' ').trim();
     cleanedText = this.applyWordSubstitutions(cleanedText);
     cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+    cleanedText = this.removeTrailingFillerHallucination(cleanedText);
     return cleanedText.toLowerCase().replace(/\.+$/, '').trim();
+  }
+
+  private removeTrailingFillerHallucination(text: string): string {
+    const wordCount = text.split(/\s+/).filter(Boolean).length;
+    if (wordCount <= 4) return text;
+
+    const filler = String.raw`(?:ok(?:ay)?|yeah|yep|uh[-\s]?huh|mm[-\s]?hmm|alright|all right)`;
+    const repeatedTrailingFiller = new RegExp(String.raw`(?:\s+${filler}[.!?,]*){2,}$`, 'i');
+    const singleTrailingFillerAfterSentence = new RegExp(String.raw`([.!?])\s+${filler}[.!?]*$`, 'i');
+
+    return text
+      .replace(repeatedTrailingFiller, '')
+      .replace(singleTrailingFillerAfterSentence, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
   }
 
   private stripFigureReferences(text: string): string {

@@ -973,7 +973,7 @@ export class ClipboardHistoryWindow {
   }
 
   focusExistingWindow(): boolean {
-    if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+    if (!this.window || this.window.isDestroyed()) {
       return false;
     }
 
