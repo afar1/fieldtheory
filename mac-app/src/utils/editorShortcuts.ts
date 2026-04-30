@@ -46,6 +46,33 @@ export function isThemeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): b
   return e.key.toLowerCase() === 'l' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export function isKeyboardShortcutsHelpShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  return (e.key === '?' || (e.key === '/' && e.shiftKey)) && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey;
+}
+
+export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }> = [
+  { keys: '/', label: 'Focus library search' },
+  { keys: 'Esc', label: 'Exit edit, focus, fullscreen, or close' },
+  { keys: '↑ / ↓', label: 'Move through files' },
+  { keys: 'J / K', label: 'Move through files' },
+  { keys: 'Tab', label: 'Cycle note task state forward' },
+  { keys: 'Shift+Tab', label: 'Cycle note task state backward' },
+  { keys: 'Command+Enter', label: 'Toggle task checkbox line' },
+  { keys: 'Command+Shift+0', label: 'Cycle task line' },
+  { keys: 'Command+.', label: 'Toggle markdown source' },
+  { keys: 'Command+/', label: 'Toggle focus chrome' },
+  { keys: 'Command+F', label: 'Find in file' },
+  { keys: 'Command+C', label: 'Copy selected text or file path' },
+  { keys: 'Command+Shift+C', label: 'Copy file path' },
+  { keys: 'Command+N', label: 'New file' },
+  { keys: 'Command+Shift+N', label: 'New folder' },
+  { keys: 'Command+[ / ]', label: 'Back or forward' },
+  { keys: 'Command+S', label: 'Save and render markdown' },
+  { keys: 'Command+W', label: 'Close Field Theory' },
+  { keys: 'Command+Backspace', label: 'Delete selected sidebar file' },
+  { keys: 'Shift+?', label: 'Show keyboard shortcuts' },
+];
+
 export type RenderedEditClickMode = 'click' | 'command-click';
 
 export const RENDERED_EDIT_CLICK_MODE_STORAGE_KEY = 'fieldtheory-rendered-edit-click-mode';
