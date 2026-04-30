@@ -45,4 +45,14 @@ describe('FieldTheoryProse', () => {
     expect(container.querySelector('.prose-ui')).toBeTruthy();
     expect(screen.getByRole('heading', { name: 'Heading' })).toBeTruthy();
   });
+
+  it('sets paragraph spacing as a prose CSS variable', () => {
+    const { container } = render(
+      <FieldTheoryProse paragraphSpacing="1.08em">
+        {'One\n\nTwo'}
+      </FieldTheoryProse>
+    );
+
+    expect((container.firstElementChild as HTMLElement).style.getPropertyValue('--ft-prose-paragraph-spacing')).toBe('1.08em');
+  });
 });

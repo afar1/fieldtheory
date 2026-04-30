@@ -1723,6 +1723,12 @@ function showClipboardHistoryOnActivate(): void {
     return;
   }
 
+  if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.focusExistingWindow()) {
+    cursorStatusManager?.refreshWindowProperties();
+    dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-app-activate');
+    return;
+  }
+
   // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   suspendDynamicIslandFocusForClipboardHistory('show-app-activate');

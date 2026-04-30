@@ -8,6 +8,7 @@ import {
   persistLibrarianLineHeight,
   persistLibrarianTypographyPreset,
   resolveLibrarianLineHeight,
+  resolveLibrarianParagraphSpacing,
   restoreLibrarianLineHeight,
   restoreLibrarianTypographyPreset,
 } from '../utils/librarianTypography';
@@ -62,5 +63,11 @@ describe('librarian typography presets', () => {
     expect(state[LIBRARIAN_LINE_HEIGHT_STORAGE_KEY]).toBe('tight');
     expect(resolveLibrarianLineHeight('normal', LIBRARIAN_TYPOGRAPHY_PRESETS[0])).toBe(LIBRARIAN_TYPOGRAPHY_PRESETS[0].lineHeight);
     expect(resolveLibrarianLineHeight('tight', LIBRARIAN_TYPOGRAPHY_PRESETS[0])).toBe(1.45);
+  });
+
+  it('changes paragraph spacing with the line-height choice', () => {
+    expect(resolveLibrarianParagraphSpacing('tight')).toBe('0.52em');
+    expect(resolveLibrarianParagraphSpacing('normal')).toBe('0.78em');
+    expect(resolveLibrarianParagraphSpacing('loose')).toBe('1.08em');
   });
 });

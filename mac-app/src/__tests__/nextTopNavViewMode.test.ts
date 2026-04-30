@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { nextTopNavViewMode, shouldCycleTopNavWithAltTab } from '../types/clipboard';
+import { nextTopNavViewMode, shouldCycleTopNavWithControlTab } from '../types/clipboard';
 
 describe('nextTopNavViewMode', () => {
   it('cycles forward through clipboard → librarian → commands → clipboard', () => {
@@ -22,20 +22,20 @@ describe('nextTopNavViewMode', () => {
 
   it('falls back to the first tab when starting from a view outside the carousel', () => {
     // feedback/sketch/todo/settings aren't in the left-group carousel;
-    // pressing Option+Tab from there should land on the first tab.
+    // pressing Control+Tab from there should land on the first tab.
     expect(nextTopNavViewMode('feedback', 1, true)).toBe('clipboard');
     expect(nextTopNavViewMode('sketch', -1, true)).toBe('clipboard');
     expect(nextTopNavViewMode('todo', 1, false)).toBe('clipboard');
   });
 
-  it('uses Option+Tab as the nav carousel shortcut from buttons, including the current tab', () => {
-    expect(shouldCycleTopNavWithAltTab('BUTTON')).toBe(true);
-    expect(shouldCycleTopNavWithAltTab('DIV')).toBe(true);
-    expect(shouldCycleTopNavWithAltTab(null)).toBe(true);
+  it('uses Control+Tab as the nav carousel shortcut from buttons, including the current tab', () => {
+    expect(shouldCycleTopNavWithControlTab('BUTTON')).toBe(true);
+    expect(shouldCycleTopNavWithControlTab('DIV')).toBe(true);
+    expect(shouldCycleTopNavWithControlTab(null)).toBe(true);
   });
 
   it('lets text fields keep native Tab behavior', () => {
-    expect(shouldCycleTopNavWithAltTab('INPUT')).toBe(false);
-    expect(shouldCycleTopNavWithAltTab('TEXTAREA')).toBe(false);
+    expect(shouldCycleTopNavWithControlTab('INPUT')).toBe(false);
+    expect(shouldCycleTopNavWithControlTab('TEXTAREA')).toBe(false);
   });
 });
