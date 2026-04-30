@@ -1,14 +1,16 @@
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import type { CSSProperties } from 'react';
+import FieldTheoryProse from './FieldTheoryProse';
+import type { ProseRenderer } from '../utils/proseRenderer';
 
 interface MarkdownPreviewCardProps {
   title: string;
   filePath: string;
   content: string;
   isDark?: boolean;
+  renderer?: ProseRenderer;
 }
 
-export default function MarkdownPreviewCard({ title, filePath, content, isDark = true }: MarkdownPreviewCardProps) {
+export default function MarkdownPreviewCard({ title, filePath, content, isDark = true, renderer = 'field-theory' }: MarkdownPreviewCardProps) {
   const colors = isDark ? {
     bg: '#1c1c1e',
     border: 'rgba(255,255,255,0.1)',
@@ -48,40 +50,23 @@ export default function MarkdownPreviewCard({ title, filePath, content, isDark =
           {filePath}
         </div>
       </header>
-      <div
+      <FieldTheoryProse
+        color={colors.text}
+        fontFamily="-apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, sans-serif"
+        fontSize="13px"
+        h1Size="18px"
+        h2Size="15px"
+        h3Size="13px"
+        linkColor={colors.link}
+        renderer={renderer}
+        size="preview"
+        surface={isDark ? 'dark' : 'light'}
         style={{
-          fontSize: '13px',
-          lineHeight: 1.5,
-          color: colors.text,
-          overflowWrap: 'anywhere',
-        }}
+          '--ft-prose-code': colors.codeBg,
+        } as CSSProperties}
       >
-        <ReactMarkdown
-          remarkPlugins={[remarkGfm]}
-          components={{
-            hr: () => (
-              <hr style={{ border: 'none', borderTop: `1px solid ${colors.border}`, margin: '14px 0' }} />
-            ),
-            pre: ({ children }) => (
-              <pre style={{ overflowX: 'auto', whiteSpace: 'pre-wrap', background: colors.codeBg, borderRadius: '8px', padding: '10px' }}>
-                {children}
-              </pre>
-            ),
-            code: ({ children }) => (
-              <code style={{ fontFamily: 'Menlo, Monaco, Consolas, monospace', fontSize: '12px', background: colors.codeBg, borderRadius: '4px', padding: '1px 3px' }}>
-                {children}
-              </code>
-            ),
-            a: ({ children, href }) => (
-              <a href={href} style={{ color: colors.link }}>
-                {children}
-              </a>
-            ),
-          }}
-        >
-          {content}
-        </ReactMarkdown>
-      </div>
+        {content}
+      </FieldTheoryProse>
     </article>
   );
 }
