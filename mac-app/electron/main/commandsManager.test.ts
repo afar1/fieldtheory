@@ -1,14 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const mockApp = vi.hoisted(() => ({
   getPath: vi.fn(),
 }));
+const mockShell = vi.hoisted(() => ({
+  trashItem: vi.fn(),
+}));
 
 vi.mock('electron', () => ({
   app: mockApp,
+  shell: mockShell,
 }));
 
 vi.mock('./logger', () => ({
@@ -21,6 +25,7 @@ vi.mock('./logger', () => ({
 }));
 
 import { CommandsManager } from './commandsManager';
+import { shell } from 'electron';
 
 describe('CommandsManager default internal commands', () => {
   let tempRoot: string;
@@ -106,5 +111,62 @@ describe('CommandsManager default internal commands', () => {
       'refactor',
       'review',
     ]);
+  });
+
+  it('rejects command names that would write outside the selected directory', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+
+    expect(manager.createCommand(defaultDir, '../escape', 'bad')).toBeNull();
+    expect(manager.createCommand(defaultDir, 'nested/escape', 'bad')).toBeNull();
+    expect(manager.createCommand(defaultDir, '.hidden', 'bad')).toBeNull();
+
+    expect(existsSync(join(tempRoot, '.fieldtheory', 'escape.md'))).toBe(false);
+    expect(existsSync(join(defaultDir, 'nested', 'escape.md'))).toBe(false);
+    expect(existsSync(join(defaultDir, '.hidden.md'))).toBe(false);
+  });
+
+  it('only saves commands inside watched directories', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const outsidePath = join(tempRoot, 'outside.md');
+    mkdirSync(defaultDir, { recursive: true });
+    writeFileSync(outsidePath, 'original\n');
+    await manager.addWatchedDir(defaultDir);
+
+    expect(manager.saveCommand(outsidePath, 'changed\n')).toBe(false);
+
+    expect(readFileSync(outsidePath, 'utf8')).toBe('original\n');
+  });
+
+  it('moves deleted commands to Trash only when they are inside a watched directory', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const outsidePath = join(tempRoot, 'outside.md');
+    mkdirSync(defaultDir, { recursive: true });
+    writeFileSync(outsidePath, 'outside\n');
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'delete-me', 'delete\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    expect(command).not.toBeNull();
+    await expect(manager.deleteCommand(command!.path)).resolves.toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(command!.path);
+
+    trashItem.mockClear();
+    await expect(manager.deleteCommand(outsidePath)).resolves.toBe(false);
+    expect(trashItem).not.toHaveBeenCalled();
+  });
+
+  it('rejects command renames that would leave the watched directory', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'inside', 'body\n');
+
+    expect(command).not.toBeNull();
+    expect(manager.renameCommand(command!.path, '../outside')).toBeNull();
+    expect(manager.renameCommand(command!.path, 'nested/outside')).toBeNull();
+    expect(existsSync(join(tempRoot, '.fieldtheory', 'outside.md'))).toBe(false);
+    expect(existsSync(join(defaultDir, 'nested', 'outside.md'))).toBe(false);
   });
 });
