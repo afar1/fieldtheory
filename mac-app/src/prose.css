@@ -6,6 +6,7 @@
   --ft-prose-soft: color-mix(in srgb, currentColor 5%, transparent);
   --ft-prose-softer: color-mix(in srgb, currentColor 3%, transparent);
   --ft-prose-code: color-mix(in srgb, currentColor 7%, transparent);
+  --ft-prose-bg: transparent;
   --ft-prose-font-family: inherit;
   --ft-prose-heading-font-family: var(--ft-prose-font-family);
   --ft-prose-font-size: 16px;
@@ -29,6 +30,7 @@
 }
 
 .ft-prose-dark {
+  --ft-prose-bg: #171a20;
   --ft-prose-muted: rgba(255, 255, 255, 0.56);
   --ft-prose-border: rgba(255, 255, 255, 0.12);
   --ft-prose-soft: rgba(255, 255, 255, 0.055);
@@ -37,6 +39,7 @@
 }
 
 .ft-prose-light {
+  --ft-prose-bg: #ffffff;
   --ft-prose-muted: rgba(17, 17, 17, 0.56);
   --ft-prose-border: rgba(0, 0, 0, 0.11);
   --ft-prose-soft: rgba(0, 0, 0, 0.045);
@@ -128,7 +131,24 @@
 }
 
 .ft-prose input[type='checkbox'] {
-  accent-color: var(--ft-prose-link);
+  appearance: none;
+  width: 0.72em;
+  height: 0.72em;
+  margin: 0;
+  border: 1.5px solid color-mix(in srgb, var(--ft-prose-color) 38%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  vertical-align: -0.03em;
+}
+
+.ft-prose input[type='checkbox']:checked {
+  border-color: color-mix(in srgb, var(--ft-prose-color) 46%, transparent);
+  background: color-mix(in srgb, var(--ft-prose-color) 72%, transparent);
+  box-shadow: inset 0 0 0 2.5px var(--ft-prose-bg, #171a20);
+}
+
+.ft-prose input[type='checkbox']:not(:disabled) {
+  cursor: pointer;
 }
 
 .ft-prose code {
