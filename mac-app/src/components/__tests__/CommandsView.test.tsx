@@ -21,7 +21,10 @@ vi.mock('../../supabaseClient', () => ({
 }));
 
 describe('CommandsView command naming', () => {
+  let insertMarkdownTextHandler: ((text: string) => void) | null = null;
+
   beforeEach(() => {
+    insertMarkdownTextHandler = null;
     const existingCommand = {
       name: 'existing',
       displayName: 'existing',
@@ -45,6 +48,17 @@ describe('CommandsView command naming', () => {
         saveCommand: vi.fn(async () => true),
         createCommand: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
+      },
+    });
+    Object.defineProperty(window, 'librarianAPI', {
+      configurable: true,
+      value: {
+        onInsertMarkdownText: vi.fn((callback: (text: string) => void) => {
+          insertMarkdownTextHandler = callback;
+          return () => {
+            insertMarkdownTextHandler = null;
+          };
+        }),
       },
     });
     Object.defineProperty(window, 'localStorage', {
@@ -103,6 +117,78 @@ describe('CommandsView command naming', () => {
       expect(window.commandsAPI?.browseDirectory).toHaveBeenCalled();
       expect(window.commandsAPI?.addWatchedDir).toHaveBeenCalledWith('/tmp/more-commands');
     });
+  });
+
+  it('keeps the launcher-provided command selected after async command loading', async () => {
+    const commands = [
+      {
+        name: 'assess',
+        displayName: 'assess',
+        filePath: '/tmp/commands/assess.md',
+      },
+      {
+        name: 'refactor',
+        displayName: 'refactor',
+        filePath: '/tmp/commands/refactor.md',
+      },
+    ];
+    window.commandsAPI!.getCommands = vi.fn(async () => commands);
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      name: filePath.endsWith('refactor.md') ? 'refactor' : 'assess',
+      displayName: filePath.endsWith('refactor.md') ? 'refactor' : 'assess',
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('refactor.md')
+        ? '# refactor\n\nOpened from launcher\n'
+        : '# assess\n\nWrong first command\n',
+    }));
+
+    render(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        initialCommandPath="/tmp/commands/refactor.md"
+      />
+    );
+
+    expect(await screen.findByText('Opened from launcher')).toBeTruthy();
+    expect(screen.queryByText('Wrong first command')).toBeNull();
+  });
+
+  it('inserts launcher wiki links into the selected command', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+
+    act(() => {
+      insertMarkdownTextHandler?.('[[refactor]]');
+    });
+
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    expect(editor.value).toContain('Rendered selection text\n[[refactor]]');
+  });
+
+  it('uses shared history navigation from the commands toolbar and bracket shortcuts', async () => {
+    const onNavigateBack = vi.fn();
+    const onNavigateForward = vi.fn();
+    render(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        canNavigateBack
+        canNavigateForward
+        onNavigateBack={onNavigateBack}
+        onNavigateForward={onNavigateForward}
+      />
+    );
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByTitle('Back'));
+    fireEvent.keyDown(window, { key: '[', metaKey: true });
+    fireEvent.click(screen.getByTitle('Forward'));
+    fireEvent.keyDown(window, { key: ']', metaKey: true });
+
+    expect(onNavigateBack).toHaveBeenCalledTimes(2);
+    expect(onNavigateForward).toHaveBeenCalledTimes(2);
   });
 
   it('uses a rendered/source toggle for internal commands', async () => {
