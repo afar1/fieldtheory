@@ -86,4 +86,9 @@ export interface CommandSyncResult {
 export interface CommandWithContent extends PortableCommandInfo {
   lastModified: number;
   content: string;
+  documentVersion: {
+    mtimeMs: number;
+    size: number;
+    sha256: string;
+  };
 }

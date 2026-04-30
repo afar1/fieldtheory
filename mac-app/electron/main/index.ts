@@ -77,6 +77,7 @@ import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LibrarySyncService } from './librarySyncService';
 import { CommandsIPCChannels } from './types/commands';
+import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
@@ -1872,15 +1873,15 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // Save reading content to disk
-  ipcMain.handle('librarian:saveReading', (_event, filePath: string, content: string): boolean => {
+  ipcMain.handle('librarian:saveReading', (_event, filePath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
     if (!librarianManager) {
-      return false;
+      return { ok: false, reason: 'error' };
     }
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
-      return false;
+      return { ok: false, reason: 'blocked' };
     }
-    return librarianManager.saveReading(filePath, content);
+    return librarianManager.saveReading(filePath, content, expectedVersion);
   });
 
   // Delete a reading file
@@ -1996,13 +1997,13 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getWikiPage(relPath);
   });
 
-  ipcMain.handle('wiki:save', (_event, relPath: string, content: string): boolean => {
-    if (!librarianManager) return false;
+  ipcMain.handle('wiki:save', (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
+    if (!librarianManager) return { ok: false, reason: 'error' };
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
-      return false;
+      return { ok: false, reason: 'blocked' };
     }
-    return librarianManager.saveWikiPage(relPath, content);
+    return librarianManager.saveWikiPage(relPath, content, expectedVersion);
   });
 
   ipcMain.handle('wiki:createFile', (_event, folderName: string, fileName: string): WikiPage | null => {
@@ -2091,7 +2092,7 @@ function setupLibrarianIPCHandlers(): void {
   // reads/writes the file in place; no copy, no watcher.
   ipcMain.handle(
     'external:open',
-    (_event, absPath: string): { path: string; name: string; content: string; mtime: number } | null => {
+    (_event, absPath: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null => {
       try {
         const canonical = fs.realpathSync(absPath);
         if (!isAllowedMarkdownExt(canonical)) return null;
@@ -2102,6 +2103,7 @@ function setupLibrarianIPCHandlers(): void {
           name: path.basename(canonical),
           content,
           mtime: Math.floor(stats.mtimeMs),
+          documentVersion: readDocumentVersion(canonical),
         };
       } catch (error) {
         log.error(`external:open failed for ${absPath}:`, error);
@@ -2110,19 +2112,18 @@ function setupLibrarianIPCHandlers(): void {
     },
   );
 
-  ipcMain.handle('external:save', (_event, absPath: string, content: string): boolean => {
+  ipcMain.handle('external:save', (_event, absPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
-      return false;
+      return { ok: false, reason: 'blocked' };
     }
     try {
       const canonical = fs.realpathSync(absPath);
-      if (!isAllowedMarkdownExt(canonical)) return false;
-      fs.writeFileSync(canonical, content, 'utf-8');
-      return true;
+      if (!isAllowedMarkdownExt(canonical)) return { ok: false, reason: 'not-found' };
+      return writeTextFileWithConflictGuard(canonical, content, expectedVersion);
     } catch (error) {
       log.error(`external:save failed for ${absPath}:`, error);
-      return false;
+      return { ok: false, reason: 'error' };
     }
   });
 
@@ -5811,15 +5812,15 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.getCommandByPath(filePath);
   });
 
-  ipcMain.handle(CommandsIPCChannels.SAVE_COMMAND, async (_event, filePath: string, content: string) => {
+  ipcMain.handle(CommandsIPCChannels.SAVE_COMMAND, async (_event, filePath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
     if (!commandsManager) {
-      return false;
+      return { ok: false, reason: 'error' };
     }
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
-      return false;
+      return { ok: false, reason: 'blocked' };
     }
-    return commandsManager.saveCommand(filePath, content);
+    return commandsManager.saveCommand(filePath, content, expectedVersion);
   });
 
   ipcMain.handle(CommandsIPCChannels.CREATE_COMMAND, async (_event, directoryPath: string, name: string, content: string) => {

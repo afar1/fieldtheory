@@ -2932,7 +2932,18 @@ type CommandWithContent = {
   filePath: string;
   lastModified: number;
   content: string;
+  documentVersion: DocumentVersion;
 };
+
+type DocumentVersion = {
+  mtimeMs: number;
+  size: number;
+  sha256: string;
+};
+
+type DocumentSaveResult =
+  | { ok: true; version: DocumentVersion }
+  | { ok: false; reason: 'blocked' | 'conflict' | 'error' | 'not-found'; currentContent?: string; currentVersion?: DocumentVersion };
 
 type HandoffInfo = {
   name: string;
@@ -3057,8 +3068,8 @@ const commandsAPI = {
   },
 
   // Save/update a command's content.
-  saveCommand: async (filePath: string, content: string): Promise<boolean> => {
-    return ipcRenderer.invoke(CommandsIPCChannels.SAVE_COMMAND, filePath, content);
+  saveCommand: async (filePath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SAVE_COMMAND, filePath, content, expectedVersion);
   },
 
   // Create a new command file.
@@ -3251,6 +3262,7 @@ interface ReadingMeta {
 // Full reading with content (loaded on demand)
 interface Reading extends ReadingMeta {
   content: string;
+  documentVersion: DocumentVersion;
 }
 
 // Watched directory configuration
@@ -3280,7 +3292,8 @@ const librarianAPI = {
   getReading: (filePath: string): Promise<Reading | null> => ipcRenderer.invoke('librarian:getReading', filePath),
 
   // Save reading content to disk
-  saveReading: (filePath: string, content: string): Promise<boolean> => ipcRenderer.invoke('librarian:saveReading', filePath, content),
+  saveReading: (filePath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
+    ipcRenderer.invoke('librarian:saveReading', filePath, content, expectedVersion),
 
   // Delete a reading file
   deleteReading: (filePath: string): Promise<boolean> => ipcRenderer.invoke('librarian:deleteReading', filePath),
@@ -3799,6 +3812,7 @@ interface WikiPageMeta {
 }
 interface WikiPage extends WikiPageMeta {
   content: string;
+  documentVersion: DocumentVersion;
 }
 interface WikiFolder {
   name: string;
@@ -3876,7 +3890,8 @@ const libraryAPI = {
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
-  save: (relPath: string, content: string): Promise<boolean> => ipcRenderer.invoke('wiki:save', relPath, content),
+  save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
+    ipcRenderer.invoke('wiki:save', relPath, content, expectedVersion),
   createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
   createFileWithTitleSuggestion: (folderName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFileWithTitleSuggestion', folderName),
   deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
@@ -3966,13 +3981,14 @@ interface ExternalMarkdownFile {
   name: string;
   content: string;
   mtime: number;
+  documentVersion: DocumentVersion;
 }
 
 const externalAPI = {
   open: (absPath: string): Promise<ExternalMarkdownFile | null> =>
     ipcRenderer.invoke('external:open', absPath),
-  save: (absPath: string, content: string): Promise<boolean> =>
-    ipcRenderer.invoke('external:save', absPath, content),
+  save: (absPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
+    ipcRenderer.invoke('external:save', absPath, content, expectedVersion),
   onOpenExternal: (callback: (absPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, absPath: string) => callback(absPath);
     ipcRenderer.on('external:openPage', handler);
