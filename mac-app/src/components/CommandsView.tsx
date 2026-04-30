@@ -92,6 +92,11 @@ interface CommandsViewProps {
   initialCommandPath?: string | null;
   onInitialCommandConsumed?: () => void;
   onFocusChromeShortcut?: () => void;
+  canNavigateBack?: boolean;
+  canNavigateForward?: boolean;
+  onNavigateBack?: () => void;
+  onNavigateForward?: () => void;
+  onSelectedCommandPathChange?: (path: string | null) => void;
 }
 
 /**
@@ -137,7 +142,19 @@ type CommandsContextMenu =
   | { x: number; y: number; kind: 'directory'; dirPath: string }
   | { x: number; y: number; kind: 'sidebar' };
 
-export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = false, onFocusChromeActiveChange, initialCommandPath, onInitialCommandConsumed, onFocusChromeShortcut }: CommandsViewProps) {
+export default function CommandsView({
+  onSwitchToClipboard,
+  sidebarCollapsed = false,
+  onFocusChromeActiveChange,
+  initialCommandPath,
+  onInitialCommandConsumed,
+  onFocusChromeShortcut,
+  canNavigateBack = false,
+  canNavigateForward = false,
+  onNavigateBack,
+  onNavigateForward,
+  onSelectedCommandPathChange,
+}: CommandsViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
 
@@ -564,6 +581,32 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     }
   }, [selectedCommand]);
 
+  const insertMarkdownText = useCallback((text: string) => {
+    if (!selectedCommand || !text) return;
+
+    const baseContent = isEditing ? editContent : selectedCommand.content;
+    const editor = editTextareaRef.current;
+    const start = editor ? editor.selectionStart : baseContent.length;
+    const end = editor ? editor.selectionEnd : start;
+    const nextContent = `${baseContent.slice(0, start)}${text}${baseContent.slice(end)}`;
+    const nextSelection = start + text.length;
+
+    if (!isEditing) {
+      lastSavedContentRef.current = selectedCommand.content;
+      lastSavedVersionRef.current = selectedCommand.documentVersion;
+      lastSeededPathRef.current = selectedCommand.filePath;
+      setIsEditing(true);
+    }
+
+    setEditContent(nextContent);
+    requestAnimationFrame(() => {
+      const nextEditor = editTextareaRef.current;
+      if (!nextEditor || nextEditor.value !== nextContent) return;
+      nextEditor.focus({ preventScroll: true });
+      nextEditor.setSelectionRange(nextSelection, nextSelection);
+    });
+  }, [editContent, isEditing, selectedCommand]);
+
   const saveCommandContent = useCallback(async (filePath: string, content: string) => {
     try {
       const expectedVersion = lastSavedVersionRef.current;
@@ -662,8 +705,8 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
       const result = await window.commandsAPI?.getCommands();
       if (result) {
         setCommands(result);
-        if (result.length > 0 && selectedPath === null) {
-          setSelectedPath(result[0].filePath);
+        if (result.length > 0) {
+          setSelectedPath((currentPath) => currentPath ?? result[0].filePath);
         }
         // Default to Shared tab if no user commands yet
         if (result.length === 0) {
@@ -730,6 +773,15 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     setSelectedPath(initialCommandPath);
     onInitialCommandConsumed?.();
   }, [initialCommandPath, onInitialCommandConsumed]);
+
+  useEffect(() => {
+    onSelectedCommandPathChange?.(selectedPath);
+  }, [onSelectedCommandPathChange, selectedPath]);
+
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onInsertMarkdownText(insertMarkdownText);
+    return () => unsubscribe?.();
+  }, [insertMarkdownText]);
 
   // Listen for commands changes. Also refresh on window focus as a safety
   // net — fs.watch with recursive:true is flaky on macOS for renames, so
@@ -857,6 +909,19 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
         return;
       }
 
+      if (e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+        if (e.key === '[' && canNavigateBack && onNavigateBack) {
+          e.preventDefault();
+          onNavigateBack();
+          return;
+        }
+        if (e.key === ']' && canNavigateForward && onNavigateForward) {
+          e.preventDefault();
+          onNavigateForward();
+          return;
+        }
+      }
+
       // / focuses sidebar search. Cmd+F is reserved for in-file find.
       if (isSearchFocusShortcut(e)) {
         e.preventDefault();
@@ -917,7 +982,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath, canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1664,6 +1729,10 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
               <ContentToolbar
                 filePath={selectedCommand?.filePath}
                 isFullScreen={focusImmersive}
+                canNavigateBack={canNavigateBack}
+                canNavigateForward={canNavigateForward}
+                onNavigateBack={onNavigateBack}
+                onNavigateForward={onNavigateForward}
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={focusToolbarControlsVisible}

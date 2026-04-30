@@ -120,7 +120,7 @@ export function getGeneratedBookmarkTaxonomyPathInfo(path: string | undefined | 
     const rootValue = taxonomyValueFromPath(normalized, `${segment}/`);
     if (rootValue) return { kind, value: rootValue };
 
-    for (const rootMarker of [`/.fieldtheory/library/${segment}/`, `/.ft-bookmarks/md/${segment}/`]) {
+    for (const rootMarker of [`/.fieldtheory/library/${segment}/`]) {
       const rootIndex = normalized.indexOf(rootMarker);
       if (rootIndex < 0) continue;
       const value = normalized.slice(rootIndex + rootMarker.length);
@@ -197,6 +197,11 @@ export interface LauncherBookmarkFacetNamespaceCandidate extends LauncherVisible
 export interface LauncherDirectoryNamespaceCandidate extends LauncherVisibleItem {
   directoryPath?: string;
   directoryRelPath?: string;
+  keywords?: string[];
+}
+
+export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
+  filePath?: string;
   keywords?: string[];
 }
 
@@ -289,6 +294,44 @@ function directoryItemMatchesQuery(item: LauncherDirectoryNamespaceCandidate, qu
     item.directoryRelPath?.toLowerCase() === q ||
     item.keywords?.some(keyword => keyword.toLowerCase() === q) ||
     false;
+}
+
+function normalizeCommandLookupText(value: string): string {
+  return value.trim().toLowerCase().replace(/\\/g, '/');
+}
+
+function stripCommandMarkdownExtension(value: string): string {
+  return value.replace(/\.md$/i, '');
+}
+
+function basename(value: string): string {
+  const parts = value.replace(/\\/g, '/').split('/');
+  return parts[parts.length - 1] ?? value;
+}
+
+function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: string): number {
+  const q = normalizeCommandLookupText(query);
+  if (!q || item.type !== 'command' || !item.filePath) return 0;
+
+  const pathName = basename(item.filePath);
+  const candidates = [
+    item.name,
+    item.displayName,
+    pathName,
+    stripCommandMarkdownExtension(pathName),
+    item.filePath,
+    ...(item.keywords ?? []),
+  ].map(normalizeCommandLookupText).filter(Boolean);
+
+  let best = 0;
+  for (const candidate of candidates) {
+    const withoutExtension = stripCommandMarkdownExtension(candidate);
+    if (candidate === q || withoutExtension === q) best = Math.max(best, 1000);
+    else if (candidate.startsWith(q) || withoutExtension.startsWith(q)) best = Math.max(best, 850);
+    else if (candidate.split(/[\s/._-]+/).some(part => part.startsWith(q))) best = Math.max(best, 760);
+    else if (candidate.includes(q)) best = Math.max(best, 600);
+  }
+  return best;
 }
 
 export function filterLauncherNamespaceItems<T extends LauncherSearchableItem>(items: T[], search: string): T[] {
@@ -661,6 +704,36 @@ export function resolveLauncherBookmarkFacetNamespace(
   if (filteredFacet) return filteredFacet;
 
   return facetItems.find((item) => item.facetPaths?.length && facetItemMatchesQuery(item, rawQuery)) ?? null;
+}
+
+export function resolveLauncherCommandOpenTarget<T extends LauncherCommandOpenCandidate>(
+  filteredItems: T[],
+  commandItems: T[],
+  selectedIndex: number,
+  query: string,
+  hasExplicitSelection: boolean,
+): T | null {
+  const selected = filteredItems[selectedIndex];
+  const rawQuery = query.trim();
+  if (selected?.type === 'command' && selected.filePath && (hasExplicitSelection || !rawQuery)) {
+    return selected;
+  }
+
+  if (!rawQuery) return null;
+
+  const seen = new Set<string>();
+  const candidates = [...filteredItems, ...commandItems]
+    .filter((item) => {
+      if (item.type !== 'command' || !item.filePath) return false;
+      if (seen.has(item.filePath)) return false;
+      seen.add(item.filePath);
+      return true;
+    })
+    .map((item) => ({ item, score: scoreCommandOpenCandidate(item, rawQuery) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.item ?? null;
 }
 
 // =============================================================================
