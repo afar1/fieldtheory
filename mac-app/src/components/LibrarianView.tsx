@@ -194,6 +194,20 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
     && (input.selectedItemType === 'wiki' || input.selectedItemType === 'external');
 }
 
+export function isLibrarianDocumentFocusChromeActive(input: {
+  canUseFocusImmersive: boolean;
+  isFullScreen: boolean;
+  sidebarCollapsed: boolean;
+  focusImmersive: boolean;
+  isFocusedWritingMode: boolean;
+  writingChromeHidden: boolean;
+}): boolean {
+  return input.canUseFocusImmersive
+    && !input.isFullScreen
+    && input.sidebarCollapsed
+    && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
+}
+
 export function isTextEntryInputType(type: string | null | undefined): boolean {
   const normalized = (type ?? 'text').toLowerCase();
   return normalized === 'text'
@@ -220,6 +234,7 @@ export function extractMarkdownH1Title(content: string, fallback: string): strin
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
+const FOCUS_CHROME_CONTENT_TOP_PADDING = 56;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
 export const CARROT_LIST_MARKER = '›';
 const CARROT_LIST_SENTINEL = '\u2060';
@@ -1528,7 +1543,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
   const focusChromeActive =
     (selectedItemType === 'bookmarks' && isFullScreen && bookmarksCanvasActive) ||
-    (canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden)));
+    isLibrarianDocumentFocusChromeActive({
+      canUseFocusImmersive,
+      isFullScreen,
+      sidebarCollapsed,
+      focusImmersive,
+      isFocusedWritingMode,
+      writingChromeHidden,
+    });
   const focusChromeUsesProximityFade = focusChromeActive;
   const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
   const focusChromePinnedVisible = fileFindOpen;
@@ -4694,8 +4716,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
             padding: contentMode === 'markdown'
-              ? (focusChromeActive ? '8px 32px 0 32px' : '8px 32px 12px 32px')
-              : (isFullScreen ? '16px 32px 28px 32px' : '28px 32px'),
+              ? (focusChromeActive ? `${FOCUS_CHROME_CONTENT_TOP_PADDING}px 32px 0 32px` : '8px 32px 12px 32px')
+              : (focusChromeActive
+                ? `${FOCUS_CHROME_CONTENT_TOP_PADDING}px 32px 28px 32px`
+                : (isFullScreen ? '16px 32px 28px 32px' : '28px 32px')),
             display: 'flex',
             justifyContent: 'center',
           }}
