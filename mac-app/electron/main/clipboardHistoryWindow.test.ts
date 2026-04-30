@@ -479,6 +479,21 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('focuses a hidden app-mode window without resetting renderer state', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+    windowRef.isVisible.mockReturnValue(false);
+
+    expect(window.focusExistingWindow()).toBe(true);
+
+    expect(windowRef.show).toHaveBeenCalled();
+    expect(windowRef.moveTop).toHaveBeenCalled();
+    expect(windowRef.focus).toHaveBeenCalled();
+    expect(mockApp.show).toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('sends showHistory before showTranscriptHistory when reusing an existing window', () => {
     const send = vi.fn();
     attachExistingWindow(window, send);
