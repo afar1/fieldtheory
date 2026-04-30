@@ -7,6 +7,7 @@
   --ft-prose-softer: color-mix(in srgb, currentColor 3%, transparent);
   --ft-prose-code: color-mix(in srgb, currentColor 7%, transparent);
   --ft-prose-bg: transparent;
+  --ft-prose-check: #ffffff;
   --ft-prose-font-family: inherit;
   --ft-prose-heading-font-family: var(--ft-prose-font-family);
   --ft-prose-font-size: 16px;
@@ -33,6 +34,7 @@
 
 .ft-prose-dark {
   --ft-prose-bg: #171a20;
+  --ft-prose-check: #171a20;
   --ft-prose-muted: rgba(255, 255, 255, 0.56);
   --ft-prose-border: rgba(255, 255, 255, 0.12);
   --ft-prose-soft: rgba(255, 255, 255, 0.055);
@@ -42,6 +44,7 @@
 
 .ft-prose-light {
   --ft-prose-bg: #ffffff;
+  --ft-prose-check: #ffffff;
   --ft-prose-muted: rgba(17, 17, 17, 0.56);
   --ft-prose-border: rgba(0, 0, 0, 0.11);
   --ft-prose-soft: rgba(0, 0, 0, 0.045);
@@ -142,12 +145,22 @@
   background: transparent;
   vertical-align: -0.03em;
   position: relative;
-  display: inline-block;
+  display: inline-grid;
+  place-content: center;
 }
 
 .ft-prose input[type='checkbox']:checked {
   border-color: color-mix(in srgb, var(--ft-prose-color) 78%, transparent);
   background: color-mix(in srgb, var(--ft-prose-color) 72%, transparent);
+}
+
+.ft-prose input[type='checkbox']:checked::after {
+  content: '';
+  width: 0.34em;
+  height: 0.18em;
+  border-left: 1.6px solid var(--ft-prose-check);
+  border-bottom: 1.6px solid var(--ft-prose-check);
+  transform: rotate(-45deg) translateY(-0.02em);
 }
 
 .ft-prose-todo-square input[type='checkbox'] {
