@@ -37,6 +37,7 @@ import {
   persistLibrarianLineHeight,
   persistLibrarianTypographyPreset,
   resolveLibrarianLineHeight,
+  resolveLibrarianParagraphSpacing,
   restoreLibrarianLineHeight,
   restoreLibrarianTypographyPreset,
   type LibrarianLineHeightId,
@@ -232,10 +233,12 @@ const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
 const FOCUS_CHROME_CONTENT_TOP_PADDING = 56;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
+export const LIBRARIAN_TODO_MARKER_STORAGE_KEY = 'librarian-todo-marker';
 export const CARROT_LIST_MARKER = '›';
 const CARROT_LIST_SENTINEL = '\u2060';
 
 export type LibrarianUnorderedListMarker = 'dash' | 'carrot';
+export type LibrarianTodoMarker = 'circle' | 'square';
 
 export function isLibrarianUnorderedListMarker(value: unknown): value is LibrarianUnorderedListMarker {
   return value === 'dash' || value === 'carrot';
@@ -253,6 +256,24 @@ export function persistLibrarianUnorderedListMarker(
   marker: LibrarianUnorderedListMarker,
 ): void {
   storage.setItem(LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY, marker);
+}
+
+export function isLibrarianTodoMarker(value: unknown): value is LibrarianTodoMarker {
+  return value === 'circle' || value === 'square';
+}
+
+export function restoreLibrarianTodoMarker(
+  storage: Pick<Storage, 'getItem'>,
+): LibrarianTodoMarker {
+  const saved = storage.getItem(LIBRARIAN_TODO_MARKER_STORAGE_KEY);
+  return isLibrarianTodoMarker(saved) ? saved : 'circle';
+}
+
+export function persistLibrarianTodoMarker(
+  storage: Pick<Storage, 'setItem'>,
+  marker: LibrarianTodoMarker,
+): void {
+  storage.setItem(LIBRARIAN_TODO_MARKER_STORAGE_KEY, marker);
 }
 
 type MarkdownTextEdit = {
@@ -1270,7 +1291,7 @@ interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
-  onFocusChromeActiveChange?: (active: boolean) => void;
+  onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean) => void;
   onBookmarksCanvasActiveChange?: (active: boolean) => void;
   onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
@@ -1420,6 +1441,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const [unorderedListMarker, setUnorderedListMarker] = useState<LibrarianUnorderedListMarker>(() => (
     restoreLibrarianUnorderedListMarker(localStorage)
+  ));
+  const [todoMarker, setTodoMarker] = useState<LibrarianTodoMarker>(() => (
+    restoreLibrarianTodoMarker(localStorage)
   ));
   const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
@@ -1789,6 +1813,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [unorderedListMarker]);
 
   useEffect(() => {
+    persistLibrarianTodoMarker(localStorage, todoMarker);
+  }, [todoMarker]);
+
+  useEffect(() => {
     const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
     window.addEventListener('storage', syncRenderedEditClickMode);
     window.addEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
@@ -1955,8 +1983,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [focusChromeUsesProximityFade]);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(active && focusChromeActive);
-  }, [active, focusChromeActive, onFocusChromeActiveChange]);
+    onFocusChromeActiveChange?.(active && focusChromeActive, active && focusChromeActive && focusChromeVisualVisible);
+  }, [active, focusChromeActive, focusChromeVisualVisible, onFocusChromeActiveChange]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(active && selectedItemType === 'bookmarks' && bookmarksCanvasActive);
@@ -2179,6 +2207,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     fontWeight: 400,
     letterSpacing: 0,
   };
+  const documentParagraphSpacing = resolveLibrarianParagraphSpacing(lineHeightId);
   const readerTopFadeVisible = contentMode === 'markdown' ? true : renderedDocumentTopFade;
 
   const markdownDisplay = useMemo(() => {
@@ -4583,6 +4612,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 } : undefined}
                 unorderedListMarker={unorderedListMarker}
                 onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
+                todoMarker={todoMarker}
+                onTodoMarkerChange={focusToolbarControlsVisible ? setTodoMarker : undefined}
                 proseRenderer={proseRenderer}
                 proseRendererOptions={focusToolbarControlsVisible ? PROSE_RENDERER_OPTIONS : undefined}
                 onProseRendererChange={focusToolbarControlsVisible ? setProseRenderer : undefined}
@@ -5214,6 +5245,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               }}
             >
               <FieldTheoryProse
+                className={todoMarker === 'square' ? 'ft-prose-todo-square' : undefined}
                 color={documentTextStyle.color}
                 fontFamily={typographyPreset.fontFamily}
                 fontSize={textSizes[textSize].base}
@@ -5224,6 +5256,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 lineHeight={documentTextStyle.lineHeight}
                 linkColor={theme.accent}
                 mutedColor={theme.textSecondary}
+                paragraphSpacing={documentParagraphSpacing}
                 remarkLineBreaks
                 renderer={proseRenderer}
                 surface={theme.isDark ? 'dark' : 'light'}
@@ -5289,6 +5322,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     return (
                       <input
                         {...props}
+                        className="ft-rendered-task-checkbox"
                         type="checkbox"
                         checked={isChecked}
                         disabled={false}
@@ -5319,15 +5353,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       const { checkbox, content } = splitTaskListItemChildren(children);
                       return (
                         <li
-                          className={animateCompletion ? 'ft-rendered-task-completed-live' : undefined}
+                          className={[
+                            'ft-rendered-task-list-item',
+                            animateCompletion ? 'ft-rendered-task-completed-live' : null,
+                          ].filter(Boolean).join(' ')}
                           style={{
-                            marginBottom: '0.22em',
+                            marginBottom: 'var(--ft-prose-list-item-spacing)',
                             listStyle: 'none',
                             display: 'grid',
-                            gridTemplateColumns: '0.78em minmax(0, 1fr)',
+                            gridTemplateColumns: '0.95em minmax(0, 1fr)',
                             columnGap: '0.6em',
                             alignItems: 'baseline',
-                            opacity: checked ? 0.68 : 1,
                           }}
                         >
                           <span
