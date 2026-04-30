@@ -61,6 +61,9 @@ interface ContentToolbarProps {
   unorderedListMarker?: 'dash' | 'carrot';
   onUnorderedListMarkerChange?: (marker: 'dash' | 'carrot') => void;
 
+  todoMarker?: 'circle' | 'square';
+  onTodoMarkerChange?: (marker: 'circle' | 'square') => void;
+
   proseRenderer?: ProseRenderer;
   proseRendererOptions?: Array<{
     id: ProseRenderer;
@@ -126,6 +129,8 @@ export default function ContentToolbar({
   onLineHeightChange,
   unorderedListMarker,
   onUnorderedListMarkerChange,
+  todoMarker,
+  onTodoMarkerChange,
   proseRenderer,
   proseRendererOptions,
   onProseRendererChange,
@@ -187,6 +192,7 @@ export default function ContentToolbar({
     (showTextSize && onTextSizeChange) ||
     (lineHeightOptions?.length && onLineHeightChange) ||
     onUnorderedListMarkerChange ||
+    onTodoMarkerChange ||
     (proseRendererOptions?.length && onProseRendererChange)
   );
   const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
@@ -756,6 +762,46 @@ export default function ContentToolbar({
                             borderRadius: '5px',
                             cursor: 'pointer',
                             fontSize: option.id === 'carrot' ? '15px' : '12px',
+                            fontWeight: isSelected ? 700 : 500,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {onTodoMarkerChange && (
+                <div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
+                    Todos
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+                    {[
+                      { id: 'circle' as const, label: '○', title: 'Circle todo checkboxes' },
+                      { id: 'square' as const, label: '□', title: 'Square todo checkboxes' },
+                    ].map((option) => {
+                      const isSelected = option.id === todoMarker;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onTodoMarkerChange(option.id)}
+                          title={option.title}
+                          style={{
+                            height: '26px',
+                            padding: '0 6px',
+                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: isSelected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            border: 'none',
+                            borderRadius: '5px',
+                            cursor: 'pointer',
+                            fontSize: '15px',
                             fontWeight: isSelected ? 700 : 500,
                             lineHeight: 1,
                           }}

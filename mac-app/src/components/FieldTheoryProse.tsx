@@ -22,6 +22,7 @@ export interface FieldTheoryProseProps {
   lineHeight?: CSSProperties['lineHeight'];
   linkColor?: string;
   mutedColor?: string;
+  paragraphSpacing?: CSSProperties['marginBottom'];
   onClick?: MouseEventHandler<HTMLDivElement>;
   onCopy?: ClipboardEventHandler<HTMLDivElement>;
   onMouseDown?: MouseEventHandler<HTMLDivElement>;
@@ -51,6 +52,7 @@ function proseStyle(props: FieldTheoryProseStyleProps): CSSProperties {
     '--ft-prose-h2-size': props.h2Size,
     '--ft-prose-h3-size': props.h3Size,
     '--ft-prose-line-height': props.lineHeight,
+    '--ft-prose-paragraph-spacing': props.paragraphSpacing,
     '--ft-prose-link': props.linkColor,
     '--ft-prose-muted': props.mutedColor,
     '--p-color-text': props.color,

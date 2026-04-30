@@ -697,6 +697,33 @@ describe('TranscriberManager command paste formatting', () => {
   });
 });
 
+describe('TranscriberManager transcript sanitization', () => {
+  const createManager = () => {
+    const manager: any = {
+      preferences: {
+        getPreference: () => [],
+      },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+    return manager;
+  };
+
+  it('removes obvious hallucinated filler endings after real content', () => {
+    const manager = createManager();
+
+    expect(manager.sanitizeTranscriptText('The build finished cleanly. okay. yeah.')).toBe('the build finished cleanly');
+    expect(manager.sanitizeTranscriptText('The build finished cleanly yeah yeah.')).toBe('the build finished cleanly');
+  });
+
+  it('keeps short or semantic uses of okay', () => {
+    const manager = createManager();
+
+    expect(manager.sanitizeTranscriptText('yeah')).toBe('yeah');
+    expect(manager.sanitizeTranscriptText('The current state is okay')).toBe('the current state is okay');
+    expect(manager.sanitizeTranscriptText('I said yeah yeah')).toBe('i said yeah yeah');
+  });
+});
+
 describe('TranscriberManager standard paste target fallback', () => {
   afterEach(() => {
     vi.clearAllMocks();

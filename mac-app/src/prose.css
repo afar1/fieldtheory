@@ -11,6 +11,8 @@
   --ft-prose-heading-font-family: var(--ft-prose-font-family);
   --ft-prose-font-size: 16px;
   --ft-prose-line-height: 1.62;
+  --ft-prose-paragraph-spacing: 0.78em;
+  --ft-prose-list-item-spacing: calc(var(--ft-prose-paragraph-spacing) * 0.28);
   --ft-prose-h1-size: 1.55em;
   --ft-prose-h2-size: 1.18em;
   --ft-prose-h3-size: 1em;
@@ -81,7 +83,7 @@
 }
 
 .ft-prose p {
-  margin: 0 0 0.78em;
+  margin: 0 0 var(--ft-prose-paragraph-spacing);
 }
 
 .ft-prose :where(strong, b) {
@@ -108,12 +110,12 @@
 }
 
 .ft-prose :where(ul, ol) {
-  margin: 0.7em 0 0.95em;
+  margin: calc(var(--ft-prose-paragraph-spacing) * 0.9) 0 calc(var(--ft-prose-paragraph-spacing) * 1.2);
   padding-left: 1.45em;
 }
 
 .ft-prose li {
-  margin: 0.22em 0;
+  margin: var(--ft-prose-list-item-spacing) 0;
 }
 
 .ft-prose li > :where(p, ul, ol) {
@@ -139,12 +141,21 @@
   border-radius: 999px;
   background: transparent;
   vertical-align: -0.03em;
+  position: relative;
+  display: inline-block;
 }
 
 .ft-prose input[type='checkbox']:checked {
-  border-color: color-mix(in srgb, var(--ft-prose-color) 46%, transparent);
+  border-color: color-mix(in srgb, var(--ft-prose-color) 78%, transparent);
   background: color-mix(in srgb, var(--ft-prose-color) 72%, transparent);
-  box-shadow: inset 0 0 0 2.5px var(--ft-prose-bg, #171a20);
+}
+
+.ft-prose-todo-square input[type='checkbox'] {
+  border-radius: 2px;
+}
+
+.ft-prose .ft-rendered-task-list-item:has(input[type='checkbox']:checked) {
+  opacity: 0.68;
 }
 
 .ft-prose input[type='checkbox']:not(:disabled) {
