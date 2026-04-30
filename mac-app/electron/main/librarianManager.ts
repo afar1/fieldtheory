@@ -7,6 +7,7 @@ import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { libraryDir } from './fieldTheoryPaths';
+import { existingPathInsideRoots } from './pathSafety';
 
 const log = createLogger('Librarian');
 
@@ -1929,6 +1930,15 @@ export class LibrarianManager extends EventEmitter {
     return filePath;
   }
 
+  private resolveWatchedReadingPath(filePath: string): string | null {
+    const normalizedPath = this.normalizePath(this.expandPath(filePath));
+    if (!normalizedPath.toLowerCase().endsWith('.md')) return null;
+    if (!this.cache.has(normalizedPath)) return null;
+
+    const watchedRoots = this.settings.watchedDirs.map(dirPath => this.normalizePath(this.expandPath(dirPath)));
+    return existingPathInsideRoots(normalizedPath, watchedRoots) ? normalizedPath : null;
+  }
+
   // ===========================================================================
   // Settings Management
   // ===========================================================================
@@ -3294,7 +3304,8 @@ export class LibrarianManager extends EventEmitter {
    * Updates the file and refreshes the cache.
    */
   saveReading(filePath: string, content: string): boolean {
-    const normalizedPath = this.normalizePath(filePath);
+    const normalizedPath = this.resolveWatchedReadingPath(filePath);
+    if (!normalizedPath) return false;
 
     try {
       fs.writeFileSync(normalizedPath, content, 'utf-8');
@@ -3319,8 +3330,9 @@ export class LibrarianManager extends EventEmitter {
    * Delete a reading file from disk.
    * Removes the file and updates the cache.
    */
-  deleteReading(filePath: string): boolean {
-    const normalizedPath = this.normalizePath(filePath);
+  async deleteReading(filePath: string): Promise<boolean> {
+    const normalizedPath = this.resolveWatchedReadingPath(filePath);
+    if (!normalizedPath) return false;
 
     try {
       // Check if file exists
@@ -3328,8 +3340,7 @@ export class LibrarianManager extends EventEmitter {
         return false;
       }
 
-      // Delete the file
-      fs.unlinkSync(normalizedPath);
+      await shell.trashItem(normalizedPath);
 
       // Remove from cache
       this.cache.delete(normalizedPath);

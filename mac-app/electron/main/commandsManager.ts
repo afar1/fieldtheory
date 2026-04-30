@@ -19,11 +19,12 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { app } from 'electron';
+import { app, shell } from 'electron';
 import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir } from './fieldTheoryPaths';
+import { existingPathInsideRoots, isPathInside, realpathIfExists } from './pathSafety';
 
 const log = createLogger('Commands');
 
@@ -433,6 +434,47 @@ export class CommandsManager extends EventEmitter {
    */
   private normalizePath(dirPath: string): string {
     return path.normalize(dirPath);
+  }
+
+  private watchedRootPaths(): string[] {
+    return this.settings.watchedDirs.map(dirPath => this.normalizePath(this.expandPath(dirPath)));
+  }
+
+  private isInsideWatchedRoot(filePath: string): boolean {
+    return this.watchedRootPaths().some((rootPath) => {
+      const realRootPath = realpathIfExists(rootPath);
+      return !!realRootPath && isPathInside(realRootPath, filePath);
+    });
+  }
+
+  private resolveWatchedCommandFile(filePath: string): string | null {
+    const normalizedPath = this.normalizePath(this.expandPath(filePath));
+    if (!this.isMarkdownFile(normalizedPath)) return null;
+    return existingPathInsideRoots(normalizedPath, this.watchedRootPaths()) ? normalizedPath : null;
+  }
+
+  private resolveWatchedCommandDirectory(dirPath: string): string | null {
+    const normalizedPath = this.normalizePath(this.expandPath(dirPath));
+    const realDirPath = realpathIfExists(normalizedPath);
+    if (!realDirPath) return null;
+    try {
+      if (!fs.statSync(realDirPath).isDirectory()) return null;
+    } catch {
+      return null;
+    }
+    return this.isInsideWatchedRoot(realDirPath) ? normalizedPath : null;
+  }
+
+  private commandFileNameFromUserInput(name: string): string | null {
+    const trimmed = name.trim();
+    if (!trimmed || trimmed.includes('\0') || /[\\/]/.test(trimmed)) return null;
+    if (trimmed === '.' || trimmed === '..' || trimmed.startsWith('.')) return null;
+
+    const lower = trimmed.toLowerCase();
+    const fileName = lower.endsWith('.md') || lower.endsWith('.markdown')
+      ? trimmed
+      : `${trimmed}.md`;
+    return path.basename(fileName) === fileName ? fileName : null;
   }
 
   /**
@@ -1133,13 +1175,14 @@ End of User Commands
    */
   async getCommandByPath(filePath: string): Promise<CommandWithContent | null> {
     try {
-      if (!fs.existsSync(filePath)) {
+      const safePath = this.resolveWatchedCommandFile(filePath);
+      if (!safePath) {
         return null;
       }
 
-      const content = fs.readFileSync(filePath, 'utf-8');
-      const stats = fs.statSync(filePath);
-      const filename = path.basename(filePath);
+      const content = fs.readFileSync(safePath, 'utf-8');
+      const stats = fs.statSync(safePath);
+      const filename = path.basename(safePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
 
       // Preserve original filename as displayName (respecting casing)
@@ -1147,7 +1190,7 @@ End of User Commands
 
       return {
         name: nameWithoutExt.toLowerCase(),
-        filePath,
+        filePath: safePath,
         displayName,
         lastModified: stats.mtimeMs,
         content,
@@ -1163,8 +1206,10 @@ End of User Commands
    */
   saveCommand(filePath: string, content: string): boolean {
     try {
-      fs.writeFileSync(filePath, content, 'utf-8');
-      log.info(`Saved command: ${filePath}`);
+      const safePath = this.resolveWatchedCommandFile(filePath);
+      if (!safePath) return false;
+      fs.writeFileSync(safePath, content, 'utf-8');
+      log.info(`Saved command: ${safePath}`);
       return true;
     } catch (error) {
       log.error(`Error saving command ${filePath}:`, error);
@@ -1178,9 +1223,12 @@ End of User Commands
    */
   createCommand(directoryPath: string, name: string, content: string = ''): { path: string; name: string } | null {
     try {
-      // Ensure the name has .md extension
-      const fileName = name.endsWith('.md') ? name : `${name}.md`;
-      const filePath = path.join(directoryPath, fileName);
+      const directory = this.resolveWatchedCommandDirectory(directoryPath);
+      const fileName = this.commandFileNameFromUserInput(name);
+      if (!directory || !fileName) return null;
+
+      const filePath = path.join(directory, fileName);
+      if (!isPathInside(directory, filePath)) return null;
 
       // Check if file already exists
       if (fs.existsSync(filePath)) {
@@ -1208,22 +1256,23 @@ End of User Commands
   /**
    * Delete a command file.
    */
-  deleteCommand(filePath: string): boolean {
+  async deleteCommand(filePath: string): Promise<boolean> {
     try {
-      if (!fs.existsSync(filePath)) {
+      const safePath = this.resolveWatchedCommandFile(filePath);
+      if (!safePath) {
         return false;
       }
 
-      fs.unlinkSync(filePath);
+      await shell.trashItem(safePath);
 
       // Remove from commands map
-      const command = Array.from(this.commands.values()).find(c => c.filePath === filePath);
+      const command = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safePath));
       if (command) {
         this.commands.delete(command.name);
         this.emit('commandsChanged', this.getCommands());
       }
 
-      log.info(`Deleted command: ${filePath}`);
+      log.info(`Deleted command: ${safePath}`);
       return true;
     } catch (error) {
       log.error(`Error deleting command ${filePath}:`, error);
@@ -1237,14 +1286,13 @@ End of User Commands
    */
   renameCommand(oldFilePath: string, newName: string): string | null {
     try {
-      if (!fs.existsSync(oldFilePath)) {
-        return null;
-      }
+      const safeOldPath = this.resolveWatchedCommandFile(oldFilePath);
+      const newFileName = this.commandFileNameFromUserInput(newName);
+      if (!safeOldPath || !newFileName) return null;
 
-      // Ensure the name has .md extension
-      const newFileName = newName.endsWith('.md') ? newName : `${newName}.md`;
-      const directory = path.dirname(oldFilePath);
+      const directory = path.dirname(safeOldPath);
       const newFilePath = path.join(directory, newFileName);
+      if (!isPathInside(directory, newFilePath)) return null;
 
       // Check if target file already exists
       if (fs.existsSync(newFilePath)) {
@@ -1252,10 +1300,10 @@ End of User Commands
       }
 
       // Rename the file
-      fs.renameSync(oldFilePath, newFilePath);
+      fs.renameSync(safeOldPath, newFilePath);
 
       // Update commands map
-      const oldCommand = Array.from(this.commands.values()).find(c => c.filePath === oldFilePath);
+      const oldCommand = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safeOldPath));
       if (oldCommand) {
         this.commands.delete(oldCommand.name);
         const newCommand = this.createCommandFromFile(newFilePath);
