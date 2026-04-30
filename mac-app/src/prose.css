@@ -150,11 +150,27 @@
   background: color-mix(in srgb, var(--ft-prose-color) 72%, transparent);
 }
 
+.ft-prose input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 0.22em;
+  top: 0.08em;
+  width: 0.22em;
+  height: 0.38em;
+  border: solid color-mix(in srgb, var(--ft-prose-color) 12%, white);
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+}
+
 .ft-prose-todo-square input[type='checkbox'] {
   border-radius: 2px;
 }
 
-.ft-prose .ft-rendered-task-list-item:has(input[type='checkbox']:checked) {
+:where(.ft-prose, .ft-prose-ui) .ft-rendered-task-list-item-open {
+  opacity: 1;
+}
+
+:where(.ft-prose, .ft-prose-ui) .ft-rendered-task-list-item-done {
   opacity: 0.68;
 }
 

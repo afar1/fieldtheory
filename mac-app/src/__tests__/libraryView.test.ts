@@ -465,6 +465,7 @@ describe('markdown task line indexing', () => {
 
   it('toggles a task by source line index instead of duplicate text', () => {
     expect(toggleMarkdownTaskLineAtIndex('- [ ] same\n- [ ] same', 1, true)).toBe('- [ ] same\n- [x] same');
+    expect(toggleMarkdownTaskLineAtIndex('- [x] same\n- [x] same', 1, false)).toBe('- [x] same\n- [ ] same');
   });
 });
 
