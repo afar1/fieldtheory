@@ -24,6 +24,7 @@ import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir } from './fieldTheoryPaths';
+import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { existingPathInsideRoots, isMarkdownDocumentPath, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
 
 const log = createLogger('Commands');
@@ -123,6 +124,7 @@ export interface PortableCommand {
  */
 export interface CommandWithContent extends PortableCommand {
   content: string;
+  documentVersion: DocumentVersion;
 }
 
 /**
@@ -1185,6 +1187,7 @@ End of User Commands
         displayName,
         lastModified: stats.mtimeMs,
         content,
+        documentVersion: readDocumentVersion(safePath),
       };
     } catch (error) {
       log.error(`Error getting command by path ${filePath}:`, error);
@@ -1195,16 +1198,16 @@ End of User Commands
   /**
    * Save/update a command's content.
    */
-  saveCommand(filePath: string, content: string): boolean {
+  saveCommand(filePath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult {
     try {
       const safePath = this.resolveWatchedCommandFile(filePath);
-      if (!safePath) return false;
-      fs.writeFileSync(safePath, content, 'utf-8');
-      log.info(`Saved command: ${safePath}`);
-      return true;
+      if (!safePath) return { ok: false, reason: 'not-found' };
+      const result = writeTextFileWithConflictGuard(safePath, content, expectedVersion);
+      if (result.ok) log.info(`Saved command: ${safePath}`);
+      return result;
     } catch (error) {
       log.error(`Error saving command ${filePath}:`, error);
-      return false;
+      return { ok: false, reason: 'error' };
     }
   }
 

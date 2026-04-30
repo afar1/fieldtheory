@@ -7,6 +7,7 @@ import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { libraryDir } from './fieldTheoryPaths';
+import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import {
   existingPathInsideRoots,
   isMarkdownDocumentPath,
@@ -1587,6 +1588,7 @@ export interface WikiPageMeta {
 export interface WikiPage extends WikiPageMeta {
   content: string;
   titleSuggestion?: string;
+  documentVersion: DocumentVersion;
 }
 
 export interface WikiFolder {
@@ -1623,6 +1625,7 @@ export interface ReadingMeta {
  */
 export interface Reading extends ReadingMeta {
   content: string;
+  documentVersion: DocumentVersion;
 }
 
 /**
@@ -2305,7 +2308,7 @@ export class LibrarianManager extends EventEmitter {
     if (isActuallyNew) {
       // Emit event - coordinator in index.ts handles counter reset and auto-show
       const content = fs.readFileSync(normalizedPath, 'utf-8');
-      const reading: Reading = { ...meta, content };
+      const reading: Reading = { ...meta, content, documentVersion: readDocumentVersion(normalizedPath) };
       this.emit('reading-added', reading);
       log.info(`New artifact: ${meta.title}`);
     } else if (isUpdated) {
@@ -2350,7 +2353,7 @@ export class LibrarianManager extends EventEmitter {
 
         // Emit event - coordinator in index.ts handles counter reset
         const content = fs.readFileSync(fullPath, 'utf-8');
-        const reading: Reading = { ...meta, content };
+        const reading: Reading = { ...meta, content, documentVersion: readDocumentVersion(fullPath) };
         this.emit('reading-added', reading);
         log.info(`Reconciliation found artifact: ${meta.title}`);
       }
@@ -2488,7 +2491,7 @@ export class LibrarianManager extends EventEmitter {
         .filter(line => !line.startsWith('STORY:') && !line.startsWith('LESSON:'))
         .join('\n')
         .trimEnd();
-      return { ...meta, content };
+      return { ...meta, content, documentVersion: readDocumentVersion(normalizedPath) };
     } catch (error) {
       log.error(`Error reading file ${normalizedPath}:`, error);
       return null;
@@ -2957,6 +2960,7 @@ export class LibrarianManager extends EventEmitter {
         lastUpdated: Math.floor(stats.mtimeMs),
         todoState: metadata.todoState,
         content,
+        documentVersion: readDocumentVersion(absPath),
       };
     } catch (error) {
       log.error(`Error reading wiki page ${relPath}:`, error);
@@ -3009,16 +3013,17 @@ export class LibrarianManager extends EventEmitter {
     this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
   }
 
-  saveWikiPage(relPath: string, content: string): boolean {
+  saveWikiPage(relPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult {
     const absPath = this.resolveWikiPageWritePath(relPath);
-    if (!absPath) return false;
+    if (!absPath) return { ok: false, reason: 'not-found' };
     try {
-      fs.writeFileSync(absPath, content, 'utf-8');
+      const result = writeTextFileWithConflictGuard(absPath, content, expectedVersion);
+      if (!result.ok) return result;
       this.emit('wiki:changed');
-      return true;
+      return result;
     } catch (error) {
       log.error(`Error saving wiki page ${relPath}:`, error);
-      return false;
+      return { ok: false, reason: 'error' };
     }
   }
 
@@ -3176,7 +3181,7 @@ export class LibrarianManager extends EventEmitter {
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
       this.emit('wiki:changed');
-      return { relPath, absPath, name: slug, title: initialTitle, lastUpdated: Math.floor(stats.mtimeMs), content, titleSuggestion };
+      return { relPath, absPath, name: slug, title: initialTitle, lastUpdated: Math.floor(stats.mtimeMs), content, titleSuggestion, documentVersion: readDocumentVersion(absPath) };
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
@@ -3252,7 +3257,7 @@ export class LibrarianManager extends EventEmitter {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
       this.emit('library:changed', root.rootPath);
-      return { relPath, absPath, name: slug, title, lastUpdated: Math.floor(stats.mtimeMs), content };
+      return { relPath, absPath, name: slug, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
     } catch (error) {
       log.error(`Error creating library file ${relPath}:`, error);
       return null;
@@ -3288,12 +3293,13 @@ export class LibrarianManager extends EventEmitter {
    * Save reading content to disk.
    * Updates the file and refreshes the cache.
    */
-  saveReading(filePath: string, content: string): boolean {
+  saveReading(filePath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult {
     const normalizedPath = this.resolveWatchedReadingPath(filePath);
-    if (!normalizedPath) return false;
+    if (!normalizedPath) return { ok: false, reason: 'not-found' };
 
     try {
-      fs.writeFileSync(normalizedPath, content, 'utf-8');
+      const result = writeTextFileWithConflictGuard(normalizedPath, content, expectedVersion);
+      if (!result.ok) return result;
 
       // Re-parse metadata since content may have changed title/context
       const meta = this.parseFileMetadata(normalizedPath);
@@ -3304,10 +3310,10 @@ export class LibrarianManager extends EventEmitter {
         this.emit('reading-updated', meta);
       }
 
-      return true;
+      return result;
     } catch (error) {
       log.error(`Error saving file ${normalizedPath}:`, error);
-      return false;
+      return { ok: false, reason: 'error' };
     }
   }
 

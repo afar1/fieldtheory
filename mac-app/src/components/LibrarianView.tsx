@@ -52,6 +52,7 @@ import {
   type MarkdownUrlPasteKind,
 } from '../utils/markdownUrlPaste';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
+import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import {
   buildWikiIndex,
   classifyLinkHref,
@@ -76,6 +77,36 @@ type FieldTheoryMarkdownTarget = {
 };
 
 type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+
+function readingFromWikiPage(page: WikiPage): Reading {
+  return {
+    path: page.absPath,
+    title: page.title,
+    content: page.content,
+    context: null,
+    readingTime: null,
+    modelSignature: null,
+    createdAt: page.lastUpdated,
+    mtime: page.lastUpdated,
+    todoState: page.todoState,
+    documentVersion: page.documentVersion,
+  };
+}
+
+function readingFromExternalMarkdownFile(file: ExternalMarkdownFile): Reading {
+  const title = file.name.replace(/\.(md|markdown|mdx)$/i, '');
+  return {
+    path: file.path,
+    title,
+    content: file.content,
+    context: null,
+    readingTime: null,
+    modelSignature: null,
+    createdAt: file.mtime,
+    mtime: file.mtime,
+    documentVersion: file.documentVersion,
+  };
+}
 
 export function deletedLibraryItemMatchesSelection(
   item: Pick<UnifiedItem, 'id' | 'type' | 'relPath' | 'absPath'>,
@@ -1360,6 +1391,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // textarea's native undo stack), so comparing against it would miss the
   // "typed a char then deleted it" case.
   const lastSavedContentRef = useRef<string | null>(null);
+  const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
@@ -1571,17 +1603,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     await flushSaveRef.current?.();
     const file = await window.externalAPI?.open(absPath);
     if (!file) return;
-    const title = file.name.replace(/\.(md|markdown|mdx)$/i, '');
-    setExternalOpenFile({
-      path: file.path,
-      title,
-      content: file.content,
-      context: null,
-      readingTime: null,
-      modelSignature: null,
-      createdAt: file.mtime,
-      mtime: file.mtime,
-    });
+    const reading = readingFromExternalMarkdownFile(file);
+    setExternalOpenFile(reading);
     setSelectedItemId(`external:${file.path}`);
     setSelectedItemType('external');
     setSelectedPath(null);
@@ -1590,7 +1613,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     void window.recentAPI?.visit({
       kind: 'external',
       path: file.path,
-      title,
+      title: reading.title,
       lastOpenedAt: Date.now(),
     });
   }, [externalOpenFile?.path, selectedItemType]);
@@ -1667,17 +1690,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     const page = await window.wikiAPI?.getPage(nextRelPath);
     if (page) {
-      setWikiSelectedPage({
-        path: page.absPath,
-        title: page.title,
-        content: page.content,
-        context: null,
-        readingTime: null,
-        modelSignature: null,
-        createdAt: page.lastUpdated,
-        mtime: page.lastUpdated,
-        todoState: page.todoState,
-      });
+      setWikiSelectedPage(readingFromWikiPage(page));
       void window.recentAPI?.visit({
         kind: 'wiki',
         path: nextRelPath,
@@ -2015,34 +2028,82 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
 
+  const applySavedDocumentState = useCallback((
+    targetType: LibrarianSelectedItemType,
+    targetPath: string | null,
+    content: string,
+    version: DocumentVersion | null,
+    fallbackTitle: string,
+  ) => {
+    const nextTitle = extractMarkdownH1Title(content, fallbackTitle);
+    const nextTodoState = splitFrontmatter(content).todoState ?? undefined;
+    const versionPatch = version ? { documentVersion: version } : {};
+
+    if (targetType === 'wiki') {
+      setWikiSelectedPage((prev) => (prev && prev.path === targetPath
+        ? { ...prev, title: nextTitle, content, todoState: nextTodoState, ...versionPatch }
+        : prev));
+    } else if (targetType === 'external') {
+      setExternalOpenFile((prev) => (prev && prev.path === targetPath
+        ? { ...prev, title: nextTitle, content, todoState: nextTodoState, ...versionPatch }
+        : prev));
+    } else {
+      setSelectedReading((prev) => (prev && prev.path === targetPath
+        ? { ...prev, title: nextTitle, content, todoState: nextTodoState, ...versionPatch }
+        : prev));
+    }
+
+    lastSavedContentRef.current = content;
+    if (version) lastSavedVersionRef.current = version;
+  }, []);
+
+  const resolveSaveConflict = useCallback(async (
+    result: DocumentSaveResult,
+    targetType: LibrarianSelectedItemType,
+    targetPath: string | null,
+    targetContent: string,
+    fallbackTitle: string,
+    overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>,
+  ): Promise<boolean> => {
+    if (!isDocumentSaveConflict(result) || !result.currentVersion || result.currentContent === undefined) {
+      return false;
+    }
+
+    const reload = window.confirm('This file changed on disk outside Field Theory. Press OK to reload the disk version, or Cancel to overwrite it with your current edit.');
+    if (reload) {
+      applySavedDocumentState(targetType, targetPath, result.currentContent, result.currentVersion, fallbackTitle);
+      setEditContent(result.currentContent);
+      return true;
+    }
+
+    const overwriteResult = await overwrite(result.currentVersion);
+    if (!isDocumentSaveOk(overwriteResult)) return false;
+    applySavedDocumentState(targetType, targetPath, targetContent, getDocumentSaveVersion(overwriteResult), fallbackTitle);
+    return true;
+  }, [applySavedDocumentState]);
+
   const refreshActiveAgentFile = useCallback(async (filePath: string) => {
     if (contentMode === 'markdown' || activeReading?.path !== filePath) return;
 
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
       const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
       if (!page || page.absPath !== filePath) return;
-      setWikiSelectedPage({
-        path: page.absPath,
-        title: page.title,
-        content: page.content,
-        context: null,
-        readingTime: null,
-        modelSignature: null,
-        createdAt: page.lastUpdated,
-        mtime: page.lastUpdated,
-        todoState: page.todoState,
-      });
+      const reading = readingFromWikiPage(page);
+      setWikiSelectedPage(reading);
+      lastSavedContentRef.current = reading.content;
+      lastSavedVersionRef.current = reading.documentVersion;
       return;
     }
 
     if (selectedItemType === 'external') {
       const file = await window.externalAPI?.open(filePath);
       if (!file) return;
-      setExternalOpenFile((prev) => prev?.path === file.path ? {
-        ...prev,
-        content: file.content,
-        mtime: file.mtime,
-      } : prev);
+      const reading = readingFromExternalMarkdownFile(file);
+      setExternalOpenFile((prev) => prev?.path === file.path ? reading : prev);
+      if (activeReading.path === reading.path) {
+        lastSavedContentRef.current = reading.content;
+        lastSavedVersionRef.current = reading.documentVersion;
+      }
     }
   }, [activeReading?.path, contentMode, selectedItemType, wikiSelectedRelPath]);
 
@@ -2190,27 +2251,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const saveRenderedContent = useCallback(async (nextContent: string) => {
     if (!activeReading) return;
+    const expectedVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
+    const targetType = selectedItemType;
+    const targetPath = activeReading.path;
+    const targetTitle = activeReading.title;
     setSaveStatus('saving');
     try {
-      if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
-        await window.wikiAPI?.save(wikiSelectedRelPath, nextContent);
-        const nextTitle = extractMarkdownH1Title(nextContent, activeReading.title);
-        const nextTodoState = splitFrontmatter(nextContent).todoState ?? undefined;
-        setWikiSelectedPage((prev) => (prev ? { ...prev, title: nextTitle, content: nextContent, todoState: nextTodoState } : prev));
-      } else if (selectedItemType === 'external' && activeReading.path) {
-        await window.externalAPI?.save(activeReading.path, nextContent);
-        setExternalOpenFile((prev) => (prev ? { ...prev, content: nextContent } : prev));
+      let result: DocumentSaveResult | null | undefined;
+      let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
+      if (targetType === 'wiki' && wikiSelectedRelPath) {
+        result = await window.wikiAPI?.save(wikiSelectedRelPath, nextContent, expectedVersion);
+        overwrite = (version) => window.wikiAPI?.save(wikiSelectedRelPath, nextContent, version) ?? Promise.resolve(undefined);
+      } else if (targetType === 'external' && activeReading.path) {
+        result = await window.externalAPI?.save(activeReading.path, nextContent, expectedVersion);
+        overwrite = (version) => window.externalAPI?.save(activeReading.path, nextContent, version) ?? Promise.resolve(undefined);
       } else if (activeReading.path) {
-        await window.librarianAPI?.saveReading(activeReading.path, nextContent);
-        setSelectedReading((prev) => (prev ? { ...prev, content: nextContent } : prev));
+        result = await window.librarianAPI?.saveReading(activeReading.path, nextContent, expectedVersion);
+        overwrite = (version) => window.librarianAPI?.saveReading(activeReading.path, nextContent, version) ?? Promise.resolve(undefined);
+      } else {
+        return;
       }
+
+      if (isDocumentSaveConflict(result)) {
+        const resolved = await resolveSaveConflict(result, targetType, targetPath, nextContent, targetTitle, overwrite);
+        setSaveStatus(resolved ? 'saved' : 'idle');
+        return;
+      }
+      if (!isDocumentSaveOk(result)) throw new Error('save failed');
+      applySavedDocumentState(targetType, targetPath, nextContent, getDocumentSaveVersion(result), targetTitle);
       setEditContent(nextContent);
-      lastSavedContentRef.current = nextContent;
       setSaveStatus('saved');
     } catch {
       setSaveStatus('idle');
     }
-  }, [activeReading, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
 
   const toggleRenderedTask = useCallback((lineIndex: number, checked: boolean) => {
     if (!activeReading) return;
@@ -2243,23 +2317,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyLocalState(nextTitle, next.content, next.state);
     setSaveStatus('saving');
     try {
+      const expectedVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
       if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
-        const saved = await window.wikiAPI?.save(wikiSelectedRelPath, next.content);
-        if (!saved) {
+        const saved = await window.wikiAPI?.save(wikiSelectedRelPath, next.content, expectedVersion);
+        if (isDocumentSaveConflict(saved)) {
+          const resolved = await resolveSaveConflict(
+            saved,
+            selectedItemType,
+            activeReading.path,
+            next.content,
+            activeReading.title,
+            (version) => window.wikiAPI?.save(wikiSelectedRelPath, next.content, version) ?? Promise.resolve(undefined),
+          );
+          if (resolved) return true;
+        }
+        if (!isDocumentSaveOk(saved)) {
           applyLocalState(previousTitle, sourceContent, previousState);
           setSaveStatus('idle');
           return false;
         }
+        applySavedDocumentState(selectedItemType, activeReading.path, next.content, getDocumentSaveVersion(saved), activeReading.title);
       } else if (selectedItemType === 'external') {
-        const saved = await window.externalAPI?.save(activeReading.path, next.content);
-        if (!saved) {
+        const saved = await window.externalAPI?.save(activeReading.path, next.content, expectedVersion);
+        if (isDocumentSaveConflict(saved)) {
+          const resolved = await resolveSaveConflict(
+            saved,
+            selectedItemType,
+            activeReading.path,
+            next.content,
+            activeReading.title,
+            (version) => window.externalAPI?.save(activeReading.path, next.content, version) ?? Promise.resolve(undefined),
+          );
+          if (resolved) return true;
+        }
+        if (!isDocumentSaveOk(saved)) {
           applyLocalState(previousTitle, sourceContent, previousState);
           setSaveStatus('idle');
           return false;
         }
+        applySavedDocumentState(selectedItemType, activeReading.path, next.content, getDocumentSaveVersion(saved), activeReading.title);
       }
 
-      lastSavedContentRef.current = next.content;
       setSaveStatus('saved');
       return true;
     } catch {
@@ -2267,7 +2365,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setSaveStatus('idle');
       return false;
     }
-  }, [activeReading, contentMode, editContent, selectedItemType, updateSelectedSidebarTodoState, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, selectedItemType, updateSelectedSidebarTodoState, wikiSelectedRelPath]);
 
   const runFileFind = useCallback((query: string, fromSelection = true) => {
     const trimmed = query.trim();
@@ -3059,6 +3157,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetWikiPath = wikiSelectedRelPath;
     const targetReadingPath = activeReading.path;
     const targetTitle = activeReading.title;
+    const targetVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetContent = editContent;
     let done = false;
     const doSave = async () => {
@@ -3066,22 +3165,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       done = true;
       setSaveStatus('saving');
       try {
+        let result: DocumentSaveResult | null | undefined;
+        let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
         if (targetType === 'wiki' && targetWikiPath) {
-          await window.wikiAPI?.save(targetWikiPath, targetContent);
-          const nextTitle = extractMarkdownH1Title(targetContent, targetTitle);
-          const nextTodoState = splitFrontmatter(targetContent).todoState ?? undefined;
-          // Update activeReading so the rendered view reflects the fresh
-          // content as soon as the user clicks away. The sync effect below
-          // is guarded by path so this won't clobber editContent.
-          setWikiSelectedPage((prev) => (prev ? { ...prev, title: nextTitle, content: targetContent, todoState: nextTodoState } : prev));
+          result = await window.wikiAPI?.save(targetWikiPath, targetContent, targetVersion);
+          overwrite = (version) => window.wikiAPI?.save(targetWikiPath, targetContent, version) ?? Promise.resolve(undefined);
         } else if (targetType === 'external' && targetReadingPath) {
-          await window.externalAPI?.save(targetReadingPath, targetContent);
-          setExternalOpenFile((prev) => (prev ? { ...prev, content: targetContent } : prev));
+          result = await window.externalAPI?.save(targetReadingPath, targetContent, targetVersion);
+          overwrite = (version) => window.externalAPI?.save(targetReadingPath, targetContent, version) ?? Promise.resolve(undefined);
         } else if (targetReadingPath) {
-          await window.librarianAPI?.saveReading(targetReadingPath, targetContent);
-          setSelectedReading((prev) => (prev ? { ...prev, content: targetContent } : prev));
+          result = await window.librarianAPI?.saveReading(targetReadingPath, targetContent, targetVersion);
+          overwrite = (version) => window.librarianAPI?.saveReading(targetReadingPath, targetContent, version) ?? Promise.resolve(undefined);
+        } else {
+          return;
         }
-        lastSavedContentRef.current = targetContent;
+
+        if (isDocumentSaveConflict(result)) {
+          const resolved = await resolveSaveConflict(result, targetType, targetReadingPath, targetContent, targetTitle, overwrite);
+          setSaveStatus(resolved ? 'saved' : 'idle');
+          return;
+        }
+        if (!isDocumentSaveOk(result)) throw new Error('save failed');
+        applySavedDocumentState(targetType, targetReadingPath, targetContent, getDocumentSaveVersion(result), targetTitle);
         setSaveStatus('saved');
       } catch {
         setSaveStatus('idle');
@@ -3094,7 +3199,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     flushSaveRef.current = doSave;
     const timer = setTimeout(() => { void doSave(); }, 400);
     return () => clearTimeout(timer);
-  }, [editContent, contentMode, activeReading, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
 
   // Keep the internal save state from staying in "saved" after auto-save settles.
   // 2.5s is long enough to notice when clicking away to another file without
@@ -3133,9 +3238,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ? { path: page.absPath, text: page.titleSuggestion, offset: 2 }
       : null;
     openWikiPage(page.relPath);
-    setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated, todoState: page.todoState });
+    setWikiSelectedPage(readingFromWikiPage(page));
     setEditContent(page.content);
     lastSavedContentRef.current = page.content;
+    lastSavedVersionRef.current = page.documentVersion;
     focusMarkdownEditorOnOpenRef.current = true;
     setContentMode('markdown');
   }, [openWikiPage]);
@@ -3219,6 +3325,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (lastSeededPathRef.current === activeReading.path) return;
     setEditContent(activeReading.content);
     lastSavedContentRef.current = activeReading.content;
+    lastSavedVersionRef.current = activeReading.documentVersion;
     lastSeededPathRef.current = activeReading.path;
   }, [contentMode, activeReading]);
 
@@ -3423,7 +3530,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     (async () => {
       const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
       if (page) {
-        setWikiSelectedPage({ path: page.absPath, title: page.title, content: page.content, context: null, readingTime: null, modelSignature: null, createdAt: page.lastUpdated, mtime: page.lastUpdated, todoState: page.todoState });
+        setWikiSelectedPage(readingFromWikiPage(page));
         void window.recentAPI?.visit({
           kind: 'wiki',
           path: wikiSelectedRelPath,

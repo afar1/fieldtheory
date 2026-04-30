@@ -1157,7 +1157,18 @@ interface PortableCommandInfo {
 interface CommandWithContent extends PortableCommandInfo {
   lastModified: number;
   content: string;
+  documentVersion: DocumentVersion;
 }
+
+interface DocumentVersion {
+  mtimeMs: number;
+  size: number;
+  sha256: string;
+}
+
+type DocumentSaveResult =
+  | { ok: true; version: DocumentVersion }
+  | { ok: false; reason: 'blocked' | 'conflict' | 'error' | 'not-found'; currentContent?: string; currentVersion?: DocumentVersion };
 
 /**
  * Watched directory for commands.
@@ -1239,7 +1250,7 @@ interface CommandsAPI {
   // CRUD operations
   getCommandByPath: (filePath: string) => Promise<CommandWithContent | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
-  saveCommand: (filePath: string, content: string) => Promise<boolean>;
+  saveCommand: (filePath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
   createCommand: (directoryPath: string, name: string, content?: string) => Promise<{ path: string; name: string } | null>;
   deleteCommand: (filePath: string) => Promise<boolean>;
   renameCommand: (oldFilePath: string, newName: string) => Promise<string | null>;
@@ -1473,7 +1484,7 @@ interface ThemeAPI {
 interface LibrarianAPI {
   getReadings: () => Promise<ReadingMeta[]>;
   getReading: (path: string) => Promise<Reading | null>;
-  saveReading: (path: string, content: string) => Promise<boolean>;
+  saveReading: (path: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
   deleteReading: (path: string) => Promise<boolean>;
   getWatchedDirs: () => Promise<WatchedDir[]>;
   addWatchedDir: (dirPath: string) => Promise<WatchedDir | null>;
@@ -1610,6 +1621,7 @@ declare global {
    */
   interface Reading extends ReadingMeta {
     content: string;
+    documentVersion: DocumentVersion;
   }
 
   /**
@@ -1637,6 +1649,7 @@ declare global {
   interface WikiPage extends WikiPageMeta {
     content: string;
     titleSuggestion?: string;
+    documentVersion: DocumentVersion;
   }
 
   interface WikiFolder {
@@ -1712,7 +1725,7 @@ declare global {
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
-    save: (relPath: string, content: string) => Promise<boolean>;
+    save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
     createFileWithTitleSuggestion: (folderName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
@@ -1732,11 +1745,12 @@ declare global {
     name: string;    // basename (e.g. "README.md")
     content: string;
     mtime: number;
+    documentVersion: DocumentVersion;
   }
 
   interface ExternalAPI {
     open: (absPath: string) => Promise<ExternalMarkdownFile | null>;
-    save: (absPath: string, content: string) => Promise<boolean>;
+    save: (absPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     onOpenExternal: (callback: (absPath: string) => void) => () => void;
   }
 
