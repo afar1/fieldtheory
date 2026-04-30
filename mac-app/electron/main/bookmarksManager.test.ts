@@ -126,18 +126,26 @@ describe('parseRawWebBookmark', () => {
 
 describe('BookmarksManager.getSnapshot', () => {
   let tmpDir: string;
+  let tmpLibraryDir: string;
   let origDataDir: string | undefined;
+  let origLibraryDir: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-test-'));
+    tmpLibraryDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-library-test-'));
     origDataDir = process.env.FT_DATA_DIR;
+    origLibraryDir = process.env.FT_LIBRARY_DIR;
     process.env.FT_DATA_DIR = tmpDir;
+    process.env.FT_LIBRARY_DIR = tmpLibraryDir;
   });
 
   afterEach(() => {
     if (origDataDir === undefined) delete process.env.FT_DATA_DIR;
     else process.env.FT_DATA_DIR = origDataDir;
+    if (origLibraryDir === undefined) delete process.env.FT_LIBRARY_DIR;
+    else process.env.FT_LIBRARY_DIR = origLibraryDir;
     fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.rmSync(tmpLibraryDir, { recursive: true, force: true });
   });
 
   it('returns an empty snapshot when no jsonl exists', () => {
@@ -215,11 +223,14 @@ describe('BookmarksManager.getSnapshot', () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(fs.existsSync(first.markdownPath)).toBe(true);
+    expect(first.markdownPath).toContain(path.join(tmpLibraryDir, 'entries', 'web', 'example.com'));
+    expect(first.markdownPath).not.toContain(tmpDir);
     expect(fs.readFileSync(first.markdownPath, 'utf-8')).toContain('source_url: "https://example.com/posts/readable"');
     expect(fs.readFileSync(first.markdownPath, 'utf-8')).toContain('[the next page](https://example.com/next)');
 
     const indexLines = fs.readFileSync(path.join(tmpDir, 'web', 'index.jsonl'), 'utf-8').trim().split('\n');
     expect(indexLines).toHaveLength(1);
+    expect(JSON.parse(indexLines[0]).markdownPath).toContain(path.join('entries', 'web', 'example.com'));
 
     const snap = mgr.getSnapshot();
     expect(snap.bookmarks).toHaveLength(1);

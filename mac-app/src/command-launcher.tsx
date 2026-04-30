@@ -34,6 +34,7 @@ import {
   resolveHighlightedLauncherIndex,
   resolveLauncherAuthorNamespaceHandle,
   resolveLauncherBookmarkFacetNamespace,
+  resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
   type LauncherHotkeyMap,
@@ -398,13 +399,17 @@ const getStyles = (isDark: boolean) => ({
     display: 'flex',
     flexDirection: 'column' as const,
     backgroundColor: isDark ? '#1e1e1e' : '#fbfbfa',
-    borderRadius: '8px',
+    borderRadius: '16px',
+    height: '100vh',
+    boxSizing: 'border-box' as const,
     overflow: 'hidden',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   inputRow: {
     display: 'flex',
     alignItems: 'center',
+    minHeight: `${LAUNCHER_COLLAPSED_HEIGHT}px`,
+    boxSizing: 'border-box' as const,
     padding: '12px 10px',
     gap: '6px',
   },
@@ -1345,8 +1350,20 @@ function CommandLauncher() {
       const q = rawQuery.toLowerCase();
       const currentIndex = selectedIndexRef.current;
 
+      const commandTarget = resolveLauncherCommandOpenTarget(
+        filtered,
+        commandItems,
+        currentIndex,
+        rawQuery,
+        hasExplicitSelectionRef.current,
+      );
+      if (commandTarget) {
+        void invokeItem(commandTarget, { openFieldTheoryTarget: true });
+        return;
+      }
+
       const selectedItem = filtered[currentIndex];
-      if (selectedItem?.type === 'command') {
+      if (selectedItem && getFieldTheoryTarget(selectedItem)) {
         void invokeItem(selectedItem, { openFieldTheoryTarget: true });
         return;
       }
@@ -1481,7 +1498,7 @@ function CommandLauncher() {
       if (filtered.length > 0) {
         const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
         const selectedItem = filtered[currentIndex];
-        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: e.metaKey });
+        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: true });
       }
     }
   };
