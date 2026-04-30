@@ -5,7 +5,7 @@ import https from 'https';
 import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { createLogger } from './logger';
-import { bookmarkDataDir } from './fieldTheoryPaths';
+import { bookmarkDataDir, libraryDir } from './fieldTheoryPaths';
 import {
   canonicalWebBookmarkUrl,
   extractWebBookmarkMarkdown,
@@ -344,7 +344,12 @@ function loadFolders(): { folders: BookmarkFolder[]; folderMap: Record<string, s
 
 function resolveStoredMarkdownPath(markdownPath: string | undefined): string | undefined {
   if (!markdownPath) return undefined;
-  return path.isAbsolute(markdownPath) ? markdownPath : path.join(bookmarksDir(), markdownPath);
+  if (path.isAbsolute(markdownPath)) return markdownPath;
+  const normalized = markdownPath.replace(/\\/g, '/');
+  if (normalized === 'entries' || normalized.startsWith('entries/')) {
+    return path.join(libraryDir(), markdownPath);
+  }
+  return path.join(bookmarksDir(), markdownPath);
 }
 
 export function parseRawWebBookmark(raw: RawWebBookmark): Bookmark | null {
@@ -541,8 +546,8 @@ export class BookmarksManager extends EventEmitter {
     const title = extracted.title || domain;
     const slug = slugifyWebBookmarkTitle(title, domain);
     const fileName = `${slug}-${id.replace(/^web:/, '').slice(0, 8)}.md`;
-    const relativeMarkdownPath = path.join('web', 'pages', domain, fileName);
-    const absoluteMarkdownPath = path.join(bookmarksDir(), relativeMarkdownPath);
+    const relativeMarkdownPath = path.join('entries', 'web', domain, fileName);
+    const absoluteMarkdownPath = path.join(libraryDir(), relativeMarkdownPath);
     const markdown = withWebBookmarkFrontmatter({
       title,
       url,

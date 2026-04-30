@@ -2648,6 +2648,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setMarkdownUrlPasteChoice(null);
     setMarkdownWikiLinkCompletion(null);
 
+    if (markdownEditorChoice === 'codemirror' && markdownCodeEditorRef.current) {
+      const editor = markdownCodeEditorRef.current;
+      const currentValue = editor.getValue() || editContent;
+      const { start, end } = editor.getSelectionRange();
+      const nextValue = `${currentValue.slice(0, start)}${text}${currentValue.slice(end)}`;
+      const nextSelection = start + text.length;
+
+      setEditContent(nextValue);
+      scheduleEditorSessionPersist();
+
+      requestAnimationFrame(() => {
+        const nextEditor = markdownCodeEditorRef.current;
+        if (!nextEditor || nextEditor.getValue() !== nextValue) return;
+        nextEditor.focus({ preventScroll: true });
+        nextEditor.setSelectionRange(nextSelection, nextSelection);
+      });
+      return;
+    }
+
     const editor = markdownEditorRef.current;
     const currentValue = editor?.value ?? editContent;
     const selectionStart = editor?.selectionStart ?? currentValue.length;
@@ -2666,7 +2685,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       updateMarkdownEditorFades(nextEditor);
       smoothScrollMarkdownCaretIntoComfortView(nextEditor);
     });
-  }, [editContent, markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+  }, [editContent, markdownEditorChoice, markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
 
   const insertMarkdownText = useCallback((text: string) => {
     if (contentMode !== 'markdown') {
@@ -5432,6 +5451,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         <li
                           className={[
                             'ft-rendered-task-list-item',
+                            checked ? 'ft-rendered-task-list-item-done' : 'ft-rendered-task-list-item-open',
                             animateCompletion ? 'ft-rendered-task-completed-live' : null,
                           ].filter(Boolean).join(' ')}
                           style={{
@@ -5444,11 +5464,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                           }}
                         >
                           <span
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (taskLine) toggleRenderedTask(taskLine.lineIndex, !checked);
+                            }}
+                            onMouseDown={(event) => event.stopPropagation()}
                             style={{
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                               height: '1lh',
+                              cursor: taskLine ? 'pointer' : 'default',
                             }}
                           >
                             {checkbox}
