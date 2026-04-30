@@ -79,4 +79,21 @@ describe('ContentToolbar', () => {
       expect(onTypographyMenuOpenChange).toHaveBeenCalledWith(false);
     });
   });
+
+  it('shows todo marker choices in the text style menu', () => {
+    const onTodoMarkerChange = vi.fn();
+
+    render(
+      <ContentToolbar
+        showCopy={false}
+        todoMarker="circle"
+        onTodoMarkerChange={onTodoMarkerChange}
+      />
+    );
+
+    fireEvent.click(screen.getByLabelText('Text style'));
+    fireEvent.click(screen.getByTitle('Square todo checkboxes'));
+
+    expect(onTodoMarkerChange).toHaveBeenCalledWith('square');
+  });
 });

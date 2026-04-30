@@ -21,6 +21,7 @@ import {
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
   normalizeMarkdownTodoLines,
+  persistLibrarianTodoMarker,
   persistLibrarianUnorderedListMarker,
   persistLibrarianEditorSession,
   persistLibrarianSelection,
@@ -31,6 +32,7 @@ import {
   replaceLibrarianNavigationEntry,
   resolveMarkdownCaretOffsetFromRenderedText,
   restoreLibrarianEditorSession,
+  restoreLibrarianTodoMarker,
   restoreLibrarianUnorderedListMarker,
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
@@ -418,6 +420,20 @@ describe('librarian unordered list marker preference', () => {
     expect(restoreLibrarianUnorderedListMarker(storage)).toBe('dash');
     persistLibrarianUnorderedListMarker(storage, 'carrot');
     expect(restoreLibrarianUnorderedListMarker(storage)).toBe('carrot');
+  });
+});
+
+describe('librarian todo marker preference', () => {
+  it('round-trips the saved todo marker', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+
+    expect(restoreLibrarianTodoMarker(storage)).toBe('circle');
+    persistLibrarianTodoMarker(storage, 'square');
+    expect(restoreLibrarianTodoMarker(storage)).toBe('square');
   });
 });
 
