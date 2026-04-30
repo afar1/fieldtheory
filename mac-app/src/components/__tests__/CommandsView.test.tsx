@@ -181,11 +181,12 @@ describe('CommandsView command naming', () => {
   it('uses the focus chrome collapse path for the focus button and shortcut', async () => {
     const onFocusChromeShortcut = vi.fn();
     const onFocusChromeActiveChange = vi.fn();
-    render(
+    const { rerender } = render(
       <CommandsView
         onSwitchToClipboard={vi.fn()}
         onFocusChromeShortcut={onFocusChromeShortcut}
         onFocusChromeActiveChange={onFocusChromeActiveChange}
+        sidebarCollapsed
       />
     );
 
@@ -200,6 +201,32 @@ describe('CommandsView command naming', () => {
       expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
     });
     expect(onFocusChromeActiveChange.mock.calls.map(([active]) => active)).toEqual([true]);
+    expect(screen.queryByText('commands / existing.md')).toBeNull();
+
+    rerender(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        onFocusChromeShortcut={onFocusChromeShortcut}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        sidebarCollapsed={false}
+      />
+    );
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+    });
+    expect(screen.getByText('commands / existing.md')).toBeTruthy();
+
+    rerender(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        onFocusChromeShortcut={onFocusChromeShortcut}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        sidebarCollapsed
+      />
+    );
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+    });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
 
     fireEvent.click(screen.getByLabelText('Exit immersive view'));

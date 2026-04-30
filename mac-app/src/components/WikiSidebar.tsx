@@ -2000,10 +2000,15 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
                   borderRadius: '999px',
                   fontSize: '9px',
                   lineHeight: '14px',
-                  color: theme.textSecondary,
+                  color: item.todoState === 'done'
+                    ? (theme.isDark ? '#86efac' : '#047857')
+                    : (theme.isDark ? '#93c5fd' : '#1d4ed8'),
                   backgroundColor: item.todoState === 'done'
-                    ? (theme.isDark ? 'rgba(34,197,94,0.16)' : 'rgba(34,197,94,0.12)')
-                    : (theme.isDark ? 'rgba(234,179,8,0.16)' : 'rgba(234,179,8,0.12)'),
+                    ? (theme.isDark ? 'rgba(52,211,153,0.14)' : 'rgba(5,150,105,0.10)')
+                    : (theme.isDark ? 'rgba(96,165,250,0.14)' : 'rgba(37,99,235,0.10)'),
+                  border: `1px solid ${item.todoState === 'done'
+                    ? (theme.isDark ? 'rgba(52,211,153,0.20)' : 'rgba(5,150,105,0.16)')
+                    : (theme.isDark ? 'rgba(96,165,250,0.20)' : 'rgba(37,99,235,0.16)')}`,
                 }}
               >
                 {item.todoState === 'done' ? 'done' : 'to do'}
