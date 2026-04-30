@@ -3,8 +3,8 @@
 // or Codex CLI against the markdown file currently open in the Librarian.
 //
 // User flow: click the agent button → modal opens → type instruction → pick
-// model → hit run. Stdout/stderr stream live into the output panel; on
-// success the main process appends a "## Agent run" footer to the file.
+// model → hit run. The modal closes after the background run starts; progress
+// is written into a "## Agent run" footer in the file.
 // =============================================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -19,7 +19,7 @@ interface AgentKickoffModalProps {
   fileTitle: string | null;
 }
 
-type RunStatus = 'idle' | 'running' | 'done' | 'error';
+type RunStatus = 'idle' | 'running' | 'error';
 
 const MODEL_OPTIONS: Array<{ id: AgentKickoffModel; label: string; hint: string }> = [
   { id: 'claude', label: 'Claude Code', hint: 'claude -p' },
@@ -41,24 +41,15 @@ export default function AgentKickoffModal({
     return stored === 'codex' ? 'codex' : 'claude';
   });
   const [status, setStatus] = useState<RunStatus>('idle');
-  const [output, setOutput] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [appendedFooter, setAppendedFooter] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
 
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
-  const outputRef = useRef<HTMLPreElement | null>(null);
 
   // Reset transient state when reopening with a different file.
   useEffect(() => {
     if (!isOpen) return;
     setStatus('idle');
-    setOutput('');
     setError(null);
-    setSummary(null);
-    setAppendedFooter(false);
-    setRunId(null);
     // Focus the textarea so the user can start typing immediately.
     requestAnimationFrame(() => textareaRef.current?.focus());
   }, [isOpen, filePath]);
@@ -68,32 +59,12 @@ export default function AgentKickoffModal({
     try { window.localStorage?.setItem(STORAGE_KEY, model); } catch { /* private mode */ }
   }, [model]);
 
-  // Subscribe to stdout/stderr chunks while the modal is open. The modal
-  // runs one agent at a time, so we don't filter by runId — every event
-  // belongs to the active run.
-  useEffect(() => {
-    if (!isOpen) return;
-    const off = window.agentKickoffAPI?.onProgress((event) => {
-      setOutput((prev) => prev + event.chunk);
-    });
-    return () => { off?.(); };
-  }, [isOpen]);
-
-  // Auto-scroll output to the bottom as new chunks arrive.
-  useEffect(() => {
-    const el = outputRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [output]);
-
   const canRun = status !== 'running' && !!filePath && instruction.trim().length > 0;
 
   const handleRun = useCallback(async () => {
     if (!canRun || !filePath) return;
     setStatus('running');
-    setOutput('');
     setError(null);
-    setSummary(null);
-    setAppendedFooter(false);
     try {
       const result = await window.agentKickoffAPI?.kickoff({
         absPath: filePath,
@@ -105,25 +76,19 @@ export default function AgentKickoffModal({
         setError('Agent kickoff API is unavailable.');
         return;
       }
-      setRunId(result.runId);
-      setSummary(result.summary || null);
-      setAppendedFooter(result.appendedFooter);
       if (result.ok) {
-        setStatus('done');
+        setInstruction('');
+        setStatus('idle');
+        onClose();
       } else {
         setStatus('error');
-        setError(result.error || 'Agent run failed.');
+        setError(result.error || 'Agent run failed to start.');
       }
     } catch (err) {
       setStatus('error');
       setError(err instanceof Error ? err.message : String(err));
     }
-  }, [canRun, filePath, instruction, model]);
-
-  const handleCancel = useCallback(async () => {
-    if (status !== 'running' || !runId) return;
-    await window.agentKickoffAPI?.cancel(runId);
-  }, [status, runId]);
+  }, [canRun, filePath, instruction, model, onClose]);
 
   const handleBackdropClick = useCallback((event: React.MouseEvent) => {
     if (event.target === event.currentTarget && status !== 'running') {
@@ -296,7 +261,7 @@ export default function AgentKickoffModal({
             </div>
           </div>
 
-          {(status !== 'idle' || output) && (
+          {error && status === 'error' && (
             <div>
               <div
                 style={{
@@ -307,40 +272,11 @@ export default function AgentKickoffModal({
                   justifyContent: 'space-between',
                 }}
               >
-                <span>{status === 'running' ? 'Running…' : status === 'done' ? 'Output' : status === 'error' ? 'Output (errored)' : 'Output'}</span>
-                {appendedFooter && (
-                  <span style={{ color: theme.success ?? '#16a34a' }}>Footer appended ✓</span>
-                )}
+                <span>Could not start agent</span>
               </div>
-              <pre
-                ref={outputRef}
-                style={{
-                  margin: 0,
-                  maxHeight: '200px',
-                  overflow: 'auto',
-                  padding: '10px 12px',
-                  fontSize: '11px',
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-                  color: theme.text,
-                  backgroundColor: theme.isDark ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.04)',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '8px',
-                  whiteSpace: 'pre-wrap',
-                  wordBreak: 'break-word',
-                }}
-              >
-                {output || (status === 'running' ? 'Waiting for output…' : '')}
-              </pre>
-              {summary && status === 'done' && (
-                <div style={{ fontSize: '12px', color: theme.text, marginTop: '8px' }}>
-                  <strong>Summary:</strong> {summary}
-                </div>
-              )}
-              {error && status === 'error' && (
-                <div style={{ fontSize: '12px', color: theme.error ?? '#dc2626', marginTop: '8px' }}>
-                  {error}
-                </div>
-              )}
+              <div style={{ fontSize: '12px', color: theme.error ?? '#dc2626' }}>
+                {error}
+              </div>
             </div>
           )}
         </div>
@@ -354,60 +290,40 @@ export default function AgentKickoffModal({
             borderTop: `1px solid ${theme.border}`,
           }}
         >
-          {status === 'running' ? (
-            <button
-              type="button"
-              onClick={handleCancel}
-              style={{
-                padding: '8px 14px',
-                fontSize: '13px',
-                color: theme.text,
-                backgroundColor: 'transparent',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '6px',
-                cursor: 'pointer',
-              }}
-            >
-              Cancel
-            </button>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={onClose}
-                style={{
-                  padding: '8px 14px',
-                  fontSize: '13px',
-                  color: theme.text,
-                  backgroundColor: 'transparent',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  cursor: 'pointer',
-                }}
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={handleRun}
-                disabled={!canRun}
-                style={{
-                  padding: '8px 14px',
-                  fontSize: '13px',
-                  fontWeight: 500,
-                  color: '#fff',
-                  backgroundColor: canRun ? (theme.accent ?? '#2563eb') : theme.border,
-                  border: 'none',
-                  borderRadius: '6px',
-                  cursor: canRun ? 'pointer' : 'not-allowed',
-                  opacity: canRun ? 1 : 0.6,
-                }}
-                title="Run agent (⌘⏎)"
-              >
-                {status === 'done' ? 'Run again' : 'Run'}
-              </button>
-            </>
-          )}
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: '8px 14px',
+              fontSize: '13px',
+              color: theme.text,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={handleRun}
+            disabled={!canRun}
+            style={{
+              padding: '8px 14px',
+              fontSize: '13px',
+              fontWeight: 500,
+              color: '#fff',
+              backgroundColor: canRun ? (theme.accent ?? '#2563eb') : theme.border,
+              border: 'none',
+              borderRadius: '6px',
+              cursor: canRun ? 'pointer' : 'not-allowed',
+              opacity: canRun ? 1 : 0.6,
+            }}
+            title="Run agent (⌘⏎)"
+          >
+            {status === 'running' ? 'Starting…' : 'Run'}
+          </button>
         </div>
       </div>
     </div>
