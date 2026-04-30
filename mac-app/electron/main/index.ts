@@ -1884,7 +1884,7 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   // Delete a reading file
-  ipcMain.handle('librarian:deleteReading', (_event, filePath: string): boolean => {
+  ipcMain.handle('librarian:deleteReading', async (_event, filePath: string): Promise<boolean> => {
     if (!librarianManager) {
       return false;
     }
