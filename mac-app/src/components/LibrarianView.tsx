@@ -5451,6 +5451,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         <li
                           className={[
                             'ft-rendered-task-list-item',
+                            checked ? 'ft-rendered-task-list-item-done' : 'ft-rendered-task-list-item-open',
                             animateCompletion ? 'ft-rendered-task-completed-live' : null,
                           ].filter(Boolean).join(' ')}
                           style={{
@@ -5463,11 +5464,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                           }}
                         >
                           <span
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (taskLine) toggleRenderedTask(taskLine.lineIndex, !checked);
+                            }}
+                            onMouseDown={(event) => event.stopPropagation()}
                             style={{
                               display: 'inline-flex',
                               alignItems: 'center',
                               justifyContent: 'center',
                               height: '1lh',
+                              cursor: taskLine ? 'pointer' : 'default',
                             }}
                           >
                             {checkbox}
