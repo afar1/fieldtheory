@@ -7,7 +7,13 @@ import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { libraryDir } from './fieldTheoryPaths';
-import { existingPathInsideRoots } from './pathSafety';
+import {
+  existingPathInsideRoots,
+  isPathInside,
+  normalizeUserDocumentNameInput,
+  normalizeUserDocumentRelPathInput,
+  stripMarkdownFileExtension,
+} from './pathSafety';
 
 const log = createLogger('Librarian');
 
@@ -2591,8 +2597,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private isInsidePath(parentPath: string, childPath: string): boolean {
-    const rel = path.relative(parentPath, childPath);
-    return rel === '' || (!!rel && !rel.startsWith('..') && !path.isAbsolute(rel));
+    return isPathInside(parentPath, childPath);
   }
 
   private libraryRootKey(dirPath: string): string {
@@ -2632,20 +2637,17 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private normalizeLibraryRelPath(relPath: string): string | null {
-    const trimmed = relPath.trim();
-    if (!trimmed) return '';
-    if (trimmed.includes('\0')) return null;
-    const parts = trimmed.split(/[\\/]+/).map((part) => part.trim()).filter(Boolean);
-    if (parts.some((part) => part === '.' || part === '..')) return null;
-    return parts.join('/');
+    return normalizeUserDocumentRelPathInput(relPath, { rejectHiddenSegments: true });
   }
 
   private stripMarkdownFileExtension(fileName: string): string {
-    return fileName.replace(/\.(md|markdown|mdx)$/i, '');
+    return stripMarkdownFileExtension(fileName);
   }
 
   private slugifyMarkdownFileName(fileName: string): string {
-    return this.stripMarkdownFileExtension(fileName).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+    const normalized = normalizeUserDocumentNameInput(fileName, { rejectLeadingUnderscore: true });
+    if (!normalized) return '';
+    return this.stripMarkdownFileExtension(normalized).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
   }
 
   private slugifyWikiRelPath(relPath: string): string {
