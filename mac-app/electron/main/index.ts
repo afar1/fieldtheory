@@ -65,7 +65,8 @@ import {
   AgentKickoffManager,
   type AgentKickoffArgs,
   type AgentKickoffProgressEvent,
-  type AgentKickoffResult,
+  type AgentKickoffStartResult,
+  type AgentKickoffStatusEvent,
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
@@ -950,6 +951,7 @@ function registerHotkeysAfterOnboarding(): void {
       && existingWindow.isVisible()
       && !existingWindow.isFocused()
     ) {
+      await clipboardHistoryWindow.capturePreviousApp();
       clipboardHistoryWindow.focusExistingWindow();
       cursorStatusManager?.refreshWindowProperties();
       dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-hotkey');
@@ -7275,20 +7277,20 @@ async function initTranscriberSystem(): Promise<void> {
       if (!w.isDestroyed()) w.webContents.send('agent:kickoffProgress', event);
     });
   });
-  ipcMain.handle('agent:kickoff', async (_e, args: AgentKickoffArgs): Promise<AgentKickoffResult> => {
+  agentKickoffManager.on('status', (event: AgentKickoffStatusEvent) => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('agent:kickoffStatus', event);
+    });
+  });
+  ipcMain.handle('agent:kickoff', async (_e, args: AgentKickoffArgs): Promise<AgentKickoffStartResult> => {
     if (!agentKickoffManager) {
       return {
         ok: false,
         runId: '',
-        stdout: '',
-        stderr: '',
-        durationMs: 0,
-        summary: '',
-        appendedFooter: false,
         error: 'Agent kickoff manager unavailable',
       };
     }
-    return agentKickoffManager.kickoff(args);
+    return agentKickoffManager.start(args);
   });
   ipcMain.handle('agent:cancelKickoff', async (_e, runId: string): Promise<boolean> => {
     return agentKickoffManager?.cancel(runId) ?? false;
