@@ -4282,6 +4282,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           flexDirection: 'column',
           overflow: 'hidden',
           minHeight: 0, // Required for flex child to shrink below content size
+          position: 'relative',
         }}
       >
         {bookmarksEverShown && (
@@ -4340,6 +4341,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
+              position: focusChromeActive ? 'absolute' : 'relative',
+              top: focusChromeActive ? 0 : undefined,
+              left: focusChromeActive ? 0 : undefined,
+              right: focusChromeActive ? 0 : undefined,
+              zIndex: focusChromeActive ? 20 : undefined,
+              boxSizing: 'border-box',
               opacity: focusChromeVisualVisible ? 1 : 0,
               pointerEvents: focusChromeVisualVisible ? 'auto' : 'none',
               transition: 'opacity 180ms ease',
@@ -4687,7 +4694,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
             padding: contentMode === 'markdown'
-              ? '8px 32px 12px 32px'
+              ? (focusChromeActive ? '8px 32px 0 32px' : '8px 32px 12px 32px')
               : (isFullScreen ? '16px 32px 28px 32px' : '28px 32px'),
             display: 'flex',
             justifyContent: 'center',
