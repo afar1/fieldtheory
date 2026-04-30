@@ -570,6 +570,82 @@ describe('recursive wiki tree scan', () => {
     expect(trashItem).not.toHaveBeenCalled();
   });
 
+  it('only saves cached readings inside watched reading folders', () => {
+    const root = makeTempDir();
+    const outside = makeTempDir();
+    const readingPath = path.join(root, 'reading.md');
+    const outsidePath = path.join(outside, 'outside.md');
+    fs.writeFileSync(readingPath, '# Reading\n');
+    fs.writeFileSync(outsidePath, '# Outside\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, unknown>;
+      saveIndex: () => void;
+      saveReading: (filePath: string, content: string) => boolean;
+      emit: typeof emit;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map([[readingPath, {
+      path: readingPath,
+      title: 'Reading',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: Date.now(),
+      mtime: Date.now(),
+    }]]);
+    manager.saveIndex = vi.fn();
+    manager.emit = emit;
+
+    expect(manager.saveReading(outsidePath, '# Changed\n')).toBe(false);
+    expect(fs.readFileSync(outsidePath, 'utf-8')).toBe('# Outside\n');
+
+    expect(manager.saveReading(readingPath, '# Changed\n')).toBe(true);
+    expect(fs.readFileSync(readingPath, 'utf-8')).toBe('# Changed\n');
+    expect(emit).toHaveBeenCalledWith('reading-updated', expect.objectContaining({ path: readingPath, title: 'Changed' }));
+  });
+
+  it('moves cached readings inside watched folders to Trash', async () => {
+    const root = makeTempDir();
+    const outside = makeTempDir();
+    const readingPath = path.join(root, 'reading.md');
+    const outsidePath = path.join(outside, 'outside.md');
+    fs.writeFileSync(readingPath, '# Reading\n');
+    fs.writeFileSync(outsidePath, '# Outside\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, unknown>;
+      saveIndex: () => void;
+      deleteReading: (filePath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map([[readingPath, {
+      path: readingPath,
+      title: 'Reading',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: Date.now(),
+      mtime: Date.now(),
+    }]]);
+    manager.saveIndex = vi.fn();
+    manager.emit = emit;
+
+    expect(await manager.deleteReading(outsidePath)).toBe(false);
+    expect(trashItem).not.toHaveBeenCalledWith(outsidePath);
+
+    expect(await manager.deleteReading(readingPath)).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(readingPath);
+    expect(manager.cache.has(readingPath)).toBe(false);
+    expect(emit).toHaveBeenCalledWith('reading-removed', readingPath);
+  });
+
   it('moves wiki pages into another folder and emits stale relPath deletion', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
