@@ -24,7 +24,7 @@ import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir } from './fieldTheoryPaths';
-import { existingPathInsideRoots, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
+import { existingPathInsideRoots, isMarkdownDocumentPath, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
 
 const log = createLogger('Commands');
 
@@ -549,8 +549,7 @@ export class CommandsManager extends EventEmitter {
    * Check if a file is a markdown file.
    */
   private isMarkdownFile(filename: string): boolean {
-    const ext = path.extname(filename).toLowerCase();
-    return ext === '.md' || ext === '.markdown';
+    return isMarkdownDocumentPath(filename);
   }
 
   /**
