@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import fs from 'fs';
+import path from 'path';
 
 export type DocumentVersion = {
   mtimeMs: number;
@@ -25,6 +26,50 @@ function documentVersionsMatch(left: DocumentVersion, right: DocumentVersion): b
   return left.size === right.size && left.sha256 === right.sha256;
 }
 
+function fsyncDirectoryBestEffort(dirPath: string): void {
+  let dirFd: number | null = null;
+  try {
+    dirFd = fs.openSync(dirPath, 'r');
+    fs.fsyncSync(dirFd);
+  } catch {
+    // Directory fsync is best-effort across platforms and filesystems.
+  } finally {
+    if (dirFd !== null) {
+      try {
+        fs.closeSync(dirFd);
+      } catch {}
+    }
+  }
+}
+
+export function writeTextFileAtomically(filePath: string, content: string): void {
+  const dirPath = path.dirname(filePath);
+  const fileName = path.basename(filePath);
+  const tempPath = path.join(dirPath, `.${fileName}.${process.pid}.${crypto.randomUUID()}.tmp`);
+  const mode = fs.statSync(filePath).mode & 0o777;
+  let fd: number | null = null;
+
+  try {
+    fd = fs.openSync(tempPath, 'wx', mode);
+    fs.writeFileSync(fd, content, 'utf-8');
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = null;
+    fs.renameSync(tempPath, filePath);
+    fsyncDirectoryBestEffort(dirPath);
+  } catch (error) {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {}
+    }
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {}
+    throw error;
+  }
+}
+
 export function writeTextFileWithConflictGuard(
   filePath: string,
   content: string,
@@ -47,7 +92,7 @@ export function writeTextFileWithConflictGuard(
   }
 
   try {
-    fs.writeFileSync(filePath, content, 'utf-8');
+    writeTextFileAtomically(filePath, content);
     return { ok: true, version: readDocumentVersion(filePath) };
   } catch {
     return { ok: false, reason: 'error' };
