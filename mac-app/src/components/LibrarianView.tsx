@@ -1309,6 +1309,13 @@ function isRenderedTaskListItem(node: unknown): boolean {
   return className === 'task-list-item';
 }
 
+function isRenderedTaskList(node: unknown): boolean {
+  if (!node || typeof node !== 'object') return false;
+  const className = (node as MarkdownRenderNode).properties?.className;
+  if (Array.isArray(className)) return className.includes('contains-task-list');
+  return className === 'contains-task-list';
+}
+
 function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
   let stripped = false;
 
@@ -1335,6 +1342,17 @@ function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
   };
 
   return Children.map(children, stripNode);
+}
+
+function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode | null; content: ReactNode[] } {
+  const nodes = Children.toArray(children);
+  const checkboxIndex = nodes.findIndex((child) =>
+    isValidElement(child) && typeof child.type === 'string' && child.type === 'input',
+  );
+  if (checkboxIndex < 0) return { checkbox: null, content: nodes };
+  const checkbox = nodes[checkboxIndex];
+  const content = nodes.filter((_, index) => index !== checkboxIndex);
+  return { checkbox, content };
 }
 
 function getRenderedTextCaretFromPoint(event: React.MouseEvent): { text: string; offset: number } | null {
@@ -1513,8 +1531,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     (canUseFocusImmersive && !isFullScreen && (focusImmersive || (isFocusedWritingMode && writingChromeHidden)));
   const focusChromeUsesProximityFade = focusChromeActive;
   const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
-  const focusChromeVisualVisible = !focusChromeUsesProximityFade || focusChromeProximityVisible;
-  const focusToolbarControlsVisible = !focusChromeActive || (focusChromeUsesProximityFade && focusChromeProximityVisible);
+  const focusChromePinnedVisible = fileFindOpen;
+  const focusChromeVisualVisible = !focusChromeUsesProximityFade || focusChromeProximityVisible || focusChromePinnedVisible;
+  const focusToolbarControlsVisible = !focusChromeActive || (focusChromeUsesProximityFade && (focusChromeProximityVisible || focusChromePinnedVisible));
   const toggleFocusChromeShortcut = useCallback(() => {
     if (!selectedItemUsesLegacyImmersive && focusChromeActive) {
       setFocusImmersive(false);
@@ -2026,6 +2045,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+
+  const refreshActiveAgentFile = useCallback(async (filePath: string) => {
+    if (contentMode === 'markdown' || activeReading?.path !== filePath) return;
+
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (!page || page.absPath !== filePath) return;
+      setWikiSelectedPage({
+        path: page.absPath,
+        title: page.title,
+        content: page.content,
+        context: null,
+        readingTime: null,
+        modelSignature: null,
+        createdAt: page.lastUpdated,
+        mtime: page.lastUpdated,
+        todoState: page.todoState,
+      });
+      return;
+    }
+
+    if (selectedItemType === 'external') {
+      const file = await window.externalAPI?.open(filePath);
+      if (!file) return;
+      setExternalOpenFile((prev) => prev?.path === file.path ? {
+        ...prev,
+        content: file.content,
+        mtime: file.mtime,
+      } : prev);
+    }
+  }, [activeReading?.path, contentMode, selectedItemType, wikiSelectedRelPath]);
+
+  useEffect(() => {
+    const unsubscribe = window.agentKickoffAPI?.onStatus((event) => {
+      void refreshActiveAgentFile(event.absPath);
+    });
+    return () => unsubscribe?.();
+  }, [refreshActiveAgentFile]);
 
   useEffect(() => {
     if (!activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) return;
@@ -5195,23 +5252,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       {children}
                     </pre>
                   ),
-                  ul: ({ children }) => (
-                    <ul
-                      style={{
-                        marginTop: '8px',
-                        marginBottom: '12px',
-                        paddingLeft: '22px',
-                      }}
-                    >
-                      {children}
-                    </ul>
-                  ),
+                  ul: ({ children, node }) => {
+                    const isTaskList = isRenderedTaskList(node);
+                    return (
+                      <ul
+                        style={{
+                          marginTop: isTaskList ? '6px' : '8px',
+                          marginBottom: isTaskList ? '14px' : '12px',
+                          paddingLeft: isTaskList ? 0 : '1.35em',
+                          listStylePosition: 'outside',
+                        }}
+                      >
+                        {children}
+                      </ul>
+                    );
+                  },
                   ol: ({ children }) => (
                     <ol
                       style={{
                         marginTop: '8px',
                         marginBottom: '12px',
-                        paddingLeft: '22px',
+                        paddingLeft: '1.45em',
+                        listStylePosition: 'outside',
                       }}
                     >
                       {children}
@@ -5240,6 +5302,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         style={{
                           ...props.style,
                           cursor: taskLine ? 'pointer' : 'default',
+                          width: '0.95em',
+                          height: '0.95em',
+                          margin: 0,
+                          accentColor: theme.accent,
                         }}
                       />
                     );
@@ -5254,16 +5320,33 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       const checked = taskLine?.checked ?? false;
                       const taskText = taskLine?.text ?? textContent;
                       const animateCompletion = checked && animatingTaskTexts.has(taskText);
+                      const { checkbox, content } = splitTaskListItemChildren(children);
                       return (
                         <li
                           className={animateCompletion ? 'ft-rendered-task-completed-live' : undefined}
                           style={{
-                            marginBottom: '2px',
+                            marginBottom: '0.55em',
                             listStyle: 'none',
-                            opacity: checked ? 0.55 : 1,
+                            display: 'grid',
+                            gridTemplateColumns: '1.15em minmax(0, 1fr)',
+                            columnGap: '0.5em',
+                            alignItems: 'baseline',
+                            opacity: checked ? 0.62 : 1,
                           }}
                         >
-                          {children}
+                          <span
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              height: '1lh',
+                            }}
+                          >
+                            {checkbox}
+                          </span>
+                          <span style={{ minWidth: 0 }}>
+                            {content}
+                          </span>
                         </li>
                       );
                     }
@@ -5300,7 +5383,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     return (
                       <li
                         style={{
-                          marginBottom: '2px',
+                          marginBottom: '0.25em',
                         }}
                       >
                         {children}
