@@ -24,7 +24,7 @@ import { EventEmitter } from 'events';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir } from './fieldTheoryPaths';
-import { existingPathInsideRoots, isPathInside, realpathIfExists } from './pathSafety';
+import { existingPathInsideRoots, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
 
 const log = createLogger('Commands');
 
@@ -466,15 +466,7 @@ export class CommandsManager extends EventEmitter {
   }
 
   private commandFileNameFromUserInput(name: string): string | null {
-    const trimmed = name.trim();
-    if (!trimmed || trimmed.includes('\0') || /[\\/]/.test(trimmed)) return null;
-    if (trimmed === '.' || trimmed === '..' || trimmed.startsWith('.')) return null;
-
-    const lower = trimmed.toLowerCase();
-    const fileName = lower.endsWith('.md') || lower.endsWith('.markdown')
-      ? trimmed
-      : `${trimmed}.md`;
-    return path.basename(fileName) === fileName ? fileName : null;
+    return markdownFileNameFromUserInput(name);
   }
 
   /**
