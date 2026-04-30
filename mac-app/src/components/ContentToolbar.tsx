@@ -5,6 +5,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
+import type { ProseRenderer } from '../utils/proseRenderer';
 import ImmersiveToggle from './ImmersiveToggle';
 
 // Icon sizes - 22% larger than the original 13px base
@@ -59,6 +60,15 @@ interface ContentToolbarProps {
 
   unorderedListMarker?: 'dash' | 'carrot';
   onUnorderedListMarkerChange?: (marker: 'dash' | 'carrot') => void;
+
+  proseRenderer?: ProseRenderer;
+  proseRendererOptions?: Array<{
+    id: ProseRenderer;
+    label: string;
+    title: string;
+  }>;
+  onProseRendererChange?: (renderer: ProseRenderer) => void;
+  onTypographyMenuOpenChange?: (open: boolean) => void;
 
   // Edit state
   isEditing?: boolean;
@@ -116,6 +126,10 @@ export default function ContentToolbar({
   onLineHeightChange,
   unorderedListMarker,
   onUnorderedListMarkerChange,
+  proseRenderer,
+  proseRendererOptions,
+  onProseRendererChange,
+  onTypographyMenuOpenChange,
   isEditing = false,
   isDirty = false,
   isSaving = false,
@@ -172,10 +186,18 @@ export default function ContentToolbar({
     (typographyPresetOptions?.length && onTypographyPresetChange) ||
     (showTextSize && onTextSizeChange) ||
     (lineHeightOptions?.length && onLineHeightChange) ||
-    onUnorderedListMarkerChange
+    onUnorderedListMarkerChange ||
+    (proseRendererOptions?.length && onProseRendererChange)
   );
   const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+
+  useEffect(() => {
+    onTypographyMenuOpenChange?.(typographyMenuOpen);
+    return () => {
+      if (typographyMenuOpen) onTypographyMenuOpenChange?.(false);
+    };
+  }, [onTypographyMenuOpenChange, typographyMenuOpen]);
 
   useEffect(() => {
     if (!typographyMenuOpen) return;
@@ -735,6 +757,43 @@ export default function ContentToolbar({
                             cursor: 'pointer',
                             fontSize: option.id === 'carrot' ? '15px' : '12px',
                             fontWeight: isSelected ? 700 : 500,
+                            lineHeight: 1,
+                          }}
+                        >
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {proseRendererOptions && proseRendererOptions.length > 0 && onProseRendererChange && (
+                <div>
+                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
+                    Renderer
+                  </div>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
+                    {proseRendererOptions.map((option) => {
+                      const isSelected = option.id === proseRenderer;
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => onProseRendererChange(option.id)}
+                          title={option.title}
+                          style={{
+                            height: '26px',
+                            padding: '0 6px',
+                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+                            backgroundColor: isSelected
+                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
+                              : 'transparent',
+                            border: 'none',
+                            borderRadius: '5px',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            fontWeight: isSelected ? 600 : 400,
                             lineHeight: 1,
                           }}
                         >

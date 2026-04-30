@@ -7,11 +7,10 @@
 import { forwardRef, useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import ContentToolbar from './ContentToolbar';
+import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
 import {
   SIDEBAR_DARK_ICON_COLOR,
@@ -25,6 +24,7 @@ import {
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
+import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -191,6 +191,7 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
   const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
+  const [proseRenderer, setProseRenderer] = useState(() => restoreProseRenderer(localStorage));
 
   // Layout
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -294,6 +295,10 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
   useEffect(() => {
     localStorage.setItem('commands-text-size', textSize);
   }, [textSize]);
+
+  useEffect(() => {
+    persistProseRenderer(localStorage, proseRenderer);
+  }, [proseRenderer]);
 
   useEffect(() => {
     const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
@@ -1662,6 +1667,9 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={focusToolbarControlsVisible}
+                proseRenderer={proseRenderer}
+                proseRendererOptions={focusToolbarControlsVisible ? PROSE_RENDERER_OPTIONS : undefined}
+                onProseRendererChange={focusToolbarControlsVisible ? setProseRenderer : undefined}
                 onDelete={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
                 showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
@@ -1863,206 +1871,66 @@ export default function CommandsView({ onSwitchToClipboard, sidebarCollapsed = f
                   }}>
                     {viewMode === 'mine' ? selectedCommand?.name : selectedPopularCommand?.name}
                   </h1>
-                  <div
+                  <FieldTheoryProse
                     ref={commandContentRef}
                     className="command-content"
-                    // Click into the rendered body to enter edit mode — mirrors
-                    // LibrarianView so users can click straight into writing. Clicks on links,
-                    // buttons, form controls, or while a text selection is
-                    // active still do their normal thing.
                     onClick={(e) => {
                       if (viewMode !== 'mine' || !selectedCommand) return;
                       if (!shouldEnterEditOnClick(e, renderedEditClickMode)) return;
                       enterEditMode();
                     }}
+                    color={theme.text}
+                    fontFamily={fonts.sans}
+                    fontSize={textSizes[textSize].base}
+                    h1Size={textSizes[textSize].h1}
+                    h2Size={textSizes[textSize].h2}
+                    h3Size={textSizes[textSize].h3}
+                    linkColor={theme.accent}
+                    mutedColor={theme.textSecondary}
+                    renderer={proseRenderer}
+                    size="compact"
+                    surface={theme.isDark ? 'dark' : 'light'}
                     style={{
-                      fontSize: textSizes[textSize].base,
-                      lineHeight: 1.5,
-                      color: theme.text,
-                      fontFamily: fonts.sans,
                       cursor: viewMode === 'mine' && selectedCommand ? 'text' : 'default',
                     }}
-                  >
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        h1: ({ children }) => (
-                          <h1
+                    components={{
+                      li: ({ children, node }) => {
+                        const className = (node as { properties?: { className?: unknown } }).properties?.className;
+                        const isTaskListItem = Array.isArray(className)
+                          ? className.includes('task-list-item')
+                          : className === 'task-list-item';
+                        return (
+                          <li
                             style={{
-                              fontSize: textSizes[textSize].h1,
-                              fontWeight: 600,
-                              marginTop: 0,
-                              marginBottom: '10px',
-                              lineHeight: 1.2,
-                              color: theme.text,
-                            }}
-                          >
-                            {children}
-                          </h1>
-                        ),
-                        h2: ({ children }) => (
-                          <h2
-                            style={{
-                              fontSize: textSizes[textSize].h2,
-                              fontWeight: 600,
-                              marginTop: '16px',
-                              marginBottom: '6px',
-                              color: theme.text,
-                            }}
-                          >
-                            {children}
-                          </h2>
-                        ),
-                        h3: ({ children }) => (
-                          <h3
-                            style={{
-                              fontSize: textSizes[textSize].h3,
-                              fontWeight: 600,
-                              marginTop: '14px',
                               marginBottom: '4px',
-                              color: theme.text,
+                              listStyle: isTaskListItem ? 'none' : undefined,
                             }}
                           >
                             {children}
-                          </h3>
-                        ),
-                        p: ({ children }) => (
-                          <p style={{ marginBottom: '8px' }}>{children}</p>
-                        ),
-                        strong: ({ children }) => (
-                          <strong style={{ fontWeight: 600, color: theme.text }}>
-                            {children}
-                          </strong>
-                        ),
-                        em: ({ children }) => (
-                          <em style={{ fontStyle: 'italic' }}>{children}</em>
-                        ),
-                        blockquote: ({ children }) => (
-                          <blockquote
-                            style={{
-                              borderLeft: `3px solid ${theme.accent}`,
-                              paddingLeft: '12px',
-                              marginLeft: 0,
-                              marginRight: 0,
-                              marginBottom: '8px',
-                              color: theme.textSecondary,
-                              fontStyle: 'italic',
-                            }}
-                          >
-                            {children}
-                          </blockquote>
-                        ),
-                        code: ({ children, className }) => {
-                          const isInline = !className;
-                          if (isInline) {
-                            return (
-                              <code
-                                style={{
-                                  backgroundColor: theme.isDark
-                                    ? 'rgba(255,255,255,0.08)'
-                                    : 'rgba(0,0,0,0.04)',
-                                  padding: '1px 4px',
-                                  borderRadius: '3px',
-                                  fontSize: '0.9em',
-                                  fontFamily: fonts.mono,
-                                }}
-                              >
-                                {children}
-                              </code>
-                            );
-                          }
-                          return (
-                            <code
-                              style={{
-                                display: 'block',
-                                backgroundColor: theme.isDark
-                                  ? 'rgba(255,255,255,0.05)'
-                                  : 'rgba(0,0,0,0.03)',
-                                padding: '12px 16px',
-                                borderRadius: '6px',
-                                fontSize: '13px',
-                                fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-                                overflowX: 'auto',
-                                marginBottom: '16px',
-                              }}
-                            >
-                              {children}
-                            </code>
-                          );
-                        },
-                        pre: ({ children }) => (
-                          <pre
-                            style={{
-                              backgroundColor: theme.isDark
-                                ? 'rgba(255,255,255,0.05)'
-                                : 'rgba(0,0,0,0.03)',
-                              padding: '12px 16px',
-                              borderRadius: '6px',
-                              overflowX: 'auto',
-                              marginBottom: '16px',
-                            }}
-                          >
-                            {children}
-                          </pre>
-                        ),
-                        ul: ({ children }) => (
-                          <ul style={{ marginBottom: '16px', paddingLeft: '24px' }}>
-                            {children}
-                          </ul>
-                        ),
-                        ol: ({ children }) => (
-                          <ol style={{ marginBottom: '16px', paddingLeft: '24px' }}>
-                            {children}
-                          </ol>
-                        ),
-                        li: ({ children, node }) => {
-                          const className = (node as { properties?: { className?: unknown } }).properties?.className;
-                          const isTaskListItem = Array.isArray(className)
-                            ? className.includes('task-list-item')
-                            : className === 'task-list-item';
-                          return (
-                            <li
-                              style={{
-                                marginBottom: '4px',
-                                listStyle: isTaskListItem ? 'none' : undefined,
-                              }}
-                            >
-                              {children}
-                            </li>
-                          );
-                        },
-                        a: ({ href, children }) => (
-                          <a
-                            href={href}
-                            style={{
-                              color: theme.accent,
-                              textDecoration: 'none',
-                            }}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              if (href) {
-                                window.shellAPI?.openExternal(href);
-                              }
-                            }}
-                          >
-                            {children}
-                          </a>
-                        ),
-                        hr: () => (
-                          <hr
-                            style={{
-                              border: 'none',
-                              height: '1px',
-                              backgroundColor: theme.border,
-                              margin: '24px 0',
-                            }}
-                          />
-                        ),
-                      }}
-                    >
-                      {displayContent}
-                    </ReactMarkdown>
-                  </div>
+                          </li>
+                        );
+                      },
+                      a: ({ href, children }) => (
+                        <a
+                          href={href}
+                          style={{
+                            color: theme.accent,
+                            textDecoration: 'none',
+                          }}
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (href) {
+                              window.shellAPI?.openExternal(href);
+                            }
+                          }}
+                        >
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {displayContent}
+                  </FieldTheoryProse>
                   <div style={{ height: '50vh', flexShrink: 0 }} />
                 </>
               )}
