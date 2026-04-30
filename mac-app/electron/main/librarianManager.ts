@@ -9,6 +9,7 @@ import { createLogger } from './logger';
 import { libraryDir } from './fieldTheoryPaths';
 import {
   existingPathInsideRoots,
+  isMarkdownDocumentPath,
   isPathInside,
   normalizeUserDocumentNameInput,
   normalizeUserDocumentRelPathInput,
@@ -76,6 +77,11 @@ Use Command+F or / to search, Command+, to switch between rendered and Markdown,
 
 function normalizeDefaultReadmeContent(content: string): string {
   return content.endsWith('\n') ? content : `${content}\n`;
+}
+
+function isWikiSkipFileName(fileName: string): boolean {
+  return WIKI_SKIP_FILE_NAMES.has(fileName)
+    || WIKI_SKIP_FILE_NAMES.has(`${stripMarkdownFileExtension(fileName)}.md`);
 }
 
 function buildDefaultReadmeWithHelp(content: string): string {
@@ -1890,8 +1896,7 @@ export class LibrarianManager extends EventEmitter {
 
   private resolveWatchedReadingPath(filePath: string): string | null {
     const normalizedPath = this.normalizePath(this.expandPath(filePath));
-    if (!normalizedPath.toLowerCase().endsWith('.md')) return null;
-    if (!this.cache.has(normalizedPath)) return null;
+    if (!isMarkdownDocumentPath(normalizedPath)) return null;
 
     const watchedRoots = this.settings.watchedDirs.map(dirPath => this.normalizePath(this.expandPath(dirPath)));
     return existingPathInsideRoots(normalizedPath, watchedRoots) ? normalizedPath : null;
@@ -2161,7 +2166,7 @@ export class LibrarianManager extends EventEmitter {
     let hasChanges = false;
 
     try {
-      const files = fs.readdirSync(normalizedDir).filter(f => f.endsWith('.md'));
+      const files = fs.readdirSync(normalizedDir).filter(isMarkdownDocumentPath);
       const seenPaths = new Set<string>();
 
       for (const file of files) {
@@ -2237,8 +2242,10 @@ export class LibrarianManager extends EventEmitter {
 
     this.scanDirectory(normalizedDir);
 
-    // Watch for .md files in the directory using chokidar
-    const watcher = chokidar.watch(`${normalizedDir}/*.md`, {
+    const watcher = chokidar.watch([
+      path.join(normalizedDir, '*.md'),
+      path.join(normalizedDir, '*.markdown'),
+    ], {
       ignoreInitial: true,           // Don't fire for existing files
       awaitWriteFinish: {            // Wait for file to be fully written
         stabilityThreshold: 100,
@@ -2327,7 +2334,7 @@ export class LibrarianManager extends EventEmitter {
     const normalizedDir = this.normalizePath(dirPath);
     if (!fs.existsSync(normalizedDir)) return;
 
-    const files = fs.readdirSync(normalizedDir).filter(f => f.endsWith('.md'));
+    const files = fs.readdirSync(normalizedDir).filter(isMarkdownDocumentPath);
     let foundNew = false;
 
     for (const file of files) {
@@ -2757,11 +2764,11 @@ export class LibrarianManager extends EventEmitter {
         continue;
       }
 
-      if (!stats.isFile() || !entry.name.endsWith('.md') || WIKI_SKIP_FILE_NAMES.has(entry.name)) {
+      if (!stats.isFile() || !isMarkdownDocumentPath(entry.name) || isWikiSkipFileName(entry.name)) {
         continue;
       }
 
-      const nameWithoutExt = entry.name.replace(/\.md$/i, '');
+      const nameWithoutExt = stripMarkdownFileExtension(entry.name);
       const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, nameWithoutExt)));
       const metadata = this.parseWikiFileMetadata(absPath);
       nodes.push({
@@ -2910,15 +2917,37 @@ export class LibrarianManager extends EventEmitter {
     return true;
   }
 
-  getWikiPage(relPath: string): WikiPage | null {
+  private resolveExistingWikiPagePath(relPath: string): string | null {
+    const candidates = [
+      path.resolve(this.wikiDir, `${relPath}.md`),
+      path.resolve(this.wikiDir, `${relPath}.markdown`),
+    ];
+
+    for (const candidate of candidates) {
+      if (this.isInsidePath(this.wikiDir, candidate) && fs.existsSync(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  private resolveWikiPageWritePath(relPath: string): string | null {
+    const existing = this.resolveExistingWikiPagePath(relPath);
+    if (existing) return existing;
+
     const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
-    if (!this.isInsidePath(this.wikiDir, absPath)) return null;
-    if (!fs.existsSync(absPath)) return null;
+    return this.isInsidePath(this.wikiDir, absPath) ? absPath : null;
+  }
+
+  getWikiPage(relPath: string): WikiPage | null {
+    const absPath = this.resolveExistingWikiPagePath(relPath);
+    if (!absPath) return null;
 
     try {
       const content = fs.readFileSync(absPath, 'utf-8');
       const stats = fs.statSync(absPath);
-      const nameWithoutExt = path.basename(absPath, '.md');
+      const nameWithoutExt = stripMarkdownFileExtension(path.basename(absPath));
       const metadata = this.parseWikiMetadata(content, absPath);
       return {
         relPath,
@@ -2957,7 +2986,10 @@ export class LibrarianManager extends EventEmitter {
       return;
     }
 
-    this.wikiWatcher = chokidar.watch(`${wikiRoot}/**/*.md`, {
+    this.wikiWatcher = chokidar.watch([
+      path.join(wikiRoot, '**/*.md'),
+      path.join(wikiRoot, '**/*.markdown'),
+    ], {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       ignorePermissionErrors: true,
@@ -2971,15 +3003,15 @@ export class LibrarianManager extends EventEmitter {
     // happens outside the app — Finder trash, `rm`, `git checkout`, etc.
     this.wikiWatcher.on('unlink', (absPath: string) => {
       this.emit('wiki:changed');
-      const rel = path.relative(this.wikiDir, absPath).replace(/\.md$/i, '');
+      const rel = stripMarkdownFileExtension(path.relative(this.wikiDir, absPath));
       if (rel && !rel.startsWith('..')) this.emit('wiki:deleted', rel);
     });
     this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
   }
 
   saveWikiPage(relPath: string, content: string): boolean {
-    const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
-    if (!this.isInsidePath(this.wikiDir, absPath)) return false;
+    const absPath = this.resolveWikiPageWritePath(relPath);
+    if (!absPath) return false;
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       this.emit('wiki:changed');
@@ -3000,10 +3032,10 @@ export class LibrarianManager extends EventEmitter {
     if (!slug) return null;
     const folder = path.posix.dirname(relPath);
     const newRelPath = folder && folder !== '.' ? `${folder}/${slug}` : slug;
-    const oldAbs = path.resolve(this.wikiDir, `${relPath}.md`);
-    const newAbs = path.resolve(this.wikiDir, `${newRelPath}.md`);
+    const oldAbs = this.resolveExistingWikiPagePath(relPath);
+    if (!oldAbs) return null;
+    const newAbs = path.resolve(this.wikiDir, `${newRelPath}${path.extname(oldAbs)}`);
     if (!this.isInsidePath(this.wikiDir, oldAbs) || !this.isInsidePath(this.wikiDir, newAbs)) return null;
-    if (!fs.existsSync(oldAbs)) return null;
     if (newRelPath === relPath) {
       try {
         this.updateMarkdownH1Title(oldAbs, trimmed);
@@ -3014,7 +3046,7 @@ export class LibrarianManager extends EventEmitter {
         return null;
       }
     }
-    if (fs.existsSync(newAbs)) return null;
+    if (this.resolveExistingWikiPagePath(newRelPath)) return null;
     try {
       fs.renameSync(oldAbs, newAbs);
       this.updateMarkdownH1Title(newAbs, trimmed);
@@ -3029,9 +3061,8 @@ export class LibrarianManager extends EventEmitter {
   }
 
   async deleteWikiPage(relPath: string): Promise<boolean> {
-    const absPath = path.resolve(this.wikiDir, `${relPath}.md`);
-    if (!this.isInsidePath(this.wikiDir, absPath)) return false;
-    if (!fs.existsSync(absPath)) return false;
+    const absPath = this.resolveExistingWikiPagePath(relPath);
+    if (!absPath) return false;
     try {
       await shell.trashItem(absPath);
       this.emit('wiki:changed');
@@ -3110,7 +3141,7 @@ export class LibrarianManager extends EventEmitter {
 
     try {
       fs.renameSync(sourceAbs, targetAbs);
-      const newRelPath = this.toPortableRelPath(path.relative(root.rootPath, targetAbs)).replace(/\.md$/i, '');
+      const newRelPath = stripMarkdownFileExtension(this.toPortableRelPath(path.relative(root.rootPath, targetAbs)));
       if (root.builtin) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
@@ -6672,11 +6703,11 @@ Your readings will accumulate here in \`.librarian/\` directories, one per meani
       path.join(os.homedir(), 'Documents', 'projects'),
     ];
 
-    // Helper to check if a .librarian dir has any .md files
+    // Helper to check if a .librarian dir has any Markdown files
     const hasReadings = (librarianDir: string): boolean => {
       try {
         const files = fs.readdirSync(librarianDir);
-        return files.some(f => f.endsWith('.md'));
+        return files.some(isMarkdownDocumentPath);
       } catch {
         return false;
       }

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 
 const MARKDOWN_FILE_EXTENSION_RE = /\.(md|markdown|mdx)$/i;
+const MARKDOWN_DOCUMENT_EXTENSION_RE = /\.(md|markdown)$/i;
 
 export function isPathInside(parentPath: string, childPath: string): boolean {
   const relPath = path.relative(parentPath, childPath);
@@ -29,6 +30,10 @@ export function existingPathInsideRoots(filePath: string, rootPaths: string[]): 
   }
 
   return null;
+}
+
+export function isMarkdownDocumentPath(filePath: string): boolean {
+  return MARKDOWN_DOCUMENT_EXTENSION_RE.test(path.basename(filePath));
 }
 
 export function stripMarkdownFileExtension(fileName: string): string {
