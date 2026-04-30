@@ -54,6 +54,16 @@ import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 import {
+  MARKDOWN_EDITOR_OPTIONS,
+  persistMarkdownEditor,
+  restoreMarkdownEditor,
+  type MarkdownEditor as MarkdownEditorChoice,
+} from '../utils/markdownEditor';
+import MarkdownCodeEditor, { type MarkdownCodeEditorHandle } from './MarkdownCodeEditor';
+import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
+import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
+import '../utils/scrollDiagnostics.bootstrap';
+import {
   buildWikiIndex,
   classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
@@ -1436,6 +1446,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     restoreLibrarianTypographyPreset(localStorage)
   ));
   const [proseRenderer, setProseRenderer] = useState(() => restoreProseRenderer(localStorage));
+  const [markdownEditorChoice, setMarkdownEditorChoice] = useState<MarkdownEditorChoice>(() => restoreMarkdownEditor(localStorage));
   const [lineHeightId, setLineHeightId] = useState<LibrarianLineHeightId>(() => (
     restoreLibrarianLineHeight(localStorage)
   ));
@@ -1502,6 +1513,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
   const markdownEditorRef = useRef<HTMLTextAreaElement | null>(null);
+  const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
+
+  const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
+  const textareaScrollSamplerRef = useScrollFpsSampler('textarea');
+  const setContentScrollRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      contentScrollRef.current = el;
+      renderedScrollSamplerRef(el);
+    },
+    [renderedScrollSamplerRef],
+  );
+  const setMarkdownEditorRef = useCallback(
+    (el: HTMLTextAreaElement | null) => {
+      markdownEditorRef.current = el;
+      textareaScrollSamplerRef(el);
+    },
+    [textareaScrollSamplerRef],
+  );
   const pendingRenderedEditSelectionRef = useRef<number | null>(null);
   const pendingTitleSuggestionRef = useRef<PendingTitleSuggestion | null>(null);
   const [markdownTitleSuggestion, setMarkdownTitleSuggestion] = useState<MarkdownTitleSuggestionState | null>(null);
@@ -1803,6 +1832,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     persistProseRenderer(localStorage, proseRenderer);
   }, [proseRenderer]);
+
+  useEffect(() => {
+    persistMarkdownEditor(localStorage, markdownEditorChoice);
+  }, [markdownEditorChoice]);
 
   useEffect(() => {
     persistLibrarianLineHeight(localStorage, lineHeightId);
@@ -4332,6 +4365,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         backgroundColor: theme.bg,
       }}
     >
+      <ScrollDiagnosticsHUD />
       <style>
         {`
           @keyframes ftRenderedTaskCompletedLive {
@@ -4617,6 +4651,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 proseRenderer={proseRenderer}
                 proseRendererOptions={focusToolbarControlsVisible ? PROSE_RENDERER_OPTIONS : undefined}
                 onProseRendererChange={focusToolbarControlsVisible ? setProseRenderer : undefined}
+                markdownEditor={markdownEditorChoice}
+                markdownEditorOptions={focusToolbarControlsVisible ? MARKDOWN_EDITOR_OPTIONS : undefined}
+                onMarkdownEditorChange={focusToolbarControlsVisible ? setMarkdownEditorChoice : undefined}
                 onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
@@ -4855,7 +4892,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         {/* Scrollable content area */}
         <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex' }}>
         <div
-          ref={contentScrollRef}
+          ref={setContentScrollRef}
           onScroll={(e) => {
             if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
           }}
@@ -4897,8 +4934,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   overflow: 'hidden',
                 }}
               >
+                {markdownEditorChoice === 'codemirror' ? (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      width: '100%',
+                      height: '100%',
+                      animation: 'ftMarkdownEditorFadeIn 140ms ease-out',
+                    }}
+                  >
+                    <MarkdownCodeEditor
+                      ref={markdownCodeEditorRef}
+                      value={editContent}
+                      onChange={(next) => {
+                        if (pendingTitleSuggestionRef.current && next !== '# \n') {
+                          pendingTitleSuggestionRef.current = null;
+                          setMarkdownTitleSuggestion(null);
+                        }
+                        markdownEditUndoStackRef.current = [];
+                        markWritingActive();
+                        setEditContent(next);
+                        scheduleEditorSessionPersist();
+                      }}
+                      onScroll={() => scheduleEditorSessionPersist()}
+                      fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
+                      fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
+                      lineHeight={(documentTextStyle.lineHeight as string | number) ?? 1.6}
+                      color={(documentTextStyle.color as string) ?? theme.text}
+                      background="transparent"
+                      caretColor={theme.accent}
+                      placeholder="Write your markdown here..."
+                      dataAttributes={{
+                        'data-ft-agent-context': 'markdown',
+                        'data-ft-agent-file-path': activeReading.path,
+                        'data-ft-agent-title': activeReading.title,
+                      }}
+                    />
+                  </div>
+                ) : (
                 <textarea
-                  ref={markdownEditorRef}
+                  ref={setMarkdownEditorRef}
                   data-ft-agent-context="markdown"
                   data-ft-agent-file-path={activeReading.path}
                   data-ft-agent-title={activeReading.title}
@@ -4997,7 +5073,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   }}
                   placeholder="Write your markdown here..."
                 />
-                {markdownTitleSuggestion && (
+                )}
+                {markdownEditorChoice === 'textarea' && markdownTitleSuggestion && (
                   <span
                     aria-hidden="true"
                     style={{
@@ -5016,7 +5093,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     {markdownTitleSuggestion.text}
                   </span>
                 )}
-                {markdownEditorCommandActive && markdownEditorLinkHover && markdownEditorLinkHover.overlays.map((overlay, index) => (
+                {markdownEditorChoice === 'textarea' && markdownEditorCommandActive && markdownEditorLinkHover && markdownEditorLinkHover.overlays.map((overlay, index) => (
                   <span
                     key={`${overlay.top}:${overlay.left}:${index}`}
                     aria-hidden="true"
@@ -5039,7 +5116,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     {overlay.text}
                   </span>
                 ))}
-                {markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
+                {markdownEditorChoice === 'textarea' && markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
                   <div
                     role="listbox"
                     aria-label="Wiki link suggestions"
@@ -5115,7 +5192,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     })}
                   </div>
                 )}
-                {markdownUrlPasteChoice && (
+                {markdownEditorChoice === 'textarea' && markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
                     style={{
