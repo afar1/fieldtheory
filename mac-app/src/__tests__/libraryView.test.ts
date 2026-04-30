@@ -17,6 +17,7 @@ import {
   getScrollRatio,
   getScrollTopForCaretVisibility,
   getScrollTopForRatio,
+  isLibrarianDocumentFocusChromeActive,
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
   normalizeMarkdownTodoLines,
@@ -742,6 +743,34 @@ describe('focus chrome proximity', () => {
 
   it('does not reveal controls above the reader pane', () => {
     expect(shouldRevealFocusChrome(12, 20, 96)).toBe(false);
+  });
+});
+
+describe('document focus chrome activation', () => {
+  const focusedDocument = {
+    canUseFocusImmersive: true,
+    isFullScreen: false,
+    sidebarCollapsed: true,
+    focusImmersive: true,
+    isFocusedWritingMode: false,
+    writingChromeHidden: false,
+  };
+
+  it('requires the sidebar to be collapsed for explicit focus chrome', () => {
+    expect(isLibrarianDocumentFocusChromeActive(focusedDocument)).toBe(true);
+    expect(isLibrarianDocumentFocusChromeActive({ ...focusedDocument, sidebarCollapsed: false })).toBe(false);
+  });
+
+  it('restores focused writing chrome when the sidebar collapses again', () => {
+    const focusedWriting = {
+      ...focusedDocument,
+      focusImmersive: false,
+      isFocusedWritingMode: true,
+      writingChromeHidden: true,
+    };
+
+    expect(isLibrarianDocumentFocusChromeActive({ ...focusedWriting, sidebarCollapsed: false })).toBe(false);
+    expect(isLibrarianDocumentFocusChromeActive(focusedWriting)).toBe(true);
   });
 });
 
