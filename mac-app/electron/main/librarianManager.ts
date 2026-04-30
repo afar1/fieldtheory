@@ -14,6 +14,10 @@ import {
   normalizeUserDocumentRelPathInput,
   stripMarkdownFileExtension,
 } from './pathSafety';
+import {
+  parseMarkdownTodoState,
+  type MarkdownTodoState,
+} from '../shared/markdownFrontmatter';
 
 const log = createLogger('Librarian');
 
@@ -1324,59 +1328,7 @@ export interface ParsedMarkdownHeader {
   modelSignature: string | null;
 }
 
-export type MarkdownTodoState = 'open' | 'done';
-
-function stripYamlScalar(value: string): string {
-  const trimmed = value.trim();
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1).trim();
-  }
-  return trimmed;
-}
-
-function parseSimpleFrontmatterScalars(content: string): Record<string, string> {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
-  if (!match) return {};
-
-  const data: Record<string, string> = {};
-  for (const rawLine of match[1].split(/\r?\n/)) {
-    const line = rawLine.trim();
-    if (!line || line.startsWith('#')) continue;
-    const field = line.match(/^([A-Za-z][\w-]*):\s*(.*?)\s*$/);
-    if (!field) continue;
-    data[field[1].replace(/-/g, '_').toLowerCase()] = stripYamlScalar(field[2]);
-  }
-  return data;
-}
-
-function normalizeMarkdownTodoState(value: string | undefined): MarkdownTodoState | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === 'open') return 'open';
-  if (normalized === 'done') return 'done';
-  return null;
-}
-
-function isTruthyYamlScalar(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === 'true' || normalized === 'yes' || normalized === '1';
-}
-
-function isFalsyYamlScalar(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === 'false' || normalized === 'no' || normalized === '0';
-}
-
-export function parseMarkdownTodoState(content: string): MarkdownTodoState | null {
-  const meta = parseSimpleFrontmatterScalars(content);
-  const declaredTodo = meta.todo ?? meta.task;
-  if (isFalsyYamlScalar(declaredTodo)) return null;
-
-  const state = normalizeMarkdownTodoState(meta.todo_state ?? meta.task_state)
-    ?? normalizeMarkdownTodoState(declaredTodo);
-  if (state) return state;
-
-  return isTruthyYamlScalar(declaredTodo) ? 'open' : null;
-}
+export { parseMarkdownTodoState, type MarkdownTodoState };
 
 export function extractArtifactModelSignature(line: string): string | null {
   const match = line.trim().match(ARTIFACT_MODEL_SIGNATURE_MARKDOWN_RE);

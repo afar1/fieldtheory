@@ -25,6 +25,13 @@ import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import {
+  getMarkdownTodoState,
+  parseMarkdownFrontmatter,
+  setMarkdownTodoState as setFrontmatterMarkdownTodoState,
+  type MarkdownTodoState,
+} from '../../electron/shared/markdownFrontmatter';
+export type { MarkdownTodoState };
+import {
   LIBRARIAN_LINE_HEIGHT_OPTIONS,
   LIBRARIAN_TYPOGRAPHY_PRESETS,
   isLibrarianLineHeightId,
@@ -89,57 +96,17 @@ export function deletedLibraryItemMatchesSelection(
   return false;
 }
 
-export type MarkdownTodoState = 'open' | 'done';
-
-function stripFrontmatterScalar(value: string): string {
-  const trimmed = value.trim();
-  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-    return trimmed.slice(1, -1).trim();
-  }
-  return trimmed;
-}
-
-function normalizeFrontmatterTodoState(value: string | undefined): MarkdownTodoState | null {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === 'open') return 'open';
-  if (normalized === 'done') return 'done';
-  return null;
-}
-
-function isTruthyFrontmatterScalar(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === 'true' || normalized === 'yes' || normalized === '1';
-}
-
-function isFalsyFrontmatterScalar(value: string | undefined): boolean {
-  const normalized = value?.trim().toLowerCase();
-  return normalized === 'false' || normalized === 'no' || normalized === '0';
-}
-
 export function getFrontmatterTodoState(meta: Record<string, string>): MarkdownTodoState | null {
-  const declaredTodo = meta.todo ?? meta.task;
-  if (isFalsyFrontmatterScalar(declaredTodo)) return null;
-
-  const state = normalizeFrontmatterTodoState(meta.todo_state ?? meta.task_state)
-    ?? normalizeFrontmatterTodoState(declaredTodo);
-  if (state) return state;
-
-  return isTruthyFrontmatterScalar(declaredTodo) ? 'open' : null;
+  return getMarkdownTodoState(meta);
 }
 
 /** Strip YAML frontmatter from wiki page content for display.
  *  Returns the body (everything after the closing ---) and parsed
  *  metadata key-values for a small tag bar. */
 export function splitFrontmatter(content: string): { body: string; meta: Record<string, string>; todoState: MarkdownTodoState | null } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!match) return { body: content, meta: {}, todoState: null };
-  if (!match[1].trim()) return { body: content, meta: {}, todoState: null };
-  const meta: Record<string, string> = {};
-  for (const line of match[1].split('\n')) {
-    const m = line.trim().match(/^([A-Za-z][\w-]*):\s*(.*)$/);
-    if (m) meta[m[1].replace(/-/g, '_').toLowerCase()] = stripFrontmatterScalar(m[2]);
-  }
-  return { body: match[2].replace(/^\n+/, ''), meta, todoState: getFrontmatterTodoState(meta) };
+  const parsed = parseMarkdownFrontmatter(content);
+  if (parsed.raw === null || !parsed.raw.trim()) return { body: content, meta: {}, todoState: null };
+  return { body: parsed.body, meta: parsed.meta, todoState: getFrontmatterTodoState(parsed.meta) };
 }
 
 export function getNextMarkdownTodoState(current: MarkdownTodoState | null): MarkdownTodoState | null {
@@ -149,27 +116,7 @@ export function getNextMarkdownTodoState(current: MarkdownTodoState | null): Mar
 }
 
 export function setMarkdownTodoState(content: string, nextState: MarkdownTodoState | null): string {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  const body = match ? match[2].replace(/^\n+/, '') : content;
-  const frontmatterLines = match && match[1].trim()
-    ? match[1]
-      .split(/\r?\n/)
-      .filter((line) => !/^\s*(todo|task|todo_state|task_state)\s*:/i.test(line))
-    : [];
-  const retainedLines = frontmatterLines.filter((line) => line.trim().length > 0);
-
-  if (!nextState) {
-    if (retainedLines.length === 0) return body;
-    return `---\n${frontmatterLines.join('\n')}\n---\n\n${body}`;
-  }
-
-  const nextLines = [
-    ...frontmatterLines,
-    ...(frontmatterLines.length > 0 ? [''] : []),
-    'todo: true',
-    `todo_state: ${nextState}`,
-  ];
-  return `---\n${nextLines.join('\n')}\n---\n\n${body}`;
+  return setFrontmatterMarkdownTodoState(content, nextState);
 }
 
 export function cycleMarkdownTodoState(content: string): { content: string; state: MarkdownTodoState | null } {

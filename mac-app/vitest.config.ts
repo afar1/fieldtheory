@@ -9,6 +9,7 @@ export default defineConfig({
     include: [
       'src/**/*.test.{ts,tsx}',
       'electron/main/**/*.test.ts',
+      'electron/shared/**/*.test.ts',
     ],
     exclude: [
       '**/node_modules/**',
