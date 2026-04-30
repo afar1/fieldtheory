@@ -114,6 +114,12 @@ function cssTimeToMs(value: string): number {
   return Number.parseFloat(trimmed) || 0;
 }
 
+const stableClipboardTextStyle = {
+  fontVariantLigatures: 'none',
+  fontKerning: 'none',
+  fontFeatureSettings: '"liga" 0, "clig" 0, "kern" 0',
+} as const;
+
 function maxTransitionMs(style: CSSStyleDeclaration): number {
   const durations = style.transitionDuration.split(',').map(cssTimeToMs);
   const delays = style.transitionDelay.split(',').map(cssTimeToMs);
@@ -405,15 +411,6 @@ export default function ClipboardHistory() {
   const navSidebarToggleEnabled =
     (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
     (viewMode === 'commands' && !showSettings);
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (!navSidebarToggleEnabled || !isSidebarToggleShortcut(event)) return;
-      event.preventDefault();
-      setNavSidebarCollapsed((collapsed) => !collapsed);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [navSidebarToggleEnabled]);
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -480,6 +477,15 @@ export default function ClipboardHistory() {
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
     setNavSidebarCollapsed(true);
   }, [navSidebarCollapsed]);
+  const toggleNavSidebarCollapsed = useCallback(() => {
+    setNavSidebarCollapsed((collapsed) => {
+      if (focusChromeActive && collapsed) {
+        focusChromePreviousSidebarCollapsedRef.current = null;
+        setFocusChromeProximityVisible(false);
+      }
+      return !collapsed;
+    });
+  }, [focusChromeActive]);
   const handleFocusChromeActiveChange = useCallback((active: boolean) => {
     setFocusChromeActive(active);
     if (!active) setFocusChromeProximityVisible(false);
@@ -490,6 +496,16 @@ export default function ClipboardHistory() {
     focusChromePreviousSidebarCollapsedRef.current = null;
     setNavSidebarCollapsed(previous);
   }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!navSidebarToggleEnabled || !isSidebarToggleShortcut(event)) return;
+      event.preventDefault();
+      toggleNavSidebarCollapsed();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [navSidebarToggleEnabled, toggleNavSidebarCollapsed]);
 
   useEffect(() => {
     if (!isFocusChromeSurface || !focusChromeActive) {
@@ -5199,6 +5215,7 @@ export default function ClipboardHistory() {
                           return (
                             <div
                               style={{
+                                ...stableClipboardTextStyle,
                                 fontSize: '12px',
                                 fontWeight: '400',
                                 color: theme.text,
@@ -5219,6 +5236,7 @@ export default function ClipboardHistory() {
                             <div style={{ marginBottom: '0px' }}>
                               <div
                                 style={{
+                                  ...stableClipboardTextStyle,
                                   fontSize: '12px',
                                   fontWeight: '400',
                                   color: theme.text,
@@ -5259,6 +5277,7 @@ export default function ClipboardHistory() {
                           <div
                             ref={checkTextOverflow(stack.stackId)}
                             style={{
+                              ...stableClipboardTextStyle,
                               fontSize: '12px',
                               fontWeight: '400',
                               color: theme.text,
@@ -5814,6 +5833,7 @@ export default function ClipboardHistory() {
                             return (
                               <div
                                 style={{
+                                  ...stableClipboardTextStyle,
                                   fontSize: '12px',
                                   fontWeight: '400',
                                   marginBottom: '0px',
@@ -5837,6 +5857,7 @@ export default function ClipboardHistory() {
                                   />
                                 )}
                                 <span style={{
+                                  ...stableClipboardTextStyle,
                                   flex: 1,
                                   wordBreak: 'break-word',
                                   whiteSpace: 'pre-wrap',
@@ -5869,6 +5890,7 @@ export default function ClipboardHistory() {
                                 )}
                                 <div
                                   style={{
+                                    ...stableClipboardTextStyle,
                                     fontSize: '12px',
                                     fontWeight: '400',
                                     color: theme.text,
@@ -5909,6 +5931,7 @@ export default function ClipboardHistory() {
                           return (
                             <div
                               style={{
+                                ...stableClipboardTextStyle,
                                 fontSize: '12px',
                                 fontWeight: '400',
                                 marginBottom: '0',
@@ -5934,6 +5957,7 @@ export default function ClipboardHistory() {
                               <span
                                 ref={itemExpanded ? undefined : checkTextOverflow(itemTextId)}
                                 style={{
+                                  ...stableClipboardTextStyle,
                                   flex: 1,
                                   wordBreak: 'break-word',
                                   ...(itemExpanded ? {
@@ -6627,7 +6651,7 @@ export default function ClipboardHistory() {
             const collapseEnabled = navSidebarToggleEnabled;
             return (
               <button
-                onClick={() => setNavSidebarCollapsed((v) => !v)}
+                onClick={toggleNavSidebarCollapsed}
                 disabled={!collapseEnabled}
                 title={collapseEnabled ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘.)` : 'Sidebar toggle'}
                 aria-label="Toggle sidebar"
