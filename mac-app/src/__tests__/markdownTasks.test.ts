@@ -38,6 +38,12 @@ describe('getMarkdownTaskShortcutEdit', () => {
     );
   });
 
+  it('cycles selected lines backward one step', () => {
+    expect(getMarkdownTaskShortcutEdit('alpha\n- [ ] beta\n- [x] gamma', 0, 28, 'backward')?.nextValue).toBe(
+      '- [x] alpha\nbeta\n- [ ] gamma',
+    );
+  });
+
   it('does not include a trailing unselected line when the selection ends at a newline', () => {
     expect(getMarkdownTaskShortcutEdit('alpha\nbeta\ngamma', 0, 11)).toEqual({
       nextValue: '- [ ] alpha\n- [ ] beta\ngamma',
