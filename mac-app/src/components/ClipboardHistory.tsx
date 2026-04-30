@@ -17,6 +17,7 @@ import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, normalizeHotkeyForComparison } from '../utils/hotkeys';
+import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -1472,7 +1473,7 @@ export default function ClipboardHistory() {
       }
 
       const saved = await window.wikiAPI?.save(page.relPath, markdown);
-      if (!saved) {
+      if (!isDocumentSaveOk(saved)) {
         showFeedback('could not save markdown');
         return;
       }
