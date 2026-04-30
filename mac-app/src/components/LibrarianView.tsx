@@ -6,11 +6,9 @@
 import { Children, cloneElement, isValidElement, useEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
-import ReactMarkdown from 'react-markdown';
-import remarkBreaks from 'remark-breaks';
-import remarkGfm from 'remark-gfm';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
+import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -53,6 +51,7 @@ import {
 } from '../utils/markdownUrlPaste';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
+import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 import {
   buildWikiIndex,
   classifyLinkHref,
@@ -1325,13 +1324,6 @@ function isRenderedTaskListItem(node: unknown): boolean {
   return className === 'task-list-item';
 }
 
-function isRenderedTaskList(node: unknown): boolean {
-  if (!node || typeof node !== 'object') return false;
-  const className = (node as MarkdownRenderNode).properties?.className;
-  if (Array.isArray(className)) return className.includes('contains-task-list');
-  return className === 'contains-task-list';
-}
-
 function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
   let stripped = false;
 
@@ -1422,6 +1414,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [typographyPresetId, setTypographyPresetId] = useState<LibrarianTypographyPresetId>(() => (
     restoreLibrarianTypographyPreset(localStorage)
   ));
+  const [proseRenderer, setProseRenderer] = useState(() => restoreProseRenderer(localStorage));
   const [lineHeightId, setLineHeightId] = useState<LibrarianLineHeightId>(() => (
     restoreLibrarianLineHeight(localStorage)
   ));
@@ -1536,7 +1529,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [isMutedForToday, setIsMutedForToday] = useState(false);
   const [isMuting, setIsMuting] = useState(false);
 
-  // Content mode: 'rendered' shows ReactMarkdown, 'markdown' shows editable raw source
+  // Content mode: 'rendered' shows formatted prose, 'markdown' shows editable raw source
   const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>(() => (
     editorSessionMatchesSelection(restoredEditorSession, restoredSelection)
       ? restoredEditorSession?.contentMode ?? 'rendered'
@@ -1556,7 +1549,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   const focusChromeUsesProximityFade = focusChromeActive;
   const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
-  const focusChromePinnedVisible = fileFindOpen;
+  const [focusToolbarMenuOpen, setFocusToolbarMenuOpen] = useState(false);
+  const focusChromePinnedVisible = fileFindOpen || focusToolbarMenuOpen;
   const focusChromeVisualVisible = !focusChromeUsesProximityFade || focusChromeProximityVisible || focusChromePinnedVisible;
   const focusToolbarControlsVisible = !focusChromeActive || (focusChromeUsesProximityFade && (focusChromeProximityVisible || focusChromePinnedVisible));
   const toggleFocusChromeShortcut = useCallback(() => {
@@ -1781,6 +1775,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     persistLibrarianTypographyPreset(localStorage, typographyPresetId);
   }, [typographyPresetId]);
+
+  useEffect(() => {
+    persistProseRenderer(localStorage, proseRenderer);
+  }, [proseRenderer]);
 
   useEffect(() => {
     persistLibrarianLineHeight(localStorage, lineHeightId);
@@ -4585,6 +4583,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 } : undefined}
                 unorderedListMarker={unorderedListMarker}
                 onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
+                proseRenderer={proseRenderer}
+                proseRendererOptions={focusToolbarControlsVisible ? PROSE_RENDERER_OPTIONS : undefined}
+                onProseRendererChange={focusToolbarControlsVisible ? setProseRenderer : undefined}
+                onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
                 onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
@@ -5211,55 +5213,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 cursor: activeReading ? 'text' : 'default',
               }}
             >
-              <ReactMarkdown
-                // remarkBreaks turns single newlines into <br> so the
-                // rendered view matches what the user typed, iA-Writer style
-                // — standard CommonMark would collapse them into spaces.
-                remarkPlugins={[remarkGfm, remarkBreaks]}
+              <FieldTheoryProse
+                color={documentTextStyle.color}
+                fontFamily={typographyPreset.fontFamily}
+                fontSize={textSizes[textSize].base}
+                h1Size={textSizes[textSize].h1}
+                h2Size={textSizes[textSize].h2}
+                h3Size={textSizes[textSize].h3}
+                headingFontFamily={typographyPreset.headingFontFamily}
+                lineHeight={documentTextStyle.lineHeight}
+                linkColor={theme.accent}
+                mutedColor={theme.textSecondary}
+                remarkLineBreaks
+                renderer={proseRenderer}
+                surface={theme.isDark ? 'dark' : 'light'}
                 components={{
-                  h1: ({ children }) => (
-                    <h1
-                      style={{
-                        fontSize: textSizes[textSize].h1,
-                        fontWeight: 600,
-                        marginTop: 0,
-                        marginBottom: '16px',
-                        lineHeight: 1.25,
-                        color: theme.text,
-                        fontFamily: typographyPreset.headingFontFamily,
-                      }}
-                    >
-                      {children}
-                    </h1>
-                  ),
-                  h2: ({ children }) => (
-                    <h2
-                      style={{
-                        fontSize: textSizes[textSize].h2,
-                        fontWeight: 600,
-                        marginTop: '18px',
-                        marginBottom: '6px',
-                        lineHeight: 1.3,
-                        color: theme.text,
-                      }}
-                    >
-                      {children}
-                    </h2>
-                  ),
-                  h3: ({ children }) => (
-                    <h3
-                      style={{
-                        fontSize: textSizes[textSize].h3,
-                        fontWeight: 600,
-                        marginTop: '16px',
-                        marginBottom: '4px',
-                        lineHeight: 1.35,
-                        color: theme.text,
-                      }}
-                    >
-                      {children}
-                    </h3>
-                  ),
                   p: ({ children, node }) => {
                     const textContent = extractMarkdownText(node);
                     const normalizedText = textContent.trim();
@@ -5307,124 +5275,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     }
 
                     return (
-                      <p
-                        style={{
-                          margin: 0,
-                          lineHeight: 'inherit',
-                        }}
-                      >
-                        {children}
-                      </p>
+                      <p>{children}</p>
                     );
                   },
-                  strong: ({ children }) => (
-                    <strong
-                      style={{
-                        fontWeight: 600,
-                        color: theme.text,
-                      }}
-                    >
-                      {children}
-                    </strong>
-                  ),
-                  em: ({ children }) => (
-                    <em style={{ fontStyle: 'italic' }}>{children}</em>
-                  ),
-                  blockquote: ({ children }) => (
-                    <blockquote
-                      style={{
-                        borderLeft: `1px solid ${theme.border}`,
-                        paddingLeft: '14px',
-                        marginLeft: 0,
-                        marginRight: 0,
-                        marginTop: '8px',
-                        marginBottom: '8px',
-                        color: theme.textSecondary,
-                      }}
-                    >
-                      {children}
-                    </blockquote>
-                  ),
-                  code: ({ children, className }) => {
-                    const isInline = !className;
-                    if (isInline) {
-                      return (
-                        <code
-                          style={{
-                            backgroundColor: theme.isDark
-                              ? 'rgba(255,255,255,0.06)'
-                              : 'rgba(0,0,0,0.04)',
-                            padding: '1px 4px',
-                            borderRadius: '3px',
-                            fontSize: '0.875em', // Slightly smaller than body text since monospace appears larger
-                            fontFamily: fonts.mono,
-                          }}
-                        >
-                          {children}
-                        </code>
-                      );
-                    }
-                    return (
-                      <code
-                        style={{
-                          display: 'block',
-                          backgroundColor: theme.isDark
-                            ? 'rgba(255,255,255,0.035)'
-                            : 'rgba(0,0,0,0.025)',
-                          padding: '12px 16px',
-                          borderRadius: '4px',
-                          fontSize: '13px',
-                          fontFamily: "'SF Mono', Monaco, 'Cascadia Code', monospace",
-                          overflowX: 'auto',
-                          marginBottom: '16px',
-                        }}
-                      >
-                        {children}
-                      </code>
-                    );
-                  },
-                  pre: ({ children }) => (
-                    <pre
-                      style={{
-                        backgroundColor: theme.isDark
-                          ? 'rgba(255,255,255,0.035)'
-                          : 'rgba(0,0,0,0.025)',
-                        padding: '12px 16px',
-                        borderRadius: '4px',
-                        overflowX: 'auto',
-                        marginBottom: '12px',
-                      }}
-                    >
-                      {children}
-                    </pre>
-                  ),
-                  ul: ({ children, node }) => {
-                    const isTaskList = isRenderedTaskList(node);
-                    return (
-                      <ul
-                        style={{
-                          marginTop: isTaskList ? '6px' : '8px',
-                          marginBottom: isTaskList ? '14px' : '12px',
-                          paddingLeft: isTaskList ? 0 : '1.35em',
-                          listStylePosition: 'outside',
-                        }}
-                      >
-                        {children}
-                      </ul>
-                    );
-                  },
-                  ol: ({ children }) => (
-                    <ol
-                      style={{
-                        marginTop: '8px',
-                        marginBottom: '12px',
-                        paddingLeft: '1.45em',
-                        listStylePosition: 'outside',
-                      }}
-                    >
-                      {children}
-                    </ol>
-                  ),
                   input: ({ node: _node, type, checked, ...props }) => {
                     if (type !== 'checkbox') {
                       return <input type={type} {...props} />;
@@ -5436,6 +5289,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     return (
                       <input
                         {...props}
+                        className="ft-rendered-task-checkbox"
                         type="checkbox"
                         checked={isChecked}
                         disabled={false}
@@ -5448,10 +5302,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         style={{
                           ...props.style,
                           cursor: taskLine ? 'pointer' : 'default',
-                          width: '0.95em',
-                          height: '0.95em',
                           margin: 0,
-                          accentColor: theme.accent,
                         }}
                       />
                     );
@@ -5471,13 +5322,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         <li
                           className={animateCompletion ? 'ft-rendered-task-completed-live' : undefined}
                           style={{
-                            marginBottom: '0.55em',
+                            marginBottom: '0.22em',
                             listStyle: 'none',
                             display: 'grid',
-                            gridTemplateColumns: '1.15em minmax(0, 1fr)',
-                            columnGap: '0.5em',
+                            gridTemplateColumns: '0.78em minmax(0, 1fr)',
+                            columnGap: '0.6em',
                             alignItems: 'baseline',
-                            opacity: checked ? 0.62 : 1,
+                            opacity: checked ? 0.68 : 1,
                           }}
                         >
                           <span
@@ -5565,21 +5416,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       </a>
                     );
                   },
-                  hr: () => (
-                    <hr
-                      style={{
-                        border: 'none',
-                        height: '1px',
-                        backgroundColor: theme.border,
-                        opacity: 0.55,
-                        margin: '20px 0',
-                      }}
-                    />
-                  ),
                 }}
               >
                 {displayContent}
-              </ReactMarkdown>
+              </FieldTheoryProse>
             </div>
             {/* Footer - only in immersive mode */}
             {isFullScreen && (

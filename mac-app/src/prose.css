@@ -1,0 +1,246 @@
+.ft-prose {
+  --ft-prose-color: inherit;
+  --ft-prose-muted: rgba(120, 120, 120, 0.82);
+  --ft-prose-link: #2563eb;
+  --ft-prose-border: color-mix(in srgb, currentColor 13%, transparent);
+  --ft-prose-soft: color-mix(in srgb, currentColor 5%, transparent);
+  --ft-prose-softer: color-mix(in srgb, currentColor 3%, transparent);
+  --ft-prose-code: color-mix(in srgb, currentColor 7%, transparent);
+  --ft-prose-bg: transparent;
+  --ft-prose-font-family: inherit;
+  --ft-prose-heading-font-family: var(--ft-prose-font-family);
+  --ft-prose-font-size: 16px;
+  --ft-prose-line-height: 1.62;
+  --ft-prose-h1-size: 1.55em;
+  --ft-prose-h2-size: 1.18em;
+  --ft-prose-h3-size: 1em;
+  color: var(--ft-prose-color);
+  font-family: var(--ft-prose-font-family);
+  font-size: var(--ft-prose-font-size);
+  font-weight: 400;
+  line-height: var(--ft-prose-line-height);
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
+
+.ft-prose,
+.ft-prose * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ft-prose-dark {
+  --ft-prose-bg: #171a20;
+  --ft-prose-muted: rgba(255, 255, 255, 0.56);
+  --ft-prose-border: rgba(255, 255, 255, 0.12);
+  --ft-prose-soft: rgba(255, 255, 255, 0.055);
+  --ft-prose-softer: rgba(255, 255, 255, 0.035);
+  --ft-prose-code: rgba(255, 255, 255, 0.07);
+}
+
+.ft-prose-light {
+  --ft-prose-bg: #ffffff;
+  --ft-prose-muted: rgba(17, 17, 17, 0.56);
+  --ft-prose-border: rgba(0, 0, 0, 0.11);
+  --ft-prose-soft: rgba(0, 0, 0, 0.045);
+  --ft-prose-softer: rgba(0, 0, 0, 0.028);
+  --ft-prose-code: rgba(0, 0, 0, 0.055);
+}
+
+.ft-prose-preview {
+  --ft-prose-line-height: 1.55;
+}
+
+.ft-prose-compact {
+  --ft-prose-line-height: 1.5;
+}
+
+.ft-prose :where(h1, h2, h3, h4) {
+  color: var(--ft-prose-color);
+  font-family: var(--ft-prose-heading-font-family);
+  font-weight: 620;
+  letter-spacing: 0;
+}
+
+.ft-prose h1 {
+  font-size: var(--ft-prose-h1-size);
+  line-height: 1.2;
+  margin: 0 0 0.78em;
+}
+
+.ft-prose h2 {
+  font-size: var(--ft-prose-h2-size);
+  line-height: 1.28;
+  margin: 1.35em 0 0.45em;
+}
+
+.ft-prose h3 {
+  font-size: var(--ft-prose-h3-size);
+  line-height: 1.35;
+  margin: 1.15em 0 0.35em;
+}
+
+.ft-prose p {
+  margin: 0 0 0.78em;
+}
+
+.ft-prose :where(strong, b) {
+  color: var(--ft-prose-color);
+  font-weight: 630;
+}
+
+.ft-prose a {
+  color: var(--ft-prose-link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--ft-prose-link) 45%, transparent);
+  text-underline-offset: 2px;
+}
+
+.ft-prose blockquote {
+  margin: 1em 0;
+  padding: 0.15em 0 0.15em 1em;
+  border-left: 2px solid var(--ft-prose-border);
+  color: var(--ft-prose-muted);
+}
+
+.ft-prose blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.ft-prose :where(ul, ol) {
+  margin: 0.7em 0 0.95em;
+  padding-left: 1.45em;
+}
+
+.ft-prose li {
+  margin: 0.22em 0;
+}
+
+.ft-prose li > :where(p, ul, ol) {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.ft-prose :where(ul.contains-task-list, ul:has(> li.task-list-item)) {
+  padding-left: 0;
+  list-style: none;
+}
+
+.ft-prose li.task-list-item {
+  list-style: none;
+}
+
+.ft-prose input[type='checkbox'] {
+  appearance: none;
+  width: 0.72em;
+  height: 0.72em;
+  margin: 0;
+  border: 1.5px solid color-mix(in srgb, var(--ft-prose-color) 38%, transparent);
+  border-radius: 999px;
+  background: transparent;
+  vertical-align: -0.03em;
+}
+
+.ft-prose input[type='checkbox']:checked {
+  border-color: color-mix(in srgb, var(--ft-prose-color) 46%, transparent);
+  background: color-mix(in srgb, var(--ft-prose-color) 72%, transparent);
+  box-shadow: inset 0 0 0 2.5px var(--ft-prose-bg, #171a20);
+}
+
+.ft-prose input[type='checkbox']:not(:disabled) {
+  cursor: pointer;
+}
+
+.ft-prose code {
+  border-radius: 4px;
+  background: var(--ft-prose-code);
+  padding: 0.08em 0.28em;
+  font-family: 'SF Mono', Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.ft-prose pre {
+  margin: 1em 0 1.1em;
+  padding: 0.95em 1em;
+  overflow-x: auto;
+  border: 1px solid var(--ft-prose-border);
+  border-radius: 6px;
+  background: var(--ft-prose-softer);
+}
+
+.ft-prose pre code {
+  display: block;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  white-space: pre;
+}
+
+.ft-prose table {
+  display: block;
+  width: 100%;
+  margin: 1em 0 1.2em;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.94em;
+}
+
+.ft-prose :where(th, td) {
+  padding: 0.45em 0.6em;
+  border: 1px solid var(--ft-prose-border);
+  vertical-align: top;
+}
+
+.ft-prose th {
+  background: var(--ft-prose-soft);
+  color: var(--ft-prose-color);
+  font-weight: 620;
+  text-align: left;
+}
+
+.ft-prose hr {
+  height: 1px;
+  margin: 1.45em 0;
+  border: 0;
+  background: var(--ft-prose-border);
+}
+
+.ft-prose img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1em auto;
+  border-radius: 6px;
+}
+
+.ft-prose p:has(> img:only-child) {
+  margin: 1em 0 1.2em;
+}
+
+.ft-prose-ui,
+.ft-prose-ui * {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.ft-prose-ui {
+  letter-spacing: 0;
+}
+
+.ft-prose-ui .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.ft-prose-ui li.task-list-item {
+  list-style: none;
+}
+
+.ft-prose-ui input[type='checkbox'] {
+  accent-color: var(--p-color-text-accent);
+}
+
+.ft-prose-ui img {
+  max-width: 100%;
+  height: auto;
+}
