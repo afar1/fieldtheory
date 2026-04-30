@@ -5361,7 +5361,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             marginBottom: 'var(--ft-prose-list-item-spacing)',
                             listStyle: 'none',
                             display: 'grid',
-                            gridTemplateColumns: '0.95em minmax(0, 1fr)',
+                            gridTemplateColumns: '0.78em minmax(0, 1fr)',
                             columnGap: '0.6em',
                             alignItems: 'baseline',
                           }}
