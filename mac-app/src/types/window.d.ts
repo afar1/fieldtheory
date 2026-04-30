@@ -2199,25 +2199,33 @@ interface AgentKickoffArgs {
   instruction: string;
   model: AgentKickoffModel;
 }
-interface AgentKickoffResult {
+interface AgentKickoffStartResult {
   ok: boolean;
   runId: string;
-  stdout: string;
-  stderr: string;
-  durationMs: number;
-  summary: string;
-  appendedFooter: boolean;
+  absPath?: string;
+  model?: AgentKickoffModel;
   error?: string;
 }
 interface AgentKickoffProgressEvent {
   runId: string;
+  absPath: string;
+  model: AgentKickoffModel;
   kind: 'stdout' | 'stderr';
   chunk: string;
 }
+interface AgentKickoffStatusEvent {
+  runId: string;
+  absPath: string;
+  model: AgentKickoffModel;
+  status: 'started' | 'done' | 'error';
+  message: string;
+  error?: string;
+}
 interface AgentKickoffAPI {
-  kickoff: (args: AgentKickoffArgs) => Promise<AgentKickoffResult>;
+  kickoff: (args: AgentKickoffArgs) => Promise<AgentKickoffStartResult>;
   cancel: (runId: string) => Promise<boolean>;
   onProgress: (callback: (event: AgentKickoffProgressEvent) => void) => () => void;
+  onStatus: (callback: (event: AgentKickoffStatusEvent) => void) => () => void;
 }
 
 export {};

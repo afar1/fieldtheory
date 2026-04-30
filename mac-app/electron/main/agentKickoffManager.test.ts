@@ -3,6 +3,7 @@ import { Readable } from 'node:stream';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { SpawnOptions } from 'node:child_process';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   AgentKickoffManager,
@@ -102,7 +103,7 @@ describe('agentKickoffManager helpers', () => {
     it('uses codex exec for the codex model', () => {
       const { command, commandArgs } = buildCommand('codex', 'PROMPT');
       expect(command).toBe('codex');
-      expect(commandArgs).toEqual(['exec', 'PROMPT']);
+      expect(commandArgs).toEqual(['exec', '--skip-git-repo-check', 'PROMPT']);
     });
   });
 
@@ -223,19 +224,18 @@ describe('AgentKickoffManager.kickoff', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/Codex CLI is installed/);
     expect(result.appendedFooter).toBe(false);
-    // File should be untouched.
-    expect(readFileSync(mdPath, 'utf-8')).toBe('# Hello\n\nbody\n');
+    expect(readFileSync(mdPath, 'utf-8')).toContain('**Status:** Error');
   });
 
-  it('does not append a footer when the agent exits non-zero', async () => {
+  it('updates the footer when the agent exits non-zero', async () => {
     const fake = new FakeChild();
     const mgr = new AgentKickoffManager(((_: string, __: ReadonlyArray<string>) => fake as never) as never);
     fake.finish({ stdoutChunks: ['oops\n'], stderrChunks: ['boom\n'], exitCode: 2 });
     const result = await mgr.kickoff({ absPath: mdPath, instruction: 'go', model: 'claude' });
     expect(result.ok).toBe(false);
-    expect(result.appendedFooter).toBe(false);
+    expect(result.appendedFooter).toBe(true);
     expect(result.error).toMatch(/exited with code 2/);
-    expect(readFileSync(mdPath, 'utf-8')).toBe('# Hello\n\nbody\n');
+    expect(readFileSync(mdPath, 'utf-8')).toContain('**Status:** Error');
   });
 
   it('emits progress events with stdout chunks', async () => {
@@ -246,6 +246,36 @@ describe('AgentKickoffManager.kickoff', () => {
     fake.finish({ stdoutChunks: ['hello ', 'world\n'], exitCode: 0 });
     await mgr.kickoff({ absPath: mdPath, instruction: 'go', model: 'claude' });
     expect(chunks.join('')).toBe('hello world\n');
+  });
+
+  it('spawns with stdin ignored so CLI tools do not wait for piped input', async () => {
+    const fake = new FakeChild();
+    let stdio: unknown;
+    const mgr = new AgentKickoffManager(((_: string, __: ReadonlyArray<string>, options: SpawnOptions) => {
+      stdio = options.stdio;
+      return fake as never;
+    }) as never);
+    fake.finish({ stdoutChunks: ['done\n'], exitCode: 0 });
+    await mgr.kickoff({ absPath: mdPath, instruction: 'go', model: 'codex' });
+    expect(stdio).toEqual(['ignore', 'pipe', 'pipe']);
+  });
+
+  it('start() returns before the child exits and emits status events', async () => {
+    const fake = new FakeChild();
+    const statuses: string[] = [];
+    const mgr = new AgentKickoffManager(((_: string, __: ReadonlyArray<string>) => fake as never) as never);
+    mgr.on('status', (event) => statuses.push(event.status));
+
+    const started = mgr.start({ absPath: mdPath, instruction: 'go', model: 'claude' });
+
+    expect(started.ok).toBe(true);
+    expect(mgr.getInFlightCount()).toBe(1);
+    expect(statuses).toContain('started');
+    fake.finish({ stdoutChunks: ['I updated the file.\n'], exitCode: 0 });
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
+    expect(statuses).toContain('done');
+    expect(mgr.getInFlightCount()).toBe(0);
   });
 
   it('cancel() sends SIGTERM to an in-flight run', async () => {
