@@ -3905,6 +3905,11 @@ const wikiAPI = {
     ipcRenderer.on('wiki:changed', handler);
     return () => ipcRenderer.removeListener('wiki:changed', handler);
   },
+  onPageDeleted: (callback: (relPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
+    ipcRenderer.on('wiki:deleted', handler);
+    return () => ipcRenderer.removeListener('wiki:deleted', handler);
+  },
   onOpenWikiPage: (callback: (relPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
     ipcRenderer.on('wiki:openPage', handler);

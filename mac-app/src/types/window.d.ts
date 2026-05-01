@@ -1737,6 +1737,7 @@ declare global {
     rename: (relPath: string, newName: string) => Promise<string | null>;
     deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
+    onPageDeleted: (callback: (relPath: string) => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
     onOpenScratchpad: (callback: (relPath: string, titleSuggestion?: string) => void) => () => void;
   }
