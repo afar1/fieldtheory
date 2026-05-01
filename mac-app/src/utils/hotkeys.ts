@@ -130,13 +130,19 @@ export function isModifierOnly(s: string): boolean {
   return s === 'Command' || s === 'Control' || s === 'Alt' || s === 'Shift';
 }
 
+export function isTextEntryElement(element: Element | null | undefined): boolean {
+  return element instanceof HTMLInputElement
+    || element instanceof HTMLTextAreaElement
+    || element instanceof HTMLSelectElement
+    || (element instanceof HTMLElement && element.isContentEditable);
+}
+
 /**
  * Let the browser/app handle Cmd+C when the user is interacting with editable
  * content or has an actual text selection.
  */
 export function shouldDeferCopyShortcutToNative(): boolean {
-  const activeElement = document.activeElement as HTMLElement | null;
-  if (activeElement?.tagName === 'INPUT' || activeElement?.tagName === 'TEXTAREA' || activeElement?.isContentEditable) {
+  if (isTextEntryElement(document.activeElement)) {
     return true;
   }
 

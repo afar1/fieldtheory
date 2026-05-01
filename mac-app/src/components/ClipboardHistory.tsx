@@ -16,7 +16,7 @@ import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
-import { buildHotkeyString, hasNonShiftModifierHotkey, normalizeHotkeyForComparison } from '../utils/hotkeys';
+import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -2540,6 +2540,8 @@ export default function ClipboardHistory() {
       const hasCtrl = e.ctrlKey;
       const hasAlt = e.altKey;
       const key = e.key;
+      const activeElement = document.activeElement;
+      const isTypingInTextEntry = isTextEntryElement(activeElement);
 
       // Cmd+Shift+I: improve selected text, or the whole open markdown file.
       if (key === 'i' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
@@ -2556,9 +2558,9 @@ export default function ClipboardHistory() {
       }
 
       // If typing in the input, let it handle normal characters and Tab
-      if (document.activeElement === inputRef.current && 
-          key.length === 1 && 
-          !hasMeta && !hasCtrl && !hasAlt && 
+      if (activeElement === inputRef.current &&
+          key.length === 1 &&
+          !hasMeta && !hasCtrl && !hasAlt &&
           key !== 'ArrowUp' && key !== 'ArrowDown' && key !== 'Enter' && key !== 'Escape') {
         return; // Let input handle it naturally
       }
@@ -2569,7 +2571,7 @@ export default function ClipboardHistory() {
       // Prevent default for navigation keys.
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || 
           key === 'j' || key === 'k' || key === 'u' || key === 'h' || key === '?') {
-        if (!document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+        if (!isTypingInTextEntry) {
           e.preventDefault();
         }
       }
@@ -2612,7 +2614,7 @@ export default function ClipboardHistory() {
       // / - Focus search input (like Gmail, Google)
       if (key === '/' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if already typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         e.preventDefault();
         inputRef.current?.focus();
         return;
@@ -2629,7 +2631,7 @@ export default function ClipboardHistory() {
       
       // D - Draw on image (open sketch editor on hovered/selected image OR preview image)
       if (key === 'd' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         // If preview is open with an image, draw on that
         if (preview && preview.type === 'image') {
@@ -2677,7 +2679,7 @@ export default function ClipboardHistory() {
       // S - Stack selected items (when multiple items are selected)
       if (key === 's' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         if (selectedIds.size > 1) {
           e.preventDefault();
@@ -2713,7 +2715,7 @@ export default function ClipboardHistory() {
       // M - Open DM modal to send selected item to a contact (disabled by feature flag).
       if (FEATURE_MESSAGE_SHORTCUT_ENABLED && key === 'm' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         e.preventDefault();
         
         // Load contacts for the modal.
@@ -2736,7 +2738,7 @@ export default function ClipboardHistory() {
       // F - Show feedback confirmation modal (in clipboard view), or open feedback view.
       if (key === 'f' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         e.preventDefault();
 
         // In clipboard view with a selected item, show confirmation modal.
@@ -2763,7 +2765,7 @@ export default function ClipboardHistory() {
       // X - Toggle selection on current item (Gmail-style)
       if (key === 'x' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         e.preventDefault();
         
         const selectedRow = listRows[selectedIndex];
@@ -2901,7 +2903,7 @@ export default function ClipboardHistory() {
           return;
         }
         // If search input is focused, blur it and select first item instead of closing
-        if (document.activeElement === inputRef.current) {
+        if (activeElement === inputRef.current) {
           e.preventDefault();
           inputRef.current?.blur();
           setSelectedIndex(0);
@@ -2932,7 +2934,7 @@ export default function ClipboardHistory() {
           return;
         }
         // Skip if typing in other inputs (not the search input).
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         e.preventDefault();
         setKeyboardNavActive(true);
@@ -2960,7 +2962,7 @@ export default function ClipboardHistory() {
       // K/ArrowUp - Move selection up (Gmail-style)
       if (key === 'ArrowUp' || (key === 'k' && !hasMeta && !hasCtrl && !hasAlt)) {
         // Skip if typing in input.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         e.preventDefault();
         
@@ -2998,7 +3000,7 @@ export default function ClipboardHistory() {
       // U - Unstack the selected stack, or unstack hovered image
       if (key === 'u' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         // If hovering over an image in a stack, unstack just that image
         if (hoveredImageId !== null) {
@@ -3040,7 +3042,7 @@ export default function ClipboardHistory() {
       // E or H - Toggle "Show more" / "Hide" expansion on selected row(s)
       if ((key === 'e' || key === 'h') && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         e.preventDefault();
         
@@ -3067,7 +3069,7 @@ export default function ClipboardHistory() {
       // Delete / Backspace - Delete selected item.
       if (key === 'Delete' || key === 'Backspace') {
         // Skip if typing in input.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
         
         e.preventDefault();
         const selectedRow = listRows[selectedIndex];
@@ -3104,7 +3106,7 @@ export default function ClipboardHistory() {
       // t: Share to Team - share selected items, stack, or multi-selected items.
       if (key === 't' && !hasMeta && !hasCtrl && !hasShift) {
         // Skip if typing in input.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) return;
+        if (isTypingInTextEntry) return;
 
         e.preventDefault();
         (async () => {
@@ -3137,7 +3139,7 @@ export default function ClipboardHistory() {
 
       if (key === 'Enter' && !hasShift && !hasMeta) {
         // Skip if user is typing in an input field - let Enter submit forms naturally.
-        if (document.activeElement?.tagName?.match(/INPUT|TEXTAREA/)) {
+        if (isTypingInTextEntry) {
           return;
         }
         
@@ -3312,13 +3314,8 @@ export default function ClipboardHistory() {
       
       // Spacebar - Quick Look style preview (images or text)
       if (e.key === ' ') {
-        const activeElement = document.activeElement;
-        const isTypingInInput = activeElement?.tagName === 'INPUT' || 
-                                activeElement?.tagName === 'TEXTAREA' ||
-                                (activeElement as HTMLElement)?.isContentEditable;
-        
         // If typing in an input, let spacebar work normally.
-        if (isTypingInInput) {
+        if (isTypingInTextEntry) {
           return;
         }
         
