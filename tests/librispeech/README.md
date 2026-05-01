@@ -26,16 +26,11 @@ performance of whisper.cpp on LibriSpeech corpus.
    $ make get-audio
    ```
 
-3. Set up the environment to compute WER score.
+3. Set up the environment and run the benchmark test.
 
    ```
    $ uv sync --extra test
-   ```
-
-4. Run the benchmark test.
-
-   ```
-   $ make
+   $ uv run --extra test make
    ```
 
 ## How-to guides
