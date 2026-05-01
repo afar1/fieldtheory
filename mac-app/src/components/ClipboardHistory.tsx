@@ -16,7 +16,7 @@ import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
-import { buildHotkeyString, normalizeHotkeyForComparison } from '../utils/hotkeys';
+import { buildHotkeyString, hasNonShiftModifierHotkey, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -371,6 +371,7 @@ export default function ClipboardHistory() {
       if (event.repeat) return;
       const configuredHotkey = scratchpadHotkeyRef.current;
       if (!configuredHotkey) return;
+      if (!hasNonShiftModifierHotkey(configuredHotkey)) return;
       if (normalizeHotkeyForComparison(buildHotkeyString(event)) !== configuredHotkey) return;
       event.preventDefault();
       event.stopPropagation();
