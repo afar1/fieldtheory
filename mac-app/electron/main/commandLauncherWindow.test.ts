@@ -347,6 +347,55 @@ describe('CommandLauncherWindow.hide()', () => {
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
+  it('lets external command invocation blur hide without re-activating previous app', () => {
+    (launcher as any).window = null;
+    launcher.preload();
+    (launcher as any).previousApp = { bundleId: 'com.apple.Safari', name: 'Safari' };
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    const blurHandler = mockWindow.on.mock.calls.find(([event]) => event === 'blur')?.[1];
+
+    launcher.suppressActivationForExternalInvocation();
+    blurHandler?.();
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
+  it('clears external invocation suppression after the hidden window consumes it', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+
+    launcher.suppressActivationForExternalInvocation();
+    launcher.hide();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+
+    mockWindow.hide.mockClear();
+    mockWindow.isVisible.mockReturnValue(true);
+    launcher.hide();
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
+  });
+
+  it('clears stale external invocation suppression before a fresh show', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.apple.Safari', name: 'Safari' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const freshLauncher = new CommandLauncherWindow(nativeHelper as any);
+    (freshLauncher as any).window = mockWindow;
+    const activatePreviousApp = vi.spyOn(freshLauncher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+
+    freshLauncher.suppressActivationForExternalInvocation();
+    await freshLauncher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+    freshLauncher.hide();
+
+    expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
+    expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
+  });
+
   it('falls back to app.hide() when no previous app is known', () => {
     (launcher as any).previousApp = null;
 

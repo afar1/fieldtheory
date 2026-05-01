@@ -52,6 +52,7 @@ import {
 } from '../utils/markdownUrlPaste';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
+import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 import {
   MARKDOWN_EDITOR_OPTIONS,
@@ -59,7 +60,10 @@ import {
   restoreMarkdownEditor,
   type MarkdownEditor as MarkdownEditorChoice,
 } from '../utils/markdownEditor';
-import MarkdownCodeEditor, { type MarkdownCodeEditorHandle } from './MarkdownCodeEditor';
+import MarkdownCodeEditor, {
+  type MarkdownCodeEditorHandle,
+  type MarkdownCodeEditorSelectionSnapshot,
+} from './MarkdownCodeEditor';
 import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import '../utils/scrollDiagnostics.bootstrap';
@@ -569,6 +573,53 @@ export function getCarrotListTabEdit(
   };
 }
 
+export function getMarkdownListToggleEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  kind: 'ordered' | 'unordered',
+  unorderedMarker: LibrarianUnorderedListMarker = 'dash',
+): MarkdownTextEdit | null {
+  const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+
+  const orderedRe = /^(\s*)(\d+)\.\s/;
+  const unorderedRe = /^(\s*)[-*+]\s/;
+  const carrotRe = /^(\s*)›+\s/;
+
+  const nonBlank = lines.filter((line) => line.trim().length > 0);
+  const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
+    kind === 'ordered' ? orderedRe.test(line) : (unorderedRe.test(line) || carrotRe.test(line))
+  ));
+
+  let counter = 1;
+  const transformed = lines.map((line) => {
+    if (line.trim().length === 0) return line;
+    const orderedMatch = line.match(orderedRe);
+    const unorderedMatch = line.match(unorderedRe);
+    const carrotMatch = line.match(carrotRe);
+    const stripped = orderedMatch
+      ? line.slice(orderedMatch[0].length)
+      : unorderedMatch
+      ? line.slice(unorderedMatch[0].length)
+      : carrotMatch
+      ? line.slice(carrotMatch[0].length)
+      : line;
+    if (allMarked) return stripped;
+    if (kind === 'ordered') return `${counter++}. ${stripped}`;
+    return unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
+  });
+
+  const nextBlock = transformed.join('\n');
+  if (nextBlock === block) return null;
+  return {
+    nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+    selectionStart: lineStart,
+    selectionEnd: lineStart + nextBlock.length,
+  };
+}
+
 export function toggleMarkdownTaskLine(content: string, text: string, checked: boolean): string {
   const target = text.trim();
   if (!target) return content;
@@ -1021,6 +1072,17 @@ export function rankMarkdownWikiLinkSuggestions(
     .sort((a, b) => a.score - b.score || a.item.title.localeCompare(b.item.title))
     .slice(0, limit)
     .map((entry) => entry.item);
+}
+
+export function getMarkdownWikiLinkCompletionState(
+  markdown: string,
+  selectionStart: number,
+  selectionEnd: number,
+  position: { top: number; left: number } | null,
+): MarkdownWikiLinkCompletionState | null {
+  if (!position) return null;
+  const completion = getActiveMarkdownWikiLinkCompletion(markdown, selectionStart, selectionEnd);
+  return completion ? { ...completion, ...position } : null;
 }
 
 export function getScrollRatio(scrollTop: number, scrollHeight: number, clientHeight: number): number {
@@ -2595,39 +2657,93 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setMarkdownTitleSuggestion({ ...pending, ...position });
   }, [activeReading?.path, contentMode, editContent, markdownEditorChoice]);
 
+  const applyMarkdownCodeEditorTextEdit = useCallback((
+    edit: MarkdownTextEdit,
+    options: { preserveCompletion?: boolean } = {},
+  ) => {
+    const editor = markdownCodeEditorRef.current;
+    const currentValue = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange() ?? { start: 0, end: 0 };
+    markdownEditUndoStackRef.current.push({
+      value: currentValue,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+    });
+    markWritingActive();
+    setEditContent(edit.nextValue);
+    setMarkdownUrlPasteChoice(null);
+    if (!options.preserveCompletion) setMarkdownWikiLinkCompletion(null);
+    scheduleEditorSessionPersist();
+    requestAnimationFrame(() => {
+      const nextEditor = markdownCodeEditorRef.current;
+      if (!nextEditor || nextEditor.getValue() !== edit.nextValue) return;
+      nextEditor.focus({ preventScroll: true });
+      nextEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+    });
+  }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
+
   const updateMarkdownWikiLinkCompletion = useCallback((
     editor: HTMLTextAreaElement,
     valueOverride?: string,
   ) => {
     const value = valueOverride ?? editor.value;
-    const completion = getActiveMarkdownWikiLinkCompletion(
+    const activeCompletion = getActiveMarkdownWikiLinkCompletion(
       value,
       editor.selectionStart,
       editor.selectionEnd,
     );
-    if (!completion) {
+    if (!activeCompletion) {
       setMarkdownWikiLinkCompletion(null);
       return;
     }
 
-    const position = getMarkdownWikiLinkCompletionPosition(editor, completion);
+    const position = getMarkdownWikiLinkCompletionPosition(editor, activeCompletion);
     if (!position) {
       setMarkdownWikiLinkCompletion(null);
       return;
     }
 
-    setMarkdownWikiLinkCompletion({ ...completion, ...position });
+    setMarkdownWikiLinkCompletion({ ...activeCompletion, ...position });
   }, []);
+
+  const updateMarkdownCodeEditorWikiLinkCompletion = useCallback((
+    snapshot: MarkdownCodeEditorSelectionSnapshot,
+  ) => {
+    const autoCloseEdit = snapshot.docChanged && snapshot.inputType === 'insertText' && snapshot.inputData === '['
+      ? getMarkdownWikiLinkAutoCloseEdit(snapshot.value, snapshot.selectionStart, snapshot.selectionEnd)
+      : null;
+    if (autoCloseEdit) {
+      applyMarkdownCodeEditorTextEdit(autoCloseEdit, { preserveCompletion: true });
+      setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+        autoCloseEdit.nextValue,
+        autoCloseEdit.selectionStart,
+        autoCloseEdit.selectionEnd,
+        snapshot.caretPosition,
+      ));
+      return;
+    }
+
+    setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      snapshot.caretPosition,
+    ));
+  }, [applyMarkdownCodeEditorTextEdit]);
 
   const applyMarkdownWikiLinkSuggestion = useCallback((
     suggestion: MarkdownWikiLinkSuggestion,
     completionFallback: MarkdownWikiLinkCompletion | null,
   ) => {
-    const editor = markdownEditorRef.current;
-    const currentValue = editor?.value ?? editContent;
-    const liveCompletion = editor
-      ? getActiveMarkdownWikiLinkCompletion(currentValue, editor.selectionStart, editor.selectionEnd)
-      : null;
+    const codeEditor = markdownEditorChoice === 'codemirror' ? markdownCodeEditorRef.current : null;
+    const textEditor = markdownEditorRef.current;
+    const currentValue = codeEditor?.getValue() ?? textEditor?.value ?? editContent;
+    const codeSelection = codeEditor?.getSelectionRange();
+    const liveCompletion = codeEditor && codeSelection
+      ? getActiveMarkdownWikiLinkCompletion(currentValue, codeSelection.start, codeSelection.end)
+      : textEditor
+        ? getActiveMarkdownWikiLinkCompletion(currentValue, textEditor.selectionStart, textEditor.selectionEnd)
+        : null;
     const completion = liveCompletion ?? completionFallback;
     if (!completion) return;
     const edit = getMarkdownWikiLinkCompletionReplacement(currentValue, completion, suggestion.title);
@@ -2641,14 +2757,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     scheduleEditorSessionPersist();
 
     requestAnimationFrame(() => {
-      const nextEditor = markdownEditorRef.current;
-      if (!nextEditor || nextEditor.value !== edit.nextValue) return;
-      nextEditor.focus({ preventScroll: true });
-      nextEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
-      updateMarkdownEditorFades(nextEditor);
-      smoothScrollMarkdownCaretIntoComfortView(nextEditor);
+      const nextCodeEditor = markdownCodeEditorRef.current;
+      if (markdownEditorChoice === 'codemirror' && nextCodeEditor) {
+        if (nextCodeEditor.getValue() !== edit.nextValue) return;
+        nextCodeEditor.focus({ preventScroll: true });
+        nextCodeEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+        return;
+      }
+
+      const nextTextEditor = markdownEditorRef.current;
+      if (!nextTextEditor || nextTextEditor.value !== edit.nextValue) return;
+      nextTextEditor.focus({ preventScroll: true });
+      nextTextEditor.setSelectionRange(edit.selectionStart, edit.selectionEnd);
+      updateMarkdownEditorFades(nextTextEditor);
+      smoothScrollMarkdownCaretIntoComfortView(nextTextEditor);
     });
-  }, [editContent, markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
+  }, [editContent, markdownEditorChoice, markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades]);
 
   const applyMarkdownTextInsertion = useCallback((text: string) => {
     if (!text) return;
@@ -2706,7 +2830,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const insertCurrentClipboardImagePath = useCallback(async () => {
     const imagePath = await window.clipboardAPI?.getClipboardImagePath?.();
-    if (imagePath) insertMarkdownText(imagePath);
+    if (imagePath) insertMarkdownText(formatLocalImageMarkdown(imagePath));
   }, [insertMarkdownText]);
 
   const applyMarkdownUrlPasteEdit = useCallback((pasteEdit: MarkdownUrlPasteEdit) => {
@@ -2734,6 +2858,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     if (!pastedText) return;
+
+    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
+    if (localImageMarkdown) {
+      e.preventDefault();
+      insertMarkdownText(localImageMarkdown);
+      return;
+    }
 
     const editor = e.currentTarget;
     const pasteEdit = getMarkdownUrlPasteEdit(
@@ -2772,63 +2903,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [markdownUrlPasteChoice, scheduleEditorSessionPersist, updateMarkdownWikiLinkCompletion]);
 
   const applyListToggle = useCallback((editor: HTMLTextAreaElement, kind: 'ordered' | 'unordered') => {
-    const value = editor.value;
-    const selStart = editor.selectionStart;
-    const selEnd = editor.selectionEnd;
-
-    const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selStart, selEnd);
-
-    const before = value.slice(0, lineStart);
-    const block = value.slice(lineStart, lineEnd);
-    const after = value.slice(lineEnd);
-    const lines = block.split('\n');
-
-    const orderedRe = /^(\s*)(\d+)\.\s/;
-    const unorderedRe = /^(\s*)[-*+]\s/;
-    const carrotRe = /^(\s*)›+\s/;
-
-    const nonBlank = lines.filter((l) => l.trim().length > 0);
-    const allMarked = nonBlank.length > 0 && nonBlank.every((l) => (
-      kind === 'ordered' ? orderedRe.test(l) : (unorderedRe.test(l) || carrotRe.test(l))
-    ));
-
-    let counter = 1;
-    const transformed = lines.map((line) => {
-      if (line.trim().length === 0) return line;
-      const orderedMatch = line.match(orderedRe);
-      const unorderedMatch = line.match(unorderedRe);
-      const carrotMatch = line.match(carrotRe);
-      const stripped = orderedMatch
-        ? line.slice(orderedMatch[0].length)
-        : unorderedMatch
-        ? line.slice(unorderedMatch[0].length)
-        : carrotMatch
-        ? line.slice(carrotMatch[0].length)
-        : line;
-      if (allMarked) return stripped;
-      if (kind === 'ordered') return `${counter++}. ${stripped}`;
-      return unorderedListMarker === 'carrot' ? `${CARROT_LIST_MARKER} ${stripped}` : `- ${stripped}`;
-    });
-
-    const nextBlock = transformed.join('\n');
-    if (nextBlock === block) return;
-    const nextValue = before + nextBlock + after;
-    const nextSelStart = lineStart;
-    const nextSelEnd = lineStart + nextBlock.length;
+    const edit = getMarkdownListToggleEdit(
+      editor.value,
+      editor.selectionStart,
+      editor.selectionEnd,
+      kind,
+      unorderedListMarker,
+    );
+    if (!edit) return;
     const scrollTop = editor.scrollTop;
 
     markdownEditUndoStackRef.current.push({
-      value,
-      selectionStart: selStart,
-      selectionEnd: selEnd,
+      value: editor.value,
+      selectionStart: editor.selectionStart,
+      selectionEnd: editor.selectionEnd,
     });
     markWritingActive();
-    setEditContent(nextValue);
+    setEditContent(edit.nextValue);
     scheduleEditorSessionPersist();
     requestAnimationFrame(() => {
       const el = markdownEditorRef.current;
-      if (!el || el.value !== nextValue) return;
-      el.setSelectionRange(nextSelStart, nextSelEnd);
+      if (!el || el.value !== edit.nextValue) return;
+      el.setSelectionRange(edit.selectionStart, edit.selectionEnd);
       el.scrollTop = scrollTop;
       updateMarkdownEditorFades(el);
     });
@@ -2876,6 +2972,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
     return true;
   }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades, updateMarkdownWikiLinkCompletion]);
+
+  const restoreMarkdownCodeEditorProgrammaticUndo = useCallback((): boolean => {
+    const snapshot = markdownEditUndoStackRef.current.pop();
+    if (!snapshot) return false;
+    markWritingActive();
+    setEditContent(snapshot.value);
+    setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
+    scheduleEditorSessionPersist();
+    requestAnimationFrame(() => {
+      const editor = markdownCodeEditorRef.current;
+      if (!editor || editor.getValue() !== snapshot.value) return;
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
+    });
+    return true;
+  }, [markWritingActive, scheduleEditorSessionPersist]);
 
   const applyPendingMarkdownTitleSuggestion = useCallback((
     currentValue: string,
@@ -3066,18 +3179,148 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ]);
 
   const handleMarkdownCodeEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
-    if (event.key !== 'Tab' || event.metaKey || event.ctrlKey || event.altKey) return false;
     const editor = markdownCodeEditorRef.current;
-    if (!editor) return false;
-    return applyPendingMarkdownTitleSuggestion(editor.getValue(), (nextValue, nextOffset) => {
-      requestAnimationFrame(() => {
-        const nextEditor = markdownCodeEditorRef.current;
-        if (!nextEditor || nextEditor.getValue() !== nextValue) return;
-        nextEditor.setSelectionRange(nextOffset, nextOffset);
-        nextEditor.focus({ preventScroll: true });
-      });
-    });
-  }, [applyPendingMarkdownTitleSuggestion]);
+    const value = editor?.getValue() ?? editContent;
+    const selection = editor?.getSelectionRange() ?? { start: 0, end: 0 };
+
+    if (event.key.toLowerCase() === 'z' && event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
+      if (restoreMarkdownCodeEditorProgrammaticUndo()) {
+        event.preventDefault();
+        return true;
+      }
+    }
+
+    if (isMarkdownTaskToggleShortcut(event)) {
+      const edit = getMarkdownTaskToggleEdit(value, selection.start, selection.end);
+      if (!edit) return false;
+      event.preventDefault();
+      applyMarkdownCodeEditorTextEdit(edit);
+      return true;
+    }
+
+    if (event.key.toLowerCase() === 'a' && event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
+      const range = getMarkdownBodySelectionRange(value);
+      if (range && (selection.start !== range.start || selection.end !== range.end)) {
+        event.preventDefault();
+        editor?.setSelectionRange(range.start, range.end);
+        scheduleEditorSessionPersist();
+        return true;
+      }
+    }
+
+    if (event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
+      if (isMarkdownTaskShortcut(event)) {
+        const edit = getMarkdownTaskShortcutEdit(value, selection.start, selection.end);
+        if (!edit) return false;
+        event.preventDefault();
+        applyMarkdownCodeEditorTextEdit(edit);
+        return true;
+      }
+
+      if (event.code === 'Digit7' || event.code === 'Digit8') {
+        const edit = getMarkdownListToggleEdit(
+          value,
+          selection.start,
+          selection.end,
+          event.code === 'Digit7' ? 'ordered' : 'unordered',
+          unorderedListMarker,
+        );
+        if (!edit) return false;
+        event.preventDefault();
+        applyMarkdownCodeEditorTextEdit(edit);
+        return true;
+      }
+    }
+
+    const completion = markdownWikiLinkCompletion;
+    if (completion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownWikiLinkCompletion(null);
+        return true;
+      }
+
+      if (markdownWikiLinkSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index + 1) % markdownWikiLinkSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index - 1 + markdownWikiLinkSuggestions.length) % markdownWikiLinkSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const suggestion = markdownWikiLinkSuggestions[
+            Math.min(markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length - 1)
+          ];
+          applyMarkdownWikiLinkSuggestion(suggestion, completion);
+          return true;
+        }
+      }
+    }
+
+    if (event.key === 'Enter') {
+      const carrotEdit = getCarrotListEnterEdit(value, selection.start, selection.end);
+      if (carrotEdit) {
+        event.preventDefault();
+        setUnorderedListMarker('carrot');
+        applyMarkdownCodeEditorTextEdit(carrotEdit);
+        return true;
+      }
+
+      const listEdit = getMarkdownListEnterEdit(value, selection.start, selection.end);
+      if (listEdit) {
+        event.preventDefault();
+        applyMarkdownCodeEditorTextEdit(listEdit);
+        return true;
+      }
+    }
+
+    if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      if (applyPendingMarkdownTitleSuggestion(value, (nextValue, nextOffset) => {
+        requestAnimationFrame(() => {
+          const nextEditor = markdownCodeEditorRef.current;
+          if (!nextEditor || nextEditor.getValue() !== nextValue) return;
+          nextEditor.setSelectionRange(nextOffset, nextOffset);
+          nextEditor.focus({ preventScroll: true });
+        });
+      })) {
+        event.preventDefault();
+        return true;
+      }
+
+      const edit = getCarrotListTabEdit(value, selection.start, selection.end, event.shiftKey ? 'out' : 'in');
+      if (edit) {
+        event.preventDefault();
+        setUnorderedListMarker('carrot');
+        applyMarkdownCodeEditorTextEdit(edit);
+        return true;
+      }
+    }
+
+    return false;
+  }, [
+    applyMarkdownCodeEditorTextEdit,
+    applyMarkdownWikiLinkSuggestion,
+    applyPendingMarkdownTitleSuggestion,
+    editContent,
+    markdownWikiLinkCompletion,
+    markdownWikiLinkSuggestionIndex,
+    markdownWikiLinkSuggestions,
+    restoreMarkdownCodeEditorProgrammaticUndo,
+    scheduleEditorSessionPersist,
+    unorderedListMarker,
+  ]);
 
   const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const editor = e.currentTarget;
@@ -5013,6 +5256,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         scheduleEditorSessionPersist();
                       }}
                       onKeyDown={handleMarkdownCodeEditorKeyDown}
+                      onSelectionChange={updateMarkdownCodeEditorWikiLinkCompletion}
                       onScroll={() => scheduleEditorSessionPersist()}
                       fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
                       fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
@@ -5172,7 +5416,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     {overlay.text}
                   </span>
                 ))}
-                {markdownEditorChoice === 'textarea' && markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
+                {markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
                   <div
                     role="listbox"
                     aria-label="Wiki link suggestions"

@@ -18,7 +18,7 @@ describe('isAllowedMarkdownExt', () => {
 });
 
 describe('resolveIncomingMarkdownPath', () => {
-  const wikiRoot = '/users/me/.ft-bookmarks/md';
+  const wikiRoot = '/users/me/.fieldtheory/library';
   const identityRealpath = (p: string) => p;
   const throwingRealpath = () => { throw new Error('ENOENT'); };
 
@@ -66,7 +66,7 @@ describe('resolveIncomingMarkdownPath', () => {
 
   it('does not match sibling directories that share a prefix with the wiki root', () => {
     // e.g. wikiRoot = /x/md, sibling = /x/md-backup/... should NOT be treated as wiki.
-    const sibling = '/users/me/.ft-bookmarks/md-backup/note.md';
+    const sibling = '/users/me/.fieldtheory/library-backup/note.md';
     expect(resolveIncomingMarkdownPath(sibling, wikiRoot, identityRealpath)).toEqual({
       kind: 'external',
       absPath: sibling,

@@ -10,7 +10,7 @@
  * - Refresh to fetch latest commands
  */
 
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   Vibration,
-  ActivityIndicator,
   TextInput,
   Keyboard,
 } from 'react-native';
@@ -37,26 +36,24 @@ interface CommandsListProps {
   onUseCommand?: (text: string) => void;
   /** Opacity 0..1 applied to the search header so it fades during a page swipe. */
   searchOpacity?: number;
+  /** True when the Commands page is selected, not merely mounted as a pager neighbor. */
+  isActive?: boolean;
   /** Notifies parent of pull-to-create state so the bottom bar can swap to Cancel/Save. */
   onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
 }
 
-export function CommandsList({ onUseCommand, searchOpacity = 1, onCreateModeChange }: CommandsListProps) {
+export function CommandsList({ onUseCommand, searchOpacity = 1, isActive = false, onCreateModeChange }: CommandsListProps) {
   const colors = useThemeColors();
+  const hasFetchedRef = useRef(false);
   const [commands, setCommands] = useState<Command[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  useEffect(() => {
-    loadCommands();
-    loadFavorites();
-  }, []);
-
-  const loadCommands = async () => {
+  const loadCommands = useCallback(async () => {
     try {
       setIsLoading(true);
       const fetched = await CommandsService.fetchCommands();
@@ -66,7 +63,30 @@ export function CommandsList({ onUseCommand, searchOpacity = 1, onCreateModeChan
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    CommandsService.getCachedCommands()
+      .then((cached) => {
+        if (mounted) {
+          setCommands(cached);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to load cached commands:', error);
+      });
+    loadFavorites();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!isActive || hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+    loadCommands();
+  }, [isActive, loadCommands]);
 
   const loadFavorites = async () => {
     try {
@@ -291,7 +311,7 @@ ${command.content}
               {commands.length} command{commands.length !== 1 ? 's' : ''} synced
             </Text>
             <Text style={[styles.headerSubtext, { color: colors.textSecondary }]}>
-              Say "use the [name] command" while recording
+              {isLoading ? 'Refreshing commands...' : 'Say "use the [name] command" while recording'}
             </Text>
           </View>
         ) : null}
@@ -304,19 +324,10 @@ ${command.content}
       isSearching,
       matchCount,
       commands.length,
+      isLoading,
       colors,
     ],
   );
-
-  // Loading guard placed AFTER all hooks so hook order is stable across renders.
-  if (isLoading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#6366F1" />
-        <Text style={styles.loadingText}>Loading commands...</Text>
-      </View>
-    );
-  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.bgPage }]}>
@@ -341,7 +352,9 @@ ${command.content}
             <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
               {searchQuery
                 ? 'Try a different search term.'
-                : `Enable mobile sync for command directories\nin the Mac app Settings > Commands`}
+                : isLoading
+                  ? 'Checking for synced commands...'
+                  : `Enable mobile sync for command directories\nin the Mac app Settings > Commands`}
             </Text>
           </View>
         }
@@ -356,17 +369,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#F4F5F7',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#F4F5F7',
-  },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 16,
-    color: '#6B7280',
   },
   searchHeader: {
     paddingHorizontal: 4,

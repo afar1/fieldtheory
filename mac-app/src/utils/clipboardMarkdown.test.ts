@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import type { ClipboardItem } from '../types/clipboard';
 import {
   buildClipboardItemsMarkdown,
+  formatLocalImageMarkdown,
+  formatPastedLocalImageMarkdown,
   localFilePathToMarkdownUrl,
 } from './clipboardMarkdown';
 
@@ -66,5 +68,19 @@ describe('clipboard markdown export', () => {
 
   it('converts local paths with spaces to file urls', () => {
     expect(localFilePathToMarkdownUrl('/tmp/Figure 1.png')).toBe('file:///tmp/Figure%201.png');
+  });
+
+  it('formats a local image path as a markdown image embed', () => {
+    expect(formatLocalImageMarkdown('/tmp/Figure 1.png', 'Figure A')).toBe('![Figure A](<file:///tmp/Figure%201.png>)');
+  });
+
+  it('converts pasted local image paths into markdown image embeds', () => {
+    expect(formatPastedLocalImageMarkdown(
+      '/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-05-01 at 11.57.03 AM.png',
+    )).toBe('![Image](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%202026-05-01%20at%2011.57.03%20AM.png>)');
+  });
+
+  it('does not convert non-image local paths', () => {
+    expect(formatPastedLocalImageMarkdown('/Users/afar/notes/example.md')).toBeNull();
   });
 });
