@@ -3102,8 +3102,8 @@ const commandsAPI = {
   },
 
   // Close the command launcher window.
-  launcherClose: (): void => {
-    ipcRenderer.send('command-launcher:close');
+  launcherClose: (options?: { skipActivation?: boolean }): void => {
+    ipcRenderer.send('command-launcher:close', options);
   },
 
   // Write diagnostic breadcrumbs to the command launcher trace log.

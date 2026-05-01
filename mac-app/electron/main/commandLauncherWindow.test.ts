@@ -96,23 +96,44 @@ describe('CommandLauncherWindow.show()', () => {
     });
   });
 
-  it('uses cached frontmost window bounds without waiting for fresh bounds', async () => {
+  it('prefers fresh frontmost window bounds over cached bounds', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({
         bundleId: 'com.apple.Safari',
         name: 'Safari',
         windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
       })),
-      getFrontmostWindowBounds: vi.fn(() => {
-        throw new Error('should not fetch fresh bounds before showing');
-      }),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 1400, y: 120, width: 1100, height: 900 })),
     };
     const launcher = new CommandLauncherWindow(nativeHelper as any);
     (launcher as any).window = mockWindow;
 
     await launcher.show();
 
-    expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
+    expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
+    expect(mockWindow.setBounds).toHaveBeenCalledWith({
+      x: Math.round(1400 + (1100 - LAUNCHER_WIDTH) / 2),
+      y: 343,
+      width: LAUNCHER_WIDTH,
+      height: LAUNCHER_COLLAPSED_HEIGHT,
+    });
+  });
+
+  it('falls back to cached frontmost window bounds when fresh bounds are unavailable', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.apple.Safari',
+        name: 'Safari',
+        windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
+      })),
+      getFrontmostWindowBounds: vi.fn(() => null),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show();
+
+    expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
       y: 273,
@@ -199,6 +220,22 @@ describe('CommandLauncherWindow.preload()', () => {
       webPreferences: expect.objectContaining({
         additionalArguments: ['--field-theory-dark-mode=true'],
       }),
+      backgroundColor: '#00000000',
+    }));
+  });
+
+  it('uses a transparent launcher background so rounded corners stay clean', () => {
+    const launcher = new CommandLauncherWindow(undefined, {
+      getInitialDarkMode: () => false,
+    });
+
+    launcher.preload();
+
+    expect(BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({
+      backgroundColor: '#00000000',
+      webPreferences: expect.objectContaining({
+        additionalArguments: ['--field-theory-dark-mode=false'],
+      }),
     }));
   });
 });
@@ -231,6 +268,16 @@ describe('CommandLauncherWindow.hide()', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
 
     launcher.hide(true);
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
+  it('honors renderer close requests that skip activation', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+
+    mockIpcMainHandlers.get('command-launcher:close')?.({}, { skipActivation: true });
 
     expect(mockWindow.hide).toHaveBeenCalled();
     expect(activatePreviousApp).not.toHaveBeenCalled();
@@ -363,6 +410,7 @@ describe('CommandLauncherWindow preview IPC', () => {
 
     expect(BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({
       hasShadow: false,
+      backgroundColor: '#00000000',
     }));
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 700,
