@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { buildHotkeyString, formatHotkeyDisplay, normalizeHotkeyForComparison, shouldDeferCopyShortcutToNative } from './hotkeys';
+import { buildHotkeyString, formatHotkeyDisplay, hasNonShiftModifierHotkey, normalizeHotkeyForComparison, shouldDeferCopyShortcutToNative } from './hotkeys';
 
 describe('buildHotkeyString', () => {
   it('builds hotkeys from physical key codes', () => {
@@ -35,6 +35,15 @@ describe('normalizeHotkeyForComparison', () => {
   it('normalizes modifier aliases and order', () => {
     expect(normalizeHotkeyForComparison('Control+Option+Command+Space')).toBe('Command+Control+Alt+Space');
     expect(normalizeHotkeyForComparison('cmd+ctrl+option+space')).toBe('Command+Control+Alt+Space');
+  });
+});
+
+describe('hasNonShiftModifierHotkey', () => {
+  it('requires Command, Control, or Alt', () => {
+    expect(hasNonShiftModifierHotkey('H')).toBe(false);
+    expect(hasNonShiftModifierHotkey('Shift+H')).toBe(false);
+    expect(hasNonShiftModifierHotkey('Command+H')).toBe(true);
+    expect(hasNonShiftModifierHotkey('Control+Option+Command+Space')).toBe(true);
   });
 });
 
