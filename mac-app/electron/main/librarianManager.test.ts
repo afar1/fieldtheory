@@ -33,6 +33,7 @@ import {
   normalizeSeededReadmes,
   parseMarkdownHeader,
   parseMarkdownTodoState,
+  type ReadingMeta,
   type WikiNode,
 } from './librarianManager';
 import { readDocumentVersion } from './documentSaveGuard';
@@ -441,8 +442,34 @@ describe('recursive wiki tree scan', () => {
     expect(manager.renameWikiPage('note', 'Better Note')).toBe('Better Note');
     expect(fs.existsSync(path.join(root, 'note.md'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'Better Note.md'))).toBe(true);
-    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:renamed', expect.objectContaining({
+      oldRelPath: 'note',
+      newRelPath: 'Better Note',
+      oldAbsPath: path.join(root, 'note.md'),
+      newAbsPath: path.join(root, 'Better Note.md'),
+      builtin: true,
+    }));
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
+  });
+
+  it('patches the cached wiki tree when a wiki page is renamed', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'note.md'), '# Note\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string }> }>;
+      renameWikiPage: (relPath: string, newName: string) => string | null;
+      startWikiWatcher: () => void;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.startWikiWatcher = vi.fn();
+    manager.emit = vi.fn();
+
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/note']);
+    expect(manager.renameWikiPage('entries/note', 'Better Note')).toBe('entries/Better Note');
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/Better Note']);
   });
 
   it('renames .markdown wiki pages without changing their extension', () => {
@@ -797,6 +824,45 @@ describe('recursive wiki tree scan', () => {
     expect(trashItem).toHaveBeenCalledWith(readingPath);
     expect(manager.cache.has(readingPath)).toBe(false);
     expect(emit).toHaveBeenCalledWith('reading-removed', readingPath);
+  });
+
+  it('updates the watched reading cache when a reading is renamed', () => {
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'reading.md');
+    const newPath = path.join(root, 'renamed.md');
+    fs.writeFileSync(oldPath, '# Reading\n');
+    fs.renameSync(oldPath, newPath);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, ReadingMeta>;
+      saveIndex: () => void;
+      emit: typeof emit;
+      recordWatchedReadingRename: (oldAbsPath: string, newAbsPath: string) => ReadingMeta | null;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map([[oldPath, {
+      path: oldPath,
+      title: 'Reading',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: Date.now(),
+      mtime: Date.now(),
+    }]]);
+    manager.saveIndex = vi.fn();
+    manager.emit = emit;
+
+    const meta = manager.recordWatchedReadingRename(oldPath, newPath);
+
+    expect(meta?.path).toBe(newPath);
+    expect(manager.cache.has(oldPath)).toBe(false);
+    expect(manager.cache.has(newPath)).toBe(true);
+    expect(emit).toHaveBeenCalledWith('reading-renamed', expect.objectContaining({
+      oldPath,
+      reading: expect.objectContaining({ path: newPath, title: 'Reading' }),
+    }));
   });
 
   it('moves wiki pages into another folder and emits stale relPath deletion', () => {

@@ -80,7 +80,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type WikiNode } from './librarianManager';
+import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
@@ -705,13 +705,23 @@ async function saveAndApplyHotMicIslandGeometry(
   const next = normalizeHotMicIslandGeometry({ ...current, ...geometry });
 
   if (preferencesManager) {
-    await preferencesManager.save({
-      hotMicIslandNotchWidthOverride: next.notchWidthOverride,
-      hotMicIslandPillWidth: next.pillWidth,
-      hotMicIslandPillHeight: next.pillHeight,
-      hotMicIslandOffsetX: next.offsetX,
-      hotMicIslandOffsetY: next.offsetY,
-    });
+    const prefsToSave: Parameters<PreferencesManager['save']>[0] = {};
+    if (Object.prototype.hasOwnProperty.call(geometry, 'notchWidthOverride')) {
+      prefsToSave.hotMicIslandNotchWidthOverride = next.notchWidthOverride;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'pillWidth')) {
+      prefsToSave.hotMicIslandPillWidth = next.pillWidth;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'pillHeight')) {
+      prefsToSave.hotMicIslandPillHeight = next.pillHeight;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'offsetX')) {
+      prefsToSave.hotMicIslandOffsetX = next.offsetX;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'offsetY')) {
+      prefsToSave.hotMicIslandOffsetY = next.offsetY;
+    }
+    await preferencesManager.save(prefsToSave);
   }
 
   dynamicIslandManager?.setGeometryTuning(next);
@@ -2296,6 +2306,23 @@ function setupLibrarianIPCHandlers(): void {
         const content = fs.readFileSync(nextPath, 'utf-8');
         const stats = fs.statSync(nextPath);
         const title = stripMarkdownFileExtension(path.basename(nextPath));
+        const libraryRoot = librarianManager?.getLibraryRoots().find((root) => {
+          if (root.builtin) return false;
+          const relative = path.relative(root.path, canonical);
+          return relative === '' || (!!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+        });
+        if (libraryRoot && librarianManager) {
+          const event: LibraryRenameEvent = {
+            rootPath: libraryRoot.path,
+            oldRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, canonical).split(path.sep).join('/')),
+            newRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, nextPath).split(path.sep).join('/')),
+            oldAbsPath: canonical,
+            newAbsPath: nextPath,
+            builtin: false,
+          };
+          librarianManager.recordLibraryRename(event);
+        }
+        librarianManager?.recordWatchedReadingRename(canonical, nextPath);
         BrowserWindow.getAllWindows().forEach((w) => {
           if (!w.isDestroyed()) {
             w.webContents.send('library:changed');
@@ -2329,10 +2356,25 @@ function setupLibrarianIPCHandlers(): void {
         }
       });
     });
+    librarianManager.on('wiki:renamed', (event: LibraryRenameEvent) => {
+      librarySyncService?.scheduleSync();
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) {
+          w.webContents.send('wiki:renamed', event);
+          w.webContents.send('library:renamed', event);
+        }
+      });
+    });
     librarianManager.on('library:changed', () => {
       librarySyncService?.scheduleSync();
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('library:changed');
+      });
+    });
+    librarianManager.on('library:renamed', (event: LibraryRenameEvent) => {
+      librarySyncService?.scheduleSync();
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('library:renamed', event);
       });
     });
     // Auto-prune recent when a wiki page is trashed so stale entries drop
@@ -7370,6 +7412,14 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
+  librarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('librarian:readingRenamed', event);
+      }
+    });
+  });
+
   // Broadcast reading-removed events to all windows
   librarianManager.on('reading-removed', (filePath: string) => {
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -8516,7 +8566,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getIslandGeometry', () => {
-      return getHotMicIslandGeometryFromPreferences();
+      return dynamicIslandManager?.getGeometryTuning() ?? getHotMicIslandGeometryFromPreferences();
     });
 
     ipcMain.handle('hotmic:setIslandGeometry', async (_event, geometry: Partial<DynamicIslandGeometryTuning>) => {
@@ -8544,7 +8594,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getIslandAutoHide', () => {
-      return preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false;
+      return dynamicIslandManager?.getAutoHideEnabled() ?? preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false;
     });
 
     ipcMain.handle('hotmic:setIslandAutoHide', async (_event, value: boolean) => {
