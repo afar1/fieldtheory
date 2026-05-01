@@ -21,10 +21,11 @@ interface LauncherPreviewThemeAPI {
 const commandsAPI = window.commandsAPI as unknown as LauncherPreviewCommandsAPI;
 const themeAPI = window.themeAPI as unknown as LauncherPreviewThemeAPI | undefined;
 const PREVIEW_PADDING = 20;
+const COMMAND_LAUNCHER_RADIUS = 16;
 
 function CommandLauncherPreview() {
   const [preview, setPreview] = useState<LauncherPreviewPayload | null>(null);
-  const [isDarkMode, setIsDarkMode] = useState(() => themeAPI?.initialTheme ?? false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean | null>(() => themeAPI?.initialTheme ?? null);
   const previewRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -49,7 +50,7 @@ function CommandLauncherPreview() {
   }, []);
 
   useLayoutEffect(() => {
-    if (!preview) return;
+    if (!preview || isDarkMode === null) return;
     const el = previewRef.current;
     if (!el) return;
 
@@ -68,7 +69,7 @@ function CommandLauncherPreview() {
       cancelAnimationFrame(rafId);
       resizeObserver?.disconnect();
     };
-  }, [preview]);
+  }, [preview, isDarkMode]);
 
   return (
     <div
@@ -84,7 +85,7 @@ function CommandLauncherPreview() {
         overflow: 'hidden',
       }}
     >
-      {preview && (
+      {preview && isDarkMode !== null && (
         <div
           ref={previewRef}
           style={{
@@ -93,7 +94,7 @@ function CommandLauncherPreview() {
             minHeight: 0,
             overflowY: 'auto',
             overscrollBehavior: 'contain',
-            borderRadius: '16px',
+            borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
           }}
         >
           {preview.kind === 'bookmark' ? (
