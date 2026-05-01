@@ -272,6 +272,24 @@ export class ClipboardHistoryWindow {
     this.window.webContents.send(channel);
   }
 
+  openScratchpad(payload: { relPath: string }): void {
+    if (!this.window || this.window.isDestroyed()) {
+      return;
+    }
+
+    const send = () => {
+      if (!this.window || this.window.isDestroyed()) return;
+      this.window.webContents.send('wiki:openScratchpad', payload);
+    };
+
+    if (this.window.webContents.isLoadingMainFrame()) {
+      this.window.webContents.once('did-finish-load', send);
+      return;
+    }
+
+    send();
+  }
+
   private activateApplicationForClipboardWindow(showInDock: boolean): void {
     if (showInDock) {
       app.show();

@@ -1,8 +1,9 @@
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import FieldTheoryProse from '../FieldTheoryProse';
+import FieldTheoryProse, { localFileUrlToFieldTheoryUrl } from '../FieldTheoryProse';
 
 const LOCAL_SCREENSHOT_URL = 'file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
+const LOCAL_SCREENSHOT_RENDER_URL = 'ftlocalfile:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
 
 describe('FieldTheoryProse', () => {
   it('renders GFM tables, task lists, and line breaks', () => {
@@ -66,7 +67,11 @@ describe('FieldTheoryProse', () => {
     );
 
     const image = screen.getByRole('img', { name: 'Figure A' });
-    expect(image.getAttribute('src')).toBe(LOCAL_SCREENSHOT_URL);
+    expect(image.getAttribute('src')).toBe(LOCAL_SCREENSHOT_RENDER_URL);
+  });
+
+  it('routes file image URLs through the Field Theory local-file protocol', () => {
+    expect(localFileUrlToFieldTheoryUrl(LOCAL_SCREENSHOT_URL)).toBe(LOCAL_SCREENSHOT_RENDER_URL);
   });
 
   it('keeps unsafe image URLs stripped', () => {

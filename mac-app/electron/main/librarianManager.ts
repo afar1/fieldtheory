@@ -12,6 +12,7 @@ import {
   existingPathInsideRoots,
   isMarkdownDocumentPath,
   isPathInside,
+  markdownFileNameFromUserInput,
   normalizeUserDocumentNameInput,
   normalizeUserDocumentRelPathInput,
   stripMarkdownFileExtension,
@@ -1579,15 +1580,14 @@ export const DISCOVERY_CONFIG: Record<DiscoveryFrequency, { min: number; max: nu
 export interface WikiPageMeta {
   relPath: string;  // e.g. 'entries/2026-04-15-foo' (no .md)
   absPath: string;
-  name: string;     // filename slug
-  title: string;    // from # heading or filename fallback
+  name: string;     // filename without extension
+  title: string;    // filename without extension
   lastUpdated: number;
   todoState?: MarkdownTodoState;
 }
 
 export interface WikiPage extends WikiPageMeta {
   content: string;
-  titleSuggestion?: string;
   documentVersion: DocumentVersion;
 }
 
@@ -2527,21 +2527,8 @@ export class LibrarianManager extends EventEmitter {
   private wikiWatcherPending = false;
 
   private parseWikiMetadata(content: string, filePath: string): { title: string; todoState?: MarkdownTodoState } {
-    let title = path.basename(filePath, '.md');
-    const lines = content.split('\n').slice(0, 20);
-    for (const line of lines) {
-      if (/^#\s*$/.test(line)) {
-        title = '';
-        break;
-      }
-      const match = line.match(/^#\s+(.+)/);
-      if (match) {
-        title = match[1].trim();
-        break;
-      }
-    }
     return {
-      title,
+      title: stripMarkdownFileExtension(path.basename(filePath)),
       todoState: parseMarkdownTodoState(content) ?? undefined,
     };
   }
@@ -2560,6 +2547,18 @@ export class LibrarianManager extends EventEmitter {
 
   private isInsidePath(parentPath: string, childPath: string): boolean {
     return isPathInside(parentPath, childPath);
+  }
+
+  private isSameExistingPath(leftPath: string, rightPath: string): boolean {
+    try {
+      return fs.realpathSync(leftPath) === fs.realpathSync(rightPath);
+    } catch {
+      return false;
+    }
+  }
+
+  private isSameDocumentVersion(left: DocumentVersion, right: DocumentVersion): boolean {
+    return left.mtimeMs === right.mtimeMs && left.size === right.size && left.sha256 === right.sha256;
   }
 
   private libraryRootKey(dirPath: string): string {
@@ -2606,10 +2605,14 @@ export class LibrarianManager extends EventEmitter {
     return stripMarkdownFileExtension(fileName);
   }
 
-  private slugifyMarkdownFileName(fileName: string): string {
-    const normalized = normalizeUserDocumentNameInput(fileName, { rejectLeadingUnderscore: true });
-    if (!normalized) return '';
-    return this.stripMarkdownFileExtension(normalized).replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+  private markdownFileNameFromTitle(title: string, extension = '.md'): string | null {
+    const normalized = normalizeUserDocumentNameInput(title, { rejectLeadingUnderscore: true });
+    if (!normalized) return null;
+    const lower = normalized.toLowerCase();
+    if (lower.endsWith('.md') || lower.endsWith('.markdown')) {
+      return markdownFileNameFromUserInput(normalized, { rejectLeadingUnderscore: true });
+    }
+    return markdownFileNameFromUserInput(`${normalized}${extension}`, { rejectLeadingUnderscore: true });
   }
 
   private slugifyWikiRelPath(relPath: string): string {
@@ -2667,18 +2670,6 @@ export class LibrarianManager extends EventEmitter {
     }
 
     return safeRoots;
-  }
-
-  private updateMarkdownH1Title(absPath: string, title: string): void {
-    const content = fs.readFileSync(absPath, 'utf-8');
-    const lines = content.split('\n');
-    const h1Index = lines.findIndex((line, index) => index < 20 && /^#\s+/.test(line));
-    if (h1Index === -1) {
-      fs.writeFileSync(absPath, `# ${title}\n\n${content}`, 'utf-8');
-      return;
-    }
-    lines[h1Index] = `# ${title}`;
-    fs.writeFileSync(absPath, lines.join('\n'), 'utf-8');
   }
 
   private ensureFolderReadme(folderId: LibraryReadmeFolderId, absDir: string, content: string, legacyContents: string[] = []): boolean {
@@ -2968,6 +2959,29 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  findWikiPageByDocumentVersion(version: DocumentVersion, previousRelPath?: string): WikiPage | null {
+    if (!fs.existsSync(this.wikiDir)) return null;
+    const pages = this.flattenWikiFiles(this.scanMarkdownTree(this.wikiDir));
+    const previousFolder = previousRelPath ? path.posix.dirname(previousRelPath) : null;
+    const sortedPages = previousFolder && previousFolder !== '.'
+      ? [...pages].sort((left, right) => {
+        const leftSameFolder = path.posix.dirname(left.relPath) === previousFolder ? 0 : 1;
+        const rightSameFolder = path.posix.dirname(right.relPath) === previousFolder ? 0 : 1;
+        return leftSameFolder - rightSameFolder;
+      })
+      : pages;
+
+    for (const page of sortedPages) {
+      if (page.relPath === previousRelPath) continue;
+      try {
+        if (this.isSameDocumentVersion(readDocumentVersion(page.absPath), version)) {
+          return this.getWikiPage(page.relPath);
+        }
+      } catch {}
+    }
+    return null;
+  }
+
   startWikiWatcher(): void {
     if (this.wikiWatcher || this.wikiWatcherPending) return;
     const wikiRoot = this.wikiDir;
@@ -3027,34 +3041,26 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  /** Rename a wiki page in place. Returns the new relPath on success.
-   *  Slug rules match createWikiFile so the on-disk filename stays consistent
-   *  with user-visible titles. */
+  /** Rename a wiki page in place. Returns the new relPath on success. */
   renameWikiPage(relPath: string, newName: string): string | null {
     const trimmed = newName.trim();
     if (!trimmed) return null;
-    const slug = this.slugifyMarkdownFileName(trimmed);
-    if (!slug) return null;
-    const folder = path.posix.dirname(relPath);
-    const newRelPath = folder && folder !== '.' ? `${folder}/${slug}` : slug;
     const oldAbs = this.resolveExistingWikiPagePath(relPath);
     if (!oldAbs) return null;
+    const newFileName = this.markdownFileNameFromTitle(trimmed, path.extname(oldAbs));
+    if (!newFileName) return null;
+    const folder = path.posix.dirname(relPath);
+    const newNameWithoutExt = stripMarkdownFileExtension(newFileName);
+    const newRelPath = folder && folder !== '.' ? `${folder}/${newNameWithoutExt}` : newNameWithoutExt;
     const newAbs = path.resolve(this.wikiDir, `${newRelPath}${path.extname(oldAbs)}`);
     if (!this.isInsidePath(this.wikiDir, oldAbs) || !this.isInsidePath(this.wikiDir, newAbs)) return null;
     if (newRelPath === relPath) {
-      try {
-        this.updateMarkdownH1Title(oldAbs, trimmed);
-        this.emit('wiki:changed');
-        return relPath;
-      } catch (error) {
-        log.error(`Error renaming wiki page title ${relPath}:`, error);
-        return null;
-      }
+      return relPath;
     }
-    if (this.resolveExistingWikiPagePath(newRelPath)) return null;
+    const existingTargetAbs = this.resolveExistingWikiPagePath(newRelPath);
+    if (existingTargetAbs && !this.isSameExistingPath(existingTargetAbs, oldAbs)) return null;
     try {
       fs.renameSync(oldAbs, newAbs);
-      this.updateMarkdownH1Title(newAbs, trimmed);
       this.emit('wiki:changed');
       // Let RecentManager prune the stale entry for the old relPath.
       this.emit('wiki:deleted', relPath);
@@ -3162,18 +3168,19 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  private createWikiFileWithInitialTitle(folderName: string, fileName: string, initialTitle: string, titleSuggestion?: string): WikiPage | null {
-    const title = this.stripMarkdownFileExtension(fileName).trim();
-    const slug = this.slugifyMarkdownFileName(fileName);
+  private createWikiFileWithInitialTitle(folderName: string, fileName: string): WikiPage | null {
+    const markdownFileName = this.markdownFileNameFromTitle(fileName);
+    if (!markdownFileName) return null;
+    const title = this.stripMarkdownFileExtension(markdownFileName).trim();
     const folderRelPath = this.normalizeLibraryRelPath(folderName);
-    if (!slug || folderRelPath === null || folderRelPath === 'artifacts' || folderRelPath.startsWith('artifacts/')) return null;
-    const relPath = folderRelPath ? `${folderRelPath}/${slug}` : slug;
-    const absPath = path.resolve(this.wikiDir, folderRelPath, `${slug}.md`);
+    if (folderRelPath === null || folderRelPath === 'artifacts' || folderRelPath.startsWith('artifacts/')) return null;
+    const relPath = folderRelPath ? `${folderRelPath}/${title}` : title;
+    const absPath = path.resolve(this.wikiDir, folderRelPath, markdownFileName);
     if (!this.isInsidePath(this.wikiDir, absPath)) return null;
     if (fs.existsSync(absPath)) return null;
     const dirPath = path.dirname(absPath);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-    const content = initialTitle ? `# ${initialTitle}\n` : '# \n';
+    const content = '';
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
@@ -3181,7 +3188,7 @@ export class LibrarianManager extends EventEmitter {
       // several seconds when the folder didn't exist at watcher setup,
       // which leaves the sidebar stale until the next FS tick.
       this.emit('wiki:changed');
-      return { relPath, absPath, name: slug, title: initialTitle, lastUpdated: Math.floor(stats.mtimeMs), content, titleSuggestion, documentVersion: readDocumentVersion(absPath) };
+      return { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
     } catch (error) {
       log.error(`Error creating wiki file ${relPath}:`, error);
       return null;
@@ -3189,29 +3196,28 @@ export class LibrarianManager extends EventEmitter {
   }
 
   createWikiFile(folderName: string, fileName: string): WikiPage | null {
-    const title = this.stripMarkdownFileExtension(fileName).trim();
-    return this.createWikiFileWithInitialTitle(folderName, fileName, title);
+    return this.createWikiFileWithInitialTitle(folderName, fileName);
   }
 
-  createWikiFileWithTitleSuggestion(folderName: string, titleSuggestion: string): WikiPage | null {
-    const suggested = titleSuggestion.trim();
-    if (!suggested) return null;
-    return this.createWikiFileWithInitialTitle(folderName, suggested, '', suggested);
+  createWikiFileWithTitle(folderName: string, title: string): WikiPage | null {
+    const trimmed = title.trim();
+    if (!trimmed) return null;
+    return this.createWikiFileWithInitialTitle(folderName, trimmed);
   }
 
-  createWikiFileWithDefaultTitleSuggestion(folderName: string): WikiPage | null {
+  createWikiFileWithDefaultTitle(folderName: string): WikiPage | null {
     const now = new Date();
     const firstTitle = defaultScratchpadName(now);
-    const first = this.createWikiFileWithTitleSuggestion(folderName, firstTitle);
+    const first = this.createWikiFileWithTitle(folderName, firstTitle);
     if (first) return first;
     const fallbackTitle = defaultScratchpadNameWithTime(now);
-    return this.createWikiFileWithTitleSuggestion(folderName, fallbackTitle);
+    return this.createWikiFileWithTitle(folderName, fallbackTitle);
   }
 
-  // Scratchpad hotkey flow uses a friendly date suggestion, with a time fallback
-  // if today's suggested filename already exists.
+  // Scratchpad hotkey flow uses a friendly date title, with a time fallback
+  // if today's filename already exists.
   createScratchpadDefault(): WikiPage | null {
-    return this.createWikiFileWithDefaultTitleSuggestion('scratchpad');
+    return this.createWikiFileWithDefaultTitle('scratchpad');
   }
 
   createWikiDir(dirName: string): boolean {
@@ -3241,23 +3247,23 @@ export class LibrarianManager extends EventEmitter {
 
     if (!this.canWriteDirectory(root.rootPath)) return null;
 
-    const title = this.stripMarkdownFileExtension(fileName).trim();
-    const slug = this.slugifyMarkdownFileName(fileName);
-    if (!slug) return null;
-    const relPath = normalizedFolder ? `${normalizedFolder}/${slug}` : slug;
-    const absPath = path.resolve(root.rootPath, normalizedFolder, `${slug}.md`);
+    const markdownFileName = this.markdownFileNameFromTitle(fileName);
+    if (!markdownFileName) return null;
+    const title = this.stripMarkdownFileExtension(markdownFileName).trim();
+    const relPath = normalizedFolder ? `${normalizedFolder}/${title}` : title;
+    const absPath = path.resolve(root.rootPath, normalizedFolder, markdownFileName);
     if (!this.isInsidePath(root.rootPath, absPath)) return null;
     if (fs.existsSync(absPath)) return null;
 
     const dirPath = path.dirname(absPath);
     if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
 
-    const content = `# ${title}\n`;
+    const content = '';
     try {
       fs.writeFileSync(absPath, content, 'utf-8');
       const stats = fs.statSync(absPath);
       this.emit('library:changed', root.rootPath);
-      return { relPath, absPath, name: slug, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
+      return { relPath, absPath, name: title, title, lastUpdated: Math.floor(stats.mtimeMs), content, documentVersion: readDocumentVersion(absPath) };
     } catch (error) {
       log.error(`Error creating library file ${relPath}:`, error);
       return null;

@@ -20,7 +20,7 @@ import {
   ModelSize,
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
-import { isFieldTheorySuperPasteBundleId, shouldInsertImagePathIntoLibrarian } from './superPasteRouting';
+import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
 import { AuthManager } from './authManager';
 import { createUserDataManager, UserDataManager } from './userDataManager';
@@ -80,15 +80,17 @@ import { CommandsIPCChannels } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage } from './librarianManager';
+import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
+import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
 import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
 import { bookmarksForTaxonomyFiles, searchBookmarks } from './bookmarkCollections';
 import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
+import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
@@ -216,7 +218,7 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
 async function activateAndPaste(
   targetApp: { bundleId: string; name: string } | null,
   options: { beforePaste?: () => void | Promise<void> } = {},
-): Promise<void> {
+): Promise<boolean> {
   appendCommandLauncherTrace('activate-and-paste-start', {
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
@@ -227,21 +229,37 @@ async function activateAndPaste(
     if (bundleId.includes('"') || bundleId.includes("'")) {
       log.error('activateAndPaste: invalid bundleId contains quotes:', bundleId);
       appendCommandLauncherTrace('activate-and-paste-invalid-bundle', { bundleId });
-      return;
+      return false;
     }
     const activateScript = `tell application id "${bundleId}"\n  activate\nend tell`;
     await execFileAsync('osascript', ['-e', activateScript], { timeout: 3000 });
+    const afterActivate = nativeHelper?.getFrontmostApp() ?? null;
+    appendCommandLauncherTrace('activate-and-paste-after-activate', {
+      targetBundleId: bundleId,
+      frontmostBundleId: afterActivate?.bundleId ?? null,
+      frontmostName: afterActivate?.name ?? null,
+    });
     await beforePaste?.();
     await new Promise(resolve => setTimeout(resolve, 40));
+    const beforeKeystroke = nativeHelper?.getFrontmostApp() ?? null;
+    appendCommandLauncherTrace('activate-and-paste-before-keystroke', {
+      targetBundleId: bundleId,
+      frontmostBundleId: beforeKeystroke?.bundleId ?? null,
+      frontmostName: beforeKeystroke?.name ?? null,
+    });
     await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down'], { timeout: 3000 });
   } else {
     await beforePaste?.();
     await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
   }
+  const afterKeystroke = nativeHelper?.getFrontmostApp() ?? null;
   appendCommandLauncherTrace('activate-and-paste-success', {
     targetBundleId: targetApp?.bundleId ?? null,
     targetName: targetApp?.name ?? null,
+    frontmostBundleId: afterKeystroke?.bundleId ?? null,
+    frontmostName: afterKeystroke?.name ?? null,
   });
+  return true;
 }
 
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
@@ -343,6 +361,7 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
 // Must happen before app.whenReady(). The actual handler is installed inside.
 protocol.registerSchemesAsPrivileged([
   { scheme: 'ftmedia', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
+  { scheme: 'ftlocalfile', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
 ]);
 
 // Pin userData paths explicitly so auth/session storage is stable across package-name changes.
@@ -429,9 +448,8 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
   clipboardHistoryWindow.show(boundsToUse);
-  clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openScratchpad', {
+  clipboardHistoryWindow.openScratchpad({
     relPath: page.relPath,
-    titleSuggestion: page.titleSuggestion,
   });
   return page;
 }
@@ -1010,7 +1028,7 @@ function registerHotkeysAfterOnboarding(): void {
       }
 
       const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
-      if (shouldInsertImagePathIntoLibrarian({
+      if (shouldRouteSuperPasteToLibrarian({
         editorFocused: librarianMarkdownEditorFocused,
         windowVisible: clipboardWindow?.isVisible() ?? false,
         windowFocused: clipboardWindow?.isFocused() ?? false,
@@ -1020,6 +1038,12 @@ function registerHotkeysAfterOnboarding(): void {
           clipboardWindow?.webContents.send('librarian:insertMarkdownText', imagePath);
           return;
         }
+        const text = clipboard.readText();
+        if (text) {
+          clipboardWindow?.webContents.send('librarian:insertMarkdownText', text);
+          return;
+        }
+        return;
       }
 
       // Get most recent item from clipboard history
@@ -1481,14 +1505,52 @@ function getLastClipboardHistorySizeKey(): ClipboardHistorySizeKey {
   return isClipboardHistorySizeKey(savedKey) ? normalizeClipboardHistorySizeKey(savedKey) : 'fields';
 }
 
+const RESTORED_LIBRARY_MIN_BOUNDS = { width: 720, height: 640 };
+const RESTORED_LIBRARY_DEFAULT_BOUNDS = { width: 720, height: 820 };
+
+function defaultClipboardHistoryBoundsForSizeKey(sizeKey: ClipboardHistorySizeKey): { x: number; y: number; width: number; height: number } | undefined {
+  if (sizeKey !== 'library') return undefined;
+  const work = screen.getPrimaryDisplay().workArea;
+  const width = Math.min(RESTORED_LIBRARY_DEFAULT_BOUNDS.width, work.width);
+  const height = Math.min(RESTORED_LIBRARY_DEFAULT_BOUNDS.height, work.height);
+  return {
+    x: Math.round(work.x + (work.width - width) / 2),
+    y: Math.round(work.y + Math.min(80, Math.max(0, work.height - height))),
+    width,
+    height,
+  };
+}
+
+function coerceClipboardHistoryBoundsForSizeKey(
+  sizeKey: ClipboardHistorySizeKey,
+  bounds: { x: number; y: number; width: number; height: number } | undefined,
+): { x: number; y: number; width: number; height: number } | undefined {
+  if (sizeKey !== 'library') return bounds;
+  const sourceBounds = bounds ?? defaultClipboardHistoryBoundsForSizeKey(sizeKey);
+  if (!sourceBounds) return undefined;
+
+  const display = screen.getDisplayMatching(sourceBounds);
+  const work = display.workArea;
+  const width = Math.min(Math.max(sourceBounds.width, RESTORED_LIBRARY_MIN_BOUNDS.width), work.width);
+  const height = Math.min(Math.max(sourceBounds.height, RESTORED_LIBRARY_MIN_BOUNDS.height), work.height);
+  const x = Math.min(Math.max(sourceBounds.x, work.x), work.x + Math.max(0, work.width - width));
+  const y = Math.min(Math.max(sourceBounds.y, work.y), work.y + Math.max(0, work.height - height));
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(width),
+    height: Math.round(height),
+  };
+}
+
 function restoreClipboardHistoryBounds(sizeKey: ClipboardHistorySizeKey = getLastClipboardHistorySizeKey()): { x: number; y: number; width: number; height: number } | undefined {
   if (!preferencesManager) {
-    return undefined;
+    return defaultClipboardHistoryBoundsForSizeKey(sizeKey);
   }
 
   const savedBounds = pickSavedBoundsByKey(preferencesManager.get(), sizeKey);
   if (!savedBounds) {
-    return undefined;
+    return defaultClipboardHistoryBoundsForSizeKey(sizeKey);
   }
 
   // Try new format first: display-relative coordinates.
@@ -1501,22 +1563,22 @@ function restoreClipboardHistoryBounds(sizeKey: ClipboardHistorySizeKey = getLas
 
     if (absolutePos) {
       // Return absolute screen coordinates directly.
-      return {
+      return coerceClipboardHistoryBoundsForSizeKey(sizeKey, {
         x: absolutePos.x,
         y: absolutePos.y,
         width: savedBounds.width,
         height: savedBounds.height,
-      };
+      });
     } else {
       // Display not found - fall back to primary display centered.
       const primaryDisplay = screen.getPrimaryDisplay();
       const primaryBounds = primaryDisplay.bounds;
-      return {
+      return coerceClipboardHistoryBoundsForSizeKey(sizeKey, {
         x: primaryBounds.x + primaryBounds.width / 2 - savedBounds.width / 2,
         y: primaryBounds.y + 80,
         width: savedBounds.width,
         height: savedBounds.height,
-      };
+      });
     }
   }
 
@@ -1524,16 +1586,16 @@ function restoreClipboardHistoryBounds(sizeKey: ClipboardHistorySizeKey = getLas
   if (savedBounds.x !== undefined && savedBounds.y !== undefined) {
     const currentDisplayConfig = ClipboardHistoryWindow.getDisplayConfigHash();
     if (savedBounds.displayConfig === currentDisplayConfig) {
-      return {
+      return coerceClipboardHistoryBoundsForSizeKey(sizeKey, {
         x: savedBounds.x,
         y: savedBounds.y,
         width: savedBounds.width,
         height: savedBounds.height,
-      };
+      });
     }
   }
 
-  return undefined;
+  return defaultClipboardHistoryBoundsForSizeKey(sizeKey);
 }
 
 async function saveClipboardHistoryBoundsForKey(
@@ -2003,6 +2065,11 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.getWikiPage(relPath);
   });
 
+  ipcMain.handle('wiki:findPageByDocumentVersion', (_event, version: DocumentVersion, previousRelPath?: string): WikiPage | null => {
+    if (!librarianManager) return null;
+    return librarianManager.findWikiPageByDocumentVersion(version, previousRelPath);
+  });
+
   ipcMain.handle('wiki:save', (_event, relPath: string, content: string, expectedVersion?: DocumentVersion | null): DocumentSaveResult => {
     if (!librarianManager) return { ok: false, reason: 'error' };
     if (!canWriteFieldTheoryContent()) {
@@ -2021,13 +2088,13 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.createWikiFile(folderName, fileName);
   });
 
-  ipcMain.handle('wiki:createFileWithTitleSuggestion', (_event, folderName: string): WikiPage | null => {
+  ipcMain.handle('wiki:createFileWithDefaultTitle', (_event, folderName: string): WikiPage | null => {
     if (!librarianManager) return null;
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return null;
     }
-    return librarianManager.createWikiFileWithDefaultTitleSuggestion(folderName);
+    return librarianManager.createWikiFileWithDefaultTitle(folderName);
   });
 
   ipcMain.handle('wiki:deletePage', async (_event, relPath: string): Promise<boolean> => {
@@ -2132,6 +2199,124 @@ function setupLibrarianIPCHandlers(): void {
       return { ok: false, reason: 'error' };
     }
   });
+
+  ipcMain.handle(
+    'external:findLibraryFileByDocumentVersion',
+    (_event, version: DocumentVersion, previousAbsPath?: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null => {
+      if (!librarianManager) return null;
+      const candidatePaths: string[] = [];
+      const collectFiles = (nodes: WikiNode[]) => {
+        for (const node of nodes) {
+          if (node.kind === 'file') {
+            candidatePaths.push(node.absPath);
+          } else {
+            collectFiles(node.children);
+          }
+        }
+      };
+
+      for (const root of librarianManager.getLibraryRoots()) {
+        if (root.builtin) continue;
+        collectFiles(root.tree);
+      }
+
+      const previousDir = previousAbsPath ? path.dirname(previousAbsPath) : null;
+      const sortedPaths = previousDir
+        ? candidatePaths.sort((left, right) => {
+          const leftSameDir = path.dirname(left) === previousDir ? 0 : 1;
+          const rightSameDir = path.dirname(right) === previousDir ? 0 : 1;
+          return leftSameDir - rightSameDir;
+        })
+        : candidatePaths;
+
+      for (const candidatePath of sortedPaths) {
+        if (candidatePath === previousAbsPath) continue;
+        try {
+          const candidateVersion = readDocumentVersion(candidatePath);
+          if (
+            candidateVersion.mtimeMs !== version.mtimeMs ||
+            candidateVersion.size !== version.size ||
+            candidateVersion.sha256 !== version.sha256
+          ) {
+            continue;
+          }
+          const content = fs.readFileSync(candidatePath, 'utf-8');
+          const stats = fs.statSync(candidatePath);
+          return {
+            path: candidatePath,
+            name: path.basename(candidatePath),
+            content,
+            mtime: Math.floor(stats.mtimeMs),
+            documentVersion: candidateVersion,
+          };
+        } catch {}
+      }
+      return null;
+    },
+  );
+
+  ipcMain.handle(
+    'external:rename',
+    (_event, absPath: string, newName: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null => {
+      if (!canWriteFieldTheoryContent()) {
+        blockWrite();
+        return null;
+      }
+      try {
+        const canonical = fs.realpathSync(absPath);
+        if (!isAllowedMarkdownExt(canonical)) return null;
+        const trimmed = newName.trim();
+        if (!trimmed) return null;
+        const lower = trimmed.toLowerCase();
+        const extension = path.extname(canonical) || '.md';
+        const nextFileName = lower.endsWith('.md') || lower.endsWith('.markdown')
+          ? markdownFileNameFromUserInput(trimmed)
+          : markdownFileNameFromUserInput(`${trimmed}${extension}`);
+        if (!nextFileName) return null;
+        const nextPath = path.join(path.dirname(canonical), nextFileName);
+        if (nextPath === canonical) {
+          const content = fs.readFileSync(canonical, 'utf-8');
+          const stats = fs.statSync(canonical);
+          return {
+            path: canonical,
+            name: path.basename(canonical),
+            content,
+            mtime: Math.floor(stats.mtimeMs),
+            documentVersion: readDocumentVersion(canonical),
+          };
+        }
+        if (fs.existsSync(nextPath)) {
+          try {
+            if (fs.realpathSync(nextPath) !== fs.realpathSync(canonical)) return null;
+          } catch {
+            return null;
+          }
+        }
+        fs.renameSync(canonical, nextPath);
+        const content = fs.readFileSync(nextPath, 'utf-8');
+        const stats = fs.statSync(nextPath);
+        const title = stripMarkdownFileExtension(path.basename(nextPath));
+        BrowserWindow.getAllWindows().forEach((w) => {
+          if (!w.isDestroyed()) {
+            w.webContents.send('library:changed');
+          }
+        });
+        recentManager?.remove('external', canonical);
+        recentManager?.visit({ kind: 'external', path: nextPath, title, lastOpenedAt: Date.now() });
+        broadcastRecentChanged();
+        return {
+          path: nextPath,
+          name: path.basename(nextPath),
+          content,
+          mtime: Math.floor(stats.mtimeMs),
+          documentVersion: readDocumentVersion(nextPath),
+        };
+      } catch (error) {
+        log.error(`external:rename failed for ${absPath}:`, error);
+        return null;
+      }
+    },
+  );
 
   if (librarianManager) {
     librarianManager.startWikiWatcher();
@@ -6032,9 +6217,8 @@ function setupClipboardIPCHandlers(): void {
       }
 
       commandLauncherWindow?.suppressActivationForExternalInvocation();
-      await activateAndPaste(targetApp, {
-        beforePaste: () => commandLauncherWindow?.hide(true),
-      });
+      commandLauncherWindow?.hide(true);
+      await activateAndPaste(targetApp);
       appendCommandLauncherTrace('invoke-handoff-success', {
         filePath,
         targetBundleId: targetApp.bundleId,
@@ -6078,11 +6262,11 @@ function setupClipboardIPCHandlers(): void {
         targetName: targetApp?.name ?? null,
       });
       if (!targetApp) {
-        commandLauncherWindow?.hide(true);
         appendCommandLauncherTrace('invoke-command-no-target', {
           commandName,
           commandPath: command.filePath,
         });
+        cursorStatusManager?.showNoTargetError('Portable command: no target app');
         return { success: false, error: 'No external target app available' };
       }
       const isTerminal = isTerminalApp(targetApp.bundleId);
@@ -6093,18 +6277,38 @@ function setupClipboardIPCHandlers(): void {
       const clipboardSnapshot = captureClipboardSnapshot();
       try {
         if (isTerminal || isIDE) {
-          clipboard.writeText(`[${command.name}.md]\n${command.filePath} `);
+          const commandReferenceText = `[${command.name}.md]\n${command.filePath} `;
+          clipboard.writeText(commandReferenceText);
           clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace('invoke-command-clipboard-written', {
+            commandName,
+            format: 'text',
+            textLength: commandReferenceText.length,
+          });
         } else {
+          const fileUrl = pathToFileURL(command.filePath).toString();
           const plistData = plist.build([command.filePath]);
+          clipboard.writeText(command.filePath);
           clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+          clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf-8'));
+          clipboard.writeBuffer('NSURLPboardType', Buffer.from(fileUrl, 'utf-8'));
           clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace('invoke-command-clipboard-written', {
+            commandName,
+            format: 'file-list+file-url+text',
+            filePath: command.filePath,
+            fileUrl,
+            availableFormats: clipboard.availableFormats(),
+          });
         }
 
         commandLauncherWindow?.suppressActivationForExternalInvocation();
-        await activateAndPaste(targetApp, {
-          beforePaste: () => commandLauncherWindow?.hide(true),
-        });
+        commandLauncherWindow?.hide(true);
+        const pasted = await activateAndPaste(targetApp);
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Portable command paste failed');
+          return { success: false, error: 'Could not paste into target app' };
+        }
       } finally {
         appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
           commandName,
@@ -6134,6 +6338,7 @@ function setupClipboardIPCHandlers(): void {
     } catch (error) {
       log.error('Error invoking command:', error);
       appendCommandLauncherTrace('invoke-command-error', { commandName, commandPath: command.filePath, error });
+      cursorStatusManager?.showNoTargetError('Portable command paste failed');
       return { success: false, error: error instanceof Error ? error.message : 'Unknown error' };
     }
   });
@@ -8153,6 +8358,25 @@ if (!gotTheLock) {
     protocol.handle('ftmedia', (req) => {
       const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));
       return net.fetch(pathToFileURL(path.join(bookmarkMediaDir(), filename)).toString());
+    });
+
+    protocol.handle('ftlocalfile', async (req) => {
+      const filePath = localImagePathFromProtocolUrl(req.url);
+      if (!filePath || !isAllowedLocalImagePath(filePath)) {
+        log.warn('ftlocalfile blocked invalid image URL: %s -> %s', req.url, filePath ? obscureHomePath(filePath) : '(unparseable)');
+        return new Response('', { status: 404 });
+      }
+      try {
+        const image = await fs.promises.readFile(filePath);
+        log.debug('ftlocalfile served image: %s (%d bytes)', obscureHomePath(filePath), image.byteLength);
+        return new Response(image, {
+          headers: { 'Content-Type': getLocalImageContentType(filePath) },
+        });
+      } catch (error) {
+        const err = error as NodeJS.ErrnoException;
+        log.warn('ftlocalfile failed to read image: %s (%s)', obscureHomePath(filePath), err.code ?? err.message ?? 'unknown error');
+        return new Response('', { status: 404 });
+      }
     });
 
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
