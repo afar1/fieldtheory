@@ -61,11 +61,15 @@ import {
   getSelectedWikiAutoExpandKey,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
+  libraryRootsHaveBuiltinRelPath,
   orderTopLevelSidebarNodes,
+  removeWikiRelPathFromLibraryRoots,
+  removeWikiRelPathFromTree,
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
   virtualizeBookmarksGroup,
+  wikiTreeHasRelPath,
   type LibrarySidebarNode,
 } from '../components/WikiSidebar';
 
@@ -1474,6 +1478,60 @@ describe('filterStaleRecent', () => {
       { kind: 'external' as const, path: '/Users/me/notes/thing.md', title: 'thing', lastOpenedAt: 4 },
     ];
     expect(filterStaleRecent(recent, tree)).toEqual(recent);
+  });
+});
+
+describe('deleted wiki page sidebar pruning', () => {
+  it('removes a deleted relPath from the flat wiki tree', () => {
+    const tree = [
+      {
+        name: 'scratchpad',
+        files: [
+          { relPath: 'scratchpad/a', absPath: '/wiki/scratchpad/a.md', name: 'a', title: 'A', lastUpdated: 1 },
+          { relPath: 'scratchpad/b', absPath: '/wiki/scratchpad/b.md', name: 'b', title: 'B', lastUpdated: 2 },
+        ],
+      },
+    ];
+
+    const out = removeWikiRelPathFromTree(tree, 'scratchpad/a');
+
+    expect(out[0].files.map((page) => page.relPath)).toEqual(['scratchpad/b']);
+    expect(wikiTreeHasRelPath(out, 'scratchpad/a')).toBe(false);
+    expect(wikiTreeHasRelPath(out, 'scratchpad/b')).toBe(true);
+  });
+
+  it('prunes only builtin library roots for a wiki relPath', () => {
+    const roots: LibraryRoot[] = [
+      {
+        path: '/wiki',
+        label: 'Library',
+        builtin: true,
+        tree: [
+          {
+            kind: 'dir',
+            name: 'scratchpad',
+            relPath: 'scratchpad',
+            children: [
+              { kind: 'file', relPath: 'scratchpad/a', absPath: '/wiki/scratchpad/a.md', name: 'a', title: 'A', lastUpdated: 1 },
+            ],
+          },
+        ],
+      },
+      {
+        path: '/external',
+        label: 'External',
+        builtin: false,
+        tree: [
+          { kind: 'file', relPath: 'scratchpad/a', absPath: '/external/scratchpad/a.md', name: 'a', title: 'A', lastUpdated: 1 },
+        ],
+      },
+    ];
+
+    const out = removeWikiRelPathFromLibraryRoots(roots, 'scratchpad/a');
+
+    expect(libraryRootsHaveBuiltinRelPath(out, 'scratchpad/a')).toBe(false);
+    expect((out[0].tree[0] as Extract<WikiNode, { kind: 'dir' }>).children).toEqual([]);
+    expect(out[1].tree).toEqual(roots[1].tree);
   });
 });
 
