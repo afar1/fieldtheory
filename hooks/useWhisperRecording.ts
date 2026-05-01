@@ -1,6 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { Audio } from 'expo-av';
 import * as FileSystem from 'expo-file-system';
+import { InteractionManager } from 'react-native';
 import { initWhisper, WhisperContext } from 'whisper.rn';
 import { ensureModelAvailable } from '../services/modelService';
 
@@ -31,9 +32,11 @@ export function useWhisperRecording(): UseWhisperRecordingReturn {
   const whisperContextRef = useRef<WhisperContext | null>(null);
   const transcribeStopRef = useRef<(() => Promise<void>) | null>(null);
 
-  // Initialize whisper model on mount
+  // Initialize whisper model after the first UI interactions settle.
   useEffect(() => {
     let isMounted = true;
+    let prewarmTimer: ReturnType<typeof setTimeout> | null = null;
+    let interactionTask: { cancel?: () => void } | null = null;
     
     async function initializeWhisper() {
       try {
@@ -65,11 +68,19 @@ export function useWhisperRecording(): UseWhisperRecordingReturn {
       }
     }
     
-    initializeWhisper();
+    prewarmTimer = setTimeout(() => {
+      interactionTask = InteractionManager.runAfterInteractions(() => {
+        initializeWhisper();
+      });
+    }, 800);
     
     // Cleanup function
     return () => {
       isMounted = false;
+      if (prewarmTimer) {
+        clearTimeout(prewarmTimer);
+      }
+      interactionTask?.cancel?.();
       
       // Stop any active transcription
       if (transcribeStopRef.current) {
@@ -247,4 +258,3 @@ export function useWhisperRecording(): UseWhisperRecordingReturn {
     isReady,
   };
 }
-

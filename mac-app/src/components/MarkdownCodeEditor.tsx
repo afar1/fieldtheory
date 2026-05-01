@@ -44,6 +44,16 @@ export interface MarkdownCodeEditorHandle {
   scrollTop: number;
 }
 
+export interface MarkdownCodeEditorSelectionSnapshot {
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+  caretPosition: { top: number; left: number } | null;
+  docChanged: boolean;
+  inputType?: string;
+  inputData?: string | null;
+}
+
 interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
@@ -60,6 +70,7 @@ interface MarkdownCodeEditorProps {
   dataAttributes?: Record<string, string | undefined>;
   style?: React.CSSProperties;
   onKeyDown?: (event: KeyboardEvent) => boolean | void;
+  onSelectionChange?: (snapshot: MarkdownCodeEditorSelectionSnapshot) => void;
   onScroll?: (scrollTop: number) => void;
 }
 
@@ -90,9 +101,22 @@ const buildHighlightStyle = (isDark: boolean) =>
     },
     {
       tag: t.list,
-      color: isDark ? 'rgba(255,255,255,0.55)' : 'rgba(0,0,0,0.55)',
+      color: isDark ? '#f5f5f5' : '#111',
     },
   ]);
+
+function getCodeEditorCaretPosition(
+  view: EditorView,
+  position: number,
+): { top: number; left: number } | null {
+  const caret = view.coordsAtPos(position);
+  const container = view.dom.getBoundingClientRect();
+  if (!caret) return null;
+  return {
+    top: caret.bottom - container.top + 6,
+    left: Math.max(0, Math.min(caret.left - container.left, container.width - 260)),
+  };
+}
 
 const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEditorProps>(
   function MarkdownCodeEditor(props, ref) {
@@ -119,7 +143,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
     const onKeyDownRef = useRef(props.onKeyDown);
+    const onSelectionChangeRef = useRef(props.onSelectionChange);
     const onScrollRef = useRef(onScroll);
+    const lastBeforeInputRef = useRef<{ inputType: string; data: string | null } | null>(null);
     const lastAppliedValueRef = useRef(value);
     const themeCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
@@ -131,6 +157,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       onKeyDownRef.current = props.onKeyDown;
     }, [props.onKeyDown]);
+
+    useEffect(() => {
+      onSelectionChangeRef.current = props.onSelectionChange;
+    }, [props.onSelectionChange]);
 
     useEffect(() => {
       onScrollRef.current = onScroll;
@@ -210,8 +240,30 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               const next = update.state.doc.toString();
               onChangeRef.current?.(next);
             }
+            if (update.docChanged || update.selectionSet) {
+              const selection = update.state.selection.main;
+              const input = update.docChanged ? lastBeforeInputRef.current : null;
+              if (update.docChanged) lastBeforeInputRef.current = null;
+              onSelectionChangeRef.current?.({
+                value: update.state.doc.toString(),
+                selectionStart: selection.from,
+                selectionEnd: selection.to,
+                caretPosition: getCodeEditorCaretPosition(update.view, selection.head),
+                docChanged: update.docChanged,
+                inputType: input?.inputType,
+                inputData: input?.data,
+              });
+            }
           }),
           EditorView.domEventHandlers({
+            beforeinput: (event) => {
+              const input = event as InputEvent;
+              lastBeforeInputRef.current = {
+                inputType: input.inputType,
+                data: input.data,
+              };
+              return false;
+            },
             keydown: (event) => onKeyDownRef.current?.(event) === true,
             scroll: (event) => {
               const target = event.target as HTMLElement;

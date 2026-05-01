@@ -76,6 +76,7 @@ export class CommandLauncherWindow {
   // Track when show() is in progress (before window.show() is called).
   // This closes the race window where isVisible() returns false during async setup.
   private _isShowing: boolean = false;
+  private suppressActivationUntilHidden = false;
 
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 366;
@@ -185,6 +186,7 @@ export class CommandLauncherWindow {
     // Mark as showing BEFORE any async work to close the race window.
     // This allows other code to check isShowingOrVisible() during the await.
     this._isShowing = true;
+    this.suppressActivationUntilHidden = false;
     appendCommandLauncherTrace('show-start', {
       hasWindow: Boolean(this.window),
       windowVisible: this.isVisible(),
@@ -307,12 +309,18 @@ export class CommandLauncherWindow {
    */
   hide(skipActivation = false): void {
     this._isShowing = false;
+    const suppressActivationForThisHide = this.suppressActivationUntilHidden;
+    const shouldSkipActivation = skipActivation || suppressActivationForThisHide;
 
     // Already hidden — prevents blur re-entry after hide(true).
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
     if (!isVisible) {
+      if (shouldSkipActivation) {
+        this.suppressActivationUntilHidden = false;
+      }
       appendCommandLauncherTrace('hide-noop', {
         skipActivation,
+        suppressActivationForThisHide,
         hasWindow: Boolean(this.window),
       });
       return;
@@ -320,12 +328,14 @@ export class CommandLauncherWindow {
 
     appendCommandLauncherTrace('hide', {
       skipActivation,
+      suppressActivationForThisHide,
       previousAppBundleId: this.previousApp?.bundleId ?? null,
     });
     this.window!.hide();
     this.hidePreview();
+    this.suppressActivationUntilHidden = false;
 
-    if (skipActivation || this.fieldTheoryActiveOnShow) {
+    if (shouldSkipActivation || this.fieldTheoryActiveOnShow) {
       appendCommandLauncherTrace('hide-skip-activation');
       return;
     }
@@ -380,6 +390,14 @@ export class CommandLauncherWindow {
    */
   isShowingOrVisible(): boolean {
     return this._isShowing || this.isVisible();
+  }
+
+  suppressActivationForExternalInvocation(): void {
+    this.suppressActivationUntilHidden = true;
+    appendCommandLauncherTrace('suppress-activation-for-external-invocation', {
+      visible: this.isVisible(),
+      isShowing: this._isShowing,
+    });
   }
 
   /**

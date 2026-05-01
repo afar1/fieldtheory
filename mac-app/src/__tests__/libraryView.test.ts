@@ -9,6 +9,8 @@ import {
   getCarrotListTabEdit,
   getMarkdownListEnterEdit,
   getMarkdownBodySelectionRange,
+  getMarkdownListToggleEdit,
+  getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
   highlightFileFindMatches,
   formatBreadcrumb,
@@ -100,6 +102,24 @@ describe('rankMarkdownWikiLinkSuggestions', () => {
     expect(results).toEqual([
       { title: '@paulg', detail: 'bookmarks/people/@paulg', kind: 'wiki' },
     ]);
+  });
+});
+
+describe('getMarkdownWikiLinkCompletionState', () => {
+  it('returns an active wikilink completion with editor-relative coordinates', () => {
+    expect(getMarkdownWikiLinkCompletionState('See [[Con', 9, 9, { top: 24, left: 12 })).toEqual({
+      openStart: 4,
+      queryStart: 6,
+      queryEnd: 9,
+      replaceEnd: 9,
+      query: 'Con',
+      top: 24,
+      left: 12,
+    });
+  });
+
+  it('returns null when there is no caret position', () => {
+    expect(getMarkdownWikiLinkCompletionState('See [[Con', 9, 9, null)).toBeNull();
   });
 });
 
@@ -399,6 +419,30 @@ describe('markdown list editor helpers', () => {
       nextValue: '[] first\n',
       selectionStart: 9,
       selectionEnd: 9,
+    });
+  });
+
+  it('toggles selected lines into ordered lists', () => {
+    expect(getMarkdownListToggleEdit('first\nsecond', 0, 12, 'ordered')).toEqual({
+      nextValue: '1. first\n2. second',
+      selectionStart: 0,
+      selectionEnd: 18,
+    });
+  });
+
+  it('toggles selected lines into carrot unordered lists', () => {
+    expect(getMarkdownListToggleEdit('first\nsecond', 0, 12, 'unordered', 'carrot')).toEqual({
+      nextValue: '› first\n› second',
+      selectionStart: 0,
+      selectionEnd: 16,
+    });
+  });
+
+  it('removes existing list markers when the selection is already marked', () => {
+    expect(getMarkdownListToggleEdit('1. first\n2. second', 0, 18, 'ordered')).toEqual({
+      nextValue: 'first\nsecond',
+      selectionStart: 0,
+      selectionEnd: 12,
     });
   });
 });
