@@ -438,9 +438,9 @@ describe('recursive wiki tree scan', () => {
     Object.defineProperty(manager, 'wikiDir', { value: root });
     manager.emit = emit;
 
-    expect(manager.renameWikiPage('note', 'Better Note')).toBe('better-note');
+    expect(manager.renameWikiPage('note', 'Better Note')).toBe('Better Note');
     expect(fs.existsSync(path.join(root, 'note.md'))).toBe(false);
-    expect(fs.existsSync(path.join(root, 'better-note.md'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'Better Note.md'))).toBe(true);
     expect(emit).toHaveBeenCalledWith('wiki:changed');
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
   });
@@ -457,10 +457,10 @@ describe('recursive wiki tree scan', () => {
     Object.defineProperty(manager, 'wikiDir', { value: root });
     manager.emit = emit;
 
-    expect(manager.renameWikiPage('note', 'Better Note')).toBe('better-note');
+    expect(manager.renameWikiPage('note', 'Better Note')).toBe('Better Note');
     expect(fs.existsSync(path.join(root, 'note.markdown'))).toBe(false);
-    expect(fs.existsSync(path.join(root, 'better-note.markdown'))).toBe(true);
-    expect(fs.existsSync(path.join(root, 'better-note.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'Better Note.markdown'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'Better Note.md'))).toBe(false);
   });
 
   it('creates markdown files inside external library roots', () => {
@@ -479,10 +479,10 @@ describe('recursive wiki tree scan', () => {
 
     const page = manager.createLibraryFile(root, 'Team Notes', 'Meeting Notes');
 
-    expect(page?.relPath).toBe('Team Notes/meeting-notes');
-    expect(page?.absPath).toBe(path.join(root, 'Team Notes', 'meeting-notes.md'));
-    expect(page?.content).toBe('# Meeting Notes\n');
-    expect(fs.readFileSync(path.join(root, 'Team Notes', 'meeting-notes.md'), 'utf-8')).toBe('# Meeting Notes\n');
+    expect(page?.relPath).toBe('Team Notes/Meeting Notes');
+    expect(page?.absPath).toBe(path.join(root, 'Team Notes', 'Meeting Notes.md'));
+    expect(page?.content).toBe('');
+    expect(fs.readFileSync(path.join(root, 'Team Notes', 'Meeting Notes.md'), 'utf-8')).toBe('');
     expect(emit).toHaveBeenCalledWith('library:changed', root);
   });
 
@@ -500,9 +500,9 @@ describe('recursive wiki tree scan', () => {
 
     const page = manager.createWikiFile('Shared Markdown', 'Testing');
 
-    expect(page?.relPath).toBe('Shared Markdown/testing');
-    expect(page?.absPath).toBe(path.join(root, 'Shared Markdown', 'testing.md'));
-    expect(fs.existsSync(path.join(root, 'shared-markdown', 'testing.md'))).toBe(false);
+    expect(page?.relPath).toBe('Shared Markdown/Testing');
+    expect(page?.absPath).toBe(path.join(root, 'Shared Markdown', 'Testing.md'));
+    expect(fs.existsSync(path.join(root, 'shared-markdown', 'Testing.md'))).toBe(false);
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
 
@@ -526,25 +526,24 @@ describe('recursive wiki tree scan', () => {
     expect(emit).not.toHaveBeenCalled();
   });
 
-  it('creates suggested-title wiki files with a blank editable H1', () => {
+  it('creates default-title wiki files with an empty body and filename title', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
 
     const emit = vi.fn();
     const manager = Object.create(LibrarianManager.prototype) as {
-      createWikiFileWithTitleSuggestion: (folderName: string, titleSuggestion: string) => { relPath: string; title: string; titleSuggestion?: string; content: string } | null;
+      createWikiFileWithTitle: (folderName: string, title: string) => { relPath: string; title: string; content: string } | null;
       emit: typeof emit;
     };
     Object.defineProperty(manager, 'wikiDir', { value: root });
     manager.emit = emit;
 
-    const page = manager.createWikiFileWithTitleSuggestion('scratchpad', 'Wednesday Apr 29th');
+    const page = manager.createWikiFileWithTitle('scratchpad', 'Wednesday Apr 29th');
 
-    expect(page?.relPath).toBe('scratchpad/wednesday-apr-29th');
-    expect(page?.title).toBe('');
-    expect(page?.titleSuggestion).toBe('Wednesday Apr 29th');
-    expect(page?.content).toBe('# \n');
-    expect(fs.readFileSync(path.join(root, 'scratchpad', 'wednesday-apr-29th.md'), 'utf-8')).toBe('# \n');
+    expect(page?.relPath).toBe('scratchpad/Wednesday Apr 29th');
+    expect(page?.title).toBe('Wednesday Apr 29th');
+    expect(page?.content).toBe('');
+    expect(fs.readFileSync(path.join(root, 'scratchpad', 'Wednesday Apr 29th.md'), 'utf-8')).toBe('');
   });
 
   it('creates wiki folders without slugging the requested folder path', () => {
@@ -1042,7 +1041,7 @@ describe('library roots', () => {
 });
 
 describe('wiki rename', () => {
-  it('updates the markdown H1 when renaming a wiki page', () => {
+  it('renames a wiki page without changing its markdown body', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
     fs.writeFileSync(path.join(root, 'entries', 'untitled.md'), '# Untitled\n\nBody\n', 'utf-8');
@@ -1050,8 +1049,27 @@ describe('wiki rename', () => {
     const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
     Object.defineProperty(manager, 'wikiDir', { value: root });
 
-    expect(manager.renameWikiPage('entries/untitled', 'New Title')).toBe('entries/new-title');
+    expect(manager.renameWikiPage('entries/untitled', 'New Title')).toBe('entries/New Title');
     expect(fs.existsSync(path.join(root, 'entries', 'untitled.md'))).toBe(false);
-    expect(fs.readFileSync(path.join(root, 'entries', 'new-title.md'), 'utf-8')).toBe('# New Title\n\nBody\n');
+    expect(fs.readFileSync(path.join(root, 'entries', 'New Title.md'), 'utf-8')).toBe('# Untitled\n\nBody\n');
+  });
+
+  it('finds a wiki page after an external filename rename', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+    const oldPath = path.join(root, 'scratchpad', 'Old Name.md');
+    const newPath = path.join(root, 'scratchpad', 'New Name.md');
+    fs.writeFileSync(oldPath, 'Body\n', 'utf-8');
+    const version = readDocumentVersion(oldPath);
+    fs.renameSync(oldPath, newPath);
+
+    const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+
+    const page = manager.findWikiPageByDocumentVersion(version, 'scratchpad/Old Name');
+
+    expect(page?.relPath).toBe('scratchpad/New Name');
+    expect(page?.title).toBe('New Name');
+    expect(page?.content).toBe('Body\n');
   });
 });

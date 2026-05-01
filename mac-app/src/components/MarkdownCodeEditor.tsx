@@ -1,14 +1,13 @@
 /**
  * MarkdownCodeEditor — CodeMirror 6 based markdown source editor.
  *
- * Drop-in alternative to the native <textarea> used in LibrarianView. It exposes
- * a minimal value/onChange contract plus an imperative ref so callers can focus
- * the editor and read/write selection state without owning the CM instance.
+ * CodeMirror 6 source editor used by LibrarianView. It exposes a minimal
+ * value/onChange contract plus an imperative ref so callers can focus the editor
+ * and read/write selection state without owning the CM instance.
  *
  * Scope is intentionally limited: this is the source-mode editor, not a
- * WYSIWYG/live-preview surface. All advanced behaviors (wiki completion,
- * paste handlers, undo stack persistence, etc.) live in the parent textarea
- * path and stay there for now — switching renderers should be reversible.
+ * WYSIWYG/live-preview surface. Advanced behaviors such as wiki completion,
+ * paste handling, and undo stack persistence are owned by LibrarianView.
  */
 import {
   forwardRef,
@@ -42,6 +41,8 @@ export interface MarkdownCodeEditorHandle {
   getSelectionRange: () => { start: number; end: number };
   setSelectionRange: (start: number, end: number) => void;
   scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
 }
 
 export interface MarkdownCodeEditorSelectionSnapshot {
@@ -70,6 +71,10 @@ interface MarkdownCodeEditorProps {
   dataAttributes?: Record<string, string | undefined>;
   style?: React.CSSProperties;
   onKeyDown?: (event: KeyboardEvent) => boolean | void;
+  onMouseDown?: (event: MouseEvent, offset: number) => boolean | void;
+  onPaste?: (event: ClipboardEvent) => boolean | void;
+  onFocus?: () => void;
+  onBlur?: () => void;
   onSelectionChange?: (snapshot: MarkdownCodeEditorSelectionSnapshot) => void;
   onScroll?: (scrollTop: number) => void;
 }
@@ -143,6 +148,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
     const onKeyDownRef = useRef(props.onKeyDown);
+    const onMouseDownRef = useRef(props.onMouseDown);
+    const onPasteRef = useRef(props.onPaste);
+    const onFocusRef = useRef(props.onFocus);
+    const onBlurRef = useRef(props.onBlur);
     const onSelectionChangeRef = useRef(props.onSelectionChange);
     const onScrollRef = useRef(onScroll);
     const lastBeforeInputRef = useRef<{ inputType: string; data: string | null } | null>(null);
@@ -158,6 +167,22 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       onKeyDownRef.current = props.onKeyDown;
     }, [props.onKeyDown]);
+
+    useEffect(() => {
+      onMouseDownRef.current = props.onMouseDown;
+    }, [props.onMouseDown]);
+
+    useEffect(() => {
+      onPasteRef.current = props.onPaste;
+    }, [props.onPaste]);
+
+    useEffect(() => {
+      onFocusRef.current = props.onFocus;
+    }, [props.onFocus]);
+
+    useEffect(() => {
+      onBlurRef.current = props.onBlur;
+    }, [props.onBlur]);
 
     useEffect(() => {
       onSelectionChangeRef.current = props.onSelectionChange;
@@ -266,6 +291,20 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               return false;
             },
             keydown: (event) => onKeyDownRef.current?.(event) === true,
+            mousedown: (event, view) => {
+              const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
+              if (pos === null) return false;
+              return onMouseDownRef.current?.(event, pos) === true;
+            },
+            paste: (event) => onPasteRef.current?.(event as ClipboardEvent) === true,
+            focus: () => {
+              onFocusRef.current?.();
+              return false;
+            },
+            blur: () => {
+              onBlurRef.current?.();
+              return false;
+            },
             scroll: (event) => {
               const target = event.target as HTMLElement;
               if (target?.classList?.contains('cm-scroller')) {
@@ -374,6 +413,12 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         set scrollTop(value: number) {
           const scroller = viewRef.current?.scrollDOM;
           if (scroller) scroller.scrollTop = value;
+        },
+        get scrollHeight() {
+          return viewRef.current?.scrollDOM.scrollHeight ?? 0;
+        },
+        get clientHeight() {
+          return viewRef.current?.scrollDOM.clientHeight ?? 0;
         },
       }),
       [],

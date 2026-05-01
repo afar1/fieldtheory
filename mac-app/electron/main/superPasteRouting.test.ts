@@ -1,18 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import {
   isFieldTheorySuperPasteBundleId,
-  shouldInsertImagePathIntoLibrarian,
+  shouldRouteSuperPasteToLibrarian,
 } from './superPasteRouting';
 
-describe('shouldInsertImagePathIntoLibrarian', () => {
+describe('shouldRouteSuperPasteToLibrarian', () => {
   it('requires the Field Theory markdown editor window to be focused', () => {
-    expect(shouldInsertImagePathIntoLibrarian({
+    expect(shouldRouteSuperPasteToLibrarian({
       editorFocused: true,
       windowVisible: true,
       windowFocused: true,
     })).toBe(true);
 
-    expect(shouldInsertImagePathIntoLibrarian({
+    expect(shouldRouteSuperPasteToLibrarian({
       editorFocused: true,
       windowVisible: true,
       windowFocused: false,
@@ -20,9 +20,22 @@ describe('shouldInsertImagePathIntoLibrarian', () => {
   });
 
   it('does not route image paths into Field Theory without editor focus', () => {
-    expect(shouldInsertImagePathIntoLibrarian({
+    expect(shouldRouteSuperPasteToLibrarian({
       editorFocused: false,
       windowVisible: true,
+      windowFocused: true,
+    })).toBe(false);
+  });
+  it('uses the same focused editor gate for text and image Super Paste routing', () => {
+    expect(shouldRouteSuperPasteToLibrarian({
+      editorFocused: true,
+      windowVisible: true,
+      windowFocused: true,
+    })).toBe(true);
+
+    expect(shouldRouteSuperPasteToLibrarian({
+      editorFocused: true,
+      windowVisible: false,
       windowFocused: true,
     })).toBe(false);
   });

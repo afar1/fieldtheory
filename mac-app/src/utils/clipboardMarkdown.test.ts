@@ -32,6 +32,20 @@ function item(overrides: Partial<ClipboardItem>): ClipboardItem {
   };
 }
 
+function withHome(home: string, run: () => void): void {
+  const previousHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    run();
+  } finally {
+    if (previousHome === undefined) {
+      delete process.env.HOME;
+    } else {
+      process.env.HOME = previousHome;
+    }
+  }
+}
+
 describe('clipboard markdown export', () => {
   it('preserves chronological text and improved transcript content', () => {
     const markdown = buildClipboardItemsMarkdown([
@@ -70,6 +84,13 @@ describe('clipboard markdown export', () => {
     expect(localFilePathToMarkdownUrl('/tmp/Figure 1.png')).toBe('file:///tmp/Figure%201.png');
   });
 
+  it('expands home-relative local image paths before making file urls', () => {
+    withHome('/Users/afar', () => {
+      expect(localFilePathToMarkdownUrl('~/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png'))
+        .toBe('file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png');
+    });
+  });
+
   it('formats a local image path as a markdown image embed', () => {
     expect(formatLocalImageMarkdown('/tmp/Figure 1.png', 'Figure A')).toBe('![Figure A](<file:///tmp/Figure%201.png>)');
   });
@@ -78,6 +99,32 @@ describe('clipboard markdown export', () => {
     expect(formatPastedLocalImageMarkdown(
       '/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-05-01 at 11.57.03 AM.png',
     )).toBe('![Image](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%202026-05-01%20at%2011.57.03%20AM.png>)');
+  });
+
+  it('converts pasted home-relative image paths into markdown image embeds', () => {
+    withHome('/Users/afar', () => {
+      expect(formatPastedLocalImageMarkdown(
+        '~/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-05-01 at 1.28.35 PM.png',
+      )).toBe('![Image](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%202026-05-01%20at%201.28.35%20PM.png>)');
+    });
+  });
+
+  it('converts multiple pasted local image paths into markdown image embeds', () => {
+    expect(formatPastedLocalImageMarkdown(
+      '/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-05-01 at 2.26.05 PM.png /Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 2026-05-01 at 2.26.01 PM.png',
+    )).toBe([
+      '![Image 1](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%202026-05-01%20at%202.26.05%20PM.png>)',
+      '![Image 2](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%202026-05-01%20at%202.26.01%20PM.png>)',
+    ].join('\n\n'));
+  });
+
+  it('converts newline-separated pasted local image paths into markdown image embeds', () => {
+    expect(formatPastedLocalImageMarkdown(
+      '/tmp/Figure 1.png\n/tmp/Figure 2.jpg',
+    )).toBe([
+      '![Image 1](<file:///tmp/Figure%201.png>)',
+      '![Image 2](<file:///tmp/Figure%202.jpg>)',
+    ].join('\n\n'));
   });
 
   it('does not convert non-image local paths', () => {

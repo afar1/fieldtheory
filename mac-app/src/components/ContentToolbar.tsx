@@ -72,14 +72,6 @@ interface ContentToolbarProps {
   }>;
   onProseRendererChange?: (renderer: ProseRenderer) => void;
 
-  markdownEditor?: 'textarea' | 'codemirror';
-  markdownEditorOptions?: Array<{
-    id: 'textarea' | 'codemirror';
-    label: string;
-    title: string;
-  }>;
-  onMarkdownEditorChange?: (editor: 'textarea' | 'codemirror') => void;
-
   onTypographyMenuOpenChange?: (open: boolean) => void;
 
   // Edit state
@@ -143,9 +135,6 @@ export default function ContentToolbar({
   proseRenderer,
   proseRendererOptions,
   onProseRendererChange,
-  markdownEditor,
-  markdownEditorOptions,
-  onMarkdownEditorChange,
   onTypographyMenuOpenChange,
   isEditing = false,
   isDirty = false,
@@ -205,8 +194,7 @@ export default function ContentToolbar({
     (lineHeightOptions?.length && onLineHeightChange) ||
     onUnorderedListMarkerChange ||
     onTodoMarkerChange ||
-    (proseRendererOptions?.length && onProseRendererChange) ||
-    (markdownEditorOptions?.length && onMarkdownEditorChange)
+    (proseRendererOptions?.length && onProseRendererChange)
   );
   const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
@@ -864,42 +852,6 @@ export default function ContentToolbar({
                 </div>
               )}
 
-              {markdownEditorOptions && markdownEditorOptions.length > 0 && onMarkdownEditorChange && (
-                <div>
-                  <div style={{ fontSize: '10px', color: theme.textSecondary, marginBottom: '5px' }}>
-                    Editor
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '4px' }}>
-                    {markdownEditorOptions.map((option) => {
-                      const isSelected = option.id === markdownEditor;
-                      return (
-                        <button
-                          key={option.id}
-                          type="button"
-                          onClick={() => onMarkdownEditorChange(option.id)}
-                          title={option.title}
-                          style={{
-                            height: '26px',
-                            padding: '0 6px',
-                            color: isSelected ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                            backgroundColor: isSelected
-                              ? (theme.isDark ? 'rgba(255,255,255,0.13)' : 'rgba(0,0,0,0.08)')
-                              : 'transparent',
-                            border: 'none',
-                            borderRadius: '5px',
-                            cursor: 'pointer',
-                            fontSize: '11px',
-                            fontWeight: isSelected ? 600 : 400,
-                            lineHeight: 1,
-                          }}
-                        >
-                          {option.label}
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>

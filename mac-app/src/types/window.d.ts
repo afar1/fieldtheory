@@ -1644,14 +1644,13 @@ declare global {
     relPath: string;     // e.g. 'entries/2026-04-15-foo' (no .md)
     absPath: string;     // full filesystem path
     name: string;        // filename slug without date/ext
-    title: string;       // from # heading or filename
+    title: string;       // filename without extension
     lastUpdated: number; // mtime
     todoState?: MarkdownTodoState;
   }
 
   interface WikiPage extends WikiPageMeta {
     content: string;
-    titleSuggestion?: string;
     documentVersion: DocumentVersion;
   }
 
@@ -1728,9 +1727,10 @@ declare global {
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
+    findPageByDocumentVersion: (version: DocumentVersion, previousRelPath?: string) => Promise<WikiPage | null>;
     save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     createFile: (folderName: string, fileName: string) => Promise<WikiPage | null>;
-    createFileWithTitleSuggestion: (folderName: string) => Promise<WikiPage | null>;
+    createFileWithDefaultTitle: (folderName: string) => Promise<WikiPage | null>;
     createScratchpadDefault: () => Promise<WikiPage | null>;
     openScratchpadDefault: () => Promise<WikiPage | null>;
     createDir: (dirName: string) => Promise<boolean>;
@@ -1739,11 +1739,11 @@ declare global {
     onPageChanged: (callback: () => void) => () => void;
     onPageDeleted: (callback: (relPath: string) => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
-    onOpenScratchpad: (callback: (relPath: string, titleSuggestion?: string) => void) => () => void;
+    onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
   }
 
   // External markdown files opened via macOS `open-file` for paths that fall
-  // outside the wiki root. Read/write happens in place — no copy, no watcher.
+  // outside the wiki root. Read/write happens in place — no copy.
   interface ExternalMarkdownFile {
     path: string;    // canonical absolute path
     name: string;    // basename (e.g. "README.md")
@@ -1755,6 +1755,8 @@ declare global {
   interface ExternalAPI {
     open: (absPath: string) => Promise<ExternalMarkdownFile | null>;
     save: (absPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
+    findLibraryFileByDocumentVersion: (version: DocumentVersion, previousAbsPath?: string) => Promise<ExternalMarkdownFile | null>;
+    rename: (absPath: string, newName: string) => Promise<ExternalMarkdownFile | null>;
     onOpenExternal: (callback: (absPath: string) => void) => () => void;
   }
 

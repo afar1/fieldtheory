@@ -1441,7 +1441,7 @@ function CommandLauncher() {
       if (filtered.length > 0) {
         const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
         const selectedItem = filtered[currentIndex];
-        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: true });
+        if (selectedItem) invokeItem(selectedItem, { insertWikiLink: selectedItem.type !== 'command' });
       }
     }
   };
@@ -1450,22 +1450,57 @@ function CommandLauncher() {
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean; openFieldTheoryTarget?: boolean } = {}) => {
     noteItemUsage(item.id);
     dismissPreview();
+    const showInvocationError = (event: string, error: string | undefined, fallback: string) => {
+      const message = error ?? fallback;
+      traceLauncher(event, { error: message });
+      setQuery(message);
+      setFiltered([]);
+      resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+    };
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
     const fieldTheoryTarget = latestContext?.fieldTheoryActive ? getFieldTheoryTarget(item) : null;
+    traceLauncher('invoke-item', {
+      item: describeLauncherItem(item),
+      fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
+      hasFieldTheoryTarget: !!fieldTheoryTarget,
+      openFieldTheoryTarget: options.openFieldTheoryTarget ?? false,
+      insertWikiLink: options.insertWikiLink ?? false,
+    });
     if (options.openFieldTheoryTarget && !fieldTheoryTarget) return;
     if (fieldTheoryTarget) {
       if (options.openFieldTheoryTarget) {
-        await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
-      } else if (options.insertWikiLink || item.type === 'command') {
-        await commandsAPI.insertMarkdownText(getWikiLinkText(item)).catch(() => null);
-      } else {
-        await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
+        const result = await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
+        if (!result.success) {
+          showInvocationError('open-field-theory-target-error', result.error, 'Open failed');
+        }
+        return;
+      }
+      if (options.insertWikiLink || item.type === 'command') {
+        const result = await commandsAPI.insertMarkdownText(getWikiLinkText(item)).catch((error) => ({
+          success: false,
+          error: error instanceof Error ? error.message : 'Insert failed',
+        }));
+        if (!result.success) {
+          showInvocationError('insert-markdown-text-error', result.error, 'Insert failed');
+        }
+        return;
+      }
+      const result = await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
+      if (!result.success) {
+        showInvocationError('open-field-theory-target-error', result.error, 'Open failed');
       }
       return;
     }
 
     if (item.type === 'command') {
-      await commandsAPI.invokeCommand(item.name);
+      const result = await commandsAPI.invokeCommand(item.name).catch((error) => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Command paste failed',
+      }));
+      if (!result.success) {
+        showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
+        return;
+      }
       commandsAPI.launcherClose();
     } else if (item.type === 'directory') {
       if (item.directoryPath) {
