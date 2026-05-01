@@ -1,4 +1,4 @@
-export function shouldInsertImagePathIntoLibrarian(input: {
+export function shouldRouteSuperPasteToLibrarian(input: {
   editorFocused: boolean;
   windowVisible: boolean;
   windowFocused: boolean;

@@ -3,7 +3,6 @@ import {
   cycleMarkdownTodoState,
   deletedLibraryItemMatchesSelection,
   editorSessionMatchesSelection,
-  extractMarkdownH1Title,
   findNextMarkdownMatch,
   getCarrotListEnterEdit,
   getCarrotListTabEdit,
@@ -204,16 +203,6 @@ Body text here.`;
     expect(result.meta.tags).toBe('[test]');
     expect(result.meta.last_updated).toBe('2026-04-15');
     expect(Object.keys(result.meta)).toHaveLength(2);
-  });
-});
-
-describe('extractMarkdownH1Title', () => {
-  it('uses the first H1 title from markdown content', () => {
-    expect(extractMarkdownH1Title('# New Title\n\nBody', 'Old Title')).toBe('New Title');
-  });
-
-  it('falls back when no H1 exists', () => {
-    expect(extractMarkdownH1Title('## H2 only\n\nBody', 'Old Title')).toBe('Old Title');
   });
 });
 
