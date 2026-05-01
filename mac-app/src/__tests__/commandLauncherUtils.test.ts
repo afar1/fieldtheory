@@ -9,6 +9,7 @@ import {
   filterLauncherDirectoryNamespaceItems,
   filterLauncherNamespaceItems,
   flattenLibraryRootsForLauncher,
+  balanceLauncherNormalModeMatches,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
@@ -87,6 +88,46 @@ describe('formatTimeAgo', () => {
   it('returns formatted date for 7+ days', () => {
     const result = formatTimeAgo(Date.now() - 10 * 86_400_000);
     expect(result).toMatch(/^[A-Z][a-z]+ \d+$/); // e.g. "Feb 23"
+  });
+});
+
+describe('balanceLauncherNormalModeMatches', () => {
+  const item = (id: string, type: string, lastOpenedAt?: number) => ({
+    id,
+    type,
+    name: id,
+    displayName: id,
+    lastOpenedAt,
+  });
+
+  it('orders search results by commands, recent markdown, library, actions, then bookmarks', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('bookmark-author', 'bookmark-author'), score: 990 },
+      { item: item('bookmark-post', 'bookmark'), score: 980 },
+      { item: item('library-page', 'wiki-page'), score: 970 },
+      { item: item('recent-page', 'recent-file'), score: 960 },
+      { item: item('action', 'action'), score: 950 },
+      { item: item('command', 'command'), score: 940 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'command',
+      'recent-page',
+      'library-page',
+      'action',
+      'bookmark-author',
+      'bookmark-post',
+    ]);
+  });
+
+  it('keeps recent-only searches sorted by latest open time', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('older', 'recent-file', 10), score: 1000 },
+      { item: item('newer', 'recent-file', 30), score: 900 },
+      { item: item('middle', 'recent-file', 20), score: 800 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual(['newer', 'middle', 'older']);
   });
 });
 
