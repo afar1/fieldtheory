@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { buildHotkeyString, formatHotkeyDisplay, hasNonShiftModifierHotkey, normalizeHotkeyForComparison, shouldDeferCopyShortcutToNative } from './hotkeys';
+import { buildHotkeyString, formatHotkeyDisplay, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison, shouldDeferCopyShortcutToNative } from './hotkeys';
 
 describe('buildHotkeyString', () => {
   it('builds hotkeys from physical key codes', () => {
@@ -91,5 +91,18 @@ describe('shouldDeferCopyShortcutToNative', () => {
     document.body.appendChild(div);
 
     expect(shouldDeferCopyShortcutToNative()).toBe(false);
+  });
+});
+
+describe('isTextEntryElement', () => {
+  it('treats CodeMirror-style contenteditable elements as text entry', () => {
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+
+    expect(isTextEntryElement(editor)).toBe(true);
+  });
+
+  it('does not treat plain divs as text entry', () => {
+    expect(isTextEntryElement(document.createElement('div'))).toBe(false);
   });
 });
