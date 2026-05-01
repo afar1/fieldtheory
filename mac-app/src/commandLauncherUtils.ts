@@ -213,10 +213,72 @@ export interface LauncherUsageScoreItem {
   name: string;
 }
 
+export type LauncherNormalModeSectionId = 'commands' | 'recent' | 'files' | 'actions' | 'bookmarks';
+
+export interface LauncherNormalModeItem {
+  type?: string;
+  lastOpenedAt?: number;
+}
+
+export interface ScoredLauncherNormalModeItem<T extends LauncherNormalModeItem> {
+  item: T;
+  score: number;
+}
+
 export interface LauncherDirectoryNamespace {
   label: string;
   directoryPath: string;
   directoryRelPath?: string;
+}
+
+const NORMAL_MODE_SECTION_ORDER: Array<{ id: LauncherNormalModeSectionId; predicate: (item: LauncherNormalModeItem) => boolean }> = [
+  { id: 'commands', predicate: (item) => item.type === 'command' },
+  { id: 'recent', predicate: (item) => item.type === 'recent-file' },
+  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
+  { id: 'actions', predicate: (item) => item.type === 'action' },
+  { id: 'bookmarks', predicate: (item) => item.type === 'bookmark' || item.type === 'bookmark-author' || item.type === 'bookmark-facet' },
+];
+
+const NORMAL_MODE_SECTION_LIMITS: Record<LauncherNormalModeSectionId, number> = {
+  commands: 4,
+  recent: 3,
+  files: 6,
+  actions: 3,
+  bookmarks: 4,
+};
+
+function getNormalModeSectionId(item: LauncherNormalModeItem): LauncherNormalModeSectionId | null {
+  return NORMAL_MODE_SECTION_ORDER.find(section => section.predicate(item))?.id ?? null;
+}
+
+export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
+  matches: ScoredLauncherNormalModeItem<T>[],
+): T[] {
+  const groups = new Map<LauncherNormalModeSectionId, ScoredLauncherNormalModeItem<T>[]>();
+  for (const item of matches) {
+    const sectionId = getNormalModeSectionId(item.item);
+    if (!sectionId) continue;
+    const group = groups.get(sectionId) ?? [];
+    group.push(item);
+    groups.set(sectionId, group);
+  }
+
+  const activeSectionCount = NORMAL_MODE_SECTION_ORDER.filter(section => (groups.get(section.id)?.length ?? 0) > 0).length;
+  const recentItems = groups.get('recent') ?? [];
+  if (activeSectionCount === 1 && recentItems.length > 0) {
+    return recentItems
+      .slice()
+      .sort((a, b) => (b.item.lastOpenedAt ?? 0) - (a.item.lastOpenedAt ?? 0))
+      .map(({ item }) => item);
+  }
+  if (activeSectionCount <= 1) return matches.map(({ item }) => item);
+
+  const balanced: T[] = [];
+  for (const { id } of NORMAL_MODE_SECTION_ORDER) {
+    const sectionMatches = groups.get(id) ?? [];
+    balanced.push(...sectionMatches.slice(0, NORMAL_MODE_SECTION_LIMITS[id]).map(({ item }) => item));
+  }
+  return balanced;
 }
 
 export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
