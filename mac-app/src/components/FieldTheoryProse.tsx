@@ -77,8 +77,14 @@ function proseStyle(props: FieldTheoryProseStyleProps): CSSProperties {
   } as CSSProperties;
 }
 
+export function localFileUrlToFieldTheoryUrl(url: string): string {
+  if (!/^file:\/\//i.test(url)) return url;
+  return url.replace(/^file:/i, 'ftlocalfile:');
+}
+
 function fieldTheoryUrlTransform(url: string, key: string): string {
-  if (key === 'src' && /^(file|ftmedia):/i.test(url)) return url;
+  if (key === 'src' && /^file:/i.test(url)) return localFileUrlToFieldTheoryUrl(url);
+  if (key === 'src' && /^(ftlocalfile|ftmedia):/i.test(url)) return url;
   return defaultUrlTransform(url);
 }
 

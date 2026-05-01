@@ -169,7 +169,12 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
 const FOCUS_CHROME_ICON_TOP_PX = 48;
-const FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX = 70;
+const FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX = 28;
+const FIELD_THEORY_CHROME_LOGO_TOP_PX = 24;
+const FIELD_THEORY_CHROME_MIC_TOP_PX = 21;
+const FIELD_THEORY_CHROME_TABS_TOP_PX = 60;
+const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 24;
+const FIELD_THEORY_CHROME_OVERLAY_TOP_PX = 10;
 
 /**
  * Check if any items in a stack have improved content.
@@ -995,8 +1000,12 @@ export default function ClipboardHistory() {
   
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
+  const appTitlebarOffsetPx = showInDock ? FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX : 0;
+  const chromeLogoTopPx = FIELD_THEORY_CHROME_LOGO_TOP_PX - appTitlebarOffsetPx;
+  const chromeMicTopPx = FIELD_THEORY_CHROME_MIC_TOP_PX - appTitlebarOffsetPx;
+  const chromeTabsTopPx = FIELD_THEORY_CHROME_TABS_TOP_PX - appTitlebarOffsetPx;
   const focusChromeIconTop = bookmarksCanvasToolbarTop === null
-    ? (showInDock ? FOCUS_CHROME_ICON_TOP_WITH_DOCK_PX : FOCUS_CHROME_ICON_TOP_PX)
+    ? FOCUS_CHROME_ICON_TOP_PX
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
   // Show fieldtheory.dev link in footer.
@@ -2173,12 +2182,13 @@ export default function ClipboardHistory() {
     return () => unsubscribe?.();
   }, []);
 
-  // Hotkey-driven scratchpad create → jump straight into Library so
-  // LibrarianView's own onOpenScratchpad listener can open the new page.
+  // Hotkey-driven scratchpad create → jump straight into Library and preserve
+  // the target in case LibrarianView mounts after the one-shot IPC event.
   useEffect(() => {
-    const unsubscribe = window.wikiAPI?.onOpenScratchpad(() => {
+    const unsubscribe = window.wikiAPI?.onOpenScratchpad((relPath) => {
       clearPreview();
       setShowSettings(false);
+      setPendingLibraryOpenTarget({ kind: 'wiki', path: relPath, contentMode: 'markdown' });
       setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
     });
@@ -3731,8 +3741,8 @@ export default function ClipboardHistory() {
       {showInDock && (
         <div
           style={{
-            height: '28px',
-            minHeight: '28px',
+            height: `${FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX}px`,
+            minHeight: `${FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX}px`,
             // @ts-ignore - webkit vendor prefix for Electron draggable region
             WebkitAppRegion: 'drag',
             cursor: 'grab',
@@ -3766,7 +3776,7 @@ export default function ClipboardHistory() {
         <div
           style={{
             position: 'absolute',
-            top: '10px',
+            top: `${chromeLogoTopPx}px`,
             left: '50%',
             transform: 'translateX(-50%)',
             display: 'flex',
@@ -3793,7 +3803,7 @@ export default function ClipboardHistory() {
           <div
             style={{
               position: 'absolute',
-              top: showInDock ? '-21px' : '7px',
+              top: `${chromeMicTopPx}px`,
               right: '28px',
               display: 'flex',
               alignItems: 'center',
@@ -4002,9 +4012,9 @@ export default function ClipboardHistory() {
             display: 'flex',
             alignItems: 'center',
             gap: '6px',
-            padding: '30px 28px 0 20px',
+            padding: `${chromeTabsTopPx}px 28px 0 20px`,
             marginTop: 0,
-            marginBottom: '14px',
+            marginBottom: `${FIELD_THEORY_CHROME_TABS_BOTTOM_PX}px`,
             height: 'auto',
             minHeight: '32px',
             overflow: 'hidden',
@@ -7241,7 +7251,7 @@ export default function ClipboardHistory() {
             position: 'absolute',
             right: '16px',
             ...(bookmarksCanvasChromeActive
-              ? { top: showInDock ? '38px' : '10px' }
+              ? { top: `${FIELD_THEORY_CHROME_OVERLAY_TOP_PX + appTitlebarOffsetPx}px` }
               : { bottom: '8px' }),
             zIndex: 20,
             pointerEvents: 'auto',
