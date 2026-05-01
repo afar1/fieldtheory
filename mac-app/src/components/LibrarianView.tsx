@@ -2241,7 +2241,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     letterSpacing: 0,
   };
   const documentParagraphSpacing = resolveLibrarianParagraphSpacing(lineHeightId);
-  const readerTopFadeVisible = contentMode === 'markdown' ? true : renderedDocumentTopFade;
+  const readerTopFadeVisible = contentMode === 'rendered' && renderedDocumentTopFade;
 
   const markdownDisplay = useMemo(() => {
     if ((selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
@@ -2570,11 +2570,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const value = valueOverride ?? editor?.value ?? editContent;
     if (
       !pending ||
-      !editor ||
       contentMode !== 'markdown' ||
       pending.path !== activeReading?.path ||
       value !== '# \n'
     ) {
+      setMarkdownTitleSuggestion(null);
+      return;
+    }
+
+    if (!editor && markdownEditorChoice === 'codemirror') {
+      setMarkdownTitleSuggestion({ ...pending, top: 0, left: 22 });
+      return;
+    }
+    if (!editor) {
       setMarkdownTitleSuggestion(null);
       return;
     }
@@ -2585,7 +2593,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     setMarkdownTitleSuggestion({ ...pending, ...position });
-  }, [activeReading?.path, contentMode, editContent]);
+  }, [activeReading?.path, contentMode, editContent, markdownEditorChoice]);
 
   const updateMarkdownWikiLinkCompletion = useCallback((
     editor: HTMLTextAreaElement,
@@ -2869,6 +2877,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [markWritingActive, scheduleEditorSessionPersist, updateMarkdownEditorFades, updateMarkdownWikiLinkCompletion]);
 
+  const applyPendingMarkdownTitleSuggestion = useCallback((
+    currentValue: string,
+    afterApply: (nextValue: string, nextOffset: number) => void,
+  ): boolean => {
+    const pendingTitleSuggestion = pendingTitleSuggestionRef.current;
+    if (
+      !pendingTitleSuggestion ||
+      pendingTitleSuggestion.path !== activeReading?.path ||
+      currentValue !== '# \n'
+    ) {
+      return false;
+    }
+
+    const nextValue = `# ${pendingTitleSuggestion.text}\n`;
+    const nextOffset = 2 + pendingTitleSuggestion.text.length;
+    pendingTitleSuggestionRef.current = null;
+    setMarkdownTitleSuggestion(null);
+    markWritingActive();
+    setEditContent(nextValue);
+    setWikiSelectedPage((prev) => (prev ? { ...prev, title: pendingTitleSuggestion.text, content: nextValue } : prev));
+    scheduleEditorSessionPersist();
+    afterApply(nextValue, nextOffset);
+    return true;
+  }, [activeReading?.path, markWritingActive, scheduleEditorSessionPersist]);
+
   const handleMarkdownEditorKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (isImmersiveToggleShortcut(e)) {
       e.preventDefault();
@@ -2993,27 +3026,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey && !e.altKey) {
-      const pendingTitleSuggestion = pendingTitleSuggestionRef.current;
-      if (
-        pendingTitleSuggestion &&
-        pendingTitleSuggestion.path === activeReading?.path &&
-        e.currentTarget.value === '# \n'
-      ) {
-        e.preventDefault();
-        const nextValue = `# ${pendingTitleSuggestion.text}\n`;
-        const nextOffset = 2 + pendingTitleSuggestion.text.length;
-        pendingTitleSuggestionRef.current = null;
-        setMarkdownTitleSuggestion(null);
-        markWritingActive();
-        setEditContent(nextValue);
-        setWikiSelectedPage((prev) => (prev ? { ...prev, title: pendingTitleSuggestion.text, content: nextValue } : prev));
-        scheduleEditorSessionPersist();
+      if (applyPendingMarkdownTitleSuggestion(e.currentTarget.value, (nextValue, nextOffset) => {
         requestAnimationFrame(() => {
           const editor = markdownEditorRef.current;
           if (!editor || editor.value !== nextValue) return;
           editor.setSelectionRange(nextOffset, nextOffset);
           updateMarkdownEditorFades(editor);
         });
+      })) {
+        e.preventDefault();
         return;
       }
 
@@ -3033,6 +3054,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyListToggle,
     applyMarkdownWikiLinkSuggestion,
     activeReading?.path,
+    applyPendingMarkdownTitleSuggestion,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
@@ -3042,6 +3064,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     toggleFocusChromeShortcut,
     updateMarkdownEditorFades,
   ]);
+
+  const handleMarkdownCodeEditorKeyDown = useCallback((event: KeyboardEvent): boolean => {
+    if (event.key !== 'Tab' || event.metaKey || event.ctrlKey || event.altKey) return false;
+    const editor = markdownCodeEditorRef.current;
+    if (!editor) return false;
+    return applyPendingMarkdownTitleSuggestion(editor.getValue(), (nextValue, nextOffset) => {
+      requestAnimationFrame(() => {
+        const nextEditor = markdownCodeEditorRef.current;
+        if (!nextEditor || nextEditor.getValue() !== nextValue) return;
+        nextEditor.setSelectionRange(nextOffset, nextOffset);
+        nextEditor.focus({ preventScroll: true });
+      });
+    });
+  }, [applyPendingMarkdownTitleSuggestion]);
 
   const handleMarkdownEditorKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     const editor = e.currentTarget;
@@ -4976,6 +5012,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         setEditContent(next);
                         scheduleEditorSessionPersist();
                       }}
+                      onKeyDown={handleMarkdownCodeEditorKeyDown}
                       onScroll={() => scheduleEditorSessionPersist()}
                       fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
                       fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
@@ -5093,7 +5130,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   placeholder="Write your markdown here..."
                 />
                 )}
-                {markdownEditorChoice === 'textarea' && markdownTitleSuggestion && (
+                {markdownTitleSuggestion && (
                   <span
                     aria-hidden="true"
                     style={{
