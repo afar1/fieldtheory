@@ -1261,7 +1261,7 @@ interface CommandsAPI {
   // Command launcher (Cmd+Shift+K)
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize?: (height: number) => void;
-  launcherClose?: () => void;
+  launcherClose?: (options?: { skipActivation?: boolean }) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;

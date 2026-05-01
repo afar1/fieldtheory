@@ -272,7 +272,7 @@ interface LauncherCommandsAPI {
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
-  launcherClose: () => void;
+  launcherClose: (options?: { skipActivation?: boolean }) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
@@ -389,6 +389,7 @@ function compactLauncherUrl(rawUrl: string): string {
 
 const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
 const LAUNCHER_COLLAPSED_HEIGHT = 43;
+const COMMAND_LAUNCHER_RADIUS = 16;
 
 // =============================================================================
 // Styles (dynamic based on theme)
@@ -399,7 +400,7 @@ const getStyles = (isDark: boolean) => ({
     display: 'flex',
     flexDirection: 'column' as const,
     backgroundColor: isDark ? '#1e1e1e' : '#fbfbfa',
-    borderRadius: '16px',
+    borderRadius: `${COMMAND_LAUNCHER_RADIUS}px`,
     height: '100vh',
     boxSizing: 'border-box' as const,
     overflow: 'hidden',
@@ -529,7 +530,7 @@ function CommandLauncher() {
   const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
-  const [isDarkMode, setIsDarkMode] = useState(() => themeAPI.initialTheme ?? false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean | null>(() => themeAPI.initialTheme ?? null);
   const [libraryMarkdownItems, setLibraryMarkdownItems] = useState<LauncherItem[]>([]);
   const [directoryItems, setDirectoryItems] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
@@ -931,7 +932,7 @@ function CommandLauncher() {
       timeAgo: formatTimeAgo(h.lastModified),
     }));
 
-    const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode, squaresHotkeys, showSquaresInCommandLauncher)
+    const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode ?? false, squaresHotkeys, showSquaresInCommandLauncher)
       .map((item) => {
         if (item.actionId !== 'save-current-website' || !activeWebPage?.url) return item;
         return {
@@ -1302,8 +1303,9 @@ function CommandLauncher() {
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
       if (previewOpen) {
-        e.preventDefault();
         traceLauncher('preview-close', { source: 'escape' });
         manualPreviewRef.current = false;
         previewRequestRef.current += 1;
@@ -1311,7 +1313,7 @@ function CommandLauncher() {
         setPreviewPayload(null);
         return;
       }
-      commandsAPI.launcherClose();
+      commandsAPI.launcherClose({ skipActivation: true });
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length === 0) return;
@@ -1638,6 +1640,10 @@ function CommandLauncher() {
       commandsAPI.launcherClose();
     }
   }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, noteItemUsage, resizeLauncher, selectIndex]);
+
+  if (isDarkMode === null) {
+    return <div style={{ width: '100vw', height: '100vh', background: 'transparent' }} />;
+  }
 
   const styles = getStyles(isDarkMode);
   const selectedItemStyle = (index: number) => {
