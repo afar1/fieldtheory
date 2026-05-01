@@ -3411,6 +3411,55 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, [contentMode, editContent, externalOpenFile?.path, selectedItemType]);
 
+  useEffect(() => {
+    const unsubscribe = window.wikiAPI?.onPageRenamed?.(async (event) => {
+      if (selectedItemType !== 'wiki' || wikiSelectedRelPath !== event.oldRelPath) return;
+      const page = await window.wikiAPI?.getPage(event.newRelPath);
+      if (!page) return;
+      const reading = readingFromWikiPage(page);
+      const hasUnsavedEdit = contentMode === 'markdown' && editContent !== lastSavedContentRef.current;
+      if (hasUnsavedEdit) reading.content = editContent;
+      const from = { itemType: 'wiki' as const, itemPath: event.oldRelPath };
+      const to = { itemType: 'wiki' as const, itemPath: event.newRelPath };
+      historyNavigationTargetRef.current = to;
+      setNavigationHistory((prev) => replaceLibrarianNavigationEntry(prev, from, to));
+      lastSeededPathRef.current = reading.path;
+      setWikiSelectedRelPath(event.newRelPath);
+      setSelectedItemId(`wiki:${event.newRelPath}`);
+      setSelectedItemType('wiki');
+      setWikiSelectedPage(reading);
+      setTitleDraft(reading.title);
+      lastSavedContentRef.current = page.content;
+      lastSavedVersionRef.current = page.documentVersion;
+    });
+
+    return () => unsubscribe?.();
+  }, [contentMode, editContent, selectedItemType, wikiSelectedRelPath]);
+
+  useEffect(() => {
+    const unsubscribe = window.libraryAPI?.onItemRenamed?.(async (event) => {
+      if (event.builtin || selectedItemType !== 'external' || externalOpenFile?.path !== event.oldAbsPath) return;
+      const file = await window.externalAPI?.open(event.newAbsPath);
+      if (!file) return;
+      const reading = readingFromExternalMarkdownFile(file);
+      const hasUnsavedEdit = contentMode === 'markdown' && editContent !== lastSavedContentRef.current;
+      if (hasUnsavedEdit) reading.content = editContent;
+      const from = { itemType: 'external' as const, itemPath: event.oldAbsPath };
+      const to = { itemType: 'external' as const, itemPath: event.newAbsPath };
+      historyNavigationTargetRef.current = to;
+      setNavigationHistory((prev) => replaceLibrarianNavigationEntry(prev, from, to));
+      lastSeededPathRef.current = reading.path;
+      setExternalOpenFile(reading);
+      setSelectedItemId(`external:${event.newAbsPath}`);
+      setSelectedPath(null);
+      setTitleDraft(reading.title);
+      lastSavedContentRef.current = file.content;
+      lastSavedVersionRef.current = file.documentVersion;
+    });
+
+    return () => unsubscribe?.();
+  }, [contentMode, editContent, externalOpenFile?.path, selectedItemType]);
+
   // Load readings on mount and check setup completion
   useEffect(() => {
     async function loadReadings() {
@@ -3507,6 +3556,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       );
       // Reload content if this is the selected reading
       if (selectedPath === reading.path) {
+        window.librarianAPI?.getReading(reading.path).then((result) => {
+          setSelectedReading(result || null);
+        });
+      }
+    });
+
+    return () => unsubscribe?.();
+  }, [selectedPath]);
+
+  useEffect(() => {
+    const unsubscribe = window.librarianAPI?.onReadingRenamed?.(({ oldPath, reading }) => {
+      setNavigationHistory((prev) => replaceLibrarianNavigationEntry(
+        prev,
+        { itemType: 'artifact', itemPath: oldPath },
+        { itemType: 'artifact', itemPath: reading.path },
+      ));
+      setReadings((prev) => {
+        const withoutOld = prev.filter((r) => r.path !== oldPath && r.path !== reading.path);
+        return [reading, ...withoutOld];
+      });
+      if (selectedPath === oldPath) {
+        setSelectedPath(reading.path);
+        setSelectedItemId(`artifact:${reading.path}`);
         window.librarianAPI?.getReading(reading.path).then((result) => {
           setSelectedReading(result || null);
         });

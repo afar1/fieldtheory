@@ -287,6 +287,31 @@ export function removeWikiRelPathFromTree(tree: WikiFolder[], relPath: string): 
   return changed ? next : tree;
 }
 
+function relPathTitle(relPath: string): string {
+  return relPath.split('/').filter(Boolean).pop() ?? relPath;
+}
+
+function renameWikiRelPathInTree(tree: WikiFolder[], event: LibraryRenameEvent): WikiFolder[] {
+  let changed = false;
+  const next = tree.map((folder) => {
+    const files = folder.files.map((page) => {
+      if (page.relPath !== event.oldRelPath) return page;
+      changed = true;
+      const title = relPathTitle(event.newRelPath);
+      return {
+        ...page,
+        relPath: event.newRelPath,
+        absPath: event.newAbsPath,
+        name: title,
+        title,
+        lastUpdated: Date.now(),
+      };
+    });
+    return changed ? { ...folder, files } : folder;
+  });
+  return changed ? next : tree;
+}
+
 function removeWikiRelPathFromNodes(nodes: WikiNode[], relPath: string): { nodes: WikiNode[]; changed: boolean } {
   let changed = false;
   const next: WikiNode[] = [];
@@ -313,6 +338,31 @@ function removeWikiRelPathFromNodes(nodes: WikiNode[], relPath: string): { nodes
   return { nodes: changed ? next : nodes, changed };
 }
 
+function renameWikiRelPathInNodes(nodes: WikiNode[], event: LibraryRenameEvent): { nodes: WikiNode[]; changed: boolean } {
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.kind === 'file') {
+      if (node.relPath !== event.oldRelPath) return node;
+      changed = true;
+      const title = relPathTitle(event.newRelPath);
+      return {
+        ...node,
+        relPath: event.newRelPath,
+        absPath: event.newAbsPath,
+        name: title,
+        title,
+        lastUpdated: Date.now(),
+      };
+    }
+
+    const children = renameWikiRelPathInNodes(node.children, event);
+    if (!children.changed) return node;
+    changed = true;
+    return { ...node, children: children.nodes };
+  });
+  return { nodes: changed ? next : nodes, changed };
+}
+
 export function removeWikiRelPathFromLibraryRoots(roots: LibraryRoot[], relPath: string): LibraryRoot[] {
   let changed = false;
   const next = roots.map((root) => {
@@ -321,6 +371,18 @@ export function removeWikiRelPathFromLibraryRoots(roots: LibraryRoot[], relPath:
     if (!pruned.changed) return root;
     changed = true;
     return { ...root, tree: pruned.nodes };
+  });
+  return changed ? next : roots;
+}
+
+function renameLibraryRootRelPath(roots: LibraryRoot[], event: LibraryRenameEvent): LibraryRoot[] {
+  let changed = false;
+  const next = roots.map((root) => {
+    if (root.path !== event.rootPath) return root;
+    const renamed = renameWikiRelPathInNodes(root.tree, event);
+    if (!renamed.changed) return root;
+    changed = true;
+    return { ...root, tree: renamed.nodes };
   });
   return changed ? next : roots;
 }
@@ -861,10 +923,19 @@ function WikiSidebar({
     loadTaggedDocs();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => loadTree());
     const unsubDeletedWiki = window.wikiAPI?.onPageDeleted((relPath) => pruneDeletedWikiPage(relPath));
+    const unsubRenamedWiki = window.wikiAPI?.onPageRenamed?.((event) => {
+      setWikiTree((prev) => renameWikiRelPathInTree(prev, event));
+      setLibraryRoots((prev) => renameLibraryRootRelPath(prev, event));
+    });
     const unsubLibrary = window.libraryAPI?.onRootsChanged(() => loadTree());
+    const unsubRenamedLibrary = window.libraryAPI?.onItemRenamed?.((event) => {
+      if (event.builtin) return;
+      setLibraryRoots((prev) => renameLibraryRootRelPath(prev, event));
+    });
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
+    const unsubRenamedReading = window.librarianAPI?.onReadingRenamed?.(() => loadArtifacts());
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
@@ -878,10 +949,13 @@ function WikiSidebar({
     return () => {
       unsubWiki?.();
       unsubDeletedWiki?.();
+      unsubRenamedWiki?.();
       unsubLibrary?.();
+      unsubRenamedLibrary?.();
       unsubAdded?.();
       unsubRemoved?.();
       unsubUpdated?.();
+      unsubRenamedReading?.();
       unsubRecent?.();
       unsubTaggedDocs?.();
       window.removeEventListener('focus', onFocus);

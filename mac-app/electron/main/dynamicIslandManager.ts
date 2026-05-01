@@ -1197,6 +1197,10 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
+  getAutoHideEnabled(): boolean {
+    return this.autoHideEnabled;
+  }
+
   private startAutoHidePolling(): void {
     if (this.autoHidePollTimer) return;
     this.autoHidePollTimer = setInterval(() => {

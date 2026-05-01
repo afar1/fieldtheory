@@ -3331,6 +3331,12 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:readingRemoved', handler);
   },
 
+  onReadingRenamed: (callback: (event: { oldPath: string; reading: ReadingMeta }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { oldPath: string; reading: ReadingMeta }) => callback(payload);
+    ipcRenderer.on('librarian:readingRenamed', handler);
+    return () => ipcRenderer.removeListener('librarian:readingRenamed', handler);
+  },
+
   // Listen for fullscreen mode requests (from URL scheme)
   onSetFullscreen: (callback: (fullscreen: boolean) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, fullscreen: boolean) => callback(fullscreen);
@@ -3828,6 +3834,14 @@ interface LibraryRoot {
   writable?: boolean;
   tree: WikiNode[];
 }
+interface LibraryRenameEvent {
+  rootPath: string;
+  oldRelPath: string;
+  newRelPath: string;
+  oldAbsPath: string;
+  newAbsPath: string;
+  builtin: boolean;
+}
 interface LibraryMigrationFile {
   relPath: string;
   sourcePath: string;
@@ -3885,6 +3899,11 @@ const libraryAPI = {
     ipcRenderer.on('library:changed', handler);
     return () => ipcRenderer.removeListener('library:changed', handler);
   },
+  onItemRenamed: (callback: (event: LibraryRenameEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: LibraryRenameEvent) => callback(payload);
+    ipcRenderer.on('library:renamed', handler);
+    return () => ipcRenderer.removeListener('library:renamed', handler);
+  },
 };
 
 const wikiAPI = {
@@ -3911,6 +3930,11 @@ const wikiAPI = {
     const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
     ipcRenderer.on('wiki:deleted', handler);
     return () => ipcRenderer.removeListener('wiki:deleted', handler);
+  },
+  onPageRenamed: (callback: (event: LibraryRenameEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: LibraryRenameEvent) => callback(payload);
+    ipcRenderer.on('wiki:renamed', handler);
+    return () => ipcRenderer.removeListener('wiki:renamed', handler);
   },
   onOpenWikiPage: (callback: (relPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);

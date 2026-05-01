@@ -143,6 +143,30 @@ describe('PreferencesManager', () => {
     expect(loaded.clickAwayToDismiss).toBe(false);
   });
 
+  it('migrates legacy click-away prefs back into Field Theory panel mode', async () => {
+    const prefsPath = path.join(tempDir, 'preferences.json');
+    await fs.writeFile(
+      prefsPath,
+      JSON.stringify(
+        {
+          fieldTheoryWindowMode: 'app',
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const preferences = new PreferencesManager();
+    await preferences.load();
+    await preferences.save({ clickAwayToDismiss: true });
+
+    const saved = JSON.parse(await fs.readFile(prefsPath, 'utf-8')) as Record<string, unknown>;
+    expect(saved.fieldTheoryWindowMode).toBe('panel');
+    expect(saved.showInDock).toBe(false);
+    expect(saved.clickAwayToDismiss).toBe(true);
+  });
+
   it('keeps current panel mechanics as the default Field Theory window mode', async () => {
     const preferences = new PreferencesManager();
     const loaded = await preferences.load();

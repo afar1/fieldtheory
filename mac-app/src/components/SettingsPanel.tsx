@@ -438,7 +438,7 @@ export default function SettingsPanel({
   const [cursorStatusWindowColorDebug, setCursorStatusWindowColorDebug] = useState(false);
 
   // Field Theory window behavior - panel uses current overlay mechanics, app behaves like a normal app.
-  const [fieldTheoryWindowMode, setFieldTheoryWindowMode] = useState<FieldTheoryWindowMode>('panel');
+  const [fieldTheoryWindowMode, setFieldTheoryWindowMode] = useState<FieldTheoryWindowMode | null>(null);
 
   // Show fieldtheory.dev link in footer.
   // showFieldTheoryLink always true — toggle removed from UI
@@ -447,7 +447,7 @@ export default function SettingsPanel({
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
 
   // Dynamic Island auto-hide toggle.
-  const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState(false);
+  const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState<boolean | null>(null);
 
   // Launch at login - start app when macOS starts.
   const [launchAtLogin, setLaunchAtLogin] = useState(true);
@@ -1514,8 +1514,9 @@ export default function SettingsPanel({
             </span>
           </div>
           <button
+            disabled={fieldTheoryWindowMode === null}
             onClick={() => handleSetFieldTheoryWindowMode(fieldTheoryWindowMode === 'app' ? 'panel' : 'app')}
-            style={{ ...styles.toggle, backgroundColor: fieldTheoryWindowMode === 'app' ? theme.success : '#d1d5db' }}
+            style={{ ...styles.toggle, backgroundColor: fieldTheoryWindowMode === 'app' ? theme.success : '#d1d5db', opacity: fieldTheoryWindowMode === null ? 0.6 : 1 }}
           >
             <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
@@ -1534,7 +1535,9 @@ export default function SettingsPanel({
             </span>
           </div>
           <button
+            disabled={dynamicIslandAutoHide === null}
             onClick={async () => {
+              if (dynamicIslandAutoHide === null) return;
               const next = !dynamicIslandAutoHide;
               setDynamicIslandAutoHide(next);
               try {
@@ -1544,7 +1547,7 @@ export default function SettingsPanel({
                 setDynamicIslandAutoHide(!next);
               }
             }}
-            style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db' }}
+            style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db', opacity: dynamicIslandAutoHide === null ? 0.6 : 1 }}
           >
             <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
