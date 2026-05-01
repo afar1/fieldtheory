@@ -27,6 +27,7 @@ import {
   filterLauncherNamespaceItems,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
+  balanceLauncherNormalModeMatches,
   dedupeLauncherPersonItems,
   getLauncherUsageScore,
   isGeneratedBookmarkTaxonomyPath,
@@ -120,66 +121,6 @@ interface LauncherItem {
   // For bookmark posts
   bookmarkId?: string;
   postedAt?: string;
-}
-
-type LauncherLayoutSectionId = 'commands' | 'actions' | 'recent' | 'bookmarks' | 'files';
-
-interface ScoredLauncherItem {
-  item: LauncherItem;
-  score: number;
-}
-
-const NORMAL_MODE_SECTION_ORDER: Array<{ id: LauncherLayoutSectionId; predicate: (item: LauncherItem) => boolean }> = [
-  { id: 'commands', predicate: (item) => item.type === 'command' },
-  { id: 'actions', predicate: (item) => item.type === 'action' },
-  { id: 'recent', predicate: (item) => item.type === 'recent-file' },
-  { id: 'bookmarks', predicate: (item) => item.type === 'bookmark' || item.type === 'bookmark-author' || item.type === 'bookmark-facet' },
-  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
-];
-
-const NORMAL_MODE_SECTION_LIMITS: Record<LauncherLayoutSectionId, number> = {
-  commands: 4,
-  actions: 3,
-  recent: 3,
-  bookmarks: 4,
-  files: 6,
-};
-
-function getNormalModeSectionId(item: LauncherItem): LauncherLayoutSectionId | null {
-  return NORMAL_MODE_SECTION_ORDER.find(section => section.predicate(item))?.id ?? null;
-}
-
-function balanceNormalModeMatches(matches: ScoredLauncherItem[]): LauncherItem[] {
-  const groups = new Map<LauncherLayoutSectionId, ScoredLauncherItem[]>();
-  for (const item of matches) {
-    const sectionId = getNormalModeSectionId(item.item);
-    if (!sectionId) continue;
-    const group = groups.get(sectionId) ?? [];
-    group.push(item);
-    groups.set(sectionId, group);
-  }
-
-  const activeSectionCount = NORMAL_MODE_SECTION_ORDER.filter(section => (groups.get(section.id)?.length ?? 0) > 0).length;
-  const recentItems = groups.get('recent') ?? [];
-  if (activeSectionCount === 1 && recentItems.length > 0) {
-    return recentItems
-      .slice()
-      .sort((a, b) => (b.item.lastOpenedAt ?? 0) - (a.item.lastOpenedAt ?? 0))
-      .map(({ item }) => item);
-  }
-  if (activeSectionCount <= 1) return matches.map(({ item }) => item);
-
-  const counts = new Map<LauncherLayoutSectionId, number>();
-  const balanced: LauncherItem[] = [];
-  for (const match of matches) {
-    const sectionId = getNormalModeSectionId(match.item);
-    if (!sectionId) continue;
-    const count = counts.get(sectionId) ?? 0;
-    if (count >= NORMAL_MODE_SECTION_LIMITS[sectionId]) continue;
-    counts.set(sectionId, count + 1);
-    balanced.push(match.item);
-  }
-  return balanced;
 }
 
 function fuzzySubsequenceScore(text: string, query: string): number {
@@ -1209,7 +1150,7 @@ function CommandLauncher() {
       .map(s => s.item));
     const scoresById = new Map(scored.map(({ item, score }) => [item.id, score]));
     const scoredMatches = matches.map(item => ({ item, score: scoresById.get(item.id) ?? 0 }));
-    const balancedMatches = balanceNormalModeMatches(scoredMatches);
+    const balancedMatches = balanceLauncherNormalModeMatches(scoredMatches);
 
     setFiltered(balancedMatches);
     selectIndex(0);
@@ -1313,7 +1254,7 @@ function CommandLauncher() {
         setPreviewPayload(null);
         return;
       }
-      commandsAPI.launcherClose({ skipActivation: true });
+      commandsAPI.launcherClose();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length === 0) return;
