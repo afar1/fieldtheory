@@ -2153,9 +2153,13 @@ function setupLibrarianIPCHandlers(): void {
     // Auto-prune recent when a wiki page is trashed so stale entries drop
     // from the sidebar even if the caller didn't explicitly call recent:remove.
     librarianManager.on('wiki:deleted', (relPath: string) => {
-      if (!recentManager) return;
-      recentManager.remove('wiki', relPath);
-      broadcastRecentChanged();
+      if (recentManager) {
+        recentManager.remove('wiki', relPath);
+        broadcastRecentChanged();
+      }
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('wiki:deleted', relPath);
+      });
     });
   }
 
