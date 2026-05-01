@@ -6031,6 +6031,7 @@ function setupClipboardIPCHandlers(): void {
         clipboardManager?.syncClipboardHash();
       }
 
+      commandLauncherWindow?.suppressActivationForExternalInvocation();
       await activateAndPaste(targetApp, {
         beforePaste: () => commandLauncherWindow?.hide(true),
       });
@@ -6100,6 +6101,7 @@ function setupClipboardIPCHandlers(): void {
           clipboardManager?.syncClipboardHash();
         }
 
+        commandLauncherWindow?.suppressActivationForExternalInvocation();
         await activateAndPaste(targetApp, {
           beforePaste: () => commandLauncherWindow?.hide(true),
         });

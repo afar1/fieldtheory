@@ -1,6 +1,6 @@
 import * as Clipboard from 'expo-clipboard';
 import { Feather } from '@expo/vector-icons';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
@@ -45,6 +45,11 @@ type MarkdownAction =
   | 'h1'
   | 'h2'
   | 'wiki';
+
+type DrawerRow =
+  | { type: 'folder'; folder: string; count: number }
+  | { type: 'empty'; folder: string }
+  | { type: 'file'; doc: LibraryDocument };
 
 const DEFAULT_FOLDER = 'scratchpad';
 const SEEDED_LIBRARY_FOLDERS = [
@@ -107,8 +112,14 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
   const insets = useSafeAreaInsets();
   const editorRef = useRef<TextInput>(null);
   const drawerProgress = useRef(new Animated.Value(0)).current;
+  const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingDocumentsRef = useRef<LibraryDocument[] | null>(null);
+  const dirtyDocumentsRef = useRef(false);
+  const onChangeRef = useRef(onChange);
+  const [localDocuments, setLocalDocuments] = useState(documents);
   const [selectedId, setSelectedId] = useState<string | null>(documents[0]?.id ?? null);
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerContentVisible, setDrawerContentVisible] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [headingOpen, setHeadingOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
@@ -118,14 +129,42 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
   const [folderQuery, setFolderQuery] = useState('');
   const keyboardAppearance = isDark ? 'dark' : 'light';
 
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    if (!dirtyDocumentsRef.current) {
+      setLocalDocuments(documents);
+    }
+  }, [documents]);
+
+  useEffect(() => {
+    return () => {
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+      }
+      if (pendingDocumentsRef.current) {
+        onChangeRef.current(pendingDocumentsRef.current);
+      }
+    };
+  }, []);
+
   const selectedDoc = useMemo(
-    () => documents.find((doc) => doc.id === selectedId) ?? null,
-    [documents, selectedId],
+    () => localDocuments.find((doc) => doc.id === selectedId) ?? null,
+    [localDocuments, selectedId],
   );
 
-  const sortedDocs = useMemo(() => [...documents].sort(compareDocs), [documents]);
+  const sortedDocs = useMemo(() => [...localDocuments].sort(compareDocs), [localDocuments]);
+
+  useEffect(() => {
+    if (!selectedId && sortedDocs[0]) {
+      setSelectedId(sortedDocs[0].id);
+    }
+  }, [selectedId, sortedDocs]);
 
   const folders = useMemo(() => {
+    if (!drawerContentVisible && !actionsOpen) return [];
     const groups = new Map<string, LibraryDocument[]>();
     SEEDED_LIBRARY_FOLDERS.forEach((folder) => groups.set(folder, []));
     sortedDocs.forEach((doc) => {
@@ -137,15 +176,26 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
       if (b === DEFAULT_FOLDER) return 1;
       return a.localeCompare(b);
     });
-  }, [sortedDocs]);
+  }, [actionsOpen, drawerContentVisible, sortedDocs]);
+
+  const drawerRows = useMemo<DrawerRow[]>(() => {
+    if (!drawerContentVisible) return [];
+    return folders.flatMap(([folder, docs]) => [
+      { type: 'folder' as const, folder, count: docs.length },
+      ...(docs.length === 0
+        ? [{ type: 'empty' as const, folder }]
+        : docs.map((doc) => ({ type: 'file' as const, doc }))),
+    ]);
+  }, [drawerContentVisible, folders]);
 
   const switcherDocs = useMemo(() => {
+    if (!switcherOpen) return [];
     const needle = normalize(switcherQuery.trim());
     if (!needle) return sortedDocs;
     return sortedDocs.filter((doc) =>
       normalize(`${getDisplayTitle(doc)}\n${folderFor(doc)}\n${doc.content}`).includes(needle),
     );
-  }, [sortedDocs, switcherQuery]);
+  }, [sortedDocs, switcherOpen, switcherQuery]);
 
   const wikiQuery = useMemo(() => {
     if (!selectedDoc || selection.start !== selection.end) return null;
@@ -164,7 +214,7 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
   }, [selectedDoc?.id, sortedDocs, wikiQuery]);
 
   const outline = useMemo(() => {
-    if (!selectedDoc) return [];
+    if (!actionsOpen || !selectedDoc) return [];
     return selectedDoc.content
       .split('\n')
       .map((line, index) => {
@@ -173,25 +223,26 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
       })
       .filter((item): item is { line: number; level: number; title: string } => Boolean(item))
       .slice(0, 12);
-  }, [selectedDoc]);
+  }, [actionsOpen, selectedDoc]);
 
   const backlinks = useMemo(() => {
-    if (!selectedDoc) return [];
+    if (!actionsOpen || !selectedDoc) return [];
     const title = getDisplayTitle(selectedDoc);
     const pattern = `[[${title}]]`;
     return sortedDocs.filter((doc) => doc.id !== selectedDoc.id && doc.content.includes(pattern)).slice(0, 8);
-  }, [selectedDoc, sortedDocs]);
+  }, [actionsOpen, selectedDoc, sortedDocs]);
 
   const outboundLinks = useMemo(() => {
-    if (!selectedDoc) return [];
+    if (!actionsOpen || !selectedDoc) return [];
     const names = new Set((selectedDoc.content.match(/\[\[([^\]]+)\]\]/g) ?? []).map((link) => link.slice(2, -2)));
     return [...names].slice(0, 12);
-  }, [selectedDoc]);
+  }, [actionsOpen, selectedDoc]);
 
-  const openDrawer = () => {
+  const openDrawer = useCallback(() => {
     Keyboard.dismiss();
+    setDrawerContentVisible(false);
     setDrawerOpen(true);
-  };
+  }, []);
 
   const edgeSwipeResponder = useMemo(
     () =>
@@ -206,23 +257,48 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
           }
         },
       }),
-    [drawerOpen],
+    [drawerOpen, openDrawer],
   );
 
   useEffect(() => {
     if (drawerOpen) {
       Keyboard.dismiss();
+    } else {
+      setDrawerContentVisible(false);
     }
 
     Animated.timing(drawerProgress, {
       toValue: drawerOpen ? 1 : 0,
       duration: 220,
       useNativeDriver: true,
-    }).start();
+    }).start(({ finished }) => {
+      if (finished && drawerOpen) {
+        setDrawerContentVisible(true);
+      }
+    });
   }, [drawerOpen, drawerProgress]);
 
+  const flushDocumentsSoon = (next: LibraryDocument[]) => {
+    dirtyDocumentsRef.current = true;
+    pendingDocumentsRef.current = next;
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+    }
+    flushTimerRef.current = setTimeout(() => {
+      flushTimerRef.current = null;
+      const pending = pendingDocumentsRef.current;
+      pendingDocumentsRef.current = null;
+      dirtyDocumentsRef.current = false;
+      if (pending) {
+        onChangeRef.current(pending);
+      }
+    }, 500);
+  };
+
   const persist = (next: LibraryDocument[], nextSelectedId = selectedId) => {
-    onChange([...next].sort(compareDocs));
+    const sorted = [...next].sort(compareDocs);
+    setLocalDocuments(sorted);
+    flushDocumentsSoon(sorted);
     setSelectedId(nextSelectedId);
   };
 
@@ -241,7 +317,7 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
       createdAt: now,
       updatedAt: now,
     };
-    persist([doc, ...documents], doc.id);
+    persist([doc, ...localDocuments], doc.id);
     setSwitcherOpen(false);
     setDrawerOpen(false);
     setTimeout(() => editorRef.current?.focus(), 100);
@@ -266,7 +342,7 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
       tags: patch.tags ?? extractTags(mergedContent),
       updatedAt: Date.now(),
     };
-    persist(documents.map((doc) => (doc.id === selectedDoc.id ? updated : doc)), selectedDoc.id);
+    persist(localDocuments.map((doc) => (doc.id === selectedDoc.id ? updated : doc)), selectedDoc.id);
   };
 
   const moveSelectedToFolder = (folderPath: string) => {
@@ -298,7 +374,7 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          const next = documents.filter((doc) => doc.id !== selectedDoc.id);
+          const next = localDocuments.filter((doc) => doc.id !== selectedDoc.id);
           persist(next, next[0]?.id ?? null);
           setActionsOpen(false);
         },
@@ -306,11 +382,11 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
     ]);
   };
 
-  const openDoc = (doc: LibraryDocument) => {
+  const openDoc = useCallback((doc: LibraryDocument) => {
     setSelectedId(doc.id);
     setDrawerOpen(false);
     setSwitcherOpen(false);
-  };
+  }, []);
 
   const insertText = (text: string, cursorOffset = text.length) => {
     if (!selectedDoc) return;
@@ -438,6 +514,44 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
     </Pressable>
   );
 
+  const renderDrawerRow = useCallback(({ item }: { item: DrawerRow }) => {
+    if (item.type === 'folder') {
+      return (
+        <View style={styles.folderHeader}>
+          <Feather name="folder" size={18} color={colors.textSecondary} />
+          <Text style={[styles.folderTitle, { color: colors.textPrimary }]}>{item.folder}</Text>
+          <Text style={[styles.folderCount, { color: colors.textTertiary }]}>{item.count}</Text>
+        </View>
+      );
+    }
+
+    if (item.type === 'empty') {
+      return <Text style={[styles.emptyFolder, { color: colors.textTertiary }]}>No notes yet</Text>;
+    }
+
+    const doc = item.doc;
+    return (
+      <Pressable
+        style={[styles.fileRow, doc.id === selectedId && { backgroundColor: colors.bgSurface }]}
+        onPress={() => openDoc(doc)}
+      >
+        <View style={styles.fileTitleRow}>
+          <Feather name={doc.isPinned ? 'bookmark' : 'file-text'} size={16} color={doc.isPinned ? '#D6B15D' : colors.textSecondary} />
+          <Text style={[styles.fileTitle, { color: colors.textPrimary }]} numberOfLines={1}>
+            {getDisplayTitle(doc)}
+          </Text>
+        </View>
+        <Text style={[styles.fileMeta, { color: colors.textTertiary }]}>MD</Text>
+      </Pressable>
+    );
+  }, [colors, openDoc, selectedId]);
+
+  const drawerRowKey = useCallback((item: DrawerRow) => {
+    if (item.type === 'folder') return `folder:${item.folder}`;
+    if (item.type === 'empty') return `empty:${item.folder}`;
+    return `file:${item.doc.id}`;
+  }, []);
+
   const editorEmpty = !selectedDoc;
   const toolbarButtonProps = {
     tint: colors.textPrimary,
@@ -561,192 +675,183 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
           },
         ]}
       >
-          <View style={styles.drawerHeader}>
-            <View>
-              <Text style={[styles.drawerTitle, { color: colors.textPrimary }]}>Library</Text>
-              <Text style={[styles.drawerSubtitle, { color: colors.textSecondary }]}>{documents.length} markdown files</Text>
-            </View>
-            <View style={styles.drawerHeaderActions}>
-              <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={() => setSwitcherOpen(true)}>
-                <Feather name="search" size={20} color={colors.textPrimary} />
-              </TouchableOpacity>
-              <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={() => createDocument('Untitled')}>
-                <Feather name="edit-3" size={20} color={colors.textPrimary} />
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          <View style={[styles.newFolderRow, { backgroundColor: colors.bgSurface }]}>
-            <Feather name="folder-plus" size={18} color={colors.textSecondary} />
-            <TextInput
-              value={folderQuery}
-              onChangeText={setFolderQuery}
-              placeholder="New folder note..."
-              placeholderTextColor={colors.textTertiary}
-              style={[styles.folderInput, { color: colors.textPrimary }]}
-              returnKeyType="done"
-              onSubmitEditing={createFolderNote}
-              keyboardAppearance={keyboardAppearance}
-            />
-            <TouchableOpacity onPress={createFolderNote}>
-              <Feather name="plus" size={20} color={colors.accent} />
-            </TouchableOpacity>
-          </View>
-
-          <ScrollView style={styles.folderList} showsVerticalScrollIndicator={false}>
-            {folders.map(([folder, docs]) => (
-              <View key={folder} style={styles.folderGroup}>
-                <View style={styles.folderHeader}>
-                  <Feather name="folder" size={18} color={colors.textSecondary} />
-                  <Text style={[styles.folderTitle, { color: colors.textPrimary }]}>{folder}</Text>
-                  <Text style={[styles.folderCount, { color: colors.textTertiary }]}>{docs.length}</Text>
-                </View>
-                {docs.length === 0 ? (
-                  <Text style={[styles.emptyFolder, { color: colors.textTertiary }]}>No notes yet</Text>
-                ) : (
-                  docs.map((doc) => (
-                    <Pressable
-                      key={doc.id}
-                      style={[styles.fileRow, doc.id === selectedId && { backgroundColor: colors.bgSurface }]}
-                      onPress={() => openDoc(doc)}
-                    >
-                      <View style={styles.fileTitleRow}>
-                        <Feather name={doc.isPinned ? 'bookmark' : 'file-text'} size={16} color={doc.isPinned ? '#D6B15D' : colors.textSecondary} />
-                        <Text style={[styles.fileTitle, { color: colors.textPrimary }]} numberOfLines={1}>
-                          {getDisplayTitle(doc)}
-                        </Text>
-                      </View>
-                      <Text style={[styles.fileMeta, { color: colors.textTertiary }]}>MD</Text>
-                    </Pressable>
-                  ))
-                )}
+        {drawerOpen && (
+          <>
+            <View style={styles.drawerHeader}>
+              <View>
+                <Text style={[styles.drawerTitle, { color: colors.textPrimary }]}>Library</Text>
+                <Text style={[styles.drawerSubtitle, { color: colors.textSecondary }]}>{localDocuments.length} markdown files</Text>
               </View>
-            ))}
-          </ScrollView>
-
-          <View style={[styles.drawerFooter, { paddingBottom: insets.bottom + 12, borderTopColor: colors.border }]}>
-            <View style={styles.userRow}>
-              <View style={[styles.callsignBadge, { backgroundColor: colors.bgSurface }]}>
-                <Feather name="user" size={14} color={colors.textSecondary} />
-                <Text style={[styles.callsignText, { color: colors.textPrimary }]} numberOfLines={1}>
-                  {callsign || 'Signed out'}
-                </Text>
+              <View style={styles.drawerHeaderActions}>
+                <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={() => setSwitcherOpen(true)}>
+                  <Feather name="search" size={20} color={colors.textPrimary} />
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.drawerIconButton, { backgroundColor: colors.bgSurface }]} onPress={() => createDocument('Untitled')}>
+                  <Feather name="edit-3" size={20} color={colors.textPrimary} />
+                </TouchableOpacity>
               </View>
-              <TouchableOpacity
-                style={[styles.syncButton, { backgroundColor: colors.bgSurface }]}
-                onPress={onSyncPress}
-                disabled={!onSyncPress || isSyncing}
-              >
-                <Feather name="refresh-cw" size={17} color={isSyncing ? colors.textTertiary : colors.textSecondary} />
-              </TouchableOpacity>
             </View>
-            <Text style={[styles.syncText, { color: colors.textTertiary }]}>
-              {isSyncing ? 'Syncing...' : `Updated ${formatSyncTime(lastSyncedAt)}`}
-            </Text>
-            <View style={[styles.themeToggleCompact, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
-              <ThemeButton icon="monitor" active={themeMode === 'system'} colors={colors} onPress={() => setThemeMode('system')} />
-              <ThemeButton icon="sun" active={themeMode === 'light'} colors={colors} onPress={() => setThemeMode('light')} />
-              <ThemeButton icon="moon" active={themeMode === 'dark'} colors={colors} onPress={() => setThemeMode('dark')} />
-            </View>
-          </View>
-      </Animated.View>
 
-      <Modal visible={switcherOpen} transparent animationType="fade" onRequestClose={() => setSwitcherOpen(false)}>
-        <View style={[styles.switcherOverlay, { paddingTop: Math.max(insets.top + 50, 70) }]}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => setSwitcherOpen(false)} />
-          <View style={[styles.switcherPanel, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
-            <View style={[styles.switcherInputRow, { backgroundColor: colors.bgSurface }]}>
-              <Feather name="search" size={18} color={colors.textSecondary} />
+            <View style={[styles.newFolderRow, { backgroundColor: colors.bgSurface }]}>
+              <Feather name="folder-plus" size={18} color={colors.textSecondary} />
               <TextInput
-                value={switcherQuery}
-                onChangeText={setSwitcherQuery}
-                placeholder="Find or create a note..."
+                value={folderQuery}
+                onChangeText={setFolderQuery}
+                placeholder="New folder note..."
                 placeholderTextColor={colors.textTertiary}
-                style={[styles.switcherInput, { color: colors.textPrimary }]}
-                autoFocus
+                style={[styles.folderInput, { color: colors.textPrimary }]}
                 returnKeyType="done"
-                onSubmitEditing={createFromSwitcher}
+                onSubmitEditing={createFolderNote}
                 keyboardAppearance={keyboardAppearance}
               />
-              {switcherQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSwitcherQuery('')}>
-                  <Feather name="x-circle" size={20} color={colors.textSecondary} />
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity onPress={createFolderNote}>
+                <Feather name="plus" size={20} color={colors.accent} />
+              </TouchableOpacity>
             </View>
+
             <FlatList
-              keyboardShouldPersistTaps="handled"
-              data={switcherDocs}
-              keyExtractor={(item) => item.id}
-              renderItem={renderFile}
-              ListFooterComponent={
-                switcherQuery.trim() ? (
-                  <TouchableOpacity style={styles.createFromQuery} onPress={createFromSwitcher}>
-                    <Feather name="plus" size={18} color={colors.accent} />
-                    <Text style={[styles.createFromQueryText, { color: colors.accent }]}>Create "{switcherQuery.trim()}" in {DEFAULT_FOLDER}</Text>
+              data={drawerRows}
+              keyExtractor={drawerRowKey}
+              renderItem={renderDrawerRow}
+              style={styles.folderList}
+              showsVerticalScrollIndicator={false}
+              initialNumToRender={18}
+              maxToRenderPerBatch={12}
+              windowSize={5}
+              removeClippedSubviews
+            />
+
+            <View style={[styles.drawerFooter, { paddingBottom: insets.bottom + 12, borderTopColor: colors.border }]}>
+              <View style={styles.userRow}>
+                <View style={[styles.callsignBadge, { backgroundColor: colors.bgSurface }]}>
+                  <Feather name="user" size={14} color={colors.textSecondary} />
+                  <Text style={[styles.callsignText, { color: colors.textPrimary }]} numberOfLines={1}>
+                    {callsign || 'Signed out'}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.syncButton, { backgroundColor: colors.bgSurface }]}
+                  onPress={onSyncPress}
+                  disabled={!onSyncPress || isSyncing}
+                >
+                  <Feather name="refresh-cw" size={17} color={isSyncing ? colors.textTertiary : colors.textSecondary} />
+                </TouchableOpacity>
+              </View>
+              <Text style={[styles.syncText, { color: colors.textTertiary }]}>
+                {isSyncing ? 'Syncing...' : `Updated ${formatSyncTime(lastSyncedAt)}`}
+              </Text>
+              <View style={[styles.themeToggleCompact, { backgroundColor: colors.bgSurface, borderColor: colors.border }]}>
+                <ThemeButton icon="monitor" active={themeMode === 'system'} colors={colors} onPress={() => setThemeMode('system')} />
+                <ThemeButton icon="sun" active={themeMode === 'light'} colors={colors} onPress={() => setThemeMode('light')} />
+                <ThemeButton icon="moon" active={themeMode === 'dark'} colors={colors} onPress={() => setThemeMode('dark')} />
+              </View>
+            </View>
+          </>
+        )}
+      </Animated.View>
+
+      {switcherOpen && (
+        <Modal visible transparent animationType="fade" onRequestClose={() => setSwitcherOpen(false)}>
+          <View style={[styles.switcherOverlay, { paddingTop: Math.max(insets.top + 50, 70) }]}>
+            <Pressable style={StyleSheet.absoluteFill} onPress={() => setSwitcherOpen(false)} />
+            <View style={[styles.switcherPanel, { backgroundColor: colors.bgElevated, borderColor: colors.border }]}>
+              <View style={[styles.switcherInputRow, { backgroundColor: colors.bgSurface }]}>
+                <Feather name="search" size={18} color={colors.textSecondary} />
+                <TextInput
+                  value={switcherQuery}
+                  onChangeText={setSwitcherQuery}
+                  placeholder="Find or create a note..."
+                  placeholderTextColor={colors.textTertiary}
+                  style={[styles.switcherInput, { color: colors.textPrimary }]}
+                  autoFocus
+                  returnKeyType="done"
+                  onSubmitEditing={createFromSwitcher}
+                  keyboardAppearance={keyboardAppearance}
+                />
+                {switcherQuery.length > 0 && (
+                  <TouchableOpacity onPress={() => setSwitcherQuery('')}>
+                    <Feather name="x-circle" size={20} color={colors.textSecondary} />
                   </TouchableOpacity>
-                ) : null
-              }
-            />
+                )}
+              </View>
+              <FlatList
+                keyboardShouldPersistTaps="handled"
+                data={switcherDocs}
+                keyExtractor={(item) => item.id}
+                renderItem={renderFile}
+                ListFooterComponent={
+                  switcherQuery.trim() ? (
+                    <TouchableOpacity style={styles.createFromQuery} onPress={createFromSwitcher}>
+                      <Feather name="plus" size={18} color={colors.accent} />
+                      <Text style={[styles.createFromQueryText, { color: colors.accent }]}>Create "{switcherQuery.trim()}" in {DEFAULT_FOLDER}</Text>
+                    </TouchableOpacity>
+                  ) : null
+                }
+              />
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
 
-      <Modal visible={headingOpen} transparent animationType="slide" onRequestClose={() => setHeadingOpen(false)}>
-        <Pressable style={styles.scrim} onPress={() => setHeadingOpen(false)} />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, backgroundColor: colors.bgElevated }]}>
-          <SheetHandle />
-          <SheetRow iconText="T" label="No heading" onPress={() => applyHeading(null)} />
-          {[1, 2, 3, 4, 5, 6].map((level) => (
-            <SheetRow key={level} iconText={`H${level}`} label={`Heading ${level}`} onPress={() => applyHeading(level)} />
-          ))}
-        </View>
-      </Modal>
-
-      <Modal visible={actionsOpen} transparent animationType="slide" onRequestClose={() => setActionsOpen(false)}>
-        <Pressable style={styles.scrim} onPress={() => setActionsOpen(false)} />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, backgroundColor: colors.bgElevated }]}>
-          <SheetHandle />
-          <ScrollView showsVerticalScrollIndicator={false} style={styles.sheetScroll}>
-            <SheetRow feather="x" label="Close" onPress={() => setActionsOpen(false)} />
-            <SheetRow
-              feather="bookmark"
-              label={selectedDoc?.isPinned ? 'Unpin' : 'Pin'}
-              onPress={() => {
-                if (selectedDoc) updateDoc({ isPinned: !selectedDoc.isPinned });
-                setActionsOpen(false);
-              }}
-            />
-            <SheetRow feather="copy" label="Copy note" onPress={copyContent} />
-            <SheetRow feather="file-text" label="Copy as file" onPress={copyFile} />
-            <SheetSectionTitle label="Move to folder" />
-            {folders.map(([folder]) => (
-              <SheetRow key={folder} feather="folder" label={folder} onPress={() => moveSelectedToFolder(folder)} />
+      {headingOpen && (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setHeadingOpen(false)}>
+          <Pressable style={styles.scrim} onPress={() => setHeadingOpen(false)} />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, backgroundColor: colors.bgElevated }]}>
+            <SheetHandle />
+            <SheetRow iconText="T" label="No heading" onPress={() => applyHeading(null)} />
+            {[1, 2, 3, 4, 5, 6].map((level) => (
+              <SheetRow key={level} iconText={`H${level}`} label={`Heading ${level}`} onPress={() => applyHeading(level)} />
             ))}
-            <SheetSectionTitle label="Outline" />
-            {outline.length === 0 ? (
-              <SheetRow feather="align-left" label="No headings" onPress={() => setActionsOpen(false)} />
-            ) : (
-              outline.map((item) => (
-                <SheetRow key={`${item.line}-${item.title}`} iconText={`H${item.level}`} label={item.title} onPress={() => jumpToLine(item.line)} />
-              ))
-            )}
-            <SheetSectionTitle label="Backlinks" />
-            {backlinks.length === 0 ? (
-              <SheetRow feather="corner-up-left" label="No backlinks" onPress={() => setActionsOpen(false)} />
-            ) : (
-              backlinks.map((doc) => <SheetRow key={doc.id} feather="corner-up-left" label={getDisplayTitle(doc)} onPress={() => openDoc(doc)} />)
-            )}
-            <SheetSectionTitle label="Outgoing links" />
-            {outboundLinks.length === 0 ? (
-              <SheetRow feather="corner-up-right" label="No outgoing links" onPress={() => setActionsOpen(false)} />
-            ) : (
-              outboundLinks.map((title) => <SheetRow key={title} feather="corner-up-right" label={title} onPress={() => openLinkedTitle(title)} />)
-            )}
-            <SheetRow feather="trash-2" label="Delete" destructive onPress={deleteSelected} />
-          </ScrollView>
-        </View>
-      </Modal>
+          </View>
+        </Modal>
+      )}
+
+      {actionsOpen && (
+        <Modal visible transparent animationType="slide" onRequestClose={() => setActionsOpen(false)}>
+          <Pressable style={styles.scrim} onPress={() => setActionsOpen(false)} />
+          <View style={[styles.sheet, { paddingBottom: insets.bottom + 16, backgroundColor: colors.bgElevated }]}>
+            <SheetHandle />
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.sheetScroll}>
+              <SheetRow feather="x" label="Close" onPress={() => setActionsOpen(false)} />
+              <SheetRow
+                feather="bookmark"
+                label={selectedDoc?.isPinned ? 'Unpin' : 'Pin'}
+                onPress={() => {
+                  if (selectedDoc) updateDoc({ isPinned: !selectedDoc.isPinned });
+                  setActionsOpen(false);
+                }}
+              />
+              <SheetRow feather="copy" label="Copy note" onPress={copyContent} />
+              <SheetRow feather="file-text" label="Copy as file" onPress={copyFile} />
+              <SheetSectionTitle label="Move to folder" />
+              {folders.map(([folder]) => (
+                <SheetRow key={folder} feather="folder" label={folder} onPress={() => moveSelectedToFolder(folder)} />
+              ))}
+              <SheetSectionTitle label="Outline" />
+              {outline.length === 0 ? (
+                <SheetRow feather="align-left" label="No headings" onPress={() => setActionsOpen(false)} />
+              ) : (
+                outline.map((item) => (
+                  <SheetRow key={`${item.line}-${item.title}`} iconText={`H${item.level}`} label={item.title} onPress={() => jumpToLine(item.line)} />
+                ))
+              )}
+              <SheetSectionTitle label="Backlinks" />
+              {backlinks.length === 0 ? (
+                <SheetRow feather="corner-up-left" label="No backlinks" onPress={() => setActionsOpen(false)} />
+              ) : (
+                backlinks.map((doc) => <SheetRow key={doc.id} feather="corner-up-left" label={getDisplayTitle(doc)} onPress={() => openDoc(doc)} />)
+              )}
+              <SheetSectionTitle label="Outgoing links" />
+              {outboundLinks.length === 0 ? (
+                <SheetRow feather="corner-up-right" label="No outgoing links" onPress={() => setActionsOpen(false)} />
+              ) : (
+                outboundLinks.map((title) => <SheetRow key={title} feather="corner-up-right" label={title} onPress={() => openLinkedTitle(title)} />)
+              )}
+              <SheetRow feather="trash-2" label="Delete" destructive onPress={deleteSelected} />
+            </ScrollView>
+          </View>
+        </Modal>
+      )}
     </KeyboardAvoidingView>
   );
 }
@@ -869,7 +974,6 @@ const styles = StyleSheet.create({
   callsignText: { flex: 1, fontSize: 14, fontWeight: '700', letterSpacing: 0 },
   syncButton: { width: 38, height: 38, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
   syncText: { fontSize: 12, fontWeight: '600', letterSpacing: 0 },
-  folderGroup: { marginBottom: 18 },
   folderHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   folderTitle: { flex: 1, fontSize: 17, fontWeight: '700', letterSpacing: 0 },
   folderCount: { fontSize: 12, fontWeight: '700', letterSpacing: 0 },

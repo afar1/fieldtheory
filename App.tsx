@@ -24,7 +24,6 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
 import { useHeadsetControls } from './hooks/useHeadsetControls';
 import { useState, useEffect, useCallback, useMemo, useRef, Component, ErrorInfo, ReactNode } from 'react';
-import { ensureModelAvailable } from './services/modelService';
 import PagerView from 'react-native-pager-view';
 import { TodoList } from './components/TodoList';
 import { PullToCreate } from './components/PullToCreate';
@@ -99,6 +98,14 @@ const TOP_FADE_OPACITIES = [1, 0.85, 0.65, 0.45, 0.25, 0.1];
 
 const TAB_INACTIVE = '#9CA3AF';
 const TAB_ACTIVE = '#007AFF';
+const PAGE_COUNT = 5;
+
+const getPagerWindow = (idx: number) => {
+  const pages = new Set<number>([idx]);
+  if (idx > 0) pages.add(idx - 1);
+  if (idx < PAGE_COUNT - 1) pages.add(idx + 1);
+  return pages;
+};
 
 // Linear color interpolation between two #rrggbb hex strings.
 function lerpHex(from: string, to: string, t: number): string {
@@ -210,8 +217,6 @@ function AppContent() {
   const colors = useThemeColors();
   const isDark = useIsDark();
 
-  const [modelDownloadProgress, setModelDownloadProgress] = useState<number | null>(null);
-  const [isDownloadingModel, setIsDownloadingModel] = useState(false);
   const [todos, setTodos] = useState<Todo[]>([]);
   const [observations, setObservations] = useState<Observation[]>([]);
   
@@ -227,6 +232,7 @@ function AppContent() {
   });
   const [isProcessingLLM, setIsProcessingLLM] = useState(false);
   const [pageIndex, setPageIndex] = useState(0);
+  const [mountedPageIndexes, setMountedPageIndexes] = useState<Set<number>>(() => getPagerWindow(0));
   
   // Transcript history state
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
@@ -268,10 +274,6 @@ function AppContent() {
   const [itemsSearchVisible, setItemsSearchVisible] = useState(false);
   const [itemsSearchQuery, setItemsSearchQuery] = useState('');
 
-  // Continuous pager scroll progress (e.g. 1.42 between Commands and Tasks).
-  // Drives bottom-tab color interpolation and per-page search-icon fade so
-  // both react during the swipe, not only after it settles.
-  const [pageScrollFloat, setPageScrollFloat] = useState(0);
   type PagerRef = React.ComponentRef<typeof PagerView>;
   const pagerRef = useRef<PagerRef>(null);
   const [isInitialized, setIsInitialized] = useState(false);
@@ -317,11 +319,6 @@ function AppContent() {
         setTranscripts(loadedTranscripts);
         setSketches(loadedSketches);
         setLibraryDocuments(loadedLibraryDocuments);
-
-        // Pre-fetch commands for voice command detection (runs in background)
-        CommandsService.fetchCommands().catch((err) => {
-          console.log('Commands pre-fetch (background):', err.message || 'Not available');
-        });
       } catch (err) {
         console.error('Failed to load data from storage:', err);
         // Continue with empty state if storage fails
@@ -434,30 +431,18 @@ function AppContent() {
     };
   }, []);
 
-  // Sync pager to pageIndex state - use instant switching (no animation).
+  // Sync pager to pageIndex state.
   useEffect(() => {
-    pagerRef.current?.setPageWithoutAnimation(pageIndex);
+    pagerRef.current?.setPage(pageIndex);
   }, [pageIndex]);
 
-  // Ensure the Whisper model is available before we allow recordings.
   useEffect(() => {
-    async function checkModel() {
-      try {
-        await ensureModelAvailable((progress) => {
-          setModelDownloadProgress(progress);
-          setIsDownloadingModel(progress < 1);
-        });
-        setIsDownloadingModel(false);
-        setModelDownloadProgress(null);
-      } catch (err) {
-        console.error('Model check failed:', err);
-      }
-    }
-
-    if (!isReady) {
-      checkModel();
-    }
-  }, [isReady]);
+    setMountedPageIndexes((prev) => {
+      const next = new Set(prev);
+      getPagerWindow(pageIndex).forEach((idx) => next.add(idx));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [pageIndex]);
 
   // Configure audio session for headset controls
   useHeadsetControls();
@@ -493,7 +478,6 @@ function AppContent() {
         isReady &&
         !isRecording &&
         !isProcessing &&
-        !isDownloadingModel &&
         !hasAutoStartedRef.current &&
         !manuallyStoppedRef.current
       ) {
@@ -515,10 +499,6 @@ function AppContent() {
           console.error('Background sketch sync failed:', error);
         });
 
-        // Refresh commands for voice command detection.
-        CommandsService.fetchCommands().catch((error) => {
-          console.error('Background commands sync failed:', error);
-        });
       }
       
       appStateRef.current = nextAppState;
@@ -527,7 +507,7 @@ function AppContent() {
     return () => {
       subscription.remove();
     };
-  }, [settings.autoStart, isReady, isRecording, isProcessing, isDownloadingModel, startRecording, session, handleLibrarySyncQuiet]);
+  }, [settings.autoStart, isReady, isRecording, isProcessing, startRecording, session, handleLibrarySyncQuiet]);
 
   // Capture every finished transcription so we can build the timeline.
   // Detects and expands portable commands (e.g., "use the review command").
@@ -831,24 +811,30 @@ function AppContent() {
   }, []);
 
   const handleToggleComplete = useCallback((id: string) => {
-    const newTodos = todos.map((t) =>
-      t.id === id ? { ...t, completed: !t.completed, updatedAt: Date.now() } : t
-    );
-    setTodos(newTodos);
-    StorageService.saveTodos(newTodos).catch(console.error);
-  }, [todos]);
+    setTodos((prev) => {
+      const next = prev.map((todo) =>
+        todo.id === id ? { ...todo, completed: !todo.completed, updatedAt: Date.now() } : todo
+      );
+      StorageService.saveTodos(next).catch(console.error);
+      return next;
+    });
+  }, []);
 
   const handleUpdateTodo = useCallback((id: string, text: string) => {
-    const newTodos = todos.map((t) => (t.id === id ? { ...t, text, updatedAt: Date.now() } : t));
-    setTodos(newTodos);
-    StorageService.saveTodos(newTodos).catch(console.error);
-  }, [todos]);
+    setTodos((prev) => {
+      const next = prev.map((todo) => (todo.id === id ? { ...todo, text, updatedAt: Date.now() } : todo));
+      StorageService.saveTodos(next).catch(console.error);
+      return next;
+    });
+  }, []);
 
   const handleDeleteTodo = useCallback((id: string) => {
-    const newTodos = todos.filter((t) => t.id !== id);
-    setTodos(newTodos);
-    StorageService.saveTodos(newTodos).catch(console.error);
-  }, [todos]);
+    setTodos((prev) => {
+      const next = prev.filter((todo) => todo.id !== id);
+      StorageService.saveTodos(next).catch(console.error);
+      return next;
+    });
+  }, []);
 
   // Create a new task via pull-to-create.
   const handleCreateTask = useCallback((text: string): boolean => {
@@ -859,11 +845,13 @@ function AppContent() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    const newTodos = [newTodo, ...todos];
-    setTodos(newTodos);
-    StorageService.saveTodos(newTodos).catch(console.error);
+    setTodos((prev) => {
+      const next = [newTodo, ...prev];
+      StorageService.saveTodos(next).catch(console.error);
+      return next;
+    });
     return true;
-  }, [todos]);
+  }, []);
 
   // Handle sketch completion - save the PNG and sync to cloud.
   const handleSketchComplete = useCallback(async (data: { uri: string; width: number; height: number }) => {
@@ -896,15 +884,6 @@ function AppContent() {
     }
   }, [session]);
 
-  // Fetch commands once session is available (pre-fetch at startup may miss if session loads later)
-  useEffect(() => {
-    if (session) {
-      CommandsService.fetchCommands().catch((err) => {
-        console.log('Commands fetch after session:', err.message || 'Failed');
-      });
-    }
-  }, [session]);
-
   // Refresh sketches list from storage.
   const handleRefreshSketches = useCallback(async () => {
     const loadedSketches = await SketchStorageService.getSketches();
@@ -919,11 +898,13 @@ function AppContent() {
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
-    const newTranscripts = [newEntry, ...transcripts];
-    setTranscripts(newTranscripts);
-    StorageService.saveTranscripts(newTranscripts).catch(console.error);
+    setTranscripts((prev) => {
+      const next = [newEntry, ...prev];
+      StorageService.saveTranscripts(next).catch(console.error);
+      return next;
+    });
     return true;
-  }, [transcripts]);
+  }, []);
 
   // Handle create mode changes from PullToCreate - used to show dynamic bottom bar.
   const handleStackCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
@@ -939,23 +920,27 @@ function AppContent() {
   }, []);
 
   const handleToggleAutoStart = useCallback((value: boolean) => {
-    const newSettings = { ...settings, autoStart: value };
-    setSettings(newSettings);
-    StorageService.saveSettings(newSettings).catch(console.error);
-  }, [settings]);
+    setSettings((prev) => {
+      const next = { ...prev, autoStart: value };
+      StorageService.saveSettings(next).catch(console.error);
+      return next;
+    });
+  }, []);
 
   const handleToggleSetting = useCallback((key: keyof Settings, value: boolean) => {
-    const newSettings = { ...settings, [key]: value };
-    setSettings(newSettings);
-    StorageService.saveSettings(newSettings).catch(console.error);
-  }, [settings]);
+    setSettings((prev) => {
+      const next = { ...prev, [key]: value };
+      StorageService.saveSettings(next).catch(console.error);
+      return next;
+    });
+  }, []);
 
   const handleLibraryDocumentsChange = useCallback((documents: LibraryDocument[]) => {
     setLibraryDocuments(documents);
     StorageService.saveLibraryDocuments(documents).catch(console.error);
   }, []);
 
-  const handleCopyTranscript = async (entry: TranscriptEntry) => {
+  const handleCopyTranscript = useCallback(async (entry: TranscriptEntry) => {
     await Clipboard.setStringAsync(entry.text);
     Vibration.vibrate();
     setCopiedId(entry.id);
@@ -964,14 +949,14 @@ function AppContent() {
       clearTimeout(copyTimeoutRef.current);
     }
     copyTimeoutRef.current = setTimeout(() => setCopiedId(null), 1500);
-  };
+  }, []);
 
-  const handleToggleExpand = (id: string) => {
+  const handleToggleExpand = useCallback((id: string) => {
     setExpandedMap((prev) => ({
       ...prev,
       [id]: !prev[id],
     }));
-  };
+  }, []);
 
   const handleDeleteTranscript = useCallback((id: string) => {
     setTranscripts((prev) => {
@@ -992,14 +977,16 @@ function AppContent() {
   const [editTranscriptText, setEditTranscriptText] = useState('');
 
   const handleUpdateTranscript = useCallback((id: string, text: string) => {
-    const updated = transcripts.map((t) => 
-      t.id === id ? { ...t, text: text.trim(), updatedAt: Date.now() } : t
-    );
-    setTranscripts(updated);
-    StorageService.saveTranscripts(updated).catch(console.error);
+    setTranscripts((prev) => {
+      const updated = prev.map((transcript) =>
+        transcript.id === id ? { ...transcript, text: text.trim(), updatedAt: Date.now() } : transcript
+      );
+      StorageService.saveTranscripts(updated).catch(console.error);
+      return updated;
+    });
     setEditingTranscriptId(null);
     setEditTranscriptText('');
-  }, [transcripts]);
+  }, []);
 
   const handleEditTranscript = useCallback((transcript: TranscriptEntry) => {
     setEditingTranscriptId(transcript.id);
@@ -1324,18 +1311,16 @@ function AppContent() {
     handleUpdateTranscript,
   ]);
 
-  // Per-page proximity (1 = fully on this page, 0 = at neighbor or beyond).
+  // Per-page proximity (1 = active page, 0 = other page).
   // Defined before any early-return so all hooks below stay in stable order.
-  const proximityToPage = (idx: number) =>
-    Math.max(0, 1 - Math.abs(pageScrollFloat - idx));
+  const proximityToPage = (idx: number) => (pageIndex === idx ? 1 : 0);
+  const shouldRenderPage = (idx: number) =>
+    mountedPageIndexes.has(idx) || Math.abs(pageIndex - idx) <= 1;
 
-  // Tab tap navigation. setPageWithoutAnimation jumps instantly without
-  // emitting onPageScroll, so pageScrollFloat would otherwise stay stale and
-  // the active-tab color wouldn't update until the next swipe. Snap both.
+  // Tab tap navigation. The pager owns the native transition; React only tracks
+  // the selected page instead of re-rendering the whole tree during scroll.
   const navigateToPage = (idx: number) => {
-    pagerRef.current?.setPageWithoutAnimation(idx);
     setPageIndex(idx);
-    setPageScrollFloat(idx);
   };
 
   // Items page search row — rendered as the FlatList header so it scrolls
@@ -1414,16 +1399,6 @@ function AppContent() {
         </View>
       )}
 
-      {/* Model download status */}
-      {isDownloadingModel && (
-        <View style={styles.downloadContainer}>
-          <Text style={styles.downloadText}>
-            Downloading model... {modelDownloadProgress ? Math.round(modelDownloadProgress * 100) : 0}%
-          </Text>
-          <ActivityIndicator size="small" color="#007AFF" />
-        </View>
-      )}
-
       {/* Error display */}
       {error && (
         <View style={styles.errorContainer}>
@@ -1446,13 +1421,6 @@ function AppContent() {
         scrollEnabled={true}
         overdrag={false}
         overScrollMode="never"
-        onPageScroll={(e) => {
-          const next = e.nativeEvent.position + e.nativeEvent.offset;
-          // Bail out on sub-pixel jitter so an unrelated vertical gesture
-          // (e.g. pull-to-create) doesn't churn re-renders via tiny
-          // horizontal touch noise reported by the pager.
-          setPageScrollFloat((prev) => (Math.abs(prev - next) > 0.005 ? next : prev));
-        }}
         onPageSelected={(e) => {
           try {
             setPageIndex(e.nativeEvent.position);
@@ -1462,94 +1430,104 @@ function AppContent() {
         }}
       >
         <View key="library" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
-          <LibraryView
-            documents={libraryDocuments}
-            onChange={handleLibraryDocumentsChange}
-            callsign={callsign}
-            lastSyncedAt={librarySyncedAt}
-            isSyncing={isLibrarySyncing}
-            onSyncPress={handleLibrarySyncQuiet}
-          />
+          {shouldRenderPage(0) ? (
+            <LibraryView
+              documents={libraryDocuments}
+              onChange={handleLibraryDocumentsChange}
+              callsign={callsign}
+              lastSyncedAt={librarySyncedAt}
+              isSyncing={isLibrarySyncing}
+              onSyncPress={handleLibrarySyncQuiet}
+            />
+          ) : null}
         </View>
         <View key="transcripts" style={[styles.transcriptContainer, { backgroundColor: colors.bgPage }]}>
-          <View style={styles.transcriptListWrapper}>
-            {/* Top fade overlay — items gently fade as they scroll past the top. */}
-            <View pointerEvents="none" style={styles.topFadeOverlay}>
-              {TOP_FADE_OPACITIES.map((op, i) => (
-                <View
-                  key={i}
-                  style={{ height: 4, backgroundColor: colors.bgPage, opacity: op }}
-                />
-              ))}
+          {shouldRenderPage(1) ? (
+            <View style={styles.transcriptListWrapper}>
+              {/* Top fade overlay — items gently fade as they scroll past the top. */}
+              <View pointerEvents="none" style={styles.topFadeOverlay}>
+                {TOP_FADE_OPACITIES.map((op, i) => (
+                  <View
+                    key={i}
+                    style={{ height: 4, backgroundColor: colors.bgPage, opacity: op }}
+                  />
+                ))}
+              </View>
+              <PullToCreate
+                itemType="transcript"
+                onCreateItem={handleCreateTranscript}
+                enabled={true}
+                style={{ flex: 1 }}
+                onCreateModeChange={handleStackCreateModeChange}
+              >
+                {filteredTranscripts.length === 0 ? (
+                  <FlatList
+                    data={[]}
+                    renderItem={() => null}
+                    ListHeaderComponent={itemsSearchHeader}
+                    ListEmptyComponent={
+                      <View style={styles.emptyState}>
+                        <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
+                          {itemsSearchQuery ? 'No matches' : 'No stacks yet'}
+                        </Text>
+                        <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
+                          {itemsSearchQuery
+                            ? 'Try a different search term.'
+                            : 'Pull down to type a note, or tap Record.'}
+                        </Text>
+                      </View>
+                    }
+                    contentContainerStyle={{ flex: 1 }}
+                  />
+                ) : (
+                  <FlatList
+                    data={filteredTranscripts}
+                    keyExtractor={(item) => item.id}
+                    renderItem={renderTranscriptItem}
+                    ListHeaderComponent={itemsSearchHeader}
+                    contentContainerStyle={styles.sectionContent}
+                    windowSize={5}
+                    removeClippedSubviews={true}
+                    maxToRenderPerBatch={10}
+                    initialNumToRender={10}
+                  />
+                )}
+              </PullToCreate>
             </View>
-            <PullToCreate
-              itemType="transcript"
-              onCreateItem={handleCreateTranscript}
-              enabled={true}
-              style={{ flex: 1 }}
-              onCreateModeChange={handleStackCreateModeChange}
-            >
-              {filteredTranscripts.length === 0 ? (
-                <FlatList
-                  data={[]}
-                  renderItem={() => null}
-                  ListHeaderComponent={itemsSearchHeader}
-                  ListEmptyComponent={
-                    <View style={styles.emptyState}>
-                      <Text style={[styles.emptyTitle, { color: colors.textPrimary }]}>
-                        {itemsSearchQuery ? 'No matches' : 'No stacks yet'}
-                      </Text>
-                      <Text style={[styles.emptySubtitle, { color: colors.textSecondary }]}>
-                        {itemsSearchQuery
-                          ? 'Try a different search term.'
-                          : 'Pull down to type a note, or tap Record.'}
-                      </Text>
-                    </View>
-                  }
-                  contentContainerStyle={{ flex: 1 }}
-                />
-              ) : (
-                <FlatList
-                  data={filteredTranscripts}
-                  keyExtractor={(item) => item.id}
-                  renderItem={renderTranscriptItem}
-                  ListHeaderComponent={itemsSearchHeader}
-                  contentContainerStyle={styles.sectionContent}
-                  windowSize={5}
-                  removeClippedSubviews={true}
-                  maxToRenderPerBatch={10}
-                  initialNumToRender={10}
-                />
-              )}
-            </PullToCreate>
-          </View>
+          ) : null}
         </View>
         <View key="commands" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
-          <CommandsList
-            searchOpacity={proximityToPage(2)}
-            onCreateModeChange={handleCommandCreateModeChange}
-          />
+          {shouldRenderPage(2) ? (
+            <CommandsList
+              searchOpacity={proximityToPage(2)}
+              isActive={pageIndex === 2}
+              onCreateModeChange={handleCommandCreateModeChange}
+            />
+          ) : null}
         </View>
         <View key="todos" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
-          <TodoList
-            sections={todosSections}
-            onToggleComplete={handleToggleComplete}
-            onUpdate={handleUpdateTodo}
-            onDelete={handleDeleteTodo}
-            formatTime={formatTime}
-            formatDateHeader={formatDateHeader}
-            onCreateTask={handleCreateTask}
-            onCreateModeChange={handleTaskCreateModeChange}
-            searchOpacity={proximityToPage(3)}
-          />
+          {shouldRenderPage(3) ? (
+            <TodoList
+              sections={todosSections}
+              onToggleComplete={handleToggleComplete}
+              onUpdate={handleUpdateTodo}
+              onDelete={handleDeleteTodo}
+              formatTime={formatTime}
+              formatDateHeader={formatDateHeader}
+              onCreateTask={handleCreateTask}
+              onCreateModeChange={handleTaskCreateModeChange}
+              searchOpacity={proximityToPage(3)}
+            />
+          ) : null}
         </View>
         <View key="settings" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
-          <ScrollView
-            style={[styles.settingsPageScroll, { backgroundColor: colors.bgPage }]}
-            contentContainerStyle={styles.settingsPageContent}
-            showsVerticalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-          >
+          {shouldRenderPage(4) ? (
+            <ScrollView
+              style={[styles.settingsPageScroll, { backgroundColor: colors.bgPage }]}
+              contentContainerStyle={styles.settingsPageContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
             <Text style={[styles.modalTitle, { color: colors.textPrimary }]}>Settings</Text>
 
             <View style={styles.settingRow}>
@@ -1698,7 +1676,8 @@ function AppContent() {
               {syncNotice && <Text style={[styles.syncStatusText, { color: colors.textSecondary }]}>{syncNotice}</Text>}
               {authNotice && <Text style={[styles.syncStatusText, { color: colors.textSecondary }]}>{authNotice}</Text>}
             </View>
-          </ScrollView>
+            </ScrollView>
+          ) : null}
         </View>
         </PagerView>
 
@@ -1959,17 +1938,6 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     color: '#EA580C',
-  },
-  downloadContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#E3F2FD',
-    gap: 10,
-  },
-  downloadText: {
-    fontSize: 14,
-    color: '#1976D2',
   },
   errorContainer: {
     backgroundColor: '#FEE2E2',

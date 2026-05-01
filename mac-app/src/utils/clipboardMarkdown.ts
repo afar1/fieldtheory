@@ -57,6 +57,19 @@ function getImageAlt(item: ClipboardItem, imageIndex: number): string {
   return `Image ${imageIndex}`;
 }
 
+export function formatLocalImageMarkdown(filePath: string, alt = 'Image'): string {
+  const destination = formatMarkdownDestination(localFilePathToMarkdownUrl(filePath));
+  return `![${escapeImageAlt(alt)}](${destination})`;
+}
+
+export function formatPastedLocalImageMarkdown(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed || trimmed.includes('\n')) return null;
+  if (!/^(file:\/\/|\/)/i.test(trimmed)) return null;
+  if (!/\.(avif|gif|jpe?g|png|svg|webp)$/i.test(trimmed)) return null;
+  return formatLocalImageMarkdown(trimmed);
+}
+
 function formatTextBlock(text: string): string {
   const trimmed = text.trim();
   if (/^https?:\/\/\S+$/i.test(trimmed)) return formatMarkdownDestination(trimmed);
@@ -84,9 +97,8 @@ export function buildClipboardItemsMarkdown(
       continue;
     }
 
-    const alt = escapeImageAlt(getImageAlt(item, imageIndex));
-    const destination = formatMarkdownDestination(localFilePathToMarkdownUrl(imagePath));
-    blocks.push(`![${alt}](${destination})`);
+    const alt = getImageAlt(item, imageIndex);
+    blocks.push(formatLocalImageMarkdown(imagePath, alt));
     imageIndex += 1;
   }
 
