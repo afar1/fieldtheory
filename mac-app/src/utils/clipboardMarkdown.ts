@@ -2,6 +2,9 @@ import type { ClipboardItem } from '../types/clipboard';
 
 export type ClipboardMarkdownImagePaths = Record<number, string | null | undefined>;
 
+const LOCAL_IMAGE_PATH_PREFIX_RE = /^(file:\/\/|\/|~\/)/i;
+const LOCAL_IMAGE_EXTENSION_RE = /\.(avif|gif|jpe?g|png|svg|webp)(?=\s|$)/i;
+
 function isImageItem(item: ClipboardItem): boolean {
   return item.type === 'image' || item.type === 'screenshot' || !!item.imageData || !!item.thumbnailData;
 }
@@ -37,10 +40,19 @@ export function getClipboardItemsMarkdownTitle(items: ClipboardItem[]): string {
 
 export function localFilePathToMarkdownUrl(filePath: string): string {
   if (/^file:\/\//i.test(filePath)) return filePath;
-  if (!filePath.startsWith('/')) return filePath;
-  return `file://${filePath.split('/').map((part, index) => (
+  const expandedPath = expandHomePath(filePath);
+  if (!expandedPath.startsWith('/')) return filePath;
+  return `file://${expandedPath.split('/').map((part, index) => (
     index === 0 ? '' : encodeURIComponent(part)
   )).join('/')}`;
+}
+
+function expandHomePath(filePath: string): string {
+  if (filePath !== '~' && !filePath.startsWith('~/')) return filePath;
+  const env = typeof process === 'undefined' ? undefined : process.env;
+  const home = env?.HOME || env?.USERPROFILE || '';
+  if (!home) return filePath;
+  return `${home}${filePath.slice(1)}`;
 }
 
 function formatMarkdownDestination(destination: string): string {
@@ -62,12 +74,38 @@ export function formatLocalImageMarkdown(filePath: string, alt = 'Image'): strin
   return `![${escapeImageAlt(alt)}](${destination})`;
 }
 
-export function formatPastedLocalImageMarkdown(text: string): string | null {
+function getPastedLocalImagePaths(text: string): string[] {
   const trimmed = text.trim();
-  if (!trimmed || trimmed.includes('\n')) return null;
-  if (!/^(file:\/\/|\/)/i.test(trimmed)) return null;
-  if (!/\.(avif|gif|jpe?g|png|svg|webp)$/i.test(trimmed)) return null;
-  return formatLocalImageMarkdown(trimmed);
+  if (!trimmed) return [];
+
+  const paths: string[] = [];
+  let index = 0;
+  while (index < trimmed.length) {
+    while (/\s/.test(trimmed[index] ?? '')) index += 1;
+    if (index >= trimmed.length) break;
+    if (!LOCAL_IMAGE_PATH_PREFIX_RE.test(trimmed.slice(index))) return [];
+
+    const rest = trimmed.slice(index);
+    const imageExtMatch = LOCAL_IMAGE_EXTENSION_RE.exec(rest);
+    if (!imageExtMatch || imageExtMatch.index === undefined) return [];
+
+    const end = index + imageExtMatch.index + imageExtMatch[0].length;
+    paths.push(trimmed.slice(index, end));
+    index = end;
+  }
+
+  return paths;
+}
+
+export function formatPastedLocalImageMarkdown(text: string): string | null {
+  const imagePaths = getPastedLocalImagePaths(text);
+  if (imagePaths.length === 0) return null;
+  return imagePaths
+    .map((imagePath, index) => formatLocalImageMarkdown(
+      imagePath,
+      imagePaths.length === 1 ? 'Image' : `Image ${index + 1}`,
+    ))
+    .join('\n\n');
 }
 
 function formatTextBlock(text: string): string {

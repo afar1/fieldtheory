@@ -92,12 +92,7 @@ export function clientIdForLibrarySourcePath(sourcePath: string): string {
   return `library-${sha256(sourcePath).slice(0, 32)}`;
 }
 
-function parseMarkdownTitle(filePath: string, content: string): string {
-  const lines = content.split(/\r?\n/).slice(0, 40);
-  for (const line of lines) {
-    const match = line.match(/^#\s+(.+)/);
-    if (match) return match[1].trim();
-  }
+function parseMarkdownTitle(filePath: string): string {
   return path.basename(filePath, path.extname(filePath));
 }
 
@@ -251,7 +246,7 @@ export class LibrarySyncService {
         return [{
           clientId: existingRemote?.client_id ?? clientIdForLibrarySourcePath(sourcePath),
           sourcePath,
-          title: parseMarkdownTitle(filePath, content),
+          title: parseMarkdownTitle(filePath),
           content,
           contentHash: sha256(content),
           createdAtMs: existingRemote?.client_created_at_ms ?? Math.floor(stats.birthtimeMs || stats.ctimeMs || stats.mtimeMs),
