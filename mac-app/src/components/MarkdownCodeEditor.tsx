@@ -120,6 +120,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const onChangeRef = useRef(onChange);
     const onKeyDownRef = useRef(props.onKeyDown);
     const onScrollRef = useRef(onScroll);
+    const lastAppliedValueRef = useRef(value);
     const themeCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
 
@@ -253,6 +254,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       const view = viewRef.current;
       if (!view) return;
+      if (value === lastAppliedValueRef.current) return;
+      lastAppliedValueRef.current = value;
       const current = view.state.doc.toString();
       if (current === value) return;
       view.dispatch({
