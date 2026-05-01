@@ -1,5 +1,5 @@
 import { forwardRef, type CSSProperties, type MouseEventHandler, type ClipboardEventHandler } from 'react';
-import ReactMarkdown, { type Components } from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
 import '@prose-ui/style/prose-ui.css';
@@ -77,6 +77,11 @@ function proseStyle(props: FieldTheoryProseStyleProps): CSSProperties {
   } as CSSProperties;
 }
 
+function fieldTheoryUrlTransform(url: string, key: string): string {
+  if (key === 'src' && /^(file|ftmedia):/i.test(url)) return url;
+  return defaultUrlTransform(url);
+}
+
 const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(function FieldTheoryProse({
   children,
   className,
@@ -104,7 +109,7 @@ const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(funct
       onMouseDown={onMouseDown}
       style={proseStyle(styleProps)}
     >
-      <ReactMarkdown remarkPlugins={remarkPlugins} components={components}>
+      <ReactMarkdown remarkPlugins={remarkPlugins} components={components} urlTransform={fieldTheoryUrlTransform}>
         {children}
       </ReactMarkdown>
     </div>

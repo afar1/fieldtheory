@@ -2,6 +2,8 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import FieldTheoryProse from '../FieldTheoryProse';
 
+const LOCAL_SCREENSHOT_URL = 'file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png';
+
 describe('FieldTheoryProse', () => {
   it('renders GFM tables, task lists, and line breaks', () => {
     render(
@@ -54,5 +56,26 @@ describe('FieldTheoryProse', () => {
     );
 
     expect((container.firstElementChild as HTMLElement).style.getPropertyValue('--ft-prose-paragraph-spacing')).toBe('1.08em');
+  });
+
+  it('renders local screenshot image URLs inline', () => {
+    render(
+      <FieldTheoryProse>
+        {`![Figure A](<${LOCAL_SCREENSHOT_URL}>)`}
+      </FieldTheoryProse>
+    );
+
+    const image = screen.getByRole('img', { name: 'Figure A' });
+    expect(image.getAttribute('src')).toBe(LOCAL_SCREENSHOT_URL);
+  });
+
+  it('keeps unsafe image URLs stripped', () => {
+    render(
+      <FieldTheoryProse>
+        {'![Unsafe](javascript:alert(1))'}
+      </FieldTheoryProse>
+    );
+
+    expect(screen.getByRole('img', { name: 'Unsafe' }).getAttribute('src')).toBe('');
   });
 });
