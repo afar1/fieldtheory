@@ -3890,10 +3890,12 @@ const libraryAPI = {
 const wikiAPI = {
   getTree: (): Promise<WikiFolder[]> => ipcRenderer.invoke('wiki:getTree'),
   getPage: (relPath: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:getPage', relPath),
+  findPageByDocumentVersion: (version: DocumentVersion, previousRelPath?: string): Promise<WikiPage | null> =>
+    ipcRenderer.invoke('wiki:findPageByDocumentVersion', version, previousRelPath),
   save: (relPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
     ipcRenderer.invoke('wiki:save', relPath, content, expectedVersion),
   createFile: (folderName: string, fileName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFile', folderName, fileName),
-  createFileWithTitleSuggestion: (folderName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFileWithTitleSuggestion', folderName),
+  createFileWithDefaultTitle: (folderName: string): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createFileWithDefaultTitle', folderName),
   deletePage: (relPath: string): Promise<boolean> => ipcRenderer.invoke('wiki:deletePage', relPath),
   createScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:createScratchpadDefault'),
   openScratchpadDefault: (): Promise<WikiPage | null> => ipcRenderer.invoke('wiki:openScratchpadDefault'),
@@ -3917,13 +3919,13 @@ const wikiAPI = {
   },
   // Hotkey-driven "new scratchpad" flow — main process has already created
   // the file and wants us to switch to Library, open it, and start editing.
-  onOpenScratchpad: (callback: (relPath: string, titleSuggestion?: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload: string | { relPath: string; titleSuggestion?: string }) => {
+  onOpenScratchpad: (callback: (relPath: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: string | { relPath: string }) => {
       if (typeof payload === 'string') {
         callback(payload);
         return;
       }
-      callback(payload.relPath, payload.titleSuggestion);
+      callback(payload.relPath);
     };
     ipcRenderer.on('wiki:openScratchpad', handler);
     return () => ipcRenderer.removeListener('wiki:openScratchpad', handler);
@@ -3994,6 +3996,10 @@ const externalAPI = {
     ipcRenderer.invoke('external:open', absPath),
   save: (absPath: string, content: string, expectedVersion?: DocumentVersion | null): Promise<DocumentSaveResult> =>
     ipcRenderer.invoke('external:save', absPath, content, expectedVersion),
+  findLibraryFileByDocumentVersion: (version: DocumentVersion, previousAbsPath?: string): Promise<ExternalMarkdownFile | null> =>
+    ipcRenderer.invoke('external:findLibraryFileByDocumentVersion', version, previousAbsPath),
+  rename: (absPath: string, newName: string): Promise<ExternalMarkdownFile | null> =>
+    ipcRenderer.invoke('external:rename', absPath, newName),
   onOpenExternal: (callback: (absPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, absPath: string) => callback(absPath);
     ipcRenderer.on('external:openPage', handler);

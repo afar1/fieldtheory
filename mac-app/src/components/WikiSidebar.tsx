@@ -983,8 +983,8 @@ function WikiSidebar({
   const beginCreateFile = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, SCRATCHPAD_FOLDER_NAME);
     if (!location) return;
-    // Built-in markdown pages have an editor-side title suggestion, so skip
-    // the sidebar naming input and let the H1 become the live title.
+    // Built-in markdown pages open with the document title field selected, so
+    // the filename title is edited in the main surface instead of the sidebar.
     if (location.builtin && onCreateDefaultFile) {
       void (async () => {
         const created = await onCreateDefaultFile(location);
