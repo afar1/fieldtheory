@@ -148,6 +148,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const lastBeforeInputRef = useRef<{ inputType: string; data: string | null } | null>(null);
     const lastAppliedValueRef = useRef(value);
     const themeCompartment = useRef(new Compartment()).current;
+    const syntaxHighlightCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
 
     useEffect(() => {
@@ -228,7 +229,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           markdown(),
-          syntaxHighlighting(buildHighlightStyle(theme.isDark)),
+          syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
           highlightActiveLine(),
@@ -319,8 +320,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       const view = viewRef.current;
       if (!view) return;
-      view.dispatch({ effects: themeCompartment.reconfigure(editorTheme) });
-    }, [editorTheme, themeCompartment]);
+      view.dispatch({
+        effects: [
+          themeCompartment.reconfigure(editorTheme),
+          syntaxHighlightCompartment.reconfigure(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
+        ],
+      });
+    }, [editorTheme, syntaxHighlightCompartment, theme.isDark, themeCompartment]);
 
     // Reconfigure read-only.
     useEffect(() => {
