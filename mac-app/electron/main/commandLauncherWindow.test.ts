@@ -284,6 +284,16 @@ describe('CommandLauncherWindow.hide()', () => {
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
+  it('activates the previous app for default renderer close requests', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+
+    mockIpcMainHandlers.get('command-launcher:close')?.({});
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
   it('does not activate stale previous app when Field Theory was active on show', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
     (launcher as any).fieldTheoryActiveOnShow = true;
