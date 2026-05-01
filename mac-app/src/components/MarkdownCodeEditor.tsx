@@ -59,6 +59,7 @@ interface MarkdownCodeEditorProps {
   spellCheck?: boolean;
   dataAttributes?: Record<string, string | undefined>;
   style?: React.CSSProperties;
+  onKeyDown?: (event: KeyboardEvent) => boolean | void;
   onScroll?: (scrollTop: number) => void;
 }
 
@@ -117,6 +118,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const containerRef = useRef<HTMLDivElement | null>(null);
     const viewRef = useRef<EditorView | null>(null);
     const onChangeRef = useRef(onChange);
+    const onKeyDownRef = useRef(props.onKeyDown);
     const onScrollRef = useRef(onScroll);
     const themeCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
@@ -124,6 +126,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       onChangeRef.current = onChange;
     }, [onChange]);
+
+    useEffect(() => {
+      onKeyDownRef.current = props.onKeyDown;
+    }, [props.onKeyDown]);
 
     useEffect(() => {
       onScrollRef.current = onScroll;
@@ -205,6 +211,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             }
           }),
           EditorView.domEventHandlers({
+            keydown: (event) => onKeyDownRef.current?.(event) === true,
             scroll: (event) => {
               const target = event.target as HTMLElement;
               if (target?.classList?.contains('cm-scroller')) {

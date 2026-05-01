@@ -117,6 +117,12 @@ export function normalizeHotkeyForComparison(hotkey: string | null | undefined):
   ].join('+');
 }
 
+export function hasNonShiftModifierHotkey(hotkey: string | null | undefined): boolean {
+  const normalized = normalizeHotkeyForComparison(hotkey);
+  if (!normalized) return false;
+  return normalized.split('+').some((part) => part === 'Command' || part === 'Control' || part === 'Alt');
+}
+
 /**
  * Check if a hotkey string contains only modifier keys (no actual key).
  */
