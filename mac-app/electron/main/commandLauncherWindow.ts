@@ -130,12 +130,14 @@ export class CommandLauncherWindow {
     });
     
     // Listen for close requests from renderer.
-    ipcMain.on('command-launcher:close', () => {
+    ipcMain.on('command-launcher:close', (_event, options?: { skipActivation?: boolean }) => {
+      const skipActivation = options?.skipActivation === true;
       appendCommandLauncherTrace('renderer-close-request', {
         visible: this.isVisible(),
         isShowing: this._isShowing,
+        skipActivation,
       });
-      this.hide();
+      this.hide(skipActivation);
     });
 
     ipcMain.on('command-launcher:preview-show', (_event, preview: Record<string, unknown>) => {
@@ -176,7 +178,8 @@ export class CommandLauncherWindow {
 
   /**
    * Show the command launcher window.
-   * Uses cached window bounds so the input can focus immediately after the hotkey.
+   * Uses fresh frontmost window bounds when possible so the launcher follows
+   * same-app window moves across displays.
    */
   async show(options: { anchorBounds?: AnchorBounds | null } = {}): Promise<void> {
     // Mark as showing BEFORE any async work to close the race window.
@@ -231,11 +234,21 @@ export class CommandLauncherWindow {
       let x: number;
       let y: number;
 
-      const windowBounds = options.anchorBounds ?? frontmostApp?.windowBounds ?? null;
+      let freshWindowBounds: AnchorBounds | null = null;
+      if (!options.anchorBounds && this.nativeHelper) {
+        try {
+          freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds();
+        } catch (error) {
+          appendCommandLauncherTrace('show-frontmost-window-bounds-error', { error });
+        }
+      }
+
+      const windowBounds = options.anchorBounds ?? freshWindowBounds ?? frontmostApp?.windowBounds ?? null;
       appendCommandLauncherTrace('show-position-source', {
         usedWindowBounds: Boolean(windowBounds),
         usedAnchorBounds: Boolean(options.anchorBounds),
-        usedCachedWindowBounds: Boolean(!options.anchorBounds && frontmostApp?.windowBounds),
+        usedFreshWindowBounds: Boolean(!options.anchorBounds && freshWindowBounds),
+        usedCachedWindowBounds: Boolean(!options.anchorBounds && !freshWindowBounds && frontmostApp?.windowBounds),
       });
 
       if (windowBounds) {
@@ -294,7 +307,6 @@ export class CommandLauncherWindow {
    */
   hide(skipActivation = false): void {
     this._isShowing = false;
-    this.hidePreview();
 
     // Already hidden — prevents blur re-entry after hide(true).
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
@@ -311,6 +323,7 @@ export class CommandLauncherWindow {
       previousAppBundleId: this.previousApp?.bundleId ?? null,
     });
     this.window!.hide();
+    this.hidePreview();
 
     if (skipActivation || this.fieldTheoryActiveOnShow) {
       appendCommandLauncherTrace('hide-skip-activation');
@@ -380,8 +393,11 @@ export class CommandLauncherWindow {
     return this.fieldTheoryActiveOnShow;
   }
 
-  private getInitialThemeArgument(): string {
-    return `--field-theory-dark-mode=${this.getInitialDarkMode() ? 'true' : 'false'}`;
+  private getInitialThemeOptions(): { argument: string } {
+    const isDarkMode = this.getInitialDarkMode();
+    return {
+      argument: `--field-theory-dark-mode=${isDarkMode ? 'true' : 'false'}`,
+    };
   }
 
   /**
@@ -389,11 +405,13 @@ export class CommandLauncherWindow {
    */
   private createWindow(): void {
     appendCommandLauncherTrace('create-window-start');
+    const initialTheme = this.getInitialThemeOptions();
     this.window = new BrowserWindow({
       width: this.WINDOW_WIDTH,
       height: this.WINDOW_HEIGHT_COLLAPSED,
       frame: false,
       transparent: true,
+      backgroundColor: '#00000000',
       resizable: false,
       skipTaskbar: true,
       alwaysOnTop: true,
@@ -403,7 +421,7 @@ export class CommandLauncherWindow {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, '../preload.js'),
-        additionalArguments: [this.getInitialThemeArgument()],
+        additionalArguments: [initialTheme.argument],
       },
     });
     appendCommandLauncherTrace('create-window-complete');
@@ -481,11 +499,13 @@ export class CommandLauncherWindow {
 
   private createPreviewWindow(): void {
     appendCommandLauncherTrace('preview-create-window-start');
+    const initialTheme = this.getInitialThemeOptions();
     this.previewWindow = new BrowserWindow({
       width: this.PREVIEW_WINDOW_WIDTH,
       height: this.PREVIEW_WINDOW_MAX_HEIGHT,
       frame: false,
       transparent: true,
+      backgroundColor: '#00000000',
       resizable: false,
       skipTaskbar: true,
       alwaysOnTop: true,
@@ -496,7 +516,7 @@ export class CommandLauncherWindow {
         nodeIntegration: false,
         contextIsolation: true,
         preload: path.join(__dirname, '../preload.js'),
-        additionalArguments: [this.getInitialThemeArgument()],
+        additionalArguments: [initialTheme.argument],
       },
     });
     appendCommandLauncherTrace('preview-create-window-complete');
