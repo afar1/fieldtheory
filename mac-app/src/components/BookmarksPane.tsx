@@ -1,4 +1,4 @@
-import { memo, useEffect, useState, useMemo, useRef, type FormEvent } from 'react';
+import { memo, useEffect, useState, useMemo, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import BookmarksList from './BookmarksList';
 import BookmarksCanvas from './BookmarksCanvas';
@@ -6,10 +6,8 @@ import ImmersiveToggle from './ImmersiveToggle';
 import { getBookmarks, peekBookmarks, onBookmarksChanged } from '../services/bookmarksCache';
 
 type BookmarksViewMode = 'list' | 'canvas';
-type BookmarkSourceFilter = 'all' | 'x' | 'web';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
-const SOURCE_FILTER_KEY = 'bookmarks-source-filter';
 const FIELD_THEORY_CLI_INSTALL_COMMAND = 'npm install -g fieldtheory';
 const FIELD_THEORY_CLI_URL = 'https://fieldtheory.dev/cli/';
 
@@ -21,11 +19,6 @@ function loadMode(): BookmarksViewMode {
 function loadShowText(): boolean {
   const saved = localStorage.getItem(SHOW_TEXT_KEY);
   return saved === null ? true : saved === '1';
-}
-
-function loadSourceFilter(): BookmarkSourceFilter {
-  const saved = localStorage.getItem(SOURCE_FILTER_KEY);
-  return saved === 'x' || saved === 'web' ? saved : 'all';
 }
 
 interface BookmarksPaneProps {
@@ -51,15 +44,11 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const [searchQuery, setSearchQuery] = useState('');
   const [debouncedQuery, setDebouncedQuery] = useState('');
   const [showText, setShowText] = useState<boolean>(loadShowText);
-  const [sourceFilter, setSourceFilter] = useState<BookmarkSourceFilter>(loadSourceFilter);
-  const [saveUrl, setSaveUrl] = useState('');
-  const [saveState, setSaveState] = useState<{ status: 'idle' | 'saving' | 'saved' | 'error'; message: string }>({ status: 'idle', message: '' });
   const [installCopied, setInstallCopied] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
   const installCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loading = snapshot === null;
-  const isCanvasMode = mode === 'canvas';
 
   useEffect(() => {
     return () => {
@@ -104,10 +93,6 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   }, [showText]);
 
   useEffect(() => {
-    localStorage.setItem(SOURCE_FILTER_KEY, sourceFilter);
-  }, [sourceFilter]);
-
-  useEffect(() => {
     if (!active) return;
     let cancelled = false;
     const unsub = onBookmarksChanged((s) => { if (!cancelled) setSnapshot(s); });
@@ -127,7 +112,6 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const filtered = useMemo(() => {
     if (!snapshot) return [];
     let list = snapshot.bookmarks;
-    if (!isCanvasMode && sourceFilter !== 'all') list = list.filter((b) => (b.sourceType ?? 'x') === sourceFilter);
     if (!showText) list = list.filter((b) => b.images && b.images.length > 0);
     if (folder !== 'All') list = list.filter((b) => b.folders.includes(folder));
     if (debouncedQuery) {
@@ -142,7 +126,7 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
       );
     }
     return list;
-  }, [snapshot, folder, debouncedQuery, showText, sourceFilter, isCanvasMode]);
+  }, [snapshot, folder, debouncedQuery, showText]);
 
   const folders = snapshot?.folders ?? [];
 
@@ -151,28 +135,6 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
     setInstallCopied(true);
     if (installCopyTimerRef.current) clearTimeout(installCopyTimerRef.current);
     installCopyTimerRef.current = setTimeout(() => setInstallCopied(false), 1600);
-  };
-
-  const handleSaveUrl = async (event: FormEvent) => {
-    event.preventDefault();
-    const url = saveUrl.trim();
-    if (!url || saveState.status === 'saving') return;
-
-    setSaveState({ status: 'saving', message: 'Saving…' });
-    try {
-      const result = await window.bookmarksAPI?.saveWebUrl(url);
-      if (!result?.success) {
-        setSaveState({ status: 'error', message: result?.error ?? 'Could not save URL' });
-        return;
-      }
-      setSaveUrl('');
-      setSourceFilter('web');
-      setSaveState({ status: 'saved', message: result.created === false ? 'Already saved' : 'Saved' });
-      const latest = await window.bookmarksAPI?.getAll();
-      if (latest) setSnapshot(latest);
-    } catch (error) {
-      setSaveState({ status: 'error', message: error instanceof Error ? error.message : 'Could not save URL' });
-    }
   };
 
   return (
@@ -222,99 +184,6 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
             );
           })}
         </div>
-
-        {!isCanvasMode && (
-          <>
-            {/* Source segmented toggle */}
-            <div
-              style={{
-                display: 'inline-flex',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '6px',
-                overflow: 'hidden',
-              }}
-            >
-              {(['all', 'x', 'web'] as const).map((source, index, sources) => {
-                const active = sourceFilter === source;
-                const label = source === 'all' ? 'All' : source === 'x' ? 'X' : 'Web';
-                return (
-                  <button
-                    key={source}
-                    onClick={() => setSourceFilter(source)}
-                    style={{
-                      padding: '4px 10px',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                      color: active ? theme.text : theme.textSecondary,
-                      backgroundColor: active
-                        ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRight: index < sources.length - 1 ? `1px solid ${theme.border}` : 'none',
-                      cursor: 'pointer',
-                    }}
-                  >
-                    {label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <form onSubmit={handleSaveUrl} style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: '220px' }}>
-              <input
-                value={saveUrl}
-                onChange={(e) => {
-                  setSaveUrl(e.target.value);
-                  if (saveState.status !== 'saving') setSaveState({ status: 'idle', message: '' });
-                }}
-                placeholder="Save URL"
-                disabled={saveState.status === 'saving'}
-                style={{
-                  width: '180px',
-                  padding: '5px 10px',
-                  fontSize: '11px',
-                  color: theme.text,
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                  border: `1px solid ${saveState.status === 'error' ? '#dc2626' : theme.border}`,
-                  borderRadius: '6px',
-                  outline: 'none',
-                }}
-              />
-              <button
-                type="submit"
-                disabled={!saveUrl.trim() || saveState.status === 'saving'}
-                style={{
-                  padding: '5px 10px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: theme.text,
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
-                  border: `1px solid ${theme.border}`,
-                  borderRadius: '6px',
-                  cursor: saveUrl.trim() && saveState.status !== 'saving' ? 'pointer' : 'default',
-                  opacity: saveUrl.trim() && saveState.status !== 'saving' ? 1 : 0.55,
-                }}
-              >
-                {saveState.status === 'saving' ? 'Saving' : 'Save'}
-              </button>
-              {saveState.message && (
-                <span
-                  style={{
-                    maxWidth: '120px',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
-                    fontSize: '10px',
-                    color: saveState.status === 'error' ? '#dc2626' : theme.textSecondary,
-                  }}
-                  title={saveState.message}
-                >
-                  {saveState.message}
-                </span>
-              )}
-            </form>
-          </>
-        )}
 
         {/* Search */}
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
