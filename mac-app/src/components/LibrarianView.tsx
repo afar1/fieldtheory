@@ -85,17 +85,19 @@ import {
   classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
-  getWikiLinkedPages,
+  getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  getWikiLinkTargetKey,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   type LinkAction,
-  type WikiBacklinkInput,
-  type WikiLinkedPage,
+  type MarkdownLinkedDocument,
+  type MarkdownLinkRelationDocument,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
+  type WikiLinkTarget,
 } from '../utils/wikiLinks';
 
 type FieldTheoryMarkdownTarget = {
@@ -1482,16 +1484,22 @@ function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode |
   return { checkbox, content };
 }
 
-const WIKI_LINK_DIRECTION_MARKER: Record<WikiLinkedPage['direction'], string> = {
+const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
   outbound: '→',
   inbound: '←',
   bidirectional: '↔',
 };
 
-const WIKI_LINK_DIRECTION_LABEL: Record<WikiLinkedPage['direction'], string> = {
+const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
   outbound: 'This document links out',
   inbound: 'Links back to this document',
   bidirectional: 'Linked both ways',
+};
+
+const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
+  wiki: 'Wiki',
+  artifact: 'Artifact',
+  command: 'Command',
 };
 
 function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoint | null {
@@ -1766,7 +1774,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
-  const [wikiLinkRelationPages, setWikiLinkRelationPages] = useState<WikiBacklinkInput[]>([]);
+  const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
@@ -1847,6 +1855,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
     }
   }, [createUnresolvedWikiLink, onOpenCommandPath, openWikiPage, selectArtifactPath]);
+
+  const openMarkdownLinkTarget = useCallback((target: WikiLinkTarget) => {
+    switch (target.kind) {
+      case 'wiki':
+        openWikiPage(target.relPath);
+        return;
+      case 'artifact':
+        selectArtifactPath(target.path);
+        return;
+      case 'command':
+        onOpenCommandPath?.(target.path);
+        return;
+    }
+  }, [onOpenCommandPath, openWikiPage, selectArtifactPath]);
 
   const currentNavigationEntry = useMemo((): LibrarianNavigationEntry | null => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -2120,10 +2142,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => window.librarianAPI?.setImmersiveDismissable?.(false);
   }, [active, isFullScreen]);
 
-  // Push 'library' size-key for every librarian section. BookmarksPane
-  // overrides this for its canvas mode so it can share Draw's window mechanics.
+  // Push 'library' size-key for document sections. Bookmarks keeps the
+  // incoming window size in list mode and only overrides size for canvas.
   useEffect(() => {
     if (!active || preserveCurrentSizeKey) return;
+    if (selectedItemType === 'bookmarks') return;
     window.librarianAPI?.setSizeKey?.('library');
   }, [active, preserveCurrentSizeKey, selectedItemType]);
 
@@ -2554,24 +2577,58 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   );
 
   useEffect(() => {
-    if (!active || wikiIndexPages.length === 0) {
-      setWikiLinkRelationPages([]);
+    if (!active) {
+      setMarkdownLinkRelationDocuments([]);
       return;
     }
 
     let cancelled = false;
     const load = async () => {
-      const pages = await Promise.all(
+      const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
         wikiIndexPages.map(async (page) => {
           const fullPage = await window.wikiAPI?.getPage(page.relPath);
           return fullPage
-            ? { relPath: fullPage.relPath, title: fullPage.title, content: fullPage.content }
+            ? {
+              target: { kind: 'wiki' as const, relPath: fullPage.relPath },
+              title: fullPage.title,
+              content: fullPage.content,
+            }
+            : null;
+        }),
+      );
+      const artifactDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        readings.map(async (reading) => {
+          const fullReading = await window.librarianAPI?.getReading(reading.path);
+          return fullReading
+            ? {
+              target: { kind: 'artifact' as const, path: fullReading.path },
+              title: fullReading.title,
+              content: fullReading.content,
+            }
+            : null;
+        }),
+      );
+      const commandPagesByPath = new Map<string, WikiIndexInput>();
+      for (const command of commandIndexPages) {
+        const commandPath = command.commandPath;
+        if (commandPath && !commandPagesByPath.has(commandPath)) commandPagesByPath.set(commandPath, command);
+      }
+      const commandDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        Array.from(commandPagesByPath.entries()).map(async ([commandPath, command]) => {
+          const fullCommand = await window.commandsAPI?.getCommandByPath(commandPath);
+          return fullCommand
+            ? {
+              target: { kind: 'command' as const, path: fullCommand.filePath },
+              title: fullCommand.displayName || command.title,
+              content: fullCommand.content,
+            }
             : null;
         }),
       );
       if (cancelled) return;
-      setWikiLinkRelationPages(
-        pages.filter((page): page is WikiBacklinkInput => page !== null),
+      setMarkdownLinkRelationDocuments(
+        [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
+          .filter((document): document is MarkdownLinkRelationDocument => document !== null),
       );
     };
 
@@ -2579,17 +2636,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => {
       cancelled = true;
     };
-  }, [active, wikiIndexPages]);
+  }, [active, commandIndexPages, readings, wikiIndexPages]);
 
-  const wikiLinkedPages = useMemo<WikiLinkedPage[]>(() => {
+  const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) return { kind: 'wiki', relPath: wikiSelectedRelPath };
+    if (selectedItemType === 'artifact' && selectedPath) return { kind: 'artifact', path: selectedPath };
+    return null;
+  }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
+
+  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!activeReading) return [];
-    return getWikiLinkedPages(
-      selectedItemType === 'wiki' ? wikiSelectedRelPath : null,
+    return getMarkdownLinkedDocuments(
+      activeLinkTarget,
       activeReading.content,
-      wikiLinkRelationPages,
+      markdownLinkRelationDocuments,
       wikiIndex,
     );
-  }, [activeReading, selectedItemType, wikiIndex, wikiLinkRelationPages, wikiSelectedRelPath]);
+  }, [activeLinkTarget, activeReading, markdownLinkRelationDocuments, wikiIndex]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -5844,7 +5907,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               >
                 {displayContent}
               </FieldTheoryProse>
-              {wikiLinkedPages.length > 0 && (
+              {linkedDocuments.length > 0 && (
                 <section
                   aria-label="Linked"
                   style={{
@@ -5865,16 +5928,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     Linked
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {wikiLinkedPages.map((link) => (
+                    {linkedDocuments.map((link) => (
                       <button
-                        key={link.relPath}
+                        key={getWikiLinkTargetKey(link.target)}
                         type="button"
                         title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          openWikiPage(link.relPath);
+                          openMarkdownLinkTarget(link.target);
                         }}
                         style={{
                           display: 'grid',
@@ -5905,6 +5968,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         <span style={{ minWidth: 0 }}>
                           <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
                             {link.title}
+                            <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
+                              {WIKI_LINK_TARGET_LABEL[link.target.kind]}
+                            </span>
                           </span>
                           {link.excerpt && (
                             <span
