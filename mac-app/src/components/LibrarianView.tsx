@@ -256,6 +256,14 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
     && (input.selectedItemType === 'wiki' || input.selectedItemType === 'external');
 }
 
+export function shouldOpenMarkdownLinkFromMouseDown(input: {
+  button: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+}): boolean {
+  return input.button === 0 && !input.altKey && !input.ctrlKey;
+}
+
 export function isLibrarianDocumentFocusChromeActive(input: {
   canUseFocusImmersive: boolean;
   isFullScreen: boolean;
@@ -1627,6 +1635,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
+  const renderedLinkMouseDownHandledRef = useRef(false);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
   const renderedSaveTimerRef = useRef<number | null>(null);
   const pendingRenderedSaveRef = useRef<(() => void) | null>(null);
@@ -3378,7 +3387,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ]);
 
   const handleMarkdownCodeEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
-    if (!event.metaKey || event.altKey || event.ctrlKey) return false;
+    if (!shouldOpenMarkdownLinkFromMouseDown(event)) return false;
     const action = getMarkdownEditorLinkActionAtOffset(editContent, offset, wikiIndex);
     if (action.kind === 'noop') return false;
     event.preventDefault();
@@ -5672,6 +5681,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               }}
               onClick={(e) => {
                 if (!activeReading) return;
+                const target = e.target instanceof Element ? e.target : null;
+                if (target?.closest('a')) return;
                 const behavior = getRenderedMarkdownClickBehavior(e, renderedEditClickMode);
                 if (!behavior) return;
                 const caret = getRenderedTextCaretFromPoint(e);
@@ -5876,6 +5887,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   },
                   a: ({ href, children }) => {
                     const unresolved = isUnresolvedWikiHref(href);
+                    const openAnchorLink = (target: HTMLAnchorElement) => {
+                      // Markdown like `[categories/tool]()` renders an
+                      // <a> with an empty href — fall back to the link
+                      // text so these still resolve through the index.
+                      const effectiveHref = href && href.trim()
+                        ? href
+                        : (target.textContent?.trim() ?? '');
+                      const action = classifyLinkHref(effectiveHref, wikiIndex);
+                      openLinkAction(action);
+                    };
                     return (
                       <a
                         href={href}
@@ -5886,17 +5907,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                           textUnderlineOffset: '2px',
                           cursor: 'pointer',
                         }}
-                        onClick={(e) => {
+                        onMouseDown={(e) => {
+                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
                           e.preventDefault();
                           e.stopPropagation();
-                          // Markdown like `[categories/tool]()` renders an
-                          // <a> with an empty href — fall back to the link
-                          // text so these still resolve through the index.
-                          const effectiveHref = href && href.trim()
-                            ? href
-                            : (e.currentTarget.textContent?.trim() ?? '');
-                          const action = classifyLinkHref(effectiveHref, wikiIndex);
-                          openLinkAction(action);
+                          renderedLinkMouseDownHandledRef.current = true;
+                          openAnchorLink(e.currentTarget);
+                        }}
+                        onClick={(e) => {
+                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (renderedLinkMouseDownHandledRef.current) {
+                            renderedLinkMouseDownHandledRef.current = false;
+                            return;
+                          }
+                          openAnchorLink(e.currentTarget);
                         }}
                       >
                         {children}

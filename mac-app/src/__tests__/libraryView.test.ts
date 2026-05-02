@@ -45,6 +45,7 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldOpenMarkdownLinkFromMouseDown,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
   splitFrontmatter,
@@ -267,6 +268,34 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
       ctrlKey: false,
       altKey: false,
       selectedItemType: 'artifact',
+    })).toBe(false);
+  });
+});
+
+describe('shouldOpenMarkdownLinkFromMouseDown', () => {
+  it('opens links on an ordinary primary click', () => {
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(true);
+  });
+
+  it('keeps modified and non-primary clicks available for browser/editor behavior', () => {
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      altKey: true,
+      ctrlKey: false,
+    })).toBe(false);
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      altKey: false,
+      ctrlKey: true,
+    })).toBe(false);
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 1,
+      altKey: false,
+      ctrlKey: false,
     })).toBe(false);
   });
 });
