@@ -58,7 +58,7 @@ import {
   addWikiPageToTree,
   applyPinnedSidebarOrder,
   applyTodoStateOverrideToItem,
-  ensureScratchpadNodePinned,
+  ensureScratchpadNodePresent,
   ensureScratchpadPinned,
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
@@ -1793,12 +1793,12 @@ describe('recursive sidebar tree helpers', () => {
     ])).toBe('/Users/afar/.fieldtheory/librarian/artifacts');
   });
 
-  it('pins an existing scratchpad directory before other built-in nodes', () => {
+  it('leaves an existing scratchpad directory in normal folder order', () => {
     const entries = dir('entries');
     const scratchpad = dir('scratchpad');
-    const result = ensureScratchpadNodePinned([entries, scratchpad], root);
-    expect(result[0]).toBe(scratchpad);
-    expect(result[1]).toBe(entries);
+    const result = ensureScratchpadNodePresent([entries, scratchpad], root);
+    expect(result[0]).toBe(entries);
+    expect(result[1]).toBe(scratchpad);
   });
 
   it('expands scratchpad ancestors for a newly selected wiki file', () => {
