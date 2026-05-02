@@ -65,6 +65,7 @@ export interface LauncherLibraryMarkdownItem {
 export interface LauncherDirectoryItem extends LauncherSearchableItem {
   id: string;
   type: 'directory';
+  rootPath: string;
   directoryPath: string;
   directoryRelPath?: string;
   hotkeyDisplay: string;
@@ -195,9 +196,18 @@ export interface LauncherBookmarkFacetNamespaceCandidate extends LauncherVisible
 }
 
 export interface LauncherDirectoryNamespaceCandidate extends LauncherVisibleItem {
+  rootPath?: string;
   directoryPath?: string;
   directoryRelPath?: string;
   keywords?: string[];
+}
+
+export interface LauncherLibraryMoveSource {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
 }
 
 export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
@@ -453,8 +463,9 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
         ...name.split(/[-_]/),
         ...relPath.split('/'),
       ].filter(Boolean),
+      rootPath: root.path,
       directoryPath: joinLauncherPath(root.path, relPath),
-      directoryRelPath: root.builtin ? relPath : undefined,
+      directoryRelPath: relPath,
       hotkeyDisplay: 'folder',
     });
   };
@@ -575,6 +586,41 @@ export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchab
   );
   const filtered = filterLauncherNamespaceItems(descendants, search);
   return filtered.slice().sort(compareLauncherDirectoryItemsByRecency);
+}
+
+function parentLauncherRelPath(relPath: string): string {
+  return relPath.split('/').slice(0, -1).join('/');
+}
+
+export function getLauncherMoveDirectoryTarget(
+  source: LauncherLibraryMoveSource,
+  directory: LauncherDirectoryNamespaceCandidate,
+): { rootPath: string; targetDirRelPath: string } | null {
+  if (!directory.rootPath || directory.rootPath !== source.rootPath) return null;
+  const targetDirRelPath = directory.directoryRelPath;
+  if (targetDirRelPath === undefined) return null;
+  if (targetDirRelPath === parentLauncherRelPath(source.relPath)) return null;
+  return { rootPath: source.rootPath, targetDirRelPath };
+}
+
+export function filterLauncherMoveTargetDirectories<T extends LauncherDirectoryNamespaceCandidate & LauncherSearchableItem>(
+  directories: T[],
+  source: LauncherLibraryMoveSource,
+  query: string,
+): T[] {
+  return filterLauncherNamespaceItems(
+    directories.filter((directory) => getLauncherMoveDirectoryTarget(source, directory)),
+    query,
+  );
+}
+
+export function getLauncherMoveUndoTargetDirRelPath(sourceRelPath: string): string {
+  return parentLauncherRelPath(sourceRelPath);
+}
+
+export function getLauncherMovedFilePath(source: LauncherLibraryMoveSource, movedRelPath: string): string {
+  if (source.type === 'wiki') return movedRelPath;
+  return joinLauncherPath(source.rootPath, `${movedRelPath}.md`);
 }
 
 function formatBookmarkFacetKind(kind: LauncherBookmarkFacetKind): string {
@@ -940,6 +986,22 @@ export function buildBuiltInLauncherActions(
       displayName: 'Save Website',
       keywords: ['save website', 'save web page', 'save page', 'bookmark page', 'bookmark website', 'current tab', 'browser', 'markdown'],
       actionId: 'save-current-website',
+    },
+    {
+      id: 'action-move-current-library-file',
+      type: 'action',
+      name: 'move file',
+      displayName: 'Move Current File',
+      keywords: ['move', 'move file', 'move current file', 'library move', 'folder'],
+      actionId: 'move-current-library-file',
+    },
+    {
+      id: 'action-undo-library-move',
+      type: 'action',
+      name: 'undo move',
+      displayName: 'Undo Last Move',
+      keywords: ['undo', 'undo move', 'move back', 'restore move', 'library move'],
+      actionId: 'undo-library-move',
     },
     {
       id: 'action-theme',

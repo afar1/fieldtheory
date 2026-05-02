@@ -1216,6 +1216,14 @@ interface FieldTheoryMarkdownTarget {
   path: string;
 }
 
+interface ActiveLibraryFileContext {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
+}
+
 interface MarkdownPreview {
   title: string;
   filePath: string;
@@ -1270,6 +1278,8 @@ interface CommandsAPI {
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean }) => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
+  getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
+  setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
