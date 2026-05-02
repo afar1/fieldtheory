@@ -113,6 +113,7 @@ export type MarkdownLinkRelationDocument = {
   target: WikiLinkTarget;
   title: string;
   content: string;
+  linkHits?: MarkdownEditorLinkHit[];
 };
 
 export type WikiBacklink = {
@@ -343,6 +344,13 @@ export function getMarkdownEditorLinkHits(
   return hits.filter((hit) => hit.action.kind !== 'noop');
 }
 
+function getMarkdownLinkRelationDocumentHits(
+  document: MarkdownLinkRelationDocument,
+  index: WikiIndex,
+): MarkdownEditorLinkHit[] {
+  return document.linkHits ?? getMarkdownEditorLinkHits(document.content, index);
+}
+
 function getLineExcerptAtOffset(markdown: string, offset: number): string {
   const safeOffset = Math.max(0, Math.min(offset, markdown.length));
   const lineStart = markdown.lastIndexOf('\n', Math.max(0, safeOffset - 1)) + 1;
@@ -399,7 +407,7 @@ export function getMarkdownBacklinks(
     const sourceKey = getWikiLinkTargetKey(document.target);
     if (!sourceKey || sourceKey === targetKey || seen.has(sourceKey)) continue;
 
-    const hit = getMarkdownEditorLinkHits(document.content, index)
+    const hit = getMarkdownLinkRelationDocumentHits(document, index)
       .find((candidate) => {
         const candidateTarget = getLinkTargetFromAction(candidate.action);
         return candidateTarget && getWikiLinkTargetKey(candidateTarget) === targetKey;
