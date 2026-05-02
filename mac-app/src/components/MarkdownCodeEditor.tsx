@@ -144,6 +144,17 @@ export function getMarkdownCodeEditorCursorScrollMargin(): { x: number; y: numbe
   return { x: 5, y: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX };
 }
 
+export function handleMarkdownCodeEditorCapturedKeyDown(
+  event: KeyboardEvent,
+  onKeyDown?: (event: KeyboardEvent) => boolean | void,
+): boolean {
+  if (onKeyDown?.(event) !== true) return false;
+  event.preventDefault();
+  event.stopPropagation();
+  event.stopImmediatePropagation();
+  return true;
+}
+
 const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEditorProps>(
   function MarkdownCodeEditor(props, ref) {
     const {
@@ -320,7 +331,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               };
               return false;
             },
-            keydown: (event) => onKeyDownRef.current?.(event) === true,
             mousedown: (event, view) => {
               if (shouldMoveCaretToDocumentEndFromClick(view, event)) {
                 event.preventDefault();
@@ -361,6 +371,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         parent: containerRef.current,
       });
       viewRef.current = view;
+      const handleKeyDownCapture = (event: KeyboardEvent) => {
+        handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
+      };
+      view.contentDOM.addEventListener('keydown', handleKeyDownCapture, true);
 
       // Apply data-* attributes on the content node so existing agent-context
       // selectors (data-ft-agent-context="markdown" etc.) still resolve.
@@ -375,6 +389,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       if (placeholder) view.contentDOM.setAttribute('aria-label', placeholder);
 
       return () => {
+        view.contentDOM.removeEventListener('keydown', handleKeyDownCapture, true);
         view.destroy();
         viewRef.current = null;
       };

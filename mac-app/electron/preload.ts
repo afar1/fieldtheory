@@ -2963,6 +2963,14 @@ type FieldTheoryMarkdownTarget = {
   path: string;
 };
 
+type ActiveLibraryFileContext = {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
+};
+
 type LauncherPreviewPayload =
   | { kind: 'bookmark'; bookmark: Bookmark }
   | { kind: 'markdown'; title: string; filePath: string; content: string };
@@ -3204,6 +3212,14 @@ const commandsAPI = {
 
   getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean }> => {
     return ipcRenderer.invoke('commands:getLauncherContext');
+  },
+
+  getActiveLibraryFileContext: async (): Promise<ActiveLibraryFileContext | null> => {
+    return ipcRenderer.invoke('commands:getActiveLibraryFileContext');
+  },
+
+  setActiveLibraryFileContext: async (context: ActiveLibraryFileContext | null): Promise<boolean> => {
+    return ipcRenderer.invoke('commands:setActiveLibraryFileContext', context);
   },
 
   openFieldTheoryMarkdown: async (target: FieldTheoryMarkdownTarget): Promise<{ success: boolean; error?: string }> => {
