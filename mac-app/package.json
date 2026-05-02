@@ -92,6 +92,14 @@
     "productName": "Field Theory",
     "beforeBuild": "scripts/electron-builder-before-build.js",
     "afterSign": "scripts/notarize.js",
+    "protocols": [
+      {
+        "name": "Field Theory",
+        "schemes": [
+          "fieldtheory"
+        ]
+      }
+    ],
     "fileAssociations": [
       {
         "ext": "md",
