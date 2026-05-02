@@ -84,15 +84,15 @@ import {
   classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
-  getWikiBacklinks,
+  getWikiLinkedPages,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   type LinkAction,
-  type WikiBacklink,
   type WikiBacklinkInput,
+  type WikiLinkedPage,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
 } from '../utils/wikiLinks';
@@ -1468,6 +1468,18 @@ function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode |
   return { checkbox, content };
 }
 
+const WIKI_LINK_DIRECTION_MARKER: Record<WikiLinkedPage['direction'], string> = {
+  outbound: '→',
+  inbound: '←',
+  bidirectional: '↔',
+};
+
+const WIKI_LINK_DIRECTION_LABEL: Record<WikiLinkedPage['direction'], string> = {
+  outbound: 'This document links out',
+  inbound: 'Links back to this document',
+  bidirectional: 'Linked both ways',
+};
+
 function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoint | null {
   const doc = event.currentTarget.ownerDocument as CaretPointDocument;
   const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
@@ -1734,7 +1746,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
-  const [wikiBacklinkPages, setWikiBacklinkPages] = useState<WikiBacklinkInput[]>([]);
+  const [wikiLinkRelationPages, setWikiLinkRelationPages] = useState<WikiBacklinkInput[]>([]);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
@@ -2517,7 +2529,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     if (!active || wikiIndexPages.length === 0) {
-      setWikiBacklinkPages([]);
+      setWikiLinkRelationPages([]);
       return;
     }
 
@@ -2532,7 +2544,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }),
       );
       if (cancelled) return;
-      setWikiBacklinkPages(
+      setWikiLinkRelationPages(
         pages.filter((page): page is WikiBacklinkInput => page !== null),
       );
     };
@@ -2543,11 +2555,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, [active, wikiIndexPages]);
 
-  const wikiBacklinks = useMemo<WikiBacklink[]>(() => (
-    selectedItemType === 'wiki' && wikiSelectedRelPath
-      ? getWikiBacklinks(wikiSelectedRelPath, wikiBacklinkPages, wikiIndex)
-      : []
-  ), [selectedItemType, wikiBacklinkPages, wikiIndex, wikiSelectedRelPath]);
+  const wikiLinkedPages = useMemo<WikiLinkedPage[]>(() => {
+    if (!activeReading) return [];
+    return getWikiLinkedPages(
+      selectedItemType === 'wiki' ? wikiSelectedRelPath : null,
+      activeReading.content,
+      wikiLinkRelationPages,
+      wikiIndex,
+    );
+  }, [activeReading, selectedItemType, wikiIndex, wikiLinkRelationPages, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -5795,9 +5811,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               >
                 {displayContent}
               </FieldTheoryProse>
-              {selectedItemType === 'wiki' && wikiBacklinks.length > 0 && (
+              {wikiLinkedPages.length > 0 && (
                 <section
-                  aria-label="Backlinks"
+                  aria-label="Linked"
                   style={{
                     marginTop: '32px',
                     paddingTop: '16px',
@@ -5813,20 +5829,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       letterSpacing: 0,
                     }}
                   >
-                    Linked from
+                    Linked
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {wikiBacklinks.map((backlink) => (
+                    {wikiLinkedPages.map((link) => (
                       <button
-                        key={backlink.relPath}
+                        key={link.relPath}
                         type="button"
+                        title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          openWikiPage(backlink.relPath);
+                          openWikiPage(link.relPath);
                         }}
                         style={{
+                          display: 'grid',
+                          gridTemplateColumns: '18px minmax(0, 1fr)',
+                          columnGap: '8px',
+                          alignItems: 'start',
                           padding: '6px 0',
                           border: 'none',
                           backgroundColor: 'transparent',
@@ -5836,24 +5857,39 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                           font: 'inherit',
                         }}
                       >
-                        <div style={{ fontSize: '13px', fontWeight: 600 }}>
-                          {backlink.title}
-                        </div>
-                        {backlink.excerpt && (
-                          <div
-                            style={{
-                              marginTop: '2px',
-                              color: theme.textSecondary,
-                              fontSize: '12px',
-                              lineHeight: 1.35,
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {backlink.excerpt}
-                          </div>
-                        )}
+                        <span
+                          aria-hidden="true"
+                          style={{
+                            marginTop: '1px',
+                            color: theme.textSecondary,
+                            fontSize: '13px',
+                            lineHeight: 1.2,
+                            textAlign: 'center',
+                          }}
+                        >
+                          {WIKI_LINK_DIRECTION_MARKER[link.direction]}
+                        </span>
+                        <span style={{ minWidth: 0 }}>
+                          <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
+                            {link.title}
+                          </span>
+                          {link.excerpt && (
+                            <span
+                              style={{
+                                display: 'block',
+                                marginTop: '2px',
+                                color: theme.textSecondary,
+                                fontSize: '12px',
+                                lineHeight: 1.35,
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {link.excerpt}
+                            </span>
+                          )}
+                        </span>
                       </button>
                     ))}
                   </div>
