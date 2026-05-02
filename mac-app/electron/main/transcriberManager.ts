@@ -1090,7 +1090,37 @@ export class TranscriberManager extends EventEmitter {
     cleanedText = this.applyWordSubstitutions(cleanedText);
     cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
     cleanedText = this.removeTrailingFillerHallucination(cleanedText);
-    return cleanedText.toLowerCase().replace(/\.+$/, '').trim();
+    const normalizedText = cleanedText.toLowerCase().replace(/\.+$/, '').trim();
+    return this.isLikelySilenceHallucination(normalizedText) ? '' : normalizedText;
+  }
+
+  private isLikelySilenceHallucination(text: string): boolean {
+    const trimmedText = text ? text.trim() : '';
+    if (!trimmedText) return true;
+
+    const normalized = trimmedText
+      .toLowerCase()
+      .replace(/[.,!?;:]+$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!normalized) return true;
+
+    if (/^(thanks?|thank you|you|okay|ok)$/.test(normalized)) {
+      return true;
+    }
+
+    const words = normalized
+      .replace(/[^\w\s']/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+    if (words.length < 2) return false;
+
+    const uniqueWords = new Set(words);
+    if (uniqueWords.size !== 1) return false;
+
+    const repeatedWord = words[0] ?? '';
+    const repeatedFillers = new Set(['ok', 'okay', 'yeah', 'yep', 'uh', 'um', 'hmm', 'you', 'thanks']);
+    return words.length >= 4 || repeatedFillers.has(repeatedWord);
   }
 
   private removeTrailingFillerHallucination(text: string): string {
@@ -1337,11 +1367,12 @@ export class TranscriberManager extends EventEmitter {
         const hasLiveTranscript = liveTranscriptFallback.length > 0;
         // 32000 bytes ≈ 0.5s of 16kHz float32 mono — minimum for a recognizable word.
         const tailTooSmall = tailFileSize < 32000;
+        const parakeetTailLikelySilence = isParakeetEngine(engine) && tailFileSize < 96000;
 
-        if (hasLiveTranscript && tailTooSmall) {
+        if (hasLiveTranscript && (tailTooSmall || parakeetTailLikelySilence)) {
           // Tail is just silence/header — use the live transcript directly.
           cleanedText = this.sanitizeTranscriptText(liveTranscriptFallback);
-          finalTextSource = 'live-tail-small';
+          finalTextSource = parakeetTailLikelySilence ? 'live-tail-silence' : 'live-tail-small';
           void fs.promises.unlink(wavPath).catch(() => {});
           log.debug('Final-pass: using live transcript (%d chars, tail=%d bytes)', cleanedText.length, tailFileSize);
         } else {
