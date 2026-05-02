@@ -36,6 +36,7 @@ import {
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
+  isSidebarToggleShortcut,
   restoreRenderedEditClickMode,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
@@ -265,6 +266,18 @@ export function isLibrarianDocumentFocusChromeActive(input: {
     && !input.isFullScreen
     && input.sidebarCollapsed
     && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
+}
+
+export function isBookmarksCanvasChromeActive(input: {
+  active: boolean;
+  selectedItemType: LibrarianSelectedItemType;
+  isFullScreen: boolean;
+  bookmarksCanvasActive: boolean;
+}): boolean {
+  return input.active
+    && input.selectedItemType === 'bookmarks'
+    && input.isFullScreen
+    && input.bookmarksCanvasActive;
 }
 
 export function isTextEntryInputType(type: string | null | undefined): boolean {
@@ -1678,8 +1691,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
+  const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
+    active,
+    selectedItemType,
+    isFullScreen,
+    bookmarksCanvasActive,
+  });
   const focusChromeActive =
-    (selectedItemType === 'bookmarks' && isFullScreen && bookmarksCanvasActive) ||
+    bookmarksFullscreenChromeActive ||
     isLibrarianDocumentFocusChromeActive({
       canUseFocusImmersive,
       isFullScreen,
@@ -2077,8 +2096,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, focusChromeActive, focusChromeVisualVisible, onFocusChromeActiveChange]);
 
   useEffect(() => {
-    onBookmarksCanvasActiveChange?.(active && selectedItemType === 'bookmarks' && bookmarksCanvasActive);
-  }, [active, bookmarksCanvasActive, onBookmarksCanvasActiveChange, selectedItemType]);
+    onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
+  }, [bookmarksFullscreenChromeActive, onBookmarksCanvasActiveChange]);
 
   useEffect(() => {
     return () => {
@@ -4211,6 +4230,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         toggleFocusChromeShortcut();
         return;
       }
+      if (selectedItemType === 'bookmarks' && isSidebarToggleShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        toggleImmersive();
+        return;
+      }
 
       // Cmd+. - toggle between rendered and markdown.
       if (isMarkdownModeToggleShortcut(e)) {
@@ -4399,7 +4425,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here

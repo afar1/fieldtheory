@@ -440,7 +440,11 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
         </div>
 
         {onToggleFullScreen && (
-          <ImmersiveToggle isFullScreen={!!isFullScreen} onToggle={onToggleFullScreen} />
+          <ImmersiveToggle
+            isFullScreen={!!isFullScreen}
+            onToggle={onToggleFullScreen}
+            title={isFullScreen ? 'Exit immersive view (⌘,)' : 'Enter immersive view (⌘,)'}
+          />
         )}
       </div>
 

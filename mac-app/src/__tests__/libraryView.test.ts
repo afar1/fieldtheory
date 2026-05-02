@@ -21,6 +21,7 @@ import {
   getMarkdownTaskLines,
   getScrollRatio,
   getScrollTopForRatio,
+  isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
@@ -1038,6 +1039,24 @@ describe('document focus chrome activation', () => {
 
     expect(isLibrarianDocumentFocusChromeActive({ ...focusedWriting, sidebarCollapsed: false })).toBe(false);
     expect(isLibrarianDocumentFocusChromeActive(focusedWriting)).toBe(true);
+  });
+});
+
+describe('bookmarks canvas chrome activation', () => {
+  it('only hides the shared footer when bookmarks canvas is fullscreen', () => {
+    expect(isBookmarksCanvasChromeActive({
+      active: true,
+      selectedItemType: 'bookmarks',
+      isFullScreen: true,
+      bookmarksCanvasActive: true,
+    })).toBe(true);
+
+    expect(isBookmarksCanvasChromeActive({
+      active: true,
+      selectedItemType: 'bookmarks',
+      isFullScreen: false,
+      bookmarksCanvasActive: true,
+    })).toBe(false);
   });
 });
 
