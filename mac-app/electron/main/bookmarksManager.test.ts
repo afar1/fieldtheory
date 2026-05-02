@@ -150,7 +150,18 @@ describe('BookmarksManager.getSnapshot', () => {
 
   it('returns an empty snapshot when no jsonl exists', () => {
     const mgr = new BookmarksManager();
-    expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [] });
+    expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [], xLastSyncedAt: null });
+  });
+
+  it('reports the X bookmarks JSONL mtime as the last sync time', () => {
+    const syncedAt = new Date('2026-04-25T12:34:56.000Z');
+    const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
+    fs.writeFileSync(jsonl, JSON.stringify({ tweetId: 'a', text: 'first', postedAt: '2026-01-01T00:00:00.000Z' }) + '\n');
+    fs.utimesSync(jsonl, syncedAt, syncedAt);
+
+    const mgr = new BookmarksManager();
+
+    expect(mgr.getSnapshot().xLastSyncedAt).toBe(syncedAt.toISOString());
   });
 
   it('reloads cached bookmark data and emits when externally refreshed', () => {

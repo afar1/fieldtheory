@@ -2524,7 +2524,7 @@ function setupLibrarianIPCHandlers(): void {
   }
 
   ipcMain.handle('bookmarks:getAll', (): BookmarksSnapshot => {
-    if (!bookmarksManager) return { bookmarks: [], folders: [] };
+    if (!bookmarksManager) return { bookmarks: [], folders: [], xLastSyncedAt: null };
     return bookmarksManager.getSnapshot();
   });
 

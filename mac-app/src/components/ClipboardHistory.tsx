@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection, shouldRevealFocusChrome } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection, shouldRevealFocusChrome, type LibrarianSelectedItemType } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
@@ -19,6 +19,7 @@ import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
+import { getBookmarks, onBookmarksChanged, peekBookmarks } from '../services/bookmarksCache';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
 const SketchView = React.lazy(() => import('./SketchView'));
@@ -460,6 +461,7 @@ export default function ClipboardHistory() {
     title: string;
     mtime: number;
   } | null>(null);
+  const [librarySelectedItemType, setLibrarySelectedItemType] = useState<LibrarianSelectedItemType>(null);
   const hasLibraryActiveFile = !!libraryActiveFileUpdated;
   const forceLibrarySidebarOpen = shouldForceLibrarySidebarOpen({
     viewMode,
@@ -1036,20 +1038,50 @@ export default function ClipboardHistory() {
     ? FOCUS_CHROME_ICON_TOP_PX
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
-  // Center footer label: active Library timestamp, otherwise fieldtheory.dev.
+  // Center footer label: Bookmarks sync time, active Library timestamp, or fieldtheory.dev.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
   const [footerRelativeTimeTick, setFooterRelativeTimeTick] = useState(() => Date.now());
+  const [xBookmarksLastSyncedAt, setXBookmarksLastSyncedAt] = useState<string | null | undefined>(
+    () => peekBookmarks()?.xLastSyncedAt
+  );
+  const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
 
   useEffect(() => {
-    if (viewMode !== 'librarian' || !libraryActiveFileUpdated) return;
+    if (viewMode !== 'librarian' || (!libraryActiveFileUpdated && !(bookmarksFooterActive && xBookmarksLastSyncedAt))) return;
     const interval = window.setInterval(() => setFooterRelativeTimeTick(Date.now()), 60_000);
     return () => window.clearInterval(interval);
-  }, [libraryActiveFileUpdated, viewMode]);
+  }, [bookmarksFooterActive, xBookmarksLastSyncedAt, libraryActiveFileUpdated, viewMode]);
+
+  useEffect(() => {
+    if (!bookmarksFooterActive) return;
+    let cancelled = false;
+    const applySnapshot = (snapshot: BookmarksSnapshot) => {
+      if (!cancelled) setXBookmarksLastSyncedAt(snapshot.xLastSyncedAt ?? null);
+    };
+
+    const cachedBookmarks = peekBookmarks();
+    if (cachedBookmarks) applySnapshot(cachedBookmarks);
+    void getBookmarks().then(applySnapshot);
+    const unsubscribe = onBookmarksChanged(applySnapshot);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [bookmarksFooterActive]);
 
   const libraryFooterUpdatedLabel = useMemo(() => {
     if (viewMode !== 'librarian' || !libraryActiveFileUpdated) return null;
     return `Updated ${formatRelativeTime(libraryActiveFileUpdated.mtime)}`;
   }, [footerRelativeTimeTick, libraryActiveFileUpdated, viewMode]);
+
+  const bookmarksFooterSyncLabel = useMemo(() => {
+    if (!bookmarksFooterActive) return null;
+    if (xBookmarksLastSyncedAt === undefined) return 'bookmarks last synced from X loading...';
+    if (!xBookmarksLastSyncedAt) return 'bookmarks last synced from X never';
+    const syncedAtMs = Date.parse(xBookmarksLastSyncedAt);
+    if (!Number.isFinite(syncedAtMs)) return 'bookmarks last synced from X unknown';
+    return `bookmarks last synced from X ${formatRelativeTime(syncedAtMs)}`;
+  }, [bookmarksFooterActive, xBookmarksLastSyncedAt, footerRelativeTimeTick]);
 
   // In-app performance HUD visibility.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
@@ -4572,6 +4604,7 @@ export default function ClipboardHistory() {
             onFocusChromeActiveChange={handleFocusChromeActiveChange}
             onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
             onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
+            onSelectedItemTypeChange={setLibrarySelectedItemType}
             initialReadingPath={pendingReadingPath}
             initialOpenTarget={pendingLibraryOpenTarget}
             initialFullScreen={librarianImmersive}
@@ -6831,14 +6864,19 @@ export default function ClipboardHistory() {
           </div>
         )}
 
-        {/* Center: active Library timestamp or fieldtheory.dev link */}
+        {/* Center: Bookmarks sync time, active Library timestamp, or fieldtheory.dev link */}
         {(() => {
           const showCenterLabel = !agentImproveStatus &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
           const centerLabel = showCenterLabel
-            ? (libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))
+            ? (bookmarksFooterSyncLabel ?? libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))
             : null;
           const centerLabelOpensSite = centerLabel === 'fieldtheory.dev';
+          const centerLabelTitle = bookmarksFooterSyncLabel && xBookmarksLastSyncedAt && Number.isFinite(Date.parse(xBookmarksLastSyncedAt))
+            ? `bookmarks last synced from X ${new Date(xBookmarksLastSyncedAt).toLocaleString()}`
+            : libraryFooterUpdatedLabel && libraryActiveFileUpdated
+              ? libraryActiveFileUpdated.title
+              : undefined;
 
           return centerLabel ? (
             <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
@@ -6846,7 +6884,7 @@ export default function ClipboardHistory() {
                 onClick={() => {
                   if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
                 }}
-                title={libraryFooterUpdatedLabel && libraryActiveFileUpdated ? libraryActiveFileUpdated.title : undefined}
+                title={centerLabelTitle}
                 style={{
                   fontSize: '9px',
                   color: theme.textSecondary,
