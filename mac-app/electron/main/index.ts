@@ -85,6 +85,11 @@ import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMig
 import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import {
+  FIELD_THEORY_URL_SCHEME,
+  fieldTheoryProtocolClientArgs,
+  shouldRegisterFieldTheoryProtocol,
+} from './urlProtocolRegistration';
 import { RecentManager, type RecentEntry } from './recentManager';
 import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
 import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
@@ -8383,16 +8388,25 @@ async function initClipboardCallbacks(): Promise<void> {
 // Prevent multiple instances of the app.
 const gotTheLock = app.requestSingleInstanceLock();
 
-// Register fieldtheory:// URL protocol for deep linking
-// Usage: open "fieldtheory://librarian/import?file=/path/to/reading.md"
-if (process.defaultApp) {
-  // Development: need to register with path to Electron
-  if (process.argv.length >= 2) {
-    app.setAsDefaultProtocolClient('fieldtheory', process.execPath, [path.resolve(process.argv[1])]);
+// Register fieldtheory:// URL protocol for deep linking.
+// Development and experimental builds only register when explicitly opted in.
+if (shouldRegisterFieldTheoryProtocol({
+  appName: app.getName(),
+  isDefaultApp: process.defaultApp,
+  env: process.env,
+})) {
+  const clientArgs = fieldTheoryProtocolClientArgs({
+    isDefaultApp: process.defaultApp,
+    argv: process.argv,
+  });
+
+  if (process.defaultApp) {
+    if (clientArgs) {
+      app.setAsDefaultProtocolClient(FIELD_THEORY_URL_SCHEME, process.execPath, clientArgs);
+    }
+  } else {
+    app.setAsDefaultProtocolClient(FIELD_THEORY_URL_SCHEME);
   }
-} else {
-  // Production
-  app.setAsDefaultProtocolClient('fieldtheory');
 }
 
 /**
