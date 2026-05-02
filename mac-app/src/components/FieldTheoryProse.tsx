@@ -82,6 +82,7 @@ export function localFileUrlToFieldTheoryUrl(url: string): string {
 function fieldTheoryUrlTransform(url: string, key: string): string {
   if (key === 'src' && /^file:/i.test(url)) return localFileUrlToFieldTheoryUrl(url);
   if (key === 'src' && /^(ftlocalfile|ftmedia):/i.test(url)) return url;
+  if (key === 'href' && /^(wiki|artifact|command):/i.test(url)) return url;
   return defaultUrlTransform(url);
 }
 
