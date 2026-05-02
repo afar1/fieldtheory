@@ -20,6 +20,14 @@ import numpy as np
 
 DEFAULT_MODEL_NAME = "nemo-parakeet-tdt-0.6b-v2"
 
+MIN_SPEECH_DURATION_SECONDS = 0.25
+SILENCE_RMS_THRESHOLD = 0.0015
+SILENCE_PEAK_THRESHOLD = 0.008
+ACTIVE_FRAME_MS = 20
+ACTIVE_FRAME_RMS_THRESHOLD = 0.006
+ACTIVE_FRAME_PEAK_THRESHOLD = 0.025
+ACTIVE_FRAME_RATIO_THRESHOLD = 0.015
+
 
 def configure_cache_dirs():
     """Route Parakeet/HuggingFace caches into an app-owned location when provided."""
@@ -103,9 +111,95 @@ def read_wav_float32(path):
     return samples, sample_rate
 
 
+def get_audio_activity(waveform, sample_rate):
+    """Return simple energy stats used to avoid decoding clear silence."""
+    if sample_rate <= 0 or len(waveform) == 0:
+        return {
+            "duration": 0.0,
+            "rms": 0.0,
+            "peak": 0.0,
+            "active_ratio": 0.0,
+        }
+
+    samples = np.nan_to_num(np.asarray(waveform, dtype=np.float32), copy=True)
+    duration = len(samples) / float(sample_rate)
+    rms = float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0
+    peak = float(np.max(np.abs(samples))) if len(samples) else 0.0
+
+    frame_size = max(1, int(sample_rate * ACTIVE_FRAME_MS / 1000))
+    active_frames = 0
+    frame_count = 0
+    for start in range(0, len(samples), frame_size):
+        frame = samples[start:start + frame_size]
+        if len(frame) == 0:
+            continue
+        frame_count += 1
+        frame_rms = float(np.sqrt(np.mean(np.square(frame))))
+        frame_peak = float(np.max(np.abs(frame)))
+        if frame_rms >= ACTIVE_FRAME_RMS_THRESHOLD or frame_peak >= ACTIVE_FRAME_PEAK_THRESHOLD:
+            active_frames += 1
+
+    return {
+        "duration": duration,
+        "rms": rms,
+        "peak": peak,
+        "active_ratio": active_frames / frame_count if frame_count else 0.0,
+    }
+
+
+def should_skip_for_silence(waveform, sample_rate):
+    """Return (skip, reason, stats) for audio that clearly lacks speech."""
+    stats = get_audio_activity(waveform, sample_rate)
+
+    if stats["duration"] <= 0:
+        return True, "empty", stats
+
+    very_short_and_quiet = (
+        stats["duration"] < MIN_SPEECH_DURATION_SECONDS
+        and stats["rms"] < ACTIVE_FRAME_RMS_THRESHOLD
+        and stats["peak"] < ACTIVE_FRAME_PEAK_THRESHOLD
+    )
+    if very_short_and_quiet:
+        return True, "short-quiet", stats
+
+    quiet_file = (
+        stats["rms"] <= SILENCE_RMS_THRESHOLD
+        and stats["peak"] <= SILENCE_PEAK_THRESHOLD
+    )
+    if quiet_file:
+        return True, "quiet", stats
+
+    no_active_frames = (
+        stats["active_ratio"] <= ACTIVE_FRAME_RATIO_THRESHOLD
+        and stats["rms"] <= ACTIVE_FRAME_RMS_THRESHOLD
+        and stats["peak"] <= ACTIVE_FRAME_PEAK_THRESHOLD
+    )
+    if no_active_frames:
+        return True, "ambient", stats
+
+    return False, "", stats
+
+
+def log_silence_skip(reason, stats):
+    print(
+        "Skipping Parakeet decode for "
+        f"{reason} audio "
+        f"(duration={stats['duration']:.3f}s, "
+        f"rms={stats['rms']:.5f}, "
+        f"peak={stats['peak']:.5f}, "
+        f"active_ratio={stats['active_ratio']:.3f})",
+        file=sys.stderr,
+    )
+
+
 def transcribe(model, audio_path, timestamps=False):
     """Run transcription and return the result string."""
     waveform, sr = read_wav_float32(audio_path)
+    skip, reason, stats = should_skip_for_silence(waveform, sr)
+    if skip:
+        log_silence_skip(reason, stats)
+        return ""
+
     result = model.recognize(waveform, sample_rate=sr)
 
     if timestamps and hasattr(result, "segments") and result.segments:
