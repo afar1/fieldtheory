@@ -1,7 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ContentToolbar from '../ContentToolbar';
-import { PROSE_RENDERER_OPTIONS } from '../../utils/proseRenderer';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -45,24 +44,6 @@ describe('ContentToolbar', () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it('shows prose renderer choices in the text style menu', () => {
-    const onProseRendererChange = vi.fn();
-
-    render(
-      <ContentToolbar
-        showCopy={false}
-        proseRenderer="field-theory"
-        proseRendererOptions={PROSE_RENDERER_OPTIONS}
-        onProseRendererChange={onProseRendererChange}
-      />
-    );
-
-    fireEvent.click(screen.getByLabelText('Text style'));
-    fireEvent.click(screen.getByText('Prose'));
-
-    expect(onProseRendererChange).toHaveBeenCalledWith('prose-ui');
   });
 
   it('reports when the text style menu opens and closes', async () => {

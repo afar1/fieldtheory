@@ -44,7 +44,6 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@excalidraw/excalidraw": "^0.18.0",
-    "@prose-ui/style": "^2.0.8",
     "@supabase/supabase-js": "^2.84.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/react-window": "^1.8.8",
