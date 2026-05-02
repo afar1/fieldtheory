@@ -217,7 +217,7 @@ interface LauncherCommandsAPI {
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
-  onLauncherReset: (callback: () => void) => () => void;
+  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean }) => void) => () => void;
 }
 
 interface LauncherClipboardAPI {
@@ -729,7 +729,10 @@ function CommandLauncher() {
 
     // Listen for reset events (when window is shown).
     // Reload commands and handoffs each time to pick up newly added ones without restart.
-    const handleReset = async () => {
+    const handleReset = async (payload?: { isDarkMode?: boolean }) => {
+      if (typeof payload?.isDarkMode === 'boolean') {
+        applyTheme(payload.isDarkMode);
+      }
       authorNamespaceRef.current = null;
       bookmarkNamespaceRef.current = null;
       authorBookmarkRequestRef.current += 1;
@@ -761,8 +764,8 @@ function CommandLauncher() {
       loadWebBookmarks();
       loadActiveWebPage();
       // Refresh theme state
-      const dark = await themeAPI.getTheme().catch(() => themeAPI.initialTheme ?? false);
-      applyTheme(dark ?? false);
+      const dark = await themeAPI.getTheme().catch(() => payload?.isDarkMode ?? themeAPI.initialTheme ?? false);
+      applyTheme(dark ?? payload?.isDarkMode ?? false);
       // Reset height to input-only
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     };
@@ -1501,7 +1504,7 @@ function CommandLauncher() {
         showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
         return;
       }
-      commandsAPI.launcherClose();
+      commandsAPI.launcherClose({ skipActivation: true });
     } else if (item.type === 'directory') {
       if (item.directoryPath) {
         setDirectoryNamespace({
@@ -1532,17 +1535,17 @@ function CommandLauncher() {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
-      commandsAPI.launcherClose();
+      commandsAPI.launcherClose({ skipActivation: true });
     } else if (item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
-      commandsAPI.launcherClose();
+      commandsAPI.launcherClose({ skipActivation: true });
     } else if (item.type === 'handoff') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
-      commandsAPI.launcherClose();
+      commandsAPI.launcherClose({ skipActivation: true });
     } else if (item.type === 'action') {
       // Handle built-in actions.
       switch (item.actionId) {

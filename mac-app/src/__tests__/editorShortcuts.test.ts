@@ -1,5 +1,5 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isKeyboardShortcutsHelpShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, TEXT_CURSOR_BLINK_STORAGE_KEY, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isKeyboardShortcutsHelpShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, persistTextCursorBlink, restoreRenderedEditClickMode, restoreTextCursorBlink, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -261,5 +261,23 @@ describe('rendered edit click mode persistence', () => {
     const values = new Map<string, string>();
     persistRenderedEditClickMode({ setItem: (key, value) => values.set(key, value) }, 'command-click');
     expect(values.get(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY)).toBe('command-click');
+  });
+});
+
+describe('text cursor blink persistence', () => {
+  it('defaults to blinking', () => {
+    const storage = { getItem: () => null };
+    expect(restoreTextCursorBlink(storage)).toBe(true);
+  });
+
+  it('restores disabled blinking', () => {
+    const storage = { getItem: (key: string) => key === TEXT_CURSOR_BLINK_STORAGE_KEY ? 'false' : null };
+    expect(restoreTextCursorBlink(storage)).toBe(false);
+  });
+
+  it('persists the selected blink setting', () => {
+    const values = new Map<string, string>();
+    persistTextCursorBlink({ setItem: (key, value) => values.set(key, value) }, false);
+    expect(values.get(TEXT_CURSOR_BLINK_STORAGE_KEY)).toBe('false');
   });
 });

@@ -37,6 +37,7 @@ export const LIBRARY_DEFAULT_FOLDER_IDS = [
   SCRATCHPAD_FOLDER_NAME,
   'Shared Markdown',
   'debates',
+  'Plans',
   'bookmarks-from-x',
   'entries',
   'categories',
@@ -53,8 +54,13 @@ const LIBRARY_SIDEBAR_ROW_LINE_HEIGHT = '16px';
 const LIBRARY_SIDEBAR_ROW_MIN_HEIGHT = '28px';
 const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
 const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
+const LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE = 56;
 const SCRATCHPAD_COLLAPSED_ITEM_LIMIT = 20;
 const EMPTY_TODO_STATE_OVERRIDES: Record<string, SidebarTodoStateOverride | undefined> = {};
+const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
+const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
+const LOCAL_WIKI_ADDED_EVENT = 'fieldtheory:wiki-added-local';
+const LOCAL_WIKI_DELETED_EVENT = 'fieldtheory:wiki-deleted-local';
 const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): React.CSSProperties => ({
   flex: 1,
   minWidth: 0,
@@ -64,6 +70,30 @@ const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): Re
   maskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
 });
 
+function libraryRenameTraceEnabled(): boolean {
+  try {
+    return localStorage.getItem('fieldtheory.libraryRenameTrace') === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function traceLibrarySidebar(stage: string, extra: Record<string, unknown> = {}): void {
+  if (!libraryRenameTraceEnabled()) return;
+  console.debug('[LibraryRenameTrace]', stage, extra);
+}
+
+function traceLibraryRename(stage: string, event: LibraryRenameEvent, extra: Record<string, unknown> = {}): void {
+  traceLibrarySidebar(stage, {
+    traceId: event.traceId,
+    source: event.source,
+    oldRelPath: event.oldRelPath,
+    newRelPath: event.newRelPath,
+    ipcAgeMs: event.emittedAt ? Date.now() - event.emittedAt : null,
+    ...extra,
+  });
+}
+
 type LibraryDragItem = {
   rootPath: string;
   kind: 'file' | 'dir';
@@ -71,6 +101,27 @@ type LibraryDragItem = {
 };
 
 let activeLibraryDragItem: LibraryDragItem | null = null;
+
+type LocalWikiDeletedPayload = {
+  relPaths: string[];
+};
+
+export function dispatchLocalWikiRenamed(event: LibraryRenameEvent): void {
+  window.dispatchEvent(new CustomEvent<LibraryRenameEvent>(LOCAL_WIKI_RENAMED_EVENT, { detail: event }));
+}
+
+export function dispatchLocalWikiAdded(page: WikiPage): void {
+  window.dispatchEvent(new CustomEvent<WikiPage>(LOCAL_WIKI_ADDED_EVENT, { detail: page }));
+}
+
+export function dispatchLocalWikiDeleted(relPathOrRelPaths: string | string[]): void {
+  const relPaths = Array.isArray(relPathOrRelPaths) ? relPathOrRelPaths : [relPathOrRelPaths];
+  const validRelPaths = relPaths.filter(Boolean);
+  if (validRelPaths.length === 0) return;
+  window.dispatchEvent(new CustomEvent<LocalWikiDeletedPayload>(LOCAL_WIKI_DELETED_EVENT, {
+    detail: { relPaths: validRelPaths },
+  }));
+}
 
 export function setLibraryDragData(dataTransfer: DataTransfer, item: LibraryDragItem): void {
   activeLibraryDragItem = item;
@@ -137,6 +188,7 @@ type SidebarNode =
       canCreateFile: boolean;
       canDeleteDir?: boolean;
       canRemoveRoot?: boolean;
+      finderPath?: string;
       hasUnread?: boolean;
       children: SidebarNode[];
     }
@@ -178,7 +230,7 @@ interface WikiSidebarProps {
   selectedId: string | null;
   selectedKeyboardActive?: boolean;
   todoStateOverrides?: Record<string, SidebarTodoStateOverride | undefined>;
-  onCreateFile: (location: LibraryCreateLocation, fileName: string) => boolean | void | Promise<boolean | void>;
+  onCreateFile: (location: LibraryCreateLocation, fileName: string) => boolean | void | WikiPage | Promise<boolean | void | WikiPage>;
   onCreateDefaultFile?: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
   onCreateDir: (location: LibraryCreateLocation) => boolean | void | Promise<boolean | void>;
   flatItemsRef?: MutableRefObject<UnifiedItem[]>;
@@ -279,12 +331,16 @@ export function filterStaleRecent(
 export function removeWikiRelPathFromTree(tree: WikiFolder[], relPath: string): WikiFolder[] {
   let changed = false;
   const next = tree.map((folder) => {
-    const files = folder.files.filter((page) => page.relPath !== relPath);
+    const files = folder.files.filter((page) => !wikiRelPathMatchesDeletedPath(page.relPath, relPath));
     if (files.length === folder.files.length) return folder;
     changed = true;
     return { ...folder, files };
   });
   return changed ? next : tree;
+}
+
+function wikiRelPathMatchesDeletedPath(candidate: string, deletedRelPath: string): boolean {
+  return candidate === deletedRelPath || candidate.startsWith(`${deletedRelPath}/`);
 }
 
 function relPathTitle(relPath: string): string {
@@ -317,11 +373,12 @@ function removeWikiRelPathFromNodes(nodes: WikiNode[], relPath: string): { nodes
   const next: WikiNode[] = [];
 
   for (const node of nodes) {
+    if (wikiRelPathMatchesDeletedPath(node.relPath, relPath)) {
+      changed = true;
+      continue;
+    }
+
     if (node.kind === 'file') {
-      if (node.relPath === relPath) {
-        changed = true;
-        continue;
-      }
       next.push(node);
       continue;
     }
@@ -336,6 +393,59 @@ function removeWikiRelPathFromNodes(nodes: WikiNode[], relPath: string): { nodes
   }
 
   return { nodes: changed ? next : nodes, changed };
+}
+
+function wikiFileNodeFromPage(page: WikiPageMeta): WikiNode {
+  return {
+    kind: 'file',
+    relPath: page.relPath,
+    absPath: page.absPath,
+    name: page.name,
+    title: page.title,
+    lastUpdated: page.lastUpdated,
+    todoState: page.todoState,
+  };
+}
+
+function makeWikiDirChain(parts: string[], page: WikiPageMeta, parentRelPath = ''): WikiNode {
+  const [head, ...rest] = parts;
+  const relPath = parentRelPath ? `${parentRelPath}/${head}` : head;
+  if (rest.length === 1) {
+    return { kind: 'dir', name: head, relPath, children: [wikiFileNodeFromPage(page)] };
+  }
+  return { kind: 'dir', name: head, relPath, children: [makeWikiDirChain(rest, page, relPath)] };
+}
+
+function addWikiPageToNodes(nodes: WikiNode[], page: WikiPageMeta, parentRelPath = ''): { nodes: WikiNode[]; changed: boolean } {
+  const relPath = parentRelPath && page.relPath.startsWith(`${parentRelPath}/`)
+    ? page.relPath.slice(parentRelPath.length + 1)
+    : page.relPath;
+  const parts = relPath.split('/').filter(Boolean);
+  if (parts.length === 0) return { nodes, changed: false };
+  if (parts.length === 1) {
+    let changed = false;
+    const fileNode = wikiFileNodeFromPage(page);
+    const next = nodes.map((node) => {
+      if (node.kind !== 'file' || node.relPath !== page.relPath) return node;
+      changed = true;
+      return fileNode;
+    });
+    if (changed) return { nodes: next, changed };
+    return { nodes: [...nodes, fileNode], changed: true };
+  }
+
+  const [dirName] = parts;
+  const dirRelPath = parentRelPath ? `${parentRelPath}/${dirName}` : dirName;
+  let changed = false;
+  const next = nodes.map((node) => {
+    if (node.kind !== 'dir' || node.relPath !== dirRelPath) return node;
+    const added = addWikiPageToNodes(node.children, page, dirRelPath);
+    if (!added.changed) return node;
+    changed = true;
+    return { ...node, children: added.nodes };
+  });
+  if (changed) return { nodes: next, changed };
+  return { nodes: [...nodes, makeWikiDirChain(parts, page)], changed: true };
 }
 
 function renameWikiRelPathInNodes(nodes: WikiNode[], event: LibraryRenameEvent): { nodes: WikiNode[]; changed: boolean } {
@@ -375,10 +485,58 @@ export function removeWikiRelPathFromLibraryRoots(roots: LibraryRoot[], relPath:
   return changed ? next : roots;
 }
 
-function renameLibraryRootRelPath(roots: LibraryRoot[], event: LibraryRenameEvent): LibraryRoot[] {
+export function addWikiPageToTree(tree: WikiFolder[], page: WikiPageMeta): WikiFolder[] {
+  const folderName = page.relPath.split('/').filter(Boolean)[0] ?? '';
+  if (!folderName) return tree;
+  const pageMeta: WikiPageMeta = {
+    relPath: page.relPath,
+    absPath: page.absPath,
+    name: page.name,
+    title: page.title,
+    lastUpdated: page.lastUpdated,
+    todoState: page.todoState,
+  };
+  let changed = false;
+  const next = tree.map((folder) => {
+    if (folder.name !== folderName) return folder;
+    changed = true;
+    const files = folder.files.some((file) => file.relPath === page.relPath)
+      ? folder.files.map((file) => file.relPath === page.relPath ? pageMeta : file)
+      : [...folder.files, pageMeta];
+    return { ...folder, files };
+  });
+  if (changed) return next;
+  return [...tree, { name: folderName, files: [pageMeta] }];
+}
+
+export function addWikiPageToLibraryRoots(roots: LibraryRoot[], page: WikiPageMeta): LibraryRoot[] {
   let changed = false;
   const next = roots.map((root) => {
-    if (root.path !== event.rootPath) return root;
+    if (!root.builtin) return root;
+    const added = addWikiPageToNodes(root.tree, page);
+    if (!added.changed) return root;
+    changed = true;
+    return { ...root, tree: added.nodes };
+  });
+  return changed ? next : roots;
+}
+
+export function addPageToLibraryRoot(roots: LibraryRoot[], rootPath: string, page: WikiPageMeta): LibraryRoot[] {
+  let changed = false;
+  const next = roots.map((root) => {
+    if (root.path !== rootPath) return root;
+    const added = addWikiPageToNodes(root.tree, page);
+    if (!added.changed) return root;
+    changed = true;
+    return { ...root, tree: added.nodes };
+  });
+  return changed ? next : roots;
+}
+
+export function renameLibraryRootRelPath(roots: LibraryRoot[], event: LibraryRenameEvent): LibraryRoot[] {
+  let changed = false;
+  const next = roots.map((root) => {
+    if (root.path !== event.rootPath && !(event.builtin && root.builtin)) return root;
     const renamed = renameWikiRelPathInNodes(root.tree, event);
     if (!renamed.changed) return root;
     changed = true;
@@ -427,8 +585,14 @@ function sidebarNodeSortTimestamp(node: SidebarNode): number {
   return node.children.reduce((latest, child) => Math.max(latest, sidebarNodeSortTimestamp(child)), 0);
 }
 
-export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alpha'): SidebarNode[] {
+export function sortSidebarNodes(
+  nodes: SidebarNode[],
+  sortMode: SortMode = 'alpha',
+  pinnedItemIds: ReadonlySet<string> = new Set(),
+): SidebarNode[] {
   return [...nodes].sort((a, b) => {
+    const pinnedDelta = Number(pinnedItemIds.has(b.id)) - Number(pinnedItemIds.has(a.id));
+    if (pinnedDelta !== 0) return pinnedDelta;
     if (sortMode === 'time') {
       const byTimestamp = sidebarNodeSortTimestamp(b) - sidebarNodeSortTimestamp(a);
       if (byTimestamp !== 0) return byTimestamp;
@@ -439,13 +603,72 @@ export function sortSidebarNodes(nodes: SidebarNode[], sortMode: SortMode = 'alp
   });
 }
 
-export function orderTopLevelSidebarNodes(nodes: SidebarNode[], _sortMode: SortMode = 'alpha'): SidebarNode[] {
-  return sortSidebarNodes(nodes, 'alpha');
+export function orderTopLevelSidebarNodes(
+  nodes: SidebarNode[],
+  _sortMode: SortMode = 'alpha',
+  pinnedItemIds: ReadonlySet<string> = new Set(),
+): SidebarNode[] {
+  return sortSidebarNodes(nodes, 'alpha', pinnedItemIds);
+}
+
+export function applyPinnedSidebarOrder(
+  nodes: SidebarNode[],
+  sortMode: SortMode,
+  pinnedItemIds: ReadonlySet<string>,
+): SidebarNode[] {
+  if (pinnedItemIds.size === 0) return nodes;
+  return sortSidebarNodes(nodes.map((node) => {
+    if (node.kind === 'file') return node;
+    return {
+      ...node,
+      children: applyPinnedSidebarOrder(node.children, sortMode, pinnedItemIds),
+    };
+  }), sortMode, pinnedItemIds);
+}
+
+export function shouldShowPinnedSidebarDividerBefore(
+  nodes: SidebarNode[],
+  index: number,
+  pinnedItemIds: ReadonlySet<string>,
+): boolean {
+  if (index <= 0 || index >= nodes.length || pinnedItemIds.size === 0) return false;
+  return pinnedItemIds.has(nodes[index - 1].id) && !pinnedItemIds.has(nodes[index].id);
+}
+
+export function renamePinnedSidebarIds(pinnedItemIds: Set<string>, event: LibraryRenameEvent): Set<string> {
+  let changed = false;
+  const next = new Set<string>();
+  const oldWikiFileId = `wiki:${event.oldRelPath}`;
+  const newWikiFileId = `wiki:${event.newRelPath}`;
+  const oldExternalFileId = `external:${event.oldAbsPath}`;
+  const newExternalFileId = `external:${event.newAbsPath}`;
+  const oldFolderId = `${event.rootPath}::${event.oldRelPath}`;
+  const newFolderId = `${event.rootPath}::${event.newRelPath}`;
+  const builtinFolderSuffix = `::${event.oldRelPath}`;
+
+  for (const id of pinnedItemIds) {
+    let replacement = id;
+    if (event.builtin) {
+      if (id === oldWikiFileId) {
+        replacement = newWikiFileId;
+      } else if (id.endsWith(builtinFolderSuffix)) {
+        replacement = `${id.slice(0, -builtinFolderSuffix.length)}::${event.newRelPath}`;
+      }
+    } else if (id === oldExternalFileId) {
+      replacement = newExternalFileId;
+    } else if (id === oldFolderId) {
+      replacement = newFolderId;
+    }
+
+    if (replacement !== id) changed = true;
+    next.add(replacement);
+  }
+
+  return changed ? next : pinnedItemIds;
 }
 
 function getLibraryFolderVisibilityId(node: SidebarNode): string | null {
   if (node.kind !== 'dir') return null;
-  if (node.id === 'artifacts') return 'artifacts';
   if (!node.builtin || !node.relPath || node.relPath.includes('/')) return null;
   return node.relPath;
 }
@@ -508,8 +731,38 @@ export function flattenBuiltinSidebarRoots(nodes: SidebarNode[]): SidebarNode[] 
   });
 }
 
+function isReadmeOnlyLibraryArtifactsNode(node: SidebarNode): boolean {
+  if (node.kind !== 'dir' || !node.builtin || node.name !== 'artifacts') return false;
+  return node.children.length === 0 || node.children.every((child) => (
+    child.kind === 'file' && child.item.relPath === 'artifacts/README'
+  ));
+}
+
+export function hideReadmeOnlyLibraryArtifactsFolder(nodes: SidebarNode[]): SidebarNode[] {
+  const filtered = nodes.filter((node) => !isReadmeOnlyLibraryArtifactsNode(node));
+  return filtered.length === nodes.length ? nodes : filtered;
+}
+
+function parentDirFromPath(filePath: string): string | null {
+  const normalized = filePath.replace(/\\/g, '/');
+  const separatorIndex = normalized.lastIndexOf('/');
+  return separatorIndex > 0 ? normalized.slice(0, separatorIndex) : null;
+}
+
+export function getPrimaryArtifactsFinderPath(artifacts: ReadonlyArray<Pick<ReadingMeta, 'path'>>): string | null {
+  const globalMarker = '/.fieldtheory/librarian/artifacts/';
+  const globalArtifact = artifacts.find((artifact) => artifact.path.replace(/\\/g, '/').includes(globalMarker));
+  if (globalArtifact) {
+    const normalized = globalArtifact.path.replace(/\\/g, '/');
+    const markerIndex = normalized.indexOf(globalMarker);
+    return normalized.slice(0, markerIndex + globalMarker.length - 1);
+  }
+  return artifacts[0] ? parentDirFromPath(artifacts[0].path) : null;
+}
+
 export function getSidebarFolderFinderPath(node: SidebarNode | null): string | null {
   if (!node || node.kind !== 'dir') return null;
+  if (node.finderPath) return node.finderPath;
   if (node.id === 'artifacts') return null;
   if (!node.rootPath || node.rootPath === 'artifacts') return null;
   if (node.builtin && node.name === 'bookmarks-from-x') return node.rootPath;
@@ -535,6 +788,13 @@ function sidebarNodeContainsSelectedId(node: SidebarNode, selectedId: string | n
   if (!selectedId) return false;
   if (node.kind === 'file') return node.item.id === selectedId;
   return node.children.some((child) => sidebarNodeContainsSelectedId(child, selectedId));
+}
+
+export function sidebarNodeContainsSelectedIdOrWikiPath(node: SidebarNode, selectedId: string | null): boolean {
+  if (sidebarNodeContainsSelectedId(node, selectedId)) return true;
+  if (node.kind !== 'dir' || !node.relPath || !selectedId?.startsWith('wiki:')) return false;
+  const selectedRelPath = selectedId.slice('wiki:'.length);
+  return selectedRelPath === node.relPath || selectedRelPath.startsWith(`${node.relPath}/`);
 }
 
 export function collectSidebarSiblingItems(nodes: SidebarNode[], selectedId: string | null): UnifiedItem[] {
@@ -743,6 +1003,7 @@ function rootToSidebarNode(
   );
   if (root.builtin) {
     children = virtualizeBookmarksGroup(children, root, sortMode);
+    children = hideReadmeOnlyLibraryArtifactsFolder(children);
     children = ensureScratchpadNodePinned(children, root);
   }
   return {
@@ -796,7 +1057,6 @@ function WikiSidebar({
       return new Set(['artifacts']);
     }
   });
-  const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [creating, setCreating] = useState<CreatingState>(null);
@@ -811,6 +1071,17 @@ function WikiSidebar({
       return false;
     }
   });
+  const [pinnedItemIds, setPinnedItemIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem(LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY);
+      const parsed = saved ? JSON.parse(saved) : null;
+      return Array.isArray(parsed)
+        ? new Set(parsed.filter((id): id is string => typeof id === 'string'))
+        : new Set();
+    } catch {
+      return new Set();
+    }
+  });
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -822,6 +1093,10 @@ function WikiSidebar({
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const autoExpandedSelectedWikiKeyRef = useRef<string | null>(null);
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
+  const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
+  const scrollJumpElementRef = useRef<HTMLElement | null>(null);
+  const [scrollJumpTarget, setScrollJumpTarget] = useState<'top' | 'bottom' | null>(null);
+  const [sidebarTopFadeVisible, setSidebarTopFadeVisible] = useState(false);
 
   // Auto-expand the parent folder of the selected wiki item so programmatic
   // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
@@ -866,12 +1141,20 @@ function WikiSidebar({
     setLibraryRoots((prev) => removeWikiRelPathFromLibraryRoots(prev, relPath));
   }, []);
 
-  const loadTree = useCallback(async () => {
+  const loadTree = useCallback(async (reason = 'manual') => {
+    const startedAt = Date.now();
+    traceLibrarySidebar('sidebar-loadTree-start', { reason });
     const [treeResult, rootsResult, hiddenFoldersResult] = await Promise.all([
       window.wikiAPI?.getTree(),
       window.libraryAPI?.getRoots(),
       window.libraryAPI?.getHiddenFolders(),
     ]);
+    traceLibrarySidebar('sidebar-loadTree-ipc-done', {
+      reason,
+      durationMs: Date.now() - startedAt,
+      folders: treeResult?.length ?? null,
+      roots: rootsResult?.length ?? null,
+    });
     const deletedRelPaths = [...deletedWikiRelPathsRef.current];
     let nextTree = treeResult;
     let nextRoots = rootsResult;
@@ -897,6 +1180,10 @@ function WikiSidebar({
         return next;
       });
     }
+    traceLibrarySidebar('sidebar-loadTree-state-scheduled', {
+      reason,
+      durationMs: Date.now() - startedAt,
+    });
     return nextRoots;
   }, []);
 
@@ -917,30 +1204,101 @@ function WikiSidebar({
 
   useEffect(() => {
     if (!active) return;
-    loadTree();
+    loadTree('active');
     loadArtifacts();
     loadRecent();
     loadTaggedDocs();
-    const unsubWiki = window.wikiAPI?.onPageChanged(() => loadTree());
+    const unsubWiki = window.wikiAPI?.onPageChanged(() => {
+      traceLibrarySidebar('sidebar-wiki-changed-received');
+      loadTree('wiki:changed');
+    });
     const unsubDeletedWiki = window.wikiAPI?.onPageDeleted((relPath) => pruneDeletedWikiPage(relPath));
     const unsubRenamedWiki = window.wikiAPI?.onPageRenamed?.((event) => {
-      setWikiTree((prev) => renameWikiRelPathInTree(prev, event));
-      setLibraryRoots((prev) => renameLibraryRootRelPath(prev, event));
+      traceLibraryRename('sidebar-wiki-received', event);
+      deletedWikiRelPathsRef.current.add(event.oldRelPath);
+      setWikiTree((prev) => {
+        const next = renameWikiRelPathInTree(prev, event);
+        traceLibraryRename('sidebar-wiki-tree-patched', event, { changed: next !== prev });
+        return next;
+      });
+      setLibraryRoots((prev) => {
+        const next = renameLibraryRootRelPath(prev, event);
+        traceLibraryRename('sidebar-wiki-roots-patched', event, { changed: next !== prev });
+        return next;
+      });
+      setPinnedItemIds((prev) => renamePinnedSidebarIds(prev, event));
     });
-    const unsubLibrary = window.libraryAPI?.onRootsChanged(() => loadTree());
+    const onLocalWikiRenamed = (localEvent: Event) => {
+      const event = (localEvent as CustomEvent<LibraryRenameEvent>).detail;
+      if (!event) return;
+      traceLibraryRename('sidebar-local-wiki-received', event);
+      deletedWikiRelPathsRef.current.add(event.oldRelPath);
+      setWikiTree((prev) => {
+        const next = renameWikiRelPathInTree(prev, event);
+        traceLibraryRename('sidebar-local-wiki-tree-patched', event, { changed: next !== prev });
+        return next;
+      });
+      setLibraryRoots((prev) => {
+        const next = renameLibraryRootRelPath(prev, event);
+        traceLibraryRename('sidebar-local-wiki-roots-patched', event, { changed: next !== prev });
+        return next;
+      });
+      setPinnedItemIds((prev) => renamePinnedSidebarIds(prev, event));
+    };
+    window.addEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
+    const onLocalWikiAdded = (localEvent: Event) => {
+      const page = (localEvent as CustomEvent<WikiPage>).detail;
+      if (!page) return;
+      if (deletedWikiRelPathsRef.current.has(page.relPath)) return;
+      setWikiTree((prev) => {
+        return addWikiPageToTree(prev, page);
+      });
+      setLibraryRoots((prev) => {
+        return addWikiPageToLibraryRoots(prev, page);
+      });
+    };
+    window.addEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
+    const onLocalWikiDeleted = (localEvent: Event) => {
+      const payload = (localEvent as CustomEvent<LocalWikiDeletedPayload>).detail;
+      if (!payload?.relPaths?.length) return;
+      for (const relPath of payload.relPaths) {
+        pruneDeletedWikiPage(relPath);
+      }
+    };
+    window.addEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
+    const unsubLibrary = window.libraryAPI?.onRootsChanged(() => {
+      traceLibrarySidebar('sidebar-library-changed-received');
+      loadTree('library:changed');
+    });
     const unsubRenamedLibrary = window.libraryAPI?.onItemRenamed?.((event) => {
       if (event.builtin) return;
-      setLibraryRoots((prev) => renameLibraryRootRelPath(prev, event));
+      traceLibraryRename('sidebar-library-received', event);
+      setLibraryRoots((prev) => {
+        const next = renameLibraryRootRelPath(prev, event);
+        traceLibraryRename('sidebar-library-roots-patched', event, { changed: next !== prev });
+        return next;
+      });
+      setPinnedItemIds((prev) => renamePinnedSidebarIds(prev, event));
     });
     const unsubAdded = window.librarianAPI?.onReadingAdded(() => loadArtifacts());
     const unsubRemoved = window.librarianAPI?.onReadingRemoved(() => loadArtifacts());
     const unsubUpdated = window.librarianAPI?.onReadingUpdated(() => loadArtifacts());
-    const unsubRenamedReading = window.librarianAPI?.onReadingRenamed?.(() => loadArtifacts());
+    const unsubRenamedReading = window.librarianAPI?.onReadingRenamed?.((event) => {
+      if (libraryRenameTraceEnabled()) {
+        console.debug('[LibraryRenameTrace]', 'sidebar-reading-received', {
+          traceId: event.traceId,
+          oldPath: event.oldPath,
+          newPath: event.reading.path,
+          ipcAgeMs: event.emittedAt ? Date.now() - event.emittedAt : null,
+        });
+      }
+      loadArtifacts();
+    });
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
     const onFocus = () => {
-      loadTree();
+      loadTree('focus');
       loadArtifacts();
       loadRecent();
       loadTaggedDocs();
@@ -950,6 +1308,9 @@ function WikiSidebar({
       unsubWiki?.();
       unsubDeletedWiki?.();
       unsubRenamedWiki?.();
+      window.removeEventListener(LOCAL_WIKI_RENAMED_EVENT, onLocalWikiRenamed);
+      window.removeEventListener(LOCAL_WIKI_ADDED_EVENT, onLocalWikiAdded);
+      window.removeEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
       unsubLibrary?.();
       unsubRenamedLibrary?.();
       unsubAdded?.();
@@ -973,6 +1334,10 @@ function WikiSidebar({
   useEffect(() => {
     localStorage.setItem('wiki-recent-collapsed', recentCollapsed ? '1' : '0');
   }, [recentCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem(LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY, JSON.stringify([...pinnedItemIds]));
+  }, [pinnedItemIds]);
 
   const toggleFolder = (name: string) => {
     setExpandedFolders((prev) => {
@@ -1039,7 +1404,6 @@ function WikiSidebar({
         const type = root?.builtin ? 'wiki' : 'external';
         const absPath = type === 'wiki' ? '' : `${target.rootPath}/${newRelPath}.md`;
         const id = type === 'wiki' ? `wiki:${newRelPath}` : `external:${absPath}`;
-        setHoveredId(null);
         const fileName = newRelPath.split('/').pop() ?? newRelPath;
         onSelectItem({
           id,
@@ -1062,14 +1426,14 @@ function WikiSidebar({
     if (location.builtin && onCreateDefaultFile) {
       void (async () => {
         const created = await onCreateDefaultFile(location);
-        if (created !== false) await reloadTreeAndExpandLocation(location);
+        if (created !== false) expandCreateLocation(location);
       })();
       return;
     }
     expandCreateLocation(location);
     setCreating({ kind: 'file', location });
     setNewName('');
-  }, [expandCreateLocation, onCreateDefaultFile, reloadTreeAndExpandLocation, resolveCreateTarget]);
+  }, [expandCreateLocation, onCreateDefaultFile, resolveCreateTarget]);
 
   const beginCreateDir = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, '');
@@ -1099,16 +1463,31 @@ function WikiSidebar({
     if (!name || !creating) { cancelCreate(); return; }
     if (creating.kind === 'file') {
       const created = await onCreateFile(creating.location, name);
-      if (created !== false) await reloadTreeAndExpandLocation(creating.location);
+      if (created !== false) {
+        if (creating.location.builtin) {
+          expandCreateLocation(creating.location, joinLibraryRelPath(creating.location.relPath, name));
+        } else if (created && typeof created === 'object') {
+          setLibraryRoots((prev) => addPageToLibraryRoot(prev, creating.location.rootPath, created));
+          expandCreateLocation(creating.location, created.relPath);
+        } else {
+          await reloadTreeAndExpandLocation(creating.location);
+        }
+      }
     } else {
       const dirRelPath = joinLibraryRelPath(creating.location.relPath, name);
       const nextLocation = { ...creating.location, relPath: dirRelPath };
       const created = await onCreateDir(nextLocation);
-      if (created !== false) await reloadTreeAndExpandLocation(nextLocation);
+      if (created !== false) {
+        if (creating.location.builtin) {
+          expandCreateLocation(nextLocation);
+        } else {
+          await reloadTreeAndExpandLocation(nextLocation);
+        }
+      }
     }
     setCreating(null);
     setNewName('');
-  }, [newName, creating, onCreateFile, onCreateDir, reloadTreeAndExpandLocation, cancelCreate]);
+  }, [newName, creating, onCreateFile, onCreateDir, expandCreateLocation, reloadTreeAndExpandLocation, cancelCreate]);
 
   const sidebarRoots = useMemo(() => {
     const roots: SidebarNode[] = [];
@@ -1138,14 +1517,16 @@ function WikiSidebar({
         rootPath: 'artifacts',
         builtin: false,
         canCreateFile: false,
+        finderPath: getPrimaryArtifactsFinderPath(artifacts) ?? undefined,
         children: items.map((item) => ({ kind: 'file' as const, id: item.id, item })),
       });
     }
 
     const libraryRootNodes = libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath));
     roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
-    return orderTopLevelSidebarNodes(filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders), sortMode);
-  }, [artifacts, hiddenDefaultFolders, libraryRoots, sortMode, taggedDocs]);
+    const visibleRoots = filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
+    return orderTopLevelSidebarNodes(applyPinnedSidebarOrder(visibleRoots, sortMode, pinnedItemIds), sortMode, pinnedItemIds);
+  }, [artifacts, hiddenDefaultFolders, libraryRoots, pinnedItemIds, sortMode, taggedDocs]);
 
   const sidebarRootsWithTodoOverrides = useMemo(
     () => applyTodoStateOverridesToNodes(sidebarRoots, todoStateOverrides),
@@ -1203,6 +1584,95 @@ function WikiSidebar({
     onSelectItem(item);
   }, [flatItems, onKeyboardScopeActive, onSelectItem, selectedFileIds, selectionAnchorId]);
 
+  const updateScrollJumpTarget = useCallback((clientY?: number, eventTarget?: EventTarget | null) => {
+    const scroller = sidebarScrollRef.current;
+    if (!scroller) {
+      scrollJumpElementRef.current = null;
+      setScrollJumpTarget(null);
+      return;
+    }
+    const maxScrollTop = scroller.scrollHeight - scroller.clientHeight;
+    if (maxScrollTop <= 2) {
+      scrollJumpElementRef.current = null;
+      setScrollJumpTarget(null);
+      return;
+    }
+    const targetElement = eventTarget instanceof Element
+      ? eventTarget.closest('[data-library-scroll-jump-control="true"]')
+        ? scrollJumpElementRef.current
+        : eventTarget.closest<HTMLElement>('[data-library-dir-node="true"]')
+      : scrollJumpElementRef.current;
+    if (!targetElement || !scroller.contains(targetElement)) {
+      scrollJumpElementRef.current = null;
+      setScrollJumpTarget(null);
+      return;
+    }
+    scrollJumpElementRef.current = targetElement;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const targetRect = targetElement.getBoundingClientRect();
+    const canJumpUp = targetRect.top < scrollerRect.top - 2;
+    const canJumpDown = targetRect.bottom > scrollerRect.bottom + 2;
+    if (clientY === undefined) {
+      setScrollJumpTarget((current) => {
+        if (current === 'top' && !canJumpUp) return null;
+        if (current === 'bottom' && !canJumpDown) return null;
+        return current;
+      });
+      return;
+    }
+    const y = clientY - scrollerRect.top;
+    if (y < LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE && canJumpUp) {
+      setScrollJumpTarget('top');
+    } else if (y > scrollerRect.height - LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE && canJumpDown) {
+      setScrollJumpTarget('bottom');
+    } else {
+      setScrollJumpTarget(null);
+    }
+  }, []);
+
+  const handleSidebarMouseMove = useCallback((event: React.MouseEvent) => {
+    const scroller = sidebarScrollRef.current;
+    if (!scroller) return;
+    const scrollerRect = scroller.getBoundingClientRect();
+    const y = event.clientY - scrollerRect.top;
+    if (
+      !scrollJumpTarget
+      && y >= LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE
+      && y <= scrollerRect.height - LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE
+    ) {
+      return;
+    }
+    updateScrollJumpTarget(event.clientY, event.target);
+  }, [scrollJumpTarget, updateScrollJumpTarget]);
+
+  const updateSidebarTopFade = useCallback(() => {
+    const scroller = sidebarScrollRef.current;
+    setSidebarTopFadeVisible(Boolean(scroller && scroller.scrollTop > 2));
+  }, []);
+
+  useEffect(() => {
+    const id = requestAnimationFrame(() => {
+      updateScrollJumpTarget();
+      updateSidebarTopFade();
+    });
+    return () => cancelAnimationFrame(id);
+  }, [filteredSidebarRoots, recent.length, searchQuery, updateScrollJumpTarget, updateSidebarTopFade]);
+
+  const jumpSidebar = useCallback((target: 'top' | 'bottom') => {
+    const scroller = sidebarScrollRef.current;
+    const targetElement = scrollJumpElementRef.current;
+    if (!scroller || !targetElement) return;
+    const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+    const scrollerRect = scroller.getBoundingClientRect();
+    const targetRect = targetElement.getBoundingClientRect();
+    const nextScrollTop = target === 'top'
+      ? scroller.scrollTop + targetRect.top - scrollerRect.top
+      : scroller.scrollTop + targetRect.bottom - scrollerRect.bottom;
+    scroller.scrollTop = Math.max(0, Math.min(maxScrollTop, nextScrollTop));
+    scrollJumpElementRef.current = null;
+    setScrollJumpTarget(null);
+  }, []);
+
   const totalPages = countSidebarItems(sidebarRootsWithTodoOverrides);
   const visiblePages = flatItems.length;
   const isSearching = searchQuery.trim().length > 0;
@@ -1244,6 +1714,10 @@ function WikiSidebar({
   const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
   const canRenameContextFile = contextFile?.type === 'wiki' && !!contextFile.relPath;
   const contextFileFinderPath = contextFile?.type !== 'bookmarks' ? contextFile?.absPath : undefined;
+  const contextPinTargetId = contextDir?.id ?? (contextFile?.type !== 'bookmarks' ? contextFile?.id : null);
+  const contextPinLabel = contextPinTargetId
+    ? `${pinnedItemIds.has(contextPinTargetId) ? 'Unpin' : 'Pin'} ${contextDir ? 'folder' : 'doc'}`
+    : null;
   const rootCreateLocation = getBuiltinCreateLocation('');
 
   const addFolderFromPath = useCallback(async () => {
@@ -1310,7 +1784,7 @@ function WikiSidebar({
         onConfirm: async () => {
           const success = await window.wikiAPI?.deletePage(target.relPath!);
           if (success) {
-            pruneDeletedWikiPage(target.relPath!);
+            dispatchLocalWikiDeleted(target.relPath!);
             onDeletedItem?.(target);
           }
         },
@@ -1333,7 +1807,7 @@ function WikiSidebar({
         }
       },
     });
-  }, [closeContextMenu, confirmDelete, contextFile, loadArtifacts, onDeletedItem, pruneDeletedWikiPage]);
+  }, [closeContextMenu, confirmDelete, contextFile, loadArtifacts, onDeletedItem]);
 
   const deleteContextDir = useCallback(() => {
     const target = contextDir;
@@ -1358,6 +1832,9 @@ function WikiSidebar({
         for (const item of deletedItems) {
           onDeletedItem?.(item);
         }
+        dispatchLocalWikiDeleted(deletedItems
+          .filter((item) => item.type === 'wiki' && item.relPath)
+          .map((item) => item.relPath!));
         await loadTree();
       },
     });
@@ -1392,88 +1869,125 @@ function WikiSidebar({
     window.shellAPI?.showItemInFolder(finderPath);
   }, [closeContextMenu, contextFileFinderPath]);
 
+  const toggleContextPinned = useCallback(() => {
+    const targetId = contextPinTargetId;
+    closeContextMenu();
+    if (!targetId) return;
+    setPinnedItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(targetId)) next.delete(targetId);
+      else next.add(targetId);
+      return next;
+    });
+  }, [closeContextMenu, contextPinTargetId]);
+
   return (
     <div
       onContextMenu={(event) => openContextMenu(event, null)}
       onClick={closeContextMenu}
-      style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', position: 'relative' }}
+      onMouseMove={handleSidebarMouseMove}
+      onMouseLeave={() => {
+        scrollJumpElementRef.current = null;
+        setScrollJumpTarget(null);
+      }}
+      style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
-      <style>{`
-        .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
-        .bm-new-file-btn:hover { opacity: 1 !important; }
-      `}</style>
-      <div style={{ padding: '0 12px 4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-        <div style={{ flex: 1 }} />
-        <button
-          onClick={() => setSortMode(sortMode === 'alpha' ? 'time' : 'alpha')}
-          style={{
-            padding: '2px 4px',
-            fontSize: '10px',
-            color: theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: 'none',
-            cursor: 'pointer',
-            borderRadius: '3px',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '3px',
-            opacity: 0.7,
-          }}
-          onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = theme.hoverBg; }}
-          onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.backgroundColor = 'transparent'; }}
-          title={sortMode === 'alpha' ? 'Sort by date' : 'Sort A-Z'}
-        >
-          {sortMode === 'alpha' ? (
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M10.082 5.629 9.664 7H8.598l1.789-5.332h1.234L13.402 7h-1.12l-.419-1.371h-1.781zm1.57-.785L11 2.687h-.047l-.652 2.157h1.351z"/>
-              <path d="M12.96 14H9.028v-.691l2.579-3.72v-.054H9.098v-.867h3.785v.691l-2.567 3.72v.054h2.645V14zM4.5 2.5a.5.5 0 0 0-1 0v9.793l-1.146-1.147a.5.5 0 0 0-.708.708l2 2a.5.5 0 0 0 .708 0l2-2a.5.5 0 0 0-.708-.708L4.5 12.293V2.5z"/>
-            </svg>
-          ) : (
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
-              <path d="M3 0a.5.5 0 0 1 .5.5V2h5a.5.5 0 0 1 0 1h-5v1.5a.5.5 0 0 1-1 0v-4A.5.5 0 0 1 3 0z"/>
-              <path d="M7.823 2.823l-2.396 2.396A.25.25 0 0 0 5.604 5.5h4.792a.25.25 0 0 0 .177-.427L8.177 2.823a.25.25 0 0 0-.354 0z"/>
-              <path d="M4.5 2.5a.5.5 0 0 0-1 0v9.793l-1.146-1.147a.5.5 0 0 0-.708.708l2 2a.5.5 0 0 0 .708 0l2-2a.5.5 0 0 0-.708-.708L4.5 12.293V2.5z"/>
-            </svg>
-          )}
-          <span>{sortMode === 'alpha' ? 'A-Z' : 'Date'}</span>
-        </button>
-      </div>
-
-      <div style={{ padding: '0 12px 8px' }}>
-        <input
-          ref={searchInputRef}
-          value={searchQuery}
-          onChange={(e) => onSearchQueryChange(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key !== 'Escape') return;
-            e.preventDefault();
-            e.stopPropagation();
-            onSearchQueryChange('');
-            e.currentTarget.blur();
-          }}
-          onBlur={(e) => {
-            if (!e.currentTarget.value.trim()) onSearchQueryChange('');
-          }}
-          placeholder="Search library (/)"
-          style={{
-            width: '100%',
-            padding: '7px 10px',
-            fontSize: '11px',
-            color: theme.text,
-            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-            border: `1px solid ${theme.border}`,
-            borderRadius: '6px',
-            outline: 'none',
-          }}
-        />
-      </div>
+        <style>{`
+          .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
+          .bm-new-file-btn:hover { opacity: 1 !important; }
+          .bm-file-row:not(.bm-file-row-selected):hover {
+            background-color: ${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.022)'};
+          }
+          .bm-file-row:hover .bm-show-finder-btn {
+            opacity: 0.7;
+            pointer-events: auto;
+          }
+          .bm-show-finder-btn:hover {
+            opacity: 1 !important;
+            background-color: ${theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'} !important;
+          }
+        `}</style>
+      <div
+        ref={sidebarScrollRef}
+        onScroll={() => {
+          updateScrollJumpTarget();
+          updateSidebarTopFade();
+        }}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}
+      >
+        <div style={{ padding: '0 12px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <input
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => onSearchQueryChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key !== 'Escape') return;
+              e.preventDefault();
+              e.stopPropagation();
+              onSearchQueryChange('');
+              e.currentTarget.blur();
+            }}
+            onBlur={(e) => {
+              if (!e.currentTarget.value.trim()) onSearchQueryChange('');
+            }}
+            placeholder="Search library (/)"
+            style={{
+              flex: '1 1 auto',
+              minWidth: 0,
+              padding: '7px 10px',
+              fontSize: '11px',
+              color: theme.text,
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              outline: 'none',
+            }}
+          />
+          <button
+            onClick={() => setSortMode(sortMode === 'alpha' ? 'time' : 'alpha')}
+            style={{
+              flex: '0 0 auto',
+              minWidth: '48px',
+              height: '30px',
+              padding: '0 7px',
+              fontSize: '10px',
+              color: theme.textSecondary,
+              backgroundColor: 'transparent',
+              border: 'none',
+              cursor: 'pointer',
+              borderRadius: '4px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '3px',
+              opacity: 0.7,
+            }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = theme.hoverBg; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.backgroundColor = 'transparent'; }}
+            title={sortMode === 'alpha' ? 'Sort by date' : 'Sort A-Z'}
+          >
+            {sortMode === 'alpha' ? (
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M10.082 5.629 9.664 7H8.598l1.789-5.332h1.234L13.402 7h-1.12l-.419-1.371h-1.781zm1.57-.785L11 2.687h-.047l-.652 2.157h1.351z"/>
+                <path d="M12.96 14H9.028v-.691l2.579-3.72v-.054H9.098v-.867h3.785v.691l-2.567 3.72v.054h2.645V14zM4.5 2.5a.5.5 0 0 0-1 0v9.793l-1.146-1.147a.5.5 0 0 0-.708.708l2 2a.5.5 0 0 0 .708 0l2-2a.5.5 0 0 0-.708-.708L4.5 12.293V2.5z"/>
+              </svg>
+            ) : (
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor">
+                <path d="M3 0a.5.5 0 0 1 .5.5V2h5a.5.5 0 0 1 0 1h-5v1.5a.5.5 0 0 1-1 0v-4A.5.5 0 0 1 3 0z"/>
+                <path d="M7.823 2.823l-2.396 2.396A.25.25 0 0 0 5.604 5.5h4.792a.25.25 0 0 0 .177-.427L8.177 2.823a.25.25 0 0 0-.354 0z"/>
+                <path d="M4.5 2.5a.5.5 0 0 0-1 0v9.793l-1.146-1.147a.5.5 0 0 0-.708.708l2 2a.5.5 0 0 0 .708 0l2-2a.5.5 0 0 0-.708-.708L4.5 12.293V2.5z"/>
+              </svg>
+            )}
+            <span>{sortMode === 'alpha' ? 'A-Z' : 'Date'}</span>
+          </button>
+        </div>
 
       {/* Page count */}
       <div style={{ padding: '0 12px 8px', fontSize: '10px', color: theme.textSecondary, opacity: 0.6 }}>
         {isSearching ? `${visiblePages} of ${totalPages} pages` : `${totalPages} pages`}
       </div>
 
-      {rootCreateLocation && creating?.kind === 'file' && createLocationMatches(creating.location, rootCreateLocation) && (
+        {rootCreateLocation && creating?.kind === 'file' && createLocationMatches(creating.location, rootCreateLocation) && (
         <CreateInput
           inputRef={createInputRef}
           value={newName}
@@ -1507,7 +2021,7 @@ function WikiSidebar({
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages match that search.
         </div>
-      ) : visibleSidebarRoots.map((node) => (
+      ) : visibleSidebarRoots.map((node, index) => (
         <TreeNode
           key={node.id}
           node={node}
@@ -1525,8 +2039,6 @@ function WikiSidebar({
           selectedId={selectedId}
           selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
-          hoveredId={hoveredId}
-          setHoveredId={setHoveredId}
           dropTargetId={dropTargetId}
           setDropTargetId={setDropTargetId}
           onMoveLibraryItem={moveLibraryItem}
@@ -1537,6 +2049,8 @@ function WikiSidebar({
           onRenameRequestConsumed={() => setRenameRequestId(null)}
           onContextMenu={openContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
+          pinnedItemIds={pinnedItemIds}
+          showPinnedDividerBefore={!isSearching && shouldShowPinnedSidebarDividerBefore(visibleSidebarRoots, index, pinnedItemIds)}
         />
       ))}
 
@@ -1552,6 +2066,7 @@ function WikiSidebar({
           canCopyFilePath={!!contextFile}
           canShowFileInFinder={!!contextFileFinderPath}
           canDeleteFile={canDeleteContextFile}
+          pinLabel={contextPinLabel}
           hideDirLabel={contextHideDirLabel}
           canDeleteDir={canDeleteContextDir}
           onNewFile={() => {
@@ -1569,6 +2084,7 @@ function WikiSidebar({
           onRenameFile={renameContextFile}
           onCopyFilePath={copyContextFilePath}
           onShowFileInFinder={showContextFileInFinder}
+          onTogglePin={toggleContextPinned}
           onRemoveRoot={removeContextRoot}
           onHideDir={hideContextDir}
           onDeleteFile={deleteContextFile}
@@ -1633,12 +2149,67 @@ function WikiSidebar({
               absPath,
               timestamp: 0,
             })
-          }
+            }
+          />
+        )}
+        </div>
+        {scrollJumpTarget && (
+          <button
+            type="button"
+            data-library-scroll-jump-control="true"
+            title={scrollJumpTarget === 'top' ? 'Jump to top' : 'Jump to bottom'}
+            onMouseDown={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              jumpSidebar(scrollJumpTarget);
+            }}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            style={{
+              position: 'absolute',
+              right: '10px',
+              [scrollJumpTarget]: '8px',
+              zIndex: 3,
+              width: '28px',
+              height: '24px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: theme.textSecondary,
+              backgroundColor: theme.isDark ? 'rgba(24,24,26,0.94)' : 'rgba(255,255,255,0.94)',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '6px',
+              boxShadow: theme.isDark ? '0 4px 12px rgba(0,0,0,0.28)' : '0 4px 12px rgba(0,0,0,0.12)',
+              cursor: 'pointer',
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+              {scrollJumpTarget === 'top'
+                ? <path d="M8 3.25a.75.75 0 0 1 .53.22l4 4a.75.75 0 0 1-1.06 1.06L8.75 5.81V12a.75.75 0 0 1-1.5 0V5.81L4.53 8.53a.75.75 0 0 1-1.06-1.06l4-4A.75.75 0 0 1 8 3.25z" />
+                : <path d="M8 12.75a.75.75 0 0 1-.53-.22l-4-4a.75.75 0 0 1 1.06-1.06l2.72 2.72V4a.75.75 0 0 1 1.5 0v6.19l2.72-2.72a.75.75 0 1 1 1.06 1.06l-4 4a.75.75 0 0 1-.53.22z" />}
+            </svg>
+          </button>
+        )}
+        <div
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: '28px',
+            pointerEvents: 'none',
+            zIndex: 2,
+            opacity: sidebarTopFadeVisible ? 1 : 0,
+            transition: 'opacity 120ms ease',
+            background: `linear-gradient(to bottom, ${theme.bg} 0%, ${theme.bg}cc 45%, ${theme.bg}00 100%)`,
+          }}
         />
-      )}
-    </div>
-  );
-}
+      </div>
+    );
+  }
 
 export default memo(WikiSidebar);
 
@@ -1695,8 +2266,6 @@ function TreeNode({
   selectedId,
   selectedKeyboardActive,
   selectedItemRef,
-  hoveredId,
-  setHoveredId,
   dropTargetId,
   setDropTargetId,
   onMoveLibraryItem,
@@ -1707,6 +2276,8 @@ function TreeNode({
   onRenameRequestConsumed,
   onContextMenu,
   onKeyboardScopeActive,
+  pinnedItemIds,
+  showPinnedDividerBefore = false,
 }: {
   node: SidebarNode;
   depth: number;
@@ -1723,8 +2294,6 @@ function TreeNode({
   selectedId: string | null;
   selectedKeyboardActive: boolean;
   selectedItemRef: MutableRefObject<HTMLDivElement | null>;
-  hoveredId: string | null;
-  setHoveredId: (id: string | null) => void;
   dropTargetId: string | null;
   setDropTargetId: (id: string | null) => void;
   onMoveLibraryItem: (item: LibraryDragItem, target: LibraryCreateLocation) => void | Promise<void>;
@@ -1735,28 +2304,32 @@ function TreeNode({
   onRenameRequestConsumed: () => void;
   onContextMenu: (event: React.MouseEvent, node: SidebarNode | null) => void;
   onKeyboardScopeActive?: () => void;
+  pinnedItemIds: ReadonlySet<string>;
+  showPinnedDividerBefore?: boolean;
 }) {
   const [scratchpadExpanded, setScratchpadExpanded] = useState(false);
+  const pinnedDivider = showPinnedDividerBefore ? <SidebarDivider theme={theme} /> : null;
 
   if (node.kind === 'file') {
     const isSel = node.item.id === selectedId;
     return (
-      <FileItem
-        item={node.item}
-        depth={depth}
-        isSelected={isSel || selectedFileIds.has(node.item.id)}
-        selectedKeyboardActive={selectedKeyboardActive}
-        isHovered={node.item.id === hoveredId}
-        theme={theme}
-        onSelect={(event) => onSelectItem(node.item, event)}
-        onHover={setHoveredId}
-        onContextMenu={(event) => onContextMenu(event, node)}
-        onKeyboardScopeActive={onKeyboardScopeActive}
-        requestRename={renameRequestId === node.item.id}
-        onRenameRequestConsumed={onRenameRequestConsumed}
-        draggable={!!node.item.rootPath && (node.item.type === 'wiki' || node.item.type === 'external')}
-        refProp={isSel ? selectedItemRef : undefined}
-      />
+      <>
+        {pinnedDivider}
+        <FileItem
+          item={node.item}
+          depth={depth}
+          isSelected={isSel || selectedFileIds.has(node.item.id)}
+          selectedKeyboardActive={selectedKeyboardActive}
+          theme={theme}
+          onSelect={(event) => onSelectItem(node.item, event)}
+          onContextMenu={(event) => onContextMenu(event, node)}
+          onKeyboardScopeActive={onKeyboardScopeActive}
+          requestRename={renameRequestId === node.item.id}
+          onRenameRequestConsumed={onRenameRequestConsumed}
+          draggable={!!node.item.rootPath && (node.item.type === 'wiki' || node.item.type === 'external')}
+          refProp={isSel ? selectedItemRef : undefined}
+        />
+      </>
     );
   }
 
@@ -1768,7 +2341,7 @@ function TreeNode({
   const shouldCapScratchpad = node.name === SCRATCHPAD_FOLDER_NAME
     && !isSearching
     && !scratchpadExpanded
-    && !node.children.some((child) => sidebarNodeContainsSelectedId(child, selectedId))
+    && !sidebarNodeContainsSelectedIdOrWikiPath(node, selectedId)
     && node.children.length > SCRATCHPAD_COLLAPSED_ITEM_LIMIT;
   const visibleChildren = shouldCapScratchpad ? node.children.slice(0, SCRATCHPAD_COLLAPSED_ITEM_LIMIT) : node.children;
   const hiddenScratchpadCount = node.children.length - visibleChildren.length;
@@ -1781,68 +2354,73 @@ function TreeNode({
   };
 
   return (
-    <div>
-      <div
-        className="bm-folder-header"
-        draggable={canDragDir}
-        onDragStart={(event) => {
-          if (!canDragDir) {
+    <>
+      {pinnedDivider}
+      <div data-library-dir-node="true" data-library-dir-id={node.id}>
+        <div
+          className="bm-folder-header"
+          draggable={canDragDir}
+          onDragStart={(event) => {
+            if (!canDragDir) {
+              event.preventDefault();
+              return;
+            }
+            const item: LibraryDragItem = {
+              rootPath: node.rootPath,
+              kind: 'dir',
+              relPath: node.relPath,
+            };
+            setLibraryDragData(event.dataTransfer, item);
+          }}
+          onDragEnd={clearLibraryDragData}
+          onDragEnter={(event) => {
+            if (!node.canCreateFile) return;
+            if (!hasLibraryDragData(event.dataTransfer)) return;
+            if (!getDroppableDragItem(event.dataTransfer)) return;
             event.preventDefault();
-            return;
-          }
-          const item: LibraryDragItem = {
-            rootPath: node.rootPath,
-            kind: 'dir',
-            relPath: node.relPath,
-          };
-          setLibraryDragData(event.dataTransfer, item);
-        }}
-        onDragEnd={clearLibraryDragData}
-        onDragEnter={(event) => {
-          if (!node.canCreateFile) return;
-          if (!hasLibraryDragData(event.dataTransfer)) return;
-          if (!getDroppableDragItem(event.dataTransfer)) return;
-          event.preventDefault();
-          setDropTargetId(node.id);
-        }}
-        onDragOver={(event) => {
-          if (!node.canCreateFile) return;
-          if (!hasLibraryDragData(event.dataTransfer)) return;
-          if (!getDroppableDragItem(event.dataTransfer)) return;
-          event.preventDefault();
-          event.dataTransfer.dropEffect = 'move';
-          setDropTargetId(node.id);
-        }}
-        onDragLeave={() => {
-          if (dropTargetId === node.id) setDropTargetId(null);
-        }}
-        onDrop={(event) => {
-          if (!node.canCreateFile) return;
-          event.preventDefault();
-          setDropTargetId(null);
-          const item = getDroppableDragItem(event.dataTransfer);
-          clearLibraryDragData();
-          if (!item) return;
-          void onMoveLibraryItem(item, nodeCreateLocation);
-        }}
-        onClick={() => toggleFolder(node.id)}
-        onContextMenu={(event) => onContextMenu(event, node)}
-        onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
-        onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : 'transparent')}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: SIDEBAR_ICON_TEXT_GAP,
-          padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
-          cursor: 'pointer',
-          fontSize: '12px',
-          fontWeight: 400,
-          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-          color: sidebarTextColor,
-          userSelect: 'none',
-          backgroundColor: isDropTarget ? dropBg : 'transparent',
-        }}
-      >
+            setDropTargetId(node.id);
+          }}
+          onDragOver={(event) => {
+            if (!node.canCreateFile) return;
+            if (!hasLibraryDragData(event.dataTransfer)) return;
+            if (!getDroppableDragItem(event.dataTransfer)) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = 'move';
+            setDropTargetId(node.id);
+          }}
+          onDragLeave={() => {
+            if (dropTargetId === node.id) setDropTargetId(null);
+          }}
+          onDrop={(event) => {
+            if (!node.canCreateFile) return;
+            event.preventDefault();
+            setDropTargetId(null);
+            const item = getDroppableDragItem(event.dataTransfer);
+            clearLibraryDragData();
+            if (!item) return;
+            void onMoveLibraryItem(item, nodeCreateLocation);
+          }}
+          onClick={() => toggleFolder(node.id)}
+          onContextMenu={(event) => onContextMenu(event, node)}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.bg)}
+          style={{
+            position: 'sticky',
+            top: 0,
+            zIndex: 3,
+            display: 'flex',
+            alignItems: 'center',
+            gap: SIDEBAR_ICON_TEXT_GAP,
+            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 400,
+            lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+            color: sidebarTextColor,
+            userSelect: 'none',
+            backgroundColor: isDropTarget ? dropBg : theme.bg,
+          }}
+        >
         <SidebarFolderIcon color={sidebarIconColor} />
         <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>{node.label}</span>
         <span style={{
@@ -1939,7 +2517,7 @@ function TreeNode({
         />
       )}
 
-      {isExpanded && visibleChildren.map((child) => (
+      {isExpanded && visibleChildren.map((child, index) => (
         <TreeNode
           key={child.id}
           node={child}
@@ -1957,8 +2535,6 @@ function TreeNode({
           selectedId={selectedId}
           selectedKeyboardActive={selectedKeyboardActive}
           selectedItemRef={selectedItemRef}
-          hoveredId={hoveredId}
-          setHoveredId={setHoveredId}
           dropTargetId={dropTargetId}
           setDropTargetId={setDropTargetId}
           onMoveLibraryItem={onMoveLibraryItem}
@@ -1969,6 +2545,8 @@ function TreeNode({
           onRenameRequestConsumed={onRenameRequestConsumed}
           onContextMenu={onContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
+          pinnedItemIds={pinnedItemIds}
+          showPinnedDividerBefore={!isSearching && shouldShowPinnedSidebarDividerBefore(visibleChildren, index, pinnedItemIds)}
         />
       ))}
       {isExpanded && hiddenScratchpadCount > 0 && (
@@ -1991,7 +2569,8 @@ function TreeNode({
           Show more ({hiddenScratchpadCount})
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -2006,6 +2585,7 @@ function LibraryContextMenu({
   canCopyFilePath,
   canShowFileInFinder,
   canDeleteFile,
+  pinLabel,
   hideDirLabel,
   canDeleteDir,
   onNewFile,
@@ -2015,6 +2595,7 @@ function LibraryContextMenu({
   onRenameFile,
   onCopyFilePath,
   onShowFileInFinder,
+  onTogglePin,
   onRemoveRoot,
   onHideDir,
   onDeleteFile,
@@ -2030,6 +2611,7 @@ function LibraryContextMenu({
   canCopyFilePath: boolean;
   canShowFileInFinder: boolean;
   canDeleteFile: boolean;
+  pinLabel: string | null;
   hideDirLabel: string | null;
   canDeleteDir: boolean;
   onNewFile: () => void;
@@ -2039,6 +2621,7 @@ function LibraryContextMenu({
   onRenameFile: () => void;
   onCopyFilePath: () => void;
   onShowFileInFinder: () => void;
+  onTogglePin: () => void;
   onRemoveRoot: () => void;
   onHideDir: () => void;
   onDeleteFile: () => void;
@@ -2118,6 +2701,9 @@ function LibraryContextMenu({
       {canShowFileInFinder && (
         <button style={itemStyle} onClick={onShowFileInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
       )}
+      {pinLabel && (
+        <button style={itemStyle} onClick={onTogglePin} onMouseEnter={setHover} onMouseLeave={clearHover}>{pinLabel}</button>
+      )}
       {canRemoveRoot && (
         <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from FT</button>
       )}
@@ -2148,15 +2734,13 @@ function LibraryContextMenu({
   );
 }
 
-function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHovered, theme, onSelect, onHover, onContextMenu, onKeyboardScopeActive, requestRename, onRenameRequestConsumed, draggable, refProp }: {
+function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, theme, onSelect, onContextMenu, onKeyboardScopeActive, requestRename, onRenameRequestConsumed, draggable, refProp }: {
   item: UnifiedItem;
   depth?: number;
   isSelected: boolean;
   selectedKeyboardActive: boolean;
-  isHovered: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelect: (event: React.MouseEvent) => void;
-  onHover: (id: string | null) => void;
   onContextMenu?: (event: React.MouseEvent) => void;
   onKeyboardScopeActive?: () => void;
   requestRename?: boolean;
@@ -2200,13 +2784,14 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
   };
 
   const canShowInFinder = !!item.absPath && item.type !== 'bookmarks';
-  const showFinderButton = canShowInFinder && isHovered;
   const selectedInSidebar = isSelected && selectedKeyboardActive;
   const selectedInDocument = isSelected && !selectedKeyboardActive;
   const documentSelectionColor = theme.isDark ? '#38bdf8' : '#0284c7';
+  const rowSelected = selectedInSidebar || selectedInDocument;
 
   return (
     <div
+      className={`bm-file-row${rowSelected ? ' bm-file-row-selected' : ''}`}
       ref={refProp}
       tabIndex={-1}
       draggable={draggable}
@@ -2237,19 +2822,17 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
       onClick={(e) => {
         onSelect(e);
       }}
-      onMouseEnter={() => onHover(item.id)}
-      onMouseLeave={() => onHover(null)}
       style={{
         position: 'relative',
         minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
         boxSizing: 'border-box',
-        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${showFinderButton ? 28 : 12}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
+        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${canShowInFinder ? 28 : 12}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
         cursor: 'pointer',
         backgroundColor: selectedInSidebar
           ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
           : selectedInDocument
             ? (theme.isDark ? 'rgba(56,189,248,0.08)' : 'rgba(2,132,199,0.08)')
-          : isHovered ? theme.hoverBg : 'transparent',
+          : undefined,
         borderLeft: selectedInSidebar
           ? `2px solid ${theme.accent}`
           : selectedInDocument
@@ -2298,7 +2881,7 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
               fontWeight: 400,
               color: sidebarTextColor,
               lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-              ...librarySidebarFadeTextStyle(showFinderButton ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH),
+              ...librarySidebarFadeTextStyle(canShowInFinder ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH),
             }}>
               {item.title}
             </div>
@@ -2342,6 +2925,7 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
         )}
         {canShowInFinder && (
           <button
+            className="bm-show-finder-btn"
             onClick={(e) => {
               e.stopPropagation();
               window.shellAPI?.showItemInFolder(item.absPath);
@@ -2363,17 +2947,9 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
               alignItems: 'center',
               justifyContent: 'center',
               borderRadius: '3px',
-              opacity: isHovered ? 0.7 : 0,
-              pointerEvents: isHovered ? 'auto' : 'none',
+              opacity: 0,
+              pointerEvents: 'none',
               transition: 'opacity 0.1s ease, background-color 0.1s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.opacity = '1';
-              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.opacity = '0.7';
-              e.currentTarget.style.backgroundColor = 'transparent';
             }}
             title="Show in Finder"
           >
@@ -2384,6 +2960,21 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, isHover
         )}
       </div>
     </div>
+  );
+}
+
+function SidebarDivider({ theme }: {
+  theme: ReturnType<typeof useTheme>['theme'];
+}) {
+  return (
+    <hr
+      style={{
+        border: 'none',
+        height: '1px',
+        margin: '8px 12px 4px',
+        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+      }}
+    />
   );
 }
 
@@ -2448,16 +3039,7 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
 
   return (
     <div style={{ marginBottom: '4px' }}>
-      {showDivider && (
-        <hr
-          style={{
-            border: 'none',
-            height: '1px',
-            margin: '8px 12px 4px',
-            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-          }}
-        />
-      )}
+      {showDivider && <SidebarDivider theme={theme} />}
       <div
         style={headerStyle}
         onClick={onToggleCollapsed}
@@ -2507,14 +3089,7 @@ function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
 
   return (
     <div>
-      <hr
-        style={{
-          border: 'none',
-          height: '1px',
-          margin: '8px 12px 4px',
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-        }}
-      />
+      <SidebarDivider theme={theme} />
       <div
         onClick={onOpen}
         style={{

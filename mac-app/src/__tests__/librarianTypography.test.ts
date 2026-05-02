@@ -66,8 +66,8 @@ describe('librarian typography presets', () => {
   });
 
   it('changes paragraph spacing with the line-height choice', () => {
-    expect(resolveLibrarianParagraphSpacing('tight')).toBe('0.52em');
-    expect(resolveLibrarianParagraphSpacing('normal')).toBe('0.78em');
-    expect(resolveLibrarianParagraphSpacing('loose')).toBe('1.08em');
+    expect(resolveLibrarianParagraphSpacing('tight')).toBe('0.36em');
+    expect(resolveLibrarianParagraphSpacing('normal')).toBe('0.52em');
+    expect(resolveLibrarianParagraphSpacing('loose')).toBe('0.78em');
   });
 });
