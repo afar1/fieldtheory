@@ -77,6 +77,8 @@ export type RenderedEditClickMode = 'click' | 'command-click';
 
 export const RENDERED_EDIT_CLICK_MODE_STORAGE_KEY = 'fieldtheory-rendered-edit-click-mode';
 export const RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT = 'fieldtheory:rendered-edit-click-mode-changed';
+export const TEXT_CURSOR_BLINK_STORAGE_KEY = 'fieldtheory-text-cursor-blink';
+export const TEXT_CURSOR_BLINK_CHANGED_EVENT = 'fieldtheory:text-cursor-blink-changed';
 
 export function restoreRenderedEditClickMode(storage: Pick<Storage, 'getItem'>): RenderedEditClickMode {
   return storage.getItem(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY) === 'command-click' ? 'command-click' : 'click';
@@ -84,6 +86,14 @@ export function restoreRenderedEditClickMode(storage: Pick<Storage, 'getItem'>):
 
 export function persistRenderedEditClickMode(storage: Pick<Storage, 'setItem'>, mode: RenderedEditClickMode): void {
   storage.setItem(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, mode);
+}
+
+export function restoreTextCursorBlink(storage: Pick<Storage, 'getItem'>): boolean {
+  return storage.getItem(TEXT_CURSOR_BLINK_STORAGE_KEY) !== 'false';
+}
+
+export function persistTextCursorBlink(storage: Pick<Storage, 'setItem'>, enabled: boolean): void {
+  storage.setItem(TEXT_CURSOR_BLINK_STORAGE_KEY, enabled ? 'true' : 'false');
 }
 
 /** True when a click on the rendered markdown body should switch to edit

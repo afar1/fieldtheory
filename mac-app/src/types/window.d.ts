@@ -1268,7 +1268,7 @@ interface CommandsAPI {
   launcherPreviewResize?: (height: number) => void;
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
-  onLauncherReset?: (callback: () => void) => () => void;
+  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean }) => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
@@ -1496,6 +1496,7 @@ interface LibrarianAPI {
   onReadingAdded: (callback: (reading: Reading) => void) => () => void;
   onReadingUpdated: (callback: (reading: ReadingMeta) => void) => () => void;
   onReadingRemoved: (callback: (path: string) => void) => () => void;
+  onReadingRenamed: (callback: (event: { oldPath: string; reading: ReadingMeta; traceId?: string; detectedAt?: number; emittedAt?: number }) => void) => () => void;
   onSetFullscreen: (callback: (fullscreen: boolean) => void) => () => void;
   onShowReading: (callback: (readingPath: string) => void) => () => void;
   // Settings API
@@ -1671,6 +1672,19 @@ declare global {
     tree: WikiNode[];
   }
 
+  interface LibraryRenameEvent {
+    rootPath: string;
+    oldRelPath: string;
+    newRelPath: string;
+    oldAbsPath: string;
+    newAbsPath: string;
+    builtin: boolean;
+    traceId?: string;
+    source?: 'app' | 'watcher' | 'external';
+    detectedAt?: number;
+    emittedAt?: number;
+  }
+
   interface LibraryMigrationFile {
     relPath: string;
     sourcePath: string;
@@ -1722,6 +1736,7 @@ declare global {
     moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
     onRootsChanged: (callback: () => void) => () => void;
+    onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
   }
 
   interface WikiAPI {
@@ -1738,6 +1753,7 @@ declare global {
     deletePage: (relPath: string) => Promise<boolean>;
     onPageChanged: (callback: () => void) => () => void;
     onPageDeleted: (callback: (relPath: string) => void) => () => void;
+    onPageRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
     onOpenWikiPage: (callback: (relPath: string) => void) => () => void;
     onOpenScratchpad: (callback: (relPath: string) => void) => () => void;
   }

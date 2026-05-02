@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, LibraryDocument } from '../types';
+import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, LibraryDocument, LibraryTombstone } from '../types';
 
 // Normalize saved records so new fields are always present.
 const normalizeTodo = (raw: Todo): Todo => ({
@@ -33,12 +33,19 @@ const normalizeLibraryDocument = (raw: LibraryDocument): LibraryDocument => ({
   updatedAt: raw.updatedAt ?? raw.createdAt,
 });
 
+const normalizeLibraryTombstone = (raw: LibraryTombstone): LibraryTombstone => ({
+  ...raw,
+  createdAt: raw.createdAt ?? raw.deletedAt,
+  deletedAt: raw.deletedAt ?? raw.createdAt,
+});
+
 // Storage keys
 const TODOS_KEY = '@littleai/todos';
 const OBSERVATIONS_KEY = '@littleai/observations';
 const SETTINGS_KEY = '@littleai/settings';
 const TRANSCRIPTS_KEY = '@littleai/transcripts';
 const LIBRARY_DOCUMENTS_KEY = '@littleai/library-documents';
+const LIBRARY_TOMBSTONES_KEY = '@littleai/library-tombstones';
 
 /**
  * Storage service for persisting todos, observations, and settings.
@@ -182,5 +189,48 @@ export class StorageService {
       console.error('Failed to save library documents:', error);
       throw error;
     }
+  }
+
+  /**
+   * Load pending Library tombstones that still need to be synced.
+   */
+  static async getLibraryTombstones(): Promise<LibraryTombstone[]> {
+    try {
+      const data = await AsyncStorage.getItem(LIBRARY_TOMBSTONES_KEY);
+      return data ? JSON.parse(data).map(normalizeLibraryTombstone) : [];
+    } catch (error) {
+      console.error('Failed to load library tombstones:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save pending Library tombstones.
+   */
+  static async saveLibraryTombstones(tombstones: LibraryTombstone[]): Promise<void> {
+    try {
+      await AsyncStorage.setItem(LIBRARY_TOMBSTONES_KEY, JSON.stringify(tombstones));
+    } catch (error) {
+      console.error('Failed to save library tombstones:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Add pending Library tombstones, keeping the newest delete per document id.
+   */
+  static async addLibraryTombstones(tombstones: LibraryTombstone[]): Promise<void> {
+    if (tombstones.length === 0) return;
+    const existing = await StorageService.getLibraryTombstones();
+    const byId = new Map(existing.map((tombstone) => [tombstone.id, tombstone]));
+
+    for (const tombstone of tombstones) {
+      const current = byId.get(tombstone.id);
+      if (!current || tombstone.deletedAt >= current.deletedAt) {
+        byId.set(tombstone.id, tombstone);
+      }
+    }
+
+    await StorageService.saveLibraryTombstones(Array.from(byId.values()));
   }
 }

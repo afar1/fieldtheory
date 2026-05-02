@@ -80,7 +80,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
-import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type WikiNode } from './librarianManager';
+import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
@@ -123,6 +123,12 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
+const LIBRARY_RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
+
+function traceLibraryRename(stage: string, payload: Record<string, unknown>): void {
+  if (!LIBRARY_RENAME_TRACE_ENABLED) return;
+  log.warn('[RenameTrace] %s %o', stage, payload);
+}
 
 const BOOT_MARK = Date.now();
 const VISION_BUILD_ENABLED = false;
@@ -260,6 +266,13 @@ async function activateAndPaste(
     frontmostName: afterKeystroke?.name ?? null,
   });
   return true;
+}
+
+function activateAndPasteFromCommandLauncher(targetApp: { bundleId: string; name: string }): Promise<boolean> {
+  commandLauncherWindow?.suppressActivationForExternalInvocation();
+  return activateAndPaste(targetApp, {
+    beforePaste: () => commandLauncherWindow?.hide(true),
+  });
 }
 
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
@@ -705,13 +718,23 @@ async function saveAndApplyHotMicIslandGeometry(
   const next = normalizeHotMicIslandGeometry({ ...current, ...geometry });
 
   if (preferencesManager) {
-    await preferencesManager.save({
-      hotMicIslandNotchWidthOverride: next.notchWidthOverride,
-      hotMicIslandPillWidth: next.pillWidth,
-      hotMicIslandPillHeight: next.pillHeight,
-      hotMicIslandOffsetX: next.offsetX,
-      hotMicIslandOffsetY: next.offsetY,
-    });
+    const prefsToSave: Parameters<PreferencesManager['save']>[0] = {};
+    if (Object.prototype.hasOwnProperty.call(geometry, 'notchWidthOverride')) {
+      prefsToSave.hotMicIslandNotchWidthOverride = next.notchWidthOverride;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'pillWidth')) {
+      prefsToSave.hotMicIslandPillWidth = next.pillWidth;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'pillHeight')) {
+      prefsToSave.hotMicIslandPillHeight = next.pillHeight;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'offsetX')) {
+      prefsToSave.hotMicIslandOffsetX = next.offsetX;
+    }
+    if (Object.prototype.hasOwnProperty.call(geometry, 'offsetY')) {
+      prefsToSave.hotMicIslandOffsetY = next.offsetY;
+    }
+    await preferencesManager.save(prefsToSave);
   }
 
   dynamicIslandManager?.setGeometryTuning(next);
@@ -1259,8 +1282,12 @@ function registerHotkeysAfterOnboarding(): void {
           ? clipboardHistoryWindow?.getBounds()
           : null;
 
+        const appWindowFocusSuppressed = !fieldTheoryFocused
+          && (clipboardHistoryWindow?.temporarilyDisableAppWindowFocus('command-launcher-show') ?? false);
+
         appendCommandLauncherTrace('hotkey-show-request', {
           anchor: anchorBounds ? 'field-theory-window' : 'frontmost-window',
+          appWindowFocusSuppressed,
         });
         await commandLauncherWindow.show({ anchorBounds });
         appendCommandLauncherTrace('hotkey-show-complete', {
@@ -1966,12 +1993,32 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('wiki:getTree', (): WikiFolder[] => {
     if (!librarianManager) return [];
-    return librarianManager.getWikiTree();
+    const startedAt = Date.now();
+    const tree = librarianManager.getWikiTree();
+    traceLibraryRename('ipc-wiki-getTree', {
+      durationMs: Date.now() - startedAt,
+      folders: tree.length,
+      files: tree.reduce((total, folder) => total + folder.files.length, 0),
+    });
+    return tree;
   });
 
   ipcMain.handle('library:getRoots', (): LibraryRoot[] => {
     if (!librarianManager) return [];
-    return librarianManager.getLibraryRoots();
+    const startedAt = Date.now();
+    const roots = librarianManager.getLibraryRoots();
+    const files = roots.reduce((total, root) => {
+      const countNodes = (nodes: WikiNode[]): number => nodes.reduce((sum, node) => (
+        sum + (node.kind === 'file' ? 1 : countNodes(node.children))
+      ), 0);
+      return total + countNodes(root.tree);
+    }, 0);
+    traceLibraryRename('ipc-library-getRoots', {
+      durationMs: Date.now() - startedAt,
+      roots: roots.length,
+      files,
+    });
+    return roots;
   });
 
   ipcMain.handle('library:previewMigration', () => {
@@ -2296,11 +2343,32 @@ function setupLibrarianIPCHandlers(): void {
         const content = fs.readFileSync(nextPath, 'utf-8');
         const stats = fs.statSync(nextPath);
         const title = stripMarkdownFileExtension(path.basename(nextPath));
-        BrowserWindow.getAllWindows().forEach((w) => {
-          if (!w.isDestroyed()) {
-            w.webContents.send('library:changed');
-          }
+        const libraryRoot = librarianManager?.getLibraryRoots().find((root) => {
+          if (root.builtin) return false;
+          const relative = path.relative(root.path, canonical);
+          return relative === '' || (!!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
         });
+        if (libraryRoot && librarianManager) {
+          const detectedAt = Date.now();
+          const event: LibraryRenameEvent = {
+            rootPath: libraryRoot.path,
+            oldRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, canonical).split(path.sep).join('/')),
+            newRelPath: stripMarkdownFileExtension(path.relative(libraryRoot.path, nextPath).split(path.sep).join('/')),
+            oldAbsPath: canonical,
+            newAbsPath: nextPath,
+            builtin: false,
+            source: 'external',
+            detectedAt,
+          };
+          traceLibraryRename('external-rename-record', {
+            oldAbsPath: canonical,
+            newAbsPath: nextPath,
+            oldRelPath: event.oldRelPath,
+            newRelPath: event.newRelPath,
+          });
+          librarianManager.recordLibraryRename(event);
+        }
+        librarianManager?.recordWatchedReadingRename(canonical, nextPath);
         recentManager?.remove('external', canonical);
         recentManager?.visit({ kind: 'external', path: nextPath, title, lastOpenedAt: Date.now() });
         broadcastRecentChanged();
@@ -2322,6 +2390,9 @@ function setupLibrarianIPCHandlers(): void {
     librarianManager.startWikiWatcher();
     librarianManager.on('wiki:changed', () => {
       librarySyncService?.scheduleSync();
+      traceLibraryRename('broadcast-wiki-changed', {
+        windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+      });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) {
           w.webContents.send('wiki:changed');
@@ -2329,10 +2400,42 @@ function setupLibrarianIPCHandlers(): void {
         }
       });
     });
+    librarianManager.on('wiki:renamed', (event: LibraryRenameEvent) => {
+      librarySyncService?.scheduleSync();
+      traceLibraryRename('broadcast-wiki-renamed', {
+        traceId: event.traceId,
+        source: event.source,
+        oldRelPath: event.oldRelPath,
+        newRelPath: event.newRelPath,
+        ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
+      });
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) {
+          w.webContents.send('wiki:renamed', event);
+          w.webContents.send('library:renamed', event);
+        }
+      });
+    });
     librarianManager.on('library:changed', () => {
       librarySyncService?.scheduleSync();
+      traceLibraryRename('broadcast-library-changed', {
+        windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
+      });
       BrowserWindow.getAllWindows().forEach((w) => {
         if (!w.isDestroyed()) w.webContents.send('library:changed');
+      });
+    });
+    librarianManager.on('library:renamed', (event: LibraryRenameEvent) => {
+      librarySyncService?.scheduleSync();
+      traceLibraryRename('broadcast-library-renamed', {
+        traceId: event.traceId,
+        source: event.source,
+        oldRelPath: event.oldRelPath,
+        newRelPath: event.newRelPath,
+        ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
+      });
+      BrowserWindow.getAllWindows().forEach((w) => {
+        if (!w.isDestroyed()) w.webContents.send('library:renamed', event);
       });
     });
     // Auto-prune recent when a wiki page is trashed so stale entries drop
@@ -2379,10 +2482,9 @@ function setupLibrarianIPCHandlers(): void {
         return { success: false, error: 'No external target app available' };
       }
 
-      commandLauncherWindow?.hide(true);
       clipboard.writeText(text);
       clipboardManager?.syncClipboardHash();
-      await activateAndPaste(targetApp);
+      await activateAndPasteFromCommandLauncher(targetApp);
 
       appendCommandLauncherTrace(`${tracePrefix}-success`, {
         ...tracePayload,
@@ -5142,6 +5244,14 @@ function setupClipboardIPCHandlers(): void {
 
   // Reveal file in Finder (macOS).
   ipcMain.handle('shell:showItemInFolder', async (_event, fullPath: string) => {
+    try {
+      if (fs.existsSync(fullPath) && fs.statSync(fullPath).isDirectory()) {
+        await shell.openPath(fullPath);
+        return;
+      }
+    } catch {
+      // Fall through to the existing reveal behavior.
+    }
     shell.showItemInFolder(fullPath);
   });
 
@@ -6163,7 +6273,10 @@ function setupClipboardIPCHandlers(): void {
     }
 
     const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' ? 'fields' : 'library';
-    if (!clipboardHistoryWindow.isVisible()) {
+    if (clipboardHistoryWindow.isVisible()) {
+      suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
+      clipboardHistoryWindow.focusExistingWindow();
+    } else {
       const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
       suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
       clipboardHistoryWindow.show(boundsToUse);
@@ -6216,9 +6329,7 @@ function setupClipboardIPCHandlers(): void {
         clipboardManager?.syncClipboardHash();
       }
 
-      commandLauncherWindow?.suppressActivationForExternalInvocation();
-      commandLauncherWindow?.hide(true);
-      await activateAndPaste(targetApp);
+      await activateAndPasteFromCommandLauncher(targetApp);
       appendCommandLauncherTrace('invoke-handoff-success', {
         filePath,
         targetBundleId: targetApp.bundleId,
@@ -6302,9 +6413,7 @@ function setupClipboardIPCHandlers(): void {
           });
         }
 
-        commandLauncherWindow?.suppressActivationForExternalInvocation();
-        commandLauncherWindow?.hide(true);
-        const pasted = await activateAndPaste(targetApp);
+        const pasted = await activateAndPasteFromCommandLauncher(targetApp);
         if (!pasted) {
           cursorStatusManager?.showNoTargetError('Portable command paste failed');
           return { success: false, error: 'Could not paste into target app' };
@@ -7366,6 +7475,20 @@ async function initTranscriberSystem(): Promise<void> {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingUpdated', reading);
+      }
+    });
+  });
+
+  librarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
+    traceLibraryRename('broadcast-reading-renamed', {
+      traceId: event.traceId,
+      oldPath: event.oldPath,
+      newPath: event.reading.path,
+      ageMs: event.emittedAt ? Date.now() - event.emittedAt : null,
+    });
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send('librarian:readingRenamed', event);
       }
     });
   });
@@ -8516,7 +8639,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getIslandGeometry', () => {
-      return getHotMicIslandGeometryFromPreferences();
+      return dynamicIslandManager?.getGeometryTuning() ?? getHotMicIslandGeometryFromPreferences();
     });
 
     ipcMain.handle('hotmic:setIslandGeometry', async (_event, geometry: Partial<DynamicIslandGeometryTuning>) => {
@@ -8544,7 +8667,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle('hotmic:getIslandAutoHide', () => {
-      return preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false;
+      return dynamicIslandManager?.getAutoHideEnabled() ?? preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false;
     });
 
     ipcMain.handle('hotmic:setIslandAutoHide', async (_event, value: boolean) => {

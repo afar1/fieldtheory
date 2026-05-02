@@ -33,6 +33,7 @@ import {
   normalizeSeededReadmes,
   parseMarkdownHeader,
   parseMarkdownTodoState,
+  type ReadingMeta,
   type WikiNode,
 } from './librarianManager';
 import { readDocumentVersion } from './documentSaveGuard';
@@ -441,8 +442,55 @@ describe('recursive wiki tree scan', () => {
     expect(manager.renameWikiPage('note', 'Better Note')).toBe('Better Note');
     expect(fs.existsSync(path.join(root, 'note.md'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'Better Note.md'))).toBe(true);
-    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:renamed', expect.objectContaining({
+      oldRelPath: 'note',
+      newRelPath: 'Better Note',
+      oldAbsPath: path.join(root, 'note.md'),
+      newAbsPath: path.join(root, 'Better Note.md'),
+      builtin: true,
+    }));
+    expect(emit).not.toHaveBeenCalledWith('wiki:changed', root);
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'note');
+  });
+
+  it('patches the cached wiki tree when a wiki page is renamed', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'note.md'), '# Note\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      getWikiTree: () => Array<{ name: string; files: Array<{ relPath: string }> }>;
+      renameWikiPage: (relPath: string, newName: string) => string | null;
+      startWikiWatcher: () => void;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.startWikiWatcher = vi.fn();
+    manager.emit = vi.fn();
+
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/note']);
+    expect(manager.renameWikiPage('entries/note', 'Better Note')).toBe('entries/Better Note');
+    expect(manager.getWikiTree()[0]?.files.map((page) => page.relPath)).toEqual(['entries/Better Note']);
+  });
+
+  it('keeps the old wiki relPath selectable briefly after a rename', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'entries', 'note.md'), '# Note\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      renameWikiPage: (relPath: string, newName: string) => string | null;
+      getWikiPage: (relPath: string) => { relPath: string; title: string } | null;
+      emit: ReturnType<typeof vi.fn>;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = vi.fn();
+
+    expect(manager.renameWikiPage('entries/note', 'Better Note')).toBe('entries/Better Note');
+    expect(manager.getWikiPage('entries/note')).toEqual(expect.objectContaining({
+      relPath: 'entries/Better Note',
+      title: 'Better Note',
+    }));
   });
 
   it('renames .markdown wiki pages without changing their extension', () => {
@@ -799,6 +847,45 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('reading-removed', readingPath);
   });
 
+  it('updates the watched reading cache when a reading is renamed', () => {
+    const root = makeTempDir();
+    const oldPath = path.join(root, 'reading.md');
+    const newPath = path.join(root, 'renamed.md');
+    fs.writeFileSync(oldPath, '# Reading\n');
+    fs.renameSync(oldPath, newPath);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { watchedDirs: string[] };
+      cache: Map<string, ReadingMeta>;
+      saveIndex: () => void;
+      emit: typeof emit;
+      recordWatchedReadingRename: (oldAbsPath: string, newAbsPath: string) => ReadingMeta | null;
+    };
+    manager.settings = { watchedDirs: [root] };
+    manager.cache = new Map([[oldPath, {
+      path: oldPath,
+      title: 'Reading',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: Date.now(),
+      mtime: Date.now(),
+    }]]);
+    manager.saveIndex = vi.fn();
+    manager.emit = emit;
+
+    const meta = manager.recordWatchedReadingRename(oldPath, newPath);
+
+    expect(meta?.path).toBe(newPath);
+    expect(manager.cache.has(oldPath)).toBe(false);
+    expect(manager.cache.has(newPath)).toBe(true);
+    expect(emit).toHaveBeenCalledWith('reading-renamed', expect.objectContaining({
+      oldPath,
+      reading: expect.objectContaining({ path: newPath, title: 'Reading' }),
+    }));
+  });
+
   it('moves wiki pages into another folder and emits stale relPath deletion', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
@@ -898,7 +985,7 @@ describe('hidden default library folders', () => {
 
 describe('default folder readmes', () => {
   it('normalizes seeded README ids to the supported defaults in canonical order', () => {
-    expect(normalizeSeededReadmes(['entities', 'unknown', 'scratchpad', 'entities'])).toEqual([
+    expect(normalizeSeededReadmes(['entities', 'unknown', 'scratchpad', 'artifacts', 'entities'])).toEqual([
       'scratchpad',
       'entities',
     ]);
@@ -920,7 +1007,7 @@ describe('default folder readmes', () => {
 
     manager.ensureDefaultFolderReadmes();
 
-    for (const folder of ['scratchpad', 'debates', 'entries', 'categories', 'domains', 'entities']) {
+    for (const folder of ['scratchpad', 'debates', 'Plans', 'entries', 'categories', 'domains', 'entities']) {
       const readmePath = path.join(root, folder, 'README.md');
       expect(fs.existsSync(readmePath)).toBe(true);
       const readme = fs.readFileSync(readmePath, 'utf-8');
@@ -930,17 +1017,34 @@ describe('default folder readmes', () => {
       expect(readme).toContain('Command+N');
       expect(readme).toContain("Field Theory's Commands tab");
     }
-    expect(fs.existsSync(path.join(root, 'bookmarks', 'README.md'))).toBe(false);
     expect(fs.existsSync(path.join(root, 'artifacts', 'README.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, 'scratchpad', 'README.md'), 'utf-8')).toContain('Create a Scratchpad note from anywhere');
+    expect(fs.readFileSync(path.join(root, 'debates', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/commands/debate.md');
+    expect(fs.readFileSync(path.join(root, 'Plans', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/commands/plan.md');
+    expect(fs.existsSync(path.join(root, 'bookmarks', 'README.md'))).toBe(false);
     expect(manager.settings.readmesSeeded).toEqual([
       'scratchpad',
       'debates',
+      'Plans',
       'entries',
       'categories',
       'domains',
       'entities',
     ]);
     expect(saveSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it('seeds the central artifacts README outside the wiki directory', () => {
+    const artifactsDir = makeTempDir();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      ensureCentralArtifactsReadme: (artifactsDir: string) => void;
+    };
+
+    manager.ensureCentralArtifactsReadme(artifactsDir);
+
+    const readme = fs.readFileSync(path.join(artifactsDir, 'README.md'), 'utf-8');
+    expect(readme).toContain('~/.fieldtheory/librarian/artifacts/');
+    expect(readme).toContain('Show in Finder');
   });
 
   it('does not overwrite an existing README and still marks the folder handled', () => {

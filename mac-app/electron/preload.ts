@@ -3141,8 +3141,8 @@ const commandsAPI = {
   },
 
   // Listen for reset events (when launcher is shown).
-  onLauncherReset: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean }) => callback(payload);
     ipcRenderer.on('command-launcher:reset', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher:reset', handler);
@@ -3329,6 +3329,12 @@ const librarianAPI = {
     const handler = (_event: Electron.IpcRendererEvent, filePath: string) => callback(filePath);
     ipcRenderer.on('librarian:readingRemoved', handler);
     return () => ipcRenderer.removeListener('librarian:readingRemoved', handler);
+  },
+
+  onReadingRenamed: (callback: (event: { oldPath: string; reading: ReadingMeta; traceId?: string; detectedAt?: number; emittedAt?: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { oldPath: string; reading: ReadingMeta; traceId?: string; detectedAt?: number; emittedAt?: number }) => callback(payload);
+    ipcRenderer.on('librarian:readingRenamed', handler);
+    return () => ipcRenderer.removeListener('librarian:readingRenamed', handler);
   },
 
   // Listen for fullscreen mode requests (from URL scheme)
@@ -3828,6 +3834,18 @@ interface LibraryRoot {
   writable?: boolean;
   tree: WikiNode[];
 }
+interface LibraryRenameEvent {
+  rootPath: string;
+  oldRelPath: string;
+  newRelPath: string;
+  oldAbsPath: string;
+  newAbsPath: string;
+  builtin: boolean;
+  traceId?: string;
+  source?: 'app' | 'watcher' | 'external';
+  detectedAt?: number;
+  emittedAt?: number;
+}
 interface LibraryMigrationFile {
   relPath: string;
   sourcePath: string;
@@ -3885,6 +3903,11 @@ const libraryAPI = {
     ipcRenderer.on('library:changed', handler);
     return () => ipcRenderer.removeListener('library:changed', handler);
   },
+  onItemRenamed: (callback: (event: LibraryRenameEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: LibraryRenameEvent) => callback(payload);
+    ipcRenderer.on('library:renamed', handler);
+    return () => ipcRenderer.removeListener('library:renamed', handler);
+  },
 };
 
 const wikiAPI = {
@@ -3911,6 +3934,11 @@ const wikiAPI = {
     const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
     ipcRenderer.on('wiki:deleted', handler);
     return () => ipcRenderer.removeListener('wiki:deleted', handler);
+  },
+  onPageRenamed: (callback: (event: LibraryRenameEvent) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: LibraryRenameEvent) => callback(payload);
+    ipcRenderer.on('wiki:renamed', handler);
+    return () => ipcRenderer.removeListener('wiki:renamed', handler);
   },
   onOpenWikiPage: (callback: (relPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, relPath: string) => callback(relPath);
