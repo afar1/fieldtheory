@@ -275,6 +275,23 @@ describe('HotMicManager transcript history persistence', () => {
     vi.clearAllMocks();
   });
 
+  it('inserts paste-phrase buffers into a focused Field Theory markdown editor', async () => {
+    const { manager, nativeHelper } = createManager();
+    const insertText = vi.fn(() => true);
+    nativeHelper.getFrontmostApp.mockReturnValue({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' });
+    manager.setFieldTheoryMarkdownInsertionTarget({
+      isAvailable: () => true,
+      insertText,
+    });
+
+    await (manager as any).processListeningChunk('alpha beta paste');
+
+    expect(insertText).toHaveBeenCalledWith('alpha beta ');
+    expect(nativeHelper.typeIntoApp).not.toHaveBeenCalled();
+
+    manager.destroy();
+  });
+
   it('documents that submitted Hot Mic transcripts with more than five words are saved to transcript history', async () => {
     const { manager, clipboardManager } = createManager();
 
@@ -446,9 +463,9 @@ describe('HotMicManager screenshot figure integration', () => {
       'com.apple.Terminal'
     );
 
-    expect(payload).toContain('alpha segment [Figure 1] beta segment [Figure 2]');
-    expect(payload).toContain('Figure 1: `/tmp/figure-201.png`');
-    expect(payload).toContain('Figure 2: `/tmp/figure-202.png`');
+    expect(payload).toContain('alpha segment [figure 1] beta segment [figure 2]');
+    expect(payload).toContain('figure 1: `/tmp/figure-201.png`');
+    expect(payload).toContain('figure 2: `/tmp/figure-202.png`');
 
     manager.destroy();
   });
@@ -465,7 +482,7 @@ describe('HotMicManager screenshot figure integration', () => {
 
     expect(nativeHelper.typeIntoApp).toHaveBeenCalledWith(
       'com.mitchellh.ghostty',
-      expect.stringContaining('[Figure 1]'),
+      expect.stringContaining('[figure 1]'),
       true
     );
     expect((manager as any).transcriptBuffer).toEqual([]);
@@ -508,8 +525,8 @@ describe('HotMicManager screenshot figure integration', () => {
       'com.apple.Terminal'
     );
 
-    expect(payload).toContain('[Figure 1]');
-    expect(payload).toContain('Figure 1: `/tmp/ctx-401.png`');
+    expect(payload).toContain('[figure 1]');
+    expect(payload).toContain('figure 1: `/tmp/ctx-401.png`');
 
     manager.destroy();
   });
