@@ -52,23 +52,26 @@ export class CommandSyncService extends EventEmitter {
   private pendingSyncTimeout: ReturnType<typeof setTimeout> | null = null;
   private static readonly DEBOUNCE_MS = 1000; // Debounce rapid changes
   private static readonly MIN_SYNC_INTERVAL_MS = 5000; // Don't sync more than once per 5 seconds
+  private readonly handleCommandsChanged = (): void => this.scheduleSync();
+  private readonly handleMobileSyncChanged = (): void => this.scheduleSync();
+  private readonly handleSessionChanged = (session: unknown): void => {
+    if (session) {
+      // When user logs in, sync commands if any are enabled for mobile.
+      this.scheduleSync();
+    }
+  };
 
   constructor(authManager: AuthManager, commandsManager: CommandsManager) {
     super();
     this.authManager = authManager;
     this.commandsManager = commandsManager;
 
-    // Listen for command changes to auto-sync
-    this.commandsManager.on('commandsChanged', () => this.scheduleSync());
-    this.commandsManager.on('mobileSyncChanged', () => this.scheduleSync());
+    // Listen for command changes to auto-sync.
+    this.commandsManager.on('commandsChanged', this.handleCommandsChanged);
+    this.commandsManager.on('mobileSyncChanged', this.handleMobileSyncChanged);
 
-    // Listen for auth changes
-    this.authManager.on('sessionChanged', (session) => {
-      if (session) {
-        // When user logs in, sync commands if any are enabled for mobile
-        this.scheduleSync();
-      }
-    });
+    // Listen for auth changes.
+    this.authManager.on('sessionChanged', this.handleSessionChanged);
   }
 
   /**
@@ -347,8 +350,9 @@ export class CommandSyncService extends EventEmitter {
       clearTimeout(this.pendingSyncTimeout);
       this.pendingSyncTimeout = null;
     }
-    this.commandsManager.removeAllListeners('commandsChanged');
-    this.commandsManager.removeAllListeners('mobileSyncChanged');
+    this.commandsManager.off('commandsChanged', this.handleCommandsChanged);
+    this.commandsManager.off('mobileSyncChanged', this.handleMobileSyncChanged);
+    this.authManager.off('sessionChanged', this.handleSessionChanged);
     this.removeAllListeners();
   }
 }

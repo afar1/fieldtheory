@@ -109,8 +109,20 @@ export type WikiBacklinkInput = {
   content: string;
 };
 
+export type MarkdownLinkRelationDocument = {
+  target: WikiLinkTarget;
+  title: string;
+  content: string;
+};
+
 export type WikiBacklink = {
   relPath: string;
+  title: string;
+  excerpt: string;
+};
+
+export type MarkdownBacklink = {
+  target: WikiLinkTarget;
   title: string;
   excerpt: string;
 };
@@ -121,8 +133,17 @@ export type WikiOutboundLink = {
   excerpt: string;
 };
 
+export type MarkdownOutboundLink = MarkdownBacklink;
+
 export type WikiLinkedPage = {
   relPath: string;
+  title: string;
+  excerpt: string;
+  direction: 'outbound' | 'inbound' | 'bidirectional';
+};
+
+export type MarkdownLinkedDocument = {
+  target: WikiLinkTarget;
   title: string;
   excerpt: string;
   direction: 'outbound' | 'inbound' | 'bidirectional';
@@ -330,63 +351,97 @@ function getLineExcerptAtOffset(markdown: string, offset: number): string {
   return markdown.slice(lineStart, lineEnd).trim();
 }
 
-export function getWikiBacklinks(
-  targetRelPath: string,
-  pages: WikiBacklinkInput[],
-  index: WikiIndex,
-): WikiBacklink[] {
-  const target = normalizeWikiRelPath(targetRelPath);
-  if (!target) return [];
+export function getWikiLinkTargetKey(target: WikiLinkTarget): string {
+  switch (target.kind) {
+    case 'wiki':
+      return `wiki:${normalizeWikiRelPath(target.relPath)}`;
+    case 'artifact':
+      return `artifact:${target.path}`;
+    case 'command':
+      return `command:${target.path}`;
+  }
+}
 
-  const backlinks: WikiBacklink[] = [];
+function getLinkTargetFromAction(action: LinkAction): WikiLinkTarget | null {
+  switch (action.kind) {
+    case 'wiki':
+      return { kind: 'wiki', relPath: normalizeWikiRelPath(action.relPath) };
+    case 'artifact':
+      return { kind: 'artifact', path: action.path };
+    case 'command':
+      return { kind: 'command', path: action.path };
+    default:
+      return null;
+  }
+}
+
+function wikiBacklinkInputsToRelationDocuments(pages: WikiBacklinkInput[]): MarkdownLinkRelationDocument[] {
+  return pages.map((page) => ({
+    target: { kind: 'wiki', relPath: page.relPath },
+    title: page.title,
+    content: page.content,
+  }));
+}
+
+export function getMarkdownBacklinks(
+  target: WikiLinkTarget | null,
+  documents: MarkdownLinkRelationDocument[],
+  index: WikiIndex,
+): MarkdownBacklink[] {
+  if (!target) return [];
+  const targetKey = getWikiLinkTargetKey(target);
+  if (!targetKey) return [];
+
+  const backlinks: MarkdownBacklink[] = [];
   const seen = new Set<string>();
 
-  for (const page of pages) {
-    const sourceRelPath = normalizeWikiRelPath(page.relPath);
-    if (!sourceRelPath || sourceRelPath === target || seen.has(sourceRelPath)) continue;
+  for (const document of documents) {
+    const sourceKey = getWikiLinkTargetKey(document.target);
+    if (!sourceKey || sourceKey === targetKey || seen.has(sourceKey)) continue;
 
-    const hit = getMarkdownEditorLinkHits(page.content, index)
-      .find((candidate) => (
-        candidate.action.kind === 'wiki'
-        && normalizeWikiRelPath(candidate.action.relPath) === target
-      ));
+    const hit = getMarkdownEditorLinkHits(document.content, index)
+      .find((candidate) => {
+        const candidateTarget = getLinkTargetFromAction(candidate.action);
+        return candidateTarget && getWikiLinkTargetKey(candidateTarget) === targetKey;
+      });
     if (!hit) continue;
 
-    seen.add(sourceRelPath);
+    seen.add(sourceKey);
     backlinks.push({
-      relPath: sourceRelPath,
-      title: page.title,
-      excerpt: getLineExcerptAtOffset(page.content, hit.start),
+      target: document.target,
+      title: document.title,
+      excerpt: getLineExcerptAtOffset(document.content, hit.start),
     });
   }
 
   return backlinks.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-export function getWikiOutboundLinks(
-  sourceRelPath: string | null,
+export function getMarkdownOutboundLinks(
+  source: WikiLinkTarget | null,
   content: string,
-  pages: WikiBacklinkInput[],
+  documents: MarkdownLinkRelationDocument[],
   index: WikiIndex,
-): WikiOutboundLink[] {
-  const source = sourceRelPath ? normalizeWikiRelPath(sourceRelPath) : '';
-  const pageByRelPath = new Map(
-    pages.map((page) => [normalizeWikiRelPath(page.relPath), page]),
+): MarkdownOutboundLink[] {
+  const sourceKey = source ? getWikiLinkTargetKey(source) : '';
+  const documentByTargetKey = new Map(
+    documents.map((document) => [getWikiLinkTargetKey(document.target), document]),
   );
-  const links: WikiOutboundLink[] = [];
+  const links: MarkdownOutboundLink[] = [];
   const seen = new Set<string>();
 
   for (const hit of getMarkdownEditorLinkHits(content, index)) {
-    if (hit.action.kind !== 'wiki') continue;
-    const relPath = normalizeWikiRelPath(hit.action.relPath);
-    if (!relPath || relPath === source || seen.has(relPath)) continue;
-    const page = pageByRelPath.get(relPath);
-    if (!page) continue;
+    const target = getLinkTargetFromAction(hit.action);
+    if (!target) continue;
+    const targetKey = getWikiLinkTargetKey(target);
+    if (!targetKey || targetKey === sourceKey || seen.has(targetKey)) continue;
+    const document = documentByTargetKey.get(targetKey);
+    if (!document) continue;
 
-    seen.add(relPath);
+    seen.add(targetKey);
     links.push({
-      relPath,
-      title: page.title,
+      target: document.target,
+      title: document.title,
       excerpt: getLineExcerptAtOffset(content, hit.start),
     });
   }
@@ -394,21 +449,23 @@ export function getWikiOutboundLinks(
   return links.sort((a, b) => a.title.localeCompare(b.title));
 }
 
-export function getWikiLinkedPages(
-  sourceRelPath: string | null,
+export function getMarkdownLinkedDocuments(
+  source: WikiLinkTarget | null,
   content: string,
-  pages: WikiBacklinkInput[],
+  documents: MarkdownLinkRelationDocument[],
   index: WikiIndex,
-): WikiLinkedPage[] {
+): MarkdownLinkedDocument[] {
   const merged = new Map<string, {
+    target: WikiLinkTarget;
     title: string;
     outbound: boolean;
     inbound: boolean;
     excerpt: string;
   }>();
 
-  for (const link of getWikiOutboundLinks(sourceRelPath, content, pages, index)) {
-    merged.set(link.relPath, {
+  for (const link of getMarkdownOutboundLinks(source, content, documents, index)) {
+    merged.set(getWikiLinkTargetKey(link.target), {
+      target: link.target,
       title: link.title,
       outbound: true,
       inbound: false,
@@ -416,13 +473,15 @@ export function getWikiLinkedPages(
     });
   }
 
-  if (sourceRelPath) {
-    for (const backlink of getWikiBacklinks(sourceRelPath, pages, index)) {
-      const existing = merged.get(backlink.relPath);
+  if (source) {
+    for (const backlink of getMarkdownBacklinks(source, documents, index)) {
+      const key = getWikiLinkTargetKey(backlink.target);
+      const existing = merged.get(key);
       if (existing) {
         existing.inbound = true;
       } else {
-        merged.set(backlink.relPath, {
+        merged.set(key, {
+          target: backlink.target,
           title: backlink.title,
           outbound: false,
           inbound: true,
@@ -432,21 +491,80 @@ export function getWikiLinkedPages(
     }
   }
 
-  return Array.from(merged.entries())
-    .map(([relPath, link]) => {
-      const direction: WikiLinkedPage['direction'] = link.outbound && link.inbound
+  return Array.from(merged.values())
+    .map((link) => {
+      const direction: MarkdownLinkedDocument['direction'] = link.outbound && link.inbound
         ? 'bidirectional'
         : link.outbound
           ? 'outbound'
           : 'inbound';
       return {
-        relPath,
+        target: link.target,
         title: link.title,
         excerpt: link.excerpt,
         direction,
       };
     })
     .sort((a, b) => a.title.localeCompare(b.title));
+}
+
+export function getWikiBacklinks(
+  targetRelPath: string,
+  pages: WikiBacklinkInput[],
+  index: WikiIndex,
+): WikiBacklink[] {
+  return getMarkdownBacklinks(
+    { kind: 'wiki', relPath: targetRelPath },
+    wikiBacklinkInputsToRelationDocuments(pages),
+    index,
+  ).flatMap((link) => link.target.kind === 'wiki'
+    ? [{
+      relPath: normalizeWikiRelPath(link.target.relPath),
+      title: link.title,
+      excerpt: link.excerpt,
+    }]
+    : []);
+}
+
+export function getWikiOutboundLinks(
+  sourceRelPath: string | null,
+  content: string,
+  pages: WikiBacklinkInput[],
+  index: WikiIndex,
+): WikiOutboundLink[] {
+  return getMarkdownOutboundLinks(
+    sourceRelPath ? { kind: 'wiki', relPath: sourceRelPath } : null,
+    content,
+    wikiBacklinkInputsToRelationDocuments(pages),
+    index,
+  ).flatMap((link) => link.target.kind === 'wiki'
+    ? [{
+      relPath: normalizeWikiRelPath(link.target.relPath),
+      title: link.title,
+      excerpt: link.excerpt,
+    }]
+    : []);
+}
+
+export function getWikiLinkedPages(
+  sourceRelPath: string | null,
+  content: string,
+  pages: WikiBacklinkInput[],
+  index: WikiIndex,
+): WikiLinkedPage[] {
+  return getMarkdownLinkedDocuments(
+    sourceRelPath ? { kind: 'wiki', relPath: sourceRelPath } : null,
+    content,
+    wikiBacklinkInputsToRelationDocuments(pages),
+    index,
+  ).flatMap((link) => link.target.kind === 'wiki'
+    ? [{
+      relPath: normalizeWikiRelPath(link.target.relPath),
+      title: link.title,
+      excerpt: link.excerpt,
+      direction: link.direction,
+    }]
+    : []);
 }
 
 export function getActiveMarkdownWikiLinkCompletion(

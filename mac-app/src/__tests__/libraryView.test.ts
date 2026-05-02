@@ -21,6 +21,7 @@ import {
   getMarkdownTaskLines,
   getScrollRatio,
   getScrollTopForRatio,
+  isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
@@ -44,6 +45,7 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldOpenMarkdownLinkFromMouseDown,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
   splitFrontmatter,
@@ -57,7 +59,7 @@ import {
   addWikiPageToTree,
   applyPinnedSidebarOrder,
   applyTodoStateOverrideToItem,
-  ensureScratchpadNodePinned,
+  ensureScratchpadNodePresent,
   ensureScratchpadPinned,
   filterHiddenDefaultSidebarNodes,
   flattenBuiltinSidebarRoots,
@@ -266,6 +268,34 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
       ctrlKey: false,
       altKey: false,
       selectedItemType: 'artifact',
+    })).toBe(false);
+  });
+});
+
+describe('shouldOpenMarkdownLinkFromMouseDown', () => {
+  it('opens links on an ordinary primary click', () => {
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(true);
+  });
+
+  it('keeps modified and non-primary clicks available for browser/editor behavior', () => {
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      altKey: true,
+      ctrlKey: false,
+    })).toBe(false);
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      altKey: false,
+      ctrlKey: true,
+    })).toBe(false);
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 1,
+      altKey: false,
+      ctrlKey: false,
     })).toBe(false);
   });
 });
@@ -1041,6 +1071,24 @@ describe('document focus chrome activation', () => {
   });
 });
 
+describe('bookmarks canvas chrome activation', () => {
+  it('only hides the shared footer when bookmarks canvas is fullscreen', () => {
+    expect(isBookmarksCanvasChromeActive({
+      active: true,
+      selectedItemType: 'bookmarks',
+      isFullScreen: true,
+      bookmarksCanvasActive: true,
+    })).toBe(true);
+
+    expect(isBookmarksCanvasChromeActive({
+      active: true,
+      selectedItemType: 'bookmarks',
+      isFullScreen: false,
+      bookmarksCanvasActive: true,
+    })).toBe(false);
+  });
+});
+
 describe('librarian content top padding', () => {
   it('keeps rendered document content in place when focus chrome removes the toolbar row from layout', () => {
     const normalPadding = getLibrarianContentTopPadding({
@@ -1774,12 +1822,12 @@ describe('recursive sidebar tree helpers', () => {
     ])).toBe('/Users/afar/.fieldtheory/librarian/artifacts');
   });
 
-  it('pins an existing scratchpad directory before other built-in nodes', () => {
+  it('leaves an existing scratchpad directory in normal folder order', () => {
     const entries = dir('entries');
     const scratchpad = dir('scratchpad');
-    const result = ensureScratchpadNodePinned([entries, scratchpad], root);
-    expect(result[0]).toBe(scratchpad);
-    expect(result[1]).toBe(entries);
+    const result = ensureScratchpadNodePresent([entries, scratchpad], root);
+    expect(result[0]).toBe(entries);
+    expect(result[1]).toBe(scratchpad);
   });
 
   it('expands scratchpad ancestors for a newly selected wiki file', () => {

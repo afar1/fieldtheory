@@ -46,14 +46,16 @@ export class TodoStore extends EventEmitter {
   private authManager: AuthManager;
   private todos: Todo[] = [];
   private channel: RealtimeChannel | null = null;
+  private readonly handleSignedIn = (): void => this.subscribe();
+  private readonly handleSignedOut = (): void => this.unsubscribe();
 
   constructor(authManager: AuthManager) {
     super();
     this.authManager = authManager;
 
-    // Subscribe to auth changes
-    this.authManager.on('signedIn', () => this.subscribe());
-    this.authManager.on('signedOut', () => this.unsubscribe());
+    // Subscribe to auth changes.
+    this.authManager.on('signedIn', this.handleSignedIn);
+    this.authManager.on('signedOut', this.handleSignedOut);
 
     // Subscribe immediately if already authenticated
     if (this.authManager.isAuthenticated()) {
@@ -320,6 +322,8 @@ export class TodoStore extends EventEmitter {
 
   destroy(): void {
     this.unsubscribe();
+    this.authManager.off('signedIn', this.handleSignedIn);
+    this.authManager.off('signedOut', this.handleSignedOut);
     this.removeAllListeners();
   }
 }

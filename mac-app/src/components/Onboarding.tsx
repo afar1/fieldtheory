@@ -775,23 +775,6 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
         setIsVerifyingOtp(false);
         setIsSettingUpSession(true);
 
-        // Main process already has session from verifyOtp - no need to sync to renderer's Supabase client.
-        // Forward session to main process for tier sync
-        try {
-          await Promise.race([
-            window.clipboardAPI?.setSyncSession?.(
-              result.session.access_token,
-              result.session.refresh_token
-            ),
-            new Promise((_, reject) =>
-              setTimeout(() => reject(new Error('Session sync timeout')), 10000)
-            ),
-          ]);
-        } catch (syncError) {
-          console.warn('[Onboarding] Session sync to main process failed, continuing:', syncError);
-          // Continue anyway - the renderer has the session, main process will recover on next sync
-        }
-
         // Fetch profile to check if returning user (has name) or new user
         let hasExistingProfile = false;
         if (supabase && result.session.user?.id) {
@@ -1276,12 +1259,10 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
 
     const runTests = async () => {
       if (!window.hotkeyAPI?.testHotkey) {
-        console.log('[Onboarding] hotkeyAPI.testHotkey not available, skipping conflict check');
         return;
       }
 
       setTestingHotkeys(true);
-      console.log('[Onboarding] Testing hotkeys for conflicts...');
 
       const hotkeysToTest = [
         { id: 'history', key: historyHotkey },
@@ -1297,7 +1278,6 @@ function ShortcutsPhase({ onFinish, theme, styles }: ShortcutsPhaseProps) {
             // Short timeout since we're just checking registration, not waiting for user input
             const result = await window.hotkeyAPI.testHotkey(key, 500);
             results[id] = result;
-            console.log(`[Onboarding] Hotkey test ${id} (${key}):`, result);
           } catch (err) {
             console.error(`[Onboarding] Failed to test hotkey ${id}:`, err);
             results[id] = null;

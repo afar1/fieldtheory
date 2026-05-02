@@ -36,6 +36,7 @@ import {
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
+  isSidebarToggleShortcut,
   restoreRenderedEditClickMode,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
@@ -84,17 +85,19 @@ import {
   classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
-  getWikiLinkedPages,
+  getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  getWikiLinkTargetKey,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   type LinkAction,
-  type WikiBacklinkInput,
-  type WikiLinkedPage,
+  type MarkdownLinkedDocument,
+  type MarkdownLinkRelationDocument,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
+  type WikiLinkTarget,
 } from '../utils/wikiLinks';
 
 type FieldTheoryMarkdownTarget = {
@@ -103,7 +106,7 @@ type FieldTheoryMarkdownTarget = {
   contentMode?: 'rendered' | 'markdown';
 };
 
-type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
 const COPY_PATH_FEEDBACK_MS = 1600;
 
 function libraryRenameTraceEnabled(): boolean {
@@ -253,6 +256,14 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
     && (input.selectedItemType === 'wiki' || input.selectedItemType === 'external');
 }
 
+export function shouldOpenMarkdownLinkFromMouseDown(input: {
+  button: number;
+  altKey: boolean;
+  ctrlKey: boolean;
+}): boolean {
+  return input.button === 0 && !input.altKey && !input.ctrlKey;
+}
+
 export function isLibrarianDocumentFocusChromeActive(input: {
   canUseFocusImmersive: boolean;
   isFullScreen: boolean;
@@ -265,6 +276,18 @@ export function isLibrarianDocumentFocusChromeActive(input: {
     && !input.isFullScreen
     && input.sidebarCollapsed
     && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
+}
+
+export function isBookmarksCanvasChromeActive(input: {
+  active: boolean;
+  selectedItemType: LibrarianSelectedItemType;
+  isFullScreen: boolean;
+  bookmarksCanvasActive: boolean;
+}): boolean {
+  return input.active
+    && input.selectedItemType === 'bookmarks'
+    && input.isFullScreen
+    && input.bookmarksCanvasActive;
 }
 
 export function isTextEntryInputType(type: string | null | undefined): boolean {
@@ -1372,6 +1395,7 @@ interface LibrarianViewProps {
   onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean) => void;
   onBookmarksCanvasActiveChange?: (active: boolean) => void;
   onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
+  onSelectedItemTypeChange?: (type: LibrarianSelectedItemType) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialOpenTarget?: FieldTheoryMarkdownTarget | null;
   initialFullScreen?: boolean; // Start in legacy fullscreen/immersive mode when supported.
@@ -1468,16 +1492,22 @@ function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode |
   return { checkbox, content };
 }
 
-const WIKI_LINK_DIRECTION_MARKER: Record<WikiLinkedPage['direction'], string> = {
+const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
   outbound: '→',
   inbound: '←',
   bidirectional: '↔',
 };
 
-const WIKI_LINK_DIRECTION_LABEL: Record<WikiLinkedPage['direction'], string> = {
+const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
   outbound: 'This document links out',
   inbound: 'Links back to this document',
   bidirectional: 'Linked both ways',
+};
+
+const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
+  wiki: 'Wiki',
+  artifact: 'Artifact',
+  command: 'Command',
 };
 
 function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoint | null {
@@ -1500,7 +1530,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoi
   };
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -1605,6 +1635,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
+  const renderedLinkMouseDownHandledRef = useRef(false);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
   const renderedSaveTimerRef = useRef<number | null>(null);
   const pendingRenderedSaveRef = useRef<(() => void) | null>(null);
@@ -1678,8 +1709,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ));
   const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
+  const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
+    active,
+    selectedItemType,
+    isFullScreen,
+    bookmarksCanvasActive,
+  });
   const focusChromeActive =
-    (selectedItemType === 'bookmarks' && isFullScreen && bookmarksCanvasActive) ||
+    bookmarksFullscreenChromeActive ||
     isLibrarianDocumentFocusChromeActive({
       canUseFocusImmersive,
       isFullScreen,
@@ -1746,7 +1783,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
-  const [wikiLinkRelationPages, setWikiLinkRelationPages] = useState<WikiBacklinkInput[]>([]);
+  const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
@@ -1827,6 +1864,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
     }
   }, [createUnresolvedWikiLink, onOpenCommandPath, openWikiPage, selectArtifactPath]);
+
+  const openMarkdownLinkTarget = useCallback((target: WikiLinkTarget) => {
+    switch (target.kind) {
+      case 'wiki':
+        openWikiPage(target.relPath);
+        return;
+      case 'artifact':
+        selectArtifactPath(target.path);
+        return;
+      case 'command':
+        onOpenCommandPath?.(target.path);
+        return;
+    }
+  }, [onOpenCommandPath, openWikiPage, selectArtifactPath]);
 
   const currentNavigationEntry = useMemo((): LibrarianNavigationEntry | null => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -1962,6 +2013,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [selectedItemType, bookmarksEverShown]);
 
   useEffect(() => {
+    onSelectedItemTypeChange?.(active ? selectedItemType : null);
+  }, [active, onSelectedItemTypeChange, selectedItemType]);
+
+  useEffect(() => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
       persistLibrarianSelection(localStorage, { type: 'wiki', relPath: wikiSelectedRelPath });
       return;
@@ -2077,8 +2132,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, focusChromeActive, focusChromeVisualVisible, onFocusChromeActiveChange]);
 
   useEffect(() => {
-    onBookmarksCanvasActiveChange?.(active && selectedItemType === 'bookmarks' && bookmarksCanvasActive);
-  }, [active, bookmarksCanvasActive, onBookmarksCanvasActiveChange, selectedItemType]);
+    onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
+  }, [bookmarksFullscreenChromeActive, onBookmarksCanvasActiveChange]);
 
   useEffect(() => {
     return () => {
@@ -2096,10 +2151,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => window.librarianAPI?.setImmersiveDismissable?.(false);
   }, [active, isFullScreen]);
 
-  // Push 'library' size-key for every librarian section. BookmarksPane
-  // overrides this for its canvas mode so it can share Draw's window mechanics.
+  // Push 'library' size-key for document sections. Bookmarks keeps the
+  // incoming window size in list mode and only overrides size for canvas.
   useEffect(() => {
     if (!active || preserveCurrentSizeKey) return;
+    if (selectedItemType === 'bookmarks') return;
     window.librarianAPI?.setSizeKey?.('library');
   }, [active, preserveCurrentSizeKey, selectedItemType]);
 
@@ -2243,14 +2299,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const commitTitleEdit = useCallback(async (options: { focusBody?: boolean } = {}) => {
     if (!activeReading || !activeTitlePath || titleCommitInFlightRef.current) return;
     const trimmed = (titleInputRef.current?.value ?? titleDraft).trim();
-    setEditingTitlePath(null);
     if (!trimmed || trimmed === activeReading.title) {
+      setEditingTitlePath(null);
       setTitleDraft(activeReading.title);
       if (options.focusBody) focusMarkdownBody();
       return;
     }
 
     titleCommitInFlightRef.current = true;
+    setTitleDraft(trimmed);
     try {
       await flushCurrentEdit();
 
@@ -2313,6 +2370,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
     } finally {
       titleCommitInFlightRef.current = false;
+      setEditingTitlePath(null);
     }
 
     if (options.focusBody) focusMarkdownBody();
@@ -2528,24 +2586,58 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   );
 
   useEffect(() => {
-    if (!active || wikiIndexPages.length === 0) {
-      setWikiLinkRelationPages([]);
+    if (!active) {
+      setMarkdownLinkRelationDocuments([]);
       return;
     }
 
     let cancelled = false;
     const load = async () => {
-      const pages = await Promise.all(
+      const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
         wikiIndexPages.map(async (page) => {
           const fullPage = await window.wikiAPI?.getPage(page.relPath);
           return fullPage
-            ? { relPath: fullPage.relPath, title: fullPage.title, content: fullPage.content }
+            ? {
+              target: { kind: 'wiki' as const, relPath: fullPage.relPath },
+              title: fullPage.title,
+              content: fullPage.content,
+            }
+            : null;
+        }),
+      );
+      const artifactDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        readings.map(async (reading) => {
+          const fullReading = await window.librarianAPI?.getReading(reading.path);
+          return fullReading
+            ? {
+              target: { kind: 'artifact' as const, path: fullReading.path },
+              title: fullReading.title,
+              content: fullReading.content,
+            }
+            : null;
+        }),
+      );
+      const commandPagesByPath = new Map<string, WikiIndexInput>();
+      for (const command of commandIndexPages) {
+        const commandPath = command.commandPath;
+        if (commandPath && !commandPagesByPath.has(commandPath)) commandPagesByPath.set(commandPath, command);
+      }
+      const commandDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        Array.from(commandPagesByPath.entries()).map(async ([commandPath, command]) => {
+          const fullCommand = await window.commandsAPI?.getCommandByPath(commandPath);
+          return fullCommand
+            ? {
+              target: { kind: 'command' as const, path: fullCommand.filePath },
+              title: fullCommand.displayName || command.title,
+              content: fullCommand.content,
+            }
             : null;
         }),
       );
       if (cancelled) return;
-      setWikiLinkRelationPages(
-        pages.filter((page): page is WikiBacklinkInput => page !== null),
+      setMarkdownLinkRelationDocuments(
+        [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
+          .filter((document): document is MarkdownLinkRelationDocument => document !== null),
       );
     };
 
@@ -2553,17 +2645,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => {
       cancelled = true;
     };
-  }, [active, wikiIndexPages]);
+  }, [active, commandIndexPages, readings, wikiIndexPages]);
 
-  const wikiLinkedPages = useMemo<WikiLinkedPage[]>(() => {
+  const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) return { kind: 'wiki', relPath: wikiSelectedRelPath };
+    if (selectedItemType === 'artifact' && selectedPath) return { kind: 'artifact', path: selectedPath };
+    return null;
+  }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
+
+  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!activeReading) return [];
-    return getWikiLinkedPages(
-      selectedItemType === 'wiki' ? wikiSelectedRelPath : null,
+    return getMarkdownLinkedDocuments(
+      activeLinkTarget,
       activeReading.content,
-      wikiLinkRelationPages,
+      markdownLinkRelationDocuments,
       wikiIndex,
     );
-  }, [activeReading, selectedItemType, wikiIndex, wikiLinkRelationPages, wikiSelectedRelPath]);
+  }, [activeLinkTarget, activeReading, markdownLinkRelationDocuments, wikiIndex]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -3289,7 +3387,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ]);
 
   const handleMarkdownCodeEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
-    if (!event.metaKey || event.altKey || event.ctrlKey) return false;
+    if (!shouldOpenMarkdownLinkFromMouseDown(event)) return false;
     const action = getMarkdownEditorLinkActionAtOffset(editContent, offset, wikiIndex);
     if (action.kind === 'noop') return false;
     event.preventDefault();
@@ -4209,6 +4307,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         toggleFocusChromeShortcut();
         return;
       }
+      if (selectedItemType === 'bookmarks' && isSidebarToggleShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        toggleImmersive();
+        return;
+      }
 
       // Cmd+. - toggle between rendered and markdown.
       if (isMarkdownModeToggleShortcut(e)) {
@@ -4397,7 +4502,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -5576,6 +5681,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               }}
               onClick={(e) => {
                 if (!activeReading) return;
+                const target = e.target instanceof Element ? e.target : null;
+                if (target?.closest('a')) return;
                 const behavior = getRenderedMarkdownClickBehavior(e, renderedEditClickMode);
                 if (!behavior) return;
                 const caret = getRenderedTextCaretFromPoint(e);
@@ -5780,6 +5887,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   },
                   a: ({ href, children }) => {
                     const unresolved = isUnresolvedWikiHref(href);
+                    const openAnchorLink = (target: HTMLAnchorElement) => {
+                      // Markdown like `[categories/tool]()` renders an
+                      // <a> with an empty href — fall back to the link
+                      // text so these still resolve through the index.
+                      const effectiveHref = href && href.trim()
+                        ? href
+                        : (target.textContent?.trim() ?? '');
+                      const action = classifyLinkHref(effectiveHref, wikiIndex);
+                      openLinkAction(action);
+                    };
                     return (
                       <a
                         href={href}
@@ -5790,17 +5907,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                           textUnderlineOffset: '2px',
                           cursor: 'pointer',
                         }}
-                        onClick={(e) => {
+                        onMouseDown={(e) => {
+                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
                           e.preventDefault();
                           e.stopPropagation();
-                          // Markdown like `[categories/tool]()` renders an
-                          // <a> with an empty href — fall back to the link
-                          // text so these still resolve through the index.
-                          const effectiveHref = href && href.trim()
-                            ? href
-                            : (e.currentTarget.textContent?.trim() ?? '');
-                          const action = classifyLinkHref(effectiveHref, wikiIndex);
-                          openLinkAction(action);
+                          renderedLinkMouseDownHandledRef.current = true;
+                          openAnchorLink(e.currentTarget);
+                        }}
+                        onClick={(e) => {
+                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (renderedLinkMouseDownHandledRef.current) {
+                            renderedLinkMouseDownHandledRef.current = false;
+                            return;
+                          }
+                          openAnchorLink(e.currentTarget);
                         }}
                       >
                         {children}
@@ -5811,7 +5933,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               >
                 {displayContent}
               </FieldTheoryProse>
-              {wikiLinkedPages.length > 0 && (
+              {linkedDocuments.length > 0 && (
                 <section
                   aria-label="Linked"
                   style={{
@@ -5832,16 +5954,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     Linked
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {wikiLinkedPages.map((link) => (
+                    {linkedDocuments.map((link) => (
                       <button
-                        key={link.relPath}
+                        key={getWikiLinkTargetKey(link.target)}
                         type="button"
                         title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
                         onMouseDown={(event) => event.stopPropagation()}
                         onClick={(event) => {
                           event.preventDefault();
                           event.stopPropagation();
-                          openWikiPage(link.relPath);
+                          openMarkdownLinkTarget(link.target);
                         }}
                         style={{
                           display: 'grid',
@@ -5872,6 +5994,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         <span style={{ minWidth: 0 }}>
                           <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
                             {link.title}
+                            <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
+                              {WIKI_LINK_TARGET_LABEL[link.target.kind]}
+                            </span>
                           </span>
                           {link.excerpt && (
                             <span

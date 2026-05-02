@@ -38,4 +38,11 @@ describe('nextTopNavViewMode', () => {
     expect(shouldCycleTopNavWithControlTab('INPUT')).toBe(false);
     expect(shouldCycleTopNavWithControlTab('TEXTAREA')).toBe(false);
   });
+
+  it('lets top-nav search fields escape and cycle with Control+Tab', () => {
+    const input = document.createElement('input');
+    input.setAttribute('data-fieldtheory-top-nav-search', 'true');
+
+    expect(shouldCycleTopNavWithControlTab(input)).toBe(true);
+  });
 });

@@ -213,32 +213,24 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
       setContacts(contactList);
 
       // Load feedback based on admin status.
-      console.log('[DMsView] loadData: admin =', admin);
       if (admin) {
-        console.log('[DMsView] Loading as admin');
         const allFeedback = await window.socialAPI.getAllFeedback();
         setFeedback(allFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, allFeedback);
 
         // Mark ALL unread feedback (including replies) as read when admin views the list.
         // This mirrors what regular users do with markAllFeedbackAsRead.
-        console.log('[FeedbackDot] Admin calling markAllFeedbackAsRead...');
-        window.socialAPI.markAllFeedbackAsRead().then(success => {
-          console.log('[FeedbackDot] Admin markAllFeedbackAsRead result:', success);
-        }).catch(err => {
+        window.socialAPI.markAllFeedbackAsRead().catch(err => {
           console.error('[FeedbackDot] Admin markAllFeedbackAsRead failed:', err);
         });
       } else {
-        console.log('[DMsView] Loading as regular user');
         const myFeedback = await window.socialAPI.getMyFeedback();
         setFeedback(myFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, myFeedback);
 
         // Mark all feedback messages as read when user views the list.
         // This clears the notification badge for replies from admin.
-        console.log('[FeedbackDot] DMsView calling markAllFeedbackAsRead...');
         window.socialAPI.markAllFeedbackAsRead().then(success => {
-          console.log('[FeedbackDot] DMsView markAllFeedbackAsRead result:', success);
           if (!success) {
             console.warn('[FeedbackDot] DMsView markAllFeedbackAsRead returned false');
           }
@@ -295,11 +287,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
         unreadIds.push(reply.id);
       }
     }
-    console.log('[FeedbackDot] loadFeedbackDetails: unread replies to mark:', unreadIds);
     if (unreadIds.length > 0) {
-      window.socialAPI.markAsReadBatch(unreadIds).then(success => {
-        console.log('[FeedbackDot] loadFeedbackDetails markAsReadBatch result:', success);
-      });
+      window.socialAPI.markAsReadBatch(unreadIds);
     }
   }, []);
 
@@ -329,8 +318,6 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
     if (!window.socialAPI) return;
 
     const unsubscribe = window.socialAPI.onMessageReceived((message) => {
-      console.log('[DMsView] Message received:', message.type, message.id);
-
       if (message.type === 'dm') {
         // Update conversations list with new message
         setConversations(prev => {
@@ -2065,4 +2052,3 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
     </div>
   );
 }
-

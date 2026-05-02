@@ -294,9 +294,6 @@ export class TrayManager {
     // Check priority mic quota status.
     const quotas = this.quotaManager?.getQuotas();
     const priorityMicQuotaExhausted = quotas && !quotas.priorityMic.allowed;
-    const priorityMicQuotaLabel = this.quotaManager
-      ? this.quotaManager.formatPriorityMicUsage()
-      : null;
 
     // Build submenu items for priority mic selection.
     const priorityMicSubmenu: MenuItemConstructorOptions[] = [
@@ -325,15 +322,6 @@ export class TrayManager {
       })),
     ];
 
-    // Add quota info at the bottom of submenu (for free tier).
-    if (priorityMicQuotaLabel && quotas && quotas.tier === 'free') {
-      priorityMicSubmenu.push({ type: 'separator' });
-      priorityMicSubmenu.push({
-        label: priorityMicQuotaExhausted ? `Limit reached` : priorityMicQuotaLabel,
-        enabled: false,
-      });
-    }
-
     // Menu structure: Set Priority Mic submenu, then Current mic, then helper text.
     const items: MenuItemConstructorOptions[] = [
       {
@@ -348,7 +336,7 @@ export class TrayManager {
       },
       {
         label: priorityMicQuotaExhausted
-          ? 'Limit reached - upgrade to Pro'
+          ? 'Priority mic temporarily unavailable'
           : priorityDeviceId
             ? 'Will auto-connect when plugged in'
             : 'Select a mic to lock it',
@@ -428,37 +416,6 @@ export class TrayManager {
     });
 
     items.push({ type: 'separator' });
-
-    // Show quota usage for non-pro users
-    if (this.quotaManager) {
-      const quotas = this.quotaManager.getQuotas();
-      const tier = quotas.tier;
-
-      if (tier !== 'pro') {
-        const micMinutes = Math.floor(quotas.priorityMic.used / 60);
-        const micLimitNum = quotas.priorityMic.limit === Infinity ? Infinity : Math.floor(quotas.priorityMic.limit / 60);
-        const micLimit = micLimitNum === Infinity ? '∞' : micLimitNum;
-        const stackUsed = quotas.autoStack.used;
-        const stackLimitNum = quotas.autoStack.limit === Infinity ? Infinity : quotas.autoStack.limit;
-        const stackLimit = stackLimitNum === Infinity ? '∞' : stackLimitNum;
-
-        // Cap displayed usage at limit (don't show over-usage in menu bar)
-        const displayMicMinutes = micLimitNum === Infinity ? micMinutes : Math.min(micMinutes, micLimitNum);
-        const displayStackUsed = stackLimitNum === Infinity ? stackUsed : Math.min(stackUsed, stackLimitNum);
-
-        items.push({
-          label: `Usage: ${displayMicMinutes}/${micLimit} mins · ${displayStackUsed}/${stackLimit} stacks`,
-          enabled: false,
-        });
-      } else {
-        items.push({
-          label: 'Pro Plan: Unlimited',
-          enabled: false,
-        });
-      }
-
-      items.push({ type: 'separator' });
-    }
 
     items.push({
       label: 'Settings…',

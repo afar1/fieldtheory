@@ -43,7 +43,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '2', capturedAtMs: 2000 },
     ];
     expect(insertFigureReferencesInline('hello world', [], screenshots))
-      .toBe('hello world [Figure 1] [Figure 2]');
+      .toBe('hello world [figure 1] [figure 2]');
   });
 
   it('places figure after the segment active during capture', () => {
@@ -56,7 +56,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '1', capturedAtMs: 2000 }, // during first segment
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('first segment [Figure 1] second segment third segment');
+      .toBe('first segment [figure 1] second segment third segment');
   });
 
   it('places figure in second segment based on timing', () => {
@@ -69,7 +69,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '1', capturedAtMs: 4500 }, // during second segment
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('first segment second segment [Figure 1] third segment');
+      .toBe('first segment second segment [figure 1] third segment');
   });
 
   it('places multiple figures in different segments', () => {
@@ -83,7 +83,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '2', capturedAtMs: 5000 }, // second segment
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('first segment [Figure 1] second segment [Figure 2] third segment');
+      .toBe('first segment [figure 1] second segment [figure 2] third segment');
   });
 
   it('groups multiple figures in same segment', () => {
@@ -96,7 +96,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '2', capturedAtMs: 3000 },
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('first segment [Figure 1] [Figure 2] second segment');
+      .toBe('first segment [figure 1] [figure 2] second segment');
   });
 
   it('attaches late screenshot to last segment', () => {
@@ -108,7 +108,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '1', capturedAtMs: 99000 }, // way after all segments
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('first second [Figure 1]');
+      .toBe('first second [figure 1]');
   });
 
   it('strips pre-existing figure references from text and segments', () => {
@@ -120,7 +120,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '1', capturedAtMs: 2000 },
     ];
     expect(insertFigureReferencesInline('original [Figure 1] text', segments, screenshots))
-      .toBe('first segment [Figure 1] second segment');
+      .toBe('first segment [figure 1] second segment');
   });
 
   it('sorts screenshots by capture time regardless of input order', () => {
@@ -133,7 +133,7 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '1', capturedAtMs: 1000 },
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('first [Figure 1] second [Figure 2]');
+      .toBe('first [figure 1] second [figure 2]');
   });
 
   it('filters out empty segments', () => {
@@ -146,6 +146,6 @@ describe('insertFigureReferencesInline', () => {
       { figureLabel: '1', capturedAtMs: 3000 },
     ];
     expect(insertFigureReferencesInline('ignored', segments, screenshots))
-      .toBe('real segment [Figure 1]');
+      .toBe('real segment [figure 1]');
   });
 });
