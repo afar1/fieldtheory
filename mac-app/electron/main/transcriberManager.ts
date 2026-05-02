@@ -3846,7 +3846,7 @@ export class TranscriberManager extends EventEmitter {
 
       if (this.quotaManager) {
         if (!this.quotaManager.isAllowed('auto_stack_sessions')) {
-          // Quota exhausted - don't stack, emit upgrade prompt.
+          // Quota exhausted - don't stack, emit temporary status.
           canAutoStack = false;
           this.emit('quotaExhausted', this.quotaManager.getFeatureStatus('auto_stack_sessions'));
         }

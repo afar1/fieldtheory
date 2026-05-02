@@ -92,7 +92,8 @@ window.sharedClipboardAPI.onTeamItemAdded((item) => { /* update state */ });
 
 ### 2. Supabase Realtime (Critical Pattern)
 
-For collaborative features (SharedContextView, DMs), we use **Supabase Realtime** instead of polling:
+For collaborative features that are enabled, we use **Supabase Realtime** instead of polling.
+Shared clipboard is historical and disabled for release; clipboard items must remain local-only.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐

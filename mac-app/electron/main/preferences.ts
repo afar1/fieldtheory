@@ -194,6 +194,10 @@ interface Preferences {
   // In-app Performance HUD - lightweight CPU/RAM/FPS overlay for debugging.
   performanceHudEnabled?: boolean;
 
+  // Hidden internal switch for unfinished Field Theory cloud sync surfaces.
+  // Add a Supabase allowlist before enabling this outside dev.
+  fieldTheoryInternalSyncEnabled?: boolean;
+
   // Launch at login - start Field Theory automatically when macOS starts.
   launchAtLogin?: boolean;
 
@@ -344,6 +348,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Performance HUD - disabled by default.
   performanceHudEnabled: false,
+
+  // Field Theory cloud sync is internal-only for this release.
+  fieldTheoryInternalSyncEnabled: false,
 
   // Word substitutions - empty by default.
   wordSubstitutions: [],

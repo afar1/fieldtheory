@@ -11,9 +11,9 @@
 export const MESSAGES = {
   // Recording notes (yellow info, 3s auto-dismiss)
   recordingNote: {
-    priorityMicLimitReached: 'Priority mic limit reached (upgrade)',
+    priorityMicLimitReached: 'Priority mic temporarily unavailable',
     autoStackLimitReached: (used: number, limit: number) =>
-      `Auto-stack limit reached (${used}/${limit})(upgrade)`,
+      `Auto-stack temporarily unavailable (${used}/${limit})`,
     tooManyImages: 'Note: Stacking 10+ images, some apps may have limits',
     autoImproveEnabled: 'Auto-improve enabled',
     autoImproveDisabled: 'Auto-improve disabled',
@@ -21,7 +21,7 @@ export const MESSAGES = {
 
   // Critical messages (orange dot, 2.5s auto-dismiss)
   critical: {
-    improvementQuotaExhausted: 'Auto-improve limit reached (upgrade)',
+    improvementQuotaExhausted: 'Auto-improve temporarily unavailable',
     noLlmConfigured: 'Download a model in Settings',
     pastingManyImages: 'Pasting 10+ images, some apps may have limits',
     noTargetInputField: 'No input field focused',

@@ -171,31 +171,23 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
       setFeedbackFilter(admin ? 'open' : 'all');
 
       // Load feedback based on admin status.
-      console.log('[FeedbackView] loadData: admin =', admin);
       if (admin) {
-        console.log('[FeedbackView] Loading as admin');
         const allFeedback = await window.socialAPI.getAllFeedback();
         setFeedback(allFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, allFeedback);
 
         // Mark ALL unread feedback (including replies) as read when admin views the list.
-        console.log('[FeedbackView] Admin calling markAllFeedbackAsRead...');
-        window.socialAPI.markAllFeedbackAsRead().then(success => {
-          console.log('[FeedbackView] Admin markAllFeedbackAsRead result:', success);
-        }).catch(err => {
+        window.socialAPI.markAllFeedbackAsRead().catch(err => {
           console.error('[FeedbackView] Admin markAllFeedbackAsRead failed:', err);
         });
       } else {
-        console.log('[FeedbackView] Loading as regular user');
         const myFeedback = await window.socialAPI.getMyFeedback();
         setFeedback(myFeedback);
         setCachedData(FEEDBACK_CACHE_KEY, myFeedback);
 
         // Mark all feedback messages as read when user views the list.
         // This clears the notification badge for replies from admin.
-        console.log('[FeedbackView] Calling markAllFeedbackAsRead...');
         window.socialAPI.markAllFeedbackAsRead().then(success => {
-          console.log('[FeedbackView] markAllFeedbackAsRead result:', success);
           if (!success) {
             console.warn('[FeedbackView] markAllFeedbackAsRead returned false');
           }
@@ -236,11 +228,8 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
         unreadIds.push(reply.id);
       }
     }
-    console.log('[FeedbackView] loadFeedbackDetails: unread replies to mark:', unreadIds);
     if (unreadIds.length > 0) {
-      window.socialAPI.markAsReadBatch(unreadIds).then(success => {
-        console.log('[FeedbackView] loadFeedbackDetails markAsReadBatch result:', success);
-      });
+      window.socialAPI.markAsReadBatch(unreadIds);
     }
   }, []);
 
@@ -262,8 +251,6 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
     if (!window.socialAPI) return;
 
     const unsubscribe = window.socialAPI.onMessageReceived((message) => {
-      console.log('[FeedbackView] Message received:', message.type, message.id);
-
       if (message.type === 'feedback') {
         // Add to feedback list if it's a new feedback item or reply
         if (!message.parentMessageId) {

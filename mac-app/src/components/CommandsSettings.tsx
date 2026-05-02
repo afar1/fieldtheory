@@ -41,6 +41,7 @@ export default function CommandsSettings() {
   // Mobile sync state.
   const [syncingDir, setSyncingDir] = useState<string | null>(null);
   const [remoteCount, setRemoteCount] = useState<number>(0);
+  const [fieldTheorySyncEnabled, setFieldTheorySyncEnabled] = useState(false);
 
   // Count commands per directory.
   const commandCountsByDir = useMemo(() => {
@@ -61,11 +62,13 @@ export default function CommandsSettings() {
     Promise.all([
       window.commandsAPI.getWatchedDirs(),
       window.commandsAPI.getCommands(),
-      window.commandsAPI.getRemoteCommandCount(),
-    ]).then(([dirs, cmds, count]) => {
+      window.fieldTheorySyncAPI?.getStatus(),
+    ]).then(async ([dirs, cmds, syncStatus]) => {
+      const syncEnabled = syncStatus?.enabled === true;
       setWatchedDirs(dirs || []);
       setCommands(cmds);
-      setRemoteCount(count);
+      setFieldTheorySyncEnabled(syncEnabled);
+      setRemoteCount(syncEnabled ? await window.commandsAPI!.getRemoteCommandCount() : 0);
       setLoading(false);
     }).catch((err) => {
       console.error('Failed to load commands settings:', err);
@@ -271,51 +274,52 @@ export default function CommandsSettings() {
                         Remove
                       </button>
                     </div>
-                    {/* Mobile sync toggle */}
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      marginTop: '6px',
-                      paddingTop: '6px',
-                      borderTop: `1px dashed ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                    }}>
-                      <span style={{
-                        fontSize: '11px',
-                        color: theme.textSecondary,
+                    {fieldTheorySyncEnabled && (
+                      <div style={{
                         display: 'flex',
                         alignItems: 'center',
-                        gap: '4px',
+                        justifyContent: 'space-between',
+                        marginTop: '6px',
+                        paddingTop: '6px',
+                        borderTop: `1px dashed ${theme.isDark ? theme.border : '#e5e7eb'}`,
                       }}>
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
-                          <line x1="12" y1="18" x2="12" y2="18"/>
-                        </svg>
-                        Available on mobile
-                      </span>
-                      <button
-                        onClick={() => handleToggleMobileSync(dir.path, !dir.mobileSyncEnabled)}
-                        disabled={isSyncing}
-                        style={{
-                          padding: '3px 8px',
-                          fontSize: '10px',
-                          fontWeight: 500,
-                          color: dir.mobileSyncEnabled ? '#fff' : theme.textSecondary,
-                          backgroundColor: dir.mobileSyncEnabled
-                            ? (theme.isDark ? '#059669' : '#10b981')
-                            : 'transparent',
-                          border: dir.mobileSyncEnabled
-                            ? 'none'
-                            : `1px solid ${theme.border}`,
-                          borderRadius: '4px',
-                          cursor: isSyncing ? 'not-allowed' : 'pointer',
-                          opacity: isSyncing ? 0.6 : 1,
-                          minWidth: '50px',
-                        }}
-                      >
-                        {isSyncing ? '...' : dir.mobileSyncEnabled ? 'On' : 'Off'}
-                      </button>
-                    </div>
+                        <span style={{
+                          fontSize: '11px',
+                          color: theme.textSecondary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                        }}>
+                          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="5" y="2" width="14" height="20" rx="2" ry="2"/>
+                            <line x1="12" y1="18" x2="12" y2="18"/>
+                          </svg>
+                          Available on mobile
+                        </span>
+                        <button
+                          onClick={() => handleToggleMobileSync(dir.path, !dir.mobileSyncEnabled)}
+                          disabled={isSyncing}
+                          style={{
+                            padding: '3px 8px',
+                            fontSize: '10px',
+                            fontWeight: 500,
+                            color: dir.mobileSyncEnabled ? '#fff' : theme.textSecondary,
+                            backgroundColor: dir.mobileSyncEnabled
+                              ? (theme.isDark ? '#059669' : '#10b981')
+                              : 'transparent',
+                            border: dir.mobileSyncEnabled
+                              ? 'none'
+                              : `1px solid ${theme.border}`,
+                            borderRadius: '4px',
+                            cursor: isSyncing ? 'not-allowed' : 'pointer',
+                            opacity: isSyncing ? 0.6 : 1,
+                            minWidth: '50px',
+                          }}
+                        >
+                          {isSyncing ? '...' : dir.mobileSyncEnabled ? 'On' : 'Off'}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}

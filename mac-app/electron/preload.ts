@@ -1731,33 +1731,36 @@ const clipboardAPI: ClipboardAPI = {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_USE_IMPROVED_VERSION, itemId, useImproved);
   },
 
-  // Mobile sync operations - sync iOS transcriptions to clipboard history
+  // Mobile transcript sync is disabled for public release.
   setSyncSession: async (accessToken: string, refreshToken: string): Promise<boolean> => {
-    return ipcRenderer.invoke('clipboard:setSyncSession', accessToken, refreshToken);
+    void accessToken;
+    void refreshToken;
+    return false;
   },
 
   clearSyncSession: async (): Promise<boolean> => {
-    return ipcRenderer.invoke('clipboard:clearSyncSession');
+    return true;
   },
 
   getSyncSession: async (): Promise<{ accessToken: string; refreshToken: string; expiresAt: number; user: { id: string; email: string } | null } | null> => {
-    return ipcRenderer.invoke('clipboard:getSyncSession');
+    return null;
   },
 
   syncMobileTranscripts: async (): Promise<number> => {
-    return ipcRenderer.invoke('clipboard:syncMobileTranscripts');
+    return 0;
   },
 
   forceSyncAll: async (): Promise<number> => {
-    return ipcRenderer.invoke('clipboard:forceSyncAll');
+    return 0;
   },
 
   getSyncEnabled: async (): Promise<boolean> => {
-    return ipcRenderer.invoke('clipboard:getSyncEnabled');
+    return false;
   },
 
   setSyncEnabled: async (enabled: boolean): Promise<boolean> => {
-    return ipcRenderer.invoke('clipboard:setSyncEnabled', enabled);
+    void enabled;
+    return false;
   },
 
   // Continuous Context mode - multi-screenshot capture sessions
@@ -2420,106 +2423,87 @@ type AuthAPI = typeof authAPI;
 // =============================================================================
 
 const sharedClipboardAPI = {
-  // Query team items with optional filters.
+  // Shared/team clipboard is hard-disabled: clipboard items never sync.
   queryItems: async (options?: SharedClipboardQueryOptions): Promise<SharedClipboardItem[]> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.QUERY_TEAM_ITEMS, options);
+    void options;
+    return [];
   },
 
-  // Get a single team item by ID.
   getItem: async (id: string): Promise<SharedClipboardItem | null> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.GET_TEAM_ITEM, id);
+    void id;
+    return null;
   },
 
-  // Share a local clipboard item to the team.
   shareToTeam: async (localItemId: number): Promise<SharedClipboardItem | null> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.SHARE_TO_TEAM, localItemId);
+    void localItemId;
+    return null;
   },
 
-  // Share a stack of local items to the team.
   shareStackToTeam: async (localItemIds: number[]): Promise<string | null> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.SHARE_STACK_TO_TEAM, localItemIds);
+    void localItemIds;
+    return null;
   },
 
-  // Delete a team item (only owner can delete).
   deleteItem: async (id: string): Promise<boolean> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.DELETE_TEAM_ITEM, id);
+    void id;
+    return false;
   },
 
-  // Update stack ID for team items (move between stacks).
   updateStackId: async (itemIds: string[], stackId: string | null): Promise<boolean> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.UPDATE_TEAM_STACK_ID, itemIds, stackId);
+    void itemIds;
+    void stackId;
+    return false;
   },
 
-  // Copy a team item to personal clipboard.
   copyToPersonal: async (teamItemId: string): Promise<number | null> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.COPY_TO_PERSONAL, teamItemId);
+    void teamItemId;
+    return null;
   },
 
-  // Copy a team stack to personal clipboard.
   copyStackToPersonal: async (teamStackId: string): Promise<number[]> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.COPY_STACK_TO_PERSONAL, teamStackId);
+    void teamStackId;
+    return [];
   },
 
-  // Get all team stacks with summary info.
   getStacks: async (): Promise<SharedStackInfo[]> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.GET_TEAM_STACKS);
+    return [];
   },
 
-  // Listen for team item added events.
   onTeamItemAdded: (callback: (item: SharedClipboardItem) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, item: SharedClipboardItem) => {
-      callback(item);
-    };
-    ipcRenderer.on(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
-    return () => {
-      ipcRenderer.removeListener(SharedClipboardIPCChannels.TEAM_ITEM_ADDED, handler);
-    };
+    void callback;
+    return () => {};
   },
 
-  // Listen for team item deleted events.
   onTeamItemDeleted: (callback: (id: string) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, id: string) => {
-      callback(id);
-    };
-    ipcRenderer.on(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
-    return () => {
-      ipcRenderer.removeListener(SharedClipboardIPCChannels.TEAM_ITEM_DELETED, handler);
-    };
+    void callback;
+    return () => {};
   },
 
-  // Listen for team item updated events (e.g., stack changes).
   onTeamItemUpdated: (callback: (item: SharedClipboardItem) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, item: SharedClipboardItem) => {
-      callback(item);
-    };
-    ipcRenderer.on(SharedClipboardIPCChannels.TEAM_ITEM_UPDATED, handler);
-    return () => {
-      ipcRenderer.removeListener(SharedClipboardIPCChannels.TEAM_ITEM_UPDATED, handler);
-    };
+    void callback;
+    return () => {};
   },
 
   // =========================================================================
   // Team Membership
   // =========================================================================
 
-  // Get all team members (people you added + people who added you).
   getTeamMembers: async (): Promise<TeamMember[]> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.GET_TEAM_MEMBERS);
+    return [];
   },
 
-  // Add a team member by email.
   addTeamMember: async (email: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.ADD_TEAM_MEMBER, email);
+    void email;
+    return { success: false, error: 'Shared clipboard is disabled' };
   },
 
-  // Remove a team member (can remove someone you added, or remove yourself).
   removeTeamMember: async (membershipId: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.REMOVE_TEAM_MEMBER, membershipId);
+    void membershipId;
+    return { success: false, error: 'Shared clipboard is disabled' };
   },
 
-  // Check if the user has any teammates.
   hasTeammates: async (): Promise<boolean> => {
-    return ipcRenderer.invoke(SharedClipboardIPCChannels.HAS_TEAMMATES);
+    return false;
   },
 };
 
@@ -2819,6 +2803,20 @@ const accountAPI = {
   },
 };
 type AccountAPI = typeof accountAPI;
+
+type FieldTheorySyncStatus = {
+  localEnabled: boolean;
+  authenticated: boolean;
+  serverEnforced: boolean;
+  enabled: boolean;
+  reason: 'enabled' | 'local_disabled' | 'not_authenticated';
+};
+
+const fieldTheorySyncAPI = {
+  getStatus: (): Promise<FieldTheorySyncStatus> => ipcRenderer.invoke('fieldTheorySync:getStatus'),
+};
+
+type FieldTheorySyncAPI = typeof fieldTheorySyncAPI;
 
 // =============================================================================
 // Shell API - Open external URLs in default browser
@@ -4179,6 +4177,7 @@ contextBridge.exposeInMainWorld('shellAPI', shellAPI);
 contextBridge.exposeInMainWorld('diagnosticsAPI', diagnosticsAPI);
 contextBridge.exposeInMainWorld('quotaAPI', quotaAPI);
 contextBridge.exposeInMainWorld('accountAPI', accountAPI);
+contextBridge.exposeInMainWorld('fieldTheorySyncAPI', fieldTheorySyncAPI);
 contextBridge.exposeInMainWorld('audioAPI', audioAPI);
 contextBridge.exposeInMainWorld('gazeAPI', gazeAPI);
 contextBridge.exposeInMainWorld('hotkeyAPI', hotkeyAPI);
@@ -4522,14 +4521,16 @@ contextBridge.exposeInMainWorld('hotMicAPI', hotMicAPI);
 // =============================================================================
 // Auto-subscribe to auth debug events for DevTools visibility
 // =============================================================================
-// This ensures auth events are always logged to the DevTools console without
-// requiring any code in the renderer to subscribe.
+// Auth events are logged only when explicitly enabled from DevTools.
 ipcRenderer.on('auth:debug', (_event, debugEvent: {
   timestamp: string;
   event: string;
   details: Record<string, unknown>;
   level: 'info' | 'warn' | 'error' | 'recovery';
 }) => {
+  const storage = (globalThis as { localStorage?: { getItem: (key: string) => string | null } }).localStorage;
+  if (storage?.getItem('fieldtheory-auth-debug') !== 'true') return;
+
   const levelStyles: Record<string, string> = {
     info: 'background: #3b82f6; color: white; padding: 2px 6px; border-radius: 3px;',
     warn: 'background: #f59e0b; color: white; padding: 2px 6px; border-radius: 3px;',
@@ -4579,6 +4580,7 @@ declare global {
     socialAPI: SocialAPI;
     quotaAPI: QuotaAPI;
     accountAPI: AccountAPI;
+    fieldTheorySyncAPI: FieldTheorySyncAPI;
     shellAPI: ShellAPI;
     agentImproveAPI: AgentImproveAPI;
     diagnosticsAPI: DiagnosticsAPI;

@@ -88,6 +88,12 @@ export interface QuotaStatus {
 
 // Background sync interval (30 minutes).
 const SYNC_INTERVAL_MS = 30 * 60 * 1000;
+const LOCAL_FIRST_RELEASE_LIMITS: Record<QuotaFeature, number> = {
+  text_improve_words: Infinity,
+  priority_mic_seconds: Infinity,
+  auto_stack_sessions: Infinity,
+  portable_commands: Infinity,
+};
 
 /**
  * QuotaManager syncs usage data from server and writes updates directly.
@@ -238,29 +244,11 @@ export class QuotaManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   /**
-   * Check if a feature is allowed (has remaining quota).
-   * Returns true if: offline (no cache), pro tier, or under limit.
-   * Grace-based: returns true if AT the limit (allows that action), false if OVER.
+   * Check if a feature is allowed.
+   * During the local-first release, quotas are usage-only and never block local tools.
    */
-  isAllowed(feature: QuotaFeature): boolean {
-    // Offline or not synced yet: allow (permissive).
-    if (!this.cache) return true;
-
-    // Expired trial: deny every feature. Catches background/hotkey-triggered
-    // paths that don't go through TrialGate (recording, screenshot stacking, etc.).
-    if (this.cache.state === 'expired') return false;
-
-    // Pro and active-trial users have no limits on most features
-    // (except text_improve_words soft limit).
-    if (this.cache.tier === 'pro' && feature !== 'text_improve_words') {
-      return true;
-    }
-
-    const used = this.cache.usage[feature] || 0;
-    const limit = this.cache.limits[feature];
-
-    // Allow if under or AT the limit (grace for the action that hits limit).
-    return used < limit;
+  isAllowed(_feature: QuotaFeature): boolean {
+    return true;
   }
 
   /**
@@ -279,17 +267,13 @@ export class QuotaManager extends EventEmitter {
     }
 
     const used = this.cache.usage[feature] || 0;
-    const limit = this.cache.limits[feature];
-    const isUnlimited = limit === Infinity || limit >= Number.MAX_SAFE_INTEGER;
-    const remaining = isUnlimited ? Infinity : Math.max(0, limit - used);
-    const percentUsed = isUnlimited ? 0 : Math.min(100, (used / limit) * 100);
 
     return {
       used,
-      limit,
-      remaining,
+      limit: Infinity,
+      remaining: Infinity,
       allowed: this.isAllowed(feature),
-      percentUsed,
+      percentUsed: 0,
     };
   }
 
@@ -313,7 +297,7 @@ export class QuotaManager extends EventEmitter {
       portableCommands: this.getFeatureStatus('portable_commands'),
       tier: this.cache?.tier || 'free',
       // Default to 'pro' when offline / not synced yet — permissive (matches isAllowed behaviour).
-      state: this.cache?.state || 'pro',
+      state: this.cache?.state === 'expired' ? 'trial' : (this.cache?.state || 'pro'),
       trialEndsAt: this.cache?.trialEndsAt ?? null,
       nextTrialResetAt: this.cache?.nextTrialResetAt ?? null,
     };
@@ -349,17 +333,7 @@ export class QuotaManager extends EventEmitter {
           auto_stack_sessions: 0,
           portable_commands: 0,
         },
-        limits: tier === 'pro' ? {
-          text_improve_words: Infinity,
-          priority_mic_seconds: Infinity,
-          auto_stack_sessions: Infinity,
-          portable_commands: Infinity,
-        } : {
-          text_improve_words: 5000,
-          priority_mic_seconds: 30000,
-          auto_stack_sessions: 50,
-          portable_commands: 100,
-        },
+        limits: LOCAL_FIRST_RELEASE_LIMITS,
       };
       log.info('Set initial tier from preferences:', tier);
       this.emit('tierChanged', tier);
@@ -500,15 +474,6 @@ export class QuotaManager extends EventEmitter {
    * Get the quota limits for the current tier.
    */
   getLimits(): Record<QuotaFeature, number> {
-    if (!this.cache) {
-      // Default to free tier limits.
-      return {
-        text_improve_words: 5000,
-        priority_mic_seconds: 30000,
-        auto_stack_sessions: 50,
-        portable_commands: 100,
-      };
-    }
-    return this.cache.limits;
+    return LOCAL_FIRST_RELEASE_LIMITS;
   }
 }

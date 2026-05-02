@@ -171,9 +171,7 @@ export default function TranscriptionSettings() {
       setStatus(newStatus);
     });
 
-    const unsubscribeResult = window.transcribeAPI!.onResult((text) => {
-      console.log('Transcription result:', text);
-    });
+    const unsubscribeResult = window.transcribeAPI!.onResult(() => {});
 
     const unsubscribeError = window.transcribeAPI!.onError((errorMsg) => {
       setError(errorMsg);

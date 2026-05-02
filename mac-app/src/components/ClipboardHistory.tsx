@@ -15,7 +15,7 @@ import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
-import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_SHARING_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
@@ -705,6 +705,7 @@ export default function ClipboardHistory() {
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
+  const [fieldTheorySyncEnabled, setFieldTheorySyncEnabled] = useState(false);
 
   // Layout variant - B8 is the official layout
   const layoutVariant = 'B8' as const;
@@ -733,19 +734,8 @@ export default function ClipboardHistory() {
   // Sign-in prompt modal - shown when user tries to share without being logged in.
   const [showSignInPrompt, setShowSignInPrompt] = useState(false);
   
-  // Secret sharing unlock - toggled via Cmd+Shift+S.
-  // Persisted to localStorage so it survives restarts.
-  const [sharingUnlocked, setSharingUnlocked] = useState(() => {
-    try {
-      return localStorage.getItem('sharingUnlocked') === 'true';
-    } catch {
-      return false;
-    }
-  });
-  
   const handleRendererSignedOut = useCallback(() => {
     setHasUnreadFeedback(false);
-    setSharingUnlocked(false);
     setViewMode('clipboard');
   }, []);
 
@@ -754,7 +744,6 @@ export default function ClipboardHistory() {
     initialized: sessionInitialized,
   } = useAuthSessionBridge({
     supabase,
-    syncRendererSessionToMain: true,
     onSignedOut: handleRendererSignedOut,
   });
 
@@ -1027,19 +1016,8 @@ export default function ClipboardHistory() {
     stacks: 0, transcriptions: 0, screenshots: 0, improved: 0, words: 0, voiceCommands: 0, commandsUsed: 0, autoStacks: 0,
   });
   
-  // Quota usage for free users (priority mic, auto-stacking, text improve, portable commands).
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string } | null>(null);
   const [cachedTier, setCachedTier] = useState<'free' | 'pro'>('free');
-  const [quotaPercentUsed, setQuotaPercentUsed] = useState(0); // Max percentage of either quota
-  const [usageHovered, setUsageHovered] = useState(false);
   const [priorityMicQuotaExhausted, setPriorityMicQuotaExhausted] = useState(false);
-  // Track individual quota percentages for 85% warning in footer
-  const [quotaPercents, setQuotaPercents] = useState<{
-    textImprove: number;
-    priorityMic: number;
-    autoStack: number;
-    portableCommands: number;
-  }>({ textImprove: 0, priorityMic: 0, autoStack: 0, portableCommands: 0 });
 
   // Narration playback state for footer controls
   const [narrationPlayback, setNarrationPlayback] = useState<{
@@ -1139,39 +1117,20 @@ export default function ClipboardHistory() {
     });
   }, [isVisible]);
   
-  // Fetch quota usage on mount and when visibility changes.
+  // Fetch release access state on mount and when visibility changes.
   useEffect(() => {
     if (!isVisible || !window.quotaAPI) return;
     
     const fetchQuotas = async () => {
       try {
-        const formatted = await window.quotaAPI?.getFormattedUsage();
-        if (formatted) setQuotaUsage(formatted);
-        
-        // Also get the cached tier and percentage for determining what to show.
         const quotas = await window.quotaAPI?.getQuotas();
         if (quotas) {
-          // Use the tier directly from the quota API
           const isPro = quotas.tier === 'pro';
           setCachedTier(isPro ? 'pro' : 'free');
-
-          // Track max percentage for Upgrade visibility (show at >= 50%).
-          const maxPercent = Math.max(quotas.priorityMic.percentUsed, quotas.autoStack.percentUsed);
-          setQuotaPercentUsed(maxPercent);
-
-          // Track if priority mic quota is exhausted for dropdown
           setPriorityMicQuotaExhausted(!quotas.priorityMic.allowed);
-
-          // Track individual percentages for 85% warning in footer
-          setQuotaPercents({
-            textImprove: quotas.textImprove.percentUsed,
-            priorityMic: quotas.priorityMic.percentUsed,
-            autoStack: quotas.autoStack.percentUsed,
-            portableCommands: quotas.portableCommands.percentUsed,
-          });
         }
       } catch (err) {
-        console.error('[ClipboardHistory] Failed to load quota usage:', err);
+        console.error('[ClipboardHistory] Failed to load release access state:', err);
       }
     };
     
@@ -1187,24 +1146,17 @@ export default function ClipboardHistory() {
     };
   }, [isVisible]);
   
-  // Quota exhausted events are no longer shown as blocking modals.
-  // Users can continue using all features except the quota-limited one.
+  // Local-first release access is usage-only; quota changes should not block tools.
   
-  // Listen for quota changes to update footer in real-time.
+  // Listen for quota changes in case the cached tier changes after a server refresh.
   useEffect(() => {
     if (!window.quotaAPI?.onQuotaChanged) return;
 
-    const cleanup = window.quotaAPI.onQuotaChanged(async (formatted) => {
-      setQuotaUsage(formatted);
-      // Also refresh percentages for 85% warning
+    const cleanup = window.quotaAPI.onQuotaChanged(async () => {
       const quotas = await window.quotaAPI?.getQuotas();
       if (quotas) {
-        setQuotaPercents({
-          textImprove: quotas.textImprove.percentUsed,
-          priorityMic: quotas.priorityMic.percentUsed,
-          autoStack: quotas.autoStack.percentUsed,
-          portableCommands: quotas.portableCommands.percentUsed,
-        });
+        setCachedTier(quotas.tier === 'pro' ? 'pro' : 'free');
+        setPriorityMicQuotaExhausted(!quotas.priorityMic.allowed);
       }
     });
 
@@ -1566,15 +1518,6 @@ export default function ClipboardHistory() {
         nextFrameMs: Number((frameAt - trace.startedAt).toFixed(1)),
       };
       traceTopNav('top-nav-switch-frame', frameDetails);
-      if (import.meta.env.DEV) {
-        console.info(
-          `[TopNavTiming] ${trace.source} ${trace.from} -> ${trace.to}: ` +
-          `highlight=${trace.highlightAppliedAt === undefined ? 'n/a' : `${(trace.highlightAppliedAt - trace.startedAt).toFixed(1)}ms`} ` +
-          `commit=${(commitAt - trace.startedAt).toFixed(1)}ms ` +
-          `nextFrame=${(frameAt - trace.startedAt).toFixed(1)}ms ` +
-          `cssTransition=${transitionMs === null ? 'n/a' : `${transitionMs.toFixed(0)}ms`}`
-        );
-      }
     });
 
     topNavPaintTraceRef.current = null;
@@ -1780,47 +1723,18 @@ export default function ClipboardHistory() {
     });
   }, [clipboardSurfaceActive, items, stacks, hydratedStackItemsById, fetchStackItemsById]);
 
-  // Check if sharing is enabled.
-  // Feature is disabled by default, unlocked via Cmd+Shift+S secret toggle.
-  const canShare = FEATURE_SHARING_ENABLED || sharingUnlocked;
+  // Clipboard items must never sync or upload from Field Theory.
+  const canShare = false;
 
   // Share an item to the shared clipboard.
   const shareToTeam = useCallback(async (localItemId: number) => {
-    // Check if user is logged in first.
-    if (!authSession?.user?.email) {
-      setShowSignInPrompt(true);
-      return;
-    }
-    // Check if sharing is enabled for this user.
-    if (!canShare) {
-      return; // Silently fail - UI should hide share buttons when !canShare.
-    }
-    if (!window.sharedClipboardAPI) return;
-    setSharingToTeam(localItemId);
-    await window.sharedClipboardAPI.shareToTeam(localItemId);
-    setSharingToTeam(null);
-    // Show success flash.
-    setSharedToTeamId(`item-${localItemId}`);
-    setTimeout(() => setSharedToTeamId(null), 1500);
-  }, [authSession?.user?.email, canShare]);
+    void localItemId;
+  }, []);
 
   // Share a stack to the shared clipboard.
   const shareStackToTeam = useCallback(async (itemIds: number[]) => {
-    // Check if user is logged in first.
-    if (!authSession?.user?.email) {
-      setShowSignInPrompt(true);
-      return;
-    }
-    // Check if sharing is enabled for this user.
-    if (!canShare) {
-      return; // Silently fail - UI should hide share buttons when !canShare.
-    }
-    if (!window.sharedClipboardAPI) return;
-    await window.sharedClipboardAPI.shareStackToTeam(itemIds);
-    // Show success flash.
-    setSharedToTeamId(`stack-${itemIds.join(',')}`);
-    setTimeout(() => setSharedToTeamId(null), 1500);
-  }, [authSession?.user?.email, canShare]);
+    void itemIds;
+  }, []);
 
   // Copy item to system clipboard and show flash.
   const copyItem = useCallback(async (itemId: number, rowKey: string, useImproved?: boolean) => {
@@ -2119,10 +2033,25 @@ export default function ClipboardHistory() {
       rendererSoundManager.play(soundId as 'windowOpen' | 'windowClose' | 'artifactDiscovery');
     });
 
+    const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
+    if (syncStatusPromise) {
+      syncStatusPromise.then(status => {
+        setFieldTheorySyncEnabled(status.enabled);
+        if (!status.enabled) {
+          setViewMode(prev => prev === 'todo' ? 'clipboard' : prev);
+        }
+      }).catch(() => setFieldTheorySyncEnabled(false));
+    }
+
     // Listen for todo view switch event (triggered when Cmd+Shift+T enables Tasks tab).
     const unsubscribeShowTodos = window.todoAPI?.onShowTodos?.(() => {
-      setShowSettings(false);
-      setViewMode('todo');
+      void (async () => {
+        const status = await window.fieldTheorySyncAPI?.getStatus?.();
+        if (!status?.enabled) return;
+        setFieldTheorySyncEnabled(true);
+        setShowSettings(false);
+        setViewMode('todo');
+      })();
     });
 
     // Load initial Tasks tab visibility and subscribe to changes.
@@ -2916,21 +2845,6 @@ export default function ClipboardHistory() {
         return;
       }
       
-      // Secret: Cmd+Shift+S to toggle sharing feature unlock.
-      // This is a hidden toggle for enabling the sharing feature without code changes.
-      if (key === 's' && hasMeta && e.shiftKey) {
-        e.preventDefault();
-        const newValue = !sharingUnlocked;
-        setSharingUnlocked(newValue);
-        try {
-          localStorage.setItem('sharingUnlocked', String(newValue));
-        } catch {
-          // Ignore storage errors.
-        }
-        showFeedback(newValue ? 'sharing enabled' : 'sharing disabled');
-        return;
-      }
-
       // Feedback modal keyboard navigation
       if (showFeedbackModal) {
         if (key === 'ArrowLeft' || key === 'ArrowRight' || key === 'Tab') {
@@ -3205,8 +3119,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // t: Share to Team - share selected items, stack, or multi-selected items.
-      if (key === 't' && !hasMeta && !hasCtrl && !hasShift) {
+      // t: Share to Team - disabled because clipboard items never sync.
+      if (canShare && key === 't' && !hasMeta && !hasCtrl && !hasShift) {
         // Skip if typing in input.
         if (isTypingInTextEntry) return;
 
@@ -3515,7 +3429,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -4683,7 +4597,7 @@ export default function ClipboardHistory() {
           onPerformanceHudEnabledChange={setPerformanceHudEnabled}
           initialSection={settingsSection as any}
         />
-      ) : viewMode === 'todo' ? (
+      ) : viewMode === 'todo' && fieldTheorySyncEnabled ? (
         <TodoView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'librarian' ? (
         null
@@ -6821,7 +6735,7 @@ export default function ClipboardHistory() {
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        {/* Left side: sidebar toggle + plan info (quotas or stats) */}
+        {/* Left side: sidebar toggle + plan and stats */}
         <div
           style={{
             display: 'flex',
@@ -6907,96 +6821,11 @@ export default function ClipboardHistory() {
                       : statItems[currentStatIndex]?.plural}
                   </span>
                 </>
-              ) : authSession && quotaUsage ? (
-                // Basic Plan: show quota warnings at 85% OR words transcribed + hover for quota details + Upgrade
-                (() => {
-                  // Build list of quotas at 85% or higher
-                  const quotaWarnings: { name: string; percent: number }[] = [];
-                  if (quotaPercents.textImprove >= 85) quotaWarnings.push({ name: 'Text improve', percent: quotaPercents.textImprove });
-                  if (quotaPercents.priorityMic >= 85) quotaWarnings.push({ name: 'Priority mic', percent: quotaPercents.priorityMic });
-                  if (quotaPercents.autoStack >= 85) quotaWarnings.push({ name: 'Auto-stack', percent: quotaPercents.autoStack });
-                  if (quotaPercents.portableCommands >= 85) quotaWarnings.push({ name: 'Portable commands', percent: quotaPercents.portableCommands });
-                  const hasQuotaWarnings = quotaWarnings.length > 0;
-
-                  return (
-                    <div
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        whiteSpace: 'nowrap',
-                        position: 'relative',
-                        padding: '4px 8px',
-                        margin: '-4px -8px',
-                        cursor: 'default',
-                      }}
-                      onMouseEnter={() => setUsageHovered(true)}
-                      onMouseLeave={() => setUsageHovered(false)}
-                    >
-                      {hasQuotaWarnings ? (
-                        // Show quota warnings (85%+ usage)
-                        <>
-                          <span style={{ fontWeight: 500 }}>Basic:</span>
-                          <span style={{ color: theme.warning || '#f59e0b' }}>
-                            {quotaWarnings.map((w, i) => (
-                              <span key={w.name}>
-                                {i > 0 && ', '}
-                                {w.name} {Math.round(w.percent)}%
-                              </span>
-                            ))}
-                          </span>
-                          <span style={{ opacity: 0.4 }}>·</span>
-                          <span
-                            onClick={() => {
-                              const userId = authSession.user.id;
-                              const paymentLink = window.stripeConfig?.paymentLink || '';
-                              window.shellAPI?.openExternal(
-                                `${paymentLink}?client_reference_id=${userId}`
-                              );
-                            }}
-                            style={{
-                              color: theme.accent,
-                              cursor: 'pointer',
-                              textDecoration: 'underline',
-                            }}
-                          >
-                            Upgrade to Pro
-                          </span>
-                        </>
-                      ) : usageHovered ? (
-                        // Hover: show clickable Upgrade + all quota items inline
-                        <>
-                          <span
-                            onClick={() => {
-                              const userId = authSession.user.id;
-                              const paymentLink = window.stripeConfig?.paymentLink || '';
-                              window.shellAPI?.openExternal(
-                                `${paymentLink}?client_reference_id=${userId}`
-                              );
-                            }}
-                            style={{
-                              fontWeight: 500,
-                              color: theme.accent,
-                              cursor: 'pointer',
-                              textDecoration: 'underline',
-                            }}
-                          >
-                            Upgrade to Pro
-                          </span>
-                          <span style={{ opacity: 0.8 }}>
-                            {quotaUsage.textImprove} · {quotaUsage.priorityMic} · {quotaUsage.autoStack} · {quotaUsage.portableCommands}
-                          </span>
-                        </>
-                      ) : (
-                        // Normal display: words transcribed
-                        <>
-                          <span style={{ fontWeight: 500 }}>Basic:</span>
-                          <span>{formatNumber(allTimeStats.words)} words transcribed</span>
-                        </>
-                      )}
-                    </div>
-                  );
-                })()
+              ) : authSession ? (
+                <>
+                  <span style={{ fontWeight: 500 }}>Basic:</span>
+                  <span>{formatNumber(allTimeStats.words)} words transcribed</span>
+                </>
               ) : null}
         </div>
 
@@ -7016,17 +6845,7 @@ export default function ClipboardHistory() {
 
         {/* Center: active Library timestamp or fieldtheory.dev link */}
         {(() => {
-          // Check if any quota is at 85% or higher (only relevant for basic users)
-          const hasQuotaWarnings = cachedTier === 'free' && (
-            quotaPercents.textImprove >= 85 ||
-            quotaPercents.priorityMic >= 85 ||
-            quotaPercents.autoStack >= 85 ||
-            quotaPercents.portableCommands >= 85
-          );
-
           const showCenterLabel = !agentImproveStatus &&
-            !hasQuotaWarnings &&
-            !usageHovered &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
           const centerLabel = showCenterLabel
             ? (libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))
@@ -7379,7 +7198,7 @@ export default function ClipboardHistory() {
         </div>
       )}
 
-      {/* Quota exhausted modal removed - users should be able to continue using other features */}
+      {/* Quota exhausted modal removed for local-first release access. */}
 
       {showAgentImproveDialog && agentImproveContext && (
         <div
@@ -7993,17 +7812,14 @@ export default function ClipboardHistory() {
                     dismissPreview();
                     setViewMode('sketch');
                   }},
-                  { label: 'share', key: 's', action: async () => {
+                  ...(canShare ? [{ label: 'share', key: 's', action: async () => {
                     const selectedRow = listRows[selectedIndex];
-                    const itemId = selectedRow?.type === 'item' 
-                      ? selectedRow.item.id 
+                    const itemId = selectedRow?.type === 'item'
+                      ? selectedRow.item.id
                       : selectedRow?.items?.[0]?.id;
-                    if (itemId && window.sharedClipboardAPI) {
-                      await window.sharedClipboardAPI.shareToTeam(itemId);
-                      showFeedback('shared to team');
-                    }
+                    if (itemId) await shareToTeam(itemId);
                     dismissPreview();
-                  }},
+                  }}] : []),
                   { label: 'feedback', key: 'f', action: async () => {
                     const selectedRow = listRows[selectedIndex];
                     const itemId = selectedRow?.type === 'item' 

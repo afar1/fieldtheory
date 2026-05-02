@@ -1,6 +1,14 @@
 # Shared Clipboard Feature
 
-The Shared Clipboard enables collaborative clipboard sharing between users signed into the same account. Users can share items to a communal clipboard that's accessible to all team members.
+Status: historical design only.
+
+Shared Clipboard is disabled for release.
+Field Theory must not sync clipboard items, including for internal users.
+The renderer preload keeps the old `window.sharedClipboardAPI` shape for compatibility, but every method is a no-op or returns an empty result.
+
+The original design below is retained only as implementation history.
+
+The Shared Clipboard was designed to enable collaborative clipboard sharing between users signed into the same account. Users could share items to a communal clipboard that's accessible to all team members.
 
 ## Overview
 
@@ -96,6 +104,8 @@ Key UI additions:
 - **Shared by email** displayed for each shared item
 
 ## Usage Flow
+
+This flow is not available in the release build.
 
 ### Sharing to Shared Clipboard
 
