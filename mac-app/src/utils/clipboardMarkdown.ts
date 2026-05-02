@@ -64,7 +64,7 @@ function escapeImageAlt(text: string): string {
 }
 
 function getImageAlt(item: ClipboardItem, imageIndex: number): string {
-  if (item.figureLabel) return `Figure ${item.figureLabel}`;
+  if (item.figureLabel) return `figure ${item.figureLabel}`;
   if (item.sourceAppName) return `${item.sourceAppName} image`;
   return `Image ${imageIndex}`;
 }
