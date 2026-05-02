@@ -1,7 +1,7 @@
 // =============================================================================
 // CommandsView - Unified Commands View for portable commands management.
 // Based on LibrarianView pattern - two-pane layout with sidebar and detail pane.
-// Supports multi-directory watching, full CRUD, and Shared commands discovery.
+// Supports multi-directory watching, full CRUD, and internally gated Shared commands discovery.
 // =============================================================================
 
 import { forwardRef, useEffect, useState, useRef, useCallback, useMemo } from 'react';
@@ -174,6 +174,7 @@ export default function CommandsView({
 
   // View mode: 'mine' or 'popular'
   const [viewMode, setViewMode] = useState<'mine' | 'popular'>('mine');
+  const [fieldTheorySyncEnabled, setFieldTheorySyncEnabled] = useState(false);
 
   // Watched directories
   const [watchedDirs, setWatchedDirs] = useState<WatchedDir[]>([]);
@@ -385,9 +386,33 @@ export default function CommandsView({
     },
   ], []);
 
+  useEffect(() => {
+    let alive = true;
+    const syncStatusPromise = window.fieldTheorySyncAPI?.getStatus?.();
+    if (!syncStatusPromise) {
+      setFieldTheorySyncEnabled(false);
+      return () => {
+        alive = false;
+      };
+    }
+    syncStatusPromise.then((status) => {
+      if (!alive) return;
+      setFieldTheorySyncEnabled(status.enabled);
+      if (!status.enabled) {
+        setViewMode((current) => current === 'popular' ? 'mine' : current);
+      }
+    }).catch(() => {
+      if (alive) setFieldTheorySyncEnabled(false);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [viewMode]);
+
   // Fetch popular commands when switching to popular view
   useEffect(() => {
     if (viewMode !== 'popular') return;
+    if (!fieldTheorySyncEnabled) return;
     if (popularCommands.length > 0) return; // Already loaded
 
     const fetchPopular = async () => {
@@ -414,7 +439,7 @@ export default function CommandsView({
     };
 
     fetchPopular();
-  }, [viewMode, popularCommands.length, getMockCommands]);
+  }, [viewMode, fieldTheorySyncEnabled, popularCommands.length, getMockCommands]);
 
   // Filter popular commands
   const filteredPopularCommands = useMemo(() => {
@@ -439,17 +464,19 @@ export default function CommandsView({
       const folderName = parts.at(-2) ?? 'Internal';
       return `${folderName} / ${fileName}`;
     }
-    if (viewMode === 'popular' && selectedPopularCommand) {
+    if (fieldTheorySyncEnabled && viewMode === 'popular' && selectedPopularCommand) {
       return `Shared / ${selectedPopularCommand.name}`;
     }
     return '';
-  }, [selectedCommand, selectedPopularCommand, viewMode]);
+  }, [fieldTheorySyncEnabled, selectedCommand, selectedPopularCommand, viewMode]);
 
   // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
   const displayContent = useMemo(() => {
-    const raw = viewMode === 'mine' ? selectedCommand?.content || '' : selectedPopularCommand?.content || '';
+    const raw = fieldTheorySyncEnabled && viewMode === 'popular'
+      ? selectedPopularCommand?.content || ''
+      : selectedCommand?.content || '';
     return raw.replace(/^#\s+.+\n?/, '');
-  }, [viewMode, selectedCommand?.content, selectedPopularCommand?.content]);
+  }, [fieldTheorySyncEnabled, viewMode, selectedCommand?.content, selectedPopularCommand?.content]);
 
   const flashCopyPathCopied = useCallback(() => {
     setCopyPathCopied(true);
@@ -714,15 +741,15 @@ export default function CommandsView({
         if (result.length > 0) {
           setSelectedPath((currentPath) => currentPath ?? result[0].filePath);
         }
-        // Default to Shared tab if no user commands yet
-        if (result.length === 0) {
+        // Default to Shared tab for internal sync users if no local commands exist.
+        if (result.length === 0 && fieldTheorySyncEnabled) {
           setViewMode('popular');
         }
       }
       setLoading(false);
     }
     loadData();
-  }, []);
+  }, [fieldTheorySyncEnabled]);
 
   // Load selected command content
   useEffect(() => {
@@ -810,7 +837,7 @@ export default function CommandsView({
   // Check if selected command is already shared
   useEffect(() => {
     async function checkShareStatus() {
-      if (!selectedCommand || !supabase) {
+      if (!fieldTheorySyncEnabled || !selectedCommand || !supabase) {
         setShareStatus(null);
         return;
       }
@@ -837,11 +864,11 @@ export default function CommandsView({
     }
 
     checkShareStatus();
-  }, [selectedCommand]);
+  }, [fieldTheorySyncEnabled, selectedCommand]);
 
   // Toggle share status - routes through main process for proper auth
   const handleShareToggle = useCallback(async () => {
-    if (!selectedCommand || isSharing) return;
+    if (!fieldTheorySyncEnabled || !selectedCommand || isSharing) return;
 
     setIsSharing(true);
     try {
@@ -874,7 +901,7 @@ export default function CommandsView({
     } finally {
       setIsSharing(false);
     }
-  }, [selectedCommand, shareStatus, isSharing]);
+  }, [fieldTheorySyncEnabled, selectedCommand, shareStatus, isSharing]);
 
   // Keyboard navigation
   useEffect(() => {
@@ -1314,20 +1341,24 @@ export default function CommandsView({
           >
             Internal
           </span>
-          <span style={{ color: theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>|</span>
-          <span
-            onClick={() => setViewMode('popular')}
-            style={{
-              fontSize: '11px',
-              fontWeight: 600,
-              color: viewMode === 'popular' ? theme.textSecondary : theme.isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
-              cursor: 'pointer',
-              textTransform: 'uppercase',
-              letterSpacing: '0.5px',
-            }}
-          >
-            Shared
-          </span>
+          {fieldTheorySyncEnabled && (
+            <>
+              <span style={{ color: theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.15)' }}>|</span>
+              <span
+                onClick={() => setViewMode('popular')}
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: viewMode === 'popular' ? theme.textSecondary : theme.isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)',
+                  cursor: 'pointer',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px',
+                }}
+              >
+                Shared
+              </span>
+            </>
+          )}
           {/* Spacer */}
           <div style={{ flex: 1 }} />
           {/* Search toggle */}
@@ -1405,7 +1436,7 @@ export default function CommandsView({
           }}
           style={{ flex: 1, overflowY: 'auto' }}
         >
-          {viewMode === 'mine' ? (
+          {viewMode === 'mine' || !fieldTheorySyncEnabled ? (
             // Internal view - grouped by directory (Librarian style)
             Array.from(groupedCommands.entries()).map(([dirPath, items]) => (
               <div key={dirPath}>
@@ -1718,7 +1749,7 @@ export default function CommandsView({
                     // @ts-ignore - keep context text selectable/clickable outside the drag region.
                     WebkitAppRegion: 'no-drag',
                   }}
-                  title={viewMode === 'mine' ? selectedCommand?.filePath : selectedPopularCommand?.name}
+                  title={fieldTheorySyncEnabled && viewMode === 'popular' ? selectedPopularCommand?.name : selectedCommand?.filePath}
                 >
                   <span
                     style={{
@@ -1755,7 +1786,7 @@ export default function CommandsView({
               />
 
               {/* Command-specific trailing actions. */}
-              {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && (
+              {fieldTheorySyncEnabled && focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && (
                 <button
                   type="button"
                   onClick={handleShareToggle}
@@ -1852,7 +1883,7 @@ export default function CommandsView({
                   </button>
                 </div>
               )}
-              {focusToolbarControlsVisible && viewMode === 'popular' && selectedPopularCommand && (
+              {fieldTheorySyncEnabled && focusToolbarControlsVisible && viewMode === 'popular' && selectedPopularCommand && (
                 <button
                   type="button"
                   onClick={() => handleAddToMine(selectedPopularCommand)}
@@ -1892,7 +1923,7 @@ export default function CommandsView({
             justifyContent: 'center',
           }}
         >
-          {(viewMode === 'mine' && selectedCommand) || (viewMode === 'popular' && selectedPopularCommand) ? (
+          {((viewMode === 'mine' || !fieldTheorySyncEnabled) && selectedCommand) || (fieldTheorySyncEnabled && viewMode === 'popular' && selectedPopularCommand) ? (
             <div
               style={{
                 maxWidth: '600px',
@@ -1943,7 +1974,7 @@ export default function CommandsView({
                     color: theme.text,
                     fontFamily: fonts.sans,
                   }}>
-                    {viewMode === 'mine' ? selectedCommand?.name : selectedPopularCommand?.name}
+                    {fieldTheorySyncEnabled && viewMode === 'popular' ? selectedPopularCommand?.name : selectedCommand?.name}
                   </h1>
                   <FieldTheoryProse
                     ref={commandContentRef}

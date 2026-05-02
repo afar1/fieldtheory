@@ -22,6 +22,18 @@ describe('AccountStatusManager', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps local writes available when no session is present', async () => {
+    const manager = new AccountStatusManager();
+    manager.init('https://example.supabase.co', () => null);
+
+    const status = await manager.checkNow();
+
+    expect(status).toMatchObject({
+      state: 'needs_login',
+      capabilityMode: 'writable',
+    });
+  });
+
   it('maps active trial usage to writable trial status', async () => {
     stubUsageResponse({
       state: 'trial',
@@ -56,7 +68,7 @@ describe('AccountStatusManager', () => {
     });
   });
 
-  it('maps expired trial usage to read-only status', async () => {
+  it('keeps expired trial usage writable for local-first release access', async () => {
     stubUsageResponse({
       state: 'expired',
       app_access_mode: 'active',
@@ -65,14 +77,14 @@ describe('AccountStatusManager', () => {
     const status = await makeManager().checkNow();
 
     expect(status).toMatchObject({
-      state: 'read_only',
-      capabilityMode: 'read_only',
-      reason: 'trial_expired',
+      state: 'active',
+      capabilityMode: 'writable',
+      tier: 'trial',
       email: 'user@example.com',
     });
   });
 
-  it('preserves previous read-only capability when a later account check is offline', async () => {
+  it('preserves previous writable capability when a later account check is offline', async () => {
     const fetch = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -87,8 +99,8 @@ describe('AccountStatusManager', () => {
 
     expect(status).toMatchObject({
       state: 'offline',
-      capabilityMode: 'read_only',
-      lastKnownState: 'read_only',
+      capabilityMode: 'writable',
+      lastKnownState: 'trial',
     });
   });
 });

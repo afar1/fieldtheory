@@ -315,7 +315,6 @@ export default function CursorStatus() {
     if (!window.cursorStatusAPI?.onDebugModeChange) return;
 
     window.cursorStatusAPI.onDebugModeChange((enabled: boolean) => {
-      console.log('[CursorStatus] Debug mode changed:', enabled);
       setDebugMode(enabled);
     });
 
@@ -323,22 +322,6 @@ export default function CursorStatus() {
       window.cursorStatusAPI?.removeAllListeners('cursor-status-debug-mode');
     };
   }, []);
-
-  // Log all state changes when in debug mode
-  useEffect(() => {
-    if (debugMode) {
-      console.log('[CursorStatus] State change:', {
-        state,
-        isIdle,
-        hideLabels,
-        screenshotMode,
-        pipeCount,
-        textVisible,
-        showRecordingText,
-        timestamp: new Date().toISOString(),
-      });
-    }
-  }, [state, isIdle, hideLabels, screenshotMode, pipeCount, textVisible, showRecordingText, debugMode]);
 
   // Handle text visibility with fade-in when idle (for transcribing and improving)
   useEffect(() => {
