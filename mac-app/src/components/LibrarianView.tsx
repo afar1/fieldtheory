@@ -2167,6 +2167,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [active, activeReading?.mtime, activeReading?.path, activeReading?.title, onActiveFileUpdatedChange]);
 
   useEffect(() => {
+    if (!active || !activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) {
+      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      return;
+    }
+
+    const sidebarItem = flatItemsRef.current.find((item) => (
+      item.id === selectedItemId || item.absPath === activeReading.path
+    ));
+    if (!sidebarItem?.rootPath || !sidebarItem.relPath || (sidebarItem.type !== 'wiki' && sidebarItem.type !== 'external')) {
+      void window.commandsAPI?.setActiveLibraryFileContext?.(null);
+      return;
+    }
+
+    void window.commandsAPI?.setActiveLibraryFileContext?.({
+      type: sidebarItem.type,
+      rootPath: sidebarItem.rootPath,
+      relPath: sidebarItem.relPath,
+      filePath: sidebarItem.absPath,
+      title: sidebarItem.title,
+    });
+  }, [active, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType]);
+
+  useEffect(() => {
     if (!activeTitlePath || editingTitlePath !== activeTitlePath) {
       setTitleDraft(activeReading?.title ?? '');
     }
