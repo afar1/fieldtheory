@@ -2959,7 +2959,7 @@ type MarkdownPreview = {
 };
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command';
+  kind: 'wiki' | 'artifact' | 'command' | 'external';
   path: string;
 };
 

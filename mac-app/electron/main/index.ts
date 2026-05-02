@@ -6264,8 +6264,8 @@ function setupClipboardIPCHandlers(): void {
     return { fieldTheoryActive };
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command'; path: string }) => {
-    if (!target?.path || !['wiki', 'artifact', 'command'].includes(target.kind)) {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external'; path: string }) => {
+    if (!target?.path || !['wiki', 'artifact', 'command', 'external'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
     }
     if (!clipboardHistoryWindow) {

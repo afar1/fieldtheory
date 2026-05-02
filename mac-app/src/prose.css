@@ -139,8 +139,8 @@
 
 .ft-prose input[type='checkbox'] {
   appearance: none;
-  width: 0.72em;
-  height: 0.72em;
+  width: 0.84em;
+  height: 0.84em;
   margin: 0;
   border: 1.5px solid color-mix(in srgb, var(--ft-prose-color) 38%, transparent);
   border-radius: 999px;
@@ -151,19 +151,20 @@
 }
 
 .ft-prose input[type='checkbox']:checked {
-  border-color: color-mix(in srgb, var(--ft-prose-color) 78%, transparent);
-  background: color-mix(in srgb, var(--ft-prose-color) 72%, transparent);
+  border-color: #34c759;
+  background: #34c759;
+  box-shadow: 0 0 0 1px color-mix(in srgb, #34c759 24%, transparent);
 }
 
 .ft-prose input[type='checkbox']:checked::after {
   content: '';
   position: absolute;
-  left: 0.22em;
-  top: 0.08em;
-  width: 0.22em;
-  height: 0.38em;
-  border: solid color-mix(in srgb, var(--ft-prose-color) 12%, white);
-  border-width: 0 1.5px 1.5px 0;
+  left: 0.28em;
+  top: 0.1em;
+  width: 0.24em;
+  height: 0.42em;
+  border: solid white;
+  border-width: 0 1.6px 1.6px 0;
   transform: rotate(45deg);
 }
 
@@ -176,6 +177,10 @@
 }
 
 .ft-prose .ft-rendered-task-list-item-done {
+  opacity: 1;
+}
+
+.ft-prose .ft-rendered-task-list-item-done > span:last-child {
   opacity: 0.68;
 }
 

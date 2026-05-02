@@ -784,17 +784,16 @@ function collectSidebarItems(nodes: SidebarNode[]): UnifiedItem[] {
   });
 }
 
-function sidebarNodeContainsSelectedId(node: SidebarNode, selectedId: string | null): boolean {
-  if (!selectedId) return false;
-  if (node.kind === 'file') return node.item.id === selectedId;
-  return node.children.some((child) => sidebarNodeContainsSelectedId(child, selectedId));
-}
-
-export function sidebarNodeContainsSelectedIdOrWikiPath(node: SidebarNode, selectedId: string | null): boolean {
-  if (sidebarNodeContainsSelectedId(node, selectedId)) return true;
-  if (node.kind !== 'dir' || !node.relPath || !selectedId?.startsWith('wiki:')) return false;
-  const selectedRelPath = selectedId.slice('wiki:'.length);
-  return selectedRelPath === node.relPath || selectedRelPath.startsWith(`${node.relPath}/`);
+export function shouldCapScratchpadSidebarNode(
+  node: SidebarNode,
+  isSearching: boolean,
+  scratchpadExpanded: boolean,
+): boolean {
+  return node.kind === 'dir'
+    && node.name === SCRATCHPAD_FOLDER_NAME
+    && !isSearching
+    && !scratchpadExpanded
+    && node.children.length > SCRATCHPAD_COLLAPSED_ITEM_LIMIT;
 }
 
 export function collectSidebarSiblingItems(nodes: SidebarNode[], selectedId: string | null): UnifiedItem[] {
@@ -2338,11 +2337,7 @@ function TreeNode({
   const nodeCreateLocation = getSidebarNodeCreateLocation(node);
   const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
   const isDropTarget = dropTargetId === node.id;
-  const shouldCapScratchpad = node.name === SCRATCHPAD_FOLDER_NAME
-    && !isSearching
-    && !scratchpadExpanded
-    && !sidebarNodeContainsSelectedIdOrWikiPath(node, selectedId)
-    && node.children.length > SCRATCHPAD_COLLAPSED_ITEM_LIMIT;
+  const shouldCapScratchpad = shouldCapScratchpadSidebarNode(node, isSearching, scratchpadExpanded);
   const visibleChildren = shouldCapScratchpad ? node.children.slice(0, SCRATCHPAD_COLLAPSED_ITEM_LIMIT) : node.children;
   const hiddenScratchpadCount = node.children.length - visibleChildren.length;
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
