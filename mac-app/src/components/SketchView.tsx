@@ -380,7 +380,6 @@ const SketchView = forwardRef<SketchViewHandle, SketchViewProps>(({ onSave, onCl
         backgroundColor: '#fff',
         overflow: 'hidden',
         minHeight: 0,
-        borderTop: '1px solid #e0e0e0',
         marginLeft: '16px',
         marginRight: '16px',
       }
