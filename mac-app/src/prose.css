@@ -139,37 +139,36 @@
 
 .ft-prose input[type='checkbox'] {
   appearance: none;
-  width: 0.84em;
-  height: 0.84em;
+  width: 0.88em;
+  height: 0.88em;
   margin: 0;
-  border: 1.5px solid color-mix(in srgb, var(--ft-prose-color) 38%, transparent);
-  border-radius: 999px;
-  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--ft-prose-color) 34%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--ft-prose-bg) 88%, transparent);
   vertical-align: -0.03em;
   position: relative;
   display: inline-block;
 }
 
 .ft-prose input[type='checkbox']:checked {
-  border-color: #34c759;
-  background: #34c759;
-  box-shadow: 0 0 0 1px color-mix(in srgb, #34c759 24%, transparent);
+  border-color: color-mix(in srgb, var(--ft-prose-color) 38%, transparent);
+  background: linear-gradient(180deg, #47c976 0%, #2fb861 100%);
 }
 
 .ft-prose input[type='checkbox']:checked::after {
   content: '';
   position: absolute;
-  left: 0.28em;
-  top: 0.1em;
-  width: 0.24em;
+  left: 50%;
+  top: 46%;
+  width: 0.22em;
   height: 0.42em;
   border: solid white;
   border-width: 0 1.6px 1.6px 0;
-  transform: rotate(45deg);
+  transform: translate(-50%, -56%) rotate(45deg);
 }
 
 .ft-prose-todo-square input[type='checkbox'] {
-  border-radius: 2px;
+  border-radius: 3px;
 }
 
 .ft-prose .ft-rendered-task-list-item-open {
