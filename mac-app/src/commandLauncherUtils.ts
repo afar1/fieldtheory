@@ -205,6 +205,18 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
   keywords?: string[];
 }
 
+export type LauncherFieldTheoryMarkdownTarget = {
+  kind: 'wiki' | 'artifact' | 'command' | 'external';
+  path: string;
+};
+
+export interface LauncherFieldTheoryTargetCandidate extends LauncherVisibleItem {
+  filePath?: string;
+  relPath?: string;
+  recentKind?: 'wiki' | 'external';
+  keywords?: string[];
+}
+
 export type LauncherUsageMap = Record<string, { count: number; lastUsedAt: number }>;
 
 export interface LauncherUsageScoreItem {
@@ -796,6 +808,28 @@ export function resolveLauncherCommandOpenTarget<T extends LauncherCommandOpenCa
     .sort((a, b) => b.score - a.score);
 
   return candidates[0]?.item ?? null;
+}
+
+export function getLauncherFieldTheoryMarkdownTarget(
+  item: LauncherFieldTheoryTargetCandidate,
+): LauncherFieldTheoryMarkdownTarget | null {
+  if (item.type === 'recent-file') {
+    if (item.recentKind === 'wiki' && item.relPath) return { kind: 'wiki', path: item.relPath };
+    if (item.recentKind === 'external' && item.filePath) return { kind: 'external', path: item.filePath };
+  }
+  if (item.type === 'wiki-page' && item.relPath) {
+    return { kind: 'wiki', path: item.relPath };
+  }
+  if (item.type === 'markdown-file' && item.filePath) {
+    return { kind: 'external', path: item.filePath };
+  }
+  if (item.type === 'artifact' && item.filePath) {
+    return { kind: 'artifact', path: item.filePath };
+  }
+  if (item.type === 'command' && item.filePath) {
+    return { kind: 'command', path: item.filePath };
+  }
+  return null;
 }
 
 // =============================================================================
