@@ -790,6 +790,43 @@ describe('TranscriberManager standard paste target fallback', () => {
     expect(typeIntoApp).toHaveBeenCalledWith('com.mitchellh.ghostty', 'hello world ', false);
   });
 
+  it('inserts into a focused Field Theory markdown editor when Field Theory is frontmost', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const insertText = vi.fn(() => true);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn(() => ({ id: 1, type: 'transcript', content: 'hello world' })),
+      },
+      currentStack: [1],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => null),
+        typeIntoApp,
+      },
+      fieldTheoryMarkdownInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'hello world',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(insertText).toHaveBeenCalledWith('hello world ');
+    expect(typeIntoApp).not.toHaveBeenCalled();
+    expect(manager.emit).not.toHaveBeenCalledWith(
+      'paste-failed',
+      'Field Theory has focus - press Cmd+V in your target app',
+      expect.any(String),
+    );
+  });
+
   it('emits paste-failed when Field Theory is frontmost and no external app is known', async () => {
     const typeIntoApp = vi.fn(async () => ({ success: true }));
     const manager: any = {
@@ -948,9 +985,9 @@ describe('TranscriberManager standard paste target fallback', () => {
     await (manager as any).pasteSilentStack([1, 2]);
 
     expect(clipboard.writeImage).not.toHaveBeenCalled();
-    expect(clipboard.writeText).toHaveBeenCalledWith('Figure 1\n`/tmp/shot-1.png` ');
+    expect(clipboard.writeText).toHaveBeenCalledWith('figure 1\n`/tmp/shot-1.png` ');
     expect(clipboard.writeText).toHaveBeenCalledWith('\n');
-    expect(clipboard.writeText).toHaveBeenCalledWith('Figure 2\n`/tmp/shot-2.png` ');
+    expect(clipboard.writeText).toHaveBeenCalledWith('figure 2\n`/tmp/shot-2.png` ');
     expect(pasteText).toHaveBeenCalledTimes(3);
   });
 });
@@ -1431,7 +1468,7 @@ describe('TranscriberManager standard real-time chunking', () => {
     await manager.stopRecordingAndTranscribe();
 
     expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
-    expect(manager.emit).toHaveBeenCalledWith('result', 'full file transcript [Figure 1]');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'full file transcript [figure 1]');
   });
 
   it('uses full-file output for final standard transcript even when live chunks exist', async () => {
@@ -1488,7 +1525,7 @@ describe('TranscriberManager standard real-time chunking', () => {
     await manager.stopRecordingAndTranscribe();
 
     expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
-    expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript [Figure 1] [Figure 2] [Figure 3]');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'authoritative full transcript [figure 1] [figure 2] [figure 3]');
   });
 
   it('uses immediate tail command text and skips full-file transcription', async () => {

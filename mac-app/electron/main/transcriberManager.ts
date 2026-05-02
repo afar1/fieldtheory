@@ -91,6 +91,11 @@ type TranscribeWithEngineOptions = {
   whisperModelOverride?: ModelSize;
 };
 
+type FieldTheoryMarkdownInsertionTarget = {
+  isAvailable: () => boolean;
+  insertText: (text: string) => boolean;
+};
+
 export type { HotMicEngineReadiness, HotMicEngineStatus };
 
 /**
@@ -193,6 +198,7 @@ export class TranscriberManager extends EventEmitter {
   private priorityMicSkippedForQuota: boolean = false; // True when quota exhausted, skip tracking
   private autoStackLimitShownThisSession: boolean = false; // Only show limit message once per session
   private lastExternalPasteTargetBundleId: string | null = null;
+  private fieldTheoryMarkdownInsertionTarget: FieldTheoryMarkdownInsertionTarget | null = null;
   private activeRecordingSource: RecordingInputSource | null = null;
   private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
     'com.fieldtheory.app',
@@ -329,6 +335,10 @@ export class TranscriberManager extends EventEmitter {
 
   setSketchModeChecker(checker: () => boolean): void {
     this.sketchModeChecker = checker;
+  }
+
+  setFieldTheoryMarkdownInsertionTarget(target: FieldTheoryMarkdownInsertionTarget | null): void {
+    this.fieldTheoryMarkdownInsertionTarget = target;
   }
 
   /**
@@ -1083,7 +1093,7 @@ export class TranscriberManager extends EventEmitter {
     // Mirror Hot Mic chunk normalization for consistent standard-mode behavior:
     // remove metadata-like bracket artifacts, strip parentheticals, apply substitutions,
     // then normalize casing/chunk-ending periods.
-    let cleanedText = trimmedText.replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ').trim();
+    let cleanedText = trimmedText.replace(/\s*\[(?!figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/gi, ' ').trim();
     cleanedText = cleanedText.replace(/\([^)]*\)/g, ' ').trim();
     cleanedText = cleanedText.replace(/[<>]{2,}/g, ' ').trim();
     cleanedText = cleanedText.replace(/\b(mm[-\s]?hmm|mm+|hmm+)\b/gi, ' ').trim();
@@ -1205,11 +1215,11 @@ export class TranscriberManager extends EventEmitter {
       if (item.imageData) {
         // Image item
         if (pasteImagesAsPaths) {
-          // Terminal-like target: paste "Figure N" label + newline + path.
+          // Terminal-like target: paste "figure N" label + newline + path.
           const figureLabel = item.figureLabel || String(i + 1);
           const imagePath = await this.clipboardManager!.exportImageToCache(item);
           if (imagePath) {
-            clipboard.writeText(this.addFollowupTypingSpace(`Figure ${figureLabel}\n\`${imagePath.replace(os.homedir(), '~')}\``));
+            clipboard.writeText(this.addFollowupTypingSpace(`figure ${figureLabel}\n\`${imagePath.replace(os.homedir(), '~')}\``));
             this.clipboardManager?.syncClipboardHash();
             await this.pasteText();
           }
@@ -4069,7 +4079,7 @@ export class TranscriberManager extends EventEmitter {
       const figures = segmentFigures.get(i);
       if (figures && figures.length > 0) {
         // Insert figure refs at end of this segment.
-        const figureRefs = figures.map(f => `[Figure ${f}]`).join(' ');
+        const figureRefs = figures.map(f => `[figure ${f}]`).join(' ');
         segmentText = `${segmentText} ${figureRefs}`;
         totalFiguresAdded += figures.length;
       }
@@ -4203,8 +4213,8 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Append figure file paths at the end of text in scientific paper format.
-   * The text should already have inline [Figure X] references inserted.
-   * This adds a "Figures:" section at the end with the actual file paths.
+   * The text should already have inline [figure X] references inserted.
+   * This adds a figure path section at the end.
    */
   private async addImagePathsToText(text: string, items: ClipboardItem[]): Promise<string> {
     const figurePaths: string[] = [];
@@ -4215,7 +4225,7 @@ export class TranscriberManager extends EventEmitter {
         const imagePath = await this.clipboardManager!.exportImageToCache(item);
         if (imagePath) {
           // Use real path for terminal compatibility
-          figurePaths.push(`Figure ${item.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
+          figurePaths.push(`figure ${item.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
         }
       }
     }
@@ -4259,6 +4269,16 @@ export class TranscriberManager extends EventEmitter {
     }
 
     return this.lastExternalPasteTargetBundleId;
+  }
+
+  private canInsertIntoFieldTheoryMarkdown(frontmostBundleId: string | null): boolean {
+    return this.isFieldTheoryBundleId(frontmostBundleId)
+      && (this.fieldTheoryMarkdownInsertionTarget?.isAvailable() ?? false);
+  }
+
+  private insertTextIntoFieldTheoryMarkdown(text: string): boolean {
+    if (!text) return false;
+    return this.fieldTheoryMarkdownInsertionTarget?.insertText(text) ?? false;
   }
 
   private async typeIntoAppWithClipboardSync(
@@ -4334,8 +4354,11 @@ export class TranscriberManager extends EventEmitter {
     // - If Field Theory is frontmost (user clicked our UI), fall back to the
     //   last known external app and inject there.
     const frontmostBundleId = await this.getFrontmostAppBundleId();
-    const forcedTargetBundleId = this.resolveStandardPasteTargetBundleId(frontmostBundleId);
-    if (this.isFieldTheoryBundleId(frontmostBundleId) && !forcedTargetBundleId) {
+    const useFieldTheoryMarkdownTarget = this.canInsertIntoFieldTheoryMarkdown(frontmostBundleId);
+    const forcedTargetBundleId = useFieldTheoryMarkdownTarget
+      ? null
+      : this.resolveStandardPasteTargetBundleId(frontmostBundleId);
+    if (this.isFieldTheoryBundleId(frontmostBundleId) && !useFieldTheoryMarkdownTarget && !forcedTargetBundleId) {
       this.emitPasteFailureAndMaybeClear(
         'Field Theory has focus - press Cmd+V in your target app',
         clearAfter
@@ -4349,6 +4372,25 @@ export class TranscriberManager extends EventEmitter {
 
     if (items.length === 0) {
       return;
+    }
+
+    if (useFieldTheoryMarkdownTarget) {
+      let insertedIntoFieldTheoryMarkdown = false;
+      for (const item of items) {
+        if (item.type !== 'text' && item.type !== 'transcript') continue;
+        const textContent = (item.useImprovedVersion && item.improvedContent)
+          ? item.improvedContent
+          : (item.content || '');
+        insertedIntoFieldTheoryMarkdown = this.insertTextIntoFieldTheoryMarkdown(this.addFollowupTypingSpace(textContent))
+          || insertedIntoFieldTheoryMarkdown;
+      }
+      if (insertedIntoFieldTheoryMarkdown) {
+        this.skipNextPasteFailedNotification = true;
+        if (clearAfter) {
+          this.clearStack();
+        }
+        return;
+      }
     }
 
     // Detect app capabilities from the effective paste target.
@@ -4379,7 +4421,7 @@ export class TranscriberManager extends EventEmitter {
           : (item.content || '');
 
         // Append figure paths at the end for terminal-like targets, but only on the LAST text item.
-        // Other apps get inline [Figure X] refs without the file path list.
+        // Other apps get inline [figure X] refs without the file path list.
         if (this.currentStack.length > 1 && pasteImagesAsPaths && itemIdx === lastTextItemIndex) {
           textContent = await this.addImagePathsToText(textContent, items);
         }

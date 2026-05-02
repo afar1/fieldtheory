@@ -816,6 +816,10 @@ export default function CommandsView({
     return () => unsubscribe?.();
   }, [insertMarkdownText]);
 
+  useEffect(() => {
+    return () => window.librarianAPI?.setMarkdownEditorFocused?.(false);
+  }, []);
+
   // Listen for commands changes. Also refresh on window focus as a safety
   // net — fs.watch with recursive:true is flaky on macOS for renames, so
   // external filename changes can be missed until the user comes back.
@@ -1948,7 +1952,11 @@ export default function CommandsView({
                   data-ft-agent-file-path={selectedCommand.filePath}
                   data-ft-agent-title={selectedCommand.displayName}
                   value={editContent}
-                  onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
+                  onFocus={() => {
+                    sidebarKeyboardActiveRef.current = false;
+                    window.librarianAPI?.setMarkdownEditorFocused?.(true);
+                  }}
+                  onBlur={() => window.librarianAPI?.setMarkdownEditorFocused?.(false)}
                   onChange={(e) => setEditContent(e.target.value)}
                   onKeyDown={handleEditTextareaKeyDown}
                   style={{
