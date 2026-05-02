@@ -55,7 +55,7 @@ import {
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
-import { isSidebarToggleShortcut, isThemeToggleShortcut } from '../utils/editorShortcuts';
+import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut, shouldForceLibrarySidebarOpen } from '../utils/editorShortcuts';
 import { getAgentImproveContext, type AgentImproveContext } from '../utils/agentImproveContext';
 import {
   buildClipboardListRows,
@@ -456,9 +456,24 @@ export default function ClipboardHistory() {
   useEffect(() => {
     localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
   }, [navSidebarCollapsed]);
-  const navSidebarToggleEnabled =
-    (viewMode === 'librarian' && !librarianImmersive && !showSettings) ||
-    (viewMode === 'commands' && !showSettings);
+  const [libraryActiveFileUpdated, setLibraryActiveFileUpdated] = useState<{
+    path: string;
+    title: string;
+    mtime: number;
+  } | null>(null);
+  const hasLibraryActiveFile = !!libraryActiveFileUpdated;
+  const forceLibrarySidebarOpen = shouldForceLibrarySidebarOpen({
+    viewMode,
+    showSettings,
+    librarianImmersive,
+    hasLibraryActiveFile,
+  });
+  const navSidebarToggleEnabled = isNavSidebarToggleEnabled({
+    viewMode,
+    showSettings,
+    librarianImmersive,
+    hasLibraryActiveFile,
+  });
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
     return saved !== 'false'; // Default to true
@@ -579,10 +594,12 @@ export default function ClipboardHistory() {
     fieldTheoryNavigationHistory.index >= 0 &&
     fieldTheoryNavigationHistory.index < fieldTheoryNavigationHistory.entries.length - 1;
   const collapseSidebarForFocusChrome = useCallback(() => {
+    if (forceLibrarySidebarOpen) return;
     focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
     setNavSidebarCollapsed(true);
-  }, [navSidebarCollapsed]);
+  }, [forceLibrarySidebarOpen, navSidebarCollapsed]);
   const toggleNavSidebarCollapsed = useCallback(() => {
+    if (!navSidebarToggleEnabled) return;
     setNavSidebarCollapsed((collapsed) => {
       if (focusChromeActive && collapsed) {
         focusChromePreviousSidebarCollapsedRef.current = null;
@@ -590,7 +607,7 @@ export default function ClipboardHistory() {
       }
       return !collapsed;
     });
-  }, [focusChromeActive]);
+  }, [focusChromeActive, navSidebarToggleEnabled]);
   const handleFocusChromeActiveChange = useCallback((active: boolean, visualVisible: boolean = false) => {
     setFocusChromeActive(active);
     setFocusChromeChildVisible(active && visualVisible);
@@ -612,6 +629,12 @@ export default function ClipboardHistory() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [navSidebarToggleEnabled, toggleNavSidebarCollapsed]);
+
+  useEffect(() => {
+    if (forceLibrarySidebarOpen && navSidebarCollapsed) {
+      setNavSidebarCollapsed(false);
+    }
+  }, [forceLibrarySidebarOpen, navSidebarCollapsed]);
 
   useEffect(() => {
     if (!currentFieldTheoryNavigationEntry) return;
@@ -1038,11 +1061,6 @@ export default function ClipboardHistory() {
 
   // Center footer label: active Library timestamp, otherwise fieldtheory.dev.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
-  const [libraryActiveFileUpdated, setLibraryActiveFileUpdated] = useState<{
-    path: string;
-    title: string;
-    mtime: number;
-  } | null>(null);
   const [footerRelativeTimeTick, setFooterRelativeTimeTick] = useState(() => Date.now());
 
   useEffect(() => {
@@ -6820,11 +6838,16 @@ export default function ClipboardHistory() {
               so the footer layout doesn't jump. */}
           {(() => {
             const collapseEnabled = navSidebarToggleEnabled;
+            const collapseTitle = forceLibrarySidebarOpen
+              ? 'Select a Library file before hiding the sidebar'
+              : collapseEnabled
+                ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘.)`
+                : 'Sidebar toggle';
             return (
               <button
                 onClick={toggleNavSidebarCollapsed}
                 disabled={!collapseEnabled}
-                title={collapseEnabled ? `${navSidebarCollapsed ? 'Show sidebar' : 'Hide sidebar'} (⌘.)` : 'Sidebar toggle'}
+                title={collapseTitle}
                 aria-label="Toggle sidebar"
                 style={{
                   width: '20px',

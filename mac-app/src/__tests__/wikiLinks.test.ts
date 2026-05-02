@@ -9,6 +9,8 @@ import {
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
   getWikiBacklinks,
+  getWikiLinkedPages,
+  getWikiOutboundLinks,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   resolveWikiLink,
@@ -389,6 +391,81 @@ describe('getWikiBacklinks', () => {
         relPath: 'scratchpad/a',
         title: 'A',
         excerpt: 'First [[My Page]]. Second [[My Page]].',
+      },
+    ]);
+  });
+});
+
+describe('getWikiOutboundLinks', () => {
+  const pages = [
+    { relPath: 'entries/my-page', title: 'My Page', content: '' },
+    { relPath: 'debates/consensus', title: 'Consensus', content: '' },
+    { relPath: 'scratchpad/source', title: 'Source', content: '' },
+  ];
+
+  it('finds wiki pages linked from the current document', () => {
+    expect(getWikiOutboundLinks(
+      'scratchpad/source',
+      'See [[Consensus]] and [[My Page|this page]].\nAgain [[Consensus]].',
+      pages,
+      index,
+    )).toEqual([
+      {
+        relPath: 'debates/consensus',
+        title: 'Consensus',
+        excerpt: 'See [[Consensus]] and [[My Page|this page]].',
+      },
+      {
+        relPath: 'entries/my-page',
+        title: 'My Page',
+        excerpt: 'See [[Consensus]] and [[My Page|this page]].',
+      },
+    ]);
+  });
+
+  it('ignores self-links and unresolved targets', () => {
+    expect(getWikiOutboundLinks(
+      'scratchpad/source',
+      'Self [[Source]]. Missing [[Not There]].',
+      pages,
+      index,
+    )).toEqual([]);
+  });
+});
+
+describe('getWikiLinkedPages', () => {
+  it('merges incoming and outgoing wiki links into one linked list', () => {
+    const pages = [
+      { relPath: 'entries/my-page', title: 'My Page', content: 'Back to [[Source]].' },
+      { relPath: 'debates/consensus', title: 'Consensus', content: '' },
+      { relPath: 'scratchpad/source', title: 'Source', content: '' },
+      { relPath: 'scratchpad/reference', title: 'Reference', content: 'See [[Source]].' },
+    ];
+    const linkedIndex = buildWikiIndex(pages);
+
+    expect(getWikiLinkedPages(
+      'scratchpad/source',
+      'See [[Consensus]] and [[My Page|this page]].',
+      pages,
+      linkedIndex,
+    )).toEqual([
+      {
+        relPath: 'debates/consensus',
+        title: 'Consensus',
+        excerpt: 'See [[Consensus]] and [[My Page|this page]].',
+        direction: 'outbound',
+      },
+      {
+        relPath: 'entries/my-page',
+        title: 'My Page',
+        excerpt: 'See [[Consensus]] and [[My Page|this page]].',
+        direction: 'bidirectional',
+      },
+      {
+        relPath: 'scratchpad/reference',
+        title: 'Reference',
+        excerpt: 'See [[Source]].',
+        direction: 'inbound',
       },
     ]);
   });
