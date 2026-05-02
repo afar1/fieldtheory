@@ -432,7 +432,6 @@ export default function ClipboardHistory() {
   const [expandedItems, setExpandedItems] = useState<Set<number>>(new Set());
   const [overflowingTexts, setOverflowingTexts] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchFocused, setSearchFocused] = useState(false);
   const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
   const [sourceFilter, setSourceFilter] = useState<SourceFilterType>('all');
@@ -2585,13 +2584,21 @@ export default function ClipboardHistory() {
       // Control+Tab/Shift+Control+Tab cycles through the left-group top-nav tabs.
       // Plain Tab is left to focused surfaces such as the Library sidebar.
       if (key === 'Tab' && hasCtrl && !hasAlt && !hasMeta) {
-        if (!shouldCycleTopNavWithControlTab(document.activeElement?.tagName)) {
+        if (!shouldCycleTopNavWithControlTab(activeElement)) {
           traceTopNav('top-nav-tab-native', {
             activeTag: document.activeElement?.tagName ?? null,
           });
           return; // Let fields keep native Tab behavior.
         }
         e.preventDefault();
+
+        if (activeElement === inputRef.current) {
+          setSearchQuery('');
+          setDebouncedSearchQuery('');
+        }
+        if (activeElement instanceof HTMLElement) {
+          activeElement.blur();
+        }
 
         setShowSettings(false);
         const delta = hasShift ? -1 : 1;
@@ -4738,7 +4745,7 @@ export default function ClipboardHistory() {
             </div>
           )}
 
-          {/* Search input with custom placeholder */}
+          {/* Search input */}
           <div style={{ 
             position: 'relative',
             marginBottom: selectedIds.size > 0 ? '0' : '8px',
@@ -4749,41 +4756,22 @@ export default function ClipboardHistory() {
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              placeholder=""
+              placeholder="Search clipboard (/)"
+              data-fieldtheory-top-nav-search="true"
               style={{
                 width: '100%',
-                padding: `6px 10px 6px ${!searchQuery && !searchFocused ? '32px' : '10px'}`,
-                border: `1px solid ${theme.inputBorder}`,
+                padding: '7px 10px',
+                border: `1px solid ${theme.border}`,
                 borderRadius: '6px',
                 fontSize: '11px',
                 outline: 'none',
                 boxSizing: 'border-box',
-                backgroundColor: theme.inputBg,
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
                 color: theme.text,
-                transition: 'padding-left 0.1s ease',
                 // @ts-ignore - prevent drag on input
                 WebkitAppRegion: 'no-drag',
               }}
             />
-            {/* Custom placeholder - hide when focused or has content */}
-            {!searchQuery && !searchFocused && (
-              <div style={{
-                position: 'absolute',
-                left: '10px',
-                top: '50%',
-                transform: 'translateY(-50%)',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px',
-                pointerEvents: 'none',
-                color: theme.textSecondary,
-                fontSize: '11px',
-              }}>
-                <span>search...</span>
-              </div>
-            )}
           </div>
           
           {/* Selection actions bar - slides in when active */}
