@@ -1,11 +1,13 @@
 /**
  * LibrarySyncService - Syncs the Mac markdown library with Supabase.
  *
- * This intentionally avoids remote deletes for now. A missing local file should
- * not erase a user's mobile copy until we have explicit tombstone handling.
+ * Local deletes become contentless tombstones. The local Trash is the recovery
+ * surface; Supabase keeps only enough metadata to prevent deleted files from
+ * being recreated on the next sync.
  */
 
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import crypto from 'crypto';
 import { AuthManager } from './authManager';
@@ -18,8 +20,10 @@ const DEBOUNCE_MS = 1500;
 const MIN_SYNC_INTERVAL_MS = 5000;
 const POLL_INTERVAL_MS = 90_000;
 const CLOCK_SKEW_MS = 1000;
+const LIBRARY_SYNC_STATE_SCHEMA_VERSION = 1;
+const EMPTY_CONTENT_HASH = '';
 
-interface LibraryDocumentRow {
+export interface LibraryDocumentRow {
   id: string;
   user_id: string;
   title: string;
@@ -35,7 +39,7 @@ interface LibraryDocumentRow {
   updated_at: string;
 }
 
-interface LocalLibraryDocument {
+export interface LocalLibraryDocument {
   clientId: string;
   sourcePath: string;
   title: string;
@@ -55,8 +59,36 @@ export interface LibrarySyncResult {
   uploaded: number;
   updated: number;
   downloaded: number;
+  deleted: number;
+  tombstoned: number;
   skipped: number;
   errors: string[];
+}
+
+export interface LibrarySyncKnownDocument {
+  clientId: string;
+  sourcePath: string;
+  contentHash: string;
+  remoteUpdatedAtMs: number;
+  seenAtMs: number;
+}
+
+export interface LibrarySyncPendingTombstone {
+  clientId: string;
+  sourcePath: string;
+  contentHash: string;
+  remoteUpdatedAtMs: number;
+  deletedAtMs: number;
+}
+
+interface LibrarySyncUserState {
+  documents: Record<string, LibrarySyncKnownDocument>;
+  pendingTombstones: Record<string, LibrarySyncPendingTombstone>;
+}
+
+interface LibrarySyncStateFile {
+  schemaVersion: number;
+  users: Record<string, LibrarySyncUserState>;
 }
 
 function sha256(value: string): string {
@@ -149,8 +181,86 @@ function remoteUpdatedAtMs(row: LibraryDocumentRow): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function remoteDeletedAtMs(row: LibraryDocumentRow): number {
+  const parsed = row.deleted_at ? new Date(row.deleted_at).getTime() : 0;
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function rowVersionUpdatedAtMs(row: LibraryDocumentRow): number {
+  return Math.max(remoteUpdatedAtMs(row), remoteDeletedAtMs(row));
+}
+
 function rowContentHash(row: LibraryDocumentRow): string {
   return row.content_hash || sha256(row.content ?? '');
+}
+
+export function getRowsToTombstoneForMissingLocalDocs(
+  remoteRows: LibraryDocumentRow[],
+  localDocs: LocalLibraryDocument[],
+  knownDocuments: Record<string, LibrarySyncKnownDocument>,
+): LibraryDocumentRow[] {
+  const localClientIds = new Set(localDocs.map((doc) => doc.clientId));
+  const localSourcePaths = new Set(localDocs.map((doc) => doc.sourcePath));
+
+  return remoteRows.filter((row) => {
+    if (row.deleted_at) return false;
+    const sourcePath = normalizeLibrarySourcePath(row.source_path, row.title);
+    if (!sourcePath) return false;
+    if (localClientIds.has(row.client_id) || localSourcePaths.has(sourcePath)) return false;
+
+    const known = knownDocuments[row.client_id];
+    if (!known || known.sourcePath !== sourcePath) return false;
+    return rowVersionUpdatedAtMs(row) <= known.remoteUpdatedAtMs + CLOCK_SKEW_MS;
+  });
+}
+
+export function reconcilePendingTombstonesForMissingKnownDocs(
+  localDocs: LocalLibraryDocument[],
+  knownDocuments: Record<string, LibrarySyncKnownDocument>,
+  pendingTombstones: Record<string, LibrarySyncPendingTombstone> = {},
+  deletedAtMs = Date.now(),
+): Record<string, LibrarySyncPendingTombstone> {
+  const localClientIds = new Set(localDocs.map((doc) => doc.clientId));
+  const localSourcePaths = new Set(localDocs.map((doc) => doc.sourcePath));
+  const next: Record<string, LibrarySyncPendingTombstone> = {};
+
+  for (const tombstone of Object.values(pendingTombstones)) {
+    if (localClientIds.has(tombstone.clientId) || localSourcePaths.has(tombstone.sourcePath)) continue;
+    next[tombstone.clientId] = tombstone;
+  }
+
+  for (const known of Object.values(knownDocuments)) {
+    if (localClientIds.has(known.clientId) || localSourcePaths.has(known.sourcePath)) continue;
+    const existing = next[known.clientId];
+    if (existing && existing.deletedAtMs >= deletedAtMs) continue;
+    next[known.clientId] = {
+      clientId: known.clientId,
+      sourcePath: known.sourcePath,
+      contentHash: known.contentHash,
+      remoteUpdatedAtMs: known.remoteUpdatedAtMs,
+      deletedAtMs,
+    };
+  }
+
+  return next;
+}
+
+function localDocMatchesRow(doc: LocalLibraryDocument, row: LibraryDocumentRow, sourcePath: string): boolean {
+  return doc.clientId === row.client_id || doc.sourcePath === sourcePath;
+}
+
+function moveFileToTrash(filePath: string): boolean {
+  const trashDir = path.join(os.homedir(), '.Trash');
+  const parsed = path.parse(filePath);
+  fs.mkdirSync(trashDir, { recursive: true });
+
+  let targetPath = path.join(trashDir, path.basename(filePath));
+  if (fs.existsSync(targetPath)) {
+    targetPath = path.join(trashDir, `${parsed.name} ${Date.now()}${parsed.ext}`);
+  }
+
+  fs.renameSync(filePath, targetPath);
+  return true;
 }
 
 export class LibrarySyncService {
@@ -218,6 +328,93 @@ export class LibrarySyncService {
     await this.syncToSupabase();
   }
 
+  private syncStatePath(): string {
+    return path.join(fieldTheoryDir(), 'library-sync-state.json');
+  }
+
+  private loadSyncState(): LibrarySyncStateFile {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.syncStatePath(), 'utf-8'));
+      if (
+        parsed?.schemaVersion === LIBRARY_SYNC_STATE_SCHEMA_VERSION &&
+        parsed.users &&
+        typeof parsed.users === 'object'
+      ) {
+        return parsed as LibrarySyncStateFile;
+      }
+    } catch {}
+
+    return { schemaVersion: LIBRARY_SYNC_STATE_SCHEMA_VERSION, users: {} };
+  }
+
+  private saveSyncState(state: LibrarySyncStateFile): void {
+    const statePath = this.syncStatePath();
+    fs.mkdirSync(path.dirname(statePath), { recursive: true });
+    fs.writeFileSync(statePath, JSON.stringify(state, null, 2));
+  }
+
+  private getUserSyncState(state: LibrarySyncStateFile, userId: string): LibrarySyncUserState {
+    state.users[userId] ??= { documents: {}, pendingTombstones: {} };
+    state.users[userId].pendingTombstones ??= {};
+    return state.users[userId];
+  }
+
+  private sourceRootExistsForPath(sourcePath: string): boolean {
+    const sourceRoots = getLibrarySyncSourceRoots();
+    const root = sourcePath.startsWith('artifacts/')
+      ? sourceRoots.find((candidate) => candidate.sourcePrefix === 'artifacts')
+      : sourceRoots.find((candidate) => candidate.sourcePrefix === '');
+    return !!root && fs.existsSync(root.dirPath);
+  }
+
+  private recordPendingLocalTombstones(userState: LibrarySyncUserState, localDocs: LocalLibraryDocument[]): boolean {
+    const knownDocuments = Object.fromEntries(
+      Object.entries(userState.documents).filter(([, doc]) => this.sourceRootExistsForPath(doc.sourcePath)),
+    );
+    const next = reconcilePendingTombstonesForMissingKnownDocs(
+      localDocs,
+      knownDocuments,
+      userState.pendingTombstones,
+    );
+    const changed = JSON.stringify(next) !== JSON.stringify(userState.pendingTombstones);
+    userState.pendingTombstones = next;
+    return changed;
+  }
+
+  private updateKnownDocuments(
+    userId: string,
+    remoteRows: LibraryDocumentRow[],
+    localDocs: LocalLibraryDocument[],
+  ): void {
+    const state = this.loadSyncState();
+    const userState = this.getUserSyncState(state, userId);
+    const nowMs = Date.now();
+
+    for (const row of remoteRows) {
+      const sourcePath = normalizeLibrarySourcePath(row.source_path, row.title);
+      if (!sourcePath) continue;
+      if (row.deleted_at) {
+        delete userState.documents[row.client_id];
+        delete userState.pendingTombstones[row.client_id];
+        continue;
+      }
+
+      if (!localDocs.some((doc) => localDocMatchesRow(doc, row, sourcePath))) {
+        continue;
+      }
+
+      userState.documents[row.client_id] = {
+        clientId: row.client_id,
+        sourcePath,
+        contentHash: rowContentHash(row),
+        remoteUpdatedAtMs: rowVersionUpdatedAtMs(row),
+        seenAtMs: nowMs,
+      };
+    }
+
+    this.saveSyncState(state);
+  }
+
   private scanLocalDocuments(remoteRows: LibraryDocumentRow[]): LocalLibraryDocument[] {
     const remoteBySourcePath = new Map<string, LibraryDocumentRow>();
     for (const row of remoteRows) {
@@ -266,11 +463,63 @@ export class LibrarySyncService {
     const { data, error } = await supabase
       .from('library_documents')
       .select('*')
-      .eq('user_id', userId)
-      .is('deleted_at', null);
+      .eq('user_id', userId);
 
     if (error) throw error;
     return (data ?? []) as LibraryDocumentRow[];
+  }
+
+  private async tombstoneLocalDeletions(userId: string, rows: LibraryDocumentRow[], result: LibrarySyncResult): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    if (!supabase || rows.length === 0) return;
+
+    const deletedAt = new Date().toISOString();
+    for (const row of rows) {
+      const { error } = await supabase
+        .from('library_documents')
+        .update({
+          title: '',
+          content: '',
+          tags: [],
+          content_hash: EMPTY_CONTENT_HASH,
+          deleted_at: deletedAt,
+        })
+        .eq('user_id', userId)
+        .eq('client_id', row.client_id)
+        .is('deleted_at', null);
+
+      if (error) throw error;
+      result.tombstoned++;
+    }
+  }
+
+  private async tombstonePendingLocalDeletions(
+    userId: string,
+    tombstones: LibrarySyncPendingTombstone[],
+    result: LibrarySyncResult,
+  ): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    if (!supabase || tombstones.length === 0) return;
+
+    for (const tombstone of tombstones) {
+      const { error } = await supabase
+        .from('library_documents')
+        .update({
+          title: '',
+          content: '',
+          tags: [],
+          source_path: tombstone.sourcePath,
+          source_kind: 'laptop',
+          content_hash: EMPTY_CONTENT_HASH,
+          deleted_at: new Date(tombstone.deletedAtMs).toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('client_id', tombstone.clientId)
+        .is('deleted_at', null);
+
+      if (error) throw error;
+      result.tombstoned++;
+    }
   }
 
   private async upsertLocalChanges(userId: string, localDocs: LocalLibraryDocument[], remoteRows: LibraryDocumentRow[], result: LibrarySyncResult): Promise<void> {
@@ -318,6 +567,54 @@ export class LibrarySyncService {
     if (error) throw error;
   }
 
+  private applyRemoteTombstones(
+    remoteRows: LibraryDocumentRow[],
+    localDocs: LocalLibraryDocument[],
+    knownDocuments: Record<string, LibrarySyncKnownDocument>,
+    result: LibrarySyncResult,
+  ): void {
+    const rootDir = libraryDir();
+    const localByClientId = new Map(localDocs.map((doc) => [doc.clientId, doc]));
+    const localBySourcePath = new Map(localDocs.map((doc) => [doc.sourcePath, doc]));
+
+    for (const row of remoteRows) {
+      if (!row.deleted_at) continue;
+      const sourcePath = normalizeLibrarySourcePath(row.source_path, row.title);
+      if (!sourcePath) {
+        result.errors.push(`Skipped unsafe library tombstone path for ${row.client_id}`);
+        continue;
+      }
+
+      const local = localByClientId.get(row.client_id) ?? localBySourcePath.get(sourcePath);
+      if (!local || !knownDocuments[row.client_id]) continue;
+
+      const targetPath = path.resolve(rootDir, ...sourcePath.split('/'));
+      if (!isInsidePath(rootDir, targetPath)) {
+        result.errors.push(`Skipped library tombstone outside root: ${sourcePath}`);
+        continue;
+      }
+      if (!fs.existsSync(targetPath)) continue;
+
+      const stats = fs.statSync(targetPath);
+      if (!stats.isFile()) {
+        result.errors.push(`Skipped library tombstone path that is not a file: ${sourcePath}`);
+        continue;
+      }
+      if (Math.floor(stats.mtimeMs) > rowVersionUpdatedAtMs(row) + CLOCK_SKEW_MS) {
+        result.skipped++;
+        continue;
+      }
+
+      try {
+        moveFileToTrash(targetPath);
+        result.deleted++;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        result.errors.push(`Failed moving tombstoned library file to Trash: ${sourcePath}: ${message}`);
+      }
+    }
+  }
+
   private pullRemoteChanges(remoteRows: LibraryDocumentRow[], localDocs: LocalLibraryDocument[], result: LibrarySyncResult): void {
     const rootDir = libraryDir();
     const localByClientId = new Map(localDocs.map((doc) => [doc.clientId, doc]));
@@ -328,6 +625,7 @@ export class LibrarySyncService {
     }
 
     for (const row of remoteRows) {
+      if (row.deleted_at) continue;
       const sourcePath = normalizeLibrarySourcePath(row.source_path, row.title);
       if (!sourcePath) {
         result.errors.push(`Skipped unsafe library path for ${row.client_id}`);
@@ -376,6 +674,8 @@ export class LibrarySyncService {
       uploaded: 0,
       updated: 0,
       downloaded: 0,
+      deleted: 0,
+      tombstoned: 0,
       skipped: 0,
       errors: [],
     };
@@ -398,12 +698,38 @@ export class LibrarySyncService {
 
     this.isSyncing = true;
     try {
-      const remoteRows = await this.fetchRemoteRows(session.user.id);
-      const localDocs = this.scanLocalDocuments(remoteRows);
+      const syncState = this.loadSyncState();
+      const userState = this.getUserSyncState(syncState, session.user.id);
+      const preflightLocalDocs = this.scanLocalDocuments([]);
+      if (this.recordPendingLocalTombstones(userState, preflightLocalDocs)) {
+        this.saveSyncState(syncState);
+      }
 
-      await this.upsertLocalChanges(session.user.id, localDocs, remoteRows, result);
+      const remoteRows = await this.fetchRemoteRows(session.user.id);
+      const knownDocuments = userState.documents;
+      const pendingTombstones = Object.values(userState.pendingTombstones);
+      const localDocs = this.scanLocalDocuments(remoteRows);
+      const rowsToTombstone = getRowsToTombstoneForMissingLocalDocs(remoteRows, localDocs, knownDocuments);
+      await this.tombstoneLocalDeletions(session.user.id, rowsToTombstone, result);
+      await this.tombstonePendingLocalDeletions(session.user.id, pendingTombstones, result);
+      if (pendingTombstones.length > 0) {
+        for (const tombstone of pendingTombstones) {
+          delete userState.pendingTombstones[tombstone.clientId];
+          delete userState.documents[tombstone.clientId];
+        }
+        this.saveSyncState(syncState);
+      }
+
+      const remoteRowsAfterTombstones = rowsToTombstone.length > 0 || pendingTombstones.length > 0
+        ? await this.fetchRemoteRows(session.user.id)
+        : remoteRows;
+      this.applyRemoteTombstones(remoteRowsAfterTombstones, localDocs, knownDocuments, result);
+      const localDocsAfterTombstones = this.scanLocalDocuments(remoteRowsAfterTombstones);
+      await this.upsertLocalChanges(session.user.id, localDocsAfterTombstones, remoteRowsAfterTombstones, result);
       const freshRemoteRows = await this.fetchRemoteRows(session.user.id);
-      this.pullRemoteChanges(freshRemoteRows, localDocs, result);
+      this.pullRemoteChanges(freshRemoteRows, localDocsAfterTombstones, result);
+      const localDocsAfterPull = this.scanLocalDocuments(freshRemoteRows);
+      this.updateKnownDocuments(session.user.id, freshRemoteRows, localDocsAfterPull);
 
       result.success = result.errors.length === 0;
       this.lastSyncAt = Date.now();

@@ -3,9 +3,69 @@ import path from 'path';
 import {
   clientIdForLibrarySourcePath,
   getLibrarySyncSourceRoots,
+  getRowsToTombstoneForMissingLocalDocs,
   normalizeLibrarySourcePath,
+  reconcilePendingTombstonesForMissingKnownDocs,
+  type LibraryDocumentRow,
+  type LibrarySyncKnownDocument,
+  type LibrarySyncPendingTombstone,
+  type LocalLibraryDocument,
 } from './librarySyncService';
 import { fieldTheoryDir, libraryDir } from './fieldTheoryPaths';
+
+function remoteRow(overrides: Partial<LibraryDocumentRow> = {}): LibraryDocumentRow {
+  return {
+    id: 'row-1',
+    user_id: 'user-1',
+    title: 'Today',
+    content: '# Today\n',
+    tags: [],
+    source_path: 'scratchpad/today.md',
+    source_kind: 'laptop',
+    content_hash: 'remote-hash',
+    client_id: 'client-1',
+    client_created_at_ms: 1,
+    deleted_at: null,
+    created_at: '2026-05-01T10:00:00.000Z',
+    updated_at: '2026-05-01T10:00:00.000Z',
+    ...overrides,
+  };
+}
+
+function localDocument(overrides: Partial<LocalLibraryDocument> = {}): LocalLibraryDocument {
+  return {
+    clientId: 'client-1',
+    sourcePath: 'scratchpad/today.md',
+    title: 'Today',
+    content: '# Today\n',
+    contentHash: 'remote-hash',
+    createdAtMs: 1,
+    updatedAtMs: Date.parse('2026-05-01T10:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+function knownDocument(overrides: Partial<LibrarySyncKnownDocument> = {}): LibrarySyncKnownDocument {
+  return {
+    clientId: 'client-1',
+    sourcePath: 'scratchpad/today.md',
+    contentHash: 'remote-hash',
+    remoteUpdatedAtMs: Date.parse('2026-05-01T10:00:00.000Z'),
+    seenAtMs: Date.parse('2026-05-01T10:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+function pendingTombstone(overrides: Partial<LibrarySyncPendingTombstone> = {}): LibrarySyncPendingTombstone {
+  return {
+    clientId: 'client-1',
+    sourcePath: 'scratchpad/today.md',
+    contentHash: 'remote-hash',
+    remoteUpdatedAtMs: Date.parse('2026-05-01T10:00:00.000Z'),
+    deletedAtMs: Date.parse('2026-05-01T10:05:00.000Z'),
+    ...overrides,
+  };
+}
 
 describe('librarySyncService path helpers', () => {
   it('normalizes remote source paths to markdown paths', () => {
@@ -30,5 +90,75 @@ describe('librarySyncService path helpers', () => {
       { dirPath: libraryDir(), sourcePrefix: '' },
       { dirPath: path.join(fieldTheoryDir(), 'librarian', 'artifacts'), sourcePrefix: 'artifacts' },
     ]);
+  });
+});
+
+describe('librarySyncService tombstone detection', () => {
+  it('does not tombstone remote rows this device has never seen', () => {
+    expect(getRowsToTombstoneForMissingLocalDocs([remoteRow()], [], {})).toEqual([]);
+  });
+
+  it('does not tombstone rows that are already remotely deleted', () => {
+    expect(getRowsToTombstoneForMissingLocalDocs(
+      [remoteRow({ deleted_at: '2026-05-01T10:00:30.000Z' })],
+      [],
+      { 'client-1': knownDocument() },
+    )).toEqual([]);
+  });
+
+  it('tombstones a previously seen remote row when the local file disappears', () => {
+    const row = remoteRow();
+    expect(getRowsToTombstoneForMissingLocalDocs(
+      [row],
+      [],
+      { 'client-1': knownDocument() },
+    )).toEqual([row]);
+  });
+
+  it('keeps a row active when the local file still exists', () => {
+    expect(getRowsToTombstoneForMissingLocalDocs(
+      [remoteRow()],
+      [localDocument()],
+      { 'client-1': knownDocument() },
+    )).toEqual([]);
+  });
+
+  it('does not tombstone when the remote row changed after this device last saw it', () => {
+    expect(getRowsToTombstoneForMissingLocalDocs(
+      [remoteRow({ updated_at: '2026-05-01T10:01:01.000Z' })],
+      [],
+      { 'client-1': knownDocument() },
+    )).toEqual([]);
+  });
+});
+
+describe('librarySyncService pending tombstones', () => {
+  it('records a durable tombstone when a known local doc disappears before network sync', () => {
+    expect(reconcilePendingTombstonesForMissingKnownDocs(
+      [],
+      { 'client-1': knownDocument() },
+      {},
+      Date.parse('2026-05-01T10:05:00.000Z'),
+    )).toEqual({
+      'client-1': pendingTombstone(),
+    });
+  });
+
+  it('does not record a tombstone for a document that still exists locally by source path', () => {
+    expect(reconcilePendingTombstonesForMissingKnownDocs(
+      [localDocument({ clientId: 'different-client-id' })],
+      { 'client-1': knownDocument() },
+      {},
+      Date.parse('2026-05-01T10:05:00.000Z'),
+    )).toEqual({});
+  });
+
+  it('clears a pending tombstone when the same document reappears locally', () => {
+    expect(reconcilePendingTombstonesForMissingKnownDocs(
+      [localDocument()],
+      { 'client-1': knownDocument() },
+      { 'client-1': pendingTombstone() },
+      Date.parse('2026-05-01T10:06:00.000Z'),
+    )).toEqual({});
   });
 });

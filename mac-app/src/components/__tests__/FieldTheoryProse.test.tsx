@@ -59,6 +59,16 @@ describe('FieldTheoryProse', () => {
     expect((container.firstElementChild as HTMLElement).style.getPropertyValue('--ft-prose-paragraph-spacing')).toBe('1.08em');
   });
 
+  it('renders markdown text without source offset annotations', () => {
+    render(
+      <FieldTheoryProse>
+        {'Hello **world**'}
+      </FieldTheoryProse>
+    );
+
+    expect(screen.getByText('world').closest('[data-ft-md-start]')).toBeNull();
+  });
+
   it('renders local screenshot image URLs inline', () => {
     render(
       <FieldTheoryProse>

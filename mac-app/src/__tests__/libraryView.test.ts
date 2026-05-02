@@ -9,14 +9,17 @@ import {
   getMarkdownListEnterEdit,
   getMarkdownBodySelectionRange,
   getMarkdownListToggleEdit,
+  getRenderedMarkdownClickBehavior,
+  getRenderedMarkdownSelectionToolbarState,
+  getRenderedMarkdownSelectionFormatEdit,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
+  getLibrarianContentTopPadding,
   highlightFileFindMatches,
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
   getMarkdownTaskLines,
   getScrollRatio,
-  getScrollTopForCaretVisibility,
   getScrollTopForRatio,
   isLibrarianDocumentFocusChromeActive,
   moveLibrarianNavigationHistory,
@@ -30,8 +33,10 @@ import {
   pushLibrarianNavigationEntry,
   rankMarkdownWikiLinkSuggestions,
   rebaseMarkdownTodoStateChange,
+  removeEmptyMarkdownCommentPlaceholders,
   replaceLibrarianNavigationEntry,
   resolveMarkdownCaretOffsetFromRenderedText,
+  resolveMarkdownSelectionRangeFromRenderedText,
   restoreLibrarianEditorSession,
   restoreLibrarianTodoMarker,
   restoreLibrarianUnorderedListMarker,
@@ -47,6 +52,10 @@ import {
   toggleMarkdownTaskLineAtIndex,
 } from '../components/LibrarianView';
 import {
+  addPageToLibraryRoot,
+  addWikiPageToLibraryRoots,
+  addWikiPageToTree,
+  applyPinnedSidebarOrder,
   applyTodoStateOverrideToItem,
   ensureScratchpadNodePinned,
   ensureScratchpadPinned,
@@ -58,14 +67,20 @@ import {
   filterStaleRecent,
   filterUnifiedFolders,
   getLibraryDragData,
+  getPrimaryArtifactsFinderPath,
   getSidebarFolderFinderPath,
   getSelectedWikiAutoExpandKey,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
+  hideReadmeOnlyLibraryArtifactsFolder,
   libraryRootsHaveBuiltinRelPath,
   orderTopLevelSidebarNodes,
   removeWikiRelPathFromLibraryRoots,
   removeWikiRelPathFromTree,
+  renamePinnedSidebarIds,
+  renameLibraryRootRelPath,
+  sidebarNodeContainsSelectedIdOrWikiPath,
+  shouldShowPinnedSidebarDividerBefore,
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
@@ -76,6 +91,7 @@ import {
 
 afterEach(() => {
   clearLibraryDragData();
+  window.getSelection()?.removeAllRanges();
 });
 
 describe('rankMarkdownWikiLinkSuggestions', () => {
@@ -288,6 +304,21 @@ describe('preserveMarkdownBlankLines', () => {
   it('does not add visible blank-line markers between carrot list groups', () => {
     const normalized = normalizeMarkdownCarrotLists('› first\n›› child\n\n› second');
     expect(preserveMarkdownBlankLines(normalized)).toBe('- \u2060first\n  - \u2060child\n\n- \u2060second');
+  });
+});
+
+describe('removeEmptyMarkdownCommentPlaceholders', () => {
+  it('removes only empty standalone HTML comments', () => {
+    expect(removeEmptyMarkdownCommentPlaceholders('First\n<!--  -->\nSecond')).toBe('First\n\nSecond');
+    expect(removeEmptyMarkdownCommentPlaceholders('First\n<!---->\nSecond')).toBe('First\n\nSecond');
+    expect(removeEmptyMarkdownCommentPlaceholders('First <!-- keep --> Second')).toBe('First <!-- keep --> Second');
+    expect(removeEmptyMarkdownCommentPlaceholders('<!-- keep me -->')).toBe('<!-- keep me -->');
+  });
+
+  it('leaves empty comments inside fenced code blocks alone', () => {
+    expect(removeEmptyMarkdownCommentPlaceholders('Before\n\n```html\n<!--  -->\n```\n\nAfter')).toBe(
+      'Before\n\n```html\n<!--  -->\n```\n\nAfter',
+    );
   });
 });
 
@@ -572,6 +603,148 @@ describe('resolveMarkdownCaretOffsetFromRenderedText', () => {
   it('falls back to the rendered prefix when the full rendered text is not contiguous in source', () => {
     expect(resolveMarkdownCaretOffsetFromRenderedText('hello **world** today', 'hello world today', 11)).toBe(13);
   });
+
+  it('maps rendered body text after frontmatter', () => {
+    const markdown = '---\ntags: [Friday Notes]\n---\n\n# Friday Notes\n';
+    expect(resolveMarkdownCaretOffsetFromRenderedText(markdown, 'Friday Notes', 6)).toBe(markdown.indexOf('# Friday Notes') + 8);
+  });
+});
+
+describe('rendered markdown edit helpers', () => {
+  it('wraps selected text with inline formatting markers', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'bold')).toEqual({
+      nextValue: 'hello **world**',
+      selectionStart: 8,
+      selectionEnd: 13,
+    });
+    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'italic')?.nextValue).toBe('hello *world*');
+    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'code')?.nextValue).toBe('hello `world`');
+    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'link')).toEqual({
+      nextValue: 'hello [world]()',
+      selectionStart: 14,
+      selectionEnd: 14,
+    });
+  });
+
+  it('toggles inline formatting markers off when selected text is already wrapped', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('hello **world**', 8, 13, 'bold')).toEqual({
+      nextValue: 'hello world',
+      selectionStart: 6,
+      selectionEnd: 11,
+    });
+    expect(getRenderedMarkdownSelectionFormatEdit('hello *world*', 7, 12, 'italic')?.nextValue).toBe('hello world');
+    expect(getRenderedMarkdownSelectionFormatEdit('hello `world`', 7, 12, 'code')?.nextValue).toBe('hello world');
+  });
+
+  it('toggles inline formatting off when the selected source includes the markers', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('hello **world**', 6, 15, 'bold')).toEqual({
+      nextValue: 'hello world',
+      selectionStart: 6,
+      selectionEnd: 11,
+    });
+  });
+
+  it('does not treat bold markers as italic when adding italic to bold text', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('hello **world**', 8, 13, 'italic')).toEqual({
+      nextValue: 'hello ***world***',
+      selectionStart: 9,
+      selectionEnd: 14,
+    });
+  });
+
+  it('can toggle italic back off from combined bold and italic text', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('hello ***world***', 9, 14, 'italic')).toEqual({
+      nextValue: 'hello **world**',
+      selectionStart: 8,
+      selectionEnd: 13,
+    });
+  });
+
+  it('toggles links off when the selected label is already linked', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('hello [world](https://example.com)', 7, 12, 'link')).toEqual({
+      nextValue: 'hello world',
+      selectionStart: 6,
+      selectionEnd: 11,
+    });
+    expect(getRenderedMarkdownSelectionFormatEdit('hello [world](https://example.com)', 6, 34, 'link')).toEqual({
+      nextValue: 'hello world',
+      selectionStart: 6,
+      selectionEnd: 11,
+    });
+  });
+
+  it('wraps selected source lines as an unordered list', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('first\nsecond', 0, 12, 'unordered-list')).toEqual({
+      nextValue: '- first\n- second',
+      selectionStart: 0,
+      selectionEnd: 16,
+    });
+  });
+
+  it('toggles unordered list markers off selected source lines', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('- first\n- second', 0, 16, 'unordered-list')).toEqual({
+      nextValue: 'first\nsecond',
+      selectionStart: 0,
+      selectionEnd: 12,
+    });
+  });
+
+  it('maps rendered selections only when the text is unambiguous', () => {
+    expect(resolveMarkdownSelectionRangeFromRenderedText('hello **world**', 'world')).toEqual({
+      start: 8,
+      end: 13,
+    });
+    expect(resolveMarkdownSelectionRangeFromRenderedText('same same', 'same')).toBeNull();
+  });
+
+  it('shows the rendered toolbar only for valid selection mappings', () => {
+    expect(getRenderedMarkdownSelectionToolbarState('hello **world**', 'world', { top: 50, left: 20, width: 40 })).toEqual({
+      start: 8,
+      end: 13,
+      top: 14,
+      left: 40,
+    });
+    expect(getRenderedMarkdownSelectionToolbarState('same same', 'same', { top: 50, left: 20, width: 40 })).toBeNull();
+  });
+});
+
+describe('rendered markdown click behavior', () => {
+  it('opens source mode for a plain rendered click by default', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(getRenderedMarkdownClickBehavior({ target: p })).toBe('source');
+    p.remove();
+  });
+
+  it('opens source mode for Command-click by default', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(getRenderedMarkdownClickBehavior({ target: p, metaKey: true })).toBe('source');
+    p.remove();
+  });
+
+  it('requires Command-click when Command-click mode is enabled', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(getRenderedMarkdownClickBehavior({ target: p }, 'command-click')).toBeNull();
+    expect(getRenderedMarkdownClickBehavior({ target: p, metaKey: true }, 'command-click')).toBe('source');
+    p.remove();
+  });
+
+  it('leaves double-click selection to the browser instead of placing a rendered caret', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(getRenderedMarkdownClickBehavior({ target: p, detail: 2 })).toBeNull();
+    p.remove();
+  });
+
+  it('keeps the rendered toolbar hidden for ambiguous selected text', () => {
+    expect(resolveMarkdownSelectionRangeFromRenderedText('repeat repeat', 'repeat')).toBeNull();
+  });
 });
 
 describe('library drag data helpers', () => {
@@ -806,17 +979,6 @@ describe('document scroll helpers', () => {
     expect(getScrollTopForRatio(400, 500, 0.5)).toBe(0);
   });
 
-  it('keeps scroll position when the caret has enough room below it', () => {
-    expect(getScrollTopForCaretVisibility(200, 1200, 500, 520, 24, 96)).toBe(200);
-  });
-
-  it('scrolls down enough to leave room below the caret', () => {
-    expect(getScrollTopForCaretVisibility(200, 1200, 500, 640, 24, 96)).toBe(260);
-  });
-
-  it('clamps caret visibility scrolling to the document end', () => {
-    expect(getScrollTopForCaretVisibility(650, 1000, 400, 960, 24, 96)).toBe(600);
-  });
 });
 
 describe('markdown editor edge fades', () => {
@@ -876,6 +1038,38 @@ describe('document focus chrome activation', () => {
 
     expect(isLibrarianDocumentFocusChromeActive({ ...focusedWriting, sidebarCollapsed: false })).toBe(false);
     expect(isLibrarianDocumentFocusChromeActive(focusedWriting)).toBe(true);
+  });
+});
+
+describe('librarian content top padding', () => {
+  it('keeps rendered document content in place when focus chrome removes the toolbar row from layout', () => {
+    const normalPadding = getLibrarianContentTopPadding({
+      contentMode: 'rendered',
+      focusChromeActive: false,
+      isFullScreen: false,
+    });
+    const focusPadding = getLibrarianContentTopPadding({
+      contentMode: 'rendered',
+      focusChromeActive: true,
+      isFullScreen: false,
+    });
+
+    expect(focusPadding - normalPadding).toBe(42);
+  });
+
+  it('keeps markdown document content in place when focus chrome removes the toolbar row from layout', () => {
+    const normalPadding = getLibrarianContentTopPadding({
+      contentMode: 'markdown',
+      focusChromeActive: false,
+      isFullScreen: false,
+    });
+    const focusPadding = getLibrarianContentTopPadding({
+      contentMode: 'markdown',
+      focusChromeActive: true,
+      isFullScreen: false,
+    });
+
+    expect(focusPadding - normalPadding).toBe(42);
   });
 });
 
@@ -1137,6 +1331,35 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
+  it('keeps pinned files before unpinned files while preserving sort inside each group', () => {
+    const result = sortSidebarNodes([
+      file('Old', 10),
+      file('Newest', 30),
+      file('Middle', 20),
+    ], 'time', new Set(['wiki:Middle']));
+
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Middle',
+      'Newest',
+      'Old',
+    ]);
+  });
+
+  it('marks the first unpinned item after pinned sidebar items for a divider', () => {
+    const pinned = new Set(['wiki:Middle']);
+    const result = sortSidebarNodes([
+      file('Old', 10),
+      file('Newest', 30),
+      file('Middle', 20),
+    ], 'time', pinned);
+
+    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
+      false,
+      true,
+      false,
+    ]);
+  });
+
   it('alphabetizes combined top-level sidebar nodes in alpha mode', () => {
     const artifactRoot: LibrarySidebarNode = {
       kind: 'dir',
@@ -1191,6 +1414,52 @@ describe('recursive sidebar tree helpers', () => {
       'Entries',
       'Plans',
       'Scratchpad',
+    ]);
+  });
+
+  it('applies pinned ordering recursively to folders and docs', () => {
+    const result = applyPinnedSidebarOrder([
+      dir('entries', [
+        file('Beta', 2),
+        file('Alpha', 1),
+      ]),
+      dir('scratchpad'),
+    ], 'alpha', new Set(['wiki:Beta', '/wiki::scratchpad']));
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Scratchpad',
+      'Entries',
+    ]);
+    const entries = result.find((node) => node.kind === 'dir' && node.name === 'entries');
+    expect(entries?.kind === 'dir' ? entries.children.map((node) => node.kind === 'file' ? node.item.title : node.label) : []).toEqual([
+      'Beta',
+      'Alpha',
+    ]);
+  });
+
+  it('keeps pinned wiki docs and folders pinned after rename', () => {
+    const pinned = new Set(['wiki:scratchpad/Old', '/wiki::scratchpad/Old Folder']);
+
+    const result = renamePinnedSidebarIds(pinned, {
+      rootPath: '/display/wiki',
+      oldRelPath: 'scratchpad/Old',
+      newRelPath: 'scratchpad/New',
+      oldAbsPath: '/display/wiki/scratchpad/Old.md',
+      newAbsPath: '/display/wiki/scratchpad/New.md',
+      builtin: true,
+    });
+    const folderResult = renamePinnedSidebarIds(result, {
+      rootPath: '/display/wiki',
+      oldRelPath: 'scratchpad/Old Folder',
+      newRelPath: 'scratchpad/New Folder',
+      oldAbsPath: '/display/wiki/scratchpad/Old Folder',
+      newAbsPath: '/display/wiki/scratchpad/New Folder',
+      builtin: true,
+    });
+
+    expect([...folderResult]).toEqual([
+      'wiki:scratchpad/New',
+      '/wiki::scratchpad/New Folder',
     ]);
   });
 
@@ -1265,6 +1534,7 @@ describe('recursive sidebar tree helpers', () => {
       rootPath: 'artifacts',
       builtin: false,
       canCreateFile: false,
+      finderPath: '/Users/afar/.fieldtheory/librarian/artifacts',
       children: [file('Artifact One', 1)],
     };
     const builtinRoot: LibrarySidebarNode = {
@@ -1303,19 +1573,79 @@ describe('recursive sidebar tree helpers', () => {
     );
 
     expect(result.map((node) => node.kind === 'dir' ? node.id : node.id)).toEqual([
+      'artifacts',
       'root:/wiki',
       'root:/external',
     ]);
-    const filteredBuiltin = result[0];
+    const filteredBuiltin = result[1];
     expect(filteredBuiltin.kind).toBe('dir');
     if (filteredBuiltin.kind !== 'dir') return;
     expect(filteredBuiltin.children.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual(['custom']);
-    expect(result[1]).toMatchObject({ rootPath: '/external', name: 'entries' });
+    expect(result[2]).toMatchObject({ rootPath: '/external', name: 'entries' });
   });
 
   it('keeps sidebar node references stable when no defaults are hidden', () => {
     const nodes = [dir('entries')];
     expect(filterHiddenDefaultSidebarNodes(nodes, [])).toBe(nodes);
+  });
+
+  it('hides the seeded Library artifacts folder when it only contains its README', () => {
+    const artifactReadme: LibrarySidebarNode = {
+      kind: 'file',
+      id: 'wiki:artifacts/README',
+      item: {
+        id: 'wiki:artifacts/README',
+        title: 'README: Artifacts',
+        type: 'wiki',
+        absPath: '/wiki/artifacts/README.md',
+        relPath: 'artifacts/README',
+        rootPath: '/wiki',
+        timestamp: 1,
+      },
+    };
+    const artifactFolder: LibrarySidebarNode = {
+      kind: 'dir',
+      id: '/wiki::artifacts',
+      name: 'artifacts',
+      label: 'Artifacts',
+      relPath: 'artifacts',
+      rootPath: '/wiki',
+      builtin: true,
+      canCreateFile: false,
+      children: [artifactReadme],
+    };
+    const entries = dir('entries');
+
+    expect(hideReadmeOnlyLibraryArtifactsFolder([artifactFolder, entries])).toEqual([entries]);
+  });
+
+  it('keeps Library artifacts visible when it contains user content', () => {
+    const userDoc: LibrarySidebarNode = {
+      kind: 'file',
+      id: 'wiki:artifacts/notes',
+      item: {
+        id: 'wiki:artifacts/notes',
+        title: 'notes',
+        type: 'wiki',
+        absPath: '/wiki/artifacts/notes.md',
+        relPath: 'artifacts/notes',
+        rootPath: '/wiki',
+        timestamp: 1,
+      },
+    };
+    const artifactFolder: LibrarySidebarNode = {
+      kind: 'dir',
+      id: '/wiki::artifacts',
+      name: 'artifacts',
+      label: 'Artifacts',
+      relPath: 'artifacts',
+      rootPath: '/wiki',
+      builtin: true,
+      canCreateFile: false,
+      children: [userDoc],
+    };
+
+    expect(hideReadmeOnlyLibraryArtifactsFolder([artifactFolder])).toEqual([artifactFolder]);
   });
 
   it('hides the legacy builtin concepts folder without touching external concepts roots', () => {
@@ -1412,8 +1742,16 @@ describe('recursive sidebar tree helpers', () => {
       rootPath: 'artifacts',
       builtin: false,
       canCreateFile: false,
+      finderPath: '/Users/afar/.fieldtheory/librarian/artifacts',
       children: [],
-    })).toBeNull();
+    })).toBe('/Users/afar/.fieldtheory/librarian/artifacts');
+  });
+
+  it('prefers the global artifacts folder for the virtual artifacts Finder path', () => {
+    expect(getPrimaryArtifactsFinderPath([
+      { path: '/Users/afar/.fieldtheory/users/user/librarian/artifacts/old.md' },
+      { path: '/Users/afar/.fieldtheory/librarian/artifacts/new.md' },
+    ])).toBe('/Users/afar/.fieldtheory/librarian/artifacts');
   });
 
   it('pins an existing scratchpad directory before other built-in nodes', () => {
@@ -1440,6 +1778,165 @@ describe('recursive sidebar tree helpers', () => {
     expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/other-note', '/wiki')).not.toBe(key);
     expect(getSelectedWikiAutoExpandKey('artifact:/tmp/team-notes.md', '/wiki')).toBeNull();
     expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', null)).toBeNull();
+  });
+
+  it('treats a stale selected wiki path as inside its folder during rename', () => {
+    const scratchpad = dir('scratchpad', [file('scratchpad/new-title', 1)]);
+
+    expect(sidebarNodeContainsSelectedIdOrWikiPath(scratchpad, 'wiki:scratchpad/new-title')).toBe(true);
+    expect(sidebarNodeContainsSelectedIdOrWikiPath(scratchpad, 'wiki:scratchpad/old-title')).toBe(true);
+    expect(sidebarNodeContainsSelectedIdOrWikiPath(scratchpad, 'wiki:entries/old-title')).toBe(false);
+  });
+
+  it('patches builtin wiki roots by relPath even when root paths differ', () => {
+    const roots: LibraryRoot[] = [{
+      path: '/canonical/wiki',
+      label: 'Wiki',
+      builtin: true,
+      tree: [{
+        kind: 'dir',
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file',
+          relPath: 'scratchpad/old-title',
+          absPath: '/canonical/wiki/scratchpad/old-title.md',
+          name: 'old-title',
+          title: 'old-title',
+          lastUpdated: 1,
+        }],
+      }],
+    }];
+
+    const result = renameLibraryRootRelPath(roots, {
+      rootPath: '/display/wiki',
+      oldRelPath: 'scratchpad/old-title',
+      newRelPath: 'scratchpad/new-title',
+      oldAbsPath: '/display/wiki/scratchpad/old-title.md',
+      newAbsPath: '/display/wiki/scratchpad/new-title.md',
+      builtin: true,
+    });
+
+    expect(result).not.toBe(roots);
+    const scratchpad = result[0].tree[0];
+    expect(scratchpad.kind).toBe('dir');
+    if (scratchpad.kind !== 'dir') return;
+    const renamed = scratchpad.children[0];
+    expect(renamed.kind).toBe('file');
+    if (renamed.kind !== 'file') return;
+    expect(renamed.relPath).toBe('scratchpad/new-title');
+  });
+
+  it('adds a locally-created wiki page to the builtin root immediately', () => {
+    const roots: LibraryRoot[] = [{
+      path: '/wiki',
+      label: 'Wiki',
+      builtin: true,
+      tree: [{
+        kind: 'dir',
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [],
+      }],
+    }];
+
+    const result = addWikiPageToLibraryRoots(roots, {
+      relPath: 'scratchpad/new-page',
+      absPath: '/wiki/scratchpad/new-page.md',
+      name: 'new-page',
+      title: 'new-page',
+      lastUpdated: 1,
+    });
+
+    expect(result).not.toBe(roots);
+    const scratchpad = result[0].tree[0];
+    expect(scratchpad.kind).toBe('dir');
+    if (scratchpad.kind !== 'dir') return;
+    expect(scratchpad.children).toHaveLength(1);
+    const page = scratchpad.children[0];
+    expect(page.kind).toBe('file');
+    if (page.kind !== 'file') return;
+    expect(page.relPath).toBe('scratchpad/new-page');
+  });
+
+  it('adds a locally-created wiki page outside scratchpad immediately', () => {
+    const roots: LibraryRoot[] = [{
+      path: '/wiki',
+      label: 'Wiki',
+      builtin: true,
+      tree: [{
+        kind: 'dir',
+        name: 'entries',
+        relPath: 'entries',
+        children: [],
+      }],
+    }];
+
+    const result = addWikiPageToLibraryRoots(roots, {
+      relPath: 'entries/new-page',
+      absPath: '/wiki/entries/new-page.md',
+      name: 'new-page',
+      title: 'new-page',
+      lastUpdated: 1,
+    });
+
+    const entries = result[0].tree[0];
+    expect(entries.kind).toBe('dir');
+    if (entries.kind !== 'dir') return;
+    expect(entries.children).toHaveLength(1);
+    const page = entries.children[0];
+    expect(page.kind).toBe('file');
+    if (page.kind !== 'file') return;
+    expect(page.relPath).toBe('entries/new-page');
+  });
+
+  it('adds a locally-created file to the matching external library root immediately', () => {
+    const roots: LibraryRoot[] = [
+      {
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [],
+      },
+      {
+        path: '/notes',
+        label: 'Notes',
+        builtin: false,
+        tree: [],
+      },
+    ];
+
+    const result = addPageToLibraryRoot(roots, '/notes', {
+      relPath: 'projects/new-page',
+      absPath: '/notes/projects/new-page.md',
+      name: 'new-page',
+      title: 'new-page',
+      lastUpdated: 1,
+    });
+
+    expect(result[0]).toBe(roots[0]);
+    expect(result[1]).not.toBe(roots[1]);
+    const projects = result[1].tree[0];
+    expect(projects.kind).toBe('dir');
+    if (projects.kind !== 'dir') return;
+    const page = projects.children[0];
+    expect(page.kind).toBe('file');
+    if (page.kind !== 'file') return;
+    expect(page.relPath).toBe('projects/new-page');
+  });
+
+  it('adds a locally-created wiki page to the legacy wiki tree immediately', () => {
+    const result = addWikiPageToTree([], {
+      relPath: 'scratchpad/new-page',
+      absPath: '/wiki/scratchpad/new-page.md',
+      name: 'new-page',
+      title: 'new-page',
+      lastUpdated: 1,
+    });
+
+    expect(result).toHaveLength(1);
+    expect(result[0].name).toBe('scratchpad');
+    expect(result[0].files.map((page) => page.relPath)).toEqual(['scratchpad/new-page']);
   });
 });
 
@@ -1533,6 +2030,23 @@ describe('deleted wiki page sidebar pruning', () => {
     expect(wikiTreeHasRelPath(out, 'scratchpad/b')).toBe(true);
   });
 
+  it('removes descendants when a wiki folder relPath is deleted', () => {
+    const tree = [
+      {
+        name: 'scratchpad',
+        files: [
+          { relPath: 'scratchpad/project/a', absPath: '/wiki/scratchpad/project/a.md', name: 'a', title: 'A', lastUpdated: 1 },
+          { relPath: 'scratchpad/project/nested/b', absPath: '/wiki/scratchpad/project/nested/b.md', name: 'b', title: 'B', lastUpdated: 2 },
+          { relPath: 'scratchpad/projectile', absPath: '/wiki/scratchpad/projectile.md', name: 'projectile', title: 'Projectile', lastUpdated: 3 },
+        ],
+      },
+    ];
+
+    const out = removeWikiRelPathFromTree(tree, 'scratchpad/project');
+
+    expect(out[0].files.map((page) => page.relPath)).toEqual(['scratchpad/projectile']);
+  });
+
   it('prunes only builtin library roots for a wiki relPath', () => {
     const roots: LibraryRoot[] = [
       {
@@ -1565,6 +2079,41 @@ describe('deleted wiki page sidebar pruning', () => {
     expect(libraryRootsHaveBuiltinRelPath(out, 'scratchpad/a')).toBe(false);
     expect((out[0].tree[0] as Extract<WikiNode, { kind: 'dir' }>).children).toEqual([]);
     expect(out[1].tree).toEqual(roots[1].tree);
+  });
+
+  it('removes a deleted folder node from builtin library roots', () => {
+    const roots: LibraryRoot[] = [
+      {
+        path: '/wiki',
+        label: 'Library',
+        builtin: true,
+        tree: [
+          {
+            kind: 'dir',
+            name: 'scratchpad',
+            relPath: 'scratchpad',
+            children: [
+              {
+                kind: 'dir',
+                name: 'project',
+                relPath: 'scratchpad/project',
+                children: [
+                  { kind: 'file', relPath: 'scratchpad/project/a', absPath: '/wiki/scratchpad/project/a.md', name: 'a', title: 'A', lastUpdated: 1 },
+                ],
+              },
+              { kind: 'file', relPath: 'scratchpad/projectile', absPath: '/wiki/scratchpad/projectile.md', name: 'projectile', title: 'Projectile', lastUpdated: 2 },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const out = removeWikiRelPathFromLibraryRoots(roots, 'scratchpad/project');
+    const scratchpad = out[0].tree[0] as Extract<WikiNode, { kind: 'dir' }>;
+
+    expect(scratchpad.children).toEqual([
+      { kind: 'file', relPath: 'scratchpad/projectile', absPath: '/wiki/scratchpad/projectile.md', name: 'projectile', title: 'Projectile', lastUpdated: 2 },
+    ]);
   });
 });
 

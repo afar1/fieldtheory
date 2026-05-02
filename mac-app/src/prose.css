@@ -123,6 +123,11 @@
   margin-bottom: 0.25em;
 }
 
+.ft-prose > :last-child,
+.ft-prose :where(li, li > span, li > div) > :last-child {
+  margin-bottom: 0;
+}
+
 .ft-prose :where(ul.contains-task-list, ul:has(> li.task-list-item)) {
   padding-left: 0;
   list-style: none;
