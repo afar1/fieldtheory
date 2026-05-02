@@ -5675,7 +5675,7 @@ function setupClipboardIPCHandlers(): void {
   // Launch at login - start app automatically when macOS starts.
   // Returns the actual system state, not just the preference.
   ipcMain.handle('clipboard:getLaunchAtLogin', async () => {
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && app.isPackaged) {
       const settings = app.getLoginItemSettings();
       return settings.openAtLogin;
     }
@@ -5693,7 +5693,7 @@ function setupClipboardIPCHandlers(): void {
     await preferencesManager.save({ launchAtLogin: enabled });
 
     // Apply immediately using Electron's login item settings.
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && app.isPackaged) {
       app.setLoginItemSettings({
         openAtLogin: enabled,
         openAsHidden: true, // Start in background (menu bar app)
@@ -9195,7 +9195,7 @@ if (!gotTheLock) {
     }
 
     // Apply launch at login setting.
-    if (process.platform === 'darwin') {
+    if (process.platform === 'darwin' && app.isPackaged) {
       const launchAtLogin = preferencesManager?.getPreference('launchAtLogin') ?? true;
       app.setLoginItemSettings({
         openAtLogin: launchAtLogin,

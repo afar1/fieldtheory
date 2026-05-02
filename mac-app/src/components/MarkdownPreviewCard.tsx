@@ -1,16 +1,14 @@
 import type { CSSProperties } from 'react';
 import FieldTheoryProse from './FieldTheoryProse';
-import type { ProseRenderer } from '../utils/proseRenderer';
 
 interface MarkdownPreviewCardProps {
   title: string;
   filePath: string;
   content: string;
   isDark?: boolean;
-  renderer?: ProseRenderer;
 }
 
-export default function MarkdownPreviewCard({ title, filePath, content, isDark = true, renderer = 'field-theory' }: MarkdownPreviewCardProps) {
+export default function MarkdownPreviewCard({ title, filePath, content, isDark = true }: MarkdownPreviewCardProps) {
   const colors = isDark ? {
     bg: '#1c1c1e',
     border: 'rgba(255,255,255,0.1)',
@@ -58,7 +56,6 @@ export default function MarkdownPreviewCard({ title, filePath, content, isDark =
         h2Size="15px"
         h3Size="13px"
         linkColor={colors.link}
-        renderer={renderer}
         size="preview"
         surface={isDark ? 'dark' : 'light'}
         style={{
