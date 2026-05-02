@@ -287,6 +287,24 @@ function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
   return lower.includes('fieldtheory') || lower.includes('electron');
 }
 
+function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
+  const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+  return Boolean(
+    librarianMarkdownEditorFocused &&
+    clipboardWindow &&
+    !clipboardWindow.isDestroyed() &&
+    clipboardWindow.isVisible()
+  );
+}
+
+function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
+  if (!text || !hasFocusedFieldTheoryMarkdownInsertionTarget()) {
+    return false;
+  }
+  clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+  return true;
+}
+
 function resolveClipboardFullScreenHotkeyPreference(prefs: {
   clipboardFullScreenHotkey?: string | null;
   clipboardDesktopScreenshotHotkey?: string | null;
@@ -1257,13 +1275,13 @@ function registerHotkeysAfterOnboarding(): void {
 
           // Add figure paths for images
           if (imageItems.length > 0) {
-            combinedText += '\nFigures:\n';
+            combinedText += '\nfigures:\n';
             for (const item of imageItems) {
               const imagePath = await clipboardManager.exportImageToCache(item);
               if (imagePath) {
                 const resolvedPath = await resolveImagePath(imagePath);
                 const label = item.figureLabel || '';
-                combinedText += `[Figure ${label}] ${resolvedPath}\n`;
+                combinedText += `[figure ${label}] ${resolvedPath}\n`;
               }
             }
           }
@@ -4427,7 +4445,7 @@ function setupClipboardIPCHandlers(): void {
                 const imagePath = await clipboardManager.exportImageToCache(stackItem);
                 if (imagePath) {
                   // Use real path for terminal compatibility
-                  figurePaths.push(`Figure ${stackItem.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
+                  figurePaths.push(`figure ${stackItem.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
                 }
               }
             }
@@ -4449,7 +4467,7 @@ function setupClipboardIPCHandlers(): void {
             // Use real path for terminal compatibility
             const shortPath = imagePath.replace(os.homedir(), '~');
             const figureRef = item.figureLabel
-              ? `Figure ${item.figureLabel}: \`${shortPath}\``
+              ? `figure ${item.figureLabel}: \`${shortPath}\``
               : `\`${shortPath}\``;
             const figureRefWithSpace = `${figureRef} `;
             clipboard.writeText(figureRefWithSpace);
@@ -4624,7 +4642,7 @@ function setupClipboardIPCHandlers(): void {
           const imagePath = await clipboardManager!.exportImageToCache(item);
           if (imagePath) {
             // Use real path for terminal compatibility
-            paths.push(`Figure ${item.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
+            paths.push(`figure ${item.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
           }
         }
         return paths.length > 0 ? `\n\n${paths.join('\n')}\n\n` : '';
@@ -7788,6 +7806,10 @@ async function initTranscriberSystem(): Promise<void> {
   // Now create transcriberManager with cursorStatusManager.
   log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
+  transcriberManager.setFieldTheoryMarkdownInsertionTarget({
+    isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
+    insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+  });
   await transcriberManager.init();
   log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   broadcastTranscribeEvents();
@@ -7814,6 +7836,10 @@ async function initTranscriberSystem(): Promise<void> {
   if (nativeHelper && preferencesManager) {
     const soundMgr = transcriberManager.getSoundManager();
     hotMicManager = new HotMicManager(nativeHelper, preferencesManager, soundMgr);
+    hotMicManager.setFieldTheoryMarkdownInsertionTarget({
+      isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
+      insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+    });
     hotMicManager.setCursorStatusManager(cursorStatusManager);
     hotMicManager.setMetricsWordsRecorder((wordCount: number) => {
       metricsManager?.recordHotMicTranscribedWords(wordCount);

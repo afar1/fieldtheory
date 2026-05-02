@@ -69,7 +69,7 @@ describe('clipboard markdown export', () => {
       item({ id: 3, type: 'screenshot', imageData: 'base64', figureLabel: 'A', sourceAppName: 'Safari' }),
     ], { 3: '/Users/afar/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png' }, 'Images');
 
-    expect(markdown).toContain('![Figure A](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png>)');
+    expect(markdown).toContain('![figure A](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png>)');
   });
 
   it('keeps a readable placeholder for missing image exports', () => {
@@ -92,7 +92,7 @@ describe('clipboard markdown export', () => {
   });
 
   it('formats a local image path as a markdown image embed', () => {
-    expect(formatLocalImageMarkdown('/tmp/Figure 1.png', 'Figure A')).toBe('![Figure A](<file:///tmp/Figure%201.png>)');
+    expect(formatLocalImageMarkdown('/tmp/Figure 1.png', 'figure A')).toBe('![figure A](<file:///tmp/Figure%201.png>)');
   });
 
   it('converts pasted local image paths into markdown image embeds', () => {
