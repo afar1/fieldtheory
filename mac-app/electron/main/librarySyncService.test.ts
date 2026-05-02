@@ -2,10 +2,13 @@ import { describe, expect, it } from 'vitest';
 import path from 'path';
 import {
   clientIdForLibrarySourcePath,
+  deduplicateLocalLibraryDocuments,
   getLibrarySyncSourceRoots,
+  getLibrarySyncTargetForSourcePath,
   getRowsToTombstoneForMissingLocalDocs,
   normalizeLibrarySourcePath,
   reconcilePendingTombstonesForMissingKnownDocs,
+  sourcePathForLibrarySyncSourceRoot,
   type LibraryDocumentRow,
   type LibrarySyncKnownDocument,
   type LibrarySyncPendingTombstone,
@@ -90,6 +93,47 @@ describe('librarySyncService path helpers', () => {
       { dirPath: libraryDir(), sourcePrefix: '' },
       { dirPath: path.join(fieldTheoryDir(), 'librarian', 'artifacts'), sourcePrefix: 'artifacts' },
     ]);
+  });
+
+  it('routes artifacts paths to the central artifacts directory', () => {
+    expect(getLibrarySyncTargetForSourcePath('artifacts/README.md')).toEqual({
+      rootDir: path.join(fieldTheoryDir(), 'librarian', 'artifacts'),
+      relPath: 'README.md',
+    });
+    expect(getLibrarySyncTargetForSourcePath('library/artifacts/README.md')).toEqual({
+      rootDir: libraryDir(),
+      relPath: 'artifacts/README.md',
+    });
+    expect(getLibrarySyncTargetForSourcePath('scratchpad/today.md')).toEqual({
+      rootDir: libraryDir(),
+      relPath: 'scratchpad/today.md',
+    });
+  });
+
+  it('keeps user-created library artifacts paths distinct from central artifacts', () => {
+    expect(sourcePathForLibrarySyncSourceRoot(
+      { dirPath: libraryDir(), sourcePrefix: '' },
+      'artifacts/README.md',
+    )).toBe('library/artifacts/README.md');
+    expect(sourcePathForLibrarySyncSourceRoot(
+      { dirPath: path.join(fieldTheoryDir(), 'librarian', 'artifacts'), sourcePrefix: 'artifacts' },
+      'README.md',
+    )).toBe('artifacts/README.md');
+  });
+
+  it('deduplicates local documents by client id and keeps the newer copy', () => {
+    const older = localDocument({
+      title: 'Older',
+      contentHash: 'older-hash',
+      updatedAtMs: Date.parse('2026-05-01T09:00:00.000Z'),
+    });
+    const newer = localDocument({
+      title: 'Newer',
+      contentHash: 'newer-hash',
+      updatedAtMs: Date.parse('2026-05-01T10:00:00.000Z'),
+    });
+
+    expect(deduplicateLocalLibraryDocuments([older, newer])).toEqual([newer]);
   });
 });
 

@@ -146,6 +146,43 @@ export function getLibrarySyncSourceRoots(): LibrarySyncSourceRoot[] {
   ];
 }
 
+export function getLibrarySyncTargetForSourcePath(sourcePath: string): { rootDir: string; relPath: string } {
+  const artifactsPrefix = 'artifacts/';
+  const libraryPrefix = 'library/';
+  if (sourcePath.startsWith(artifactsPrefix)) {
+    return {
+      rootDir: path.join(fieldTheoryDir(), 'librarian', 'artifacts'),
+      relPath: sourcePath.slice(artifactsPrefix.length),
+    };
+  }
+  if (sourcePath.startsWith(libraryPrefix)) {
+    return { rootDir: libraryDir(), relPath: sourcePath.slice(libraryPrefix.length) };
+  }
+
+  return { rootDir: libraryDir(), relPath: sourcePath };
+}
+
+export function sourcePathForLibrarySyncSourceRoot(root: LibrarySyncSourceRoot, relPath: string): string {
+  const sourcePath = prefixedSourcePath(root.sourcePrefix, relPath);
+  if (root.sourcePrefix === '' && sourcePath.startsWith('artifacts/')) {
+    return `library/${sourcePath}`;
+  }
+  return sourcePath;
+}
+
+export function deduplicateLocalLibraryDocuments(localDocs: LocalLibraryDocument[]): LocalLibraryDocument[] {
+  const byClientId = new Map<string, LocalLibraryDocument>();
+
+  for (const doc of localDocs) {
+    const existing = byClientId.get(doc.clientId);
+    if (!existing || doc.updatedAtMs >= existing.updatedAtMs) {
+      byClientId.set(doc.clientId, doc);
+    }
+  }
+
+  return [...byClientId.values()];
+}
+
 function prefixedSourcePath(prefix: string, relPath: string): string {
   return prefix ? `${prefix}/${relPath}` : relPath;
 }
@@ -360,11 +397,8 @@ export class LibrarySyncService {
   }
 
   private sourceRootExistsForPath(sourcePath: string): boolean {
-    const sourceRoots = getLibrarySyncSourceRoots();
-    const root = sourcePath.startsWith('artifacts/')
-      ? sourceRoots.find((candidate) => candidate.sourcePrefix === 'artifacts')
-      : sourceRoots.find((candidate) => candidate.sourcePrefix === '');
-    return !!root && fs.existsSync(root.dirPath);
+    const { rootDir } = getLibrarySyncTargetForSourcePath(sourcePath);
+    return fs.existsSync(rootDir);
   }
 
   private recordPendingLocalTombstones(userState: LibrarySyncUserState, localDocs: LocalLibraryDocument[]): boolean {
@@ -422,9 +456,11 @@ export class LibrarySyncService {
       if (sourcePath) remoteBySourcePath.set(sourcePath, row);
     }
 
-    return getLibrarySyncSourceRoots().flatMap((root) => (
+    const localDocs = getLibrarySyncSourceRoots().flatMap((root) => (
       this.scanSourceRoot(root, remoteBySourcePath)
     ));
+
+    return deduplicateLocalLibraryDocuments(localDocs);
   }
 
   private scanSourceRoot(
@@ -434,7 +470,7 @@ export class LibrarySyncService {
     return walkMarkdownFiles(root.dirPath).flatMap((filePath): LocalLibraryDocument[] => {
       const relPath = relativeMarkdownPath(root.dirPath, filePath);
       if (!relPath) return [];
-      const sourcePath = prefixedSourcePath(root.sourcePrefix, relPath);
+      const sourcePath = sourcePathForLibrarySyncSourceRoot(root, relPath);
 
       try {
         const content = fs.readFileSync(filePath, 'utf-8');
@@ -573,7 +609,6 @@ export class LibrarySyncService {
     knownDocuments: Record<string, LibrarySyncKnownDocument>,
     result: LibrarySyncResult,
   ): void {
-    const rootDir = libraryDir();
     const localByClientId = new Map(localDocs.map((doc) => [doc.clientId, doc]));
     const localBySourcePath = new Map(localDocs.map((doc) => [doc.sourcePath, doc]));
 
@@ -588,7 +623,8 @@ export class LibrarySyncService {
       const local = localByClientId.get(row.client_id) ?? localBySourcePath.get(sourcePath);
       if (!local || !knownDocuments[row.client_id]) continue;
 
-      const targetPath = path.resolve(rootDir, ...sourcePath.split('/'));
+      const { rootDir, relPath } = getLibrarySyncTargetForSourcePath(sourcePath);
+      const targetPath = path.resolve(rootDir, ...relPath.split('/'));
       if (!isInsidePath(rootDir, targetPath)) {
         result.errors.push(`Skipped library tombstone outside root: ${sourcePath}`);
         continue;
@@ -616,13 +652,8 @@ export class LibrarySyncService {
   }
 
   private pullRemoteChanges(remoteRows: LibraryDocumentRow[], localDocs: LocalLibraryDocument[], result: LibrarySyncResult): void {
-    const rootDir = libraryDir();
     const localByClientId = new Map(localDocs.map((doc) => [doc.clientId, doc]));
     const localBySourcePath = new Map(localDocs.map((doc) => [doc.sourcePath, doc]));
-
-    if (!fs.existsSync(rootDir)) {
-      fs.mkdirSync(rootDir, { recursive: true });
-    }
 
     for (const row of remoteRows) {
       if (row.deleted_at) continue;
@@ -632,7 +663,12 @@ export class LibrarySyncService {
         continue;
       }
 
-      const targetPath = path.resolve(rootDir, ...sourcePath.split('/'));
+      const { rootDir, relPath } = getLibrarySyncTargetForSourcePath(sourcePath);
+      if (!fs.existsSync(rootDir)) {
+        fs.mkdirSync(rootDir, { recursive: true });
+      }
+
+      const targetPath = path.resolve(rootDir, ...relPath.split('/'));
       if (!isInsidePath(rootDir, targetPath)) {
         result.errors.push(`Skipped library path outside root: ${sourcePath}`);
         continue;
