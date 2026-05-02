@@ -1850,6 +1850,7 @@ declare global {
   interface BookmarksSnapshot {
     bookmarks: Bookmark[];
     folders: BookmarkFolder[];
+    xLastSyncedAt: string | null;
   }
   interface ActiveWebPage {
     url: string;
