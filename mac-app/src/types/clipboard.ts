@@ -86,8 +86,20 @@ export function nextTopNavViewMode(
   return tabs[nextIdx];
 }
 
-export function shouldCycleTopNavWithControlTab(activeTagName?: string | null): boolean {
-  return !activeTagName?.match(/^(INPUT|TEXTAREA)$/i);
+const TOP_NAV_SEARCH_ATTRIBUTE = 'data-fieldtheory-top-nav-search';
+
+export function shouldCycleTopNavWithControlTab(activeTarget?: string | Element | null): boolean {
+  const activeTagName = typeof activeTarget === 'string'
+    ? activeTarget
+    : activeTarget?.tagName ?? null;
+
+  if (!activeTagName?.match(/^(INPUT|TEXTAREA)$/i)) return true;
+
+  if (typeof activeTarget !== 'string') {
+    return activeTarget?.getAttribute(TOP_NAV_SEARCH_ATTRIBUTE) === 'true';
+  }
+
+  return false;
 }
 
 export const MAX_UNDO = 20;

@@ -1926,6 +1926,11 @@ function WikiSidebar({
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) {
+                onSearchQueryChange('');
+                e.currentTarget.blur();
+                return;
+              }
               if (e.key !== 'Escape') return;
               e.preventDefault();
               e.stopPropagation();
@@ -1936,6 +1941,7 @@ function WikiSidebar({
               if (!e.currentTarget.value.trim()) onSearchQueryChange('');
             }}
             placeholder="Search library (/)"
+            data-fieldtheory-top-nav-search="true"
             style={{
               flex: '1 1 auto',
               minWidth: 0,

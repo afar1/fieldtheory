@@ -1400,6 +1400,7 @@ export default function CommandsView({
               ref={searchInputRef}
               type="text"
               placeholder="Search commands (/)"
+              data-fieldtheory-top-nav-search="true"
               onBlur={(e) => {
                 if (!e.currentTarget.value.trim()) setSearchOpen(false);
               }}
@@ -1407,6 +1408,12 @@ export default function CommandsView({
               onFocus={() => { sidebarKeyboardActiveRef.current = false; }}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => {
+                if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) {
+                  setSearchOpen(false);
+                  setSearchQuery('');
+                  e.currentTarget.blur();
+                  return;
+                }
                 if (e.key === 'Escape') {
                   e.stopPropagation();
                   setSearchOpen(false);
