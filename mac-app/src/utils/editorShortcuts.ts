@@ -3,7 +3,10 @@
 
 export function isActiveElementEditable(): boolean {
   const el = document.activeElement;
-  return el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement;
+  return el instanceof HTMLInputElement
+    || el instanceof HTMLTextAreaElement
+    || el instanceof HTMLSelectElement
+    || (el instanceof HTMLElement && el.isContentEditable);
 }
 
 /** True when a keydown event should focus the sidebar search input.

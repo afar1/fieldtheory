@@ -24,7 +24,6 @@ import {
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
-import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
 
@@ -223,7 +222,6 @@ export default function CommandsView({
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
   const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
-  const [proseRenderer, setProseRenderer] = useState(() => restoreProseRenderer(localStorage));
 
   // Layout
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -324,10 +322,6 @@ export default function CommandsView({
   useEffect(() => {
     localStorage.setItem('commands-text-size', textSize);
   }, [textSize]);
-
-  useEffect(() => {
-    persistProseRenderer(localStorage, proseRenderer);
-  }, [proseRenderer]);
 
   useEffect(() => {
     const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
@@ -1750,9 +1744,6 @@ export default function CommandsView({
                 textSize={textSize}
                 onTextSizeChange={setTextSize}
                 showTextSize={focusToolbarControlsVisible}
-                proseRenderer={proseRenderer}
-                proseRendererOptions={focusToolbarControlsVisible ? PROSE_RENDERER_OPTIONS : undefined}
-                onProseRendererChange={focusToolbarControlsVisible ? setProseRenderer : undefined}
                 onDelete={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
                 showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
@@ -1970,7 +1961,6 @@ export default function CommandsView({
                     h3Size={textSizes[textSize].h3}
                     linkColor={theme.accent}
                     mutedColor={theme.textSecondary}
-                    renderer={proseRenderer}
                     size="compact"
                     surface={theme.isDark ? 'dark' : 'light'}
                     style={{

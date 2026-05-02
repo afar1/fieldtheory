@@ -2,9 +2,7 @@ import { forwardRef, type CSSProperties, type MouseEventHandler, type ClipboardE
 import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown';
 import remarkBreaks from 'remark-breaks';
 import remarkGfm from 'remark-gfm';
-import '@prose-ui/style/prose-ui.css';
 import '../prose.css';
-import type { ProseRenderer } from '../utils/proseRenderer';
 
 type FieldTheoryProseSize = 'reader' | 'compact' | 'preview';
 
@@ -27,7 +25,6 @@ export interface FieldTheoryProseProps {
   onCopy?: ClipboardEventHandler<HTMLDivElement>;
   onMouseDown?: MouseEventHandler<HTMLDivElement>;
   remarkLineBreaks?: boolean;
-  renderer?: ProseRenderer;
   size?: FieldTheoryProseSize;
   style?: CSSProperties;
   surface?: 'dark' | 'light';
@@ -35,7 +32,7 @@ export interface FieldTheoryProseProps {
 
 type FieldTheoryProseStyleProps = Omit<
   FieldTheoryProseProps,
-  'children' | 'className' | 'components' | 'onClick' | 'onCopy' | 'onMouseDown' | 'remarkLineBreaks' | 'renderer' | 'size' | 'surface'
+  'children' | 'className' | 'components' | 'onClick' | 'onCopy' | 'onMouseDown' | 'remarkLineBreaks' | 'size' | 'surface'
 >;
 
 function mergeClassName(base: string, next?: string): string {
@@ -96,15 +93,12 @@ const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(funct
   onCopy,
   onMouseDown,
   remarkLineBreaks = false,
-  renderer = 'field-theory',
   size = 'reader',
   surface,
   ...styleProps
 }, ref) {
   const remarkPlugins = remarkLineBreaks ? [remarkGfm, remarkBreaks] : [remarkGfm];
-  const baseClassName = renderer === 'prose-ui'
-    ? `prose-ui ft-prose-ui ft-prose-ui-${size}${surface ? ` ${surface}` : ''}`
-    : `ft-prose ft-prose-${size}${surface ? ` ft-prose-${surface}` : ''}`;
+  const baseClassName = `ft-prose ft-prose-${size}${surface ? ` ft-prose-${surface}` : ''}`;
 
   return (
     <div
