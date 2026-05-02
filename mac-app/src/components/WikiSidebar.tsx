@@ -585,13 +585,19 @@ function sidebarNodeSortTimestamp(node: SidebarNode): number {
   return node.children.reduce((latest, child) => Math.max(latest, sidebarNodeSortTimestamp(child)), 0);
 }
 
+function sidebarNodePinnedRank(node: SidebarNode, pinnedItemIds: ReadonlySet<string>): number {
+  if (pinnedItemIds.has(node.id)) return 2;
+  if (node.kind === 'file') return 0;
+  return node.children.some((child) => sidebarNodePinnedRank(child, pinnedItemIds) > 0) ? 1 : 0;
+}
+
 export function sortSidebarNodes(
   nodes: SidebarNode[],
   sortMode: SortMode = 'alpha',
   pinnedItemIds: ReadonlySet<string> = new Set(),
 ): SidebarNode[] {
   return [...nodes].sort((a, b) => {
-    const pinnedDelta = Number(pinnedItemIds.has(b.id)) - Number(pinnedItemIds.has(a.id));
+    const pinnedDelta = sidebarNodePinnedRank(b, pinnedItemIds) - sidebarNodePinnedRank(a, pinnedItemIds);
     if (pinnedDelta !== 0) return pinnedDelta;
     if (sortMode === 'time') {
       const byTimestamp = sidebarNodeSortTimestamp(b) - sidebarNodeSortTimestamp(a);
@@ -632,7 +638,7 @@ export function shouldShowPinnedSidebarDividerBefore(
   pinnedItemIds: ReadonlySet<string>,
 ): boolean {
   if (index <= 0 || index >= nodes.length || pinnedItemIds.size === 0) return false;
-  return pinnedItemIds.has(nodes[index - 1].id) && !pinnedItemIds.has(nodes[index].id);
+  return sidebarNodePinnedRank(nodes[index - 1], pinnedItemIds) > 0 && sidebarNodePinnedRank(nodes[index], pinnedItemIds) === 0;
 }
 
 export function renamePinnedSidebarIds(pinnedItemIds: Set<string>, event: LibraryRenameEvent): Set<string> {

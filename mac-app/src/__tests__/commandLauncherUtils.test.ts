@@ -7,6 +7,7 @@ import {
   formatHotkeyDisplay,
   formatTimeAgo,
   filterLauncherDirectoryNamespaceItems,
+  filterLauncherMoveTargetDirectories,
   filterLauncherNamespaceItems,
   flattenLibraryRootsForLauncher,
   balanceLauncherNormalModeMatches,
@@ -14,6 +15,9 @@ import {
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
+  getLauncherMoveDirectoryTarget,
+  getLauncherMovedFilePath,
+  getLauncherMoveUndoTargetDirRelPath,
   getLauncherUsageScore,
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
@@ -309,6 +313,63 @@ describe('flattenLibraryDirectoriesForLauncher', () => {
         directoryRelPath: 'scratchpad/projects',
       }),
     ]);
+  });
+});
+
+describe('launcher library move helpers', () => {
+  const source = {
+    type: 'external' as const,
+    rootPath: '/Drive/Notes',
+    relPath: 'Inbox/current',
+    filePath: '/Drive/Notes/Inbox/current.md',
+    title: 'current',
+  };
+  const directory = {
+    id: 'directory-/Drive/Notes-Projects',
+    type: 'directory' as const,
+    name: 'Projects',
+    displayName: 'Projects — Shared',
+    keywords: ['projects'],
+    rootPath: '/Drive/Notes',
+    directoryPath: '/Drive/Notes/Projects',
+    directoryRelPath: 'Projects',
+    hotkeyDisplay: 'folder',
+  };
+
+  it('resolves valid move targets inside the same library root', () => {
+    expect(getLauncherMoveDirectoryTarget(source, directory)).toEqual({
+      rootPath: '/Drive/Notes',
+      targetDirRelPath: 'Projects',
+    });
+  });
+
+  it('rejects moving into the current parent or another library root', () => {
+    expect(getLauncherMoveDirectoryTarget(source, {
+      ...directory,
+      directoryPath: '/Drive/Notes/Inbox',
+      directoryRelPath: 'Inbox',
+    })).toBeNull();
+    expect(getLauncherMoveDirectoryTarget(source, {
+      ...directory,
+      rootPath: '/Other',
+      directoryPath: '/Other/Projects',
+    })).toBeNull();
+  });
+
+  it('filters move targets by query after removing invalid folders', () => {
+    const results = filterLauncherMoveTargetDirectories([
+      directory,
+      { ...directory, id: 'directory-inbox', name: 'Inbox', displayName: 'Inbox', directoryPath: '/Drive/Notes/Inbox', directoryRelPath: 'Inbox' },
+      { ...directory, id: 'directory-archive', name: 'Archive', displayName: 'Archive', keywords: ['archive'], directoryPath: '/Drive/Notes/Archive', directoryRelPath: 'Archive' },
+    ], source, 'pro');
+
+    expect(results.map((item) => item.name)).toEqual(['Projects']);
+  });
+
+  it('builds undo targets and moved file paths', () => {
+    expect(getLauncherMoveUndoTargetDirRelPath('Inbox/current')).toBe('Inbox');
+    expect(getLauncherMovedFilePath(source, 'Projects/current')).toBe('/Drive/Notes/Projects/current.md');
+    expect(getLauncherMovedFilePath({ ...source, type: 'wiki' }, 'Projects/current')).toBe('Projects/current');
   });
 });
 
@@ -884,7 +945,7 @@ describe('SQUARES_ACTION_DEFS', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
-      'save-current-website', 'toggle-theme'];
+      'save-current-website', 'move-current-library-file', 'undo-library-move', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -933,5 +994,18 @@ describe('buildBuiltInLauncherActions', () => {
       displayName: 'Save Website',
     }));
     expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
+  });
+
+  it('includes move and undo move actions', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'move-current-library-file')).toEqual(expect.objectContaining({
+      name: 'move file',
+      displayName: 'Move Current File',
+    }));
+    expect(actions.find((action) => action.actionId === 'undo-library-move')).toEqual(expect.objectContaining({
+      name: 'undo move',
+      displayName: 'Undo Last Move',
+    }));
   });
 });

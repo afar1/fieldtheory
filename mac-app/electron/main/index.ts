@@ -426,6 +426,14 @@ let commandSyncService: CommandSyncService | null = null;
 let librarySyncService: LibrarySyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
+type ActiveLibraryFileContext = {
+  type: 'wiki' | 'external';
+  rootPath: string;
+  relPath: string;
+  filePath: string;
+  title: string;
+};
+let activeLibraryFileContext: ActiveLibraryFileContext | null = null;
 let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
@@ -6262,6 +6270,34 @@ function setupClipboardIPCHandlers(): void {
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
     });
     return { fieldTheoryActive };
+  });
+
+  ipcMain.handle('commands:getActiveLibraryFileContext', (): ActiveLibraryFileContext | null => {
+    return activeLibraryFileContext;
+  });
+
+  ipcMain.handle('commands:setActiveLibraryFileContext', (_event, context: ActiveLibraryFileContext | null): boolean => {
+    if (context === null) {
+      activeLibraryFileContext = null;
+      return true;
+    }
+    if (
+      (context.type !== 'wiki' && context.type !== 'external') ||
+      !context.rootPath ||
+      !context.relPath ||
+      !context.filePath ||
+      !context.title
+    ) {
+      return false;
+    }
+    activeLibraryFileContext = {
+      type: context.type,
+      rootPath: context.rootPath,
+      relPath: context.relPath,
+      filePath: context.filePath,
+      title: context.title,
+    };
+    return true;
   });
 
   ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external'; path: string }) => {

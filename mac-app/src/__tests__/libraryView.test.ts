@@ -1437,6 +1437,26 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
+  it('keeps folders with pinned descendants in the pinned group', () => {
+    const pinned = new Set(['wiki:Artifact']);
+    const result = applyPinnedSidebarOrder([
+      dir('scratchpad'),
+      dir('z-artifacts', [
+        file('Artifact', 5),
+        file('Other', 1),
+      ]),
+    ], 'alpha', pinned);
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Z-artifacts',
+      'Scratchpad',
+    ]);
+    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
+      false,
+      true,
+    ]);
+  });
+
   it('keeps pinned wiki docs and folders pinned after rename', () => {
     const pinned = new Set(['wiki:scratchpad/Old', '/wiki::scratchpad/Old Folder']);
 
