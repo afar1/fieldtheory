@@ -5,6 +5,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { localAvatarUrl, localMediaUrl, localMediaUrls, localVideoUrl } from '../utils/bookmarkMedia';
 import { estimateTextCardHeight } from '../utils/bookmarkCardHeight';
 import { formatLongBookmarkDate, formatShortBookmarkDate } from '../utils/bookmarkDate';
+import { copyBookmarkContent } from '../utils/bookmarkCopy';
 
 const CONFIG = {
   MIN_COLS: 2,
@@ -394,6 +395,47 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         dateBadgeEl.className = 'bm-date-badge';
         el.appendChild(dateBadgeEl);
 
+        const cardCopyBtn = document.createElement('button');
+        cardCopyBtn.className = 'bm-card-copy-button';
+        cardCopyBtn.type = 'button';
+        cardCopyBtn.setAttribute('aria-label', 'Copy bookmark content');
+        cardCopyBtn.title = 'Copy bookmark content';
+        cardCopyBtn.innerHTML = `
+          <svg class="bm-card-copy-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+          </svg>
+          <svg class="bm-card-check-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <polyline points="20 6 9 17 4 12"></polyline>
+          </svg>
+        `;
+        cardCopyBtn.addEventListener('mousedown', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        cardCopyBtn.addEventListener('mouseup', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+        });
+        cardCopyBtn.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          const bookmark = elToBookmark.get(el);
+          if (!bookmark) return;
+          void copyBookmarkContent(bookmark.id).then((success) => {
+            if (!success) return;
+            cardCopyBtn.dataset.copied = '1';
+            cardCopyBtn.setAttribute('aria-label', 'Copied');
+            cardCopyBtn.title = 'Copied';
+            setTimeout(() => {
+              delete cardCopyBtn.dataset.copied;
+              cardCopyBtn.setAttribute('aria-label', 'Copy bookmark content');
+              cardCopyBtn.title = 'Copy bookmark content';
+            }, 1200);
+          });
+        });
+        el.appendChild(cardCopyBtn);
+
         grid.appendChild(el);
         pool.push(el);
         freePool.push(el);
@@ -408,6 +450,12 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     };
 
     const releaseEl = (el: HTMLDivElement) => {
+      const cardCopyBtn = el.querySelector('.bm-card-copy-button') as HTMLButtonElement | null;
+      if (cardCopyBtn) {
+        delete cardCopyBtn.dataset.copied;
+        cardCopyBtn.setAttribute('aria-label', 'Copy bookmark content');
+        cardCopyBtn.title = 'Copy bookmark content';
+      }
       el.style.display = 'none';
       el.style.visibility = '';
       freePool.push(el);
@@ -563,6 +611,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       el.style.visibility = 'hidden';
 
       const clone = el.cloneNode(true) as HTMLDivElement;
+      clone.querySelector('.bm-card-copy-button')?.remove();
       clone.style.position = 'fixed';
       clone.style.top = '0';
       clone.style.left = '0';
@@ -1103,6 +1152,62 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         .bm-check-icon { opacity: 0; transform: scale(0.7); }
         button[data-copied="1"] .bm-copy-icon { opacity: 0; transform: scale(0.7); }
         button[data-copied="1"] .bm-check-icon { opacity: 1; transform: scale(1); }
+        .bm-card-copy-button {
+          position: absolute;
+          top: 10px;
+          right: 10px;
+          z-index: 3;
+          width: 28px;
+          height: 28px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          border: 1px solid rgba(255,255,255,0.24);
+          border-radius: 8px;
+          background: rgba(0,0,0,0.42);
+          color: rgba(255,255,255,0.92);
+          box-shadow: 0 8px 18px rgba(0,0,0,0.24);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
+          cursor: pointer;
+          opacity: 0;
+          pointer-events: none;
+          transform: translateY(-2px);
+          transition: opacity 0.14s ease, transform 0.14s ease, color 0.14s ease, background 0.14s ease;
+        }
+        .bm-grid-item:hover .bm-card-copy-button,
+        .bm-card-copy-button[data-copied="1"] {
+          opacity: 1;
+          pointer-events: auto;
+          transform: translateY(0);
+        }
+        .bm-card-copy-button[data-copied="1"] {
+          color: #22c55e;
+        }
+        .bm-card-copy-button:hover {
+          background: rgba(0,0,0,0.58);
+        }
+        .bm-card-check-icon {
+          position: absolute;
+          opacity: 0;
+          transform: scale(0.7);
+          transition: opacity 0.14s ease, transform 0.14s ease;
+        }
+        .bm-card-copy-icon {
+          position: absolute;
+          opacity: 1;
+          transform: scale(1);
+          transition: opacity 0.14s ease, transform 0.14s ease;
+        }
+        .bm-card-copy-button[data-copied="1"] .bm-card-copy-icon {
+          opacity: 0;
+          transform: scale(0.7);
+        }
+        .bm-card-copy-button[data-copied="1"] .bm-card-check-icon {
+          opacity: 1;
+          transform: scale(1);
+        }
         .bm-agent-copied-label { display: none; }
         button[data-copied="1"] .bm-agent-copy-label { display: none; }
         button[data-copied="1"] .bm-agent-copied-label { display: inline; }
