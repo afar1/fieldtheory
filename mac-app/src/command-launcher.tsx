@@ -29,6 +29,7 @@ import {
   buildBookmarkPostLauncherItems,
   balanceLauncherNormalModeMatches,
   dedupeLauncherPersonItems,
+  getLauncherFieldTheoryMarkdownTarget,
   getLauncherUsageScore,
   isGeneratedBookmarkTaxonomyPath,
   nextLauncherArrowIndex,
@@ -38,6 +39,7 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
   type LauncherLibraryRoot,
@@ -195,7 +197,7 @@ function writeLauncherUsageMap(next: LauncherUsageMap): void {
 
 const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
 type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
-type FieldTheoryMarkdownTarget = { kind: 'wiki' | 'artifact' | 'command'; path: string };
+type FieldTheoryMarkdownTarget = LauncherFieldTheoryMarkdownTarget;
 
 let WIKI_COMMAND_PATH: string | null = null;
 try { WIKI_COMMAND_PATH = `${process.env.HOME}/.fieldtheory/commands/wiki.md`; } catch {}
@@ -1211,21 +1213,9 @@ function CommandLauncher() {
     // Otherwise, item is visible - don't scroll.
   }, [selectedIndex, filtered.length]);
 
-  const getFieldTheoryTarget = useCallback((item: LauncherItem): FieldTheoryMarkdownTarget | null => {
-    if (item.type === 'recent-file' && item.recentKind === 'wiki' && item.relPath) {
-      return { kind: 'wiki', path: item.relPath };
-    }
-    if (item.type === 'wiki-page' && item.relPath) {
-      return { kind: 'wiki', path: item.relPath };
-    }
-    if (item.type === 'artifact' && item.filePath) {
-      return { kind: 'artifact', path: item.filePath };
-    }
-    if (item.type === 'command' && item.filePath) {
-      return { kind: 'command', path: item.filePath };
-    }
-    return null;
-  }, []);
+  const getFieldTheoryTarget = useCallback((item: LauncherItem): FieldTheoryMarkdownTarget | null => (
+    getLauncherFieldTheoryMarkdownTarget(item)
+  ), []);
 
   const getWikiLinkText = useCallback((item: LauncherItem): string => {
     const target = (item.type === 'command' ? item.name : item.displayName).trim();
@@ -1461,7 +1451,8 @@ function CommandLauncher() {
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     };
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
-    const fieldTheoryTarget = latestContext?.fieldTheoryActive ? getFieldTheoryTarget(item) : null;
+    const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
+    const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
     traceLauncher('invoke-item', {
       item: describeLauncherItem(item),
       fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,

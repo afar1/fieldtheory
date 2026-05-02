@@ -80,7 +80,7 @@ import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command';
+  kind: 'wiki' | 'artifact' | 'command' | 'external';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
@@ -1036,8 +1036,25 @@ export default function ClipboardHistory() {
     ? FOCUS_CHROME_ICON_TOP_PX
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
-  // Show fieldtheory.dev link in footer.
+  // Center footer label: active Library timestamp, otherwise fieldtheory.dev.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
+  const [libraryActiveFileUpdated, setLibraryActiveFileUpdated] = useState<{
+    path: string;
+    title: string;
+    mtime: number;
+  } | null>(null);
+  const [footerRelativeTimeTick, setFooterRelativeTimeTick] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (viewMode !== 'librarian' || !libraryActiveFileUpdated) return;
+    const interval = window.setInterval(() => setFooterRelativeTimeTick(Date.now()), 60_000);
+    return () => window.clearInterval(interval);
+  }, [libraryActiveFileUpdated, viewMode]);
+
+  const libraryFooterUpdatedLabel = useMemo(() => {
+    if (viewMode !== 'librarian' || !libraryActiveFileUpdated) return null;
+    return `Updated ${formatRelativeTime(libraryActiveFileUpdated.mtime)}`;
+  }, [footerRelativeTimeTick, libraryActiveFileUpdated, viewMode]);
 
   // In-app performance HUD visibility.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
@@ -4625,6 +4642,7 @@ export default function ClipboardHistory() {
             onAutoPopArtifactSuperseded={handleAutoPopArtifactSuperseded}
             onOpenCommandPath={handleLibrarianOpenCommandPath}
             onFocusChromeShortcut={collapseSidebarForFocusChrome}
+            onActiveFileUpdatedChange={setLibraryActiveFileUpdated}
             preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
           />
@@ -6973,7 +6991,7 @@ export default function ClipboardHistory() {
           </div>
         )}
 
-        {/* Center: fieldtheory.dev link (hidden when quota warnings show for basic users) */}
+        {/* Center: active Library timestamp or fieldtheory.dev link */}
         {(() => {
           // Check if any quota is at 85% or higher (only relevant for basic users)
           const hasQuotaWarnings = cachedTier === 'free' && (
@@ -6983,28 +7001,33 @@ export default function ClipboardHistory() {
             quotaPercents.portableCommands >= 85
           );
 
-          // Show link when: preference is on, no quota warnings, not hovering usage, not showing narration
-          const showLink = showFieldTheoryLink &&
-            !agentImproveStatus &&
+          const showCenterLabel = !agentImproveStatus &&
             !hasQuotaWarnings &&
             !usageHovered &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
+          const centerLabel = showCenterLabel
+            ? (libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))
+            : null;
+          const centerLabelOpensSite = centerLabel === 'fieldtheory.dev';
 
-          return showLink ? (
+          return centerLabel ? (
             <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
               <span
-                onClick={() => window.shellAPI?.openExternal('https://fieldtheory.dev')}
+                onClick={() => {
+                  if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
+                }}
+                title={libraryFooterUpdatedLabel && libraryActiveFileUpdated ? libraryActiveFileUpdated.title : undefined}
                 style={{
                   fontSize: '9px',
                   color: theme.textSecondary,
-                  cursor: 'pointer',
+                  cursor: centerLabelOpensSite ? 'pointer' : 'default',
                   opacity: 0.7,
                   transition: 'opacity 0.15s',
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
               >
-                fieldtheory.dev
+                {centerLabel}
               </span>
             </div>
           ) : null;
