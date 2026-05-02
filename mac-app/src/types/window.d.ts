@@ -2186,6 +2186,18 @@ declare global {
     onConfigChanged: (callback: (config: SquaresConfig) => void) => () => void;
   }
 
+  interface FieldTheorySyncStatus {
+    localEnabled: boolean;
+    authenticated: boolean;
+    serverEnforced: boolean;
+    enabled: boolean;
+    reason: 'enabled' | 'local_disabled' | 'not_authenticated';
+  }
+
+  interface FieldTheorySyncAPI {
+    getStatus: () => Promise<FieldTheorySyncStatus>;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
@@ -2203,6 +2215,7 @@ declare global {
     socialAPI?: SocialAPI;
     cursorStatusAPI?: CursorStatusAPI;
     quotaAPI?: QuotaAPI;
+    fieldTheorySyncAPI?: FieldTheorySyncAPI;
     shellAPI?: ShellAPI;
     agentImproveAPI?: AgentImproveAPI;
     commandsAPI?: CommandsAPI;

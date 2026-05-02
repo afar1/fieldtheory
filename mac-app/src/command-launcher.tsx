@@ -13,7 +13,6 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
-import TrialGate from './components/TrialGate';
 import {
   buildBuiltInLauncherActions,
   DEFAULT_LAUNCHER_HOTKEYS,
@@ -583,7 +582,6 @@ function CommandLauncher() {
   const loadCommands = useCallback(async () => {
     try {
       const cmds = await commandsAPI.getCommands();
-      console.log('[CommandLauncher] Loaded commands:', cmds?.length || 0, cmds?.map(c => c.name));
       setCommands(cmds || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);
@@ -696,7 +694,6 @@ function CommandLauncher() {
   const loadHandoffs = useCallback(async () => {
     try {
       const hoffs = await commandsAPI.getHandoffs();
-      console.log('[CommandLauncher] Loaded handoffs:', hoffs?.length || 0);
       setHandoffs(hoffs || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load handoffs:', err);
@@ -1917,11 +1914,6 @@ function CommandLauncher() {
 const root = ReactDOM.createRoot(document.getElementById('root')!);
 root.render(
   <React.StrictMode>
-    <TrialGate
-      showBanner={false}
-      onPaywallMount={() => commandsAPI.launcherResize(360)}
-    >
-      <CommandLauncher />
-    </TrialGate>
+    <CommandLauncher />
   </React.StrictMode>
 );

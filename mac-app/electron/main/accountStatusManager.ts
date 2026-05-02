@@ -30,7 +30,7 @@ export type AccountStatus =
     }
   | {
       state: 'needs_login';
-      capabilityMode: 'read_only';
+      capabilityMode: 'writable';
       email?: string;
     }
   | {
@@ -95,7 +95,7 @@ export class AccountStatusManager extends EventEmitter {
   }
 
   setNeedsLogin(email?: string): void {
-    this.setStatus({ state: 'needs_login', capabilityMode: 'read_only', email });
+    this.setStatus({ state: 'needs_login', capabilityMode: 'writable', email });
   }
 
   async checkNow(): Promise<AccountStatus> {
@@ -144,21 +144,10 @@ export class AccountStatusManager extends EventEmitter {
         return this.status;
       }
 
-      if (data.state === 'expired') {
-        this.setStatus({
-          state: 'read_only',
-          capabilityMode: 'read_only',
-          reason: 'trial_expired',
-          email: session.user?.email ?? undefined,
-          checkedAt,
-        });
-        return this.status;
-      }
-
       this.setStatus({
         state: 'active',
         capabilityMode: 'writable',
-        tier: data.state === 'trial' ? 'trial' : 'pro',
+        tier: data.state === 'pro' ? 'pro' : 'trial',
         email: session.user?.email ?? undefined,
         checkedAt,
         trialEndsAt: data.trialEndsAt ?? null,

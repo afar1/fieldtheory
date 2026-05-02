@@ -4,7 +4,6 @@ import type { Session, SupabaseClient } from '@supabase/supabase-js';
 
 interface UseAuthSessionBridgeOptions {
   supabase: SupabaseClient | null;
-  syncRendererSessionToMain?: boolean;
   onSignedOut?: () => void;
 }
 
@@ -16,7 +15,6 @@ interface UseAuthSessionBridgeResult {
 
 export function useAuthSessionBridge({
   supabase,
-  syncRendererSessionToMain = false,
   onSignedOut,
 }: UseAuthSessionBridgeOptions): UseAuthSessionBridgeResult {
   const [session, setSession] = useState<Session | null>(null);
@@ -29,15 +27,6 @@ export function useAuthSessionBridge({
 
   useEffect(() => {
     let disposed = false;
-
-    const syncSessionToMain = (nextSession: Session | null): void => {
-      if (!syncRendererSessionToMain || !nextSession) return;
-
-      void window.clipboardAPI?.setSyncSession?.(
-        nextSession.access_token,
-        nextSession.refresh_token
-      );
-    };
 
     const handleSignedOut = (): void => {
       if (disposed) return;
@@ -65,7 +54,6 @@ export function useAuthSessionBridge({
 
         if (rendererSession) {
           setSession(rendererSession);
-          syncSessionToMain(rendererSession);
         }
       } catch (error) {
         console.error('[useAuthSessionBridge] Failed to initialize auth session:', error);
@@ -94,7 +82,6 @@ export function useAuthSessionBridge({
       if (nextSession) {
         setSession(nextSession);
         setInitialized(true);
-        syncSessionToMain(nextSession);
         return;
       }
 
@@ -108,7 +95,7 @@ export function useAuthSessionBridge({
       unsubscribeMainProcess();
       rendererSubscription?.data.subscription.unsubscribe();
     };
-  }, [supabase, syncRendererSessionToMain]);
+  }, [supabase]);
 
   return { session, setSession, initialized };
 }

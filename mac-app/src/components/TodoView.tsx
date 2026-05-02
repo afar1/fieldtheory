@@ -1,11 +1,10 @@
 // =============================================================================
-// TodoView - Keyboard-first todo list with bidirectional Supabase sync.
-// Shows todos from iOS, allows marking complete, editing, deleting, creating.
+// TodoView - Keyboard-first internal todo sync surface.
+// Hidden unless Field Theory sync is explicitly enabled.
 // =============================================================================
 
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { supabase } from '../supabaseClient';
 
 // Todo type matches what MobileSync returns.
 interface Todo {
@@ -150,18 +149,6 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     
     try {
       setSyncing(true);
-      
-      // Ensure session is passed to main process (in case it wasn't on app start).
-      // This handles the case where user was already logged in from a previous session.
-      if (supabase) {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session) {
-          await window.clipboardAPI?.setSyncSession?.(
-            session.access_token,
-            session.refresh_token
-          );
-        }
-      }
       
       // Check authentication.
       const authed = await window.todoAPI.isAuthenticated();
@@ -1034,4 +1021,3 @@ export default function TodoView({ onSwitchToClipboard }: TodoViewProps) {
     </div>
   );
 }
-

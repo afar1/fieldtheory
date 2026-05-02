@@ -306,13 +306,14 @@ export class LibrarySyncService {
   private lastSyncAt: number | null = null;
   private pendingSyncTimeout: ReturnType<typeof setTimeout> | null = null;
   private pollInterval: ReturnType<typeof setInterval> | null = null;
+  private readonly handleSessionChanged = (session: unknown): void => {
+    if (session) this.scheduleSync();
+  };
 
   constructor(authManager: AuthManager) {
     this.authManager = authManager;
 
-    this.authManager.on('sessionChanged', (session) => {
-      if (session) this.scheduleSync();
-    });
+    this.authManager.on('sessionChanged', this.handleSessionChanged);
 
     if (this.authManager.isAuthenticated()) {
       this.scheduleSync();
@@ -343,6 +344,7 @@ export class LibrarySyncService {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
+    this.authManager.off('sessionChanged', this.handleSessionChanged);
   }
 
   scheduleSync(delayMs = DEBOUNCE_MS): void {

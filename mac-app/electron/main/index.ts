@@ -76,6 +76,7 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LibrarySyncService } from './librarySyncService';
+import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { CommandsIPCChannels } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
@@ -444,6 +445,64 @@ let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
 let lastScratchpadOpenAt = 0;
+
+function broadcastTodosChanged(todos: Todo[]): void {
+  BrowserWindow.getAllWindows().forEach(win => {
+    if (!win.isDestroyed()) {
+      win.webContents.send(TodoIPCChannels.TODOS_CHANGED, todos);
+    }
+  });
+}
+
+function getFieldTheorySyncStatus(): FieldTheorySyncStatus {
+  const localEnabled =
+    preferencesManager?.get().fieldTheoryInternalSyncEnabled === true ||
+    isFieldTheoryInternalSyncEnvEnabled();
+  return resolveFieldTheorySyncStatus({
+    localEnabled,
+    authenticated: authManager?.isAuthenticated() ?? false,
+  });
+}
+
+function canUseFieldTheorySync(): boolean {
+  return getFieldTheorySyncStatus().enabled;
+}
+
+function fieldTheorySyncDisabledError(): string {
+  const status = getFieldTheorySyncStatus();
+  if (status.reason === 'not_authenticated') return 'Not authenticated';
+  return 'Field Theory sync is not enabled for this user';
+}
+
+function refreshFieldTheorySyncServices(): void {
+  if (!canUseFieldTheorySync()) {
+    librarySyncService?.dispose();
+    librarySyncService = null;
+    commandSyncService?.destroy();
+    commandSyncService = null;
+    todoStore?.destroy();
+    todoStore = null;
+    return;
+  }
+
+  if (!commandSyncService && authManager && commandsManager) {
+    commandSyncService = new CommandSyncService(authManager, commandsManager);
+  }
+  if (!librarySyncService && authManager) {
+    librarySyncService = new LibrarySyncService(authManager);
+  }
+  if (!todoStore && authManager) {
+    todoStore = new TodoStore(authManager);
+    todoStore.on('todosChanged', broadcastTodosChanged);
+  }
+}
+
+function scheduleLibrarySyncIfAllowed(): void {
+  refreshFieldTheorySyncServices();
+  if (canUseFieldTheorySync()) {
+    librarySyncService?.scheduleSync();
+  }
+}
 
 function canWriteFieldTheoryContent(): boolean {
   return accountStatusManager?.getCapabilityMode() !== 'read_only';
@@ -2402,7 +2461,7 @@ function setupLibrarianIPCHandlers(): void {
   if (librarianManager) {
     librarianManager.startWikiWatcher();
     librarianManager.on('wiki:changed', () => {
-      librarySyncService?.scheduleSync();
+      scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-wiki-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
       });
@@ -2414,7 +2473,7 @@ function setupLibrarianIPCHandlers(): void {
       });
     });
     librarianManager.on('wiki:renamed', (event: LibraryRenameEvent) => {
-      librarySyncService?.scheduleSync();
+      scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-wiki-renamed', {
         traceId: event.traceId,
         source: event.source,
@@ -2430,7 +2489,7 @@ function setupLibrarianIPCHandlers(): void {
       });
     });
     librarianManager.on('library:changed', () => {
-      librarySyncService?.scheduleSync();
+      scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-library-changed', {
         windows: BrowserWindow.getAllWindows().filter((w) => !w.isDestroyed()).length,
       });
@@ -2439,7 +2498,7 @@ function setupLibrarianIPCHandlers(): void {
       });
     });
     librarianManager.on('library:renamed', (event: LibraryRenameEvent) => {
-      librarySyncService?.scheduleSync();
+      scheduleLibrarySyncIfAllowed();
       traceLibraryRename('broadcast-library-renamed', {
         traceId: event.traceId,
         source: event.source,
@@ -6182,6 +6241,10 @@ function setupClipboardIPCHandlers(): void {
     if (!commandsManager) {
       return false;
     }
+    refreshFieldTheorySyncServices();
+    if (!canUseFieldTheorySync()) {
+      return false;
+    }
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return false;
@@ -6202,6 +6265,10 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_MOBILE_SYNC_STATUS, async () => {
+    refreshFieldTheorySyncServices();
+    if (!canUseFieldTheorySync()) {
+      return { ready: false, lastSyncAt: null };
+    }
     if (!commandSyncService) {
       return { ready: false, lastSyncAt: null };
     }
@@ -6212,8 +6279,9 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.SYNC_TO_MOBILE, async () => {
+    refreshFieldTheorySyncServices();
     if (!commandSyncService) {
-      return { success: false, uploaded: 0, updated: 0, deleted: 0, errors: ['Not initialized'] };
+      return { success: false, uploaded: 0, updated: 0, deleted: 0, errors: [fieldTheorySyncDisabledError()] };
     }
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
@@ -6230,6 +6298,10 @@ function setupClipboardIPCHandlers(): void {
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_REMOTE_COMMAND_COUNT, async () => {
+    refreshFieldTheorySyncServices();
+    if (!canUseFieldTheorySync()) {
+      return 0;
+    }
     if (!commandSyncService) {
       return 0;
     }
@@ -6395,10 +6467,6 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'Not initialized' };
     }
 
-    if (quotaManager && !quotaManager.isAllowed('portable_commands')) {
-      return { success: false, error: 'Portable command limit reached. Upgrade to continue.' };
-    }
-
     const command = commandsManager.getCommand(commandName);
     if (!command) {
       log.error(`Command not found: "${commandName}". Available: ${commandsManager.getCommands().map(c => c.name).join(', ')}`);
@@ -6496,6 +6564,10 @@ function setupClipboardIPCHandlers(): void {
   // Share a command to the shared pool (popular_commands table).
   // Routes through main process to use AuthManager's authenticated Supabase client.
   ipcMain.handle('commands:share', async (_event, command: { name: string; content: string }) => {
+    refreshFieldTheorySyncServices();
+    if (!canUseFieldTheorySync()) {
+      return { error: fieldTheorySyncDisabledError() };
+    }
     const supabase = authManager?.getSupabaseClient();
     if (!supabase) {
       return { error: 'Not authenticated' };
@@ -6526,6 +6598,10 @@ function setupClipboardIPCHandlers(): void {
 
   // Unshare a command from the shared pool.
   ipcMain.handle('commands:unshare', async (_event, commandId: string) => {
+    refreshFieldTheorySyncServices();
+    if (!canUseFieldTheorySync()) {
+      return { error: fieldTheorySyncDisabledError() };
+    }
     const supabase = authManager?.getSupabaseClient();
     if (!supabase) {
       return { error: 'Not authenticated' };
@@ -6682,6 +6758,10 @@ function setupClipboardIPCHandlers(): void {
       return { state: 'checking', capabilityMode: 'writable' };
     }
     return accountStatusManager.checkNow();
+  });
+
+  ipcMain.handle('fieldTheorySync:getStatus', async () => {
+    return getFieldTheorySyncStatus();
   });
 }
 
@@ -7028,11 +7108,11 @@ function broadcastTranscribeEvents(): void {
     dynamicIslandManager?.updateStandardAudioLevel(level);
   });
 
-  // Track if quota just exhausted - skip paste-success to preserve upgrade message.
+  // Track if quota just exhausted - skip paste-success to preserve temporary status.
   let quotaJustExhausted = false;
   
   transcriberManager.on('paste-success', (_transcription) => {
-    // If quota was just exhausted, skip the normal done state to preserve upgrade message.
+    // If quota was just exhausted, skip the normal done state to preserve temporary status.
     if (quotaJustExhausted) {
       quotaJustExhausted = false;
       return;
@@ -7052,7 +7132,7 @@ function broadcastTranscribeEvents(): void {
     return;
   });
   
-  // Handle quota exhausted events - show upgrade prompt at cursor and broadcast to windows.
+  // Handle quota exhausted events - show a temporary status at cursor and broadcast to windows.
   transcriberManager.on('quotaExhausted', (data: { feature: 'priorityMic' | 'autoStack'; used: number; limit: number }) => {
     const { feature, used, limit } = data;
     const featureName = feature === 'priorityMic' ? 'priority mic minutes' : 'auto-stacks';
@@ -7574,9 +7654,8 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  // Broadcast quota changes to all windows so UI can update in real-time.
-  // Also auto-select 'none' for priority mic when quota is exhausted.
-  quotaManager.on('quotaChanged', (quotas) => {
+  // Broadcast quota changes to all windows so usage stats can update in real-time.
+  quotaManager.on('quotaChanged', () => {
     const formatted = {
       priorityMic: quotaManager!.formatPriorityMicUsage(),
       autoStack: quotaManager!.formatAutoStackUsage(),
@@ -7588,15 +7667,6 @@ async function initTranscriberSystem(): Promise<void> {
         window.webContents.send('quota:changed', formatted);
       }
     });
-
-    // Auto-select 'none' when priority mic quota is exhausted.
-    // This ensures users don't stay on a device they can't use.
-    if (!quotas.priorityMic.allowed && audioManager) {
-      const audioState = audioManager.getState();
-      if (audioState.priorityDeviceId) {
-        audioManager.setPriorityDevice(null);
-      }
-    }
   });
 
   // Initialize cursor status indicator BEFORE transcriberManager so it can be passed in.
@@ -7687,7 +7757,6 @@ async function initTranscriberSystem(): Promise<void> {
     syntheticAgentIndex = (syntheticAgentIndex + 1) % syntheticAgentCounts.length;
     const count = syntheticAgentCounts[syntheticAgentIndex];
     agentAttentionManager?.setSynthetic(count);
-    console.log(`[DynamicIsland] synthetic agents → ${count}`);
   });
 
   const syncAgentToolFilter = () => {
@@ -8061,18 +8130,6 @@ async function initTranscriberSystem(): Promise<void> {
   }
   await metricsManager.init();
 
-  // Initialize todo store for iOS ↔ Mac sync.
-  todoStore = new TodoStore(authManager);
-
-  // Forward todo events to renderer windows.
-  todoStore.on('todosChanged', (todos: Todo[]) => {
-    BrowserWindow.getAllWindows().forEach(win => {
-      if (!win.isDestroyed()) {
-        win.webContents.send(TodoIPCChannels.TODOS_CHANGED, todos);
-      }
-    });
-  });
-
   // Register event handlers BEFORE authManager.init().
   // init() restores session and may emit 'userChanged' synchronously.
   authManager.on('userChanged', async (userId: string) => {
@@ -8133,6 +8190,7 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       await commandsManager.reinitializeForUser();
     }
+    refreshFieldTheorySyncServices();
     if (taggedDocsManager && userDataManager) {
       taggedDocsManager.setDatabasePath(userDataManager.getUserDataPath('tagged.db'));
       void taggedDocsManager.rescan();
@@ -8167,6 +8225,7 @@ async function initTranscriberSystem(): Promise<void> {
     if (commandsManager) {
       commandsManager.onUserLoggedOut();
     }
+    refreshFieldTheorySyncServices();
     taggedDocsManager?.onUserLoggedOut();
     accountStatusManager?.setNeedsLogin();
   });
@@ -8191,6 +8250,7 @@ async function initTranscriberSystem(): Promise<void> {
     } else {
       accountStatusManager?.setNeedsLogin();
     }
+    refreshFieldTheorySyncServices();
   });
 
   // Forward auth debug events to all renderer windows for DevTools visibility
@@ -8329,15 +8389,9 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize feedback manager for user feedback to admin.
   feedbackManager = new FeedbackManager(authManager, clipboardManager);
 
-  // Initialize command sync service for mobile voice commands.
-  // This syncs portable commands to Supabase when mobile sync is enabled.
-  if (commandsManager && authManager) {
-    commandSyncService = new CommandSyncService(authManager, commandsManager);
-  }
-
-  if (authManager) {
-    librarySyncService = new LibrarySyncService(authManager);
-  }
+  // Field Theory cloud sync is internal-only and disabled unless the hidden
+  // local setting is on. Add a Supabase allowlist before enabling it outside dev.
+  refreshFieldTheorySyncServices();
 
   // metricsManager was initialized earlier, before authManager.init()
 
@@ -9042,18 +9096,22 @@ if (!gotTheLock) {
 
     // Todo IPC handlers
     ipcMain.handle('todo:isAuthenticated', () => {
-      return authManager?.isAuthenticated() ?? false;
+      refreshFieldTheorySyncServices();
+      return canUseFieldTheorySync();
     });
 
     ipcMain.handle(TodoIPCChannels.GET_TODOS, () => {
+      refreshFieldTheorySyncServices();
       return todoStore?.getTodos() ?? [];
     });
 
     ipcMain.handle(TodoIPCChannels.SYNC_TODOS, async () => {
+      refreshFieldTheorySyncServices();
       return await todoStore?.syncTodos() ?? [];
     });
 
     ipcMain.handle(TodoIPCChannels.CREATE_TODO, async (_event, text: string) => {
+      refreshFieldTheorySyncServices();
       if (!todoStore) return null;
       // Generate a client ID for deduplication
       const clientId = crypto.randomUUID();
@@ -9061,6 +9119,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle(TodoIPCChannels.UPDATE_TODO, async (_event, id: string, text: string) => {
+      refreshFieldTheorySyncServices();
       if (!todoStore) return null;
       const success = await todoStore.update(id, { text });
       if (success) {
@@ -9071,6 +9130,7 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle(TodoIPCChannels.TOGGLE_TODO, async (_event, id: string) => {
+      refreshFieldTheorySyncServices();
       if (!todoStore) return null;
       const success = await todoStore.toggle(id);
       if (success) {
@@ -9081,14 +9141,17 @@ if (!gotTheLock) {
     });
 
     ipcMain.handle(TodoIPCChannels.DELETE_TODO, async (_event, id: string) => {
+      refreshFieldTheorySyncServices();
       return await todoStore?.delete(id) ?? false;
     });
 
     ipcMain.handle(TodoIPCChannels.DELETE_TODOS, async (_event, ids: string[]) => {
+      refreshFieldTheorySyncServices();
       return await todoStore?.deleteBatch(ids) ?? false;
     });
 
     ipcMain.handle(TodoIPCChannels.COMPLETE_TODOS, async (_event, ids: string[]) => {
+      refreshFieldTheorySyncServices();
       return await todoStore?.completeBatch(ids) ?? false;
     });
 
@@ -9569,6 +9632,10 @@ if (!gotTheLock) {
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.destroy();
     }
+
+    librarySyncService?.dispose();
+    commandSyncService?.destroy();
+    todoStore?.destroy();
 
     // Sync metrics before quitting (fire-and-forget, don't block quit)
     if (metricsManager) {
