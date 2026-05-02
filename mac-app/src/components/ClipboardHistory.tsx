@@ -2758,29 +2758,34 @@ export default function ClipboardHistory() {
         return;
       }
 
-      // Shift+M - Create Markdown in Library from the selected row or selected items.
-      if (key.toLowerCase() === 'm' && hasShift && !hasMeta && !hasCtrl && !hasAlt) {
+      // M - Create markdown in Library from the selected row or selected items.
+      if (key.toLowerCase() === 'm' && !hasMeta && !hasCtrl && !hasAlt) {
         if (isTypingInTextEntry) return;
-        e.preventDefault();
 
         if (selectedIds.size > 0) {
           const selectedItems = items.filter(item => selectedIds.has(item.id));
-          if (selectedItems.length > 0) void handleCreateMarkdownFromItems(selectedItems);
-          return;
+          if (selectedItems.length > 0) {
+            e.preventDefault();
+            void handleCreateMarkdownFromItems(selectedItems);
+            return;
+          }
         }
 
         const selectedRow = listRows[selectedIndex];
         if (selectedRow?.type === 'stack') {
+          e.preventDefault();
           const hasImprovedContent = stackHasImprovedContent(selectedRow.items);
           const showImproved = hasImprovedContent && !viewOriginalIds.has(selectedRow.stack.stackId);
           void handleCreateMarkdownFromItems(selectedRow.items, {
             stackId: selectedRow.stack.stackId,
             contentVersion: showImproved ? 'improved' : 'original',
           });
+          return;
         } else if (selectedRow?.type === 'item') {
+          e.preventDefault();
           void handleCreateMarkdownFromItems([selectedRow.item]);
+          return;
         }
-        return;
       }
 
       // M - Open DM modal to send selected item to a contact (disabled by feature flag).
@@ -5673,7 +5678,7 @@ export default function ClipboardHistory() {
                               contentVersion: showImproved ? 'improved' : 'original',
                             });
                           }}
-                          title="Create Markdown in Library (Shift+M)"
+                          title="create markdown in library (m)"
                           style={{
                             padding: '4px 6px',
                             fontSize: '10px',
@@ -5688,7 +5693,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          Markdown <KeyCap>⇧M</KeyCap>
+                          markdown <KeyCap>m</KeyCap>
                         </button>
                         {/* Paste hint button - rightmost */}
                         <button
@@ -6552,7 +6557,7 @@ export default function ClipboardHistory() {
                           e.stopPropagation();
                           void handleCreateMarkdownFromItems([item]);
                         }}
-                        title="Create Markdown in Library (Shift+M)"
+                        title="create markdown in library (m)"
                         style={{
                           padding: '3px 4px',
                           fontSize: '9px',
@@ -6568,7 +6573,7 @@ export default function ClipboardHistory() {
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
-                        Markdown <KeyCap>⇧M</KeyCap>
+                        markdown <KeyCap>m</KeyCap>
                       </button>
                       {/* Paste hint button with target app - rightmost */}
                       <button
@@ -7793,7 +7798,7 @@ export default function ClipboardHistory() {
                   borderRadius: '4px',
                   backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
                 }}>
-                  Figure {preview.figureLabel}
+                  figure {preview.figureLabel}
                 </div>
               )}
               <img

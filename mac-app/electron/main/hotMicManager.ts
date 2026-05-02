@@ -85,6 +85,16 @@ type HotMicClipboardBridge = {
   exportImageToCache?: (item: ClipboardItem) => Promise<string | null>;
 };
 
+type FieldTheoryMarkdownInsertionTarget = {
+  isAvailable: () => boolean;
+  insertText: (text: string) => boolean;
+};
+
+type HotMicTextTarget =
+  | { kind: 'app'; bundleId: string }
+  | { kind: 'field-theory-markdown' }
+  | { kind: 'none' };
+
 /**
  * Hot Mic states:
  * - idle: Not active
@@ -286,6 +296,7 @@ export class HotMicManager extends EventEmitter {
   private audioManager: AudioManager | null = null;
   private dynamicIslandManager: DynamicIslandManager | null = null;
   private metricsWordsRecorder: ((wordCount: number) => void) | null = null;
+  private fieldTheoryMarkdownInsertionTarget: FieldTheoryMarkdownInsertionTarget | null = null;
 
   private state: HotMicState = 'idle';
   private condition: HotMicCondition | null = null;
@@ -377,6 +388,11 @@ export class HotMicManager extends EventEmitter {
   private lastSpeechDetectedMs: number = 0;
   private readonly DEFAULT_BUFFER_DISCARD_MS = 4_000;
   private readonly MIN_HISTORY_WORDS = 6;
+  private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
+    'com.fieldtheory.app',
+    'com.fieldtheory.experimental',
+    'com.github.electron',
+  ]);
 
   // Escape key — reserved for future double-tap implementation
 
@@ -603,6 +619,10 @@ export class HotMicManager extends EventEmitter {
 
   setClipboardManager(manager: HotMicClipboardBridge): void {
     this.clipboardManager = manager;
+  }
+
+  setFieldTheoryMarkdownInsertionTarget(target: FieldTheoryMarkdownInsertionTarget | null): void {
+    this.fieldTheoryMarkdownInsertionTarget = target;
   }
 
   setCommandsManager(manager: CommandsManager): void {
@@ -834,8 +854,7 @@ export class HotMicManager extends EventEmitter {
   private getTypeTarget(): string | null {
     // Use whatever app is currently focused
     const frontmost = this.nativeHelper.getFrontmostApp();
-    const ftBundleIds = ['com.fieldtheory.app', 'com.fieldtheory.experimental'];
-    if (frontmost?.bundleId && !ftBundleIds.includes(frontmost.bundleId)) {
+    if (frontmost?.bundleId && !this.isFieldTheoryBundleId(frontmost.bundleId)) {
       log.debug('Hot Mic: typing into frontmost app: %s (%s)', frontmost.name, frontmost.bundleId);
       return frontmost.bundleId;
     }
@@ -843,6 +862,53 @@ export class HotMicManager extends EventEmitter {
     // Fall back to configured target
     log.debug('Hot Mic: falling back to configured target: %s', this.targetBundleId);
     return this.targetBundleId;
+  }
+
+  private isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
+    return !!bundleId && HotMicManager.FIELD_THEORY_BUNDLE_IDS.has(bundleId.toLowerCase());
+  }
+
+  private getTextTarget(): HotMicTextTarget {
+    const frontmost = this.nativeHelper.getFrontmostApp();
+    if (frontmost?.bundleId && !this.isFieldTheoryBundleId(frontmost.bundleId)) {
+      log.debug('Hot Mic: typing into frontmost app: %s (%s)', frontmost.name, frontmost.bundleId);
+      return { kind: 'app', bundleId: frontmost.bundleId };
+    }
+
+    if (this.fieldTheoryMarkdownInsertionTarget?.isAvailable()) {
+      log.debug('Hot Mic: typing into focused Field Theory markdown editor');
+      return { kind: 'field-theory-markdown' };
+    }
+
+    if (this.targetBundleId) {
+      log.debug('Hot Mic: falling back to configured target: %s', this.targetBundleId);
+      return { kind: 'app', bundleId: this.targetBundleId };
+    }
+
+    log.debug('Hot Mic: no text target available');
+    return { kind: 'none' };
+  }
+
+  private getBundleIdForTextTarget(target: HotMicTextTarget): string | null {
+    return target.kind === 'app' ? target.bundleId : null;
+  }
+
+  private async insertTextIntoTarget(target: HotMicTextTarget, text: string, pressEnter: boolean): Promise<boolean> {
+    if (target.kind === 'field-theory-markdown') {
+      const textToInsert = pressEnter ? `${text}\n` : text;
+      return this.fieldTheoryMarkdownInsertionTarget?.insertText(textToInsert) ?? false;
+    }
+
+    if (target.kind !== 'app') {
+      return false;
+    }
+
+    const result = await this.typeIntoAppWithClipboardSync(target.bundleId, text, pressEnter);
+    if (!result.success) {
+      log.error('Hot Mic: typeIntoApp failed:', result.error);
+      return false;
+    }
+    return true;
   }
 
   private async typeIntoAppWithClipboardSync(
@@ -1136,22 +1202,24 @@ export class HotMicManager extends EventEmitter {
     }
 
     const frontmost = this.nativeHelper.getFrontmostApp();
-    const ftBundleIds = ['com.fieldtheory.app', 'com.fieldtheory.experimental'];
-    if (frontmost?.bundleId && !ftBundleIds.includes(frontmost.bundleId)) {
+    if (frontmost?.bundleId && !this.isFieldTheoryBundleId(frontmost.bundleId)) {
       this.targetBundleId = frontmost.bundleId;
     } else {
       this.targetBundleId = this.preferences.getPreference('hotMicTargetBundleId') || null;
     }
 
-    if (!this.targetBundleId) {
+    const hasFieldTheoryMarkdownTarget = this.isFieldTheoryBundleId(frontmost?.bundleId)
+      && (this.fieldTheoryMarkdownInsertionTarget?.isAvailable() ?? false);
+
+    if (!this.targetBundleId && !hasFieldTheoryMarkdownTarget) {
       log.error('No target app for Hot Mic');
       this.cursorStatusManager?.showCriticalMessage('Hot Mic: No target app');
       return;
     }
 
-    log.info('Hot Mic activated, target: %s', this.targetBundleId);
+    log.info('Hot Mic activated, target: %s', this.targetBundleId ?? 'field-theory-markdown');
     this.playSound('recordingStart');
-    this.emit('activated', this.targetBundleId);
+    this.emit('activated', this.targetBundleId ?? 'field-theory-markdown');
 
     // Go straight into listening (buffer mode) — no queue needed
     this.startListening();
@@ -1235,15 +1303,14 @@ export class HotMicManager extends EventEmitter {
 
       if (this.transcriptBuffer.length > 0) {
         log.info('Hot Mic: flushing buffer via short press (%d chunks)', this.transcriptBuffer.length);
-        const target = this.getTypeTarget();
-        let mappedText = await this.consumeBufferedHotMicPayload(target);
+        const target = this.getTextTarget();
+        let mappedText = await this.consumeBufferedHotMicPayload(this.getBundleIdForTextTarget(target));
         if (mappedText) {
           void this.storeHotMicTranscript(mappedText);
-          if (target) {
+          if (target.kind !== 'none') {
             // Trailing space so the next dictation flows naturally.
             mappedText = mappedText + ' ';
-            const result = await this.typeIntoAppWithClipboardSync(target, mappedText, false);
-            if (result.success) {
+            if (await this.insertTextIntoTarget(target, mappedText, false)) {
               this.playSound('paste');
             }
           }
@@ -2219,16 +2286,16 @@ export class HotMicManager extends EventEmitter {
           );
           this.clearHotMicDraftUi(true);
         } else {
-          const target = this.getTypeTarget();
-          const mappedText = await this.consumeBufferedHotMicPayload(target);
+          const target = this.getTextTarget();
+          const mappedText = await this.consumeBufferedHotMicPayload(this.getBundleIdForTextTarget(target));
           if (mappedText) {
             void this.storeHotMicTranscript(mappedText);
-            if (target) {
+            if (target.kind !== 'none') {
               log.info('Hot Mic: flushing buffer before command (%d chars)', mappedText.length);
               if (LOG_TRANSCRIPT_PAYLOADS) {
                 log.debug('Hot Mic: flushing buffer payload: "%s"', mappedText);
               }
-              await this.typeIntoAppWithClipboardSync(target, mappedText, false);
+              await this.insertTextIntoTarget(target, mappedText, false);
             }
           }
         }
@@ -2263,22 +2330,19 @@ export class HotMicManager extends EventEmitter {
         this.pushNormalizedTextToBuffer(pasteCleanedText);
       }
 
-      const target = this.getTypeTarget();
-      let mappedText = await this.consumeBufferedHotMicPayload(target);
+      const target = this.getTextTarget();
+      let mappedText = await this.consumeBufferedHotMicPayload(this.getBundleIdForTextTarget(target));
 
       if (mappedText) {
         void this.storeHotMicTranscript(mappedText);
         // Trailing space so the next dictation flows naturally
-        if (target) {
+        if (target.kind !== 'none') {
           mappedText = mappedText + ' ';
-          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s', mappedText.length, target);
+          log.info('Hot Mic: pasting buffer (%d chars, no submit) to %s', mappedText.length, target.kind === 'app' ? target.bundleId : 'field-theory-markdown');
           if (LOG_TRANSCRIPT_PAYLOADS) {
             log.debug('Hot Mic: pasting buffer payload: "%s"', mappedText);
           }
-          const result = await this.typeIntoAppWithClipboardSync(target, mappedText, false);
-          if (!result.success) {
-            log.error('Hot Mic: typeIntoApp failed:', result.error);
-          } else {
+          if (await this.insertTextIntoTarget(target, mappedText, false)) {
             this.playSound('paste');
           }
         }
@@ -2306,31 +2370,28 @@ export class HotMicManager extends EventEmitter {
       }
 
       // Flush the entire buffer
-      const target = this.getTypeTarget();
-      const mappedText = await this.consumeBufferedHotMicPayload(target);
+      const target = this.getTextTarget();
+      const mappedText = await this.consumeBufferedHotMicPayload(this.getBundleIdForTextTarget(target));
 
       if (mappedText) {
         void this.storeHotMicTranscript(mappedText);
-        if (target) {
-          log.info('Hot Mic: submitting buffer (%d chars) to %s', mappedText.length, target);
+        if (target.kind !== 'none') {
+          log.info('Hot Mic: submitting buffer (%d chars) to %s', mappedText.length, target.kind === 'app' ? target.bundleId : 'field-theory-markdown');
           if (LOG_TRANSCRIPT_PAYLOADS) {
             log.debug('Hot Mic: submitting buffer payload: "%s"', mappedText);
           }
-          const result = await this.typeIntoAppWithClipboardSync(target, mappedText, true);
-          if (!result.success) {
-            log.error('Hot Mic: typeIntoApp failed:', result.error);
-          } else {
+          if (await this.insertTextIntoTarget(target, mappedText, true)) {
             this.playSound('paste');
           }
         }
       } else {
-        const target = this.getTypeTarget();
-        if (!target) {
+        const target = this.getTextTarget();
+        if (target.kind === 'none') {
           this.resetBufferDiscardTimer();
           return;
         }
         // Submit word alone — just hit Enter
-        await this.nativeHelper.typeIntoApp(target, '', true);
+        await this.insertTextIntoTarget(target, '', true);
       }
 
       // Keep listening — user navigates on their own
@@ -3001,16 +3062,16 @@ export class HotMicManager extends EventEmitter {
   }
 
   /**
-   * Remove transcription metadata-like artifacts while preserving Figure refs.
+   * Remove transcription metadata-like artifacts while preserving figure refs.
    */
   private sanitizeTranscriptText(text: string): string {
     const trimmedText = text ? text.trim() : '';
     if (!trimmedText) return '';
 
-    const startedWithArtifact = /^\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/i.test(trimmedText);
+    const startedWithArtifact = /^\[(?!figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/i.test(trimmedText);
 
     let cleanedText = trimmedText
-      .replace(/\s*\[(?!Figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/g, ' ')
+      .replace(/\s*\[(?!figure\s+[A-Za-z0-9]+\])[^\]]+\]\s*/gi, ' ')
       .replace(/\([^)]*\)/g, ' ')
       .replace(/[<>]{2,}/g, ' ')
       .replace(/\b(mm[-\s]?hmm|mm+|hmm+)\b/gi, ' ')
@@ -3251,7 +3312,7 @@ export class HotMicManager extends EventEmitter {
       if (!item || !item.imageData) continue;
       const imagePath = await this.exportClipboardItemToCache(item);
       if (imagePath) {
-        lines.push(`Figure ${screenshot.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
+        lines.push(`figure ${screenshot.figureLabel}: \`${imagePath.replace(os.homedir(), '~')}\``);
       }
     }
 
@@ -3348,8 +3409,8 @@ export class HotMicManager extends EventEmitter {
       void this.storeHotMicTranscript(textToInject);
     }
 
-    const target = this.getTypeTarget();
-    if (textToInject && target) {
+    const target = this.getTextTarget();
+    if (textToInject && target.kind !== 'none') {
       if (!shouldSubmit) {
         textToInject = textToInject + ' ';
       }
@@ -3357,19 +3418,14 @@ export class HotMicManager extends EventEmitter {
       if (LOG_TRANSCRIPT_PAYLOADS) {
         log.debug('Hot Mic: pasting chunk payload: "%s"', textToInject);
       }
-      const result = await this.typeIntoAppWithClipboardSync(target, textToInject, shouldSubmit);
-      if (!result.success) {
-        log.error('Hot Mic: typeIntoApp failed:', result.error);
-        this.cursorStatusManager?.showCriticalMessage(`Hot Mic: ${result.error || 'Injection failed'}`);
+      if (!(await this.insertTextIntoTarget(target, textToInject, shouldSubmit))) {
+        this.cursorStatusManager?.showCriticalMessage('Hot Mic: Injection failed');
         this.deactivate();
         return;
       }
       this.playSound('paste');
-    } else if (shouldSubmit && target) {
-      const result = await this.nativeHelper.typeIntoApp(target, '', true);
-      if (!result.success) {
-        log.error('Hot Mic: typeIntoApp failed:', result.error);
-      }
+    } else if (shouldSubmit && target.kind !== 'none') {
+      await this.insertTextIntoTarget(target, '', true);
     }
 
     if (shouldSubmit) {
