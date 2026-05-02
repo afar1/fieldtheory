@@ -443,6 +443,8 @@ export default function SettingsPanel({
 
   // In-app performance HUD toggle.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
+  const [fieldTheorySyncStatus, setFieldTheorySyncStatus] = useState<FieldTheorySyncStatus | null>(null);
+  const [showInternalSyncToggle, setShowInternalSyncToggle] = useState(false);
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
 
   // Dynamic Island auto-hide toggle.
@@ -466,6 +468,15 @@ export default function SettingsPanel({
   const [dataRetentionDays, setDataRetentionDays] = useState<number>(-1);
 
   const styles = getStyles(theme);
+
+  const refreshFieldTheorySyncStatus = useCallback(async () => {
+    const status = await window.fieldTheorySyncAPI?.getStatus?.();
+    if (!status) return;
+    setFieldTheorySyncStatus(status);
+    if (status.localEnabled) {
+      setShowInternalSyncToggle(true);
+    }
+  }, []);
 
   // Load system permissions on mount and when window gains focus
   useEffect(() => {
@@ -540,6 +551,8 @@ export default function SettingsPanel({
         setPerformanceHudEnabled(enabled);
       });
 
+      refreshFieldTheorySyncStatus().catch(() => {});
+
       // Load Dynamic Island auto-hide setting.
       window.hotMicAPI?.getIslandAutoHide?.().then(enabled => {
         setDynamicIslandAutoHide(enabled);
@@ -608,7 +621,7 @@ export default function SettingsPanel({
     return () => {
       unsubscribeTier?.();
     };
-  }, []);
+  }, [refreshFieldTheorySyncStatus]);
   
   // Handler for toggling continuous context enabled state
   const handleToggleContinuousContext = async (enabled: boolean) => {
@@ -725,6 +738,18 @@ export default function SettingsPanel({
       }
     } catch (err) {
       console.error('Failed to toggle performance HUD:', err);
+    }
+  };
+
+  const handleToggleFieldTheorySync = async (enabled: boolean) => {
+    if (!window.fieldTheorySyncAPI?.setLocalEnabled) return;
+
+    try {
+      const status = await window.fieldTheorySyncAPI.setLocalEnabled(enabled);
+      setFieldTheorySyncStatus(status);
+      setShowInternalSyncToggle(true);
+    } catch (err) {
+      console.error('Failed to toggle Field Theory sync:', err);
     }
   };
 
@@ -1253,8 +1278,15 @@ export default function SettingsPanel({
   }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
 
   // Section header component for consistent divider styling
-  const SectionHeader = ({ title }: { title: string }) => (
-    <div style={styles.sectionHeader}>
+  const SectionHeader = ({ title, onHiddenReveal }: { title: string; onHiddenReveal?: () => void }) => (
+    <div
+      style={styles.sectionHeader}
+      onClick={(event) => {
+        if (event.altKey) {
+          onHiddenReveal?.();
+        }
+      }}
+    >
       <span style={styles.sectionTitle}>{title}</span>
       <div style={styles.sectionLine} />
     </div>
@@ -2059,10 +2091,17 @@ export default function SettingsPanel({
         // Get display name from user metadata, fallback to email.
         const userFullName = session?.user?.user_metadata?.full_name as string | undefined;
         const userEmail = session?.user?.email;
+        const syncLocalEnabled = fieldTheorySyncStatus?.localEnabled ?? false;
+        const syncEnabled = fieldTheorySyncStatus?.enabled ?? false;
+        const syncHint = syncEnabled
+          ? 'Internal library, commands, and tasks sync is live on this device.'
+          : syncLocalEnabled
+            ? 'Local switch is on; sign in and server allowlist are still required.'
+            : 'Internal library, commands, and tasks sync is off on this device.';
 
         return (
           <div style={styles.section}>
-            <SectionHeader title="Account" />
+            <SectionHeader title="Account" onHiddenReveal={() => setShowInternalSyncToggle(true)} />
 
             {initialAuthLoading ? (
               <div style={styles.row}>
@@ -2236,6 +2275,21 @@ export default function SettingsPanel({
                   </button>
                 </div>
               </>
+            )}
+
+            {(showInternalSyncToggle || syncLocalEnabled) && (
+              <div style={styles.row}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={styles.rowLabel}>Field Theory Sync</span>
+                  <span style={styles.rowHint}>{syncHint}</span>
+                </div>
+                <button
+                  onClick={() => handleToggleFieldTheorySync(!syncLocalEnabled)}
+                  style={{ ...styles.toggle, backgroundColor: syncLocalEnabled ? theme.success : '#d1d5db' }}
+                >
+                  <span style={{ ...styles.toggleKnob, transform: syncLocalEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+                </button>
+              </div>
             )}
 
             {/* Support section - shown for all users */}
