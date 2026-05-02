@@ -2196,6 +2196,7 @@ declare global {
 
   interface FieldTheorySyncAPI {
     getStatus: () => Promise<FieldTheorySyncStatus>;
+    setLocalEnabled: (enabled: boolean) => Promise<FieldTheorySyncStatus>;
   }
 
   interface Window {

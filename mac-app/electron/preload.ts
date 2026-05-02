@@ -2814,6 +2814,7 @@ type FieldTheorySyncStatus = {
 
 const fieldTheorySyncAPI = {
   getStatus: (): Promise<FieldTheorySyncStatus> => ipcRenderer.invoke('fieldTheorySync:getStatus'),
+  setLocalEnabled: (enabled: boolean): Promise<FieldTheorySyncStatus> => ipcRenderer.invoke('fieldTheorySync:setLocalEnabled', enabled),
 };
 
 type FieldTheorySyncAPI = typeof fieldTheorySyncAPI;
