@@ -84,12 +84,15 @@ import {
   classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
+  getWikiBacklinks,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   type LinkAction,
+  type WikiBacklink,
+  type WikiBacklinkInput,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
 } from '../utils/wikiLinks';
@@ -1730,6 +1733,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Flat list of every wiki page for resolving [[wikilinks]] by title or
   // relPath. Refreshed from getTree() on mount and on `onPageChanged`.
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
+  const [wikiBacklinkPages, setWikiBacklinkPages] = useState<WikiBacklinkInput[]>([]);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
@@ -2479,6 +2483,40 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     () => getMarkdownTaskLines(activeReading?.content ?? ''),
     [activeReading?.content],
   );
+
+  useEffect(() => {
+    if (!active || wikiIndexPages.length === 0) {
+      setWikiBacklinkPages([]);
+      return;
+    }
+
+    let cancelled = false;
+    const load = async () => {
+      const pages = await Promise.all(
+        wikiIndexPages.map(async (page) => {
+          const fullPage = await window.wikiAPI?.getPage(page.relPath);
+          return fullPage
+            ? { relPath: fullPage.relPath, title: fullPage.title, content: fullPage.content }
+            : null;
+        }),
+      );
+      if (cancelled) return;
+      setWikiBacklinkPages(
+        pages.filter((page): page is WikiBacklinkInput => page !== null),
+      );
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [active, wikiIndexPages]);
+
+  const wikiBacklinks = useMemo<WikiBacklink[]>(() => (
+    selectedItemType === 'wiki' && wikiSelectedRelPath
+      ? getWikiBacklinks(wikiSelectedRelPath, wikiBacklinkPages, wikiIndex)
+      : []
+  ), [selectedItemType, wikiBacklinkPages, wikiIndex, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -4286,9 +4324,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Markdown mode owns text input, but a clicked sidebar item owns sidebar navigation.
-      if (contentMode === 'markdown' && (!sidebarKeyboardActiveRef.current || !isSidebarNavigationKey)) return;
       if (!isSidebarNavigationKey) return;
+      if (!sidebarKeyboardActiveRef.current) return;
 
       // Arrow key / j/k navigation through the current sidebar folder.
       const items = flatItemsRef.current;
@@ -5723,6 +5760,70 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               >
                 {displayContent}
               </FieldTheoryProse>
+              {selectedItemType === 'wiki' && wikiBacklinks.length > 0 && (
+                <section
+                  aria-label="Backlinks"
+                  style={{
+                    marginTop: '32px',
+                    paddingTop: '16px',
+                    borderTop: `1px solid ${theme.border}`,
+                  }}
+                >
+                  <div
+                    style={{
+                      marginBottom: '8px',
+                      fontSize: '12px',
+                      fontWeight: 650,
+                      color: theme.textSecondary,
+                      letterSpacing: 0,
+                    }}
+                  >
+                    Linked from
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    {wikiBacklinks.map((backlink) => (
+                      <button
+                        key={backlink.relPath}
+                        type="button"
+                        onMouseDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          openWikiPage(backlink.relPath);
+                        }}
+                        style={{
+                          padding: '6px 0',
+                          border: 'none',
+                          backgroundColor: 'transparent',
+                          color: theme.text,
+                          cursor: 'pointer',
+                          textAlign: 'left',
+                          font: 'inherit',
+                        }}
+                      >
+                        <div style={{ fontSize: '13px', fontWeight: 600 }}>
+                          {backlink.title}
+                        </div>
+                        {backlink.excerpt && (
+                          <div
+                            style={{
+                              marginTop: '2px',
+                              color: theme.textSecondary,
+                              fontSize: '12px',
+                              lineHeight: 1.35,
+                              overflow: 'hidden',
+                              textOverflow: 'ellipsis',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            {backlink.excerpt}
+                          </div>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )}
             </div>
             {RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED && contentMode === 'rendered' && renderedSelectionToolbar && (
               <div

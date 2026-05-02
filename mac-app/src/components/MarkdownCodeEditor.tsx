@@ -230,13 +230,16 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             fontFamily,
             lineHeight: lineHeightCss,
             overflow: 'auto',
+            cursor: 'text',
           },
           '.cm-content': {
             caretColor: caretColor ?? color,
             padding: '0',
+            cursor: 'text',
           },
           '.cm-line': {
             padding: '0',
+            cursor: 'text',
           },
           '&.cm-focused': {
             outline: 'none',
