@@ -19,3 +19,9 @@ This is a minimal Electron + Vite desktop viewer for Supabase data. It shares th
 4. Request a code via email, verify the OTP, and press **Refresh** to load your lists.
 
 For production builds, run `npm run build` and then `npm start` to launch Electron against the compiled assets.
+
+## URL Protocol
+
+Packaged production builds register the `fieldtheory://` URL scheme for deep links from the CLI and other local tools.
+Development and experimental builds do not register that scheme by default.
+To test protocol registration locally, launch the app with `FT_REGISTER_FIELD_THEORY_PROTOCOL=true npm run dev`.
