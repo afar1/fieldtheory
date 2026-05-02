@@ -24,12 +24,16 @@ import {
   flattenLibraryDirectoriesForLauncher,
   flattenLibraryRootsForLauncher,
   filterLauncherDirectoryNamespaceItems,
+  filterLauncherMoveTargetDirectories,
   filterLauncherNamespaceItems,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   balanceLauncherNormalModeMatches,
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
+  getLauncherMoveDirectoryTarget,
+  getLauncherMovedFilePath,
+  getLauncherMoveUndoTargetDirRelPath,
   getLauncherUsageScore,
   isGeneratedBookmarkTaxonomyPath,
   nextLauncherArrowIndex,
@@ -42,6 +46,7 @@ import {
   type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
+  type LauncherLibraryMoveSource,
   type LauncherLibraryRoot,
   type LauncherUsageMap,
 } from './commandLauncherUtils';
@@ -94,6 +99,11 @@ type LauncherPreviewPayload =
   | { kind: 'bookmark'; bookmark: Bookmark }
   | { kind: 'markdown'; title: string; filePath: string; content: string };
 
+type LauncherLibraryMoveRecord = {
+  source: LauncherLibraryMoveSource;
+  movedRelPath: string;
+};
+
 interface LauncherItem {
   id: string;
   type: LauncherItemType;
@@ -118,6 +128,7 @@ interface LauncherItem {
   // For bookmark facets
   facetPaths?: string[];
   // For directory namespaces
+  rootPath?: string;
   directoryPath?: string;
   directoryRelPath?: string;
   // For bookmark posts
@@ -212,6 +223,7 @@ interface LauncherCommandsAPI {
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
+  getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
@@ -246,6 +258,7 @@ interface LauncherThemeAPI {
 
 interface LauncherLibraryAPI {
   getRoots: () => Promise<LauncherLibraryRoot[]>;
+  moveItem?: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => Promise<string | null>;
 }
 
 interface LauncherBookmarksAPI {
@@ -467,6 +480,8 @@ function CommandLauncher() {
   const [directoryNamespace, setDirectoryNamespace] = useState<LauncherDirectoryNamespace | null>(null);
   const [authorNamespace, setAuthorNamespace] = useState<string | null>(null);
   const [bookmarkNamespace, setBookmarkNamespace] = useState<BookmarkNamespace | null>(null);
+  const [moveSource, setMoveSource] = useState<LauncherLibraryMoveSource | null>(null);
+  const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [recentEntries, setRecentEntries] = useState<LauncherRecentEntry[]>([]);
@@ -549,6 +564,12 @@ function CommandLauncher() {
     setHasExplicitSelection(true);
     selectIndex(index);
   }, [selectIndex]);
+
+  const showLauncherMessage = useCallback((message: string) => {
+    setQuery(message);
+    setFiltered([]);
+    resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+  }, [resizeLauncher]);
 
   const handleListItemMouseMove = useCallback((event: React.MouseEvent, index: number) => {
     const last = lastMousePositionRef.current;
@@ -746,6 +767,7 @@ function CommandLauncher() {
       setDirectoryNamespace(null);
       setAuthorNamespace(null);
       setBookmarkNamespace(null);
+      setMoveSource(null);
       setActiveWebPage(null);
       previewRequestRef.current += 1;
       setPreviewOpen(false);
@@ -880,6 +902,12 @@ function CommandLauncher() {
 
     const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode ?? false, squaresHotkeys, showSquaresInCommandLauncher)
       .map((item) => {
+        if (item.actionId === 'undo-library-move' && lastLibraryMove) {
+          return {
+            ...item,
+            displayName: `Undo Move: ${lastLibraryMove.source.title}`,
+          };
+        }
         if (item.actionId !== 'save-current-website' || !activeWebPage?.url) return item;
         return {
           ...item,
@@ -895,9 +923,11 @@ function CommandLauncher() {
       return true;
     });
     return [...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...recentFileItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage]);
+  }, [commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
-  const namespaceLabel = directoryNamespace?.label ?? (authorNamespace ? `@${authorNamespace}` : bookmarkNamespace?.label ?? namespacePrefix);
+  const namespaceLabel = moveSource
+    ? `move: ${moveSource.title}`
+    : directoryNamespace?.label ?? (authorNamespace ? `@${authorNamespace}` : bookmarkNamespace?.label ?? namespacePrefix);
   const bookmarkForItem = useCallback((item: LauncherItem | undefined): Bookmark | null => {
     if (item?.type !== 'bookmark' || !item.bookmarkId) return null;
     const bookmarks = authorNamespace ? authorBookmarks : bookmarkNamespaceBookmarks;
@@ -1014,10 +1044,10 @@ function CommandLauncher() {
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
-    if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) return false;
+    if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource) return false;
     const q = query.trim().toLowerCase();
     return q === 'help' || q === '?';
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, query]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query]);
 
   // Filter items when query changes.
   useEffect(() => {
@@ -1034,7 +1064,7 @@ function CommandLauncher() {
       resizeLauncher(inputHeight + listHeight);
     };
 
-    if (allItems.length === 0 && !directoryNamespace && !authorNamespace && !bookmarkNamespace) {
+    if (allItems.length === 0 && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
       setFiltered([]);
       selectIndex(0);
       // Don't show empty state height when still loading (query is empty)
@@ -1043,7 +1073,7 @@ function CommandLauncher() {
       return;
     }
 
-    if (!namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && query.trim() === '') {
+    if (!namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource && query.trim() === '') {
       setFiltered([]);
       selectIndex(0);
       resizeLauncher(inputHeight);
@@ -1081,6 +1111,14 @@ function CommandLauncher() {
     }
 
     const q = query.toLowerCase();
+
+    if (moveSource) {
+      const results = filterLauncherMoveTargetDirectories(directoryItems, moveSource, q);
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, true);
+      return;
+    }
 
     if (directoryNamespace) {
       const results = filterLauncherDirectoryNamespaceItems(
@@ -1166,13 +1204,14 @@ function CommandLauncher() {
       queryLength: query.length,
       namespacePrefix: namespacePrefix ?? null,
       hasDirectoryNamespace: Boolean(directoryNamespace),
+      hasMoveSource: Boolean(moveSource),
       hasAuthorNamespace: Boolean(authorNamespace),
       hasBookmarkNamespace: Boolean(bookmarkNamespace),
       resultCount: balancedMatches.length,
       totalResultCount: matches.length,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, query, allItems, isHelpQuery, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, resizeLauncher, selectIndex, usageByItemId]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, resizeLauncher, selectIndex, usageByItemId]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -1234,6 +1273,74 @@ function CommandLauncher() {
     previewWindowWasOpenRef.current = false;
   }, [previewOpen]);
 
+  const openMovedLibraryFile = useCallback(async (source: LauncherLibraryMoveSource, movedRelPath: string) => {
+    const path = getLauncherMovedFilePath(source, movedRelPath);
+    const result = await commandsAPI.openFieldTheoryMarkdown({
+      kind: source.type === 'wiki' ? 'wiki' : 'external',
+      path,
+    });
+    if (!result.success) {
+      traceLauncher('move-open-moved-file-error', { error: result.error ?? 'Open failed', path });
+    }
+  }, []);
+
+  const moveLibraryFileToDirectory = useCallback(async (
+    source: LauncherLibraryMoveSource,
+    directory: LauncherItem,
+  ): Promise<boolean> => {
+    const target = getLauncherMoveDirectoryTarget(source, directory);
+    if (!target) {
+      showLauncherMessage('Choose a folder in the same Library root');
+      return false;
+    }
+    const movedRelPath = await libraryAPI?.moveItem?.(
+      target.rootPath,
+      'file',
+      source.relPath,
+      target.targetDirRelPath,
+    );
+    if (!movedRelPath) {
+      showLauncherMessage('Move failed');
+      return false;
+    }
+    setLastLibraryMove({ source, movedRelPath });
+    setMoveSource(null);
+    setQuery('');
+    setFiltered([]);
+    selectIndex(0);
+    resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+    await loadLibraryMarkdown();
+    await openMovedLibraryFile(source, movedRelPath);
+    commandsAPI.launcherClose({ skipActivation: true });
+    return true;
+  }, [loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, selectIndex, showLauncherMessage]);
+
+  const undoLastLibraryMove = useCallback(async (): Promise<boolean> => {
+    if (!lastLibraryMove) {
+      showLauncherMessage('No move to undo');
+      return false;
+    }
+    const originalParentRelPath = getLauncherMoveUndoTargetDirRelPath(lastLibraryMove.source.relPath);
+    const restoredRelPath = await libraryAPI?.moveItem?.(
+      lastLibraryMove.source.rootPath,
+      'file',
+      lastLibraryMove.movedRelPath,
+      originalParentRelPath,
+    );
+    if (!restoredRelPath) {
+      showLauncherMessage('Undo move failed');
+      return false;
+    }
+    setLastLibraryMove(null);
+    setQuery('');
+    setFiltered([]);
+    resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+    await loadLibraryMarkdown();
+    await openMovedLibraryFile(lastLibraryMove.source, restoredRelPath);
+    commandsAPI.launcherClose({ skipActivation: true });
+    return true;
+  }, [lastLibraryMove, loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, showLauncherMessage]);
+
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -1285,6 +1392,8 @@ function CommandLauncher() {
       const rawQuery = query.trim();
       const q = rawQuery.toLowerCase();
       const currentIndex = selectedIndexRef.current;
+
+      if (moveSource) return;
 
       const commandTarget = resolveLauncherCommandOpenTarget(
         filtered,
@@ -1415,7 +1524,7 @@ function CommandLauncher() {
         selectedIndex: currentIndex,
         item: describeLauncherItem(selectedItem),
       });
-    } else if (e.key === 'Backspace' && (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) && query === '') {
+    } else if (e.key === 'Backspace' && (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource) && query === '') {
       e.preventDefault();
       authorNamespaceRef.current = null;
       bookmarkNamespaceRef.current = null;
@@ -1426,6 +1535,7 @@ function CommandLauncher() {
       setDirectoryNamespace(null);
       setAuthorNamespace(null);
       setBookmarkNamespace(null);
+      setMoveSource(null);
       previewRequestRef.current += 1;
       setPreviewOpen(false);
       setPreviewPayload(null);
@@ -1497,6 +1607,10 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose({ skipActivation: true });
     } else if (item.type === 'directory') {
+      if (moveSource) {
+        await moveLibraryFileToDirectory(moveSource, item);
+        return;
+      }
       if (item.directoryPath) {
         setDirectoryNamespace({
           label: item.displayName,
@@ -1600,6 +1714,25 @@ function CommandLauncher() {
           setPreviewOpen(true);
           return;
         }
+        case 'move-current-library-file': {
+          if (!latestContext?.fieldTheoryActive) {
+            showLauncherMessage('Open Field Theory to move the current file');
+            return;
+          }
+          const source = await commandsAPI.getActiveLibraryFileContext?.();
+          if (!source) {
+            showLauncherMessage('No current Library file to move');
+            return;
+          }
+          setMoveSource(source);
+          setQuery('');
+          selectIndex(0);
+          return;
+        }
+        case 'undo-library-move': {
+          await undoLastLibraryMove();
+          return;
+        }
         // Route Squares window management actions.
         default:
           if (item.actionId && SQUARES_ACTION_IDS.has(item.actionId)) {
@@ -1609,7 +1742,7 @@ function CommandLauncher() {
       }
       commandsAPI.launcherClose();
     }
-  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, noteItemUsage, resizeLauncher, selectIndex]);
+  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   if (isDarkMode === null) {
     return <div style={{ width: '100vw', height: '100vh', background: 'transparent' }} />;
