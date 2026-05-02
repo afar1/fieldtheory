@@ -179,9 +179,16 @@ describe('Library sidebar collapse availability', () => {
       librarianImmersive: false,
       hasLibraryActiveFile: false,
     })).toBe(true);
+    expect(shouldForceLibrarySidebarOpen({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
+      hasLibraryActiveFile: false,
+      bookmarksFooterActive: true,
+    })).toBe(false);
   });
 
-  it('allows collapse only for Library with an active file or Commands', () => {
+  it('allows collapse for Library with an active file, Bookmarks, or Commands', () => {
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
@@ -193,6 +200,13 @@ describe('Library sidebar collapse availability', () => {
       showSettings: false,
       librarianImmersive: false,
       hasLibraryActiveFile: true,
+    })).toBe(true);
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
+      hasLibraryActiveFile: false,
+      bookmarksFooterActive: true,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'commands',

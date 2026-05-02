@@ -17,7 +17,7 @@ export const FEATURE_MESSAGE_SHORTCUT_ENABLED = false;
 
 /**
  * Sharing feature - sharing clipboard items to shared/team clipboard.
- * Disabled by default. Users can unlock via Cmd+Shift+S.
+ * Hard-disabled: clipboard items must never sync or upload.
  */
 export const FEATURE_SHARING_ENABLED = false;
 

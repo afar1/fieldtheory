@@ -1,10 +1,12 @@
 # Field Theory (Mac)
 
-This is a minimal Electron + Vite desktop viewer for Supabase data. It shares the same OTP sign-in flow as the mobile app and lists todos, observations, and transcripts.
+This is the Electron + Vite macOS app for Field Theory.
+The release build is local-first by default: core tools work without requiring login, and unfinished Field Theory cloud sync is gated for internal users only.
+Clipboard history is local-only and must never be synced by Field Theory.
 
 ## Setup
 
-1. Copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY`.
+1. Copy `.env.example` to `.env.local` and fill in `VITE_SUPABASE_URL` + `VITE_SUPABASE_ANON_KEY` when testing Supabase-backed auth, feedback, or internal sync surfaces.
 2. Install dependencies:
    ```bash
    cd mac-app
@@ -16,7 +18,7 @@ This is a minimal Electron + Vite desktop viewer for Supabase data. It shares th
    ```
    - Vite serves the renderer on port 5173.
    - Electron launches once the dev server is ready.
-4. Request a code via email, verify the OTP, and press **Refresh** to load your lists.
+4. Launch the app. Login is optional for local tools; use OTP only when testing authenticated surfaces.
 
 For production builds, run `npm run build` and then `npm start` to launch Electron against the compiled assets.
 

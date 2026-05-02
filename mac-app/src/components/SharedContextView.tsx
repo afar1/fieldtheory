@@ -493,7 +493,6 @@ export default function SharedContextView({ onOpenSketch, onSubmitFeedback, show
     initialized: authInitialized,
   } = useAuthSessionBridge({
     supabase,
-    syncRendererSessionToMain: true,
     onSignedOut: handleSignedOut,
   });
 

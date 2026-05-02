@@ -53,8 +53,6 @@ class RendererSoundManager {
     const soundFiles = Object.values(SOUND_FILES);
     const uniqueFiles = [...new Set(soundFiles)];
 
-    console.log('[RendererSoundManager] Preloading sounds:', uniqueFiles);
-
     const loadPromises = uniqueFiles.map(async (filename) => {
       try {
         // In Electron, we can access files from the public/sounds directory
@@ -70,7 +68,6 @@ class RendererSoundManager {
         const arrayBuffer = await response.arrayBuffer();
         const audioBuffer = await context.decodeAudioData(arrayBuffer);
         this.soundBuffers.set(filename, audioBuffer);
-        console.log(`[RendererSoundManager] Loaded: ${filename}`);
       } catch (error) {
         console.warn(`[RendererSoundManager] Failed to load ${filename}:`, error);
       }
@@ -78,7 +75,6 @@ class RendererSoundManager {
 
     await Promise.all(loadPromises);
     this.isPreloaded = true;
-    console.log(`[RendererSoundManager] Preloaded ${this.soundBuffers.size}/${uniqueFiles.length} sounds`);
   }
 
   /**
