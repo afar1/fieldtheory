@@ -1,5 +1,5 @@
 /**
- * Shared utilities for inserting inline [Figure N] references into transcript text.
+ * Shared utilities for inserting inline [figure N] references into transcript text.
  * Used by both TranscriberManager (standard recording) and HotMicManager.
  */
 
@@ -14,7 +14,7 @@ export interface FigureMeta {
 }
 
 /**
- * Strip existing [Figure X] references from text.
+ * Strip existing [figure X] references from text.
  */
 export function stripFigureReferences(text: string): string {
   if (!text) return '';
@@ -25,7 +25,7 @@ export function stripFigureReferences(text: string): string {
 }
 
 /**
- * Insert [Figure N] references inline into transcript text based on segment timing.
+ * Insert [figure N] references inline into transcript text based on segment timing.
  *
  * Each screenshot is placed after the segment that was active when the screenshot
  * was captured (using endMs timing). If no segments are available, all figure
@@ -51,7 +51,7 @@ export function insertFigureReferencesInline(
 
   // No segment timing — fall back to appending at the end.
   if (cleanSegments.length === 0) {
-    const refs = sortedScreenshots.map(meta => `[Figure ${meta.figureLabel}]`).join(' ');
+    const refs = sortedScreenshots.map(meta => `[figure ${meta.figureLabel}]`).join(' ');
     return [normalizedText, refs].filter(Boolean).join(' ').trim();
   }
 
@@ -70,7 +70,7 @@ export function insertFigureReferencesInline(
   const result = cleanSegments.map((segment, index) => {
     const figures = segmentFigures.get(index);
     if (!figures || figures.length === 0) return segment.text;
-    const refs = figures.map((label) => `[Figure ${label}]`).join(' ');
+    const refs = figures.map((label) => `[figure ${label}]`).join(' ');
     return `${segment.text} ${refs}`;
   });
 

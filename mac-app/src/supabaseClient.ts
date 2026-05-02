@@ -24,7 +24,7 @@ if (url && anonKey) {
 } else {
   console.warn(
     'Supabase credentials not found. VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY is missing. ' +
-    'Team clipboard and mobile sync features will be unavailable.'
+    'Supabase-backed features will be unavailable.'
   );
 }
 

@@ -71,9 +71,7 @@ describe('useAuthSessionBridge', () => {
 
     window.authAPI = authApiMock as unknown as NonNullable<Window['authAPI']>;
 
-    window.clipboardAPI = {
-      setSyncSession: vi.fn(),
-    } as unknown as NonNullable<Window['clipboardAPI']>;
+    window.clipboardAPI = {} as unknown as NonNullable<Window['clipboardAPI']>;
   });
 
   it('prefers the main-process session over the renderer session', async () => {
@@ -84,7 +82,7 @@ describe('useAuthSessionBridge', () => {
     vi.mocked(authApiMock.getSession).mockResolvedValue(mainProcessSession);
 
     const { result } = renderHook(() =>
-      useAuthSessionBridge({ supabase, syncRendererSessionToMain: true })
+      useAuthSessionBridge({ supabase })
     );
 
     await waitFor(() => {
@@ -92,7 +90,6 @@ describe('useAuthSessionBridge', () => {
     });
 
     expect(result.current.session?.user.email).toBe('main@example.com');
-    expect(window.clipboardAPI?.setSyncSession).not.toHaveBeenCalled();
   });
 
   it('updates mounted renderers when the main process session changes', async () => {
@@ -100,7 +97,7 @@ describe('useAuthSessionBridge', () => {
     const nextSession = makeSession('live-update@example.com');
 
     const { result } = renderHook(() =>
-      useAuthSessionBridge({ supabase, syncRendererSessionToMain: true })
+      useAuthSessionBridge({ supabase })
     );
 
     await waitFor(() => {
@@ -116,22 +113,19 @@ describe('useAuthSessionBridge', () => {
     });
   });
 
-  it('falls back to the renderer session and syncs it back to the main process', async () => {
+  it('falls back to the renderer session when main process has no session', async () => {
     const rendererSession = makeSession('renderer-fallback@example.com');
     const { supabase } = createSupabaseMock(rendererSession);
 
     const { result } = renderHook(() =>
-      useAuthSessionBridge({ supabase, syncRendererSessionToMain: true })
+      useAuthSessionBridge({ supabase })
     );
 
     await waitFor(() => {
       expect(result.current.session?.user.email).toBe('renderer-fallback@example.com');
     });
 
-    expect(window.clipboardAPI?.setSyncSession).toHaveBeenCalledWith(
-      rendererSession.access_token,
-      rendererSession.refresh_token
-    );
+    expect(result.current.session?.user.email).toBe('renderer-fallback@example.com');
   });
 
   it('calls the signed-out callback only for live sign-out events', async () => {
@@ -139,7 +133,7 @@ describe('useAuthSessionBridge', () => {
     const onSignedOut = vi.fn();
 
     renderHook(() =>
-      useAuthSessionBridge({ supabase, syncRendererSessionToMain: true, onSignedOut })
+      useAuthSessionBridge({ supabase, onSignedOut })
     );
 
     await waitFor(() => {
@@ -163,7 +157,7 @@ describe('useAuthSessionBridge', () => {
     authApiMock.getSession.mockRejectedValueOnce(new Error('boom'));
 
     const { result } = renderHook(() =>
-      useAuthSessionBridge({ supabase, syncRendererSessionToMain: true })
+      useAuthSessionBridge({ supabase })
     );
 
     await waitFor(() => {

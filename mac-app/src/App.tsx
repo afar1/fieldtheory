@@ -197,7 +197,6 @@ export default function App() {
     const permissionsAPI = window.permissionsAPI;
     if (!permissionsAPI) {
       // If permissionsAPI is not available (e.g., in browser), assume permissions are granted
-      console.log('[App] permissionsAPI not available, assuming permissions granted');
       setPermissions({ accessibilityGranted: true });
       setShowPermissionsGate(false);
       return;

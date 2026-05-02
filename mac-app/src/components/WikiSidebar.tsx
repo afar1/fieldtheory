@@ -923,13 +923,9 @@ function wikiNodeToSidebarNode(
   };
 }
 
-export function ensureScratchpadNodePinned(nodes: SidebarNode[], root: LibraryRoot): SidebarNode[] {
+export function ensureScratchpadNodePresent(nodes: SidebarNode[], root: LibraryRoot): SidebarNode[] {
   const scratchpadIndex = nodes.findIndex((node) => node.kind === 'dir' && node.name === SCRATCHPAD_FOLDER_NAME);
-  if (scratchpadIndex === 0) return nodes;
-  if (scratchpadIndex > 0) {
-    const scratchpad = nodes[scratchpadIndex];
-    return [scratchpad, ...nodes.slice(0, scratchpadIndex), ...nodes.slice(scratchpadIndex + 1)];
-  }
+  if (scratchpadIndex >= 0) return nodes;
   return [
     {
       kind: 'dir',
@@ -1009,7 +1005,7 @@ function rootToSidebarNode(
   if (root.builtin) {
     children = virtualizeBookmarksGroup(children, root, sortMode);
     children = hideReadmeOnlyLibraryArtifactsFolder(children);
-    children = ensureScratchpadNodePinned(children, root);
+    children = ensureScratchpadNodePresent(children, root);
   }
   return {
     kind: 'dir',
@@ -1926,6 +1922,11 @@ function WikiSidebar({
             value={searchQuery}
             onChange={(e) => onSearchQueryChange(e.target.value)}
             onKeyDown={(e) => {
+              if (e.key === 'Tab' && e.ctrlKey && !e.altKey && !e.metaKey) {
+                onSearchQueryChange('');
+                e.currentTarget.blur();
+                return;
+              }
               if (e.key !== 'Escape') return;
               e.preventDefault();
               e.stopPropagation();
@@ -1936,6 +1937,7 @@ function WikiSidebar({
               if (!e.currentTarget.value.trim()) onSearchQueryChange('');
             }}
             placeholder="Search library (/)"
+            data-fieldtheory-top-nav-search="true"
             style={{
               flex: '1 1 auto',
               minWidth: 0,

@@ -397,8 +397,6 @@ export default function SettingsPanel({
 
   const [initialAuthLoading, setInitialAuthLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
-  const [syncStatus, setSyncStatus] = useState<string | null>(null);
-  const [isSyncing, setIsSyncing] = useState(false);
 
   const {
     session,
@@ -406,7 +404,6 @@ export default function SettingsPanel({
     initialized: authSessionInitialized,
   } = useAuthSessionBridge({
     supabase,
-    syncRendererSessionToMain: true,
   });
   
   // Delete account state.
@@ -446,6 +443,8 @@ export default function SettingsPanel({
 
   // In-app performance HUD toggle.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
+  const [fieldTheorySyncStatus, setFieldTheorySyncStatus] = useState<FieldTheorySyncStatus | null>(null);
+  const [showInternalSyncToggle, setShowInternalSyncToggle] = useState(false);
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
 
   // Dynamic Island auto-hide toggle.
@@ -456,21 +455,6 @@ export default function SettingsPanel({
 
   // Subscription tier state - 'free' or 'pro'.
   const [userTier, setUserTier] = useState<'free' | 'pro'>('free');
-
-  // Quota usage for free users (formatted strings).
-  const [quotaUsage, setQuotaUsage] = useState<{ priorityMic: string; autoStack: string; textImprove: string; portableCommands: string } | null>(null);
-
-  // Full quota status for progress bars and exhaustion checks.
-  const [quotaStatus, setQuotaStatus] = useState<{
-    priorityMic: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
-    autoStack: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
-    textImprove: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
-    portableCommands: { used: number; limit: number; remaining: number; allowed: boolean; percentUsed: number };
-  } | null>(null);
-
-  // Days until quota reset and limits for display.
-  const [daysUntilReset, setDaysUntilReset] = useState<number>(0);
-  const [quotaLimits, setQuotaLimits] = useState<{ priorityMicMinutes: number; autoStackSessions: number; textImprovementWords: number; portableCommands: number } | null>(null);
 
   // Diagnostics modal visibility.
   const [showDiagnostics, setShowDiagnostics] = useState(false);
@@ -484,6 +468,15 @@ export default function SettingsPanel({
   const [dataRetentionDays, setDataRetentionDays] = useState<number>(-1);
 
   const styles = getStyles(theme);
+
+  const refreshFieldTheorySyncStatus = useCallback(async () => {
+    const status = await window.fieldTheorySyncAPI?.getStatus?.();
+    if (!status) return;
+    setFieldTheorySyncStatus(status);
+    if (status.localEnabled) {
+      setShowInternalSyncToggle(true);
+    }
+  }, []);
 
   // Load system permissions on mount and when window gains focus
   useEffect(() => {
@@ -558,6 +551,8 @@ export default function SettingsPanel({
         setPerformanceHudEnabled(enabled);
       });
 
+      refreshFieldTheorySyncStatus().catch(() => {});
+
       // Load Dynamic Island auto-hide setting.
       window.hotMicAPI?.getIslandAutoHide?.().then(enabled => {
         setDynamicIslandAutoHide(enabled);
@@ -606,33 +601,12 @@ export default function SettingsPanel({
       });
     }
     
-    // Load user tier and quota usage from quota manager.
+    // Load user tier from quota manager.
     if (window.quotaAPI?.getQuotas) {
       window.quotaAPI.getQuotas().then(quotas => {
         if (quotas) {
           setUserTier(quotas.tier);
-          setQuotaStatus({
-            priorityMic: quotas.priorityMic,
-            autoStack: quotas.autoStack,
-            textImprove: quotas.textImprove,
-            portableCommands: quotas.portableCommands,
-          });
         }
-      });
-    }
-    if (window.quotaAPI?.getFormattedUsage) {
-      window.quotaAPI.getFormattedUsage().then(formatted => {
-        if (formatted) setQuotaUsage(formatted);
-      });
-    }
-    if (window.quotaAPI?.getDaysUntilReset) {
-      window.quotaAPI.getDaysUntilReset().then(days => {
-        setDaysUntilReset(days);
-      });
-    }
-    if (window.quotaAPI?.getLimits) {
-      window.quotaAPI.getLimits().then(limits => {
-        setQuotaLimits(limits);
       });
     }
 
@@ -644,30 +618,10 @@ export default function SettingsPanel({
       });
     }
 
-    // Listen for quota changes to update usage in real-time.
-    let unsubscribeQuota: (() => void) | undefined;
-    if (window.quotaAPI?.onQuotaChanged) {
-      unsubscribeQuota = window.quotaAPI.onQuotaChanged((formatted) => {
-        setQuotaUsage(formatted);
-        // Also refresh the full status for progress bars
-        window.quotaAPI?.getQuotas?.().then(quotas => {
-          if (quotas) {
-            setQuotaStatus({
-              priorityMic: quotas.priorityMic,
-              autoStack: quotas.autoStack,
-              textImprove: quotas.textImprove,
-              portableCommands: quotas.portableCommands,
-            });
-          }
-        });
-      });
-    }
-    
     return () => {
       unsubscribeTier?.();
-      unsubscribeQuota?.();
     };
-  }, []);
+  }, [refreshFieldTheorySyncStatus]);
   
   // Handler for toggling continuous context enabled state
   const handleToggleContinuousContext = async (enabled: boolean) => {
@@ -787,6 +741,18 @@ export default function SettingsPanel({
     }
   };
 
+  const handleToggleFieldTheorySync = async (enabled: boolean) => {
+    if (!window.fieldTheorySyncAPI?.setLocalEnabled) return;
+
+    try {
+      const status = await window.fieldTheorySyncAPI.setLocalEnabled(enabled);
+      setFieldTheorySyncStatus(status);
+      setShowInternalSyncToggle(true);
+    } catch (err) {
+      console.error('Failed to toggle Field Theory sync:', err);
+    }
+  };
+
   const handleToggleTextCursorBlink = (enabled: boolean) => {
     setBlinkTextCursor(enabled);
     persistTextCursorBlink(localStorage, enabled);
@@ -865,67 +831,6 @@ export default function SettingsPanel({
       console.error('Delete account error:', err);
       setDeleteError('An unexpected error occurred');
       setDeleteLoading(false);
-    }
-  };
-  
-  // Handle manual sync trigger - syncs both transcripts and todos.
-  const handleManualSync = async () => {
-    setIsSyncing(true);
-    setSyncStatus('Syncing...');
-    
-    try {
-      // Sync transcripts.
-      let transcriptCount = 0;
-      if (window.clipboardAPI?.syncMobileTranscripts) {
-        transcriptCount = await window.clipboardAPI.syncMobileTranscripts();
-      }
-      
-      // Sync todos.
-      let todoCount = 0;
-      if (window.todoAPI?.syncTodos) {
-        const todos = await window.todoAPI.syncTodos();
-        todoCount = todos.length;
-      }
-      
-      // Build status message.
-      const parts: string[] = [];
-      if (transcriptCount > 0) {
-        parts.push(`${transcriptCount} transcript${transcriptCount === 1 ? '' : 's'}`);
-      }
-      if (todoCount > 0) {
-        parts.push(`${todoCount} task${todoCount === 1 ? '' : 's'}`);
-      }
-      
-      setSyncStatus(parts.length > 0 
-        ? `Synced ${parts.join(' and ')} from iOS`
-        : 'Already up to date'
-      );
-    } catch (err) {
-      setSyncStatus('Sync failed');
-      console.error('Sync error:', err);
-    } finally {
-      setIsSyncing(false);
-    }
-  };
-  
-  // Force full re-sync - fixes source attribution for existing items
-  const handleForceSync = async () => {
-    if (!window.clipboardAPI?.forceSyncAll) return;
-    
-    setIsSyncing(true);
-    setSyncStatus('Re-syncing all transcripts...');
-    
-    try {
-      const count = await window.clipboardAPI.forceSyncAll();
-      setSyncStatus(count > 0 
-        ? `Fixed attribution for ${count} transcript${count === 1 ? '' : 's'}`
-        : 'All transcripts already correctly attributed'
-      );
-    } catch (err) {
-      setSyncStatus('Re-sync failed');
-      console.error('Force sync error:', err);
-    } finally {
-      setIsSyncing(false);
     }
   };
   
@@ -1373,8 +1278,15 @@ export default function SettingsPanel({
   }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
 
   // Section header component for consistent divider styling
-  const SectionHeader = ({ title }: { title: string }) => (
-    <div style={styles.sectionHeader}>
+  const SectionHeader = ({ title, onHiddenReveal }: { title: string; onHiddenReveal?: () => void }) => (
+    <div
+      style={styles.sectionHeader}
+      onClick={(event) => {
+        if (event.altKey) {
+          onHiddenReveal?.();
+        }
+      }}
+    >
       <span style={styles.sectionTitle}>{title}</span>
       <div style={styles.sectionLine} />
     </div>
@@ -2179,10 +2091,17 @@ export default function SettingsPanel({
         // Get display name from user metadata, fallback to email.
         const userFullName = session?.user?.user_metadata?.full_name as string | undefined;
         const userEmail = session?.user?.email;
+        const syncLocalEnabled = fieldTheorySyncStatus?.localEnabled ?? false;
+        const syncEnabled = fieldTheorySyncStatus?.enabled ?? false;
+        const syncHint = syncEnabled
+          ? 'Internal library, commands, and tasks sync is live on this device.'
+          : syncLocalEnabled
+            ? 'Local switch is on; sign in and server allowlist are still required.'
+            : 'Internal library, commands, and tasks sync is off on this device.';
 
         return (
           <div style={styles.section}>
-            <SectionHeader title="Account" />
+            <SectionHeader title="Account" onHiddenReveal={() => setShowInternalSyncToggle(true)} />
 
             {initialAuthLoading ? (
               <div style={styles.row}>
@@ -2307,8 +2226,6 @@ export default function SettingsPanel({
                   </div>
                 )}
 
-                {syncStatus && <p style={styles.syncStatusText}>{syncStatus}</p>}
-                
                 {/* Subscription row */}
                 <div style={styles.row}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: 1 }}>
@@ -2326,24 +2243,7 @@ export default function SettingsPanel({
                           {tierDisplayName}
                         </span>
                       </div>
-                      {displayTier === 'free' ? (
-                        <button
-                          onClick={() => {
-                            const userId = session.user.id;
-                            const paymentLink = window.stripeConfig?.paymentLink || '';
-                            window.shellAPI?.openExternal(
-                              `${paymentLink}?client_reference_id=${userId}`
-                            );
-                          }}
-                          style={{
-                            ...styles.linkBtn,
-                            color: theme.accent,
-                            fontWeight: 500,
-                          }}
-                        >
-                          Upgrade
-                        </button>
-                      ) : (
+                      {displayTier === 'pro' && (
                         <button
                           onClick={() => {
                             const portalLink = window.stripeConfig?.portalLink || '';
@@ -2357,98 +2257,9 @@ export default function SettingsPanel({
                     </div>
 
                     {displayTier === 'pro' ? (
-                      <p style={styles.rowHint}>Unlimited priority mic and auto-stacking.</p>
-                    ) : quotaStatus && quotaLimits ? (
-                      <div style={{
-                        marginTop: '12px',
-                        padding: '12px',
-                        borderRadius: '8px',
-                        backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-                        border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-                      }}>
-                        {/* Priority Mic */}
-                        <div style={{ marginBottom: '12px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ fontSize: '12px', color: theme.text }}>Priority Mic</span>
-                            <span style={{ fontSize: '11px', color: quotaStatus.priorityMic.allowed ? theme.textSecondary : theme.error }}>
-                              {Math.floor(quotaStatus.priorityMic.used / 60)} of {quotaLimits.priorityMicMinutes} mins
-                            </span>
-                          </div>
-                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
-                            <div style={{
-                              height: '100%',
-                              width: `${Math.min(100, quotaStatus.priorityMic.percentUsed)}%`,
-                              backgroundColor: quotaStatus.priorityMic.allowed ? theme.accent : theme.error,
-                              borderRadius: '2px',
-                              transition: 'width 0.3s ease',
-                            }} />
-                          </div>
-                        </div>
-
-                        {/* Auto-Stack */}
-                        <div style={{ marginBottom: '12px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ fontSize: '12px', color: theme.text }}>Auto-Stack</span>
-                            <span style={{ fontSize: '11px', color: quotaStatus.autoStack.allowed ? theme.textSecondary : theme.error }}>
-                              {quotaStatus.autoStack.used} of {quotaLimits.autoStackSessions} sessions
-                            </span>
-                          </div>
-                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
-                            <div style={{
-                              height: '100%',
-                              width: `${Math.min(100, quotaStatus.autoStack.percentUsed)}%`,
-                              backgroundColor: quotaStatus.autoStack.allowed ? theme.accent : theme.error,
-                              borderRadius: '2px',
-                              transition: 'width 0.3s ease',
-                            }} />
-                          </div>
-                        </div>
-
-                        {/* Text Improvements */}
-                        <div style={{ marginBottom: '12px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ fontSize: '12px', color: theme.text }}>Text Improvements</span>
-                            <span style={{ fontSize: '11px', color: quotaStatus.textImprove.allowed ? theme.textSecondary : theme.error }}>
-                              {(quotaStatus?.textImprove?.used ?? 0).toLocaleString()} of {(quotaLimits?.textImprovementWords ?? 0).toLocaleString()} words
-                            </span>
-                          </div>
-                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
-                            <div style={{
-                              height: '100%',
-                              width: `${Math.min(100, quotaStatus.textImprove.percentUsed)}%`,
-                              backgroundColor: quotaStatus.textImprove.allowed ? theme.accent : theme.error,
-                              borderRadius: '2px',
-                              transition: 'width 0.3s ease',
-                            }} />
-                          </div>
-                        </div>
-
-                        {/* Portable Commands (includes voice commands) */}
-                        <div style={{ marginBottom: '12px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-                            <span style={{ fontSize: '12px', color: theme.text }}>Portable Commands</span>
-                            <span style={{ fontSize: '11px', color: quotaStatus.portableCommands?.allowed !== false ? theme.textSecondary : theme.error }}>
-                              {quotaStatus?.portableCommands?.used ?? 0} of {quotaLimits?.portableCommands ?? 0}
-                            </span>
-                          </div>
-                          <div style={{ height: '4px', backgroundColor: theme.isDark ? theme.border : '#e5e7eb', borderRadius: '2px', overflow: 'hidden' }}>
-                            <div style={{
-                              height: '100%',
-                              width: `${Math.min(100, quotaStatus?.portableCommands?.percentUsed ?? 0)}%`,
-                              backgroundColor: quotaStatus?.portableCommands?.allowed !== false ? theme.accent : theme.error,
-                              borderRadius: '2px',
-                              transition: 'width 0.3s ease',
-                            }} />
-                          </div>
-                        </div>
-
-                        {/* Reset info */}
-                        <div style={{ fontSize: '11px', color: theme.textSecondary, textAlign: 'center', paddingTop: '4px', borderTop: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}` }}>
-                          Resets in {daysUntilReset} day{daysUntilReset !== 1 ? 's' : ''}
-                        </div>
-                      </div>
+                      <p style={styles.rowHint}>Pro subscription active.</p>
                     ) : (
-                      <p style={styles.rowHint}>Loading quota info...</p>
+                      <p style={styles.rowHint}>Local access enabled.</p>
                     )}
                   </div>
                 </div>
@@ -2464,6 +2275,21 @@ export default function SettingsPanel({
                   </button>
                 </div>
               </>
+            )}
+
+            {(showInternalSyncToggle || syncLocalEnabled) && (
+              <div style={styles.row}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <span style={styles.rowLabel}>Field Theory Sync</span>
+                  <span style={styles.rowHint}>{syncHint}</span>
+                </div>
+                <button
+                  onClick={() => handleToggleFieldTheorySync(!syncLocalEnabled)}
+                  style={{ ...styles.toggle, backgroundColor: syncLocalEnabled ? theme.success : '#d1d5db' }}
+                >
+                  <span style={{ ...styles.toggleKnob, transform: syncLocalEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+                </button>
+              </div>
             )}
 
             {/* Support section - shown for all users */}
