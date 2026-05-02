@@ -2243,14 +2243,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const commitTitleEdit = useCallback(async (options: { focusBody?: boolean } = {}) => {
     if (!activeReading || !activeTitlePath || titleCommitInFlightRef.current) return;
     const trimmed = (titleInputRef.current?.value ?? titleDraft).trim();
-    setEditingTitlePath(null);
     if (!trimmed || trimmed === activeReading.title) {
+      setEditingTitlePath(null);
       setTitleDraft(activeReading.title);
       if (options.focusBody) focusMarkdownBody();
       return;
     }
 
     titleCommitInFlightRef.current = true;
+    setTitleDraft(trimmed);
     try {
       await flushCurrentEdit();
 
@@ -2313,6 +2314,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
     } finally {
       titleCommitInFlightRef.current = false;
+      setEditingTitlePath(null);
     }
 
     if (options.focusBody) focusMarkdownBody();
