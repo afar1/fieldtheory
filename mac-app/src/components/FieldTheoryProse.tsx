@@ -115,7 +115,11 @@ const FieldTheoryProse = forwardRef<HTMLDivElement, FieldTheoryProseProps>(funct
       onMouseDown={onMouseDown}
       style={proseStyle(styleProps)}
     >
-      <ReactMarkdown remarkPlugins={remarkPlugins} components={components} urlTransform={fieldTheoryUrlTransform}>
+      <ReactMarkdown
+        remarkPlugins={remarkPlugins}
+        components={components}
+        urlTransform={fieldTheoryUrlTransform}
+      >
         {children}
       </ReactMarkdown>
     </div>
