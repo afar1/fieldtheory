@@ -4440,7 +4440,7 @@ export default function ClipboardHistory() {
           style={{
             display: 'flex',
             alignItems: 'center',
-            padding: '0 16px 8px 16px',
+            padding: `${showInDock ? 22 : 14}px 16px 8px 16px`,
             marginBottom: '8px',
             position: 'relative',
           }}>
@@ -4482,20 +4482,6 @@ export default function ClipboardHistory() {
           >
             Back
           </button>
-          
-          {/* Center: Draw header */}
-          <span
-            style={{
-              position: 'absolute',
-              left: '50%',
-              transform: 'translateX(-50%)',
-              fontSize: '12px',
-              fontWeight: 600,
-              color: theme.text,
-            }}
-          >
-            Draw
-          </span>
           
           {/* Right: Recording indicator + Save buttons */}
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
