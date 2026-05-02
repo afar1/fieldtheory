@@ -72,7 +72,6 @@ import {
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
-import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 import MarkdownCodeEditor, {
   type MarkdownCodeEditorHandle,
   type MarkdownCodeEditorSelectionSnapshot,
@@ -1518,7 +1517,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [typographyPresetId, setTypographyPresetId] = useState<LibrarianTypographyPresetId>(() => (
     restoreLibrarianTypographyPreset(localStorage)
   ));
-  const [proseRenderer, setProseRenderer] = useState(() => restoreProseRenderer(localStorage));
   const [lineHeightId, setLineHeightId] = useState<LibrarianLineHeightId>(() => (
     restoreLibrarianLineHeight(localStorage)
   ));
@@ -1868,10 +1866,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     persistLibrarianTypographyPreset(localStorage, typographyPresetId);
   }, [typographyPresetId]);
-
-  useEffect(() => {
-    persistProseRenderer(localStorage, proseRenderer);
-  }, [proseRenderer]);
 
   useEffect(() => {
     persistLibrarianLineHeight(localStorage, lineHeightId);
@@ -4929,9 +4923,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
                 todoMarker={todoMarker}
                 onTodoMarkerChange={focusToolbarControlsVisible ? setTodoMarker : undefined}
-                proseRenderer={proseRenderer}
-                proseRendererOptions={focusToolbarControlsVisible ? PROSE_RENDERER_OPTIONS : undefined}
-                onProseRendererChange={focusToolbarControlsVisible ? setProseRenderer : undefined}
                 onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
@@ -5529,7 +5520,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 mutedColor={theme.textSecondary}
                 paragraphSpacing={documentParagraphSpacing}
                 remarkLineBreaks
-                renderer={proseRenderer}
                 surface={theme.isDark ? 'dark' : 'light'}
                 components={{
                   p: ({ children, node }) => {

@@ -38,14 +38,16 @@ describe('FieldTheoryProse', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
-  it('can render with the Prose UI stylesheet class', () => {
+  it('renders with the Field Theory prose class', () => {
     const { container } = render(
-      <FieldTheoryProse renderer="prose-ui">
+      <FieldTheoryProse>
         {'# Heading'}
       </FieldTheoryProse>
     );
 
-    expect(container.querySelector('.prose-ui')).toBeTruthy();
+    expect(container.querySelector('.ft-prose')).toBeTruthy();
+    expect(container.querySelector('.prose-ui')).toBeNull();
+    expect(container.querySelector('.ft-prose-ui')).toBeNull();
     expect(screen.getByRole('heading', { name: 'Heading' })).toBeTruthy();
   });
 

@@ -36,6 +36,14 @@ describe('isSearchFocusShortcut', () => {
     expect(isSearchFocusShortcut(mkKey({ key: '/' }))).toBe(false);
   });
 
+  it('rejects "/" while typing in a contenteditable editor', () => {
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    document.body.appendChild(editor);
+    editor.focus();
+    expect(isSearchFocusShortcut(mkKey({ key: '/' }))).toBe(false);
+  });
+
   it('rejects "/" with any modifier so chorded shortcuts still work', () => {
     expect(isSearchFocusShortcut(mkKey({ key: '/', metaKey: true }))).toBe(false);
     expect(isSearchFocusShortcut(mkKey({ key: '/', ctrlKey: true }))).toBe(false);

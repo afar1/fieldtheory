@@ -2754,6 +2754,31 @@ export default function ClipboardHistory() {
         return;
       }
 
+      // Shift+M - Create Markdown in Library from the selected row or selected items.
+      if (key.toLowerCase() === 'm' && hasShift && !hasMeta && !hasCtrl && !hasAlt) {
+        if (isTypingInTextEntry) return;
+        e.preventDefault();
+
+        if (selectedIds.size > 0) {
+          const selectedItems = items.filter(item => selectedIds.has(item.id));
+          if (selectedItems.length > 0) void handleCreateMarkdownFromItems(selectedItems);
+          return;
+        }
+
+        const selectedRow = listRows[selectedIndex];
+        if (selectedRow?.type === 'stack') {
+          const hasImprovedContent = stackHasImprovedContent(selectedRow.items);
+          const showImproved = hasImprovedContent && !viewOriginalIds.has(selectedRow.stack.stackId);
+          void handleCreateMarkdownFromItems(selectedRow.items, {
+            stackId: selectedRow.stack.stackId,
+            contentVersion: showImproved ? 'improved' : 'original',
+          });
+        } else if (selectedRow?.type === 'item') {
+          void handleCreateMarkdownFromItems([selectedRow.item]);
+        }
+        return;
+      }
+
       // M - Open DM modal to send selected item to a contact (disabled by feature flag).
       if (FEATURE_MESSAGE_SHORTCUT_ENABLED && key === 'm' && !hasMeta && !hasCtrl && !hasAlt && !hasShift) {
         // Skip if typing in input
@@ -3455,7 +3480,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, sharingUnlocked, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -5676,7 +5701,7 @@ export default function ClipboardHistory() {
                               contentVersion: showImproved ? 'improved' : 'original',
                             });
                           }}
-                          title="Create Markdown in Library"
+                          title="Create Markdown in Library (Shift+M)"
                           style={{
                             padding: '4px 6px',
                             fontSize: '10px',
@@ -5691,7 +5716,7 @@ export default function ClipboardHistory() {
                           onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                           onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                         >
-                          md
+                          Markdown <KeyCap>⇧M</KeyCap>
                         </button>
                         {/* Paste hint button - rightmost */}
                         <button
@@ -6555,7 +6580,7 @@ export default function ClipboardHistory() {
                           e.stopPropagation();
                           void handleCreateMarkdownFromItems([item]);
                         }}
-                        title="Create Markdown in Library"
+                        title="Create Markdown in Library (Shift+M)"
                         style={{
                           padding: '3px 4px',
                           fontSize: '9px',
@@ -6571,7 +6596,7 @@ export default function ClipboardHistory() {
                         onMouseEnter={(e) => e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)'}
                         onMouseLeave={(e) => e.currentTarget.style.backgroundColor = 'transparent'}
                       >
-                        md
+                        Markdown <KeyCap>⇧M</KeyCap>
                       </button>
                       {/* Paste hint button with target app - rightmost */}
                       <button
