@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
 import os from 'os';
 import path from 'path';
 import { EventEmitter } from 'events';
@@ -1222,6 +1222,64 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript text');
   });
 
+  it('uses live transcript instead of Parakeet ASR for a small final tail', async () => {
+    const tempDir = mkdtempSync(path.join(os.tmpdir(), 'ft-parakeet-tail-'));
+    const tailPath = path.join(tempDir, 'tail.wav');
+    writeFileSync(tailPath, Buffer.alloc(64000));
+
+    try {
+      const transcribeWithEngineFallback = vi.fn(async () => 'hallucinated tail');
+      const manager: any = {
+        status: 'recording',
+        unregisterAbandonHotkey: vi.fn(),
+        soundManager: { play: vi.fn() },
+        nativeHelper: {
+          snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+          stopRecording: vi.fn(async () => tailPath),
+          checkFocusedTextInput: vi.fn(async () => true),
+        },
+        processStandardChunkQueue: vi.fn(async () => {}),
+        waitForStandardChunkDrain: vi.fn(async () => {}),
+        detachStandardChunkListener: vi.fn(),
+        pendingImmediateSquaresAction: null,
+        pendingImmediateSquaresText: '',
+        standardPendingChunkQueue: [],
+        trackPriorityMicUsage: vi.fn(async () => {}),
+        setStatus: vi.fn(),
+        overlay: { showTranscribing: vi.fn() },
+        standardLiveTranscript: 'chunked transcript text',
+        sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+        clearStandardLiveTranscript: vi.fn(),
+        modelManager: {
+          getSelectedModel: vi.fn(() => 'small'),
+          isModelAvailable: vi.fn(async () => true),
+        },
+        squaresManager: null,
+        commandsManager: null,
+        clipboardManager: null,
+        detectedCommands: [],
+        screenshotMetadata: [],
+        accessTokenGetter: null,
+        lastTranscription: '',
+        pasteStack: vi.fn(async () => {}),
+        emit: vi.fn(),
+        skipNextPasteFailedNotification: false,
+        handleOverlayAfterTranscription: vi.fn(),
+        transcribeWithEngineFallback,
+        preferences: { getPreference: vi.fn((key: string) => key === 'transcriptionEngine' ? 'parakeet' : undefined) },
+      };
+      Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+      await manager.stopRecordingAndTranscribe();
+
+      expect(transcribeWithEngineFallback).not.toHaveBeenCalled();
+      expect(manager.pasteStack).toHaveBeenCalledWith(false);
+      expect(manager.emit).toHaveBeenCalledWith('result', 'chunked transcript text');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('stops recording immediately when a tail Squares command is detected in a chunk', async () => {
     const stopRecordingAndTranscribe = vi.fn(async () => {});
     const manager: any = {
@@ -1271,6 +1329,20 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.sanitizeTranscriptText('hello << goodbye')).toBe('hello goodbye');
     expect(manager.sanitizeTranscriptText('<<>>')).toBe('');
     expect(manager.sanitizeTranscriptText('hello >> world')).toBe('hello world');
+  });
+
+  it('drops narrow silence hallucination artifacts from standard chunks', () => {
+    const manager: any = {
+      applyWordSubstitutions: vi.fn((text: string) => text),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    expect(manager.sanitizeTranscriptText('thanks')).toBe('');
+    expect(manager.sanitizeTranscriptText('thank you.')).toBe('');
+    expect(manager.sanitizeTranscriptText('you')).toBe('');
+    expect(manager.sanitizeTranscriptText('okay okay')).toBe('');
+    expect(manager.sanitizeTranscriptText('testing testing testing testing')).toBe('');
+    expect(manager.sanitizeTranscriptText('okay this works')).toBe('okay this works');
   });
 
   it('strips mm-hmm and filler sounds from transcript chunks', () => {
