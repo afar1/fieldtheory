@@ -22,6 +22,7 @@ import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
 import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
+import { TEXT_CURSOR_BLINK_CHANGED_EVENT, persistTextCursorBlink, restoreTextCursorBlink } from '../utils/editorShortcuts';
 
 // Settings sections in alphabetical order
 type SettingsSection =
@@ -445,6 +446,7 @@ export default function SettingsPanel({
 
   // In-app performance HUD toggle.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
+  const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
 
   // Dynamic Island auto-hide toggle.
   const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState<boolean | null>(null);
@@ -783,6 +785,12 @@ export default function SettingsPanel({
     } catch (err) {
       console.error('Failed to toggle performance HUD:', err);
     }
+  };
+
+  const handleToggleTextCursorBlink = (enabled: boolean) => {
+    setBlinkTextCursor(enabled);
+    persistTextCursorBlink(localStorage, enabled);
+    window.dispatchEvent(new Event(TEXT_CURSOR_BLINK_CHANGED_EVENT));
   };
 
   const handleSetFieldTheoryWindowMode = async (mode: FieldTheoryWindowMode) => {
@@ -1420,6 +1428,21 @@ export default function SettingsPanel({
             style={{ ...styles.toggle, backgroundColor: theme.isDark ? theme.success : '#d1d5db' }}
           >
             <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(20px)' : 'translateX(2px)' }} />
+          </button>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Blink text cursor</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Animate the caret in Markdown editing surfaces
+            </span>
+          </div>
+          <button
+            onClick={() => handleToggleTextCursorBlink(!blinkTextCursor)}
+            style={{ ...styles.toggle, backgroundColor: blinkTextCursor ? theme.success : '#d1d5db' }}
+          >
+            <span style={{ ...styles.toggleKnob, transform: blinkTextCursor ? 'translateX(20px)' : 'translateX(2px)' }} />
           </button>
         </div>
 

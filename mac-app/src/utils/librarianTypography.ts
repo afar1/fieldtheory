@@ -77,9 +77,9 @@ export function resolveLibrarianLineHeight(
 }
 
 export function resolveLibrarianParagraphSpacing(lineHeight: LibrarianLineHeightId): string {
-  if (lineHeight === 'tight') return '0.52em';
-  if (lineHeight === 'loose') return '1.08em';
-  return '0.78em';
+  if (lineHeight === 'tight') return '0.36em';
+  if (lineHeight === 'loose') return '0.78em';
+  return '0.52em';
 }
 
 export function restoreLibrarianTypographyPreset(

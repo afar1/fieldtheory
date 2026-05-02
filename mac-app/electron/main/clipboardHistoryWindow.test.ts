@@ -337,7 +337,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.activateApp).toHaveBeenCalledWith('com.apple.Safari');
   });
 
-  it('does not restore the previous app when hiding the app-mode window', async () => {
+  it('restores the previous app when hiding the app-mode window', async () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const activateApp = vi.spyOn(window, 'activateApp').mockResolvedValue(true);
     vi.spyOn(window, 'getPreviousApp').mockReturnValue({
@@ -349,7 +349,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     await window.hideAndRestorePreviousApp('hotkey-toggle-hide');
 
     expect(window.hide).toHaveBeenCalledWith(false, 'hotkey-toggle-hide');
-    expect(activateApp).not.toHaveBeenCalled();
+    expect(activateApp).toHaveBeenCalledWith('com.apple.Safari');
   });
 
   it('hides after paste in panel mode', () => {
@@ -492,6 +492,30 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(windowRef.focus).toHaveBeenCalled();
     expect(mockApp.show).toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
+  });
+
+  it('temporarily disables app-mode window focus and restores it', () => {
+    vi.useFakeTimers();
+    try {
+      (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+      const windowRef = attachExistingWindow(window, vi.fn());
+
+      expect(window.temporarilyDisableAppWindowFocus('command-launcher-show', 1500)).toBe(true);
+
+      expect(windowRef.setFocusable).toHaveBeenCalledWith(false);
+      vi.advanceTimersByTime(1500);
+      expect(windowRef.setFocusable).toHaveBeenLastCalledWith(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not change focusability in panel mode', () => {
+    const windowRef = attachExistingWindow(window, vi.fn());
+
+    expect(window.temporarilyDisableAppWindowFocus('command-launcher-show')).toBe(false);
+
+    expect(windowRef.setFocusable).not.toHaveBeenCalled();
   });
 
   it('sends showHistory before showTranscriptHistory when reusing an existing window', () => {

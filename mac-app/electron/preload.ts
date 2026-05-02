@@ -3141,8 +3141,8 @@ const commandsAPI = {
   },
 
   // Listen for reset events (when launcher is shown).
-  onLauncherReset: (callback: () => void): (() => void) => {
-    const handler = () => callback();
+  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean }) => callback(payload);
     ipcRenderer.on('command-launcher:reset', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher:reset', handler);
@@ -3331,8 +3331,8 @@ const librarianAPI = {
     return () => ipcRenderer.removeListener('librarian:readingRemoved', handler);
   },
 
-  onReadingRenamed: (callback: (event: { oldPath: string; reading: ReadingMeta }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload: { oldPath: string; reading: ReadingMeta }) => callback(payload);
+  onReadingRenamed: (callback: (event: { oldPath: string; reading: ReadingMeta; traceId?: string; detectedAt?: number; emittedAt?: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { oldPath: string; reading: ReadingMeta; traceId?: string; detectedAt?: number; emittedAt?: number }) => callback(payload);
     ipcRenderer.on('librarian:readingRenamed', handler);
     return () => ipcRenderer.removeListener('librarian:readingRenamed', handler);
   },
@@ -3841,6 +3841,10 @@ interface LibraryRenameEvent {
   oldAbsPath: string;
   newAbsPath: string;
   builtin: boolean;
+  traceId?: string;
+  source?: 'app' | 'watcher' | 'external';
+  detectedAt?: number;
+  emittedAt?: number;
 }
 interface LibraryMigrationFile {
   relPath: string;

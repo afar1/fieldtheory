@@ -44,6 +44,13 @@ export interface LibraryDocument {
   updatedAt: number;
 }
 
+export interface LibraryTombstone {
+  id: string;
+  sourcePath: string;
+  createdAt: number;
+  deletedAt: number;
+}
+
 export interface TranscriptSegment {
   id: string;
   text: string;

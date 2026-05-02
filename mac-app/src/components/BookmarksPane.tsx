@@ -10,6 +10,8 @@ type BookmarkSourceFilter = 'all' | 'x' | 'web';
 const STORAGE_KEY = 'bookmarks-view-mode';
 const SHOW_TEXT_KEY = 'bookmarks-show-text';
 const SOURCE_FILTER_KEY = 'bookmarks-source-filter';
+const FIELD_THEORY_CLI_INSTALL_COMMAND = 'npm install -g fieldtheory';
+const FIELD_THEORY_CLI_URL = 'https://fieldtheory.dev/cli/';
 
 function loadMode(): BookmarksViewMode {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -52,10 +54,18 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   const [sourceFilter, setSourceFilter] = useState<BookmarkSourceFilter>(loadSourceFilter);
   const [saveUrl, setSaveUrl] = useState('');
   const [saveState, setSaveState] = useState<{ status: 'idle' | 'saving' | 'saved' | 'error'; message: string }>({ status: 'idle', message: '' });
+  const [installCopied, setInstallCopied] = useState(false);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const installCopyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const loading = snapshot === null;
   const isCanvasMode = mode === 'canvas';
+
+  useEffect(() => {
+    return () => {
+      if (installCopyTimerRef.current) clearTimeout(installCopyTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
@@ -135,6 +145,14 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
   }, [snapshot, folder, debouncedQuery, showText, sourceFilter, isCanvasMode]);
 
   const folders = snapshot?.folders ?? [];
+
+  const copyInstallCommand = async () => {
+    await navigator.clipboard?.writeText(FIELD_THEORY_CLI_INSTALL_COMMAND);
+    setInstallCopied(true);
+    if (installCopyTimerRef.current) clearTimeout(installCopyTimerRef.current);
+    installCopyTimerRef.current = setTimeout(() => setInstallCopied(false), 1600);
+  };
+
   const handleSaveUrl = async (event: FormEvent) => {
     event.preventDefault();
     const url = saveUrl.trim();
@@ -434,9 +452,61 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
           </div>
         ) : filtered.length === 0 ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: theme.textSecondary, fontSize: '12px', textAlign: 'center', padding: '24px' }}>
-            {snapshot && snapshot.bookmarks.length === 0
-              ? 'No bookmarks saved yet.'
-              : 'No bookmarks in this folder.'}
+            {snapshot && snapshot.bookmarks.length === 0 ? (
+              <div style={{ width: 'min(420px, 100%)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '12px' }}>
+                <div style={{ fontSize: '14px', fontWeight: 600, color: theme.text }}>Sync your bookmarks locally</div>
+                <div style={{ lineHeight: 1.5 }}>
+                  Field Theory CLI gives you a free local copy of all your X bookmarks, then Field Theory can show them here.
+                </div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    maxWidth: '100%',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '6px',
+                    overflow: 'hidden',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                  }}
+                >
+                  <code style={{ padding: '8px 10px', fontSize: '12px', color: theme.text, whiteSpace: 'nowrap', overflowX: 'auto' }}>
+                    {FIELD_THEORY_CLI_INSTALL_COMMAND}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={copyInstallCommand}
+                    style={{
+                      alignSelf: 'stretch',
+                      padding: '0 10px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      color: theme.text,
+                      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+                      border: 'none',
+                      borderLeft: `1px solid ${theme.border}`,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    {installCopied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => window.shellAPI?.openExternal(FIELD_THEORY_CLI_URL)}
+                  style={{
+                    padding: 0,
+                    fontSize: '11px',
+                    color: theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                  }}
+                >
+                  Learn more about Field Theory CLI
+                </button>
+              </div>
+            ) : 'No bookmarks in this folder.'}
           </div>
         ) : (
           <>

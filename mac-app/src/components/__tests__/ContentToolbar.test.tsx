@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import ContentToolbar from '../ContentToolbar';
 import { PROSE_RENDERER_OPTIONS } from '../../utils/proseRenderer';
@@ -18,21 +18,33 @@ vi.mock('../../contexts/ThemeContext', () => ({
 
 describe('ContentToolbar', () => {
   it('shows a clicked state after copying the path', async () => {
+    vi.useFakeTimers();
     const onCopyPath = vi.fn(async () => {});
 
-    render(
-      <ContentToolbar
-        showCopy={false}
-        onCopyPath={onCopyPath}
-      />
-    );
+    try {
+      render(
+        <ContentToolbar
+          showCopy={false}
+          onCopyPath={onCopyPath}
+        />
+      );
 
-    fireEvent.click(screen.getByLabelText('Copy file path (⌘C)'));
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText('Copy file path (⌘C)'));
+        await Promise.resolve();
+      });
 
-    await waitFor(() => {
       expect(onCopyPath).toHaveBeenCalledTimes(1);
       expect(screen.getByLabelText('Copied')).toBeTruthy();
-    });
+
+      act(() => {
+        vi.advanceTimersByTime(1700);
+      });
+
+      expect(screen.getByLabelText('Copy file path (⌘C)')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('shows prose renderer choices in the text style menu', () => {

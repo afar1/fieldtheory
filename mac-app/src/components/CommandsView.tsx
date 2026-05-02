@@ -26,6 +26,8 @@ import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import { PROSE_RENDERER_OPTIONS, persistProseRenderer, restoreProseRenderer } from '../utils/proseRenderer';
 
+const COPY_PATH_FEEDBACK_MS = 1600;
+
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
  *  onCommit unconditionally. */
@@ -129,6 +131,19 @@ interface CommandWithContent extends CommandItem {
   documentVersion: DocumentVersion;
 }
 
+function commandNameFromFilePath(filePath: string): string {
+  const fileName = filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? filePath;
+  return fileName.replace(/\.md$/i, '');
+}
+
+function upsertCommandItem(commands: CommandItem[], command: CommandItem): CommandItem[] {
+  const existingIndex = commands.findIndex((item) => item.filePath === command.filePath);
+  if (existingIndex >= 0) {
+    return commands.map((item, index) => index === existingIndex ? command : item);
+  }
+  return [...commands, command];
+}
+
 /**
  * Watched directory.
  */
@@ -222,9 +237,6 @@ export default function CommandsView({
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const commandContentRef = useRef<HTMLDivElement | null>(null);
-
-  // Hover states for toolbar buttons
-  const [hoveredButton, setHoveredButton] = useState<string | null>(null);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
@@ -453,7 +465,7 @@ export default function CommandsView({
     copyPathFeedbackTimerRef.current = window.setTimeout(() => {
       setCopyPathCopied(false);
       copyPathFeedbackTimerRef.current = null;
-    }, 2000);
+    }, COPY_PATH_FEEDBACK_MS);
   }, []);
 
   const getRenderedSelectionText = useCallback((): string => {
@@ -1135,13 +1147,17 @@ export default function CommandsView({
     const initialContent = `# ${name}\n\n`;
     const result = await window.commandsAPI?.createCommand(targetDir, name.trim(), initialContent);
     if (result) {
-      // Refresh and select the new command
-      const updatedCommands = await window.commandsAPI?.getCommands();
-      if (updatedCommands) {
-        setCommands(updatedCommands);
-        setSelectedPath(result.path);
-        // Enter edit mode directly with the content we already know
-        setEditContent(initialContent);
+      const command = {
+        name: result.name,
+        displayName: result.name,
+        filePath: result.path,
+      };
+      setCommands((current) => upsertCommandItem(current, command));
+      setSelectedPath(result.path);
+      const loaded = await window.commandsAPI?.getCommandByPath(result.path);
+      if (loaded) {
+        setSelectedCommand(loaded);
+        setEditContent(loaded.content);
         setIsEditing(true);
       }
       cancelCreatingCommand();
@@ -1162,23 +1178,16 @@ export default function CommandsView({
       onConfirm: async () => {
         const success = await window.commandsAPI?.deleteCommand(filePath);
         if (success) {
-          // Refresh commands
-          const updatedCommands = await window.commandsAPI?.getCommands();
-          if (updatedCommands) {
-            setCommands(updatedCommands);
-            // Select next command or clear selection
-            if (selectedPath === filePath) {
-              if (updatedCommands.length > 0) {
-                setSelectedPath(updatedCommands[0].filePath);
-              } else {
-                setSelectedPath(null);
-              }
-            }
+          const updatedCommands = commands.filter((command) => command.filePath !== filePath);
+          setCommands(updatedCommands);
+          if (selectedPath === filePath) {
+            setSelectedPath(updatedCommands[0]?.filePath ?? null);
+            setSelectedCommand(null);
           }
         }
       },
     });
-  }, [confirmDelete, selectedPath]);
+  }, [commands, confirmDelete, selectedPath]);
 
   // Rename command handler — kicks off the inline input in the sidebar.
   // Actual rename happens in commitRename() when the user confirms.
@@ -1205,11 +1214,16 @@ export default function CommandsView({
     setRenameError(null);
     const newFilePath = await window.commandsAPI?.renameCommand(renamingPath, trimmed);
     if (newFilePath) {
-      const updated = await window.commandsAPI?.getCommands();
-      if (updated) {
-        setCommands(updated);
-        setSelectedPath(newFilePath);
-      }
+      const displayName = commandNameFromFilePath(newFilePath);
+      setCommands((current) => current.map((command) => command.filePath === renamingPath
+        ? { ...command, name: displayName, displayName, filePath: newFilePath }
+        : command
+      ));
+      setSelectedPath(newFilePath);
+      setSelectedCommand((current) => current?.filePath === renamingPath
+        ? { ...current, name: displayName, displayName, filePath: newFilePath }
+        : current
+      );
       cancelRename();
     } else {
       setRenameError('A command with that name already exists.');
