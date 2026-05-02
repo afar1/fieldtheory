@@ -6,6 +6,7 @@ import {
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
+  getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
   getWikiBacklinks,
@@ -465,6 +466,83 @@ describe('getWikiLinkedPages', () => {
         relPath: 'scratchpad/reference',
         title: 'Reference',
         excerpt: 'See [[Source]].',
+        direction: 'inbound',
+      },
+    ]);
+  });
+});
+
+describe('getMarkdownLinkedDocuments', () => {
+  const artifactPath = '/tmp/artifact.md';
+  const commandPath = '/tmp/refactor.md';
+  const documents = [
+    {
+      target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+      title: 'Source',
+      content: 'See [[Artifact One]] and [[refactor]].',
+    },
+    {
+      target: { kind: 'artifact' as const, path: artifactPath },
+      title: 'Artifact One',
+      content: 'Back to [[Source]].',
+    },
+    {
+      target: { kind: 'command' as const, path: commandPath },
+      title: 'refactor',
+      content: '',
+    },
+    {
+      target: { kind: 'wiki' as const, relPath: 'scratchpad/reference' },
+      title: 'Reference',
+      content: 'Run [[refactor]].',
+    },
+  ];
+  const linkedIndex = buildWikiIndex([
+    { relPath: 'scratchpad/source', title: 'Source' },
+    { relPath: artifactPath, title: 'Artifact One', artifactPath },
+    { relPath: commandPath, title: 'refactor', commandPath },
+    { relPath: 'scratchpad/reference', title: 'Reference' },
+  ]);
+
+  it('shows artifact and command links from a wiki page', () => {
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/source' },
+      'See [[Artifact One]] and [[refactor]].',
+      documents,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'artifact', path: artifactPath },
+        title: 'Artifact One',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
+        direction: 'bidirectional',
+      },
+      {
+        target: { kind: 'command', path: commandPath },
+        title: 'refactor',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
+        direction: 'outbound',
+      },
+    ]);
+  });
+
+  it('shows backlinks to command documents', () => {
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'command', path: commandPath },
+      '',
+      documents,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/reference' },
+        title: 'Reference',
+        excerpt: 'Run [[refactor]].',
+        direction: 'inbound',
+      },
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/source' },
+        title: 'Source',
+        excerpt: 'See [[Artifact One]] and [[refactor]].',
         direction: 'inbound',
       },
     ]);
