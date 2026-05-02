@@ -21,6 +21,7 @@ const LIBRARY_FOLDER_TOGGLES = [
   { id: 'scratchpad', label: 'Scratchpad', hint: 'Quick notes and captures' },
   { id: 'Shared Markdown', label: 'Shared Markdown', hint: 'Shared markdown pages' },
   { id: 'debates', label: 'Debates', hint: 'Structured debate notes' },
+  { id: 'Plans', label: 'Plans', hint: 'Saved planning notes' },
   { id: 'bookmarks-from-x', label: 'Bookmarks from x.com', hint: 'Synced bookmark categories, domains, and entities' },
   { id: 'entries', label: 'Entries', hint: 'Authored wiki entries' },
 ] as const;
@@ -854,10 +855,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-              Click rendered markdown to edit
+              Single-click rendered pages to edit markdown
             </span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Turn off to require Command-click before entering edit mode
+              Turn off to require Command-click before opening markdown source
             </span>
           </div>
           <input

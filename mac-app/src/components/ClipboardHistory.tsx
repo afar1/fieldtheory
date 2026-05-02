@@ -11,6 +11,7 @@ import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection, shouldRevealFocusChrome } from './LibrarianView';
+import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import type { SketchViewHandle } from './SketchView';
@@ -173,7 +174,7 @@ const FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX = 28;
 const FIELD_THEORY_CHROME_LOGO_TOP_PX = 24;
 const FIELD_THEORY_CHROME_MIC_TOP_PX = 21;
 const FIELD_THEORY_CHROME_TABS_TOP_PX = 60;
-const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 24;
+const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 12;
 const FIELD_THEORY_CHROME_OVERLAY_TOP_PX = 10;
 
 /**
@@ -380,7 +381,10 @@ export default function ClipboardHistory() {
       if (normalizeHotkeyForComparison(buildHotkeyString(event)) !== configuredHotkey) return;
       event.preventDefault();
       event.stopPropagation();
-      void window.wikiAPI?.openScratchpadDefault();
+      void (async () => {
+        const page = await window.wikiAPI?.openScratchpadDefault();
+        if (page) dispatchLocalWikiAdded(page);
+      })();
     };
 
     window.addEventListener('fieldtheory:scratchpad-hotkey-changed', hotkeyChangedHandler);
@@ -521,6 +525,30 @@ export default function ClipboardHistory() {
   const appChromeHidden = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
   const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible && !focusChromeChildVisible;
   const footerChromeHidden = appChromeHidden || bookmarksCanvasChromeActive;
+  const [footerFps, setFooterFps] = useState<number | null>(null);
+  useEffect(() => {
+    if (!isWindowVisible || footerChromeHidden) {
+      setFooterFps(null);
+      return;
+    }
+
+    let rafId = 0;
+    let frameCount = 0;
+    let sampleStart = performance.now();
+
+    const sample = (now: number) => {
+      frameCount += 1;
+      if (now - sampleStart >= 500) {
+        setFooterFps(Math.round((frameCount * 1000) / (now - sampleStart)));
+        frameCount = 0;
+        sampleStart = now;
+      }
+      rafId = requestAnimationFrame(sample);
+    };
+
+    rafId = requestAnimationFrame(sample);
+    return () => cancelAnimationFrame(rafId);
+  }, [footerChromeHidden, isWindowVisible]);
   const currentFieldTheoryNavigationEntry = useMemo((): FieldTheoryNavigationEntry | null => {
     if (showSettings) return null;
     if (viewMode === 'librarian') return { surface: 'librarian' };
@@ -2188,6 +2216,10 @@ export default function ClipboardHistory() {
     const unsubscribe = window.wikiAPI?.onOpenScratchpad((relPath) => {
       clearPreview();
       setShowSettings(false);
+      void (async () => {
+        const page = await window.wikiAPI?.getPage(relPath);
+        if (page) dispatchLocalWikiAdded(page);
+      })();
       setPendingLibraryOpenTarget({ kind: 'wiki', path: relPath, contentMode: 'markdown' });
       setLibraryKeepsCurrentSizeKey(false);
       setViewMode('librarian');
@@ -7191,6 +7223,14 @@ export default function ClipboardHistory() {
                   )
                 ) : (
                   <>
+                    {footerFps !== null && (
+                      <span
+                        title="Renderer frames per second"
+                        style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', opacity: 0.72 }}
+                      >
+                        {footerFps}fps
+                      </span>
+                    )}
                     {userCallsign && (
                       <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
                         {userCallsign}

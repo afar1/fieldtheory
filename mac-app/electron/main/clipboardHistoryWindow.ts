@@ -1001,6 +1001,27 @@ export class ClipboardHistoryWindow {
     return true;
   }
 
+  temporarilyDisableAppWindowFocus(reason: string, durationMs: number = 1500): boolean {
+    if (!this.shouldUseAppWindow() || !this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+      return false;
+    }
+
+    if (this.blurFocusableResetTimer) {
+      clearTimeout(this.blurFocusableResetTimer);
+      this.blurFocusableResetTimer = null;
+    }
+
+    this.window.setFocusable(false);
+    this.logLifecycle('temporarily-disable-app-window-focus', `reason=${reason} durationMs=${durationMs}`);
+    this.blurFocusableResetTimer = setTimeout(() => {
+      this.blurFocusableResetTimer = null;
+      if (this.window && !this.window.isDestroyed()) {
+        this.window.setFocusable(true);
+      }
+    }, durationMs);
+    return true;
+  }
+
   /**
    * Hide the clipboard history window.
    * By default this only hides the window. Call `hideAndRestorePreviousApp()`
@@ -1103,7 +1124,6 @@ export class ClipboardHistoryWindow {
     let previousApp = this.getPreviousApp();
     const pendingCapture = !previousApp?.bundleId ? this.previousAppCapturePromise : null;
     this.hide(false, reason);
-    if (this.shouldUseAppWindow()) return;
     if (!previousApp?.bundleId) {
       previousApp = await this.resolvePreviousAppForRestore(pendingCapture);
     }

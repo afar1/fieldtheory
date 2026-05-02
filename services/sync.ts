@@ -44,6 +44,7 @@ type LibraryDocumentRow = {
   tags: string[];
   source_path: string | null;
   source_kind: 'mobile' | 'laptop';
+  content_hash: string | null;
   client_id: string;
   client_created_at_ms: number;
   deleted_at: string | null;
@@ -87,7 +88,7 @@ const parseSourcePath = (sourcePath: string | null, title: string) => {
   };
 };
 
-const sourcePathForLibraryDocument = (doc: LibraryDocument) => {
+export const sourcePathForLibraryDocument = (doc: LibraryDocument) => {
   const folderPath = doc.folderPath?.trim() || 'scratchpad';
   const fileName = doc.fileName?.trim() || `${(doc.title.trim() || 'Untitled').replace(/[/:]/g, '-')}.md`;
   return `${folderPath}/${fileName}`;
@@ -133,6 +134,25 @@ const upsertRows = async (table: string, rows: object[]) => {
   }
 };
 
+const syncLibraryTombstonesUpForUser = async (userId: string) => {
+  const tombstones = await StorageService.getLibraryTombstones();
+  if (tombstones.length === 0) return;
+
+  await upsertRows('library_documents', tombstones.map((tombstone) => ({
+    user_id: userId,
+    title: '',
+    content: '',
+    tags: [],
+    source_path: tombstone.sourcePath,
+    source_kind: 'mobile',
+    content_hash: '',
+    client_id: tombstone.id,
+    client_created_at_ms: tombstone.createdAt,
+    deleted_at: new Date(tombstone.deletedAt).toISOString(),
+  })));
+  await StorageService.saveLibraryTombstones([]);
+};
+
 const syncLibraryUpForUser = async (userId: string) => {
   const libraryDocuments = await StorageService.getLibraryDocuments();
   await upsertRows('library_documents', libraryDocuments.map((doc) => ({
@@ -153,17 +173,30 @@ const syncLibraryDownOnly = async () => {
   const { data, error } = await supabase
     .from('library_documents')
     .select('*')
-    .is('deleted_at', null)
     .order('updated_at', { ascending: false });
 
   if (error) throw error;
 
-  const mergedLibraryDocuments = mergeByLastWriteWins(localLibraryDocuments, (data ?? []).map(toLocalLibraryDocument));
+  const remoteRows = (data ?? []) as LibraryDocumentRow[];
+  const activeRows = remoteRows.filter((row) => !row.deleted_at);
+  const deletedRows = remoteRows.filter((row) => row.deleted_at);
+  let mergedLibraryDocuments = mergeByLastWriteWins(localLibraryDocuments, activeRows.map(toLocalLibraryDocument));
+
+  for (const row of deletedRows) {
+    const deletedAt = row.deleted_at ? new Date(row.deleted_at).getTime() : 0;
+    if (!Number.isFinite(deletedAt)) continue;
+    mergedLibraryDocuments = mergedLibraryDocuments.filter((doc) => {
+      if (doc.id !== row.client_id) return true;
+      return (doc.updatedAt ?? doc.createdAt) > deletedAt;
+    });
+  }
+
   await StorageService.saveLibraryDocuments(mergedLibraryDocuments);
   return mergedLibraryDocuments;
 };
 
 const syncLibraryRemoteFirstForUser = async (userId: string) => {
+  await syncLibraryTombstonesUpForUser(userId);
   const mergedLibraryDocuments = await syncLibraryDownOnly();
   await syncLibraryUpForUser(userId);
   return mergedLibraryDocuments;

@@ -152,7 +152,7 @@ describe('CommandLauncherWindow.show()', () => {
 
     await launcher.show();
 
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset');
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: false });
     expect(mockWindow.webContents.send.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.show.mock.invocationCallOrder[0]);
     expect(mockWindow.show.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.focus.mock.invocationCallOrder[0]);
   });
@@ -222,6 +222,17 @@ describe('CommandLauncherWindow.preload()', () => {
       }),
       backgroundColor: '#00000000',
     }));
+  });
+
+  it('passes the current app theme to reset before show', async () => {
+    const launcher = new CommandLauncherWindow(undefined, {
+      getInitialDarkMode: () => true,
+    });
+    (launcher as any).window = mockWindow;
+
+    await launcher.show();
+
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: true });
   });
 
   it('uses a transparent launcher background so rounded corners stay clean', () => {
@@ -362,19 +373,47 @@ describe('CommandLauncherWindow.hide()', () => {
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
-  it('clears external invocation suppression after the hidden window consumes it', () => {
+  it('keeps external invocation suppression through a blur close after direct hide', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1000);
 
-    launcher.suppressActivationForExternalInvocation();
-    launcher.hide();
-    expect(activatePreviousApp).not.toHaveBeenCalled();
+    try {
+      launcher.suppressActivationForExternalInvocation();
+      launcher.hide(true);
+      expect(activatePreviousApp).not.toHaveBeenCalled();
 
-    mockWindow.hide.mockClear();
-    mockWindow.isVisible.mockReturnValue(true);
-    launcher.hide();
+      mockWindow.hide.mockClear();
+      mockWindow.isVisible.mockReturnValue(true);
+      dateNow.mockReturnValue(1500);
+      launcher.hide();
 
-    expect(mockWindow.hide).toHaveBeenCalled();
-    expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
+      expect(mockWindow.hide).toHaveBeenCalled();
+      expect(activatePreviousApp).not.toHaveBeenCalled();
+      expect(mockApp.hide).not.toHaveBeenCalled();
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it('lets external invocation suppression expire after the handoff window', () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1000);
+
+    try {
+      launcher.suppressActivationForExternalInvocation();
+      launcher.hide();
+      expect(activatePreviousApp).not.toHaveBeenCalled();
+
+      mockWindow.hide.mockClear();
+      mockWindow.isVisible.mockReturnValue(true);
+      dateNow.mockReturnValue(4101);
+      launcher.hide();
+
+      expect(mockWindow.hide).toHaveBeenCalled();
+      expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it('clears stale external invocation suppression before a fresh show', async () => {

@@ -11,6 +11,7 @@ import ImmersiveToggle from './ImmersiveToggle';
 // Icon sizes - 22% larger than the original 13px base
 const ICON_SIZE = 16; // ~22% larger than 13px
 const ICON_SIZE_SMALL = 13; // Standard size for less prominent icons
+const COPY_PATH_FEEDBACK_MS = 1600;
 
 const TEXT_SIZE_OPTIONS: Array<{
   id: 'small' | 'normal' | 'large';
@@ -165,6 +166,7 @@ export default function ContentToolbar({
   const [copyPathHovered, setCopyPathHovered] = useState(false);
   const [typographyMenuOpen, setTypographyMenuOpen] = useState(false);
   const typographyMenuRef = useRef<HTMLDivElement | null>(null);
+  const copyPathLocalTimerRef = useRef<number | null>(null);
 
   // Handle copy with feedback
   const handleCopy = () => {
@@ -180,7 +182,13 @@ export default function ContentToolbar({
     try {
       await onCopyPath();
       setCopyPathLocalCopied(true);
-      setTimeout(() => setCopyPathLocalCopied(false), 2000);
+      if (copyPathLocalTimerRef.current !== null) {
+        window.clearTimeout(copyPathLocalTimerRef.current);
+      }
+      copyPathLocalTimerRef.current = window.setTimeout(() => {
+        setCopyPathLocalCopied(false);
+        copyPathLocalTimerRef.current = null;
+      }, COPY_PATH_FEEDBACK_MS);
     } catch {
       // The caller owns copy failure reporting.
     }
@@ -205,6 +213,14 @@ export default function ContentToolbar({
       if (typographyMenuOpen) onTypographyMenuOpenChange?.(false);
     };
   }, [onTypographyMenuOpenChange, typographyMenuOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (copyPathLocalTimerRef.current !== null) {
+        window.clearTimeout(copyPathLocalTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (!typographyMenuOpen) return;

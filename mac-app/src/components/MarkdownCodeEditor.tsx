@@ -34,6 +34,8 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { useTheme } from '../contexts/ThemeContext';
 
+export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 0;
+
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
   blur: () => void;
@@ -65,6 +67,7 @@ interface MarkdownCodeEditorProps {
   background?: string;
   caretColor?: string;
   selectionBackground?: string;
+  blinkCursor?: boolean;
   placeholder?: string;
   readOnly?: boolean;
   spellCheck?: boolean;
@@ -123,6 +126,24 @@ function getCodeEditorCaretPosition(
   };
 }
 
+function shouldMoveCaretToDocumentEndFromClick(view: EditorView, event: MouseEvent): boolean {
+  if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return false;
+  const scroller = view.scrollDOM;
+  if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2) return false;
+
+  const lastLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
+  if (!lastLine) return false;
+  return event.clientY > lastLine.getBoundingClientRect().bottom;
+}
+
+export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean): React.CSSProperties {
+  return blinkCursor ? {} : { animation: 'none' };
+}
+
+export function getMarkdownCodeEditorCursorScrollMargin(): { x: number; y: number } {
+  return { x: 5, y: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX };
+}
+
 const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEditorProps>(
   function MarkdownCodeEditor(props, ref) {
     const {
@@ -135,6 +156,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       background,
       caretColor,
       selectionBackground,
+      blinkCursor = true,
       placeholder,
       readOnly = false,
       spellCheck = true,
@@ -222,6 +244,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-cursor, .cm-dropCursor': {
             borderLeftColor: caretColor ?? color,
           },
+          '.cm-cursor': {
+            ...getMarkdownCodeEditorCursorAnimationStyle(blinkCursor),
+          },
           '.cm-selectionBackground, ::selection, .cm-content ::selection': {
             backgroundColor: selectionBackground ?? (theme.isDark ? 'rgba(120,170,255,0.25)' : 'rgba(80,140,255,0.25)'),
           },
@@ -236,6 +261,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       );
     }, [
       background,
+      blinkCursor,
       caretColor,
       color,
       fontFamily,
@@ -259,6 +285,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           bracketMatching(),
           highlightActiveLine(),
           EditorView.lineWrapping,
+          EditorView.cursorScrollMargin.of(getMarkdownCodeEditorCursorScrollMargin()),
           themeCompartment.of(editorTheme),
           readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
           EditorView.updateListener.of((update) => {
@@ -292,6 +319,16 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             },
             keydown: (event) => onKeyDownRef.current?.(event) === true,
             mousedown: (event, view) => {
+              if (shouldMoveCaretToDocumentEndFromClick(view, event)) {
+                event.preventDefault();
+                view.focus();
+                const end = view.state.doc.length;
+                view.dispatch({
+                  selection: { anchor: end, head: end },
+                  effects: EditorView.scrollIntoView(end, { yMargin: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX }),
+                });
+                return true;
+              }
               const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
               if (pos === null) return false;
               return onMouseDownRef.current?.(event, pos) === true;
@@ -384,7 +421,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           if (!view) return;
           view.focus();
           if (!options?.preventScroll) {
-            view.dispatch({ effects: EditorView.scrollIntoView(view.state.selection.main.head) });
+            view.dispatch({
+              effects: EditorView.scrollIntoView(view.state.selection.main.head, {
+                yMargin: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
+              }),
+            });
           }
         },
         blur: () => {
@@ -404,7 +445,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           const length = view.state.doc.length;
           const safeStart = Math.max(0, Math.min(start, length));
           const safeEnd = Math.max(0, Math.min(end, length));
-          view.dispatch({ selection: { anchor: safeStart, head: safeEnd } });
+          view.dispatch({
+            selection: { anchor: safeStart, head: safeEnd },
+            effects: EditorView.scrollIntoView(safeEnd, { yMargin: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX }),
+          });
         },
         get scrollTop() {
           const scroller = viewRef.current?.scrollDOM;

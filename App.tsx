@@ -46,7 +46,7 @@ import {
 import { processTranscription } from './services/llm';
 import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, SketchEntry, LibraryDocument } from './types';
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
-import { syncAll, seedRemoteFromLocal, syncLibraryDocuments } from './services/sync';
+import { syncAll, seedRemoteFromLocal, syncLibraryDocuments, sourcePathForLibraryDocument } from './services/sync';
 import { supabase } from './services/supabase';
 import { CommandsService } from './services/commands';
 import { useIsDark, useThemeColors } from './services/theme';
@@ -303,30 +303,49 @@ function AppContent() {
 
   // Load data from storage on mount
   useEffect(() => {
+    let cancelled = false;
+
     async function loadData() {
       try {
-        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts, loadedSketches, loadedLibraryDocuments] = await Promise.all([
+        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts] = await Promise.all([
           StorageService.getTodos(),
           StorageService.getObservations(),
           StorageService.getSettings(),
           StorageService.getTranscripts(),
-          SketchStorageService.getSketches(),
-          StorageService.getLibraryDocuments(),
         ]);
+        if (cancelled) return;
         setTodos(loadedTodos);
         setObservations(loadedObservations);
         setSettings(loadedSettings);
         setTranscripts(loadedTranscripts);
-        setSketches(loadedSketches);
-        setLibraryDocuments(loadedLibraryDocuments);
       } catch (err) {
         console.error('Failed to load data from storage:', err);
         // Continue with empty state if storage fails
       } finally {
-        setIsInitialized(true);
+        if (!cancelled) setIsInitialized(true);
       }
     }
+
+    async function loadSecondaryData() {
+      try {
+        const [loadedSketches, loadedLibraryDocuments] = await Promise.all([
+          SketchStorageService.getSketches(),
+          StorageService.getLibraryDocuments(),
+        ]);
+        if (cancelled) return;
+        setSketches(loadedSketches);
+        setLibraryDocuments(loadedLibraryDocuments);
+      } catch (err) {
+        console.error('Failed to load secondary data from storage:', err);
+      }
+    }
+
     loadData();
+    loadSecondaryData();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Track keyboard height to position bottom bar above suggestions
@@ -936,7 +955,20 @@ function AppContent() {
   }, []);
 
   const handleLibraryDocumentsChange = useCallback((documents: LibraryDocument[]) => {
-    setLibraryDocuments(documents);
+    setLibraryDocuments((previous) => {
+      const nextIds = new Set(documents.map((doc) => doc.id));
+      const deletedDocuments = previous.filter((doc) => !nextIds.has(doc.id));
+      if (deletedDocuments.length > 0) {
+        const deletedAt = Date.now();
+        StorageService.addLibraryTombstones(deletedDocuments.map((doc) => ({
+          id: doc.id,
+          sourcePath: sourcePathForLibraryDocument(doc),
+          createdAt: doc.createdAt,
+          deletedAt,
+        }))).catch(console.error);
+      }
+      return documents;
+    });
     StorageService.saveLibraryDocuments(documents).catch(console.error);
   }, []);
 

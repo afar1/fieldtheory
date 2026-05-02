@@ -23,6 +23,18 @@ import {
 } from '../shared/markdownFrontmatter';
 
 const log = createLogger('Librarian');
+const RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
+let renameTraceSequence = 0;
+
+function nextRenameTraceId(prefix: string): string {
+  renameTraceSequence += 1;
+  return `${prefix}-${Date.now()}-${renameTraceSequence}`;
+}
+
+function traceRename(stage: string, payload: Record<string, unknown>): void {
+  if (!RENAME_TRACE_ENABLED) return;
+  log.warn('[RenameTrace] %s %o', stage, payload);
+}
 
 const TOML_TABLE_HEADER_RE = /^\s*\[/;
 const TOML_NOTIFY_LINE_RE = /^\s*notify\s*=.*$\n?/gm;
@@ -36,6 +48,7 @@ export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'scratchpad',
   'Shared Markdown',
   'debates',
+  'Plans',
   'bookmarks-from-x',
   'entries',
   'categories',
@@ -47,6 +60,7 @@ const DEFAULT_LIBRARY_FOLDER_ID_SET = new Set<string>(DEFAULT_LIBRARY_FOLDER_IDS
 export const DEFAULT_README_FOLDER_IDS = [
   'scratchpad',
   'debates',
+  'Plans',
   'entries',
   'categories',
   'domains',
@@ -101,6 +115,14 @@ function buildDefaultFolderReadme(content: string, legacyContent: string): { con
   };
 }
 
+const CENTRAL_ARTIFACTS_README_CONTENT = normalizeDefaultReadmeContent(`# README: Artifacts
+
+This is the Librarian artifacts folder.
+Field Theory and its agent hooks write artifacts here: ~/.fieldtheory/librarian/artifacts/.
+
+Artifacts are normal Markdown files. Right-click the Artifacts folder in Library and choose Show in Finder to inspect or manage them directly.
+`);
+
 const DEFAULT_FOLDER_READMES: ReadonlyArray<{
   id: LibraryReadmeFolderId;
   relPath: string;
@@ -112,8 +134,8 @@ const DEFAULT_FOLDER_READMES: ReadonlyArray<{
     relPath: 'scratchpad',
     ...buildDefaultFolderReadme(`# README: Scratchpad
 
-Drop quick notes here.
-Use this folder for rough captures before they become entries.
+Create a Scratchpad note from anywhere with Control+Option+Command+Space.
+Use Scratchpad for quick notes and rough captures before they become entries.
 `, `# Scratchpad
 
 Drop quick notes here.
@@ -125,12 +147,25 @@ Use this folder for rough captures before they become entries.
     relPath: 'debates',
     ...buildDefaultFolderReadme(`# README: Debates
 
-Debates are structured notes for comparing approaches.
-Use the portable command at ~/.fieldtheory/commands/debate.md when you want one generated.
+Run the portable command at ~/.fieldtheory/commands/debate.md when you want a debate.
+It starts a structured comparison between models or approaches, then saves the result so you can come back to the reasoning later.
 `, `# Debates
 
 Debates are structured notes for comparing approaches.
 Use the portable command at .cursor/commands/debate.md when you want one generated.
+`),
+  },
+  {
+    id: 'Plans',
+    relPath: 'Plans',
+    ...buildDefaultFolderReadme(`# README: Plans
+
+Run the portable command at ~/.fieldtheory/commands/plan.md when you want a plan saved here.
+It turns the current proposal or next steps into a Markdown plan with a clear filename, outside any repo, so the plan is easy to find later.
+`, `# Plans
+
+Run the portable command at ~/.fieldtheory/commands/plan.md when you want a plan saved here.
+It turns the current proposal or next steps into a Markdown plan with a clear filename, outside any repo, so the plan is easy to find later.
 `),
   },
   {
@@ -1615,6 +1650,10 @@ export interface LibraryRenameEvent {
   oldAbsPath: string;
   newAbsPath: string;
   builtin: boolean;
+  traceId?: string;
+  source?: 'app' | 'watcher' | 'external';
+  detectedAt?: number;
+  emittedAt?: number;
 }
 
 export type LibraryMoveKind = 'file' | 'dir';
@@ -1640,6 +1679,9 @@ export interface Reading extends ReadingMeta {
 export interface ReadingRenameEvent {
   oldPath: string;
   reading: ReadingMeta;
+  traceId?: string;
+  detectedAt?: number;
+  emittedAt?: number;
 }
 
 /**
@@ -1721,6 +1763,7 @@ export class LibrarianManager extends EventEmitter {
   private libraryRootsCache: LibraryRoot[] | null = null;
   private pendingWikiUnlinks: Map<string, ReturnType<typeof setTimeout>> = new Map();
   private pendingLibraryUnlinks: Map<string, { rootPath: string; timer: ReturnType<typeof setTimeout> }> = new Map();
+  private wikiRenameAliases: Map<string, { relPath: string; timer: ReturnType<typeof setTimeout> }> = new Map();
 
   constructor() {
     super();
@@ -1927,6 +1970,8 @@ export class LibrarianManager extends EventEmitter {
     this.pendingWikiUnlinks?.clear();
     for (const pending of this.pendingLibraryUnlinks?.values() ?? []) clearTimeout(pending.timer);
     this.pendingLibraryUnlinks?.clear();
+    for (const alias of this.wikiRenameAliases?.values() ?? []) clearTimeout(alias.timer);
+    this.wikiRenameAliases?.clear();
   }
 
   // ===========================================================================
@@ -2744,6 +2789,17 @@ export class LibrarianManager extends EventEmitter {
     if (changed) this.saveSettings();
   }
 
+  private ensureCentralArtifactsReadme(artifactsDir: string): void {
+    try {
+      const readmePath = path.join(artifactsDir, 'README.md');
+      if (!fs.existsSync(readmePath)) {
+        fs.writeFileSync(readmePath, CENTRAL_ARTIFACTS_README_CONTENT, 'utf-8');
+      }
+    } catch (error) {
+      log.warn('Failed to seed central artifacts README:', error);
+    }
+  }
+
   private scanMarkdownTree(rootPath: string, currentDir = rootPath, seenRealPaths = new Set<string>()): WikiNode[] {
     if (!fs.existsSync(currentDir)) return [];
 
@@ -2911,8 +2967,63 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private emitRename(event: LibraryRenameEvent): void {
-    this.patchCachedRename(event);
-    this.emit(event.builtin ? 'wiki:renamed' : 'library:renamed', event);
+    const tracedEvent: LibraryRenameEvent = {
+      ...event,
+      traceId: event.traceId ?? nextRenameTraceId(event.builtin ? 'wiki' : 'library'),
+      detectedAt: event.detectedAt ?? Date.now(),
+      emittedAt: Date.now(),
+    };
+    traceRename('emit', {
+      traceId: tracedEvent.traceId,
+      source: tracedEvent.source,
+      builtin: tracedEvent.builtin,
+      oldRelPath: tracedEvent.oldRelPath,
+      newRelPath: tracedEvent.newRelPath,
+      ageMs: (tracedEvent.emittedAt ?? Date.now()) - (tracedEvent.detectedAt ?? Date.now()),
+      renameListeners: this.listenerCount(tracedEvent.builtin ? 'wiki:renamed' : 'library:renamed'),
+      changedListeners: this.listenerCount(tracedEvent.builtin ? 'wiki:changed' : 'library:changed'),
+    });
+    const beforePatch = Date.now();
+    this.patchCachedRename(tracedEvent);
+    this.rememberWikiRenameAlias(tracedEvent);
+    traceRename('cache-patched', {
+      traceId: tracedEvent.traceId,
+      patchMs: Date.now() - beforePatch,
+    });
+    this.emit(tracedEvent.builtin ? 'wiki:renamed' : 'library:renamed', tracedEvent);
+    traceRename('renamed-emitted', {
+      traceId: tracedEvent.traceId,
+      builtin: tracedEvent.builtin,
+      ageMs: Date.now() - (tracedEvent.detectedAt ?? Date.now()),
+    });
+  }
+
+  private rememberWikiRenameAlias(event: LibraryRenameEvent): void {
+    if (!event.builtin) return;
+    const aliases = this.wikiRenameAliases ??= new Map();
+    const existing = aliases.get(event.oldRelPath);
+    if (existing) clearTimeout(existing.timer);
+    const timer = setTimeout(() => {
+      aliases.delete(event.oldRelPath);
+    }, 15000);
+    (timer as { unref?: () => void }).unref?.();
+    aliases.set(event.oldRelPath, { relPath: event.newRelPath, timer });
+    traceRename('wiki-alias-remembered', {
+      traceId: event.traceId,
+      oldRelPath: event.oldRelPath,
+      newRelPath: event.newRelPath,
+      ttlMs: 15000,
+    });
+  }
+
+  private resolveWikiPageReadRelPath(relPath: string): string {
+    if (this.resolveExistingWikiPagePath(relPath)) return relPath;
+    const alias = this.wikiRenameAliases?.get(relPath)?.relPath;
+    if (alias && this.resolveExistingWikiPagePath(alias)) {
+      traceRename('wiki-alias-resolved', { oldRelPath: relPath, newRelPath: alias });
+      return alias;
+    }
+    return relPath;
   }
 
   recordLibraryRename(event: LibraryRenameEvent): void {
@@ -2920,6 +3031,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   recordWatchedReadingRename(oldAbsPath: string, newAbsPath: string): ReadingMeta | null {
+    const detectedAt = Date.now();
     const oldPath = this.normalizePath(oldAbsPath);
     const newPath = this.normalizePath(newAbsPath);
     const oldCached = this.cache.get(oldPath);
@@ -2931,7 +3043,22 @@ export class LibrarianManager extends EventEmitter {
     if (newMeta) this.cache.set(newPath, newMeta);
     this.saveIndex();
 
-    if (newMeta) this.emit('reading-renamed', { oldPath, reading: newMeta });
+    if (newMeta) {
+      const event: ReadingRenameEvent = {
+        oldPath,
+        reading: newMeta,
+        traceId: nextRenameTraceId('reading'),
+        detectedAt,
+        emittedAt: Date.now(),
+      };
+      traceRename('reading-renamed', {
+        traceId: event.traceId,
+        oldPath,
+        newPath,
+        ageMs: event.emittedAt! - detectedAt,
+      });
+      this.emit('reading-renamed', event);
+    }
     else this.emit('reading-removed', oldPath);
     return newMeta;
   }
@@ -3063,7 +3190,8 @@ export class LibrarianManager extends EventEmitter {
   }
 
   getWikiPage(relPath: string): WikiPage | null {
-    const absPath = this.resolveExistingWikiPagePath(relPath);
+    const resolvedRelPath = this.resolveWikiPageReadRelPath(relPath);
+    const absPath = this.resolveExistingWikiPagePath(resolvedRelPath);
     if (!absPath) return null;
 
     try {
@@ -3072,7 +3200,7 @@ export class LibrarianManager extends EventEmitter {
       const nameWithoutExt = stripMarkdownFileExtension(path.basename(absPath));
       const metadata = this.parseWikiMetadata(content, absPath);
       return {
-        relPath,
+        relPath: resolvedRelPath,
         absPath,
         name: nameWithoutExt,
         title: metadata.title,
@@ -3132,18 +3260,23 @@ export class LibrarianManager extends EventEmitter {
   private handleWikiAdd(absPath: string): void {
     const oldAbsPath = this.takePendingWikiRename(absPath);
     if (!oldAbsPath) {
+      traceRename('wiki-add-unmatched', { absPath });
       this.emit('wiki:changed');
       return;
     }
 
     const oldRelPath = this.wikiRelPathFromAbsPath(oldAbsPath);
+    const newRelPath = this.wikiRelPathFromAbsPath(absPath);
+    traceRename('wiki-add-matched', { oldAbsPath, newAbsPath: absPath, oldRelPath, newRelPath });
     this.emitRename({
       rootPath: this.wikiDir,
       oldRelPath,
-      newRelPath: this.wikiRelPathFromAbsPath(absPath),
+      newRelPath,
       oldAbsPath,
       newAbsPath: absPath,
       builtin: true,
+      source: 'watcher',
+      detectedAt: Date.now(),
     });
     this.emit('wiki:deleted', oldRelPath);
   }
@@ -3151,8 +3284,10 @@ export class LibrarianManager extends EventEmitter {
   private scheduleWikiUnlink(absPath: string): void {
     const existing = this.pendingWikiUnlinks.get(absPath);
     if (existing) clearTimeout(existing);
+    traceRename('wiki-unlink-pending', { absPath, relPath: this.wikiRelPathFromAbsPath(absPath), waitMs: 350 });
     const timer = setTimeout(() => {
       this.pendingWikiUnlinks.delete(absPath);
+      traceRename('wiki-unlink-unmatched', { absPath, relPath: this.wikiRelPathFromAbsPath(absPath) });
       this.emit('wiki:changed');
       const rel = this.wikiRelPathFromAbsPath(absPath);
       if (rel && !rel.startsWith('..')) this.emit('wiki:deleted', rel);
@@ -3174,17 +3309,23 @@ export class LibrarianManager extends EventEmitter {
   private handleLibraryRootAdd(rootPath: string, absPath: string): void {
     const oldAbsPath = this.takePendingLibraryRename(rootPath, absPath);
     if (!oldAbsPath) {
+      traceRename('library-add-unmatched', { rootPath, absPath });
       this.emit('library:changed', rootPath);
       return;
     }
 
+    const oldRelPath = this.libraryRelPathFromAbsPath(rootPath, oldAbsPath);
+    const newRelPath = this.libraryRelPathFromAbsPath(rootPath, absPath);
+    traceRename('library-add-matched', { rootPath, oldAbsPath, newAbsPath: absPath, oldRelPath, newRelPath });
     this.emitRename({
       rootPath,
-      oldRelPath: this.libraryRelPathFromAbsPath(rootPath, oldAbsPath),
-      newRelPath: this.libraryRelPathFromAbsPath(rootPath, absPath),
+      oldRelPath,
+      newRelPath,
       oldAbsPath,
       newAbsPath: absPath,
       builtin: false,
+      source: 'watcher',
+      detectedAt: Date.now(),
     });
     this.recordWatchedReadingRename(oldAbsPath, absPath);
   }
@@ -3192,8 +3333,10 @@ export class LibrarianManager extends EventEmitter {
   private scheduleLibraryRootUnlink(rootPath: string, absPath: string): void {
     const existing = this.pendingLibraryUnlinks.get(absPath);
     if (existing) clearTimeout(existing.timer);
+    traceRename('library-unlink-pending', { rootPath, absPath, relPath: this.libraryRelPathFromAbsPath(rootPath, absPath), waitMs: 350 });
     const timer = setTimeout(() => {
       this.pendingLibraryUnlinks.delete(absPath);
+      traceRename('library-unlink-unmatched', { rootPath, absPath, relPath: this.libraryRelPathFromAbsPath(rootPath, absPath) });
       this.emit('library:changed', rootPath);
     }, 350);
     this.pendingLibraryUnlinks.set(absPath, { rootPath, timer });
@@ -3280,6 +3423,8 @@ export class LibrarianManager extends EventEmitter {
         oldAbsPath: oldAbs,
         newAbsPath: newAbs,
         builtin: true,
+        source: 'app',
+        detectedAt: Date.now(),
       });
       // Let RecentManager prune the stale entry for the old relPath.
       this.emit('wiki:deleted', relPath);
@@ -5613,6 +5758,7 @@ exit 0
     if (!fs.existsSync(artifactsDir)) {
       fs.mkdirSync(artifactsDir, { recursive: true });
     }
+    this.ensureCentralArtifactsReadme(artifactsDir);
 
     // Add to watched dirs if not already present
     if (!this.settings.watchedDirs.includes(artifactsDir)) {
