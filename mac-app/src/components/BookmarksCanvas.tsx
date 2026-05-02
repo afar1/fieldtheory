@@ -576,7 +576,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
       clone.style.transform = `translate3d(${startX}px, ${startY}px, 0)`;
       // The clone lives under document.body, outside the viewport that owns the
       // --bm-card-* CSS vars. Copy them over so the text-card background shows.
-      for (const v of ['--bm-card-bg', '--bm-card-border', '--bm-card-text', '--bm-card-secondary']) {
+      for (const v of ['--bm-card-bg', '--bm-card-border', '--bm-card-text', '--bm-card-secondary', '--bm-card-quoted-bg']) {
         const val = viewport.style.getPropertyValue(v);
         if (val) clone.style.setProperty(v, val);
       }
@@ -1066,8 +1066,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
   const overlayBg = theme.isDark ? 'rgba(0,0,0,0.55)' : 'rgba(255,255,255,0.65)';
   const closeBtnBg = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
   const closeBtnBorder = theme.isDark ? 'rgba(255,255,255,0.2)' : 'rgba(0,0,0,0.12)';
-  const canvasFadeSoft = `${theme.bg}cc`;
-  const canvasFadeClear = `${theme.bg}00`;
+  const canvasFadeSoft = `color-mix(in srgb, ${theme.bg} 82%, transparent)`;
+  const canvasFadeClear = `color-mix(in srgb, ${theme.bg} 0%, transparent)`;
 
   // Text-card palette — tuned for readability in both themes. Backgrounds are
   // fully opaque so cards don't bleed with the canvas behind them.

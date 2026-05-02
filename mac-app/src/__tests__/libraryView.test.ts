@@ -79,7 +79,7 @@ import {
   removeWikiRelPathFromTree,
   renamePinnedSidebarIds,
   renameLibraryRootRelPath,
-  sidebarNodeContainsSelectedIdOrWikiPath,
+  shouldCapScratchpadSidebarNode,
   shouldShowPinnedSidebarDividerBefore,
   splitRecent,
   sortSidebarNodes,
@@ -1780,12 +1780,14 @@ describe('recursive sidebar tree helpers', () => {
     expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', null)).toBeNull();
   });
 
-  it('treats a stale selected wiki path as inside its folder during rename', () => {
-    const scratchpad = dir('scratchpad', [file('scratchpad/new-title', 1)]);
+  it('caps scratchpad until the user explicitly expands it', () => {
+    const scratchpadChildren = Array.from({ length: 21 }, (_, index) => file(`scratchpad/note-${index}`, index));
+    const scratchpad = dir('scratchpad', scratchpadChildren);
 
-    expect(sidebarNodeContainsSelectedIdOrWikiPath(scratchpad, 'wiki:scratchpad/new-title')).toBe(true);
-    expect(sidebarNodeContainsSelectedIdOrWikiPath(scratchpad, 'wiki:scratchpad/old-title')).toBe(true);
-    expect(sidebarNodeContainsSelectedIdOrWikiPath(scratchpad, 'wiki:entries/old-title')).toBe(false);
+    expect(shouldCapScratchpadSidebarNode(scratchpad, false, false)).toBe(true);
+    expect(shouldCapScratchpadSidebarNode(scratchpad, false, true)).toBe(false);
+    expect(shouldCapScratchpadSidebarNode(scratchpad, true, false)).toBe(false);
+    expect(shouldCapScratchpadSidebarNode(dir('entries', scratchpadChildren), false, false)).toBe(false);
   });
 
   it('patches builtin wiki roots by relPath even when root paths differ', () => {
