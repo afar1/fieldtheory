@@ -23,6 +23,7 @@ _spec = spec_from_file_location(
 _mod = module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 read_wav_float32 = _mod.read_wav_float32
+transcribe = _mod.transcribe
 
 
 def _write_wav(path, samples, sample_rate, audio_format, bits_per_sample):
@@ -187,6 +188,65 @@ class TestReadWavFloat32(unittest.TestCase):
 
         result, sr = read_wav_float32(path)
         np.testing.assert_array_equal(result, samples)
+
+
+class FakeParakeetResult:
+    def __init__(self, text):
+        self.text = text
+
+
+class FakeParakeetModel:
+    def __init__(self, text="model text"):
+        self.text = text
+        self.calls = 0
+
+    def recognize(self, waveform, sample_rate):
+        self.calls += 1
+        return FakeParakeetResult(self.text)
+
+
+class TestParakeetSilencePreflight(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+
+    def _path(self, name):
+        return os.path.join(self.tmpdir, name)
+
+    def test_transcribe_skips_empty_audio_before_model(self):
+        path = self._path("empty.wav")
+        _write_wav(path, np.array([], dtype=np.float32), 16000, audio_format=3, bits_per_sample=32)
+        model = FakeParakeetModel()
+
+        self.assertEqual(transcribe(model, path), "")
+        self.assertEqual(model.calls, 0)
+
+    def test_transcribe_skips_low_room_noise_before_model(self):
+        rng = np.random.default_rng(seed=42)
+        samples = rng.normal(0, 0.0002, 16000).astype(np.float32)
+        path = self._path("room_noise.wav")
+        _write_wav(path, samples, 16000, audio_format=3, bits_per_sample=32)
+        model = FakeParakeetModel()
+
+        self.assertEqual(transcribe(model, path), "")
+        self.assertEqual(model.calls, 0)
+
+    def test_transcribe_skips_short_quiet_tail_before_model(self):
+        samples = np.full(1600, 0.0005, dtype=np.float32)
+        path = self._path("short_tail.wav")
+        _write_wav(path, samples, 16000, audio_format=3, bits_per_sample=32)
+        model = FakeParakeetModel()
+
+        self.assertEqual(transcribe(model, path), "")
+        self.assertEqual(model.calls, 0)
+
+    def test_transcribe_keeps_quiet_plausible_voice(self):
+        samples = (0.02 * np.sin(2 * np.pi * 220 * np.arange(16000) / 16000)).astype(np.float32)
+        path = self._path("quiet_voice.wav")
+        _write_wav(path, samples, 16000, audio_format=3, bits_per_sample=32)
+        model = FakeParakeetModel("quiet speech")
+
+        self.assertEqual(transcribe(model, path), "quiet speech")
+        self.assertEqual(model.calls, 1)
 
 
 if __name__ == "__main__":
