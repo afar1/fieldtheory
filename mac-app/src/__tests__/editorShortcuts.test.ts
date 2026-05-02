@@ -1,5 +1,25 @@
 import { afterEach, describe, it, expect } from 'vitest';
-import { RENDERED_EDIT_CLICK_MODE_STORAGE_KEY, TEXT_CURSOR_BLINK_STORAGE_KEY, isCommandDeleteShortcut, isCommandFindShortcut, isImmersiveToggleShortcut, isKeyboardShortcutsHelpShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, isSidebarToggleShortcut, isThemeToggleShortcut, persistRenderedEditClickMode, persistTextCursorBlink, restoreRenderedEditClickMode, restoreTextCursorBlink, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import {
+  RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
+  TEXT_CURSOR_BLINK_STORAGE_KEY,
+  isCommandDeleteShortcut,
+  isCommandFindShortcut,
+  isImmersiveToggleShortcut,
+  isKeyboardShortcutsHelpShortcut,
+  isMarkdownModeToggleShortcut,
+  isMarkdownTaskShortcut,
+  isMarkdownTaskToggleShortcut,
+  isNavSidebarToggleEnabled,
+  isSearchFocusShortcut,
+  isSidebarToggleShortcut,
+  isThemeToggleShortcut,
+  persistRenderedEditClickMode,
+  persistTextCursorBlink,
+  restoreRenderedEditClickMode,
+  restoreTextCursorBlink,
+  shouldEnterEditOnClick,
+  shouldForceLibrarySidebarOpen,
+} from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
   return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
@@ -148,6 +168,38 @@ describe('isSidebarToggleShortcut', () => {
 
   it('rejects Cmd+Slash so it can toggle focus mode', () => {
     expect(isSidebarToggleShortcut(mkKey({ key: '/', code: 'Slash', metaKey: true }))).toBe(false);
+  });
+});
+
+describe('Library sidebar collapse availability', () => {
+  it('forces the Library sidebar open when no file is selected', () => {
+    expect(shouldForceLibrarySidebarOpen({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
+      hasLibraryActiveFile: false,
+    })).toBe(true);
+  });
+
+  it('allows collapse only for Library with an active file or Commands', () => {
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
+      hasLibraryActiveFile: false,
+    })).toBe(false);
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
+      hasLibraryActiveFile: true,
+    })).toBe(true);
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'commands',
+      showSettings: false,
+      librarianImmersive: false,
+      hasLibraryActiveFile: false,
+    })).toBe(true);
   });
 });
 
