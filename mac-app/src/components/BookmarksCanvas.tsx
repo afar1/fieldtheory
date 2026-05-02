@@ -951,7 +951,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         agentCopyBtn.dataset.copied = '1';
         setTimeout(() => { delete agentCopyBtn.dataset.copied; }, 1200);
       } catch (err) {
-        console.error('[BookmarksCanvas] copy for agent failed', err);
+        console.error('[BookmarksCanvas] copy content failed', err);
       }
     };
 
@@ -1358,10 +1358,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
                 WebkitBackdropFilter: 'blur(8px)',
                 transition: 'background 0.2s ease',
               }}
-              aria-label="Copy for agent"
+              aria-label="Copy content"
             >
-              <span className="bm-agent-copy-label">Copy for agent</span>
-              <span className="bm-agent-copied-label">Copied</span>
+              <span className="bm-agent-copy-label">Copy content</span>
+              <span className="bm-agent-copied-label">Copied!</span>
             </button>
             <button
               ref={openBtnRef}
