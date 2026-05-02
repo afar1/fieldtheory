@@ -13,6 +13,7 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
+  getLauncherFieldTheoryMarkdownTarget,
   getLauncherUsageScore,
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
@@ -791,6 +792,58 @@ describe('resolveLauncherCommandOpenTarget', () => {
 
   it('does not open row zero for an unrelated query', () => {
     expect(resolveLauncherCommandOpenTarget([commandItems[0]], commandItems, 0, 'scratchpad', false)).toBeNull();
+  });
+});
+
+describe('getLauncherFieldTheoryMarkdownTarget', () => {
+  it('opens watched directory markdown files as external Field Theory files', () => {
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'file-roadmap',
+      type: 'markdown-file',
+      name: 'Roadmap',
+      displayName: 'Roadmap',
+      filePath: '/Users/afar/Notes/Roadmap.md',
+      keywords: ['Roadmap'],
+    })).toEqual({ kind: 'external', path: '/Users/afar/Notes/Roadmap.md' });
+  });
+
+  it('opens recent external markdown files as external Field Theory files', () => {
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'recent-roadmap',
+      type: 'recent-file',
+      name: 'Roadmap',
+      displayName: 'Roadmap',
+      recentKind: 'external',
+      filePath: '/Users/afar/Notes/Roadmap.md',
+      keywords: ['Roadmap'],
+    })).toEqual({ kind: 'external', path: '/Users/afar/Notes/Roadmap.md' });
+  });
+
+  it('keeps wiki pages, artifacts, and commands on their existing target kinds', () => {
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'wiki-plan',
+      type: 'wiki-page',
+      name: 'Plan',
+      displayName: 'Plan',
+      relPath: 'Plans/Plan',
+      keywords: ['Plan'],
+    })).toEqual({ kind: 'wiki', path: 'Plans/Plan' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'artifact-plan',
+      type: 'artifact',
+      name: 'Artifact',
+      displayName: 'Artifact',
+      filePath: '/tmp/artifact.md',
+      keywords: ['Artifact'],
+    })).toEqual({ kind: 'artifact', path: '/tmp/artifact.md' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'cmd-refactor',
+      type: 'command',
+      name: 'refactor',
+      displayName: 'refactor.md',
+      filePath: '/Users/afar/.fieldtheory/commands/refactor.md',
+      keywords: ['refactor'],
+    })).toEqual({ kind: 'command', path: '/Users/afar/.fieldtheory/commands/refactor.md' });
   });
 });
 

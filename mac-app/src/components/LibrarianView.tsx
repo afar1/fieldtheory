@@ -98,7 +98,7 @@ import {
 } from '../utils/wikiLinks';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command';
+  kind: 'wiki' | 'artifact' | 'command' | 'external';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
@@ -1384,6 +1384,7 @@ interface LibrarianViewProps {
   onAutoPopArtifactSuperseded?: () => void;
   onOpenCommandPath?: (path: string) => void;
   onFocusChromeShortcut?: () => void;
+  onActiveFileUpdatedChange?: (file: { path: string; title: string; mtime: number } | null) => void;
   preserveCurrentSizeKey?: boolean;
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
@@ -1487,7 +1488,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoi
   };
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -2160,6 +2161,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       : null;
 
   useEffect(() => {
+    onActiveFileUpdatedChange?.(active && activeReading
+      ? { path: activeReading.path, title: activeReading.title, mtime: activeReading.mtime }
+      : null);
+  }, [active, activeReading?.mtime, activeReading?.path, activeReading?.title, onActiveFileUpdatedChange]);
+
+  useEffect(() => {
     if (!activeTitlePath || editingTitlePath !== activeTitlePath) {
       setTitleDraft(activeReading?.title ?? '');
     }
@@ -2299,18 +2306,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ) => {
     const nextTodoState = splitFrontmatter(content).todoState ?? undefined;
     const versionPatch = version ? { documentVersion: version } : {};
+    const mtime = Date.now();
 
     if (targetType === 'wiki') {
       setWikiSelectedPage((prev) => (prev && prev.path === targetPath
-        ? { ...prev, content, todoState: nextTodoState, ...versionPatch }
+        ? { ...prev, content, mtime, todoState: nextTodoState, ...versionPatch }
         : prev));
     } else if (targetType === 'external') {
       setExternalOpenFile((prev) => (prev && prev.path === targetPath
-        ? { ...prev, content, todoState: nextTodoState, ...versionPatch }
+        ? { ...prev, content, mtime, todoState: nextTodoState, ...versionPatch }
         : prev));
     } else {
       setSelectedReading((prev) => (prev && prev.path === targetPath
-        ? { ...prev, title: fallbackTitle, content, todoState: nextTodoState, ...versionPatch }
+        ? { ...prev, title: fallbackTitle, content, mtime, todoState: nextTodoState, ...versionPatch }
         : prev));
     }
 
@@ -3504,8 +3512,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } else if (initialOpenTarget.kind === 'artifact') {
       selectArtifactPath(initialOpenTarget.path);
       onInitialOpenTargetConsumed?.();
+    } else if (initialOpenTarget.kind === 'external') {
+      void selectExternalFile(initialOpenTarget.path).finally(() => {
+        onInitialOpenTargetConsumed?.();
+      });
     }
-  }, [initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath]);
+  }, [initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
 
   const handleCreateDefaultFile = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.builtin) return false;
@@ -5660,7 +5672,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                             margin: 'calc(var(--ft-prose-list-item-spacing) * 0.55) 0',
                             listStyle: 'none',
                             display: 'grid',
-                            gridTemplateColumns: '0.78em minmax(0, 1fr)',
+                            gridTemplateColumns: '0.95em minmax(0, 1fr)',
                             columnGap: '0.6em',
                             alignItems: 'baseline',
                           }}
