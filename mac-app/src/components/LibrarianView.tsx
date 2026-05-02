@@ -85,6 +85,7 @@ import {
   classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
+  getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
@@ -2601,6 +2602,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               target: { kind: 'wiki' as const, relPath: fullPage.relPath },
               title: fullPage.title,
               content: fullPage.content,
+              linkHits: getMarkdownEditorLinkHits(fullPage.content, wikiIndex),
             }
             : null;
         }),
@@ -2613,6 +2615,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               target: { kind: 'artifact' as const, path: fullReading.path },
               title: fullReading.title,
               content: fullReading.content,
+              linkHits: getMarkdownEditorLinkHits(fullReading.content, wikiIndex),
             }
             : null;
         }),
@@ -2630,6 +2633,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               target: { kind: 'command' as const, path: fullCommand.filePath },
               title: fullCommand.displayName || command.title,
               content: fullCommand.content,
+              linkHits: getMarkdownEditorLinkHits(fullCommand.content, wikiIndex),
             }
             : null;
         }),
@@ -2645,7 +2649,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => {
       cancelled = true;
     };
-  }, [active, commandIndexPages, readings, wikiIndexPages]);
+  }, [active, commandIndexPages, readings, wikiIndex, wikiIndexPages]);
 
   const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) return { kind: 'wiki', relPath: wikiSelectedRelPath };
