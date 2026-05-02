@@ -8,6 +8,7 @@ import {
   getMarkdownEditorLinkHits,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
+  getWikiBacklinks,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   resolveWikiLink,
@@ -362,6 +363,34 @@ describe('getMarkdownEditorLinkHits', () => {
       displayEnd: 29,
       displayText: 'https://example.com/path',
     });
+  });
+});
+
+describe('getWikiBacklinks', () => {
+  it('finds pages that link to the target wiki page', () => {
+    expect(getWikiBacklinks('debates/consensus', [
+      { relPath: 'scratchpad/source', title: 'Source', content: 'See [[Consensus]] for context.' },
+      { relPath: 'entries/other', title: 'Other', content: 'No link here.' },
+    ], index)).toEqual([
+      {
+        relPath: 'scratchpad/source',
+        title: 'Source',
+        excerpt: 'See [[Consensus]] for context.',
+      },
+    ]);
+  });
+
+  it('ignores self-links and returns each source page once', () => {
+    expect(getWikiBacklinks('entries/my-page', [
+      { relPath: 'entries/my-page', title: 'My Page', content: 'Self [[My Page]].' },
+      { relPath: 'scratchpad/a', title: 'A', content: 'First [[My Page]]. Second [[My Page]].' },
+    ], index)).toEqual([
+      {
+        relPath: 'scratchpad/a',
+        title: 'A',
+        excerpt: 'First [[My Page]]. Second [[My Page]].',
+      },
+    ]);
   });
 });
 
