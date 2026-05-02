@@ -463,17 +463,20 @@ export default function ClipboardHistory() {
   } | null>(null);
   const [librarySelectedItemType, setLibrarySelectedItemType] = useState<LibrarianSelectedItemType>(null);
   const hasLibraryActiveFile = !!libraryActiveFileUpdated;
+  const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
   const forceLibrarySidebarOpen = shouldForceLibrarySidebarOpen({
     viewMode,
     showSettings,
     librarianImmersive,
     hasLibraryActiveFile,
+    bookmarksFooterActive,
   });
   const navSidebarToggleEnabled = isNavSidebarToggleEnabled({
     viewMode,
     showSettings,
     librarianImmersive,
     hasLibraryActiveFile,
+    bookmarksFooterActive,
   });
   const [librarianEnabled, setLibrarianEnabled] = useState(() => {
     const saved = localStorage.getItem('librarianEnabled');
@@ -1044,8 +1047,6 @@ export default function ClipboardHistory() {
   const [xBookmarksLastSyncedAt, setXBookmarksLastSyncedAt] = useState<string | null | undefined>(
     () => peekBookmarks()?.xLastSyncedAt
   );
-  const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
-
   useEffect(() => {
     if (viewMode !== 'librarian' || (!libraryActiveFileUpdated && !(bookmarksFooterActive && xBookmarksLastSyncedAt))) return;
     const interval = window.setInterval(() => setFooterRelativeTimeTick(Date.now()), 60_000);
