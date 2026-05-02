@@ -6763,6 +6763,14 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.handle('fieldTheorySync:getStatus', async () => {
     return getFieldTheorySyncStatus();
   });
+
+  ipcMain.handle('fieldTheorySync:setLocalEnabled', async (_event, enabled: boolean) => {
+    if (preferencesManager) {
+      await preferencesManager.save({ fieldTheoryInternalSyncEnabled: enabled === true });
+      refreshFieldTheorySyncServices();
+    }
+    return getFieldTheorySyncStatus();
+  });
 }
 
 
