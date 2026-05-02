@@ -103,6 +103,18 @@ export type MarkdownWikiLinkCompletionEdit = {
   selectionEnd: number;
 };
 
+export type WikiBacklinkInput = {
+  relPath: string;
+  title: string;
+  content: string;
+};
+
+export type WikiBacklink = {
+  relPath: string;
+  title: string;
+  excerpt: string;
+};
+
 // Decides what clicking a rendered <a> should do. Extracted from the renderer
 // so the branching — unresolved sentinel, resolved wiki://, bare relPath that
 // matches the index, everything else — is testable without React.
@@ -295,6 +307,47 @@ export function getMarkdownEditorLinkHits(
   }
 
   return hits.filter((hit) => hit.action.kind !== 'noop');
+}
+
+function getLineExcerptAtOffset(markdown: string, offset: number): string {
+  const safeOffset = Math.max(0, Math.min(offset, markdown.length));
+  const lineStart = markdown.lastIndexOf('\n', Math.max(0, safeOffset - 1)) + 1;
+  const lineEndIndex = markdown.indexOf('\n', safeOffset);
+  const lineEnd = lineEndIndex === -1 ? markdown.length : lineEndIndex;
+  return markdown.slice(lineStart, lineEnd).trim();
+}
+
+export function getWikiBacklinks(
+  targetRelPath: string,
+  pages: WikiBacklinkInput[],
+  index: WikiIndex,
+): WikiBacklink[] {
+  const target = normalizeWikiRelPath(targetRelPath);
+  if (!target) return [];
+
+  const backlinks: WikiBacklink[] = [];
+  const seen = new Set<string>();
+
+  for (const page of pages) {
+    const sourceRelPath = normalizeWikiRelPath(page.relPath);
+    if (!sourceRelPath || sourceRelPath === target || seen.has(sourceRelPath)) continue;
+
+    const hit = getMarkdownEditorLinkHits(page.content, index)
+      .find((candidate) => (
+        candidate.action.kind === 'wiki'
+        && normalizeWikiRelPath(candidate.action.relPath) === target
+      ));
+    if (!hit) continue;
+
+    seen.add(sourceRelPath);
+    backlinks.push({
+      relPath: sourceRelPath,
+      title: page.title,
+      excerpt: getLineExcerptAtOffset(page.content, hit.start),
+    });
+  }
+
+  return backlinks.sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export function getActiveMarkdownWikiLinkCompletion(
