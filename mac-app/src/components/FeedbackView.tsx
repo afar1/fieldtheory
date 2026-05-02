@@ -1,8 +1,9 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 
 const GITHUB_ISSUES_URL = 'https://github.com/afar1/field-releases/issues';
 const SUPPORT_EMAIL = 'support@fieldtheory.dev';
+const X_PROFILE_URL = 'https://x.com/andrewfarah';
 
 interface FeedbackViewProps {
   onSwitchToClipboard?: () => void;
@@ -10,9 +11,16 @@ interface FeedbackViewProps {
 
 export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps) {
   const { theme } = useTheme();
+  const [copiedEmail, setCopiedEmail] = useState(false);
 
   const openExternal = (url: string) => {
     void window.shellAPI?.openExternal(url);
+  };
+
+  const copySupportEmail = async () => {
+    await navigator.clipboard.writeText(SUPPORT_EMAIL);
+    setCopiedEmail(true);
+    window.setTimeout(() => setCopiedEmail(false), 1600);
   };
 
   useEffect(() => {
@@ -34,34 +42,20 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
   return (
     <div
       style={{
-        height: '100%',
         display: 'flex',
+        flex: 1,
         flexDirection: 'column',
+        minHeight: 0,
         backgroundColor: theme.bg,
         color: theme.text,
+        borderTop: `1px solid ${theme.border}`,
+        boxSizing: 'border-box',
       }}
     >
       <div
         style={{
-          padding: '18px 24px',
-          borderBottom: `1px solid ${theme.border}`,
-          backgroundColor: theme.bg,
-        }}
-      >
-        <div
-          style={{
-            fontSize: '13px',
-            fontWeight: 600,
-            color: theme.text,
-          }}
-        >
-          Feedback
-        </div>
-      </div>
-
-      <div
-        style={{
           flex: 1,
+          minHeight: 0,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -84,27 +78,33 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
               lineHeight: 1.5,
               color: theme.textSecondary,
               marginBottom: '18px',
+              textAlign: 'center',
             }}
           >
-            Add a GitHub issue or email{' '}
-            <button
-              type="button"
-              onClick={() => openExternal(`mailto:${SUPPORT_EMAIL}`)}
+            Submit a github issue, email us at{' '}
+            <span style={{ color: theme.accent }}>
+              {SUPPORT_EMAIL}
+            </span>,
+            <br />
+            or reach out to{' '}
+            <a
+              href={X_PROFILE_URL}
+              onClick={(event) => {
+                event.preventDefault();
+                openExternal(X_PROFILE_URL);
+              }}
               style={{
-                padding: 0,
-                fontSize: '13px',
                 color: theme.accent,
-                background: 'transparent',
-                border: 'none',
-                cursor: 'pointer',
+                textDecoration: 'underline',
+                textUnderlineOffset: '2px',
               }}
             >
-              {SUPPORT_EMAIL}
-            </button>
-            .
+              @andrewfarah
+            </a>
+            {' '}on X.
           </div>
 
-          <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <button
               type="button"
               onClick={() => openExternal(GITHUB_ISSUES_URL)}
@@ -119,12 +119,12 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                 cursor: 'pointer',
               }}
             >
-              Open GitHub Issues
+              Github Issues
             </button>
 
             <button
               type="button"
-              onClick={() => openExternal(`mailto:${SUPPORT_EMAIL}`)}
+              onClick={copySupportEmail}
               style={{
                 padding: '8px 12px',
                 fontSize: '12px',
@@ -136,7 +136,24 @@ export default function FeedbackView({ onSwitchToClipboard }: FeedbackViewProps)
                 cursor: 'pointer',
               }}
             >
-              Email Support
+              {copiedEmail ? 'Copied Email' : 'Copy Email'}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => openExternal(X_PROFILE_URL)}
+              style={{
+                padding: '8px 12px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: theme.text,
+                backgroundColor: 'transparent',
+                border: `1px solid ${theme.inputBorder}`,
+                borderRadius: '5px',
+                cursor: 'pointer',
+              }}
+            >
+              X @andrewfarah
             </button>
           </div>
         </div>
