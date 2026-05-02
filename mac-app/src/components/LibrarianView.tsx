@@ -104,7 +104,7 @@ type FieldTheoryMarkdownTarget = {
   contentMode?: 'rendered' | 'markdown';
 };
 
-type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
 const COPY_PATH_FEEDBACK_MS = 1600;
 
 function libraryRenameTraceEnabled(): boolean {
@@ -1385,6 +1385,7 @@ interface LibrarianViewProps {
   onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean) => void;
   onBookmarksCanvasActiveChange?: (active: boolean) => void;
   onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
+  onSelectedItemTypeChange?: (type: LibrarianSelectedItemType) => void;
   initialReadingPath?: string | null; // Auto-select this reading on mount (for auto-open)
   initialOpenTarget?: FieldTheoryMarkdownTarget | null;
   initialFullScreen?: boolean; // Start in legacy fullscreen/immersive mode when supported.
@@ -1513,7 +1514,7 @@ function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoi
   };
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -1979,6 +1980,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setBookmarksEverShown(true);
     }
   }, [selectedItemType, bookmarksEverShown]);
+
+  useEffect(() => {
+    onSelectedItemTypeChange?.(active ? selectedItemType : null);
+  }, [active, onSelectedItemTypeChange, selectedItemType]);
 
   useEffect(() => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {

@@ -76,6 +76,8 @@ export interface BookmarkFolder {
 export interface BookmarksSnapshot {
   bookmarks: Bookmark[];
   folders: BookmarkFolder[];
+  /** mtime of bookmarks.jsonl, which is written by `ft sync` for X bookmarks. */
+  xLastSyncedAt: string | null;
 }
 
 interface RawMediaObject {
@@ -140,6 +142,14 @@ function bookmarksDir(): string {
 
 function jsonlPath(): string {
   return path.join(bookmarksDir(), 'bookmarks.jsonl');
+}
+
+function xBookmarksLastSyncedAt(): string | null {
+  try {
+    return fs.statSync(jsonlPath()).mtime.toISOString();
+  } catch {
+    return null;
+  }
 }
 
 function foldersPath(): string {
@@ -518,7 +528,7 @@ export class BookmarksManager extends EventEmitter {
       return tb - ta;
     });
 
-    this.cached = { bookmarks, folders };
+    this.cached = { bookmarks, folders, xLastSyncedAt: xBookmarksLastSyncedAt() };
     return this.cached;
   }
 

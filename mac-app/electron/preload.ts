@@ -4115,7 +4115,7 @@ interface Bookmark {
   markdownPath?: string;
 }
 interface BookmarkFolder { name: string; id?: string }
-interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[] }
+interface BookmarksSnapshot { bookmarks: Bookmark[]; folders: BookmarkFolder[]; xLastSyncedAt: string | null }
 interface ActiveWebPage {
   url: string;
   title: string;

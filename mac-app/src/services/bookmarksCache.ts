@@ -32,9 +32,9 @@ export function getBookmarks(): Promise<BookmarksSnapshot> {
   if (cached) return Promise.resolve(cached);
   if (inflight) return inflight;
   const api = window.bookmarksAPI;
-  if (!api) return Promise.resolve({ bookmarks: [], folders: [] });
+  if (!api) return Promise.resolve({ bookmarks: [], folders: [], xLastSyncedAt: null });
   inflight = api.getAll().then((snap) => {
-    cached = snap ?? { bookmarks: [], folders: [] };
+    cached = snap ?? { bookmarks: [], folders: [], xLastSyncedAt: null };
     inflight = null;
     return cached;
   });
