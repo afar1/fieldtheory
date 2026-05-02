@@ -115,6 +115,19 @@ export type WikiBacklink = {
   excerpt: string;
 };
 
+export type WikiOutboundLink = {
+  relPath: string;
+  title: string;
+  excerpt: string;
+};
+
+export type WikiLinkedPage = {
+  relPath: string;
+  title: string;
+  excerpt: string;
+  direction: 'outbound' | 'inbound' | 'bidirectional';
+};
+
 // Decides what clicking a rendered <a> should do. Extracted from the renderer
 // so the branching — unresolved sentinel, resolved wiki://, bare relPath that
 // matches the index, everything else — is testable without React.
@@ -348,6 +361,92 @@ export function getWikiBacklinks(
   }
 
   return backlinks.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+export function getWikiOutboundLinks(
+  sourceRelPath: string | null,
+  content: string,
+  pages: WikiBacklinkInput[],
+  index: WikiIndex,
+): WikiOutboundLink[] {
+  const source = sourceRelPath ? normalizeWikiRelPath(sourceRelPath) : '';
+  const pageByRelPath = new Map(
+    pages.map((page) => [normalizeWikiRelPath(page.relPath), page]),
+  );
+  const links: WikiOutboundLink[] = [];
+  const seen = new Set<string>();
+
+  for (const hit of getMarkdownEditorLinkHits(content, index)) {
+    if (hit.action.kind !== 'wiki') continue;
+    const relPath = normalizeWikiRelPath(hit.action.relPath);
+    if (!relPath || relPath === source || seen.has(relPath)) continue;
+    const page = pageByRelPath.get(relPath);
+    if (!page) continue;
+
+    seen.add(relPath);
+    links.push({
+      relPath,
+      title: page.title,
+      excerpt: getLineExcerptAtOffset(content, hit.start),
+    });
+  }
+
+  return links.sort((a, b) => a.title.localeCompare(b.title));
+}
+
+export function getWikiLinkedPages(
+  sourceRelPath: string | null,
+  content: string,
+  pages: WikiBacklinkInput[],
+  index: WikiIndex,
+): WikiLinkedPage[] {
+  const merged = new Map<string, {
+    title: string;
+    outbound: boolean;
+    inbound: boolean;
+    excerpt: string;
+  }>();
+
+  for (const link of getWikiOutboundLinks(sourceRelPath, content, pages, index)) {
+    merged.set(link.relPath, {
+      title: link.title,
+      outbound: true,
+      inbound: false,
+      excerpt: link.excerpt,
+    });
+  }
+
+  if (sourceRelPath) {
+    for (const backlink of getWikiBacklinks(sourceRelPath, pages, index)) {
+      const existing = merged.get(backlink.relPath);
+      if (existing) {
+        existing.inbound = true;
+      } else {
+        merged.set(backlink.relPath, {
+          title: backlink.title,
+          outbound: false,
+          inbound: true,
+          excerpt: backlink.excerpt,
+        });
+      }
+    }
+  }
+
+  return Array.from(merged.entries())
+    .map(([relPath, link]) => {
+      const direction: WikiLinkedPage['direction'] = link.outbound && link.inbound
+        ? 'bidirectional'
+        : link.outbound
+          ? 'outbound'
+          : 'inbound';
+      return {
+        relPath,
+        title: link.title,
+        excerpt: link.excerpt,
+        direction,
+      };
+    })
+    .sort((a, b) => a.title.localeCompare(b.title));
 }
 
 export function getActiveMarkdownWikiLinkCompletion(

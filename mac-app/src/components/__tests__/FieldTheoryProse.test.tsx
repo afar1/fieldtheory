@@ -38,6 +38,18 @@ describe('FieldTheoryProse', () => {
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves internal rendered link hrefs for app navigation', () => {
+    render(
+      <FieldTheoryProse>
+        {'[Launch Work](wiki://scratchpad/launch-work)\n\n[Artifact](artifact://%2Ftmp%2Fartifact.md)\n\n[Command](command://%2Ftmp%2Frefactor.md)'}
+      </FieldTheoryProse>
+    );
+
+    expect(screen.getByRole('link', { name: 'Launch Work' }).getAttribute('href')).toBe('wiki://scratchpad/launch-work');
+    expect(screen.getByRole('link', { name: 'Artifact' }).getAttribute('href')).toBe('artifact://%2Ftmp%2Fartifact.md');
+    expect(screen.getByRole('link', { name: 'Command' }).getAttribute('href')).toBe('command://%2Ftmp%2Frefactor.md');
+  });
+
   it('renders with the Field Theory prose class', () => {
     const { container } = render(
       <FieldTheoryProse>
