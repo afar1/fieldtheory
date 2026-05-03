@@ -102,7 +102,7 @@ import {
 } from '../utils/wikiLinks';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
@@ -263,6 +263,15 @@ export function shouldOpenMarkdownLinkFromMouseDown(input: {
   ctrlKey: boolean;
 }): boolean {
   return input.button === 0 && !input.altKey && !input.ctrlKey;
+}
+
+export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
+  button: number;
+  metaKey: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+}): boolean {
+  return input.button === 0 && input.metaKey && !input.altKey && !input.ctrlKey;
 }
 
 export function isLibrarianDocumentFocusChromeActive(input: {
@@ -3391,7 +3400,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ]);
 
   const handleMarkdownCodeEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
-    if (!shouldOpenMarkdownLinkFromMouseDown(event)) return false;
+    if (!shouldOpenMarkdownEditorLinkFromMouseDown(event)) return false;
     const action = getMarkdownEditorLinkActionAtOffset(editContent, offset, wikiIndex);
     if (action.kind === 'noop') return false;
     event.preventDefault();
@@ -3657,6 +3666,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       void selectExternalFile(initialOpenTarget.path).finally(() => {
         onInitialOpenTargetConsumed?.();
       });
+    } else if (initialOpenTarget.kind === 'bookmarks') {
+      setSearchQuery('');
+      setSelectedItemId(BOOKMARKS_ITEM_ID);
+      setSelectedItemType('bookmarks');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
+      onInitialOpenTargetConsumed?.();
     }
   }, [initialOpenTarget, onInitialOpenTargetConsumed, openWikiPage, selectArtifactPath, selectExternalFile]);
 
