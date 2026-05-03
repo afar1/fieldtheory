@@ -269,7 +269,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     });
   });
 
-  it('persists the active size key when switching view sizes', () => {
+  it('persists non-draw size keys without resizing the current window', () => {
     const save = vi.fn().mockResolvedValue(undefined);
     window = new ClipboardHistoryWindow({
       get: vi.fn(() => ({})),
@@ -284,12 +284,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.getCurrentSizeKey()).toBe('library');
     expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'library' });
     expect(animateBounds).not.toHaveBeenCalled();
-    expect(setBounds).toHaveBeenCalledWith({
-      x: 100,
-      y: 100,
-      width: 720,
-      height: 820,
-    });
+    expect(setBounds).not.toHaveBeenCalled();
   });
 
   it('uses draw mechanics for the canvas size key', () => {
@@ -312,6 +307,33 @@ describe('ClipboardHistoryWindow helper methods', () => {
       y: 100,
       width: 1180,
       height: 760,
+    });
+  });
+
+  it('restores the target size profile when leaving draw', () => {
+    const save = vi.fn().mockResolvedValue(undefined);
+    window = new ClipboardHistoryWindow({
+      get: vi.fn(() => ({
+        clipboardHistoryBoundsByView: {
+          fields: { x: 40, y: 50, width: 940, height: 620, displayConfig: 'test' },
+        },
+      })),
+      getPreference: vi.fn(() => false),
+      save,
+    } as any);
+    const { setBounds } = attachWindowWithBounds(window, { x: 100, y: 100, width: 1180, height: 760 });
+
+    window.setSizeKey('draw');
+    setBounds.mockClear();
+    window.setSizeKey('fields');
+
+    expect(window.getCurrentSizeKey()).toBe('fields');
+    expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'fields' });
+    expect(setBounds).toHaveBeenCalledWith({
+      x: 100,
+      y: 100,
+      width: 940,
+      height: 620,
     });
   });
 

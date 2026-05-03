@@ -827,6 +827,53 @@ describe('TranscriberManager standard paste target fallback', () => {
     );
   });
 
+  it('inserts text and screenshot stacks as markdown into a focused Field Theory editor', async () => {
+    const typeIntoApp = vi.fn(async () => ({ success: true }));
+    const insertText = vi.fn(() => true);
+    const manager: any = {
+      sketchModeChecker: null,
+      clipboardManager: {
+        getItem: vi.fn((id: number) => {
+          if (id === 1) return { id: 1, type: 'transcript', content: 'compare these' };
+          if (id === 2) return {
+            id: 2,
+            type: 'screenshot',
+            content: null,
+            imageData: Buffer.from([1, 2, 3]),
+            figureLabel: 'A',
+          };
+          return null;
+        }),
+        exportImageToCache: vi.fn(async () => '/tmp/shot 2.png'),
+      },
+      currentStack: [1, 2],
+      detectedCommands: [],
+      screenshotMetadata: [],
+      getFrontmostAppBundleId: vi.fn(async () => 'com.fieldtheory.app'),
+      nativeHelper: {
+        getFrontmostApp: vi.fn(() => null),
+        typeIntoApp,
+      },
+      fieldTheoryMarkdownInsertionTarget: {
+        isAvailable: vi.fn(() => true),
+        insertText,
+      },
+      lastExternalPasteTargetBundleId: null,
+      lastTranscription: 'compare these',
+      emit: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.pasteStack(false);
+
+    expect(insertText).toHaveBeenCalledTimes(1);
+    expect(insertText).toHaveBeenCalledWith([
+      'compare these',
+      '![figure A](<file:///tmp/shot%202.png>) ',
+    ].join('\n\n'));
+    expect(typeIntoApp).not.toHaveBeenCalled();
+  });
+
   it('emits paste-failed when Field Theory is frontmost and no external app is known', async () => {
     const typeIntoApp = vi.fn(async () => ({ success: true }));
     const manager: any = {

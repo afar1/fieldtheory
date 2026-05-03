@@ -6395,15 +6395,15 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks'; path: string; contentMode?: 'rendered' | 'markdown' }) => {
-    if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks'].includes(target.kind)) {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown' }) => {
+    if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
     }
     if (!clipboardHistoryWindow) {
       return { success: false, error: 'Field Theory window not available' };
     }
 
-    const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' ? 'fields' : 'library';
+    const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' || target.kind === 'commands' || target.kind === 'clipboard' ? 'fields' : 'library';
     if (clipboardHistoryWindow.isVisible()) {
       suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
       clipboardHistoryWindow.focusExistingWindow();
@@ -7143,6 +7143,9 @@ function broadcastTranscribeEvents(): void {
       quotaJustExhausted = false;
       return;
     }
+    dynamicIslandManager?.updateStackCount(0);
+    dynamicIslandManager?.updateDrawerTranscript('');
+    dynamicIslandManager?.setState('idle');
   });
   
   transcriberManager.on('paste-failed', (_message, _transcription) => {
