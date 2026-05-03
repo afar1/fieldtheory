@@ -24,6 +24,20 @@ import {
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
+import {
+  buildWikiIndex,
+  classifyLinkHref,
+  getMarkdownEditorLinkHits,
+  getMarkdownLinkedDocuments,
+  getWikiLinkTargetKey,
+  isUnresolvedWikiHref,
+  transformWikiLinks,
+  type LinkAction,
+  type MarkdownLinkedDocument,
+  type MarkdownLinkRelationDocument,
+  type WikiIndexInput,
+  type WikiLinkTarget,
+} from '../utils/wikiLinks';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
 
@@ -130,9 +144,40 @@ interface CommandWithContent extends CommandItem {
   documentVersion: DocumentVersion;
 }
 
+const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
+  outbound: '→',
+  inbound: '←',
+  bidirectional: '↔',
+};
+
+const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
+  outbound: 'This document links out',
+  inbound: 'Links back to this document',
+  bidirectional: 'Linked both ways',
+};
+
+const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
+  wiki: 'Wiki',
+  artifact: 'Artifact',
+  command: 'Command',
+};
+
 function commandNameFromFilePath(filePath: string): string {
   const fileName = filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? filePath;
   return fileName.replace(/\.md$/i, '');
+}
+
+function commandsToWikiIndexPages(commands: Array<{ name: string; displayName: string; filePath: string }>): WikiIndexInput[] {
+  return commands.flatMap((command) => {
+    const displayTitle = command.displayName || command.name;
+    const base = {
+      relPath: command.filePath,
+      commandPath: command.filePath,
+    };
+    return displayTitle === command.name
+      ? [{ ...base, title: command.name }]
+      : [{ ...base, title: displayTitle }, { ...base, title: command.name }];
+  });
 }
 
 function upsertCommandItem(commands: CommandItem[], command: CommandItem): CommandItem[] {
@@ -184,6 +229,9 @@ export default function CommandsView({
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedCommand, setSelectedCommand] = useState<CommandWithContent | null>(null);
   const [loading, setLoading] = useState(true);
+  const [readings, setReadings] = useState<ReadingMeta[]>([]);
+  const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
+  const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
 
   // Popular commands state
   const [popularCommands, setPopularCommands] = useState<PopularCommand[]>([]);
@@ -470,13 +518,41 @@ export default function CommandsView({
     return '';
   }, [fieldTheorySyncEnabled, selectedCommand, selectedPopularCommand, viewMode]);
 
+  const commandIndexPages = useMemo(() => commandsToWikiIndexPages(commands), [commands]);
+  const wikiIndex = useMemo(() => buildWikiIndex([
+    ...wikiIndexPages,
+    ...readings.map((reading) => ({
+      relPath: reading.path,
+      title: reading.title,
+      artifactPath: reading.path,
+    })),
+    ...commandIndexPages,
+  ]), [commandIndexPages, readings, wikiIndexPages]);
+
   // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
   const displayContent = useMemo(() => {
     const raw = fieldTheorySyncEnabled && viewMode === 'popular'
       ? selectedPopularCommand?.content || ''
       : selectedCommand?.content || '';
-    return raw.replace(/^#\s+.+\n?/, '');
-  }, [fieldTheorySyncEnabled, viewMode, selectedCommand?.content, selectedPopularCommand?.content]);
+    return transformWikiLinks(raw.replace(/^#\s+.+\n?/, ''), wikiIndex);
+  }, [fieldTheorySyncEnabled, viewMode, selectedCommand?.content, selectedPopularCommand?.content, wikiIndex]);
+
+  const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
+    if (viewMode === 'mine' && selectedCommand) {
+      return { kind: 'command', path: selectedCommand.filePath };
+    }
+    return null;
+  }, [selectedCommand, viewMode]);
+
+  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
+    if (!selectedCommand) return [];
+    return getMarkdownLinkedDocuments(
+      activeLinkTarget,
+      selectedCommand.content,
+      markdownLinkRelationDocuments,
+      wikiIndex,
+    );
+  }, [activeLinkTarget, markdownLinkRelationDocuments, selectedCommand, wikiIndex]);
 
   const flashCopyPathCopied = useCallback(() => {
     setCopyPathCopied(true);
@@ -534,6 +610,44 @@ export default function CommandsView({
       console.error('Failed to copy command path:', err);
     }
   }, [flashCopyPathCopied, selectedCommand?.filePath]);
+
+  const openFieldTheoryMarkdownTarget = useCallback((target: WikiLinkTarget) => {
+    void window.commandsAPI?.openFieldTheoryMarkdown?.({
+      kind: target.kind,
+      path: target.kind === 'wiki' ? target.relPath : target.path,
+    });
+  }, []);
+
+  const createUnresolvedWikiLink = useCallback(async (title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const page = await window.wikiAPI?.createFile('scratchpad', trimmed);
+    if (page?.relPath) {
+      void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: page.relPath });
+    }
+  }, []);
+
+  const openLinkAction = useCallback((action: LinkAction) => {
+    switch (action.kind) {
+      case 'create':
+        void createUnresolvedWikiLink(action.title);
+        return;
+      case 'wiki':
+        void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'wiki', path: action.relPath });
+        return;
+      case 'artifact':
+        void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'artifact', path: action.path });
+        return;
+      case 'command':
+        void window.commandsAPI?.openFieldTheoryMarkdown?.({ kind: 'command', path: action.path });
+        return;
+      case 'external':
+        window.shellAPI?.openExternal(action.href);
+        return;
+      case 'noop':
+        return;
+    }
+  }, [createUnresolvedWikiLink]);
 
   useEffect(() => {
     return () => {
@@ -837,6 +951,96 @@ export default function CommandsView({
       window.removeEventListener('focus', onFocus);
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const result = await window.librarianAPI?.getReadings?.();
+      if (!cancelled && result) setReadings(result);
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const folders = await window.wikiAPI?.getTree?.();
+      if (!cancelled && folders) {
+        setWikiIndexPages(
+          folders.flatMap((folder) => folder.files.map((page) => ({ relPath: page.relPath, title: page.title }))),
+        );
+      }
+    };
+    void load();
+    const unsubscribe = window.wikiAPI?.onPageChanged?.(() => { void load(); });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      const wikiDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        wikiIndexPages.map(async (page) => {
+          const fullPage = await window.wikiAPI?.getPage?.(page.relPath);
+          return fullPage
+            ? {
+              target: { kind: 'wiki' as const, relPath: fullPage.relPath },
+              title: fullPage.title,
+              content: fullPage.content,
+              linkHits: getMarkdownEditorLinkHits(fullPage.content, wikiIndex),
+            }
+            : null;
+        }),
+      );
+      const artifactDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        readings.map(async (reading) => {
+          const fullReading = await window.librarianAPI?.getReading?.(reading.path);
+          return fullReading
+            ? {
+              target: { kind: 'artifact' as const, path: fullReading.path },
+              title: fullReading.title,
+              content: fullReading.content,
+              linkHits: getMarkdownEditorLinkHits(fullReading.content, wikiIndex),
+            }
+            : null;
+        }),
+      );
+      const commandPagesByPath = new Map<string, WikiIndexInput>();
+      for (const command of commandIndexPages) {
+        const commandPath = command.commandPath;
+        if (commandPath && !commandPagesByPath.has(commandPath)) commandPagesByPath.set(commandPath, command);
+      }
+      const commandDocuments: Array<MarkdownLinkRelationDocument | null> = await Promise.all(
+        Array.from(commandPagesByPath.entries()).map(async ([commandPath, command]) => {
+          const fullCommand = await window.commandsAPI?.getCommandByPath?.(commandPath);
+          return fullCommand
+            ? {
+              target: { kind: 'command' as const, path: fullCommand.filePath },
+              title: fullCommand.displayName || command.title,
+              content: fullCommand.content,
+              linkHits: getMarkdownEditorLinkHits(fullCommand.content, wikiIndex),
+            }
+            : null;
+        }),
+      );
+      if (cancelled) return;
+      setMarkdownLinkRelationDocuments(
+        [...wikiDocuments, ...artifactDocuments, ...commandDocuments]
+          .filter((document): document is MarkdownLinkRelationDocument => document !== null),
+      );
+    };
+
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [commandIndexPages, readings, selectedCommand?.content, wikiIndex, wikiIndexPages]);
 
   // Check if selected command is already shared
   useEffect(() => {
@@ -2029,27 +2233,125 @@ export default function CommandsView({
                           </li>
                         );
                       },
-                      a: ({ href, children }) => (
-                        <a
-                          href={href}
-                          style={{
-                            color: theme.accent,
-                            textDecoration: 'none',
-                          }}
-                          onClick={(e) => {
-                            e.preventDefault();
-                            if (href) {
-                              window.shellAPI?.openExternal(href);
-                            }
-                          }}
-                        >
-                          {children}
-                        </a>
-                      ),
+                      a: ({ href, children }) => {
+                        const unresolved = isUnresolvedWikiHref(href);
+                        const openAnchorLink = (target: HTMLAnchorElement) => {
+                          const effectiveHref = href && href.trim()
+                            ? href
+                            : (target.textContent?.trim() ?? '');
+                          openLinkAction(classifyLinkHref(effectiveHref, wikiIndex));
+                        };
+                        return (
+                          <a
+                            href={href}
+                            style={{
+                              color: unresolved ? '#ef4444' : theme.accent,
+                              textDecoration: 'underline',
+                              textDecorationColor: unresolved ? '#ef4444' : `${theme.accent}66`,
+                              textUnderlineOffset: '2px',
+                              cursor: 'pointer',
+                            }}
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              openAnchorLink(e.currentTarget);
+                            }}
+                          >
+                            {children}
+                          </a>
+                        );
+                      },
                     }}
                   >
                     {displayContent}
                   </FieldTheoryProse>
+                  {viewMode === 'mine' && linkedDocuments.length > 0 && (
+                    <section
+                      aria-label="Linked"
+                      style={{
+                        marginTop: '32px',
+                        paddingTop: '16px',
+                        borderTop: `1px solid ${theme.border}`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          marginBottom: '8px',
+                          fontSize: '12px',
+                          fontWeight: 650,
+                          color: theme.textSecondary,
+                          letterSpacing: 0,
+                        }}
+                      >
+                        Linked
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {linkedDocuments.map((link) => (
+                          <button
+                            key={getWikiLinkTargetKey(link.target)}
+                            type="button"
+                            title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
+                            onMouseDown={(event) => event.stopPropagation()}
+                            onClick={(event) => {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              openFieldTheoryMarkdownTarget(link.target);
+                            }}
+                            style={{
+                              display: 'grid',
+                              gridTemplateColumns: '18px minmax(0, 1fr)',
+                              columnGap: '8px',
+                              alignItems: 'start',
+                              padding: '6px 0',
+                              border: 'none',
+                              backgroundColor: 'transparent',
+                              color: theme.text,
+                              cursor: 'pointer',
+                              textAlign: 'left',
+                              font: 'inherit',
+                            }}
+                          >
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                marginTop: '1px',
+                                color: theme.textSecondary,
+                                fontSize: '13px',
+                                lineHeight: 1.2,
+                                textAlign: 'center',
+                              }}
+                            >
+                              {WIKI_LINK_DIRECTION_MARKER[link.direction]}
+                            </span>
+                            <span style={{ minWidth: 0 }}>
+                              <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
+                                {link.title}
+                                <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
+                                  {WIKI_LINK_TARGET_LABEL[link.target.kind]}
+                                </span>
+                              </span>
+                              {link.excerpt && (
+                                <span
+                                  style={{
+                                    display: 'block',
+                                    marginTop: '2px',
+                                    color: theme.textSecondary,
+                                    fontSize: '12px',
+                                    lineHeight: 1.35,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
+                                  {link.excerpt}
+                                </span>
+                              )}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    </section>
+                  )}
                   <div style={{ height: '50vh', flexShrink: 0 }} />
                 </>
               )}

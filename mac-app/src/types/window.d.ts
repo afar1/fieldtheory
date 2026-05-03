@@ -1212,8 +1212,9 @@ interface HandoffInfo {
 }
 
 interface FieldTheoryMarkdownTarget {
-  kind: 'wiki' | 'artifact' | 'command' | 'external';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
   path: string;
+  contentMode?: 'rendered' | 'markdown';
 }
 
 interface ActiveLibraryFileContext {
