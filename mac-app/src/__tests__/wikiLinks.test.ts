@@ -553,7 +553,7 @@ describe('getMarkdownLinkedDocuments', () => {
       {
         target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
         title: 'Source',
-        content: 'stale content without links',
+        content: 'Cached relation content without links.',
         linkHits: getMarkdownEditorLinkHits('See [[refactor]].', linkedIndex),
       },
       {
@@ -572,7 +572,7 @@ describe('getMarkdownLinkedDocuments', () => {
       {
         target: { kind: 'wiki', relPath: 'scratchpad/source' },
         title: 'Source',
-        excerpt: 'stale content without links',
+        excerpt: 'Cached relation content without links.',
         direction: 'inbound',
       },
     ]);

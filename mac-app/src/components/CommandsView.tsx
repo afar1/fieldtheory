@@ -35,8 +35,8 @@ import {
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
-  type WikiLinkTarget,
   type WikiIndexInput,
+  type WikiLinkTarget,
 } from '../utils/wikiLinks';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
@@ -546,6 +546,14 @@ export default function CommandsView({
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
 
+  // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
+  const displayContent = useMemo(() => {
+    const raw = fieldTheorySyncEnabled && viewMode === 'popular'
+      ? selectedPopularCommand?.content || ''
+      : selectedCommand?.content || '';
+    return transformWikiLinks(raw.replace(/^#\s+.+\n?/, ''), wikiIndex);
+  }, [fieldTheorySyncEnabled, viewMode, selectedCommand?.content, selectedPopularCommand?.content, wikiIndex]);
+
   const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
     if (viewMode === 'mine' && selectedCommand) {
       return { kind: 'command', path: selectedCommand.filePath };
@@ -562,14 +570,6 @@ export default function CommandsView({
       wikiIndex,
     );
   }, [activeLinkTarget, markdownLinkRelationDocuments, selectedCommand, wikiIndex]);
-
-  // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
-  const displayContent = useMemo(() => {
-    const raw = fieldTheorySyncEnabled && viewMode === 'popular'
-      ? selectedPopularCommand?.content || ''
-      : selectedCommand?.content || '';
-    return transformWikiLinks(raw.replace(/^#\s+.+\n?/, ''), wikiIndex);
-  }, [fieldTheorySyncEnabled, viewMode, selectedCommand?.content, selectedPopularCommand?.content, wikiIndex]);
 
   const flashCopyPathCopied = useCallback(() => {
     setCopyPathCopied(true);
@@ -1057,7 +1057,7 @@ export default function CommandsView({
     return () => {
       cancelled = true;
     };
-  }, [commandIndexPages, readings, wikiIndex, wikiIndexPages]);
+  }, [commandIndexPages, readings, selectedCommand?.content, wikiIndex, wikiIndexPages]);
 
   // Check if selected command is already shared
   useEffect(() => {
@@ -2316,8 +2316,23 @@ export default function CommandsView({
                     {displayContent}
                   </FieldTheoryProse>
                   {viewMode === 'mine' && linkedDocuments.length > 0 && (
-                    <section aria-label="Linked" style={{ marginTop: '32px', paddingTop: '16px', borderTop: `1px solid ${theme.border}` }}>
-                      <div style={{ marginBottom: '8px', fontSize: '12px', fontWeight: 650, color: theme.textSecondary, letterSpacing: 0 }}>
+                    <section
+                      aria-label="Linked"
+                      style={{
+                        marginTop: '32px',
+                        paddingTop: '16px',
+                        borderTop: `1px solid ${theme.border}`,
+                      }}
+                    >
+                      <div
+                        style={{
+                          marginBottom: '8px',
+                          fontSize: '12px',
+                          fontWeight: 650,
+                          color: theme.textSecondary,
+                          letterSpacing: 0,
+                        }}
+                      >
                         Linked
                       </div>
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
@@ -2346,7 +2361,16 @@ export default function CommandsView({
                               font: 'inherit',
                             }}
                           >
-                            <span aria-hidden="true" style={{ marginTop: '1px', color: theme.textSecondary, fontSize: '13px', lineHeight: 1.2, textAlign: 'center' }}>
+                            <span
+                              aria-hidden="true"
+                              style={{
+                                marginTop: '1px',
+                                color: theme.textSecondary,
+                                fontSize: '13px',
+                                lineHeight: 1.2,
+                                textAlign: 'center',
+                              }}
+                            >
                               {WIKI_LINK_DIRECTION_MARKER[link.direction]}
                             </span>
                             <span style={{ minWidth: 0 }}>
@@ -2357,16 +2381,18 @@ export default function CommandsView({
                                 </span>
                               </span>
                               {link.excerpt && (
-                                <span style={{
-                                  display: 'block',
-                                  marginTop: '2px',
-                                  color: theme.textSecondary,
-                                  fontSize: '12px',
-                                  lineHeight: 1.35,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}>
+                                <span
+                                  style={{
+                                    display: 'block',
+                                    marginTop: '2px',
+                                    color: theme.textSecondary,
+                                    fontSize: '12px',
+                                    lineHeight: 1.35,
+                                    overflow: 'hidden',
+                                    textOverflow: 'ellipsis',
+                                    whiteSpace: 'nowrap',
+                                  }}
+                                >
                                   {link.excerpt}
                                 </span>
                               )}
