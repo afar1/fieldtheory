@@ -81,7 +81,7 @@ import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
@@ -2196,6 +2196,12 @@ export default function ClipboardHistory() {
         setSelectedCommandPath(target.path);
         setPendingCommandPath(target.path);
         setViewMode('commands');
+        return;
+      }
+      if (target.kind === 'bookmarks') {
+        setPendingLibraryOpenTarget(target);
+        setLibraryKeepsCurrentSizeKey(false);
+        setViewMode('librarian');
         return;
       }
       setPendingLibraryOpenTarget(target);

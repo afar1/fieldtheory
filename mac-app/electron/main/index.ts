@@ -6395,8 +6395,8 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external'; path: string }) => {
-    if (!target?.path || !['wiki', 'artifact', 'command', 'external'].includes(target.kind)) {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks'; path: string; contentMode?: 'rendered' | 'markdown' }) => {
+    if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
     }
     if (!clipboardHistoryWindow) {

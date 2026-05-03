@@ -1711,6 +1711,13 @@ function CommandLauncher() {
           setPreviewOpen(true);
           return;
         }
+        case 'view-bookmarks': {
+          const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'bookmarks', path: 'bookmarks' });
+          if (!result.success) {
+            showInvocationError('open-bookmarks-error', result.error, 'Open bookmarks failed');
+          }
+          return;
+        }
         case 'move-current-library-file': {
           if (!latestContext?.fieldTheoryActive) {
             showLauncherMessage('Open Field Theory to move the current file');

@@ -216,7 +216,7 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 }
 
 export type LauncherFieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
   path: string;
 };
 
@@ -978,6 +978,14 @@ export function buildBuiltInLauncherActions(
       hotkey: hotkeys.history,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
       actionId: 'open-history',
+    },
+    {
+      id: 'action-view-bookmarks',
+      type: 'action',
+      name: 'bookmarks',
+      displayName: 'View Bookmarks',
+      keywords: ['bookmarks', 'bookmark canvas', 'view bookmarks', 'saved posts', 'saved links', 'library'],
+      actionId: 'view-bookmarks',
     },
     {
       id: 'action-save-current-website',
