@@ -2958,7 +2958,7 @@ type MarkdownPreview = {
 };
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };

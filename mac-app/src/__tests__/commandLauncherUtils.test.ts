@@ -15,6 +15,7 @@ import {
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
+  getLauncherAreaActionIdForQuery,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
@@ -908,6 +909,19 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
   });
 });
 
+describe('getLauncherAreaActionIdForQuery', () => {
+  it('maps exact area queries to app-area actions', () => {
+    expect(getLauncherAreaActionIdForQuery('clipboard')).toBe('open-history');
+    expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
+    expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-commands');
+  });
+
+  it('does not route partial area words', () => {
+    expect(getLauncherAreaActionIdForQuery('command')).toBeNull();
+    expect(getLauncherAreaActionIdForQuery('library notes')).toBeNull();
+  });
+});
+
 describe('SQUARES_ACTION_DEFS', () => {
   it('has 10 window management actions', () => {
     expect(SQUARES_ACTION_DEFS).toHaveLength(10);
@@ -945,7 +959,7 @@ describe('SQUARES_ACTION_DEFS', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
-      'view-bookmarks', 'save-current-website', 'move-current-library-file',
+      'open-library', 'open-commands', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
       'undo-library-move', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
@@ -1006,6 +1020,19 @@ describe('buildBuiltInLauncherActions', () => {
       displayName: 'View Bookmarks',
     }));
     expect(bookmarksAction?.keywords).toEqual(expect.arrayContaining(['bookmarks', 'view bookmarks']));
+  });
+
+  it('includes app-area actions for library and commands queries', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'open-library')).toEqual(expect.objectContaining({
+      name: 'library',
+      displayName: 'Open Library',
+    }));
+    expect(actions.find((action) => action.actionId === 'open-commands')).toEqual(expect.objectContaining({
+      name: 'commands',
+      displayName: 'Open Commands',
+    }));
   });
 
   it('includes move and undo move actions', () => {

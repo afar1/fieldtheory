@@ -586,9 +586,7 @@ function sidebarNodeSortTimestamp(node: SidebarNode): number {
 }
 
 function sidebarNodePinnedRank(node: SidebarNode, pinnedItemIds: ReadonlySet<string>): number {
-  if (pinnedItemIds.has(node.id)) return 2;
-  if (node.kind === 'file') return 0;
-  return node.children.some((child) => sidebarNodePinnedRank(child, pinnedItemIds) > 0) ? 1 : 0;
+  return pinnedItemIds.has(node.id) ? 1 : 0;
 }
 
 export function sortSidebarNodes(

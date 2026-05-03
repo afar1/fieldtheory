@@ -102,7 +102,7 @@ import {
 } from '../utils/wikiLinks';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
@@ -204,6 +204,24 @@ export function splitFrontmatter(content: string): { body: string; meta: Record<
   const parsed = parseMarkdownFrontmatter(content);
   if (parsed.raw === null || !parsed.raw.trim()) return { body: content, meta: {}, todoState: null };
   return { body: parsed.body, meta: parsed.meta, todoState: getFrontmatterTodoState(parsed.meta) };
+}
+
+export function getMarkdownRenderedBodyStartLineIndex(content: string): number {
+  if (!content.startsWith('---')) return 0;
+  const parsed = parseMarkdownFrontmatter(content);
+  if (parsed.raw === null) return 0;
+
+  const lines = content.split(/\r?\n/);
+  let bodyStartLineIndex = 0;
+  for (let index = 1; index < lines.length; index += 1) {
+    if (lines[index].trim() !== '---') continue;
+    bodyStartLineIndex = index + 1;
+    break;
+  }
+  while (bodyStartLineIndex < lines.length && lines[bodyStartLineIndex] === '') {
+    bodyStartLineIndex += 1;
+  }
+  return bodyStartLineIndex;
 }
 
 export function getNextMarkdownTodoState(current: MarkdownTodoState | null): MarkdownTodoState | null {
@@ -1431,10 +1449,18 @@ function isArtifactModelSignatureText(text: string): boolean {
 
 type MarkdownRenderNode = {
   type?: string;
+  tagName?: unknown;
   value?: unknown;
   children?: unknown;
+  position?: {
+    start?: {
+      line?: unknown;
+    };
+  };
   properties?: {
     className?: unknown;
+    checked?: unknown;
+    type?: unknown;
   };
 };
 
@@ -1456,11 +1482,31 @@ function extractMarkdownText(node: unknown): string {
   return '';
 }
 
-function isRenderedTaskListItem(node: unknown): boolean {
+export function getRenderedMarkdownNodeStartLine(node: unknown): number | null {
+  if (!node || typeof node !== 'object') return null;
+  const line = (node as MarkdownRenderNode).position?.start?.line;
+  return typeof line === 'number' && Number.isFinite(line) ? line : null;
+}
+
+export function getRenderedTaskListItemChecked(node: unknown): boolean | null {
+  if (!node || typeof node !== 'object') return null;
+  const renderNode = node as MarkdownRenderNode;
+  if (!Array.isArray(renderNode.children)) return null;
+  for (const child of renderNode.children) {
+    if (!child || typeof child !== 'object') continue;
+    const childNode = child as MarkdownRenderNode;
+    if (childNode.tagName !== 'input' || childNode.properties?.type !== 'checkbox') continue;
+    return childNode.properties.checked === true;
+  }
+  return null;
+}
+
+export function isRenderedTaskListItem(node: unknown): boolean {
   if (!node || typeof node !== 'object') return false;
   const className = (node as MarkdownRenderNode).properties?.className;
   if (Array.isArray(className)) return className.includes('task-list-item');
-  return className === 'task-list-item';
+  if (className === 'task-list-item') return true;
+  return getRenderedTaskListItemChecked(node) !== null;
 }
 
 function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
@@ -1493,9 +1539,11 @@ function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
 
 function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode | null; content: ReactNode[] } {
   const nodes = Children.toArray(children);
-  const checkboxIndex = nodes.findIndex((child) =>
-    isValidElement(child) && typeof child.type === 'string' && child.type === 'input',
-  );
+  const checkboxIndex = nodes.findIndex((child) => {
+    if (!isValidElement<{ type?: unknown }>(child)) return false;
+    if (typeof child.type === 'string' && child.type === 'input') return true;
+    return child.props.type === 'checkbox';
+  });
   if (checkboxIndex < 0) return { checkbox: null, content: nodes };
   const checkbox = nodes[checkboxIndex];
   const content = nodes.filter((_, index) => index !== checkboxIndex);
@@ -2594,6 +2642,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     () => getMarkdownTaskLines(activeReading?.content ?? ''),
     [activeReading?.content],
   );
+  const sourceTaskLinesByRenderedLine = useMemo(() => {
+    const content = activeReading?.content ?? '';
+    const bodyStartLineIndex = getMarkdownRenderedBodyStartLineIndex(content);
+    const linesByRenderedLine = new Map<number, MarkdownTaskLine>();
+    for (const taskLine of sourceTaskLines) {
+      linesByRenderedLine.set(taskLine.lineIndex - bodyStartLineIndex + 1, taskLine);
+    }
+    return linesByRenderedLine;
+  }, [activeReading?.content, sourceTaskLines]);
 
   useEffect(() => {
     if (!active) {
@@ -3647,6 +3704,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         openWikiPage(initialOpenTarget.path);
         if (initialOpenTarget.contentMode === 'markdown') {
           setContentMode('markdown');
+          setFocusImmersive(true);
+          focusMarkdownEditorOnOpenRef.current = true;
           const page = await window.wikiAPI?.getPage(initialOpenTarget.path);
           if (page) {
             dispatchLocalWikiAdded(page);
@@ -3654,7 +3713,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             setEditContent(page.content);
             lastSavedContentRef.current = page.content;
             lastSavedVersionRef.current = page.documentVersion;
-            pendingTitleEditPathRef.current = page.absPath;
           }
         }
         onInitialOpenTargetConsumed?.();
@@ -4838,9 +4896,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   }
 
-  let renderedTaskInputIndex = 0;
-  let renderedTaskListItemIndex = 0;
-
   return (
     <div
       ref={containerRef}
@@ -5789,46 +5844,36 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       <p>{children}</p>
                     );
                   },
-                  input: ({ node: _node, type, checked, ...props }) => {
-                    if (type !== 'checkbox') {
-                      return <input type={type} {...props} />;
-                    }
-
-                    const taskLine = sourceTaskLines[renderedTaskInputIndex];
-                    renderedTaskInputIndex += 1;
-                    const isChecked = taskLine?.checked ?? Boolean(checked);
-                    return (
-                      <input
-                        {...props}
-                        className="ft-rendered-task-checkbox"
-                        type="checkbox"
-                        checked={isChecked}
-                        disabled={false}
-                        readOnly={!taskLine}
-                        onChange={(event) => {
-                          event.stopPropagation();
-                          if (taskLine) toggleRenderedTask(taskLine.lineIndex, event.currentTarget.checked);
-                        }}
-                        onClick={(event) => event.stopPropagation()}
-                        style={{
-                          ...props.style,
-                          cursor: taskLine ? 'pointer' : 'default',
-                          margin: 0,
-                        }}
-                      />
-                    );
-                  },
                   li: ({ children, node }) => {
                     const textContent = extractMarkdownText(node).trim();
                     const isCarrotListItem = textContent.startsWith(CARROT_LIST_SENTINEL);
                     const isTaskListItem = isRenderedTaskListItem(node);
                     if (isTaskListItem) {
-                      const taskLine = sourceTaskLines[renderedTaskListItemIndex];
-                      renderedTaskListItemIndex += 1;
-                      const checked = taskLine?.checked ?? false;
+                      const renderedLine = getRenderedMarkdownNodeStartLine(node);
+                      const taskLine = renderedLine === null ? undefined : sourceTaskLinesByRenderedLine.get(renderedLine);
+                      const renderedChecked = getRenderedTaskListItemChecked(node);
+                      const checked = renderedChecked ?? taskLine?.checked ?? false;
                       const taskText = taskLine?.text ?? textContent;
                       const animateCompletion = checked && animatingTaskTexts.has(taskText);
                       const { checkbox, content } = splitTaskListItemChildren(children);
+                      const renderedCheckbox = (
+                        <input
+                          className="ft-rendered-task-checkbox"
+                          type="checkbox"
+                          checked={checked}
+                          disabled={false}
+                          readOnly={!taskLine}
+                          onChange={(event) => {
+                            event.stopPropagation();
+                            if (taskLine) toggleRenderedTask(taskLine.lineIndex, event.currentTarget.checked);
+                          }}
+                          onClick={(event) => event.stopPropagation()}
+                          style={{
+                            cursor: taskLine ? 'pointer' : 'default',
+                            margin: 0,
+                          }}
+                        />
+                      );
                       return (
                         <li
                           className={[
@@ -5859,7 +5904,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                               cursor: taskLine ? 'pointer' : 'default',
                             }}
                           >
-                            {checkbox}
+                            {checkbox ? renderedCheckbox : null}
                           </span>
                           <span style={{ minWidth: 0 }}>
                             {content}

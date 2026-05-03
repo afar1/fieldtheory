@@ -81,6 +81,16 @@ export function isKeyboardShortcutsHelpShortcut(e: KeyboardEvent | React.Keyboar
   return (e.key === '?' || (e.key === '/' && e.shiftKey)) && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey;
 }
 
+export function shouldRevealFooterChrome(
+  cursorClientY: number,
+  viewportHeight: number,
+  revealDistancePx = 96,
+): boolean {
+  if (!Number.isFinite(cursorClientY) || !Number.isFinite(viewportHeight)) return false;
+  if (viewportHeight <= 0) return false;
+  return cursorClientY <= viewportHeight && cursorClientY >= viewportHeight - Math.max(0, revealDistancePx);
+}
+
 export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }> = [
   { keys: '/', label: 'Focus library search' },
   { keys: 'Esc', label: 'Exit edit, focus, fullscreen, or close' },
@@ -90,8 +100,9 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
   { keys: 'Shift+Tab', label: 'Cycle note task state backward' },
   { keys: 'Command+Enter', label: 'Toggle task checkbox line' },
   { keys: 'Command+Shift+0', label: 'Cycle task line' },
-  { keys: 'Command+.', label: 'Toggle markdown source' },
-  { keys: 'Command+/', label: 'Toggle focus chrome' },
+  { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+  { keys: 'Command+/', label: 'Toggle focus mode' },
+  { keys: 'Command+,', label: 'Toggle sidebar' },
   { keys: 'Command+F', label: 'Find in file' },
   { keys: 'Command+C', label: 'Copy selected text or file path' },
   { keys: 'Command+Shift+C', label: 'Copy file path' },

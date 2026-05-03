@@ -10,6 +10,8 @@ import {
   getMarkdownBodySelectionRange,
   getMarkdownListToggleEdit,
   getRenderedMarkdownClickBehavior,
+  getRenderedMarkdownNodeStartLine,
+  getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
   getRenderedMarkdownSelectionFormatEdit,
   getMarkdownWikiLinkCompletionState,
@@ -19,10 +21,12 @@ import {
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
   getMarkdownTaskLines,
+  getMarkdownRenderedBodyStartLineIndex,
   getScrollRatio,
   getScrollTopForRatio,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
+  isRenderedTaskListItem,
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
   normalizeMarkdownTodoLines,
@@ -214,6 +218,12 @@ Body text here.`;
     const content = '---\ntags: [test]\n---\n\n\n\nContent after gaps.';
     const result = splitFrontmatter(content);
     expect(result.body).toBe('Content after gaps.');
+  });
+
+  it('returns the source line where rendered body content starts', () => {
+    expect(getMarkdownRenderedBodyStartLineIndex('# Task')).toBe(0);
+    expect(getMarkdownRenderedBodyStartLineIndex('---\ntags: [test]\n---\n# Task')).toBe(3);
+    expect(getMarkdownRenderedBodyStartLineIndex('---\ntags: [test]\n---\n\n\n# Task')).toBe(5);
   });
 
   it('ignores malformed frontmatter lines', () => {
@@ -603,6 +613,46 @@ describe('markdown task line indexing', () => {
   it('toggles a task by source line index instead of duplicate text', () => {
     expect(toggleMarkdownTaskLineAtIndex('- [ ] same\n- [ ] same', 1, true)).toBe('- [ ] same\n- [x] same');
     expect(toggleMarkdownTaskLineAtIndex('- [x] same\n- [x] same', 1, false)).toBe('- [x] same\n- [ ] same');
+  });
+});
+
+describe('rendered markdown task list detection', () => {
+  it('recognizes task list items by checkbox child when the class is missing', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      position: { start: { line: 4 } },
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: true },
+        },
+        { type: 'text', value: 'Done item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(true);
+    expect(getRenderedMarkdownNodeStartLine(node)).toBe(4);
+  });
+
+  it('reads unchecked rendered checkbox state', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: false },
+        },
+        { type: 'text', value: 'Open item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(false);
   });
 });
 
@@ -1524,13 +1574,41 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
-  it('keeps folders with pinned descendants in the pinned group', () => {
+  it('keeps pinned descendants inside their directory without promoting the parent directory', () => {
     const pinned = new Set(['wiki:Artifact']);
     const result = applyPinnedSidebarOrder([
       dir('scratchpad'),
       dir('z-artifacts', [
         file('Artifact', 5),
         file('Other', 1),
+      ]),
+    ], 'alpha', pinned);
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Scratchpad',
+      'Z-artifacts',
+    ]);
+    const artifacts = result.find((node) => node.kind === 'dir' && node.name === 'z-artifacts');
+    expect(artifacts?.kind === 'dir' ? artifacts.children.map((node) => node.kind === 'file' ? node.item.title : node.label) : []).toEqual([
+      'Artifact',
+      'Other',
+    ]);
+    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
+      false,
+      false,
+    ]);
+    expect(artifacts?.kind === 'dir' ? artifacts.children.map((_node, index) => shouldShowPinnedSidebarDividerBefore(artifacts.children, index, pinned)) : []).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it('still promotes pinned directories above unpinned directories', () => {
+    const pinned = new Set(['/wiki::z-artifacts']);
+    const result = applyPinnedSidebarOrder([
+      dir('scratchpad'),
+      dir('z-artifacts', [
+        file('Artifact', 5),
       ]),
     ], 'alpha', pinned);
 
