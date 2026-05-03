@@ -48,17 +48,29 @@ describe('CommandsView command naming', () => {
         saveCommand: vi.fn(async () => true),
         createCommand: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
+        openFieldTheoryMarkdown: vi.fn(async () => ({ success: true })),
       },
     });
     Object.defineProperty(window, 'librarianAPI', {
       configurable: true,
       value: {
+        getReadings: vi.fn(async () => []),
+        getReading: vi.fn(async () => null),
         onInsertMarkdownText: vi.fn((callback: (text: string) => void) => {
           insertMarkdownTextHandler = callback;
           return () => {
             insertMarkdownTextHandler = null;
           };
         }),
+      },
+    });
+    Object.defineProperty(window, 'wikiAPI', {
+      configurable: true,
+      value: {
+        getTree: vi.fn(async () => []),
+        getPage: vi.fn(async () => null),
+        createFile: vi.fn(async () => null),
+        onPageChanged: vi.fn(() => () => {}),
       },
     });
     Object.defineProperty(window, 'localStorage', {
@@ -206,6 +218,36 @@ describe('CommandsView command naming', () => {
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
     });
+  });
+
+  it('shows the shared linked-documents footer for command files', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+    };
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nSee [[existing]].\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+
+    expect(await screen.findByText('Linked')).toBeTruthy();
+    expect(await screen.findByTitle('Links back to this document')).toBeTruthy();
+    expect(screen.getAllByText('Command').length).toBeGreaterThan(0);
   });
 
   it('autosaves markdown edits without toolbar save controls', async () => {

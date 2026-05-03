@@ -45,6 +45,7 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
@@ -273,7 +274,7 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
 });
 
 describe('shouldOpenMarkdownLinkFromMouseDown', () => {
-  it('opens links on an ordinary primary click', () => {
+  it('opens rendered links on an ordinary primary click', () => {
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
       altKey: false,
@@ -294,6 +295,44 @@ describe('shouldOpenMarkdownLinkFromMouseDown', () => {
     })).toBe(false);
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 1,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(false);
+  });
+});
+
+describe('shouldOpenMarkdownEditorLinkFromMouseDown', () => {
+  it('opens editor links only on Command-primary click', () => {
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(true);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(false);
+  });
+
+  it('keeps modified and non-primary editor clicks available for editing', () => {
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: true,
+      ctrlKey: false,
+    })).toBe(false);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: false,
+      ctrlKey: true,
+    })).toBe(false);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 1,
+      metaKey: true,
       altKey: false,
       ctrlKey: false,
     })).toBe(false);
