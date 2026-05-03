@@ -34,7 +34,7 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { useTheme } from '../contexts/ThemeContext';
 
-export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 0;
+export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 96;
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
@@ -126,10 +126,11 @@ function getCodeEditorCaretPosition(
   };
 }
 
-function shouldMoveCaretToDocumentEndFromClick(view: EditorView, event: MouseEvent): boolean {
+export function shouldMoveCaretToDocumentEndFromClick(view: EditorView, event: MouseEvent): boolean {
   if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return false;
   const scroller = view.scrollDOM;
-  if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2) return false;
+  const remainingScroll = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+  if (remainingScroll > MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX + 2) return false;
 
   const lastLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
   if (!lastLine) return false;
@@ -246,6 +247,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-content': {
             caretColor: caretColor ?? color,
             padding: '0',
+            paddingBottom: `${MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX}px`,
             cursor: 'text',
           },
           '.cm-line': {
