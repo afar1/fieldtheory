@@ -18,6 +18,7 @@ import {
   getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
+  getLibrarianContentBottomPadding,
   getLibrarianContentTopPadding,
   highlightFileFindMatches,
   formatBreadcrumb,
@@ -1282,6 +1283,25 @@ describe('focus chrome proximity', () => {
     })).toBe(1);
   });
 
+  it('keeps the grouped top chrome stack fully visible across a taller top band', () => {
+    expect(getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 150,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 220,
+      fullOpacityDistancePx: 128,
+      topFullOpacityDistancePx: 160,
+    })).toBe(1);
+    expect(getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 190,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 220,
+      fullOpacityDistancePx: 128,
+      topFullOpacityDistancePx: 160,
+    })).toBeGreaterThan(0);
+  });
+
   it('keeps the top nav on the same opacity ramp as the chrome group', () => {
     expect(getFocusChromeSurfaceOpacity({
       isFocusChromeSurface: true,
@@ -1389,6 +1409,11 @@ describe('librarian content top padding', () => {
     });
 
     expect(focusPadding - normalPadding).toBe(42);
+  });
+
+  it('removes the bottom footer carve-out while focus chrome overlays the footer', () => {
+    expect(getLibrarianContentBottomPadding({ focusChromeActive: false })).toBe(32);
+    expect(getLibrarianContentBottomPadding({ focusChromeActive: true })).toBe(0);
   });
 });
 

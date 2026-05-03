@@ -40,6 +40,34 @@ import {
 } from '../utils/wikiLinks';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
+const COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
+const COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX = 8;
+const COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX = 12;
+const COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX = 28;
+const COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX = 24;
+
+export function getCommandsContentTopPadding(input: {
+  isEditing: boolean;
+  focusChromeActive: boolean;
+}): number {
+  const normalTopPadding = input.isEditing
+    ? COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX
+    : COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX;
+
+  return input.focusChromeActive
+    ? normalTopPadding + COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX
+    : normalTopPadding;
+}
+
+export function getCommandsContentBottomPadding(input: {
+  isEditing: boolean;
+  focusChromeActive: boolean;
+}): number {
+  if (input.focusChromeActive) return 0;
+  return input.isEditing
+    ? COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX
+    : COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX;
+}
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -311,6 +339,8 @@ export default function CommandsView({
   const focusChromeVisualOpacity = focusChromeActive ? focusChromeGroupOpacity : 1;
   const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
   const focusToolbarControlsVisible = !focusChromeActive || focusChromeVisualVisible;
+  const commandContentTopPadding = getCommandsContentTopPadding({ isEditing, focusChromeActive });
+  const commandContentBottomPadding = getCommandsContentBottomPadding({ isEditing, focusChromeActive });
   const toggleFocusImmersive = useCallback(() => {
     if (!focusImmersive) {
       onFocusChromeShortcut?.();
@@ -2033,6 +2063,7 @@ export default function CommandsView({
               <ContentToolbar
                 filePath={selectedCommand?.filePath}
                 isFullScreen={focusImmersive}
+                dragSpacer={!focusChromeActive}
                 canNavigateBack={canNavigateBack}
                 canNavigateForward={canNavigateForward}
                 onNavigateBack={onNavigateBack}
@@ -2183,7 +2214,7 @@ export default function CommandsView({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: isEditing ? '8px 20px 12px 20px' : '24px 20px',
+            padding: `${commandContentTopPadding}px 20px ${commandContentBottomPadding}px 20px`,
             display: 'flex',
             justifyContent: 'center',
           }}
