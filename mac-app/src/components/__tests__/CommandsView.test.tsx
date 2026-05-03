@@ -48,17 +48,29 @@ describe('CommandsView command naming', () => {
         saveCommand: vi.fn(async () => true),
         createCommand: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
+        openFieldTheoryMarkdown: vi.fn(async () => ({ success: true })),
       },
     });
     Object.defineProperty(window, 'librarianAPI', {
       configurable: true,
       value: {
+        getReadings: vi.fn(async () => []),
+        getReading: vi.fn(async () => null),
         onInsertMarkdownText: vi.fn((callback: (text: string) => void) => {
           insertMarkdownTextHandler = callback;
           return () => {
             insertMarkdownTextHandler = null;
           };
         }),
+      },
+    });
+    Object.defineProperty(window, 'wikiAPI', {
+      configurable: true,
+      value: {
+        getTree: vi.fn(async () => []),
+        getPage: vi.fn(async () => null),
+        createFile: vi.fn(async () => null),
+        onPageChanged: vi.fn(() => () => {}),
       },
     });
     Object.defineProperty(window, 'localStorage', {
@@ -208,6 +220,36 @@ describe('CommandsView command naming', () => {
     });
   });
 
+  it('shows the shared linked-documents footer for command files', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+    };
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nSee [[existing]].\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+
+    expect(await screen.findByText('Linked')).toBeTruthy();
+    expect(await screen.findByTitle('Links back to this document')).toBeTruthy();
+    expect(screen.getAllByText('Command').length).toBeGreaterThan(0);
+  });
+
   it('autosaves markdown edits without toolbar save controls', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
@@ -284,7 +326,7 @@ describe('CommandsView command naming', () => {
 
     expect(onFocusChromeShortcut).toHaveBeenCalledTimes(1);
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(onFocusChromeActiveChange.mock.calls.map(([active]) => active)).toEqual([true]);
     expect(screen.queryByText('commands / existing.md')).toBeNull();
@@ -298,7 +340,7 @@ describe('CommandsView command naming', () => {
       />
     );
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(false);
     });
     expect(screen.getByText('commands / existing.md')).toBeTruthy();
 
@@ -311,14 +353,14 @@ describe('CommandsView command naming', () => {
       />
     );
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
 
     fireEvent.click(screen.getByLabelText('Exit immersive view'));
 
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(false);
     });
     expect(screen.getByText('commands / existing.md')).toBeTruthy();
 
@@ -326,8 +368,72 @@ describe('CommandsView command naming', () => {
 
     expect(onFocusChromeShortcut).toHaveBeenCalledTimes(2);
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
+  });
+
+  it('uses the parent focus chrome state when switching into Commands', async () => {
+    const onFocusChromeActiveChange = vi.fn();
+    const onFocusChromeEnabledChange = vi.fn();
+    const { rerender } = render(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />
+    );
+
+    await screen.findByText('Rendered selection text');
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)).toEqual([true, false, 0]);
+    });
+    expect(screen.queryByText('commands / existing.md')).toBeNull();
+
+    rerender(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0.5}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)).toEqual([true, true, 0.5]);
+    });
+    expect(screen.getByText('commands / existing.md')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Exit immersive view'));
+    expect(onFocusChromeEnabledChange).toHaveBeenCalledWith(false);
+  });
+
+  it('temporarily reveals the collapsed sidebar from the left edge', async () => {
+    const { container } = render(<CommandsView onSwitchToClipboard={vi.fn()} sidebarCollapsed />);
+
+    await screen.findByText('Rendered selection text');
+
+    const hoverStrip = container.querySelector('div[aria-hidden="true"]') as HTMLDivElement | null;
+    expect(hoverStrip).toBeTruthy();
+    const sidebarPane = hoverStrip?.nextElementSibling as HTMLDivElement | null;
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseEnter(hoverStrip!);
+
+    await waitFor(() => {
+      expect(sidebarPane?.style.width).toBe('180px');
+    });
+
+    fireEvent.mouseLeave(container.firstElementChild!);
+
+    await waitFor(() => {
+      expect(sidebarPane?.style.width).toBe('0px');
+    });
   });
 });

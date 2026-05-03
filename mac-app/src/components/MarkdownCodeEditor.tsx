@@ -17,9 +17,12 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { EditorState, Compartment } from '@codemirror/state';
+import { EditorState, Compartment, RangeSetBuilder } from '@codemirror/state';
 import {
+  Decoration,
+  type DecorationSet,
   EditorView,
+  ViewPlugin,
   keymap,
   highlightActiveLine,
 } from '@codemirror/view';
@@ -33,8 +36,11 @@ import {
 } from '@codemirror/language';
 import { tags as t } from '@lezer/highlight';
 import { useTheme } from '../contexts/ThemeContext';
+import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
+import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 
-export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 0;
+export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 32;
+export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
@@ -113,6 +119,36 @@ const buildHighlightStyle = (isDark: boolean) =>
     },
   ]);
 
+export function buildCheckedMarkdownTaskLineDecorations(state: EditorState): DecorationSet {
+  const builder = new RangeSetBuilder<Decoration>();
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber);
+    if (isCheckedMarkdownTaskLine(line.text)) {
+      builder.add(line.from, line.from, Decoration.line({ class: MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS }));
+    }
+  }
+  return builder.finish();
+}
+
+export const checkedMarkdownTaskLineExtension = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildCheckedMarkdownTaskLineDecorations(view.state);
+    }
+
+    update(update: { docChanged: boolean; state: EditorState }) {
+      if (update.docChanged) {
+        this.decorations = buildCheckedMarkdownTaskLineDecorations(update.state);
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
 function getCodeEditorCaretPosition(
   view: EditorView,
   position: number,
@@ -126,10 +162,11 @@ function getCodeEditorCaretPosition(
   };
 }
 
-function shouldMoveCaretToDocumentEndFromClick(view: EditorView, event: MouseEvent): boolean {
+export function shouldMoveCaretToDocumentEndFromClick(view: EditorView, event: MouseEvent): boolean {
   if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return false;
   const scroller = view.scrollDOM;
-  if (scroller.scrollTop + scroller.clientHeight < scroller.scrollHeight - 2) return false;
+  const remainingScroll = scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop;
+  if (remainingScroll > MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX + 2) return false;
 
   const lastLine = view.contentDOM.querySelector<HTMLElement>('.cm-line:last-child');
   if (!lastLine) return false;
@@ -192,6 +229,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const themeCompartment = useRef(new Compartment()).current;
     const syntaxHighlightCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
+    const scrollFpsSamplerRef = useScrollFpsSampler('markdown');
 
     useEffect(() => {
       onChangeRef.current = onChange;
@@ -246,11 +284,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-content': {
             caretColor: caretColor ?? color,
             padding: '0',
+            paddingBottom: `${MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX}px`,
             cursor: 'text',
           },
           '.cm-line': {
             padding: '0',
             cursor: 'text',
+          },
+          [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
+            opacity: 0.68,
           },
           '&.cm-focused': {
             outline: 'none',
@@ -298,6 +340,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
           highlightActiveLine(),
+          checkedMarkdownTaskLineExtension,
           EditorView.lineWrapping,
           EditorView.cursorScrollMargin.of(getMarkdownCodeEditorCursorScrollMargin()),
           themeCompartment.of(editorTheme),
@@ -371,6 +414,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         parent: containerRef.current,
       });
       viewRef.current = view;
+      scrollFpsSamplerRef(view.scrollDOM);
       const handleKeyDownCapture = (event: KeyboardEvent) => {
         handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
       };
@@ -390,6 +434,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
 
       return () => {
         view.contentDOM.removeEventListener('keydown', handleKeyDownCapture, true);
+        scrollFpsSamplerRef(null);
         view.destroy();
         viewRef.current = null;
       };

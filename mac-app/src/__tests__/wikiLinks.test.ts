@@ -547,6 +547,36 @@ describe('getMarkdownLinkedDocuments', () => {
       },
     ]);
   });
+
+  it('uses precomputed relation link hits for backlinks', () => {
+    const precomputedDocuments = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'stale content without links',
+        linkHits: getMarkdownEditorLinkHits('See [[refactor]].', linkedIndex),
+      },
+      {
+        target: { kind: 'command' as const, path: commandPath },
+        title: 'refactor',
+        content: '',
+      },
+    ];
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'command', path: commandPath },
+      '',
+      precomputedDocuments,
+      linkedIndex,
+    )).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/source' },
+        title: 'Source',
+        excerpt: 'stale content without links',
+        direction: 'inbound',
+      },
+    ]);
+  });
 });
 
 describe('getActiveMarkdownWikiLinkCompletion', () => {

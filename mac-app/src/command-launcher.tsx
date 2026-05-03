@@ -33,6 +33,7 @@ import {
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
+  getLauncherAreaActionIdForQuery,
   getLauncherUsageScore,
   isGeneratedBookmarkTaxonomyPath,
   nextLauncherArrowIndex,
@@ -1179,6 +1180,15 @@ function CommandLauncher() {
       return;
     }
 
+    const areaActionId = getLauncherAreaActionIdForQuery(q);
+    if (areaActionId) {
+      const areaAction = allItems.find((item) => item.type === 'action' && item.actionId === areaActionId);
+      setFiltered(areaAction ? [areaAction] : []);
+      selectIndex(0);
+      resizeForResults(areaAction ? 1 : 0);
+      return;
+    }
+
     const scored = allItems.map(item => {
       const baseScore = scoreLauncherItem(item, q);
       return { item, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
@@ -1654,6 +1664,28 @@ function CommandLauncher() {
         case 'take-screenshot':
           clipboardAPI.captureScreenshot?.(true);
           break;
+        case 'open-history':
+          {
+            const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'clipboard', path: 'clipboard' });
+            if (!result.success) {
+              showInvocationError('open-clipboard-error', result.error, 'Open clipboard failed');
+            }
+          }
+          return;
+        case 'open-library': {
+          const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'library', path: 'library' });
+          if (!result.success) {
+            showInvocationError('open-library-error', result.error, 'Open library failed');
+          }
+          return;
+        }
+        case 'open-commands': {
+          const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'commands', path: 'commands' });
+          if (!result.success) {
+            showInvocationError('open-commands-error', result.error, 'Open commands failed');
+          }
+          return;
+        }
         case 'start-recording':
           transcribeAPI.toggleRecording?.();
           break;
@@ -1709,6 +1741,13 @@ function CommandLauncher() {
             content: preview.content,
           });
           setPreviewOpen(true);
+          return;
+        }
+        case 'view-bookmarks': {
+          const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'bookmarks', path: 'bookmarks' });
+          if (!result.success) {
+            showInvocationError('open-bookmarks-error', result.error, 'Open bookmarks failed');
+          }
           return;
         }
         case 'move-current-library-file': {

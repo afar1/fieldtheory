@@ -4247,6 +4247,55 @@ export class TranscriberManager extends EventEmitter {
     return `${trimmed} `;
   }
 
+  private formatMarkdownImageDestination(filePath: string): string {
+    const expandedPath = filePath === '~' || filePath.startsWith('~/')
+      ? `${os.homedir()}${filePath.slice(1)}`
+      : filePath;
+    const url = /^file:\/\//i.test(expandedPath)
+      ? expandedPath
+      : `file://${expandedPath.split('/').map((part, index) => (
+        index === 0 ? '' : encodeURIComponent(part)
+      )).join('/')}`;
+    return `<${url.replace(/>/g, '%3E')}>`;
+  }
+
+  private async buildFieldTheoryMarkdownStackPayload(items: ClipboardItem[]): Promise<string> {
+    const textBlocks: string[] = [];
+    const imageBlocks: string[] = [];
+    let imageIndex = 1;
+
+    for (const item of items) {
+      if (item.type === 'text' || item.type === 'transcript') {
+        const textContent = (item.useImprovedVersion && item.improvedContent)
+          ? item.improvedContent
+          : (item.content || '');
+        if (textContent.trim()) textBlocks.push(textContent.trimEnd());
+      }
+    }
+
+    for (const item of items) {
+      if (!item.imageData && item.type !== 'image' && item.type !== 'screenshot') continue;
+
+      const imagePath = await this.clipboardManager?.exportImageToCache(item);
+      if (!imagePath) {
+        imageBlocks.push(`> Image ${imageIndex} was unavailable when this note was created.`);
+        imageIndex += 1;
+        continue;
+      }
+
+      const alt = item.figureLabel
+        ? `figure ${item.figureLabel}`
+        : item.sourceAppName
+          ? `${item.sourceAppName} image`
+          : `Image ${imageIndex}`;
+      imageBlocks.push(`![${alt.replace(/\]/g, '\\]')}](${this.formatMarkdownImageDestination(imagePath)})`);
+      imageIndex += 1;
+    }
+
+    const blocks = [...textBlocks, ...imageBlocks];
+    return blocks.join('\n\n');
+  }
+
   private isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
     return !!bundleId && TranscriberManager.FIELD_THEORY_BUNDLE_IDS.has(bundleId.toLowerCase());
   }
@@ -4375,16 +4424,8 @@ export class TranscriberManager extends EventEmitter {
     }
 
     if (useFieldTheoryMarkdownTarget) {
-      let insertedIntoFieldTheoryMarkdown = false;
-      for (const item of items) {
-        if (item.type !== 'text' && item.type !== 'transcript') continue;
-        const textContent = (item.useImprovedVersion && item.improvedContent)
-          ? item.improvedContent
-          : (item.content || '');
-        insertedIntoFieldTheoryMarkdown = this.insertTextIntoFieldTheoryMarkdown(this.addFollowupTypingSpace(textContent))
-          || insertedIntoFieldTheoryMarkdown;
-      }
-      if (insertedIntoFieldTheoryMarkdown) {
+      const markdownPayload = await this.buildFieldTheoryMarkdownStackPayload(items);
+      if (this.insertTextIntoFieldTheoryMarkdown(this.addFollowupTypingSpace(markdownPayload))) {
         this.skipNextPasteFailedNotification = true;
         if (clearAfter) {
           this.clearStack();

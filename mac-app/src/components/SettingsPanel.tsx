@@ -22,7 +22,12 @@ import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
 import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
-import { TEXT_CURSOR_BLINK_CHANGED_EVENT, persistTextCursorBlink, restoreTextCursorBlink } from '../utils/editorShortcuts';
+import {
+  LIBRARIAN_KEYBOARD_SHORTCUTS,
+  TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  persistTextCursorBlink,
+  restoreTextCursorBlink,
+} from '../utils/editorShortcuts';
 
 // Settings sections in alphabetical order
 type SettingsSection =
@@ -130,6 +135,17 @@ const ISLAND_GEOMETRY_FIELDS: Array<{ key: keyof IslandGeometrySettings; label: 
   { key: 'offsetX', label: 'Horizontal Offset', help: '' },
   { key: 'offsetY', label: 'Vertical Offset', help: '' },
 ];
+
+const LIBRARY_LOCAL_SHORTCUT_LABELS = [
+  'Toggle focus mode',
+  'Toggle sidebar',
+  'Toggle rendered/markdown',
+] as const;
+
+const LIBRARY_LOCAL_SHORTCUTS = LIBRARY_LOCAL_SHORTCUT_LABELS.map((label) => {
+  const shortcut = LIBRARIAN_KEYBOARD_SHORTCUTS.find((item) => item.label === label);
+  return { label, keys: shortcut?.keys ?? '' };
+}).filter((shortcut) => shortcut.keys);
 
 function clampGeometry(value: number, min: number, max: number): number {
   if (!Number.isFinite(value)) return min;
@@ -1836,6 +1852,21 @@ export default function SettingsPanel({
           </div>
         </div>
 
+        <div style={styles.shortcutReferenceGroup}>
+          <div style={styles.shortcutReferenceHeader}>
+            <span style={styles.rowLabel}>Library shortcuts</span>
+            <span style={styles.rowHint}>App-local reference</span>
+          </div>
+          {LIBRARY_LOCAL_SHORTCUTS.map((shortcut) => (
+            <div key={shortcut.label} style={styles.row}>
+              <span style={styles.rowLabel}>{shortcut.label}</span>
+              <div style={styles.rowControls}>
+                <span style={styles.readOnlyShortcut}>{shortcut.keys}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <span style={styles.rowLabel}>Window management</span>
@@ -2627,6 +2658,30 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.textSecondary,
     fontWeight: 400,
     lineHeight: 1.45,
+  },
+  shortcutReferenceGroup: {
+    marginTop: '8px',
+    paddingTop: '12px',
+    borderTop: `1px solid ${theme.border}`,
+  },
+  shortcutReferenceHeader: {
+    display: 'flex',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: '12px',
+    padding: '0 0 4px',
+  },
+  readOnlyShortcut: {
+    padding: '7px 12px',
+    fontSize: '12px',
+    fontWeight: 500,
+    color: theme.textSecondary,
+    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '8px',
+    minWidth: '80px',
+    textAlign: 'center' as const,
+    cursor: 'default',
   },
 
   // Unified button styles
