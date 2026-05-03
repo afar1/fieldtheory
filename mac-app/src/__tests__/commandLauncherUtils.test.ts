@@ -945,7 +945,8 @@ describe('SQUARES_ACTION_DEFS', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
-      'save-current-website', 'move-current-library-file', 'undo-library-move', 'toggle-theme'];
+      'view-bookmarks', 'save-current-website', 'move-current-library-file',
+      'undo-library-move', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -994,6 +995,17 @@ describe('buildBuiltInLauncherActions', () => {
       displayName: 'Save Website',
     }));
     expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
+  });
+
+  it('includes a bookmarks canvas action searchable by bookmarks', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const bookmarksAction = actions.find((action) => action.actionId === 'view-bookmarks');
+
+    expect(bookmarksAction).toEqual(expect.objectContaining({
+      name: 'bookmarks',
+      displayName: 'View Bookmarks',
+    }));
+    expect(bookmarksAction?.keywords).toEqual(expect.arrayContaining(['bookmarks', 'view bookmarks']));
   });
 
   it('includes move and undo move actions', () => {
