@@ -570,6 +570,11 @@ body.dark .feature-image img {
   margin: 0 auto;
 }
 
+.pricing-grid.single-tier {
+  grid-template-columns: minmax(0, 513px);
+  justify-content: center;
+}
+
 .pricing-card {
   background: var(--color-bg-alt);
   border: 1px solid var(--color-border);
@@ -641,11 +646,6 @@ body.dark .feature-image img {
   float: right;
   font-size: 1.1rem;
   font-weight: 400;
-  color: var(--color-text-muted);
-}
-
-/* Grayed out free features in Pro card (keep green checkmark) */
-.pricing-card li.included-free {
   color: var(--color-text-muted);
 }
 
@@ -1045,6 +1045,10 @@ html, body {
   }
 
   .pricing-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .pricing-grid.single-tier {
     grid-template-columns: 1fr;
   }
 
