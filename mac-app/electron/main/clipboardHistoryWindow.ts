@@ -527,6 +527,7 @@ export class ClipboardHistoryWindow {
       this.emitBoundsChanged();
     }
 
+    const previousSizeKey = this.currentSizeKey;
     this.currentSizeKey = normalizedKey;
     this.preferencesManager.save({ clipboardHistoryLastSizeKey: normalizedKey }).catch((err) => {
       log.error('Failed to save clipboard history size key:', err);
@@ -537,8 +538,13 @@ export class ClipboardHistoryWindow {
 
     if (!this.window || this.window.isDestroyed()) return;
 
+    // Ordinary non-Draw view switches should not resize the window. Draw is
+    // the one view that opts into a distinct size profile.
+    const drawInvolved = previousSizeKey === 'draw' || normalizedKey === 'draw';
+    if (!drawInvolved) return;
+
     // Keep the window anchored at its current on-screen position when
-    // switching views — only width/height should track the new section.
+    // Draw enters/exits; only width/height should track the size profile.
     const saved = pickSavedBoundsByKey(this.preferencesManager.get(), normalizedKey);
     const defaultDims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[normalizedKey];
     const current = this.window.getBounds();
