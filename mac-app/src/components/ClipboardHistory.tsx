@@ -56,7 +56,7 @@ import {
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
-import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut, shouldForceLibrarySidebarOpen } from '../utils/editorShortcuts';
+import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut, shouldForceLibrarySidebarOpen, shouldRevealFooterChrome } from '../utils/editorShortcuts';
 import { getAgentImproveContext, type AgentImproveContext } from '../utils/agentImproveContext';
 import {
   buildClipboardListRows,
@@ -81,7 +81,7 @@ import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
 type FieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown';
 };
@@ -484,6 +484,7 @@ export default function ClipboardHistory() {
   });
   const topNavPaintTraceRef = useRef<TopNavPaintTrace | null>(null);
   const viewModeRef = useRef(viewMode);
+  const previousSizeViewModeRef = useRef(viewMode);
   const [libraryKeepsCurrentSizeKey, setLibraryKeepsCurrentSizeKey] = useState(false);
   useEffect(() => {
     viewModeRef.current = viewMode;
@@ -535,6 +536,7 @@ export default function ClipboardHistory() {
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeActive, setFocusChromeActive] = useState(false);
   const [focusChromeProximityVisible, setFocusChromeProximityVisible] = useState(false);
+  const [footerChromeProximityVisible, setFooterChromeProximityVisible] = useState(false);
   const [focusChromeChildVisible, setFocusChromeChildVisible] = useState(false);
   const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
@@ -543,7 +545,7 @@ export default function ClipboardHistory() {
   const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
   const appChromeHidden = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible;
   const showFocusChromeIcon = isFocusChromeSurface && focusChromeActive && !focusChromeProximityVisible && !focusChromeChildVisible;
-  const footerChromeHidden = appChromeHidden || bookmarksCanvasChromeActive;
+  const footerChromeHidden = (isFocusChromeSurface && focusChromeActive && !footerChromeProximityVisible) || bookmarksCanvasChromeActive;
   const [footerFps, setFooterFps] = useState<number | null>(null);
   useEffect(() => {
     if (!isWindowVisible || footerChromeHidden) {
@@ -615,7 +617,10 @@ export default function ClipboardHistory() {
   const handleFocusChromeActiveChange = useCallback((active: boolean, visualVisible: boolean = false) => {
     setFocusChromeActive(active);
     setFocusChromeChildVisible(active && visualVisible);
-    if (!active) setFocusChromeProximityVisible(false);
+    if (!active) {
+      setFocusChromeProximityVisible(false);
+      setFooterChromeProximityVisible(false);
+    }
     if (active) return;
 
     const previous = focusChromePreviousSidebarCollapsedRef.current;
@@ -652,11 +657,18 @@ export default function ClipboardHistory() {
   useEffect(() => {
     if (!isFocusChromeSurface || !focusChromeActive) {
       setFocusChromeProximityVisible(false);
+      setFooterChromeProximityVisible(false);
       return;
     }
 
-    const updateProximity = (event: MouseEvent) => setFocusChromeProximityVisible(shouldRevealFocusChrome(event.clientY, 0));
-    const hideProximityChrome = () => setFocusChromeProximityVisible(false);
+    const updateProximity = (event: MouseEvent) => {
+      setFocusChromeProximityVisible(shouldRevealFocusChrome(event.clientY, 0));
+      setFooterChromeProximityVisible(shouldRevealFooterChrome(event.clientY, window.innerHeight));
+    };
+    const hideProximityChrome = () => {
+      setFocusChromeProximityVisible(false);
+      setFooterChromeProximityVisible(false);
+    };
 
     window.addEventListener('mousemove', updateProximity);
     window.addEventListener('mouseleave', hideProximityChrome);
@@ -1896,9 +1908,10 @@ export default function ClipboardHistory() {
       window.librarianAPI?.setSizeKey?.('fields');
     } else if (viewMode === 'sketch') {
       window.librarianAPI?.setSizeKey?.('draw');
-    } else if (viewMode !== 'librarian') {
+    } else if (viewMode !== 'librarian' && previousSizeViewModeRef.current === 'sketch') {
       window.librarianAPI?.setSizeKey?.('fields');
     }
+    previousSizeViewModeRef.current = viewMode;
   }, [showSettings, viewMode]);
 
   useEffect(() => {
@@ -2198,6 +2211,19 @@ export default function ClipboardHistory() {
         setViewMode('commands');
         return;
       }
+      if (target.kind === 'commands') {
+        setViewMode('commands');
+        return;
+      }
+      if (target.kind === 'clipboard') {
+        setViewMode('clipboard');
+        return;
+      }
+      if (target.kind === 'library') {
+        setLibraryKeepsCurrentSizeKey(false);
+        setViewMode('librarian');
+        return;
+      }
       if (target.kind === 'bookmarks') {
         setPendingLibraryOpenTarget(target);
         setLibraryKeepsCurrentSizeKey(false);
@@ -2224,6 +2250,7 @@ export default function ClipboardHistory() {
       })();
       setPendingLibraryOpenTarget({ kind: 'wiki', path: relPath, contentMode: 'markdown' });
       setLibraryKeepsCurrentSizeKey(false);
+      setNavSidebarCollapsed(true);
       setViewMode('librarian');
     });
     return () => unsubscribe?.();
@@ -7478,7 +7505,7 @@ export default function ClipboardHistory() {
             <div style={{ 
               display: 'grid', 
               gridTemplateColumns: 'auto auto', 
-              gridTemplateRows: 'repeat(12, auto)',
+              gridTemplateRows: 'repeat(13, auto)',
               gridAutoFlow: 'column',
               gap: '10px 32px',
               fontSize: '13px',
@@ -7494,15 +7521,18 @@ export default function ClipboardHistory() {
               <span>draw on image <KeyCap>d</KeyCap></span>
               <span>expand/collapse <KeyCap>e</KeyCap></span>
               <span>feedback <KeyCap>f</KeyCap></span>
+              <span>focus mode <KeyCap>⌘</KeyCap><KeyCap>/</KeyCap></span>
               <span>help <KeyCap>shift</KeyCap><KeyCap>?</KeyCap></span>
               <span>hot mic <KeyCap>h</KeyCap></span>
               {/* Right column (N-U) */}
+              <span>markdown/rendered <KeyCap>⌘</KeyCap><KeyCap>.</KeyCap></span>
               <span>new draw <KeyCap>⌘</KeyCap><KeyCap>d</KeyCap></span>
               <span>paste <KeyCap>↵</KeyCap></span>
               <span>preview <KeyCap>␣</KeyCap> <span style={{ opacity: 0.5, fontSize: '0.85em' }}>(space)</span></span>
               <span>redo <KeyCap>⌘</KeyCap><KeyCap>⇧</KeyCap><KeyCap>z</KeyCap></span>
               <span>search <KeyCap>/</KeyCap></span>
               <span>select <KeyCap>x</KeyCap></span>
+              <span>sidebar <KeyCap>⌘</KeyCap><KeyCap>,</KeyCap></span>
               <span>stack <KeyCap>s</KeyCap></span>
               <span>team share <KeyCap>t</KeyCap></span>
               <span>undo <KeyCap>⌘</KeyCap><KeyCap>z</KeyCap></span>
