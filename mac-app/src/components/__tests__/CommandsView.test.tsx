@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import CommandsView from '../CommandsView';
+import CommandsView, { getCommandsContentBottomPadding, getCommandsContentTopPadding } from '../CommandsView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -19,6 +19,34 @@ vi.mock('../../contexts/ThemeContext', () => ({
 vi.mock('../../supabaseClient', () => ({
   supabase: null,
 }));
+
+describe('CommandsView layout helpers', () => {
+  it('clears the focus toolbar row when the toolbar overlays command content', () => {
+    expect(getCommandsContentTopPadding({
+      isEditing: false,
+      focusChromeActive: false,
+    })).toBe(28);
+    expect(getCommandsContentTopPadding({
+      isEditing: false,
+      focusChromeActive: true,
+    })).toBe(70);
+  });
+
+  it('removes the bottom footer carve-out while focus chrome overlays the footer', () => {
+    expect(getCommandsContentBottomPadding({
+      isEditing: false,
+      focusChromeActive: false,
+    })).toBe(24);
+    expect(getCommandsContentBottomPadding({
+      isEditing: true,
+      focusChromeActive: false,
+    })).toBe(12);
+    expect(getCommandsContentBottomPadding({
+      isEditing: false,
+      focusChromeActive: true,
+    })).toBe(0);
+  });
+});
 
 describe('CommandsView command naming', () => {
   let insertMarkdownTextHandler: ((text: string) => void) | null = null;

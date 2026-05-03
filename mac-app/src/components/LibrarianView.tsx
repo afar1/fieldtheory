@@ -1457,9 +1457,19 @@ export function getGroupedFocusChromeProximityOpacity(input: {
   viewportHeight: number;
   revealDistancePx?: number;
   fullOpacityDistancePx?: number;
+  topFullOpacityDistancePx?: number;
+  bottomFullOpacityDistancePx?: number;
 }): number {
   const revealDistancePx = Math.max(0, input.revealDistancePx ?? 128);
   const fullOpacityDistancePx = Math.max(0, Math.min(revealDistancePx, input.fullOpacityDistancePx ?? 28));
+  const topFullOpacityDistancePx = Math.max(
+    0,
+    Math.min(revealDistancePx, input.topFullOpacityDistancePx ?? fullOpacityDistancePx),
+  );
+  const bottomFullOpacityDistancePx = Math.max(
+    0,
+    Math.min(revealDistancePx, input.bottomFullOpacityDistancePx ?? fullOpacityDistancePx),
+  );
   if (
     !Number.isFinite(input.cursorClientY) ||
     !Number.isFinite(input.paneClientTop) ||
@@ -1472,16 +1482,19 @@ export function getGroupedFocusChromeProximityOpacity(input: {
 
   const topDistance = input.cursorClientY - input.paneClientTop;
   const bottomDistance = input.viewportHeight - input.cursorClientY;
-  const opacityForDistance = (distance: number) => {
+  const opacityForDistance = (distance: number, fullDistance: number) => {
     if (distance < 0 || distance > revealDistancePx) return 0;
-    if (distance <= fullOpacityDistancePx) return 1;
-    const fadeDistance = Math.max(1, revealDistancePx - fullOpacityDistancePx);
-    return 1 - ((distance - fullOpacityDistancePx) / fadeDistance);
+    if (distance <= fullDistance) return 1;
+    const fadeDistance = Math.max(1, revealDistancePx - fullDistance);
+    return 1 - ((distance - fullDistance) / fadeDistance);
   };
 
   return Math.max(
     0,
-    Math.min(1, Number(Math.max(opacityForDistance(topDistance), opacityForDistance(bottomDistance)).toFixed(3))),
+    Math.min(1, Number(Math.max(
+      opacityForDistance(topDistance, topFullOpacityDistancePx),
+      opacityForDistance(bottomDistance, bottomFullOpacityDistancePx),
+    ).toFixed(3))),
   );
 }
 
@@ -1520,6 +1533,12 @@ export function getLibrarianContentTopPadding(input: {
   return input.focusChromeActive
     ? normalTopPadding + LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX
     : normalTopPadding;
+}
+
+export function getLibrarianContentBottomPadding(input: {
+  focusChromeActive: boolean;
+}): number {
+  return input.focusChromeActive ? 0 : LIBRARIAN_CONTENT_BOTTOM_PADDING_PX;
 }
 
 interface LibrarianViewProps {
@@ -1962,6 +1981,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusChromeActive,
     isFullScreen,
   });
+  const contentBottomPadding = getLibrarianContentBottomPadding({ focusChromeActive });
   const toggleFocusChromeShortcut = useCallback(() => {
     if (!selectedItemUsesLegacyImmersive && focusChromeActive) {
       setFocusImmersive(false);
@@ -5350,6 +5370,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               <ContentToolbar
                 filePath={activeReading?.path || undefined}
                 isFullScreen={isFullScreen}
+                dragSpacer={!focusChromeActive}
                 canNavigateBack={canNavigateBack}
                 canNavigateForward={canNavigateForward}
                 onNavigateBack={() => navigateHistory(-1)}
@@ -5622,7 +5643,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             width: `min(100%, calc(${typographyPreset.maxWidth} + 64px))`,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
-            padding: `${contentTopPadding}px 32px ${LIBRARIAN_CONTENT_BOTTOM_PADDING_PX}px 32px`,
+            padding: `${contentTopPadding}px 32px ${contentBottomPadding}px 32px`,
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -5737,6 +5758,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     blinkCursor={blinkTextCursor}
                     placeholder="Write your markdown here..."
+                    bottomRoomPx={focusChromeActive ? 0 : undefined}
                     dataAttributes={{
                       'data-ft-agent-context': 'markdown',
                       'data-ft-agent-file-path': activeReading.path,

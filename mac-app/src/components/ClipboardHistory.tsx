@@ -173,6 +173,9 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
 const FOCUS_CHROME_ICON_TOP_PX = 48;
+const FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX = 220;
+const FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX = 160;
+const FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX = 128;
 const FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX = 28;
 const FIELD_THEORY_CHROME_LOGO_TOP_PX = 24;
 const FIELD_THEORY_CHROME_MIC_TOP_PX = 21;
@@ -691,8 +694,9 @@ export default function ClipboardHistory() {
         cursorClientY: event.clientY,
         paneClientTop: 0,
         viewportHeight: window.innerHeight,
-        revealDistancePx: 180,
-        fullOpacityDistancePx: 128,
+        revealDistancePx: FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX,
+        fullOpacityDistancePx: FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX,
+        topFullOpacityDistancePx: FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX,
       });
       setFocusChromeGroupOpacity(opacity);
     };

@@ -5,6 +5,7 @@ import {
   MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS,
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
   checkedMarkdownTaskLineExtension,
+  getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   handleMarkdownCodeEditorCapturedKeyDown,
@@ -28,6 +29,11 @@ describe('MarkdownCodeEditor cursor scroll margin', () => {
       x: 5,
       y: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
     });
+  });
+
+  it('can remove bottom room when focus chrome should sit flush to the footer', () => {
+    expect(getMarkdownCodeEditorBottomRoom(0)).toBe(0);
+    expect(getMarkdownCodeEditorCursorScrollMargin(0)).toEqual({ x: 5, y: 0 });
   });
 });
 
