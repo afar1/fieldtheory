@@ -27,24 +27,11 @@ whisper.cpp on Earnings-21 corpus.
    $ make get-audio
    ```
 
-3. Set up the environment to compute WER score.
+3. Set up the environment and run the benchmark test.
 
    ```
-   $ pip install -r requirements.txt
-   ```
-
-   For example, if you use `virtualenv`, you can set up it as follows:
-
-   ```
-   $ python3 -m venv venv
-   $ . venv/bin/activate
-   $ pip install -r requirements.txt
-   ```
-
-4. Run the benchmark test.
-
-   ```
-   $ make
+   $ uv sync --extra test
+   $ uv run --extra test make
    ```
 
 ## How-to guides

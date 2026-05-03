@@ -713,6 +713,46 @@ describe('rendered markdown task list detection', () => {
   });
 });
 
+describe('rendered markdown task list detection', () => {
+  it('recognizes task list items by checkbox child when the class is missing', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      position: { start: { line: 4 } },
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: true },
+        },
+        { type: 'text', value: 'Done item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(true);
+    expect(getRenderedMarkdownNodeStartLine(node)).toBe(4);
+  });
+
+  it('reads unchecked rendered checkbox state', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: false },
+        },
+        { type: 'text', value: 'Open item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(false);
+  });
+});
+
 describe('rebaseMarkdownTodoStateChange', () => {
   it('reapplies a note todo-state change onto newer disk content', () => {
     const previous = '---\ntodo: true\ntodo_state: open\n---\n\n# Note\n\nOld body';
