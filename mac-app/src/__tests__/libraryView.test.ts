@@ -10,19 +10,27 @@ import {
   getMarkdownBodySelectionRange,
   getMarkdownListToggleEdit,
   getRenderedMarkdownClickBehavior,
+  getRenderedMarkdownNodeStartLine,
+  getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
   getRenderedMarkdownSelectionFormatEdit,
+  getFocusChromeHintOpacity,
+  getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
   getLibrarianContentTopPadding,
   highlightFileFindMatches,
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
+  getGroupedFocusChromeProximityOpacity,
   getMarkdownTaskLines,
+  getMarkdownRenderedBodyStartLineIndex,
+  getRenderedTaskLinesByRenderedLine,
   getScrollRatio,
   getScrollTopForRatio,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
+  isRenderedTaskListItem,
   moveLibrarianNavigationHistory,
   normalizeMarkdownCarrotLists,
   normalizeMarkdownTodoLines,
@@ -44,7 +52,9 @@ import {
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
+  shouldRevealGroupedFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
@@ -215,6 +225,12 @@ Body text here.`;
     expect(result.body).toBe('Content after gaps.');
   });
 
+  it('returns the source line where rendered body content starts', () => {
+    expect(getMarkdownRenderedBodyStartLineIndex('# Task')).toBe(0);
+    expect(getMarkdownRenderedBodyStartLineIndex('---\ntags: [test]\n---\n# Task')).toBe(3);
+    expect(getMarkdownRenderedBodyStartLineIndex('---\ntags: [test]\n---\n\n\n# Task')).toBe(5);
+  });
+
   it('ignores malformed frontmatter lines', () => {
     const content = '---\ntags: [test]\nno-colon-here\nlast_updated: 2026-04-15\n---\n\nBody.';
     const result = splitFrontmatter(content);
@@ -273,7 +289,7 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
 });
 
 describe('shouldOpenMarkdownLinkFromMouseDown', () => {
-  it('opens links on an ordinary primary click', () => {
+  it('opens rendered links on an ordinary primary click', () => {
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
       altKey: false,
@@ -294,6 +310,44 @@ describe('shouldOpenMarkdownLinkFromMouseDown', () => {
     })).toBe(false);
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 1,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(false);
+  });
+});
+
+describe('shouldOpenMarkdownEditorLinkFromMouseDown', () => {
+  it('opens editor links only on Command-primary click', () => {
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(true);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+    })).toBe(false);
+  });
+
+  it('keeps modified and non-primary editor clicks available for editing', () => {
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: true,
+      ctrlKey: false,
+    })).toBe(false);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: false,
+      ctrlKey: true,
+    })).toBe(false);
+    expect(shouldOpenMarkdownEditorLinkFromMouseDown({
+      button: 1,
+      metaKey: true,
       altKey: false,
       ctrlKey: false,
     })).toBe(false);
@@ -564,6 +618,98 @@ describe('markdown task line indexing', () => {
   it('toggles a task by source line index instead of duplicate text', () => {
     expect(toggleMarkdownTaskLineAtIndex('- [ ] same\n- [ ] same', 1, true)).toBe('- [ ] same\n- [x] same');
     expect(toggleMarkdownTaskLineAtIndex('- [x] same\n- [x] same', 1, false)).toBe('- [x] same\n- [ ] same');
+  });
+
+  it('maps rendered task lines back through preserved blank-line spacing', () => {
+    const content = [
+      'Intro',
+      '',
+      '- [ ] first',
+      '- [ ] second',
+      '',
+      '![figure](file:///tmp/figure.png)',
+      '',
+      '- [ ] third',
+      '- [ ] fourth',
+    ].join('\n');
+    const renderedLines = getRenderedTaskLinesByRenderedLine(content);
+
+    expect(renderedLines.get(5)).toMatchObject({ lineIndex: 2, text: 'first' });
+    expect(renderedLines.get(6)).toMatchObject({ lineIndex: 3, text: 'second' });
+    expect(renderedLines.get(14)).toMatchObject({ lineIndex: 7, text: 'third' });
+    expect(renderedLines.get(15)).toMatchObject({ lineIndex: 8, text: 'fourth' });
+  });
+
+  it('maps bare rendered tasks back to bare source task lines', () => {
+    const content = [
+      '[] bare open',
+      '[ ] bracket open',
+      '[x] bare done',
+      '- [x] dash done',
+    ].join('\n');
+    const renderedLines = getRenderedTaskLinesByRenderedLine(content);
+
+    expect(renderedLines.get(1)).toMatchObject({ lineIndex: 0, text: 'bare open', checked: false });
+    expect(renderedLines.get(2)).toMatchObject({ lineIndex: 1, text: 'bracket open', checked: false });
+    expect(renderedLines.get(3)).toMatchObject({ lineIndex: 2, text: 'bare done', checked: true });
+    expect(renderedLines.get(4)).toMatchObject({ lineIndex: 3, text: 'dash done', checked: true });
+  });
+
+  it('maps rendered task lines after frontmatter using real source indexes', () => {
+    const content = [
+      '---',
+      'tags: [test]',
+      '---',
+      '',
+      '# Plan',
+      '',
+      '- [ ] first',
+      '- [x] second',
+    ].join('\n');
+    const renderedLines = getRenderedTaskLinesByRenderedLine(content);
+
+    expect(renderedLines.get(5)).toMatchObject({ lineIndex: 6, text: 'first' });
+    expect(renderedLines.get(6)).toMatchObject({ lineIndex: 7, text: 'second', checked: true });
+  });
+});
+
+describe('rendered markdown task list detection', () => {
+  it('recognizes task list items by checkbox child when the class is missing', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      position: { start: { line: 4 } },
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: true },
+        },
+        { type: 'text', value: 'Done item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(true);
+    expect(getRenderedMarkdownNodeStartLine(node)).toBe(4);
+  });
+
+  it('reads unchecked rendered checkbox state', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: false },
+        },
+        { type: 'text', value: 'Open item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(false);
   });
 });
 
@@ -1041,6 +1187,91 @@ describe('focus chrome proximity', () => {
   it('does not reveal controls above the reader pane', () => {
     expect(shouldRevealFocusChrome(12, 20, 96)).toBe(false);
   });
+
+  it('reveals the chrome group near either the top toolbar or footer', () => {
+    expect(shouldRevealGroupedFocusChrome({
+      cursorClientY: 42,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 96,
+    })).toBe(true);
+    expect(shouldRevealGroupedFocusChrome({
+      cursorClientY: 760,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 96,
+    })).toBe(true);
+  });
+
+  it('ramps grouped chrome opacity from the edge toward the middle', () => {
+    const edge = getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 10,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 128,
+      fullOpacityDistancePx: 28,
+    });
+    const middle = getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 78,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 128,
+      fullOpacityDistancePx: 28,
+    });
+    const away = getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 200,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 128,
+      fullOpacityDistancePx: 28,
+    });
+
+    expect(edge).toBe(1);
+    expect(middle).toBeGreaterThan(0);
+    expect(middle).toBeLessThan(1);
+    expect(away).toBe(0);
+  });
+
+  it('can treat the whole top chrome stack as the full-opacity zone', () => {
+    expect(getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 96,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 180,
+      fullOpacityDistancePx: 128,
+    })).toBe(1);
+  });
+
+  it('keeps the top nav on the same opacity ramp as the chrome group', () => {
+    expect(getFocusChromeSurfaceOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      groupOpacity: 0.42,
+      childOpacity: 0.42,
+    })).toBe(0.42);
+  });
+
+  it('uses pinned child chrome without making proximity fades snap to full opacity', () => {
+    expect(getFocusChromeSurfaceOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      groupOpacity: 0.25,
+      childOpacity: 1,
+    })).toBe(1);
+  });
+
+  it('fades the focus logo out as the chrome surface fades in', () => {
+    expect(getFocusChromeHintOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      surfaceOpacity: 0,
+    })).toBe(0.62);
+    expect(getFocusChromeHintOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      surfaceOpacity: 1,
+    })).toBe(0);
+  });
 });
 
 describe('document focus chrome activation', () => {
@@ -1485,13 +1716,41 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
-  it('keeps folders with pinned descendants in the pinned group', () => {
+  it('keeps pinned descendants inside their directory without promoting the parent directory', () => {
     const pinned = new Set(['wiki:Artifact']);
     const result = applyPinnedSidebarOrder([
       dir('scratchpad'),
       dir('z-artifacts', [
         file('Artifact', 5),
         file('Other', 1),
+      ]),
+    ], 'alpha', pinned);
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Scratchpad',
+      'Z-artifacts',
+    ]);
+    const artifacts = result.find((node) => node.kind === 'dir' && node.name === 'z-artifacts');
+    expect(artifacts?.kind === 'dir' ? artifacts.children.map((node) => node.kind === 'file' ? node.item.title : node.label) : []).toEqual([
+      'Artifact',
+      'Other',
+    ]);
+    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
+      false,
+      false,
+    ]);
+    expect(artifacts?.kind === 'dir' ? artifacts.children.map((_node, index) => shouldShowPinnedSidebarDividerBefore(artifacts.children, index, pinned)) : []).toEqual([
+      false,
+      true,
+    ]);
+  });
+
+  it('still promotes pinned directories above unpinned directories', () => {
+    const pinned = new Set(['/wiki::z-artifacts']);
+    const result = applyPinnedSidebarOrder([
+      dir('scratchpad'),
+      dir('z-artifacts', [
+        file('Artifact', 5),
       ]),
     ], 'alpha', pinned);
 

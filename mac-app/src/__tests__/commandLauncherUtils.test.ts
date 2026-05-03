@@ -15,6 +15,7 @@ import {
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
+  getLauncherAreaActionIdForQuery,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
@@ -105,7 +106,7 @@ describe('balanceLauncherNormalModeMatches', () => {
     lastOpenedAt,
   });
 
-  it('orders search results by commands, recent markdown, library, actions, then bookmarks', () => {
+  it('orders search results by commands, recent markdown, actions, library, then bookmarks', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('bookmark-author', 'bookmark-author'), score: 990 },
       { item: item('bookmark-post', 'bookmark'), score: 980 },
@@ -118,10 +119,24 @@ describe('balanceLauncherNormalModeMatches', () => {
     expect(results.map(result => result.id)).toEqual([
       'command',
       'recent-page',
-      'library-page',
       'action',
+      'library-page',
       'bookmark-author',
       'bookmark-post',
+    ]);
+  });
+
+  it('keeps launcher actions above matching wiki and artifact rows', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('wiki-clipboard', 'wiki-page'), score: 1000 },
+      { item: item('artifact-clipboard', 'artifact'), score: 990 },
+      { item: item('open-clipboard-history', 'action'), score: 900 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'open-clipboard-history',
+      'wiki-clipboard',
+      'artifact-clipboard',
     ]);
   });
 
@@ -908,6 +923,19 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
   });
 });
 
+describe('getLauncherAreaActionIdForQuery', () => {
+  it('maps exact area queries to app-area actions', () => {
+    expect(getLauncherAreaActionIdForQuery('clipboard')).toBe('open-history');
+    expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
+    expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-commands');
+  });
+
+  it('does not route partial area words', () => {
+    expect(getLauncherAreaActionIdForQuery('command')).toBeNull();
+    expect(getLauncherAreaActionIdForQuery('library notes')).toBeNull();
+  });
+});
+
 describe('SQUARES_ACTION_DEFS', () => {
   it('has 10 window management actions', () => {
     expect(SQUARES_ACTION_DEFS).toHaveLength(10);
@@ -945,7 +973,8 @@ describe('SQUARES_ACTION_DEFS', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
-      'save-current-website', 'move-current-library-file', 'undo-library-move', 'toggle-theme'];
+      'open-library', 'open-commands', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
+      'undo-library-move', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -994,6 +1023,30 @@ describe('buildBuiltInLauncherActions', () => {
       displayName: 'Save Website',
     }));
     expect(saveAction?.keywords).toEqual(expect.arrayContaining(['save website', 'current tab', 'markdown']));
+  });
+
+  it('includes a bookmarks canvas action searchable by bookmarks', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const bookmarksAction = actions.find((action) => action.actionId === 'view-bookmarks');
+
+    expect(bookmarksAction).toEqual(expect.objectContaining({
+      name: 'bookmarks',
+      displayName: 'View Bookmarks',
+    }));
+    expect(bookmarksAction?.keywords).toEqual(expect.arrayContaining(['bookmarks', 'view bookmarks']));
+  });
+
+  it('includes app-area actions for library and commands queries', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'open-library')).toEqual(expect.objectContaining({
+      name: 'library',
+      displayName: 'Open Library',
+    }));
+    expect(actions.find((action) => action.actionId === 'open-commands')).toEqual(expect.objectContaining({
+      name: 'commands',
+      displayName: 'Open Commands',
+    }));
   });
 
   it('includes move and undo move actions', () => {

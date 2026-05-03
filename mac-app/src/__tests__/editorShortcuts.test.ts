@@ -13,12 +13,13 @@ import {
   isSearchFocusShortcut,
   isSidebarToggleShortcut,
   isThemeToggleShortcut,
+  LIBRARIAN_KEYBOARD_SHORTCUTS,
   persistRenderedEditClickMode,
   persistTextCursorBlink,
   restoreRenderedEditClickMode,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
-  shouldForceLibrarySidebarOpen,
+  shouldRevealFooterChrome,
 } from '../utils/editorShortcuts';
 
 function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
@@ -172,48 +173,53 @@ describe('isSidebarToggleShortcut', () => {
 });
 
 describe('Library sidebar collapse availability', () => {
-  it('forces the Library sidebar open when no file is selected', () => {
-    expect(shouldForceLibrarySidebarOpen({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-    })).toBe(true);
-    expect(shouldForceLibrarySidebarOpen({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-      bookmarksFooterActive: true,
-    })).toBe(false);
-  });
-
   it('allows collapse for Library with an active file, Bookmarks, or Commands', () => {
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
-    })).toBe(false);
-    expect(isNavSidebarToggleEnabled({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: true,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
-      bookmarksFooterActive: true,
+    })).toBe(true);
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'commands',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
     })).toBe(true);
+  });
+});
+
+describe('shortcut reference rows', () => {
+  it('documents focus mode, sidebar toggle, and rendered/markdown toggle', () => {
+    expect(LIBRARIAN_KEYBOARD_SHORTCUTS).toEqual(
+      expect.arrayContaining([
+        { keys: 'Command+/', label: 'Toggle focus mode' },
+        { keys: 'Command+,', label: 'Toggle sidebar' },
+        { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+      ])
+    );
+  });
+});
+
+describe('footer chrome proximity', () => {
+  it('reveals controls near the bottom edge', () => {
+    expect(shouldRevealFooterChrome(725, 800, 96)).toBe(true);
+  });
+
+  it('keeps controls faded away from the bottom edge', () => {
+    expect(shouldRevealFooterChrome(650, 800, 96)).toBe(false);
+  });
+
+  it('rejects invalid viewport geometry', () => {
+    expect(shouldRevealFooterChrome(10, 0, 96)).toBe(false);
   });
 });
 

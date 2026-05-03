@@ -216,7 +216,7 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 }
 
 export type LauncherFieldTheoryMarkdownTarget = {
-  kind: 'wiki' | 'artifact' | 'command' | 'external';
+  kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
 };
 
@@ -256,8 +256,8 @@ export interface LauncherDirectoryNamespace {
 const NORMAL_MODE_SECTION_ORDER: Array<{ id: LauncherNormalModeSectionId; predicate: (item: LauncherNormalModeItem) => boolean }> = [
   { id: 'commands', predicate: (item) => item.type === 'command' },
   { id: 'recent', predicate: (item) => item.type === 'recent-file' },
-  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
   { id: 'actions', predicate: (item) => item.type === 'action' },
+  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
   { id: 'bookmarks', predicate: (item) => item.type === 'bookmark' || item.type === 'bookmark-author' || item.type === 'bookmark-facet' },
 ];
 
@@ -904,6 +904,19 @@ export interface BuiltInLauncherAction {
   actionId: string;
 }
 
+export function getLauncherAreaActionIdForQuery(query: string): string | null {
+  switch (query.trim().toLowerCase()) {
+    case 'clipboard':
+      return 'open-history';
+    case 'library':
+      return 'open-library';
+    case 'commands':
+      return 'open-commands';
+    default:
+      return null;
+  }
+}
+
 export function buildBuiltInLauncherActions(
   hotkeys: LauncherHotkeyMap,
   isDarkMode: boolean,
@@ -978,6 +991,30 @@ export function buildBuiltInLauncherActions(
       hotkey: hotkeys.history,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.history),
       actionId: 'open-history',
+    },
+    {
+      id: 'action-open-library',
+      type: 'action',
+      name: 'library',
+      displayName: 'Open Library',
+      keywords: ['library', 'markdown', 'wiki', 'files'],
+      actionId: 'open-library',
+    },
+    {
+      id: 'action-open-commands',
+      type: 'action',
+      name: 'commands',
+      displayName: 'Open Commands',
+      keywords: ['commands', 'portable commands', 'command library'],
+      actionId: 'open-commands',
+    },
+    {
+      id: 'action-view-bookmarks',
+      type: 'action',
+      name: 'bookmarks',
+      displayName: 'View Bookmarks',
+      keywords: ['bookmarks', 'bookmark canvas', 'view bookmarks', 'saved posts', 'saved links', 'library'],
+      actionId: 'view-bookmarks',
     },
     {
       id: 'action-save-current-website',
