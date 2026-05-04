@@ -1750,6 +1750,92 @@ declare global {
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
   }
 
+  interface PossibleIdeaFrame {
+    id: string;
+    name: string;
+    axisA?: { label?: string; rubricSentence?: string };
+    axisB?: { label?: string; rubricSentence?: string };
+    quadrantLabels?: {
+      highHigh?: string;
+      highLow?: string;
+      lowHigh?: string;
+      lowLow?: string;
+    };
+  }
+
+  interface PossibleIdeaBatchSummary {
+    id: string;
+    batchPath: string;
+    createdAt: string;
+    seedId: string;
+    seedArtifactIds: string[];
+    frameId: string;
+    frameName: string;
+    depth: string;
+    model: string;
+    nodeTarget: number;
+    totalDotCount: number;
+    considerationIds: string[];
+    repos: string[];
+  }
+
+  interface PossibleIdeaLibraryLink {
+    title: string;
+    relPath: string;
+    path: string;
+  }
+
+  interface PossibleIdeaBookmarkSource {
+    artifactId: string;
+    bookmarkId: string;
+    authorHandle: string;
+    url: string;
+    postedAt: string;
+    bookmarkedAt: string;
+    category: string;
+    domain: string;
+    title: string;
+    excerpt: string;
+    artifactPath: string;
+  }
+
+  interface PossibleIdeaNode {
+    id: string;
+    title: string;
+    summary: string;
+    essay: string;
+    rationale: string;
+    repoSurface: string;
+    effortEstimate: string;
+    axisAScore: number;
+    axisAJustification: string;
+    axisBScore: number;
+    axisBJustification: string;
+    exportablePrompt: string;
+    implementationPrompt: string;
+    repo: string;
+    repoName: string;
+    runId: string;
+    artifactPath: string;
+    rank: number;
+    libraryLinks: PossibleIdeaLibraryLink[];
+  }
+
+  interface PossibleIdeaBatch extends PossibleIdeaBatchSummary {
+    axisA: string;
+    axisB: string;
+    frame: PossibleIdeaFrame | null;
+    seedTitle: string;
+    seedNotes: string;
+    bookmarkSources: PossibleIdeaBookmarkSource[];
+    nodes: PossibleIdeaNode[];
+  }
+
+  interface PossibleAPI {
+    listBatches: () => Promise<PossibleIdeaBatchSummary[]>;
+    getBatch: (batchId?: string) => Promise<PossibleIdeaBatch | null>;
+  }
+
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;
     getPage: (relPath: string) => Promise<WikiPage | null>;
@@ -2226,6 +2312,7 @@ declare global {
     librarianAPI?: LibrarianAPI;
     libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
+    possibleAPI?: PossibleAPI;
     externalAPI?: ExternalAPI;
     recentAPI?: RecentAPI;
     bookmarksAPI?: BookmarksAPI;

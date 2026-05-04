@@ -84,6 +84,7 @@ import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './comma
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
+import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import {
@@ -2109,6 +2110,14 @@ function setupLibrarianIPCHandlers(): void {
       files,
     });
     return roots;
+  });
+
+  ipcMain.handle('possible:listBatches', () => {
+    return listPossibleIdeaBatches();
+  });
+
+  ipcMain.handle('possible:getBatch', (_event, batchId?: string) => {
+    return getPossibleIdeaBatch(typeof batchId === 'string' ? batchId : undefined);
   });
 
   ipcMain.handle('library:previewMigration', () => {
