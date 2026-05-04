@@ -2,7 +2,7 @@
  * Shared types for clipboard history components.
  */
 
-export type ViewMode = 'clipboard' | 'todo' | 'feedback' | 'commands' | 'sketch' | 'librarian';
+export type ViewMode = 'clipboard' | 'todo' | 'feedback' | 'commands' | 'possible' | 'sketch' | 'librarian';
 
 export type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
 export type ClipboardSource = 'mac' | 'ios';
@@ -71,6 +71,7 @@ export const TAB_LABELS: Record<ViewMode, string> = {
   todo: 'Tasks',
   feedback: 'Feedback',
   commands: 'Commands',
+  possible: 'Possible',
   sketch: 'Sketch',
 };
 
@@ -80,7 +81,7 @@ export function nextTopNavViewMode(
   direction: 1 | -1,
   _librarianEnabled: boolean,
 ): ViewMode {
-  const tabs: ViewMode[] = ['clipboard', 'librarian', 'commands'];
+  const tabs: ViewMode[] = ['clipboard', 'librarian', 'commands', 'possible'];
   const idx = tabs.indexOf(prev);
   const nextIdx = idx === -1 ? 0 : (idx + direction + tabs.length) % tabs.length;
   return tabs[nextIdx];
