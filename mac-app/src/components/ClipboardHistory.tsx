@@ -9,6 +9,7 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
+import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, restoreLibrarianSelection, shouldRevealFocusChrome, type LibrarianSelectedItemType } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
@@ -86,7 +87,7 @@ type FieldTheoryMarkdownTarget = {
   contentMode?: 'rendered' | 'markdown';
 };
 
-type TopNavMode = 'clipboard' | 'librarian' | 'commands';
+type TopNavMode = 'clipboard' | 'librarian' | 'commands' | 'possible';
 
 type FieldTheoryNavigationEntry =
   | { surface: 'librarian' }
@@ -106,7 +107,7 @@ type TopNavPaintTrace = {
 };
 
 function isTopNavMode(mode: ViewMode): mode is TopNavMode {
-  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands';
+  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands' || mode === 'possible';
 }
 
 function sameFieldTheoryNavigationEntry(
@@ -4249,6 +4250,42 @@ export default function ClipboardHistory() {
             Commands
           </button>
 
+          <button
+            onClick={() => {
+              selectTopNavView('possible');
+            }}
+            data-top-nav-mode="possible"
+            tabIndex={0}
+            style={{
+              padding: '6px 8px',
+              fontSize: '11px',
+              fontWeight: 400,
+              backgroundColor: viewMode === 'possible' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'possible' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'none',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'possible' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'possible' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Possible ideas"
+          >
+            Possible
+          </button>
+
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {actionFeedback && (
               <span 
@@ -4736,6 +4773,8 @@ export default function ClipboardHistory() {
           onNavigateForward={() => navigateFieldTheoryHistory(1)}
           onSelectedCommandPathChange={setSelectedCommandPath}
         />
+      ) : viewMode === 'possible' ? (
+        <PossibleGraphView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
           <SketchView
