@@ -42,9 +42,9 @@ import {
 const COPY_PATH_FEEDBACK_MS = 1600;
 const COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
 const COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX = 8;
-const COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX = 12;
+const COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX = 22.2;
 const COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX = 28;
-const COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX = 24;
+const COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX = 44.4;
 
 export function getCommandsContentTopPadding(input: {
   isEditing: boolean;
@@ -63,7 +63,6 @@ export function getCommandsContentBottomPadding(input: {
   isEditing: boolean;
   focusChromeActive: boolean;
 }): number {
-  if (input.focusChromeActive) return 0;
   return input.isEditing
     ? COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX
     : COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX;
@@ -2247,7 +2246,7 @@ export default function CommandsView({
                   style={{
                     flex: 1,
                     minHeight: 0,
-                    padding: 0,
+                    padding: `0 0 ${commandContentBottomPadding}px 0`,
                     fontSize: textSizes[textSize].base,
                     lineHeight: 1.5,
                     fontFamily: fonts.sans,

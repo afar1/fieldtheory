@@ -12,7 +12,7 @@ const SLOT_WIDTH = 22;
 const SLOT_GAP = 8;
 export const WAVEFORM_WIDTH = 30;
 const WAVEFORM_GAP = 8;
-export const FLOATING_WAVEFORM_STACK_GAP = 6;
+export const FLOATING_WAVEFORM_STACK_GAP = 4;
 
 export interface LeftPillSlotInputs {
   xExpanded: boolean;
@@ -59,7 +59,7 @@ export function pipeSlotWidthForCount(pipeCount: number): number {
 }
 
 export function floatingPipeSlotWidthForCount(pipeCount: number): number {
-  if (pipeCount >= 10) return 28;
-  if (pipeCount > 3) return 22;
-  return Math.max(8, pipeCount * 4 + 4);
+  if (pipeCount >= 10) return 24;
+  if (pipeCount > 3) return 18;
+  return Math.max(4, pipeCount * 4);
 }

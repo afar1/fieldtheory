@@ -32,19 +32,23 @@ describe('CommandsView layout helpers', () => {
     })).toBe(70);
   });
 
-  it('removes the bottom footer carve-out while focus chrome overlays the footer', () => {
+  it('keeps bottom command padding while focus chrome overlays the footer', () => {
     expect(getCommandsContentBottomPadding({
       isEditing: false,
       focusChromeActive: false,
-    })).toBe(24);
+    })).toBe(44.4);
     expect(getCommandsContentBottomPadding({
       isEditing: true,
       focusChromeActive: false,
-    })).toBe(12);
+    })).toBe(22.2);
     expect(getCommandsContentBottomPadding({
       isEditing: false,
       focusChromeActive: true,
-    })).toBe(0);
+    })).toBe(44.4);
+    expect(getCommandsContentBottomPadding({
+      isEditing: true,
+      focusChromeActive: true,
+    })).toBe(22.2);
   });
 });
 
@@ -239,7 +243,8 @@ describe('CommandsView command naming', () => {
 
     fireEvent.click(screen.getByLabelText('Markdown source'));
 
-    expect(await screen.findByPlaceholderText('Write your command markdown here...')).toBeTruthy();
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    expect(editor.style.paddingBottom).toBe('22.2px');
 
     fireEvent.click(screen.getByLabelText('Rendered'));
 

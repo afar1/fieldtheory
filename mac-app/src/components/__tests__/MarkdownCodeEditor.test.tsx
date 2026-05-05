@@ -31,7 +31,7 @@ describe('MarkdownCodeEditor cursor scroll margin', () => {
     });
   });
 
-  it('can remove bottom room when focus chrome should sit flush to the footer', () => {
+  it('can remove bottom room when a caller explicitly opts out', () => {
     expect(getMarkdownCodeEditorBottomRoom(0)).toBe(0);
     expect(getMarkdownCodeEditorCursorScrollMargin(0)).toEqual({ x: 5, y: 0 });
   });

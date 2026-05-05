@@ -317,7 +317,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    expect(floating?.getSize()).toEqual([94, 38]);
+    expect(floating?.getSize()).toEqual([68, 38]);
     const resizeMessages = floating?.webContents.sent.filter(
       (message) => message.channel === 'dynamic-island-resize'
     ) ?? [];
@@ -325,7 +325,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       leftWidth: number;
       rightWidth: number;
     };
-    expect(resizePayload).toEqual({ leftWidth: 94, rightWidth: 30 });
+    expect(resizePayload).toEqual({ leftWidth: 68, rightWidth: 30 });
   });
 
   it('expands the floating pill around a stable waveform center when screenshot pipes appear', () => {
@@ -339,18 +339,18 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    expect(floating?.getSize()).toEqual([94, 38]);
-    expect(floating?.getPosition()).toEqual([817, 1055]);
+    expect(floating?.getSize()).toEqual([68, 38]);
+    expect(floating?.getPosition()).toEqual([830, 1055]);
     const listener = vi.fn();
     manager.on('floating-position-changed', listener);
 
     manager.updateStackCount(2);
 
-    expect(floating?.getSize()).toEqual([130, 38]);
-    expect(floating?.getPosition()).toEqual([799, 1055]);
+    expect(floating?.getSize()).toEqual([80, 38]);
+    expect(floating?.getPosition()).toEqual([824, 1055]);
     const growBoundsCall = floating?.setBoundsCalls[(floating?.setBoundsCalls.length ?? 0) - 1];
     expect(growBoundsCall).toEqual({
-      bounds: { x: 799, y: 1055, width: 130, height: 38 },
+      bounds: { x: 824, y: 1055, width: 80, height: 38 },
       animate: false,
     });
     expect((floating?.getPosition()[0] ?? 0) + ((floating?.getSize()[0] ?? 0) / 2)).toBe(864);
@@ -361,17 +361,17 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       (message) => message.channel === 'dynamic-island-resize'
     ) ?? [];
     expect(resizeMessages[resizeMessages.length - 1]?.args[0]).toEqual({
-      leftWidth: 130,
-      rightWidth: 66,
+      leftWidth: 80,
+      rightWidth: 42,
     });
 
     manager.updateStackCount(0);
 
-    expect(floating?.getSize()).toEqual([94, 38]);
-    expect(floating?.getPosition()).toEqual([817, 1055]);
+    expect(floating?.getSize()).toEqual([68, 38]);
+    expect(floating?.getPosition()).toEqual([830, 1055]);
     const shrinkBoundsCall = floating?.setBoundsCalls[(floating?.setBoundsCalls.length ?? 0) - 1];
     expect(shrinkBoundsCall).toEqual({
-      bounds: { x: 817, y: 1055, width: 94, height: 38 },
+      bounds: { x: 830, y: 1055, width: 68, height: 38 },
       animate: false,
     });
     expect((floating?.getPosition()[0] ?? 0) + ((floating?.getSize()[0] ?? 0) / 2)).toBe(864);
@@ -379,7 +379,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       (message) => message.channel === 'dynamic-island-resize'
     ) ?? [];
     expect(resizeMessages[resizeMessages.length - 1]?.args[0]).toEqual({
-      leftWidth: 94,
+      leftWidth: 68,
       rightWidth: 30,
     });
   });
@@ -444,7 +444,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    expect(floating?.getPosition()).toEqual([817, 1055]);
+    expect(floating?.getPosition()).toEqual([830, 1055]);
   });
 
   it('uses the bottom-center fallback for saved floating positions at the top-edge clamp', () => {
@@ -458,7 +458,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    expect(floating?.getPosition()).toEqual([817, 1055]);
+    expect(floating?.getPosition()).toEqual([830, 1055]);
   });
 
   it('uses the bottom-center fallback when a saved floating position is on a zero-y work area edge', () => {
@@ -474,7 +474,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    expect(floating?.getPosition()).toEqual([817, 1017]);
+    expect(floating?.getPosition()).toEqual([830, 1017]);
   });
 
   it('does not create a unified island while startup waits to apply floating preferences', () => {
@@ -528,7 +528,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     const floating = testState.getWindowBySide('floating');
     expect(floating).toBeDefined();
-    floating?.setBounds({ x: 512, y: 144, width: 94, height: 38 });
+    floating?.setBounds({ x: 512, y: 144, width: 68, height: 38 });
     floating?.emitEvent('move');
 
     expect(listener).toHaveBeenCalledWith({ x: 512, y: 144 });
@@ -547,7 +547,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    floating?.setBounds({ x: 512, y: 144, width: 94, height: 38 });
+    floating?.setBounds({ x: 512, y: 144, width: 68, height: 38 });
     floating?.emitEvent('move');
     const saved = listener.mock.calls[listener.mock.calls.length - 1]?.[0];
     expect(saved).toEqual({ x: 512, y: 144 });
@@ -581,7 +581,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
     const floating = testState.getWindowBySide('floating');
     expect(floating).toBeDefined();
-    floating?.setBounds({ x: 410, y: 0, width: 94, height: 38 });
+    floating?.setBounds({ x: 410, y: 0, width: 68, height: 38 });
     floating?.emitEvent('moved');
 
     expect(listener).toHaveBeenCalledWith({ x: 410, y: 62 });
@@ -628,16 +628,40 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.setState('recording');
 
     const floating = testState.getWindowBySide('floating');
-    expect(floating?.getPosition()).toEqual([817, 1055]);
-    expect(floating?.getSize()).toEqual([94, 38]);
+    expect(floating?.getPosition()).toEqual([830, 1055]);
+    expect(floating?.getSize()).toEqual([68, 38]);
 
     (
       manager as unknown as { applyAutoHideProgress: (progress: number) => void }
     ).applyAutoHideProgress(0.5);
 
-    expect(floating?.getPosition()).toEqual([817, 1055]);
-    expect(floating?.getSize()).toEqual([94, 38]);
+    expect(floating?.getPosition()).toEqual([830, 1055]);
+    expect(floating?.getSize()).toEqual([68, 38]);
     expect(floating?.getOpacity()).toBe(0.5);
+  });
+
+  it('does not reveal a forced-floating pill when hovering the notch while idle', () => {
+    testState.setCursorPoint({ x: 864, y: 12 });
+
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.isVisible()).toBe(true);
+
+    manager.setState('idle');
+    expect(floating?.isVisible()).toBe(false);
+
+    manager.setAutoHide(true);
+    (
+      manager as unknown as { tickAutoHide: () => void }
+    ).tickAutoHide();
+
+    expect(floating?.isVisible()).toBe(false);
   });
 
   it('does not show the floating pill again for final transcript display', () => {

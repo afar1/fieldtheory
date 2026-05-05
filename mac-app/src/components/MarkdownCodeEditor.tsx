@@ -39,7 +39,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 
-export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 32;
+export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 
 export interface MarkdownCodeEditorHandle {

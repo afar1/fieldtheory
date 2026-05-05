@@ -1411,9 +1411,9 @@ describe('librarian content top padding', () => {
     expect(focusPadding - normalPadding).toBe(42);
   });
 
-  it('removes the bottom footer carve-out while focus chrome overlays the footer', () => {
-    expect(getLibrarianContentBottomPadding({ focusChromeActive: false })).toBe(32);
-    expect(getLibrarianContentBottomPadding({ focusChromeActive: true })).toBe(0);
+  it('keeps bottom document padding while focus chrome overlays the footer', () => {
+    expect(getLibrarianContentBottomPadding({ focusChromeActive: false })).toBe(59.2);
+    expect(getLibrarianContentBottomPadding({ focusChromeActive: true })).toBe(59.2);
   });
 });
 

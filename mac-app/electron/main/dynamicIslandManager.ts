@@ -154,7 +154,7 @@ export class DynamicIslandManager extends EventEmitter {
   private readonly FLOATING_BUTTON_WIDTH = 22;
   private readonly FLOATING_BUTTON_GAP = 4;
   private readonly FLOATING_HORIZONTAL_PADDING = 12;
-  private readonly FLOATING_WAVEFORM_STACK_GAP = 6;
+  private readonly FLOATING_WAVEFORM_STACK_GAP = 4;
   private readonly FLOATING_COMPLETION_HIDE_MS = 240;
   private readonly FLOATING_TOP_RELIC_TOLERANCE = 4;
   private readonly FLOATING_PILL_EDGE_MARGIN = 24;
@@ -1358,8 +1358,8 @@ export class DynamicIslandManager extends EventEmitter {
 
   private getFloatingPillWidth(): number {
     return this.getFloatingContentWidth()
-      + (this.FLOATING_BUTTON_WIDTH * 2)
-      + (this.FLOATING_BUTTON_GAP * 2)
+      + this.FLOATING_BUTTON_WIDTH
+      + this.FLOATING_BUTTON_GAP
       + this.FLOATING_HORIZONTAL_PADDING;
   }
 
@@ -1368,15 +1368,15 @@ export class DynamicIslandManager extends EventEmitter {
     const hasStackChip = this.stackCount > 0;
     const stackSlotWidth = hasStackChip ? this.FLOATING_WAVEFORM_STACK_GAP + this.floatingPipeSlotWidth(this.stackCount) : 0;
     const contentWidth = waveformActive
-      ? this.PILL_WAVEFORM + (stackSlotWidth * 2)
+      ? this.PILL_WAVEFORM + stackSlotWidth
       : (hasStackChip ? this.floatingPipeSlotWidth(this.stackCount) : 0);
     return Math.max(this.PILL_WAVEFORM, contentWidth);
   }
 
   private floatingPipeSlotWidth(pipeCount: number): number {
-    if (pipeCount >= 10) return 28;
-    if (pipeCount > 3) return 22;
-    return Math.max(8, pipeCount * 4 + 4);
+    if (pipeCount >= 10) return 24;
+    if (pipeCount > 3) return 18;
+    return Math.max(4, pipeCount * 4);
   }
 
   private getResolvedFloatingPosition(width: number, height: number): FloatingIndicatorPosition {
@@ -1512,6 +1512,7 @@ export class DynamicIslandManager extends EventEmitter {
   // Maps the cursor to a binary auto-hide target. Only cursor movement inside
   // the menu bar can reveal the island; anything below the menu bar closes it.
   private computeAutoHideTargetFromCursor(): number {
+    if (!this.shouldUseNotchIndicator()) return 0;
     const display = this.getTargetDisplay();
     if (!display) return 0;
     const cursor = screen.getCursorScreenPoint();
