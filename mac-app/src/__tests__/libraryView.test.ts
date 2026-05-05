@@ -927,11 +927,11 @@ describe('rendered markdown edit helpers', () => {
 });
 
 describe('rendered markdown click behavior', () => {
-  it('opens source mode for a plain rendered click by default', () => {
+  it('does not open source mode for a plain rendered click by default', () => {
     const p = document.createElement('p');
     p.textContent = 'hi';
     document.body.appendChild(p);
-    expect(getRenderedMarkdownClickBehavior({ target: p })).toBe('source');
+    expect(getRenderedMarkdownClickBehavior({ target: p })).toBeNull();
     p.remove();
   });
 
@@ -949,6 +949,14 @@ describe('rendered markdown click behavior', () => {
     document.body.appendChild(p);
     expect(getRenderedMarkdownClickBehavior({ target: p }, 'command-click')).toBeNull();
     expect(getRenderedMarkdownClickBehavior({ target: p, metaKey: true }, 'command-click')).toBe('source');
+    p.remove();
+  });
+
+  it('preserves explicit click mode as plain-click source', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(getRenderedMarkdownClickBehavior({ target: p }, 'click')).toBe('source');
     p.remove();
   });
 

@@ -124,7 +124,7 @@ export const TEXT_CURSOR_BLINK_STORAGE_KEY = 'fieldtheory-text-cursor-blink';
 export const TEXT_CURSOR_BLINK_CHANGED_EVENT = 'fieldtheory:text-cursor-blink-changed';
 
 export function restoreRenderedEditClickMode(storage: Pick<Storage, 'getItem'>): RenderedEditClickMode {
-  return storage.getItem(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY) === 'command-click' ? 'command-click' : 'click';
+  return storage.getItem(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY) === 'click' ? 'click' : 'command-click';
 }
 
 export function persistRenderedEditClickMode(storage: Pick<Storage, 'setItem'>, mode: RenderedEditClickMode): void {
@@ -144,7 +144,7 @@ export function persistTextCursorBlink(storage: Pick<Storage, 'setItem'>, enable
  *  selection are excluded. */
 export function shouldEnterEditOnClick(
   e: { target: EventTarget | null; metaKey?: boolean },
-  mode: RenderedEditClickMode = 'click',
+  mode: RenderedEditClickMode = 'command-click',
 ): boolean {
   if (mode === 'command-click' && !e.metaKey) return false;
   const target = e.target as HTMLElement | null;
