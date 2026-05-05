@@ -647,6 +647,17 @@ export function shouldShowPinnedSidebarDividerBefore(
   return sidebarNodePinnedRank(nodes[index - 1], pinnedItemIds) > 0 && sidebarNodePinnedRank(nodes[index], pinnedItemIds) === 0;
 }
 
+export function toggleSidebarPinnedItemIds(
+  pinnedItemIds: ReadonlySet<string>,
+  targetId: string | null,
+): Set<string> {
+  const next = new Set(pinnedItemIds);
+  if (!targetId) return next;
+  if (next.has(targetId)) next.delete(targetId);
+  else next.add(targetId);
+  return next;
+}
+
 export function renamePinnedSidebarIds(pinnedItemIds: Set<string>, event: LibraryRenameEvent): Set<string> {
   let changed = false;
   const next = new Set<string>();
@@ -1893,12 +1904,7 @@ function WikiSidebar({
     const targetId = contextPinTargetId;
     closeContextMenu();
     if (!targetId) return;
-    setPinnedItemIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(targetId)) next.delete(targetId);
-      else next.add(targetId);
-      return next;
-    });
+    setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
   }, [closeContextMenu, contextPinTargetId]);
 
   return (
