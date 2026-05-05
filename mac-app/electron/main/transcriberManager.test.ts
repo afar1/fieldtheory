@@ -43,7 +43,7 @@ vi.mock('./transcriberTrace', () => ({
   getTranscriberTracePath: vi.fn(() => '/tmp/recording-trace.log'),
 }));
 
-import { clipboard } from 'electron';
+import { clipboard, globalShortcut } from 'electron';
 import { TranscriberManager } from './transcriberManager';
 
 // Command queue tests for MLX Whisper/Parakeet are covered by stdioJsonServer.test.ts,
@@ -1042,6 +1042,42 @@ describe('TranscriberManager standard paste target fallback', () => {
 describe('TranscriberManager standard real-time chunking', () => {
   afterEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('keeps Escape on the recording session before the Field Theory window can dismiss', () => {
+    const manager: any = {
+      abandonHotkeyRegistered: false,
+      registeredAbandonHotkey: 'Escape',
+      pendingAbandonConfirmation: false,
+      preferences: {
+        getPreference: vi.fn((key: string) => (
+          key === 'abandonRecordingConfirmation' ? true : undefined
+        )),
+      },
+      hasAudioContent: true,
+      overlay: {
+        hideConfirmation: vi.fn(),
+        showConfirmation: vi.fn(),
+      },
+      emit: vi.fn(),
+      cancelRecording: vi.fn(),
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+
+    (manager as any).registerAbandonHotkey();
+    const escapeHandler = vi.mocked(globalShortcut.register).mock.calls[0]?.[1] as () => void;
+
+    escapeHandler();
+    expect(manager.emit).toHaveBeenCalledWith('confirmation-show');
+    expect(manager.emit).not.toHaveBeenCalledWith('dismiss-clipboard-history');
+    expect(manager.overlay.showConfirmation).toHaveBeenCalledTimes(1);
+    expect(manager.cancelRecording).not.toHaveBeenCalled();
+
+    escapeHandler();
+    expect(manager.overlay.hideConfirmation).toHaveBeenCalledTimes(1);
+    expect(manager.cancelRecording).toHaveBeenCalledTimes(1);
   });
 
   it('runs full-file transcription even when real-time transcript text exists', async () => {
