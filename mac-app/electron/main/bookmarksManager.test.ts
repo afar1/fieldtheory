@@ -153,6 +153,30 @@ describe('BookmarksManager.getSnapshot', () => {
     expect(mgr.getSnapshot()).toEqual({ bookmarks: [], folders: [], xLastSyncedAt: null });
   });
 
+  it('loads X bookmarks from legacy bookmark data when canonical data is absent', () => {
+    const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bm-home-test-'));
+    const legacyDir = path.join(homeDir, '.ft-bookmarks');
+    fs.mkdirSync(legacyDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(legacyDir, 'bookmarks.jsonl'),
+      JSON.stringify({ tweetId: 'legacy', text: 'from legacy', postedAt: '2026-01-01T00:00:00.000Z' }) + '\n'
+    );
+
+    const homedirSpy = vi.spyOn(os, 'homedir').mockReturnValue(homeDir);
+    const savedDataDir = process.env.FT_DATA_DIR;
+    delete process.env.FT_DATA_DIR;
+
+    try {
+      const mgr = new BookmarksManager();
+      expect(mgr.getSnapshot().bookmarks.map((b) => b.id)).toEqual(['legacy']);
+    } finally {
+      if (savedDataDir === undefined) delete process.env.FT_DATA_DIR;
+      else process.env.FT_DATA_DIR = savedDataDir;
+      homedirSpy.mockRestore();
+      fs.rmSync(homeDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports the X bookmarks JSONL mtime as the last sync time', () => {
     const syncedAt = new Date('2026-04-25T12:34:56.000Z');
     const jsonl = path.join(tmpDir, 'bookmarks.jsonl');
