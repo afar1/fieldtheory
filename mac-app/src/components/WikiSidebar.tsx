@@ -211,6 +211,14 @@ type CreatingState =
   | { kind: 'dir'; location: LibraryCreateLocation }
   | null;
 
+type LibraryFolderConfirmationRequest = {
+  title: string;
+  message: string;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => void | Promise<void>;
+};
+
 type TaggedDocListItem = {
   ulid: string;
   path: string;
@@ -1087,6 +1095,7 @@ function WikiSidebar({
     y: number;
     node: SidebarNode | null;
   } | null>(null);
+  const [folderConfirmation, setFolderConfirmation] = useState<LibraryFolderConfirmationRequest | null>(null);
   const [renameRequestId, setRenameRequestId] = useState<string | null>(null);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
@@ -1477,11 +1486,7 @@ function WikiSidebar({
       const nextLocation = { ...creating.location, relPath: dirRelPath };
       const created = await onCreateDir(nextLocation);
       if (created !== false) {
-        if (creating.location.builtin) {
-          expandCreateLocation(nextLocation);
-        } else {
-          await reloadTreeAndExpandLocation(nextLocation);
-        }
+        await reloadTreeAndExpandLocation(nextLocation);
       }
     }
     setCreating(null);
@@ -1743,31 +1748,46 @@ function WikiSidebar({
     });
   }, [closeContextMenu, loadTree]);
 
-  const removeContextRoot = useCallback(async () => {
+  const removeContextRoot = useCallback(() => {
     const target = contextDir;
     closeContextMenu();
     if (!target?.canRemoveRoot) return;
-    await window.libraryAPI?.removeRoot(target.rootPath);
-    await loadTree();
+    setFolderConfirmation({
+      title: 'Remove folder from FT?',
+      message: `Remove "${target.label}" from Field Theory? The folder stays on disk.`,
+      confirmLabel: 'Remove from FT',
+      onConfirm: async () => {
+        await window.libraryAPI?.removeRoot(target.rootPath);
+        await loadTree();
+      },
+    });
   }, [closeContextMenu, contextDir, loadTree]);
 
-  const hideContextDir = useCallback(async () => {
+  const hideContextDir = useCallback(() => {
     const folderId = contextHideFolderId;
-    const previous = hiddenDefaultFolders;
+    const target = contextDir;
     closeContextMenu();
     if (!folderId) return;
 
-    const optimistic = [...new Set([...previous, folderId])];
-    setHiddenDefaultFolders(optimistic);
+    setFolderConfirmation({
+      title: 'Hide folder?',
+      message: `Hide "${target?.label ?? folderId}" from the Library sidebar? You can restore it in Settings.`,
+      confirmLabel: 'Hide folder',
+      onConfirm: async () => {
+        const previous = hiddenDefaultFolders;
+        const optimistic = [...new Set([...previous, folderId])];
+        setHiddenDefaultFolders(optimistic);
 
-    try {
-      const result = await window.libraryAPI?.setFolderHidden(folderId, true);
-      setHiddenDefaultFolders(result ?? optimistic);
-      await loadTree();
-    } catch {
-      setHiddenDefaultFolders(previous);
-    }
-  }, [closeContextMenu, contextHideFolderId, hiddenDefaultFolders, loadTree]);
+        try {
+          const result = await window.libraryAPI?.setFolderHidden(folderId, true);
+          setHiddenDefaultFolders(result ?? optimistic);
+          await loadTree();
+        } catch {
+          setHiddenDefaultFolders(previous);
+        }
+      },
+    });
+  }, [closeContextMenu, contextDir, contextHideFolderId, hiddenDefaultFolders, loadTree]);
 
   const deleteContextFile = useCallback(() => {
     const target = contextFile;
@@ -1813,10 +1833,11 @@ function WikiSidebar({
     closeContextMenu();
     if (!target?.canDeleteDir) return;
     const deletedItems = collectSidebarItems(target.children).filter((item) => item.type !== 'bookmarks');
-    confirmDelete({
+    setFolderConfirmation({
       title: 'Delete folder?',
       message: `Move "${target.label}"${deletedItems.length > 0 ? ` and ${deletedItems.length} file${deletedItems.length === 1 ? '' : 's'}` : ''} to Trash?`,
       confirmLabel: 'Move to Trash',
+      danger: true,
       onConfirm: async () => {
         const success = await window.libraryAPI?.deleteDir(target.rootPath, target.relPath);
         if (!success) return;
@@ -1837,7 +1858,7 @@ function WikiSidebar({
         await loadTree();
       },
     });
-  }, [closeContextMenu, confirmDelete, contextDir, loadTree, onDeletedItem]);
+  }, [closeContextMenu, contextDir, loadTree, onDeletedItem]);
 
   const showContextFolderInFinder = useCallback(() => {
     const finderPath = contextFolderFinderPath;
@@ -2072,6 +2093,7 @@ function WikiSidebar({
           canShowFileInFinder={!!contextFileFinderPath}
           canDeleteFile={canDeleteContextFile}
           pinLabel={contextPinLabel}
+          pinIsFolder={!!contextDir && !!contextPinLabel}
           hideDirLabel={contextHideDirLabel}
           canDeleteDir={canDeleteContextDir}
           onNewFile={() => {
@@ -2097,6 +2119,11 @@ function WikiSidebar({
         />
       )}
       {deleteConfirmationDialog}
+      <LibraryFolderConfirmationDialog
+        request={folderConfirmation}
+        theme={theme}
+        onClose={() => setFolderConfirmation(null)}
+      />
       {moveError && (
         <div
           role="status"
@@ -2575,6 +2602,96 @@ function TreeNode({
   );
 }
 
+function LibraryFolderConfirmationDialog({
+  request,
+  theme,
+  onClose,
+}: {
+  request: LibraryFolderConfirmationRequest | null;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onClose: () => void;
+}) {
+  if (!request) return null;
+
+  const confirmColor = request.danger ? '#dc2626' : theme.accent;
+
+  return (
+    <div
+      role="presentation"
+      onMouseDown={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 10000,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: theme.isDark ? 'rgba(0,0,0,0.36)' : 'rgba(0,0,0,0.18)',
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={request.title}
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          width: 'min(360px, calc(100vw - 32px))',
+          padding: '16px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface2,
+          boxShadow: theme.isDark ? '0 18px 48px rgba(0,0,0,0.5)' : '0 18px 48px rgba(0,0,0,0.2)',
+        }}
+      >
+        <div style={{ fontSize: '14px', fontWeight: 600, color: theme.text, marginBottom: '8px' }}>
+          {request.title}
+        </div>
+        <div style={{ fontSize: '12px', lineHeight: 1.45, color: theme.textSecondary, marginBottom: '14px' }}>
+          {request.message}
+        </div>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              height: '28px',
+              padding: '0 10px',
+              fontSize: '12px',
+              color: theme.text,
+              backgroundColor: 'transparent',
+              border: `1px solid ${theme.border}`,
+              borderRadius: '5px',
+              cursor: 'pointer',
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const pending = request;
+              onClose();
+              void pending.onConfirm();
+            }}
+            style={{
+              height: '28px',
+              padding: '0 10px',
+              fontSize: '12px',
+              color: '#fff',
+              backgroundColor: confirmColor,
+              border: `1px solid ${confirmColor}`,
+              borderRadius: '5px',
+              cursor: 'pointer',
+            }}
+          >
+            {request.confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function LibraryContextMenu({
   x,
   y,
@@ -2587,6 +2704,7 @@ function LibraryContextMenu({
   canShowFileInFinder,
   canDeleteFile,
   pinLabel,
+  pinIsFolder,
   hideDirLabel,
   canDeleteDir,
   onNewFile,
@@ -2613,6 +2731,7 @@ function LibraryContextMenu({
   canShowFileInFinder: boolean;
   canDeleteFile: boolean;
   pinLabel: string | null;
+  pinIsFolder: boolean;
   hideDirLabel: string | null;
   canDeleteDir: boolean;
   onNewFile: () => void;
@@ -2653,6 +2772,13 @@ function LibraryContextMenu({
   const clearHover = (event: React.MouseEvent<HTMLButtonElement>) => {
     event.currentTarget.style.backgroundColor = 'transparent';
   };
+  const dividerStyle: React.CSSProperties = {
+    height: '1px',
+    margin: '4px 2px',
+    backgroundColor: theme.border,
+  };
+  const hasBottomFolderAction = canRemoveRoot || !!hideDirLabel;
+  const hasBottomAction = hasBottomFolderAction || canDeleteDir || canDeleteFile;
 
   return (
     <div
@@ -2689,6 +2815,9 @@ function LibraryContextMenu({
       >
         New folder
       </button>
+      {pinLabel && pinIsFolder && (
+        <button style={itemStyle} onClick={onTogglePin} onMouseEnter={setHover} onMouseLeave={clearHover}>{pinLabel}</button>
+      )}
       <button style={itemStyle} onClick={onAddFolder} onMouseEnter={setHover} onMouseLeave={clearHover}>Add folder from path...</button>
       {canShowFolderInFinder && (
         <button style={itemStyle} onClick={onShowFolderInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
@@ -2702,15 +2831,17 @@ function LibraryContextMenu({
       {canShowFileInFinder && (
         <button style={itemStyle} onClick={onShowFileInFinder} onMouseEnter={setHover} onMouseLeave={clearHover}>Show in Finder</button>
       )}
-      {pinLabel && (
+      {pinLabel && !pinIsFolder && (
         <button style={itemStyle} onClick={onTogglePin} onMouseEnter={setHover} onMouseLeave={clearHover}>{pinLabel}</button>
       )}
+      {hasBottomAction && <div style={dividerStyle} />}
       {canRemoveRoot && (
         <button style={itemStyle} onClick={onRemoveRoot} onMouseEnter={setHover} onMouseLeave={clearHover}>Remove from FT</button>
       )}
       {hideDirLabel && (
         <button style={itemStyle} onClick={onHideDir} onMouseEnter={setHover} onMouseLeave={clearHover}>{hideDirLabel}</button>
       )}
+      {hasBottomFolderAction && (canDeleteDir || canDeleteFile) && <div style={dividerStyle} />}
       {canDeleteDir && (
         <button
           style={{ ...itemStyle, color: '#dc2626' }}

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import type { ParakeetSetupProgress, ParakeetStatus } from '../types/window';
+import type { ParakeetSetupError, ParakeetSetupProgress, ParakeetStatus } from '../types/window';
 import ParakeetSupportPanel from './ParakeetSupportPanel';
 import {
   DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE,
@@ -83,7 +83,7 @@ export default function TranscriptionSettings() {
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
   const [settingUpParakeetEngine, setSettingUpParakeetEngine] = useState<VisibleParakeetEngine | null>(null);
   const [parakeetSetupProgress, setParakeetSetupProgress] = useState<ParakeetSetupProgress | null>(null);
-  const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
+  const [parakeetSetupError, setParakeetSetupError] = useState<ParakeetSetupError | null>(null);
   const [uninstallingParakeet, setUninstallingParakeet] = useState(false);
 
   const [abandonHotkey, setAbandonHotkey] = useState<string>('Escape');
@@ -295,11 +295,24 @@ export default function TranscriptionSettings() {
       if (result?.success) {
         await refreshParakeetStatus();
       } else {
-        setParakeetSetupError(result?.error ?? 'Setup failed');
+        setParakeetSetupError(result?.setupError ?? {
+          code: 'setup-failed',
+          summary: result?.error ?? 'Setup failed',
+          detail: result?.error ?? 'Setup failed',
+          recoveryCommand: '',
+          moreInfo: 'Retry Parakeet setup. If it fails again, open Diagnostics so support can inspect the setup log.',
+        });
         await refreshParakeetStatus();
       }
     } catch (err) {
-      setParakeetSetupError(err instanceof Error ? err.message : 'Setup failed');
+      const summary = err instanceof Error ? err.message : 'Setup failed';
+      setParakeetSetupError({
+        code: 'setup-failed',
+        summary,
+        detail: summary,
+        recoveryCommand: '',
+        moreInfo: 'Retry Parakeet setup. If it fails again, open Diagnostics so support can inspect the setup log.',
+      });
       await refreshParakeetStatus();
     } finally {
       setSettingUpParakeet(false);
@@ -320,10 +333,24 @@ export default function TranscriptionSettings() {
         const currentEngine = await window.transcribeAPI.getTranscriptionEngine?.() ?? DEFAULT_VISIBLE_TRANSCRIPTION_ENGINE;
         setSelectedEngine(normalizeVisibleTranscriptionEngine(currentEngine));
       } else {
-        setParakeetSetupError(result?.error ?? 'Uninstall failed');
+        const summary = result?.error ?? 'Uninstall failed';
+        setParakeetSetupError({
+          code: 'setup-failed',
+          summary,
+          detail: summary,
+          recoveryCommand: '',
+          moreInfo: 'Retry the action. If it fails again, open Diagnostics so support can inspect the setup log.',
+        });
       }
     } catch (err) {
-      setParakeetSetupError(err instanceof Error ? err.message : 'Uninstall failed');
+      const summary = err instanceof Error ? err.message : 'Uninstall failed';
+      setParakeetSetupError({
+        code: 'setup-failed',
+        summary,
+        detail: summary,
+        recoveryCommand: '',
+        moreInfo: 'Retry the action. If it fails again, open Diagnostics so support can inspect the setup log.',
+      });
     } finally {
       setUninstallingParakeet(false);
     }
@@ -336,9 +363,10 @@ export default function TranscriptionSettings() {
   const selectedParakeetEngineStatus = selectedEngine === 'whisper'
     ? null
     : getParakeetEngineStatus(selectedEngine);
-  const selectedParakeetSupportSummary = selectedParakeetEngineStatus?.lastError ?? parakeetSetupError;
+  const selectedParakeetSetupError = selectedParakeetEngineStatus?.setupError ?? parakeetSetupError;
+  const selectedParakeetSupportSummary = selectedParakeetSetupError?.summary ?? selectedParakeetEngineStatus?.lastError ?? null;
   const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
-  const selectedParakeetErrorDetail = selectedParakeetEngineStatus?.lastErrorDetail ?? null;
+  const selectedParakeetErrorDetail = selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
   const selectedParakeetProgress = selectedEngine === 'whisper'
     ? null
     : parakeetSetupProgress?.engine === selectedEngine
@@ -818,11 +846,13 @@ export default function TranscriptionSettings() {
                   : `Setting up ${PARAKEET_VISIBLE_ENGINE_OPTIONS.find((o) => o.id === selectedEngine)?.label ?? 'Parakeet'}`
               }
               summary={selectedParakeetSupportSummary}
-              recoveryMessage={
-                selectedParakeetRecoveryMessage
-                ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
-              }
-              detail={selectedParakeetErrorDetail}
+            recoveryMessage={
+              selectedParakeetSetupError?.moreInfo
+              ?? selectedParakeetRecoveryMessage
+              ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
+            }
+            recoveryCommand={selectedParakeetSetupError?.recoveryCommand}
+            detail={selectedParakeetErrorDetail}
               progress={selectedParakeetProgress}
             />
           )}

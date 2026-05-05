@@ -10,8 +10,9 @@
 const PILL_PADDING = 18; // 10 + 8
 const SLOT_WIDTH = 22;
 const SLOT_GAP = 8;
-const WAVEFORM_WIDTH = 22;
+export const WAVEFORM_WIDTH = 30;
 const WAVEFORM_GAP = 8;
+export const FLOATING_WAVEFORM_STACK_GAP = 6;
 
 export interface LeftPillSlotInputs {
   xExpanded: boolean;
@@ -55,4 +56,10 @@ export function pipeSlotWidthForCount(pipeCount: number): number {
   if (pipeCount >= 10) return 38;
   if (pipeCount > 3) return 32;
   return 22;
+}
+
+export function floatingPipeSlotWidthForCount(pipeCount: number): number {
+  if (pipeCount >= 10) return 28;
+  if (pipeCount > 3) return 22;
+  return Math.max(8, pipeCount * 4 + 4);
 }

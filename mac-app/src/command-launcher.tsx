@@ -47,6 +47,7 @@ import {
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
   type LauncherLibraryMoveSource,
+  type LauncherMoveDirectoryTarget,
   type LauncherLibraryRoot,
   type LauncherUsageMap,
 } from './commandLauncherUtils';
@@ -101,6 +102,7 @@ type LauncherPreviewPayload =
 
 type LauncherLibraryMoveRecord = {
   source: LauncherLibraryMoveSource;
+  target: LauncherMoveDirectoryTarget;
   movedRelPath: string;
 };
 
@@ -258,7 +260,7 @@ interface LauncherThemeAPI {
 
 interface LauncherLibraryAPI {
   getRoots: () => Promise<LauncherLibraryRoot[]>;
-  moveItem?: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => Promise<string | null>;
+  moveItem?: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
 }
 
 interface LauncherBookmarksAPI {
@@ -1280,10 +1282,14 @@ function CommandLauncher() {
     previewWindowWasOpenRef.current = false;
   }, [previewOpen]);
 
-  const openMovedLibraryFile = useCallback(async (source: LauncherLibraryMoveSource, movedRelPath: string) => {
-    const path = getLauncherMovedFilePath(source, movedRelPath);
+  const openMovedLibraryFile = useCallback(async (
+    source: LauncherLibraryMoveSource,
+    target: LauncherMoveDirectoryTarget,
+    movedRelPath: string,
+  ) => {
+    const path = getLauncherMovedFilePath(source, movedRelPath, target.targetRootPath, target.targetType);
     const result = await commandsAPI.openFieldTheoryMarkdown({
-      kind: source.type === 'wiki' ? 'wiki' : 'external',
+      kind: target.targetType,
       path,
     });
     if (!result.success) {
@@ -1297,27 +1303,28 @@ function CommandLauncher() {
   ): Promise<boolean> => {
     const target = getLauncherMoveDirectoryTarget(source, directory);
     if (!target) {
-      showLauncherMessage('Choose a folder in the same Library root');
+      showLauncherMessage('Choose a Library folder');
       return false;
     }
     const movedRelPath = await libraryAPI?.moveItem?.(
-      target.rootPath,
+      target.sourceRootPath,
       'file',
       source.relPath,
       target.targetDirRelPath,
+      target.targetRootPath,
     );
     if (!movedRelPath) {
       showLauncherMessage('Move failed');
       return false;
     }
-    setLastLibraryMove({ source, movedRelPath });
+    setLastLibraryMove({ source, target, movedRelPath });
     setMoveSource(null);
     setQuery('');
     setFiltered([]);
     selectIndex(0);
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     await loadLibraryMarkdown();
-    await openMovedLibraryFile(source, movedRelPath);
+    await openMovedLibraryFile(source, target, movedRelPath);
     commandsAPI.launcherClose({ skipActivation: true });
     return true;
   }, [loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, selectIndex, showLauncherMessage]);
@@ -1329,10 +1336,11 @@ function CommandLauncher() {
     }
     const originalParentRelPath = getLauncherMoveUndoTargetDirRelPath(lastLibraryMove.source.relPath);
     const restoredRelPath = await libraryAPI?.moveItem?.(
-      lastLibraryMove.source.rootPath,
+      lastLibraryMove.target.targetRootPath,
       'file',
       lastLibraryMove.movedRelPath,
       originalParentRelPath,
+      lastLibraryMove.source.rootPath,
     );
     if (!restoredRelPath) {
       showLauncherMessage('Undo move failed');
@@ -1343,7 +1351,16 @@ function CommandLauncher() {
     setFiltered([]);
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     await loadLibraryMarkdown();
-    await openMovedLibraryFile(lastLibraryMove.source, restoredRelPath);
+    await openMovedLibraryFile(
+      lastLibraryMove.source,
+      {
+        sourceRootPath: lastLibraryMove.target.targetRootPath,
+        targetRootPath: lastLibraryMove.source.rootPath,
+        targetDirRelPath: originalParentRelPath,
+        targetType: lastLibraryMove.source.type,
+      },
+      restoredRelPath,
+    );
     commandsAPI.launcherClose({ skipActivation: true });
     return true;
   }, [lastLibraryMove, loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, showLauncherMessage]);

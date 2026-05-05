@@ -89,4 +89,16 @@ describe('ContentToolbar', () => {
 
     expect(onTodoMarkerChange).toHaveBeenCalledWith('square');
   });
+
+  it('can keep the center spacer in the renderer hit-test path', () => {
+    const { container } = render(
+      <ContentToolbar
+        showCopy={false}
+        dragSpacer={false}
+      />
+    );
+
+    const spacer = container.querySelector('[data-content-toolbar-spacer]') as HTMLDivElement | null;
+    expect(spacer?.style.WebkitAppRegion).toBe('no-drag');
+  });
 });

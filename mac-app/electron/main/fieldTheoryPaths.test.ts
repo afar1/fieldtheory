@@ -5,6 +5,7 @@ import {
   canonicalBookmarkDataDir,
   canonicalLibraryDir,
   commandsDir,
+  ideasDir,
   legacyLibraryDir,
   libraryDir,
 } from './fieldTheoryPaths';
@@ -18,6 +19,7 @@ describe('Field Theory path contract', () => {
     expect(canonicalBookmarkDataDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'bookmarks'));
     expect(canonicalLibraryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library'));
     expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'commands'));
+    expect(ideasDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'ideas'));
   });
 
   it('honors explicit env overrides', () => {
@@ -27,12 +29,14 @@ describe('Field Theory path contract', () => {
         FT_DATA_DIR: '/tmp/ft-data',
         FT_LIBRARY_DIR: '/tmp/ft-library',
         FT_COMMANDS_DIR: '/tmp/ft-commands',
+        FT_IDEAS_DIR: '/tmp/ft-ideas',
       },
     };
 
     expect(bookmarkDataDir(options)).toBe('/tmp/ft-data');
     expect(libraryDir(options)).toBe('/tmp/ft-library');
     expect(commandsDir(options)).toBe('/tmp/ft-commands');
+    expect(ideasDir(options)).toBe('/tmp/ft-ideas');
   });
 
   it('does not fall back to legacy bookmark data when canonical data is absent', () => {

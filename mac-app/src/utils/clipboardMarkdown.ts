@@ -119,27 +119,33 @@ export function buildClipboardItemsMarkdown(
   imagePaths: ClipboardMarkdownImagePaths,
   title = getClipboardItemsMarkdownTitle(items),
 ): string {
-  const blocks: string[] = [];
+  const textBlocks: string[] = [];
+  const imageBlocks: string[] = [];
   let imageIndex = 1;
 
-  for (const item of [...items].sort((a, b) => a.createdAt - b.createdAt)) {
-    const text = getItemText(item);
-    if (text.trim()) blocks.push(formatTextBlock(text));
+  const chronologicalItems = [...items].sort((a, b) => a.createdAt - b.createdAt);
 
+  for (const item of chronologicalItems) {
+    const text = getItemText(item);
+    if (text.trim()) textBlocks.push(formatTextBlock(text));
+  }
+
+  for (const item of chronologicalItems) {
     if (!isImageItem(item)) continue;
 
     const imagePath = imagePaths[item.id];
     if (!imagePath) {
-      blocks.push(`> Image ${imageIndex} was unavailable when this note was created.`);
+      imageBlocks.push(`> Image ${imageIndex} was unavailable when this note was created.`);
       imageIndex += 1;
       continue;
     }
 
     const alt = getImageAlt(item, imageIndex);
-    blocks.push(formatLocalImageMarkdown(imagePath, alt));
+    imageBlocks.push(formatLocalImageMarkdown(imagePath, alt));
     imageIndex += 1;
   }
 
+  const blocks = [...textBlocks, ...imageBlocks];
   const body = blocks.length > 0 ? blocks.join('\n\n') : '_No text or images were available._';
   return `# ${normalizeTitlePart(title)}\n\n${body}\n`;
 }

@@ -1,4 +1,5 @@
 import { BrowserWindow, screen, app, ipcMain, clipboard } from 'electron';
+import type { Display } from 'electron';
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import os from 'os';
@@ -33,8 +34,15 @@ function pillDebugWrite(line: string): void {
 // Two symmetric pills: left (history + cancel) and right (waveform + stack).
 // =============================================================================
 
-export type DynamicIslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'showing-transcript' | 'improving';
+export type DynamicIslandState = 'idle' | 'silentStacking' | 'recording' | 'transcribing' | 'completing' | 'showing-transcript' | 'improving';
 export type DynamicIslandInputMode = 'hot-mic' | 'standard';
+export type RecordingIndicatorMode = 'auto' | 'notch' | 'floating';
+export type ResolvedRecordingIndicatorMode = 'notch' | 'floating';
+
+export interface FloatingIndicatorPosition {
+  x: number;
+  y: number;
+}
 
 interface TranscriptHistoryItem {
   id: number;
@@ -142,6 +150,14 @@ export class DynamicIslandManager extends EventEmitter {
   private readonly CENTER_JOIN_OVERLAP_PX = 1;
   private readonly RIGHT_PILL_WIDTH = 48;
   private readonly RIGHT_PILL_HEIGHT = 38;
+  private readonly FLOATING_PILL_HEIGHT = 38;
+  private readonly FLOATING_BUTTON_WIDTH = 22;
+  private readonly FLOATING_BUTTON_GAP = 4;
+  private readonly FLOATING_HORIZONTAL_PADDING = 12;
+  private readonly FLOATING_WAVEFORM_STACK_GAP = 6;
+  private readonly FLOATING_COMPLETION_HIDE_MS = 240;
+  private readonly FLOATING_TOP_RELIC_TOLERANCE = 4;
+  private readonly FLOATING_PILL_EDGE_MARGIN = 24;
   private readonly DRAWER_WIDTH = 360;
   private readonly DRAWER_HEIGHT = 82;   // 38px backdrop + 44px text
   private readonly DRAWER_Y = 0;
@@ -215,6 +231,12 @@ export class DynamicIslandManager extends EventEmitter {
   private inputMode: DynamicIslandInputMode = 'standard';
   private geometryTuning: DynamicIslandGeometryTuning = { ...DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING };
   private stayOnLaptop: boolean = false;
+  private recordingIndicatorMode: RecordingIndicatorMode = 'auto';
+  private currentWindowMode: ResolvedRecordingIndicatorMode | null = null;
+  private floatingPosition: FloatingIndicatorPosition | null = null;
+  private floatingAnchorCenterX: number | null = null;
+  private suppressFloatingMoveEvents: boolean = false;
+  private lastProgrammaticFloatingPosition: FloatingIndicatorPosition | null = null;
 
   // Auto-hide: when enabled, pill visibility tracks simple cursor zones.
   // Each tick computes a binary target (0 = hidden, 1 = revealed) and eases
@@ -317,7 +339,11 @@ export class DynamicIslandManager extends EventEmitter {
     this.clipboardManager = manager;
     if (!this.enabled) return;
     this.show();
-    this.createDrawerWindow();
+    if (this.shouldUseNotchIndicator()) {
+      this.createDrawerWindow();
+    } else {
+      this.hideDrawerWindow();
+    }
     this.tickAutoHide();
   }
 
@@ -334,10 +360,14 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (!this.clipboardManager) return;
     this.show();
-    if (!this.drawerWindow || this.drawerWindow.isDestroyed()) {
-      this.createDrawerWindow();
+    if (this.shouldUseNotchIndicator()) {
+      if (!this.drawerWindow || this.drawerWindow.isDestroyed()) {
+        this.createDrawerWindow();
+      } else {
+        this.updateDrawerWindowPosition();
+      }
     } else {
-      this.updateDrawerWindowPosition();
+      this.hideDrawerWindow();
     }
     this.updateDrawerTranscript(this.drawerTranscriptText);
     this.updateWindowSize();
@@ -400,6 +430,54 @@ export class DynamicIslandManager extends EventEmitter {
     };
   }
 
+  setRecordingIndicatorMode(mode: RecordingIndicatorMode): RecordingIndicatorMode {
+    const next = this.normalizeRecordingIndicatorMode(mode);
+    if (this.recordingIndicatorMode === next) return this.recordingIndicatorMode;
+
+    this.recordingIndicatorMode = next;
+    this.recreateIndicatorWindowForMode();
+    if (this.shouldUseNotchIndicator()) {
+      if (this.enabled && this.clipboardManager) {
+        this.show();
+        this.createDrawerWindow();
+      }
+    } else {
+      this.hideDrawerWindow();
+      if (this.shouldShowFloatingIndicator()) {
+        this.show();
+      } else {
+        this.hide();
+      }
+    }
+    this.updateWindowSize();
+    return this.recordingIndicatorMode;
+  }
+
+  getRecordingIndicatorMode(): RecordingIndicatorMode {
+    return this.recordingIndicatorMode;
+  }
+
+  getResolvedRecordingIndicatorMode(): ResolvedRecordingIndicatorMode {
+    if (this.recordingIndicatorMode === 'floating') return 'floating';
+    if (this.recordingIndicatorMode === 'notch') return 'notch';
+    return this.getActiveNotchProfile() ? 'notch' : 'floating';
+  }
+
+  setFloatingPosition(position: FloatingIndicatorPosition | null): FloatingIndicatorPosition | null {
+    this.floatingPosition = this.normalizeFloatingPosition(position);
+    this.floatingAnchorCenterX = this.floatingPosition
+      ? this.floatingPosition.x + this.getFloatingPillWidth() / 2
+      : null;
+    if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+      this.updateWindowSize();
+    }
+    return this.getFloatingPosition();
+  }
+
+  getFloatingPosition(): FloatingIndicatorPosition | null {
+    return this.floatingPosition ? { ...this.floatingPosition } : null;
+  }
+
   // -------------------------------------------------------------------------
   // State transitions
   // -------------------------------------------------------------------------
@@ -422,6 +500,9 @@ export class DynamicIslandManager extends EventEmitter {
       this.sendStateToRenderer(state);
       this.updateWindowSize();
       this.tickAutoHide();
+      if (!this.shouldShowIndicatorWindow()) {
+        this.hide();
+      }
       return;
     }
 
@@ -442,9 +523,15 @@ export class DynamicIslandManager extends EventEmitter {
   updateStackCount(count: number): void {
     this.stackCount = count;
     if (!this.enabled) return;
+    if (this.shouldShowFloatingIndicator()) {
+      this.show();
+    } else if (!this.shouldShowIndicatorWindow()) {
+      this.hide();
+    }
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {
       this.window.webContents.send('dynamic-island-stack-changed', count);
     }
+    this.updateWindowSize();
   }
 
   setWaitingAgents(agents: WaitingAgent[]): void {
@@ -482,6 +569,11 @@ export class DynamicIslandManager extends EventEmitter {
     if (!this.enabled) return;
     this.sendHotMicToRight();
     this.updateWindowSize();
+    if (this.shouldShowFloatingIndicator()) {
+      this.show();
+    } else if (!this.shouldShowIndicatorWindow()) {
+      this.hide();
+    }
     this.tickAutoHide();
   }
 
@@ -571,6 +663,12 @@ export class DynamicIslandManager extends EventEmitter {
 
   sendTranscript(text: string, isFinal: boolean): void {
     if (!this.enabled) return;
+    if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+      if (isFinal && this.state !== 'idle') {
+        this.setState('idle');
+      }
+      return;
+    }
     if (this.state === 'idle' || this.state === 'transcribing') {
       this.setState('showing-transcript');
     }
@@ -589,6 +687,17 @@ export class DynamicIslandManager extends EventEmitter {
         }
       }, this.TRANSCRIPT_DISPLAY_MS);
     }
+  }
+
+  prepareForPaste(): number {
+    if (!this.enabled || this.getResolvedRecordingIndicatorMode() !== 'floating') return 0;
+    this.setState('completing');
+    setTimeout(() => {
+      if (this.state === 'completing') {
+        this.hide();
+      }
+    }, this.FLOATING_COMPLETION_HIDE_MS);
+    return this.FLOATING_COMPLETION_HIDE_MS;
   }
 
   sendCommandDetected(phrase: string, startIndex: number, endIndex: number): void {
@@ -627,6 +736,11 @@ export class DynamicIslandManager extends EventEmitter {
 
   private show(): void {
     if (!this.enabled) return;
+    if (!this.shouldShowIndicatorWindow()) {
+      this.hide();
+      return;
+    }
+    this.recreateIndicatorWindowForMode();
     if (!this.window || this.window.isDestroyed()) {
       this.createWindow();
     }
@@ -659,17 +773,28 @@ export class DynamicIslandManager extends EventEmitter {
 
   private createWindow(): void {
     this.rendererReady = false;
+    const resolvedMode = this.getResolvedRecordingIndicatorMode();
+    this.currentWindowMode = resolvedMode;
+    const isFloating = resolvedMode === 'floating';
     const useTransparentWindow = this.shouldUseTransparentWindow('left');
     const backingColor = this.getOverlayBackingColor(useTransparentWindow);
-    const idleWidth = this.getIdlePillWidth();
-    const idleHeight = this.getIdlePillHeight();
-    const initialWidth = this.historyVisible
+    const idleWidth = isFloating ? this.getFloatingPillWidth() : this.getIdlePillWidth();
+    const idleHeight = isFloating ? this.FLOATING_PILL_HEIGHT : this.getIdlePillHeight();
+    const initialWidth = isFloating
+      ? this.getFloatingPillWidth()
+      : this.historyVisible
       ? this.getUnifiedWindowWidth(this.ISLAND_WIDTH)
       : this.getUnifiedWindowWidth(idleWidth);
-    const x = this.getLeftWindowX(idleWidth, true);
-    const y = this.getTopWindowY();
+    const floatingPosition = isFloating
+      ? this.getResolvedFloatingPosition(initialWidth, idleHeight)
+      : null;
+    const x = floatingPosition?.x ?? this.getLeftWindowX(idleWidth, true);
+    const y = floatingPosition?.y ?? this.getTopWindowY();
+    if (isFloating) {
+      this.floatingAnchorCenterX = x + initialWidth / 2;
+    }
 
-    const initialHeight = this.historyVisible ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
+    const initialHeight = isFloating ? idleHeight : this.historyVisible ? this.ISLAND_HEIGHT_WITH_HISTORY : idleHeight;
 
     this.window = new BrowserWindow({
       type: 'panel',
@@ -680,14 +805,14 @@ export class DynamicIslandManager extends EventEmitter {
       frame: false,
       transparent: useTransparentWindow,
       backgroundColor: backingColor,
-      hasShadow: false,
+      hasShadow: isFloating,
       roundedCorners: this.USE_SYSTEM_ROUNDED_CORNERS,
       alwaysOnTop: true,
       skipTaskbar: true,
       hiddenInMissionControl: true,
       resizable: false,
-      movable: false,
-      focusable: this.leftWindowFocusable,
+      movable: isFloating,
+      focusable: isFloating ? false : this.leftWindowFocusable,
       show: false,
       webPreferences: {
         nodeIntegration: false,
@@ -703,7 +828,12 @@ export class DynamicIslandManager extends EventEmitter {
 
     this.window.setIgnoreMouseEvents(false);
 
-    this.loadWindowUrl(this.window, `dynamic-island.html?side=unified&rightWidth=${this.getRightPillWidth()}`);
+    this.loadWindowUrl(
+      this.window,
+      isFloating
+        ? `dynamic-island.html?side=floating&rightWidth=${this.getFloatingContentWidth()}`
+        : `dynamic-island.html?side=unified&rightWidth=${this.getRightPillWidth()}`
+    );
 
     // Intercept Cmd+W at the keyboard level so it never reaches the window
     // close handler. Using preventDefault on 'close' causes macOS to
@@ -717,8 +847,11 @@ export class DynamicIslandManager extends EventEmitter {
 
     this.window.on('closed', () => {
       this.window = null;
+      this.currentWindowMode = null;
     });
     this.attachWindowDebugLogging(this.window, 'left');
+    this.window.on('move', () => this.handleFloatingWindowMoved());
+    this.window.on('moved', () => this.handleFloatingWindowMoved());
 
     // Close history panel when window loses focus.
     this.window.on('blur', () => {
@@ -734,14 +867,22 @@ export class DynamicIslandManager extends EventEmitter {
         }
         this.sendStateToRenderer(this.state);
         this.sendInputModeToRenderers();
-        // Seed both sides with the same width so the first frame is symmetric;
-        // getPillWidth() already accounts for visible active chips.
-        const leftWidth = this.historyVisible ? this.ISLAND_WIDTH : this.getPillWidth();
-        this.window.webContents.send('dynamic-island-resize', { leftWidth, rightWidth: this.getRightPillWidth() });
+        // Seed renderer widths before the first visible frame.
+        const leftWidth = isFloating
+          ? this.getFloatingPillWidth()
+          : this.historyVisible ? this.ISLAND_WIDTH : this.getPillWidth();
+        this.window.webContents.send(
+          'dynamic-island-resize',
+          {
+            leftWidth,
+            rightWidth: isFloating ? this.getFloatingContentWidth() : this.getRightPillWidth(),
+          }
+        );
         this.window.webContents.send('dynamic-island-stack-changed', this.stackCount);
         this.window.webContents.send('dynamic-island-agents', this.waitingAgents);
         this.window.webContents.send('dynamic-island-agent-layout', this.agentLayout);
         this.sendHistory();
+        this.sendHotMicToRight();
         this.sendHotMicRuntimeStatusToLeft();
 
         if (this.pendingShow) {
@@ -761,6 +902,7 @@ export class DynamicIslandManager extends EventEmitter {
   // -------------------------------------------------------------------------
 
   private createDrawerWindow(): void {
+    if (!this.shouldUseNotchIndicator()) return;
     if (this.drawerWindow && !this.drawerWindow.isDestroyed()) return;
 
     this.drawerRendererReady = false;
@@ -821,6 +963,10 @@ export class DynamicIslandManager extends EventEmitter {
 
   updateDrawerTranscript(text: string): void {
     this.drawerTranscriptText = text;
+    if (!this.shouldUseNotchIndicator()) {
+      this.hideDrawerWindow();
+      return;
+    }
 
     if ((!this.drawerWindow || this.drawerWindow.isDestroyed()) && text && this.enabled) {
       this.createDrawerWindow();
@@ -1153,9 +1299,149 @@ export class DynamicIslandManager extends EventEmitter {
         primary.scaleFactor
       );
     }
+    const previousMode = this.currentWindowMode;
+    if (previousMode && previousMode !== this.getResolvedRecordingIndicatorMode()) {
+      this.recreateIndicatorWindowForMode();
+      if (this.shouldShowIndicatorWindow()) {
+        this.show();
+      }
+    }
     this.updateWindowSize();
     this.refreshWindowProperties('display-metrics-changed');
   };
+
+  private normalizeRecordingIndicatorMode(mode: RecordingIndicatorMode | null | undefined): RecordingIndicatorMode {
+    return mode === 'notch' || mode === 'floating' || mode === 'auto' ? mode : 'auto';
+  }
+
+  private shouldUseNotchIndicator(): boolean {
+    return this.getResolvedRecordingIndicatorMode() === 'notch';
+  }
+
+  private shouldShowFloatingIndicator(): boolean {
+    return this.getResolvedRecordingIndicatorMode() === 'floating' && (this.isActiveState() || this.stackCount > 0);
+  }
+
+  private shouldShowIndicatorWindow(): boolean {
+    if (!this.enabled) return false;
+    if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+      return this.shouldShowFloatingIndicator();
+    }
+    return true;
+  }
+
+  private recreateIndicatorWindowForMode(): void {
+    const resolvedMode = this.getResolvedRecordingIndicatorMode();
+    if (!this.window || this.window.isDestroyed() || this.currentWindowMode === null || this.currentWindowMode === resolvedMode) {
+      return;
+    }
+
+    this.window.close();
+    this.window = null;
+    this.rendererReady = false;
+    this.pendingShow = false;
+    this.currentWindowMode = null;
+  }
+
+  private normalizeFloatingPosition(position: FloatingIndicatorPosition | null | undefined): FloatingIndicatorPosition | null {
+    if (!position) return null;
+    if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
+    const rounded = {
+      x: Math.round(position.x),
+      y: Math.round(position.y),
+    };
+    const display = this.getTargetDisplay();
+    const topEdgeY = display.workArea.y + this.FLOATING_PILL_EDGE_MARGIN;
+    if (rounded.y <= topEdgeY + this.FLOATING_TOP_RELIC_TOLERANCE) return null;
+    return this.clampFloatingPosition(rounded, this.getFloatingPillWidth(), this.FLOATING_PILL_HEIGHT, display);
+  }
+
+  private getFloatingPillWidth(): number {
+    return this.getFloatingContentWidth()
+      + (this.FLOATING_BUTTON_WIDTH * 2)
+      + (this.FLOATING_BUTTON_GAP * 2)
+      + this.FLOATING_HORIZONTAL_PADDING;
+  }
+
+  private getFloatingContentWidth(): number {
+    const waveformActive = this.hotMicActive || this.state === 'recording' || this.state === 'completing';
+    const hasStackChip = this.stackCount > 0;
+    const stackSlotWidth = hasStackChip ? this.FLOATING_WAVEFORM_STACK_GAP + this.floatingPipeSlotWidth(this.stackCount) : 0;
+    const contentWidth = waveformActive
+      ? this.PILL_WAVEFORM + (stackSlotWidth * 2)
+      : (hasStackChip ? this.floatingPipeSlotWidth(this.stackCount) : 0);
+    return Math.max(this.PILL_WAVEFORM, contentWidth);
+  }
+
+  private floatingPipeSlotWidth(pipeCount: number): number {
+    if (pipeCount >= 10) return 28;
+    if (pipeCount > 3) return 22;
+    return Math.max(8, pipeCount * 4 + 4);
+  }
+
+  private getResolvedFloatingPosition(width: number, height: number): FloatingIndicatorPosition {
+    if (this.floatingPosition) {
+      return this.clampFloatingPosition(this.floatingPosition, width, height);
+    }
+
+    return this.getDefaultFloatingPosition(width, height);
+  }
+
+  private getDefaultFloatingPosition(width: number, height: number): FloatingIndicatorPosition {
+    const display = this.getTargetDisplay();
+    const x = display.workArea.x + Math.floor((display.workArea.width - width) / 2);
+    const y = display.workArea.y + display.workArea.height - height - this.FLOATING_PILL_EDGE_MARGIN;
+    return this.clampFloatingPosition({ x, y }, width, height, display);
+  }
+
+  private clampFloatingPosition(
+    position: FloatingIndicatorPosition,
+    width: number,
+    height: number,
+    display: Display = this.getTargetDisplay()
+  ): FloatingIndicatorPosition {
+    const minX = display.workArea.x + this.FLOATING_PILL_EDGE_MARGIN;
+    const minY = display.workArea.y + this.FLOATING_PILL_EDGE_MARGIN;
+    const maxX = Math.max(minX, display.workArea.x + display.workArea.width - width - this.FLOATING_PILL_EDGE_MARGIN);
+    const maxY = Math.max(minY, display.workArea.y + display.workArea.height - height - this.FLOATING_PILL_EDGE_MARGIN);
+    return {
+      x: Math.max(minX, Math.min(position.x, maxX)),
+      y: Math.max(minY, Math.min(position.y, maxY)),
+    };
+  }
+
+  private handleFloatingWindowMoved(): void {
+    if (this.currentWindowMode !== 'floating' || !this.window || this.window.isDestroyed()) return;
+    if (!this.window.isVisible()) return;
+    const [x, y] = this.window.getPosition();
+    if (
+      this.suppressFloatingMoveEvents ||
+      (this.lastProgrammaticFloatingPosition?.x === x && this.lastProgrammaticFloatingPosition?.y === y)
+    ) {
+      this.lastProgrammaticFloatingPosition = null;
+      return;
+    }
+    const [width, height] = this.window.getSize();
+    const next = this.clampFloatingPosition({ x, y }, width, height);
+    if (next.x !== x || next.y !== y) {
+      this.suppressFloatingMoveEvents = true;
+      this.lastProgrammaticFloatingPosition = next;
+      this.window.setBounds({ x: next.x, y: next.y, width, height }, false);
+      setTimeout(() => {
+        this.suppressFloatingMoveEvents = false;
+      }, 0);
+    }
+    this.floatingAnchorCenterX = next.x + width / 2;
+    if (this.floatingPosition?.x === next.x && this.floatingPosition?.y === next.y) return;
+    this.floatingPosition = next;
+    this.emit('floating-position-changed', { ...next });
+  }
+
+  private hideDrawerWindow(): void {
+    if (this.drawerWindow && !this.drawerWindow.isDestroyed()) {
+      this.drawerWindow.hide();
+    }
+  }
 
   private clampInt(
     value: number | undefined,
@@ -1292,7 +1578,7 @@ export class DynamicIslandManager extends EventEmitter {
   // safe to call standalone from transitions (setEnabled, disable, etc.).
   private applyAutoHideProgress(progress: number): void {
     const clamped = Math.max(0, Math.min(1, progress));
-    const hasNotch = this.getActiveNotchProfile() !== null;
+    const slideIntoNotch = this.shouldUseNotchIndicator();
 
     if (clamped <= 0) {
       if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
@@ -1314,7 +1600,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.window.setOpacity(1);
         this.window.showInactive();
       }
-      if (hasNotch) {
+      if (slideIntoNotch) {
         // Slide only — opacity stays 1 throughout. The window hides (clamped <= 0)
         // only after pills are fully retracted behind the notch gap.
         const leftWidth = this.getIdlePillWidth();
@@ -1430,7 +1716,7 @@ export class DynamicIslandManager extends EventEmitter {
   private readonly PILL_SLOT = 22;
   private readonly PILL_GAP = 8;
   private readonly PILL_HAMBURGER = 22;
-  private readonly PILL_WAVEFORM = 22;
+  private readonly PILL_WAVEFORM = 30;
 
   private pipeSlotWidth(pipeCount: number): number {
     if (pipeCount >= 10) return 38;
@@ -1505,6 +1791,10 @@ export class DynamicIslandManager extends EventEmitter {
 
   private updateDrawerWindowPosition(): void {
     if (!this.drawerWindow || this.drawerWindow.isDestroyed()) return;
+    if (!this.shouldUseNotchIndicator()) {
+      this.drawerWindow.hide();
+      return;
+    }
 
     const x = this.getDrawerWindowX();
     const y = this.getTopWindowY() + this.DRAWER_Y;
@@ -1527,14 +1817,45 @@ export class DynamicIslandManager extends EventEmitter {
   }
 
   private updateWindowSize(): void {
-    if (!this.enabled) {
+    if (!this.enabled || !this.shouldShowIndicatorWindow()) {
       this.hideAllWindows();
       return;
     }
 
-    this.updateDrawerWindowPosition();
+    if (this.shouldUseNotchIndicator()) {
+      this.updateDrawerWindowPosition();
+    } else {
+      this.hideDrawerWindow();
+    }
 
     if (!this.window || this.window.isDestroyed()) return;
+
+    if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+      const targetWidth = this.getFloatingPillWidth();
+      const targetHeight = this.FLOATING_PILL_HEIGHT;
+      const [currentWidth, currentHeight] = this.window.getSize();
+      const [currentX, currentY] = this.window.getPosition();
+      const resolvedPosition = this.getResolvedFloatingPosition(targetWidth, targetHeight);
+      const anchorCenterX = this.floatingAnchorCenterX ?? (resolvedPosition.x + targetWidth / 2);
+      const x = Math.round(anchorCenterX - targetWidth / 2);
+      const y = resolvedPosition.y;
+      if (currentWidth !== targetWidth || currentHeight !== targetHeight || currentX !== x || currentY !== y) {
+        this.suppressFloatingMoveEvents = true;
+        this.lastProgrammaticFloatingPosition = { x, y };
+        this.window.setBounds({ x, y, width: targetWidth, height: targetHeight }, false);
+        setTimeout(() => {
+          this.suppressFloatingMoveEvents = false;
+        }, 0);
+        this.reinforceWindowBacking('left', 'floating-set-bounds');
+      }
+      if (this.rendererReady) {
+        this.window.webContents.send(
+          'dynamic-island-resize',
+          { leftWidth: targetWidth, rightWidth: this.getFloatingContentWidth() }
+        );
+      }
+      return;
+    }
 
     const showingHistory = this.historyVisible;
     const idleWidth = this.getIdlePillWidth();
@@ -1584,6 +1905,7 @@ export class DynamicIslandManager extends EventEmitter {
 
   private hideAllWindows(): void {
     this.pendingShow = false;
+    this.recreateIndicatorWindowForMode();
     if (this.window && !this.window.isDestroyed()) {
       this.window.hide();
     }

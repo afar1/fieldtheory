@@ -59,6 +59,8 @@ import {
   DynamicIslandManager,
   DEFAULT_DYNAMIC_ISLAND_GEOMETRY_TUNING,
   type DynamicIslandGeometryTuning,
+  type FloatingIndicatorPosition,
+  type RecordingIndicatorMode,
 } from './dynamicIslandManager';
 import { AgentAttentionManager } from './agentAttentionManager';
 import {
@@ -85,6 +87,7 @@ import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFo
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
+import { releaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import {
@@ -402,25 +405,41 @@ protocol.registerSchemesAsPrivileged([
   { scheme: 'ftlocalfile', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, bypassCSP: true } },
 ]);
 
-// Pin userData paths explicitly so auth/session storage is stable across package-name changes.
+function readPackagedBuildChannel(): string | undefined {
+  try {
+    const packageJsonPath = path.join(__dirname, '../../package.json');
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as { fieldTheoryBuildChannel?: unknown };
+    return typeof packageJson.fieldTheoryBuildChannel === 'string'
+      ? packageJson.fieldTheoryBuildChannel
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+const fieldTheoryBuildChannel = resolveFieldTheoryBuildChannel({
+  env: process.env,
+  appName: app.getName(),
+  metadataChannel: readPackagedBuildChannel(),
+});
+const isExperimentalBuild = fieldTheoryBuildChannel === 'experimental';
+
+// Pin userData paths explicitly so auth/session storage is shared across release channels.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
-if (process.env.EXPERIMENTAL === 'true') {
-  const experimentalUserData = path.join(
-    os.homedir(),
-    'Library/Application Support/Field Theory Experimental'
-  );
-  app.setPath('userData', experimentalUserData);
+const productionUserData = path.join(app.getPath('appData'), 'fieldtheory-mac');
+app.setPath('userData', productionUserData);
+if (isExperimentalBuild) {
   app.setName('Field Theory Experimental');
-} else {
-  const productionUserData = path.join(app.getPath('appData'), 'fieldtheory-mac');
-  app.setPath('userData', productionUserData);
 }
 
 // Configure autoUpdater for manual update flow.
-// allowPrerelease ensures users on prerelease builds (e.g., 0.1.29-maxwell) can update to stable releases (0.1.30).
 autoUpdater.autoDownload = false;
-autoUpdater.allowPrerelease = true;
-autoUpdater.setFeedURL({ provider: 'github', owner: 'afar1', repo: 'field-releases' });
+autoUpdater.allowPrerelease = isExperimentalBuild;
+autoUpdater.setFeedURL({
+  provider: 'github',
+  owner: 'afar1',
+  repo: releaseRepoForBuildChannel(fieldTheoryBuildChannel),
+});
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
@@ -800,6 +819,66 @@ function getHotMicIslandGeometryFromPreferences(): DynamicIslandGeometryTuning {
     offsetX: preferencesManager?.getPreference('hotMicIslandOffsetX'),
     offsetY: preferencesManager?.getPreference('hotMicIslandOffsetY'),
   });
+}
+
+function normalizeRecordingIndicatorMode(value: unknown): RecordingIndicatorMode {
+  return value === 'notch' || value === 'floating' || value === 'auto' ? value : 'auto';
+}
+
+function normalizeFloatingIndicatorPosition(value: unknown): FloatingIndicatorPosition | null {
+  if (!value || typeof value !== 'object') return null;
+  const position = value as Partial<FloatingIndicatorPosition>;
+  if (!Number.isFinite(position.x) || !Number.isFinite(position.y)) return null;
+  return {
+    x: Math.round(position.x as number),
+    y: Math.round(position.y as number),
+  };
+}
+
+function getRecordingIndicatorModeFromPreferences(): RecordingIndicatorMode {
+  return normalizeRecordingIndicatorMode(preferencesManager?.getPreference('recordingIndicatorMode'));
+}
+
+function getFloatingIndicatorPositionFromPreferences(): FloatingIndicatorPosition | null {
+  return normalizeFloatingIndicatorPosition(preferencesManager?.getPreference('floatingIndicatorPosition'));
+}
+
+function sameFloatingIndicatorPosition(
+  left: FloatingIndicatorPosition | null,
+  right: FloatingIndicatorPosition | null
+): boolean {
+  if (left === null || right === null) return left === right;
+  return left.x === right.x && left.y === right.y;
+}
+
+function applyFloatingIndicatorPositionFromPreferences(): FloatingIndicatorPosition | null {
+  const stored = getFloatingIndicatorPositionFromPreferences();
+  const applied = dynamicIslandManager?.setFloatingPosition(stored) ?? stored;
+  if (!sameFloatingIndicatorPosition(stored, applied)) {
+    void preferencesManager?.save({ floatingIndicatorPosition: applied });
+  }
+  return applied;
+}
+
+function applyDynamicIslandPreferencesFromPreferences(): void {
+  if (!dynamicIslandManager) return;
+  const hotMicEnabled = preferencesManager?.getPreference('hotMicEnabled') ?? false;
+  dynamicIslandManager.setInputMode(resolveInputModeFromHotMicEnabled(hotMicEnabled));
+  dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
+  dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
+  dynamicIslandManager.setStayOnLaptop(preferencesManager?.getPreference('hotMicIslandStayOnLaptop') ?? false);
+  dynamicIslandManager.setRecordingIndicatorMode(getRecordingIndicatorModeFromPreferences());
+  applyFloatingIndicatorPositionFromPreferences();
+  dynamicIslandManager.setAutoHide(preferencesManager?.getPreference('hotMicIslandAutoHide') ?? false);
+}
+
+function enableDynamicIslandFromPreferences(): void {
+  if (!dynamicIslandManager) return;
+  applyDynamicIslandPreferencesFromPreferences();
+  if (clipboardManager) {
+    dynamicIslandManager.setClipboardManager(clipboardManager);
+  }
+  dynamicIslandManager.setEnabled(true);
 }
 
 async function saveAndApplyHotMicIslandGeometry(
@@ -2189,13 +2268,13 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
   });
 
-  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): string | null => {
+  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): string | null => {
     if (!librarianManager) return null;
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return null;
     }
-    return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath);
+    return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath);
   });
 
   ipcMain.handle('library:pickFolder', async (): Promise<string | null> => {
@@ -6404,7 +6483,7 @@ function setupClipboardIPCHandlers(): void {
     return true;
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown' }) => {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number }) => {
     if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
     }
@@ -6412,7 +6491,11 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error: 'Field Theory window not available' };
     }
 
-    const sizeKey: ClipboardHistorySizeKey = target.kind === 'command' || target.kind === 'commands' || target.kind === 'clipboard' ? 'fields' : 'library';
+    const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
+      ? clipboardHistoryWindow.getCurrentSizeKey()
+      : target.kind === 'command' || target.kind === 'commands' || target.kind === 'clipboard'
+        ? 'fields'
+        : 'library';
     if (clipboardHistoryWindow.isVisible()) {
       suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
       clipboardHistoryWindow.focusExistingWindow();
@@ -7041,6 +7124,7 @@ function broadcastTranscribeEvents(): void {
     // Update clipboard history window's recording state
     // This ensures blur event doesn't hide the app when recording is active
     clipboardHistoryWindow?.setRecordingActive(status === 'recording');
+    trayManager?.setRecordingActive(status === 'recording');
 
     // Update dynamic island with recording state transitions.
     if (dynamicIslandManager) {
@@ -7071,6 +7155,13 @@ function broadcastTranscribeEvents(): void {
   // Standard mode no longer shows live preview in the drawer.
   // The left pill displays "Recording" / "Transcribing" status instead.
   // Hot Mic still uses the drawer via its own path.
+
+  transcriberManager.on('paste-starting', async () => {
+    const delayMs = dynamicIslandManager?.prepareForPaste() ?? 0;
+    if (delayMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  });
 
   transcriberManager.on('result', (text) => {
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -7141,6 +7232,7 @@ function broadcastTranscribeEvents(): void {
   // Forward standard recording audio levels to the Dynamic Island for waveform.
   transcriberManager.on('audioLevel', (level: number) => {
     dynamicIslandManager?.updateStandardAudioLevel(level);
+    trayManager?.updateRecordingAudioLevel(level);
   });
 
   // Track if quota just exhausted - skip paste-success to preserve temporary status.
@@ -7714,16 +7806,12 @@ async function initTranscriberSystem(): Promise<void> {
   const hideStatusLabels = preferencesManager.getPreference('hideStatusLabels') ?? false;
   cursorStatusManager.setHideLabels(hideStatusLabels);
 
-  // Initialize the dynamic island overlay (fixed near the notch, shows transcript + history).
+  // Initialize the recording indicator after applying saved placement preferences.
   dynamicIslandManager = new DynamicIslandManager();
-  const hotMicEnabledOnLaunch = preferencesManager.getPreference('hotMicEnabled') ?? false;
-  dynamicIslandManager.setEnabled(true);
-  dynamicIslandManager.setInputMode(resolveInputModeFromHotMicEnabled(hotMicEnabledOnLaunch));
-  dynamicIslandManager.setClipboardManager(clipboardManager);
-  dynamicIslandManager.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
-  dynamicIslandManager.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
-  dynamicIslandManager.setStayOnLaptop(preferencesManager.getPreference('hotMicIslandStayOnLaptop') ?? false);
-  dynamicIslandManager.setAutoHide(preferencesManager.getPreference('hotMicIslandAutoHide') ?? false);
+  dynamicIslandManager.setEnabled(false);
+  dynamicIslandManager.on('floating-position-changed', (position: FloatingIndicatorPosition) => {
+    void preferencesManager?.save({ floatingIndicatorPosition: position });
+  });
 
   // Hook installer must exist before the attention manager so the manager's
   // tool filter can be seeded from install status (and re-synced on toggle).
@@ -7870,10 +7958,12 @@ async function initTranscriberSystem(): Promise<void> {
       dynamicIslandManager.on('cancel-session', () => {
         // Cancel whichever recording mode is active and collapse the tray.
         const transcriberStatus = transcriberManager?.getStatus();
-        if (transcriberStatus === 'silentStacking') {
-          transcriberManager?.cancelSilentStacking();
-        } else if (transcriberStatus === 'recording') {
-          transcriberManager?.toggleRecording();
+        if (
+          transcriberStatus === 'silentStacking'
+          || transcriberStatus === 'recording'
+          || transcriberStatus === 'transcribing'
+        ) {
+          void transcriberManager?.cancelActiveSession();
         } else if (transcriberStatus === 'idle' && transcriberManager && transcriberManager.getStackLength() > 0) {
           transcriberManager.clearStack();
           // Explicitly reset DI state and stack count so both pills collapse.
@@ -8126,6 +8216,7 @@ async function initTranscriberSystem(): Promise<void> {
   if (clipboardManager) {
     clipboardManager.setUserDataManager(userDataManager);
   }
+  enableDynamicIslandFromPreferences();
   if (librarianManager) {
     librarianManager.setUserDataManager(userDataManager);
     if (userDataManager.isLoggedIn()) {
@@ -8205,12 +8296,7 @@ async function initTranscriberSystem(): Promise<void> {
       }
 
       // Re-apply per-user Dynamic Island tuning after preferences reload.
-      dynamicIslandManager?.setGeometryTuning(getHotMicIslandGeometryFromPreferences());
-      dynamicIslandManager?.setDrawerTextSize(getHotMicDrawerTextSizeFromPreferences());
-      dynamicIslandManager?.setStayOnLaptop(prefs.hotMicIslandStayOnLaptop ?? false);
-      dynamicIslandManager?.setAutoHide(prefs.hotMicIslandAutoHide ?? false);
-      dynamicIslandManager?.setEnabled(true);
-      dynamicIslandManager?.setInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
+      enableDynamicIslandFromPreferences();
       broadcastInputMode(resolveInputModeFromHotMicEnabled(prefs.hotMicEnabled ?? false));
       await gazeTrackingManager?.reloadFromPreferences();
       await gazeDebugOverlayManager?.reloadFromPreferences();
@@ -8814,6 +8900,36 @@ if (!gotTheLock) {
       }
       dynamicIslandManager?.setStayOnLaptop(value);
       return value;
+    });
+
+    ipcMain.handle('hotmic:getRecordingIndicatorMode', () => {
+      return dynamicIslandManager?.getRecordingIndicatorMode() ?? getRecordingIndicatorModeFromPreferences();
+    });
+
+    ipcMain.handle('hotmic:setRecordingIndicatorMode', async (_event, mode: RecordingIndicatorMode) => {
+      const next = normalizeRecordingIndicatorMode(mode);
+      if (preferencesManager) {
+        await preferencesManager.save({ recordingIndicatorMode: next });
+      }
+      dynamicIslandManager?.setRecordingIndicatorMode(next);
+      return next;
+    });
+
+    ipcMain.handle('hotmic:getResolvedRecordingIndicatorMode', () => {
+      return dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? 'floating';
+    });
+
+    ipcMain.handle('hotmic:getFloatingIndicatorPosition', () => {
+      return dynamicIslandManager?.getFloatingPosition() ?? getFloatingIndicatorPositionFromPreferences();
+    });
+
+    ipcMain.handle('hotmic:setFloatingIndicatorPosition', async (_event, position: FloatingIndicatorPosition | null) => {
+      const next = normalizeFloatingIndicatorPosition(position);
+      const applied = dynamicIslandManager?.setFloatingPosition(next) ?? next;
+      if (preferencesManager) {
+        await preferencesManager.save({ floatingIndicatorPosition: applied });
+      }
+      return applied;
     });
 
     ipcMain.handle('hotmic:getIslandAutoHide', () => {

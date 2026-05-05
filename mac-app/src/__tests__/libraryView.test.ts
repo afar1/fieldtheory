@@ -14,14 +14,19 @@ import {
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
   getRenderedMarkdownSelectionFormatEdit,
+  getFocusChromeHintOpacity,
+  getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
+  getLibrarianContentBottomPadding,
   getLibrarianContentTopPadding,
   highlightFileFindMatches,
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
+  getGroupedFocusChromeProximityOpacity,
   getMarkdownTaskLines,
   getMarkdownRenderedBodyStartLineIndex,
+  getRenderedTaskLinesByRenderedLine,
   getScrollRatio,
   getScrollTopForRatio,
   isBookmarksCanvasChromeActive,
@@ -48,6 +53,7 @@ import {
   resolveWikiCreateFolder,
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
+  shouldRevealGroupedFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
@@ -614,6 +620,98 @@ describe('markdown task line indexing', () => {
     expect(toggleMarkdownTaskLineAtIndex('- [ ] same\n- [ ] same', 1, true)).toBe('- [ ] same\n- [x] same');
     expect(toggleMarkdownTaskLineAtIndex('- [x] same\n- [x] same', 1, false)).toBe('- [x] same\n- [ ] same');
   });
+
+  it('maps rendered task lines back through preserved blank-line spacing', () => {
+    const content = [
+      'Intro',
+      '',
+      '- [ ] first',
+      '- [ ] second',
+      '',
+      '![figure](file:///tmp/figure.png)',
+      '',
+      '- [ ] third',
+      '- [ ] fourth',
+    ].join('\n');
+    const renderedLines = getRenderedTaskLinesByRenderedLine(content);
+
+    expect(renderedLines.get(5)).toMatchObject({ lineIndex: 2, text: 'first' });
+    expect(renderedLines.get(6)).toMatchObject({ lineIndex: 3, text: 'second' });
+    expect(renderedLines.get(14)).toMatchObject({ lineIndex: 7, text: 'third' });
+    expect(renderedLines.get(15)).toMatchObject({ lineIndex: 8, text: 'fourth' });
+  });
+
+  it('maps bare rendered tasks back to bare source task lines', () => {
+    const content = [
+      '[] bare open',
+      '[ ] bracket open',
+      '[x] bare done',
+      '- [x] dash done',
+    ].join('\n');
+    const renderedLines = getRenderedTaskLinesByRenderedLine(content);
+
+    expect(renderedLines.get(1)).toMatchObject({ lineIndex: 0, text: 'bare open', checked: false });
+    expect(renderedLines.get(2)).toMatchObject({ lineIndex: 1, text: 'bracket open', checked: false });
+    expect(renderedLines.get(3)).toMatchObject({ lineIndex: 2, text: 'bare done', checked: true });
+    expect(renderedLines.get(4)).toMatchObject({ lineIndex: 3, text: 'dash done', checked: true });
+  });
+
+  it('maps rendered task lines after frontmatter using real source indexes', () => {
+    const content = [
+      '---',
+      'tags: [test]',
+      '---',
+      '',
+      '# Plan',
+      '',
+      '- [ ] first',
+      '- [x] second',
+    ].join('\n');
+    const renderedLines = getRenderedTaskLinesByRenderedLine(content);
+
+    expect(renderedLines.get(5)).toMatchObject({ lineIndex: 6, text: 'first' });
+    expect(renderedLines.get(6)).toMatchObject({ lineIndex: 7, text: 'second', checked: true });
+  });
+});
+
+describe('rendered markdown task list detection', () => {
+  it('recognizes task list items by checkbox child when the class is missing', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      position: { start: { line: 4 } },
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: true },
+        },
+        { type: 'text', value: 'Done item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(true);
+    expect(getRenderedMarkdownNodeStartLine(node)).toBe(4);
+  });
+
+  it('reads unchecked rendered checkbox state', () => {
+    const node = {
+      type: 'element',
+      tagName: 'li',
+      children: [
+        {
+          type: 'element',
+          tagName: 'input',
+          properties: { type: 'checkbox', checked: false },
+        },
+        { type: 'text', value: 'Open item' },
+      ],
+    };
+
+    expect(isRenderedTaskListItem(node)).toBe(true);
+    expect(getRenderedTaskListItemChecked(node)).toBe(false);
+  });
 });
 
 describe('rendered markdown task list detection', () => {
@@ -1130,6 +1228,110 @@ describe('focus chrome proximity', () => {
   it('does not reveal controls above the reader pane', () => {
     expect(shouldRevealFocusChrome(12, 20, 96)).toBe(false);
   });
+
+  it('reveals the chrome group near either the top toolbar or footer', () => {
+    expect(shouldRevealGroupedFocusChrome({
+      cursorClientY: 42,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 96,
+    })).toBe(true);
+    expect(shouldRevealGroupedFocusChrome({
+      cursorClientY: 760,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 96,
+    })).toBe(true);
+  });
+
+  it('ramps grouped chrome opacity from the edge toward the middle', () => {
+    const edge = getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 10,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 128,
+      fullOpacityDistancePx: 28,
+    });
+    const middle = getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 78,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 128,
+      fullOpacityDistancePx: 28,
+    });
+    const away = getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 200,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 128,
+      fullOpacityDistancePx: 28,
+    });
+
+    expect(edge).toBe(1);
+    expect(middle).toBeGreaterThan(0);
+    expect(middle).toBeLessThan(1);
+    expect(away).toBe(0);
+  });
+
+  it('can treat the whole top chrome stack as the full-opacity zone', () => {
+    expect(getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 96,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 180,
+      fullOpacityDistancePx: 128,
+    })).toBe(1);
+  });
+
+  it('keeps the grouped top chrome stack fully visible across a taller top band', () => {
+    expect(getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 150,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 220,
+      fullOpacityDistancePx: 128,
+      topFullOpacityDistancePx: 160,
+    })).toBe(1);
+    expect(getGroupedFocusChromeProximityOpacity({
+      cursorClientY: 190,
+      paneClientTop: 0,
+      viewportHeight: 800,
+      revealDistancePx: 220,
+      fullOpacityDistancePx: 128,
+      topFullOpacityDistancePx: 160,
+    })).toBeGreaterThan(0);
+  });
+
+  it('keeps the top nav on the same opacity ramp as the chrome group', () => {
+    expect(getFocusChromeSurfaceOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      groupOpacity: 0.42,
+      childOpacity: 0.42,
+    })).toBe(0.42);
+  });
+
+  it('uses pinned child chrome without making proximity fades snap to full opacity', () => {
+    expect(getFocusChromeSurfaceOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      groupOpacity: 0.25,
+      childOpacity: 1,
+    })).toBe(1);
+  });
+
+  it('fades the focus logo out as the chrome surface fades in', () => {
+    expect(getFocusChromeHintOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      surfaceOpacity: 0,
+    })).toBe(0.62);
+    expect(getFocusChromeHintOpacity({
+      isFocusChromeSurface: true,
+      focusChromeActive: true,
+      surfaceOpacity: 1,
+    })).toBe(0);
+  });
 });
 
 describe('document focus chrome activation', () => {
@@ -1207,6 +1409,11 @@ describe('librarian content top padding', () => {
     });
 
     expect(focusPadding - normalPadding).toBe(42);
+  });
+
+  it('removes the bottom footer carve-out while focus chrome overlays the footer', () => {
+    expect(getLibrarianContentBottomPadding({ focusChromeActive: false })).toBe(32);
+    expect(getLibrarianContentBottomPadding({ focusChromeActive: true })).toBe(0);
   });
 });
 

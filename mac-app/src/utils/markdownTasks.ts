@@ -4,6 +4,30 @@ export type MarkdownTaskShortcutEdit = {
   selectionEnd: number;
 };
 
+export type MarkdownTaskLine = {
+  indentation: string;
+  bullet: string | null;
+  checked: boolean;
+  text: string;
+  spacing: string;
+};
+
+export function parseMarkdownTaskLine(line: string): MarkdownTaskLine | null {
+  const task = line.match(/^(\s*)(?:([-*+])\s*)?(\[( |x|X)?\])(\s+)(.*)$/);
+  if (!task) return null;
+  return {
+    indentation: task[1],
+    bullet: task[2] ?? null,
+    checked: task[4]?.toLowerCase() === 'x',
+    spacing: task[5],
+    text: task[6],
+  };
+}
+
+export function isCheckedMarkdownTaskLine(line: string): boolean {
+  return parseMarkdownTaskLine(line)?.checked === true;
+}
+
 function selectedLineBounds(value: string, selectionStart: number, selectionEnd: number): { start: number; end: number } {
   const start = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
   const endSearch = selectionEnd > selectionStart && value[selectionEnd - 1] === '\n'
@@ -21,15 +45,14 @@ type MarkdownTaskCycleDirection = 'forward' | 'backward';
 function cycleTaskLine(line: string, direction: MarkdownTaskCycleDirection): string {
   if (!line.trim()) return line;
 
-  const task = line.match(/^(\s*)(?:([-*+])\s*)?(\[( |x|X)?\])\s+(.+)$/);
+  const task = parseMarkdownTaskLine(line);
   if (task) {
-    const checked = task[4]?.toLowerCase() === 'x';
     if (direction === 'backward') {
-      if (checked) return task[2] ? `${task[1]}${task[2]} [ ] ${task[5]}` : `${task[1]}[ ] ${task[5]}`;
-      return `${task[1]}${task[5]}`;
+      if (task.checked) return task.bullet ? `${task.indentation}${task.bullet} [ ] ${task.text}` : `${task.indentation}[ ] ${task.text}`;
+      return `${task.indentation}${task.text}`;
     }
-    if (checked) return `${task[1]}${task[5]}`;
-    return task[2] ? `${task[1]}${task[2]} [x] ${task[5]}` : `${task[1]}[x] ${task[5]}`;
+    if (task.checked) return `${task.indentation}${task.text}`;
+    return task.bullet ? `${task.indentation}${task.bullet} [x] ${task.text}` : `${task.indentation}[x] ${task.text}`;
   }
 
   const list = line.match(/^(\s*)(?:[-*+]|\d+\.)\s+(.+)$/);
@@ -40,12 +63,11 @@ function cycleTaskLine(line: string, direction: MarkdownTaskCycleDirection): str
 }
 
 function toggleTaskCheckLine(line: string): string | null {
-  const task = line.match(/^(\s*)(?:([-*+])\s*)?(\[( |x|X)?\])(\s+.*)$/);
+  const task = parseMarkdownTaskLine(line);
   if (!task) return null;
-  const checked = task[4]?.toLowerCase() === 'x';
-  const nextMarker = checked ? '[ ]' : '[x]';
-  const prefix = task[2] ? `${task[1]}${task[2]} ` : task[1];
-  return `${prefix}${nextMarker}${task[5]}`;
+  const nextMarker = task.checked ? '[ ]' : '[x]';
+  const prefix = task.bullet ? `${task.indentation}${task.bullet} ` : task.indentation;
+  return `${prefix}${nextMarker}${task.spacing}${task.text}`;
 }
 
 export function getMarkdownTaskToggleEdit(

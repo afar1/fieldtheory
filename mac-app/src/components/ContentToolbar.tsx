@@ -30,6 +30,7 @@ interface ContentToolbarProps {
   // View state
   isFullScreen?: boolean;
   onToggleFullScreen?: () => void;
+  dragSpacer?: boolean;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
   onNavigateBack?: () => void;
@@ -107,6 +108,7 @@ export default function ContentToolbar({
   filePath,
   isFullScreen = false,
   onToggleFullScreen,
+  dragSpacer = true,
   canNavigateBack = false,
   canNavigateForward = false,
   onNavigateBack,
@@ -308,12 +310,13 @@ export default function ContentToolbar({
 
       {/* Spacer to push remaining controls to the right - also serves as drag region */}
       <div
+        data-content-toolbar-spacer
         style={{
           flex: 1,
           height: '24px',
           // @ts-ignore - webkit vendor prefix for Electron draggable region
-          WebkitAppRegion: 'drag',
-          cursor: 'grab',
+          WebkitAppRegion: dragSpacer ? 'drag' : 'no-drag',
+          cursor: dragSpacer ? 'grab' : 'default',
         }}
       />
 

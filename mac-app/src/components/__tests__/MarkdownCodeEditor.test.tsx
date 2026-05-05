@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { EditorView } from '@codemirror/view';
+import { EditorState } from '@codemirror/state';
+import { EditorView } from '@codemirror/view';
 import {
+  MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS,
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
+  checkedMarkdownTaskLineExtension,
+  getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   handleMarkdownCodeEditorCapturedKeyDown,
@@ -19,12 +23,17 @@ describe('MarkdownCodeEditor cursor blink', () => {
 });
 
 describe('MarkdownCodeEditor cursor scroll margin', () => {
-  it('keeps bottom room for the caret above the footer', () => {
+  it('keeps a small bottom margin for caret movement', () => {
     expect(MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX).toBeGreaterThan(0);
     expect(getMarkdownCodeEditorCursorScrollMargin()).toEqual({
       x: 5,
       y: MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
     });
+  });
+
+  it('can remove bottom room when focus chrome should sit flush to the footer', () => {
+    expect(getMarkdownCodeEditorBottomRoom(0)).toBe(0);
+    expect(getMarkdownCodeEditorCursorScrollMargin(0)).toEqual({ x: 5, y: 0 });
   });
 });
 
@@ -91,12 +100,50 @@ describe('MarkdownCodeEditor blank-space clicks', () => {
   });
 });
 
+describe('MarkdownCodeEditor checked task decorations', () => {
+  it('adds the checked task class to checked source lines only', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- [x] done\n- [ ] todo\n[x] bare done\n[] bare todo',
+        extensions: [checkedMarkdownTaskLineExtension],
+      }),
+      parent,
+    });
+
+    const lines = Array.from(parent.querySelectorAll('.cm-line'));
+    expect(lines).toHaveLength(4);
+    expect(lines[0].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(true);
+    expect(lines[1].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
+    expect(lines[2].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(true);
+    expect(lines[3].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
+
+    view.destroy();
+    parent.remove();
+  });
+});
+
 describe('MarkdownCodeEditor captured keydown', () => {
   it('stops CodeMirror keymaps when the app handles a shortcut', () => {
     const event = new KeyboardEvent('keydown', {
       key: '/',
       code: 'Slash',
       metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    const stopImmediatePropagation = vi.spyOn(event, 'stopImmediatePropagation');
+
+    expect(handleMarkdownCodeEditorCapturedKeyDown(event, () => true)).toBe(true);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(stopImmediatePropagation).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the app capture Escape before it can bubble into window close handling', () => {
+    const event = new KeyboardEvent('keydown', {
+      key: 'Escape',
       bubbles: true,
       cancelable: true,
     });

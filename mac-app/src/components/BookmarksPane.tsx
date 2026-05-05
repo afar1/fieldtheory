@@ -58,10 +58,9 @@ function BookmarksPane({ active = true, isFullScreen, onToggleFullScreen, onCanv
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, mode);
-    if (active && mode === 'canvas') window.librarianAPI?.setSizeKey?.('draw');
     if (mode === 'list' && !listEverShown) setListEverShown(true);
     if (mode === 'canvas' && !canvasEverShown) setCanvasEverShown(true);
-  }, [active, mode, listEverShown, canvasEverShown]);
+  }, [mode, listEverShown, canvasEverShown]);
 
   useEffect(() => {
     onCanvasModeActiveChange?.(active && mode === 'canvas');

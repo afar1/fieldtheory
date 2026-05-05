@@ -229,6 +229,20 @@ interface SoundOption {
   category: string;
 }
 
+export type ParakeetSetupErrorCode =
+  | 'missing-python'
+  | 'unsupported-python'
+  | 'python-venv-failed'
+  | 'setup-failed';
+
+export interface ParakeetSetupError {
+  code: ParakeetSetupErrorCode;
+  summary: string;
+  detail: string;
+  recoveryCommand: string;
+  moreInfo: string;
+}
+
 export interface ParakeetEngineStatus {
   engine: 'parakeet' | 'parakeet-multilingual';
   label: string;
@@ -237,6 +251,7 @@ export interface ParakeetEngineStatus {
   lastError: string | null;
   lastErrorDetail?: string | null;
   lastErrorAt: string | null;
+  setupError?: ParakeetSetupError | null;
 }
 
 export type ParakeetSetupStage =
@@ -304,7 +319,7 @@ interface TranscribeAPI {
   getParakeetStatus?: () => Promise<ParakeetStatus | null>;
   isAppleSilicon?: () => Promise<boolean>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
+  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }>;
   uninstallParakeet?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
@@ -1215,6 +1230,8 @@ interface FieldTheoryMarkdownTarget {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown';
+  selectionStart?: number;
+  selectionEnd?: number;
 }
 
 interface ActiveLibraryFileContext {
@@ -1399,6 +1416,11 @@ interface HotMicAPI {
   } | null>;
   getIslandStayOnLaptop: () => Promise<boolean>;
   setIslandStayOnLaptop: (value: boolean) => Promise<boolean>;
+  getRecordingIndicatorMode: () => Promise<'auto' | 'notch' | 'floating'>;
+  setRecordingIndicatorMode: (mode: 'auto' | 'notch' | 'floating') => Promise<'auto' | 'notch' | 'floating'>;
+  getResolvedRecordingIndicatorMode: () => Promise<'notch' | 'floating'>;
+  getFloatingIndicatorPosition: () => Promise<{ x: number; y: number } | null>;
+  setFloatingIndicatorPosition: (position: { x: number; y: number } | null) => Promise<{ x: number; y: number } | null>;
   getIslandAutoHide: () => Promise<boolean>;
   setIslandAutoHide: (value: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
@@ -1744,7 +1766,7 @@ declare global {
     createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
     createDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
-    moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => Promise<string | null>;
+    moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
     onRootsChanged: (callback: () => void) => () => void;
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;

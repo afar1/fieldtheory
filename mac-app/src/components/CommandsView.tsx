@@ -40,6 +40,34 @@ import {
 } from '../utils/wikiLinks';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
+const COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
+const COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX = 8;
+const COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX = 12;
+const COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX = 28;
+const COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX = 24;
+
+export function getCommandsContentTopPadding(input: {
+  isEditing: boolean;
+  focusChromeActive: boolean;
+}): number {
+  const normalTopPadding = input.isEditing
+    ? COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX
+    : COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX;
+
+  return input.focusChromeActive
+    ? normalTopPadding + COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX
+    : normalTopPadding;
+}
+
+export function getCommandsContentBottomPadding(input: {
+  isEditing: boolean;
+  focusChromeActive: boolean;
+}): number {
+  if (input.focusChromeActive) return 0;
+  return input.isEditing
+    ? COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX
+    : COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX;
+}
 
 /** Inline text input used for both "new command" and "rename command" flows.
  *  Both commit handlers treat empty input as a cancel, so blur just calls
@@ -103,10 +131,13 @@ const InlineNameInput = forwardRef<HTMLInputElement, {
 interface CommandsViewProps {
   onSwitchToClipboard: () => void;
   sidebarCollapsed?: boolean;
-  onFocusChromeActiveChange?: (active: boolean) => void;
+  onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean, visualOpacity?: number) => void;
   initialCommandPath?: string | null;
   onInitialCommandConsumed?: () => void;
   onFocusChromeShortcut?: () => void;
+  focusChromeEnabled?: boolean;
+  onFocusChromeEnabledChange?: (enabled: boolean) => void;
+  focusChromeGroupOpacity?: number;
   canNavigateBack?: boolean;
   canNavigateForward?: boolean;
   onNavigateBack?: () => void;
@@ -208,6 +239,9 @@ export default function CommandsView({
   initialCommandPath,
   onInitialCommandConsumed,
   onFocusChromeShortcut,
+  focusChromeEnabled,
+  onFocusChromeEnabledChange,
+  focusChromeGroupOpacity = 0,
   canNavigateBack = false,
   canNavigateForward = false,
   onNavigateBack,
@@ -277,6 +311,7 @@ export default function CommandsView({
     const saved = localStorage.getItem('commands-sidebar-width');
     return saved ? parseInt(saved, 10) : 180;
   });
+  const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const sidebarWidthRef = useRef(sidebarWidth);
   const [isResizing, setIsResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -291,15 +326,27 @@ export default function CommandsView({
   const [copyPathCopied, setCopyPathCopied] = useState(false);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
 
-  const [focusImmersive, setFocusImmersive] = useState(false);
+  const [uncontrolledFocusImmersive, setUncontrolledFocusImmersive] = useState(false);
+  const focusImmersive = focusChromeEnabled ?? uncontrolledFocusImmersive;
+  const setFocusImmersive = useCallback((next: boolean | ((prev: boolean) => boolean)) => {
+    const nextValue = typeof next === 'function' ? next(focusImmersive) : next;
+    if (focusChromeEnabled === undefined) {
+      setUncontrolledFocusImmersive(nextValue);
+    }
+    onFocusChromeEnabledChange?.(nextValue);
+  }, [focusChromeEnabled, focusImmersive, onFocusChromeEnabledChange]);
   const focusChromeActive = focusImmersive && sidebarCollapsed;
-  const focusToolbarControlsVisible = !focusChromeActive;
+  const focusChromeVisualOpacity = focusChromeActive ? focusChromeGroupOpacity : 1;
+  const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
+  const focusToolbarControlsVisible = !focusChromeActive || focusChromeVisualVisible;
+  const commandContentTopPadding = getCommandsContentTopPadding({ isEditing, focusChromeActive });
+  const commandContentBottomPadding = getCommandsContentBottomPadding({ isEditing, focusChromeActive });
   const toggleFocusImmersive = useCallback(() => {
     if (!focusImmersive) {
       onFocusChromeShortcut?.();
     }
     setFocusImmersive((prev) => !prev);
-  }, [focusImmersive, onFocusChromeShortcut]);
+  }, [focusImmersive, onFocusChromeShortcut, setFocusImmersive]);
   const handleEditTextareaKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (isImmersiveToggleShortcut(e)) {
       e.preventDefault();
@@ -383,8 +430,8 @@ export default function CommandsView({
   }, []);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(focusChromeActive);
-  }, [focusChromeActive, onFocusChromeActiveChange]);
+    onFocusChromeActiveChange?.(focusChromeActive, focusChromeActive && focusChromeVisualVisible, focusChromeActive ? focusChromeVisualOpacity : 0);
+  }, [focusChromeActive, focusChromeVisualOpacity, focusChromeVisualVisible, onFocusChromeActiveChange]);
 
   useEffect(() => {
     return () => onFocusChromeActiveChange?.(false);
@@ -1483,10 +1530,14 @@ export default function CommandsView({
     };
   }, [contextMenu]);
 
+  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded;
+  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
+
   return (
     <div
       ref={containerRef}
       tabIndex={0}
+      onMouseLeave={() => setSidebarHoverExpanded(false)}
       style={{
         display: 'flex',
         flex: 1,
@@ -1496,16 +1547,36 @@ export default function CommandsView({
         position: 'relative',
       }}
     >
+      {sidebarCollapsed && !sidebarTemporarilyExpanded && (
+        <div
+          aria-hidden="true"
+          onMouseEnter={() => setSidebarHoverExpanded(true)}
+          style={{
+            position: 'absolute',
+            top: 0,
+            bottom: 0,
+            left: 0,
+            width: '14px',
+            zIndex: 25,
+            cursor: 'default',
+          }}
+        />
+      )}
       {/* Sidebar - kept in DOM when collapsed for instant transition */}
       <div
         ref={sidebarPaneRef}
+        onMouseLeave={() => {
+          if (sidebarCollapsed) setSidebarHoverExpanded(false);
+        }}
         style={{
-          width: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
-          minWidth: sidebarCollapsed ? '0px' : `${sidebarWidth}px`,
+          width: sidebarVisible ? `${sidebarWidth}px` : '0px',
+          minWidth: sidebarVisible ? `${sidebarWidth}px` : '0px',
           overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
           display: 'block',
           flexShrink: 0,
+          zIndex: sidebarTemporarilyExpanded ? 30 : undefined,
+          boxShadow: sidebarTemporarilyExpanded ? (theme.isDark ? '12px 0 24px rgba(0,0,0,0.36)' : '12px 0 24px rgba(0,0,0,0.12)') : undefined,
           transition: isResizing ? undefined : 'width 0.18s ease, min-width 0.18s ease',
         }}
       >
@@ -1519,7 +1590,7 @@ export default function CommandsView({
             padding: '12px 0',
             display: 'flex',
             flexDirection: 'column',
-            pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+            pointerEvents: sidebarVisible ? 'auto' : 'none',
           }}
         >
         {/* Header - Librarian style */}
@@ -1883,15 +1954,15 @@ export default function CommandsView({
       <div
         onMouseDown={handleResizeMouseDown}
         style={{
-          width: sidebarCollapsed ? '0px' : '4px',
-          minWidth: sidebarCollapsed ? '0px' : '4px',
+          width: sidebarVisible ? '4px' : '0px',
+          minWidth: sidebarVisible ? '4px' : '0px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: sidebarCollapsed ? '0 solid transparent' : `1px solid ${theme.border}`,
+          borderRight: sidebarVisible ? `1px solid ${theme.border}` : '0 solid transparent',
           transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
           display: 'block',
-          pointerEvents: sidebarCollapsed ? 'none' : 'auto',
+          pointerEvents: sidebarVisible ? 'auto' : 'none',
         }}
         onMouseEnter={(e) => {
           if (!isResizing) {
@@ -1941,6 +2012,15 @@ export default function CommandsView({
               padding: '8px 20px',
               backgroundColor: theme.bg,
               flexShrink: 0,
+              position: focusChromeActive ? 'absolute' : 'relative',
+              top: focusChromeActive ? 0 : undefined,
+              left: focusChromeActive ? 0 : undefined,
+              right: focusChromeActive ? 0 : undefined,
+              zIndex: focusChromeActive ? 20 : undefined,
+              boxSizing: 'border-box',
+              opacity: focusChromeVisualOpacity,
+              pointerEvents: focusChromeVisualVisible ? 'auto' : 'none',
+              transition: 'opacity 90ms linear',
             }}
           >
             {/* Inner container - matches content width (600px centered) */}
@@ -1983,6 +2063,7 @@ export default function CommandsView({
               <ContentToolbar
                 filePath={selectedCommand?.filePath}
                 isFullScreen={focusImmersive}
+                dragSpacer={!focusChromeActive}
                 canNavigateBack={canNavigateBack}
                 canNavigateForward={canNavigateForward}
                 onNavigateBack={onNavigateBack}
@@ -2133,7 +2214,7 @@ export default function CommandsView({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: isEditing ? '8px 20px 12px 20px' : '24px 20px',
+            padding: `${commandContentTopPadding}px 20px ${commandContentBottomPadding}px 20px`,
             display: 'flex',
             justifyContent: 'center',
           }}

@@ -41,32 +41,16 @@ export function isSidebarToggleShortcut(e: KeyboardEvent | React.KeyboardEvent):
   return (e.key === ',' || e.code === 'Comma') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
-export function shouldForceLibrarySidebarOpen(input: {
-  viewMode: string;
-  showSettings: boolean;
-  librarianImmersive: boolean;
-  hasLibraryActiveFile: boolean;
-  bookmarksFooterActive?: boolean;
-}): boolean {
-  return input.viewMode === 'librarian'
-    && !input.showSettings
-    && !input.librarianImmersive
-    && !input.hasLibraryActiveFile
-    && !input.bookmarksFooterActive;
-}
-
 export function isNavSidebarToggleEnabled(input: {
   viewMode: string;
   showSettings: boolean;
   librarianImmersive: boolean;
-  hasLibraryActiveFile: boolean;
-  bookmarksFooterActive?: boolean;
 }): boolean {
   if (input.showSettings) return false;
   if (input.viewMode === 'commands') return true;
   if (input.viewMode !== 'librarian') return false;
   if (input.librarianImmersive) return false;
-  return input.hasLibraryActiveFile || !!input.bookmarksFooterActive;
+  return true;
 }
 
 export function isCommandDeleteShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {

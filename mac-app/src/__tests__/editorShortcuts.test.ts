@@ -19,7 +19,6 @@ import {
   restoreRenderedEditClickMode,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
-  shouldForceLibrarySidebarOpen,
   shouldRevealFooterChrome,
 } from '../utils/editorShortcuts';
 
@@ -174,47 +173,26 @@ describe('isSidebarToggleShortcut', () => {
 });
 
 describe('Library sidebar collapse availability', () => {
-  it('forces the Library sidebar open when no file is selected', () => {
-    expect(shouldForceLibrarySidebarOpen({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-    })).toBe(true);
-    expect(shouldForceLibrarySidebarOpen({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: false,
-      bookmarksFooterActive: true,
-    })).toBe(false);
-  });
-
   it('allows collapse for Library with an active file, Bookmarks, or Commands', () => {
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
-    })).toBe(false);
-    expect(isNavSidebarToggleEnabled({
-      viewMode: 'librarian',
-      showSettings: false,
-      librarianImmersive: false,
-      hasLibraryActiveFile: true,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
-      bookmarksFooterActive: true,
+    })).toBe(true);
+    expect(isNavSidebarToggleEnabled({
+      viewMode: 'librarian',
+      showSettings: false,
+      librarianImmersive: false,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'commands',
       showSettings: false,
       librarianImmersive: false,
-      hasLibraryActiveFile: false,
     })).toBe(true);
   });
 });
