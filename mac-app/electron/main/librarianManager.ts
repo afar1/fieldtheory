@@ -2653,6 +2653,32 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private moveLibraryPathSync(sourceAbs: string, targetAbs: string, kind: LibraryMoveKind): void {
+    try {
+      fs.renameSync(sourceAbs, targetAbs);
+      return;
+    } catch (error) {
+      if ((error as { code?: string }).code !== 'EXDEV' || kind !== 'file') throw error;
+    }
+
+    const sourceStats = fs.statSync(sourceAbs);
+    let copied = false;
+    try {
+      fs.copyFileSync(sourceAbs, targetAbs, fs.constants.COPYFILE_EXCL);
+      copied = true;
+      fs.chmodSync(targetAbs, sourceStats.mode);
+      fs.utimesSync(targetAbs, sourceStats.atime, sourceStats.mtime);
+      fs.unlinkSync(sourceAbs);
+    } catch (error) {
+      if (copied) {
+        try {
+          fs.unlinkSync(targetAbs);
+        } catch {}
+      }
+      throw error;
+    }
+  }
+
   private resolveLibraryRootForWrite(rootPath: string): { rootPath: string; builtin: boolean } | null {
     const normalizedPath = this.normalizePath(this.expandPath(rootPath.trim()));
     const targetKey = this.libraryRootKey(normalizedPath);
@@ -3480,17 +3506,21 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  moveLibraryItem(rootPath: string, kind: LibraryMoveKind, sourceRelPath: string, targetDirRelPath: string): string | null {
-    const root = this.resolveLibraryRootForWrite(rootPath);
+  moveLibraryItem(rootPath: string, kind: LibraryMoveKind, sourceRelPath: string, targetDirRelPath: string, targetRootPath = rootPath): string | null {
+    const sourceRoot = this.resolveLibraryRootForWrite(rootPath);
+    const targetRoot = this.resolveLibraryRootForWrite(targetRootPath);
     const sourceRel = this.normalizeLibraryRelPath(sourceRelPath);
     const targetDirRel = this.normalizeLibraryRelPath(targetDirRelPath);
-    if (!root || !sourceRel || targetDirRel === null) return null;
-    if (!root.builtin && !this.canWriteDirectory(root.rootPath)) return null;
-    if (root.builtin && kind === 'dir' && DEFAULT_LIBRARY_FOLDER_ID_SET.has(sourceRel)) return null;
+    if (!sourceRoot || !targetRoot || !sourceRel || targetDirRel === null) return null;
+    const crossRoot = this.libraryRootKey(sourceRoot.rootPath) !== this.libraryRootKey(targetRoot.rootPath);
+    if (crossRoot && kind !== 'file') return null;
+    if (!sourceRoot.builtin && !this.canWriteDirectory(sourceRoot.rootPath)) return null;
+    if (!targetRoot.builtin && !this.canWriteDirectory(targetRoot.rootPath)) return null;
+    if (sourceRoot.builtin && kind === 'dir' && DEFAULT_LIBRARY_FOLDER_ID_SET.has(sourceRel)) return null;
 
-    const sourceAbs = path.resolve(root.rootPath, kind === 'file' ? `${sourceRel}.md` : sourceRel);
-    const targetDirAbs = path.resolve(root.rootPath, targetDirRel);
-    if (!this.isInsidePath(root.rootPath, sourceAbs) || !this.isInsidePath(root.rootPath, targetDirAbs)) return null;
+    const sourceAbs = path.resolve(sourceRoot.rootPath, kind === 'file' ? `${sourceRel}.md` : sourceRel);
+    const targetDirAbs = path.resolve(targetRoot.rootPath, targetDirRel);
+    if (!this.isInsidePath(sourceRoot.rootPath, sourceAbs) || !this.isInsidePath(targetRoot.rootPath, targetDirAbs)) return null;
     if (!fs.existsSync(sourceAbs)) return null;
     if (!fs.existsSync(targetDirAbs) || !fs.statSync(targetDirAbs).isDirectory()) return null;
 
@@ -3504,26 +3534,33 @@ export class LibrarianManager extends EventEmitter {
 
     const name = path.basename(sourceAbs);
     const targetAbs = path.resolve(targetDirAbs, name);
-    if (!this.isInsidePath(root.rootPath, targetAbs)) return null;
+    if (!this.isInsidePath(targetRoot.rootPath, targetAbs)) return null;
     if (sourceAbs === targetAbs) return sourceRel;
     if (fs.existsSync(targetAbs)) return null;
 
-    const deletedWikiRelPaths = root.builtin
+    const deletedWikiRelPaths = sourceRoot.builtin
       ? kind === 'file'
         ? [sourceRel]
-        : this.flattenWikiFiles(this.scanMarkdownTree(root.rootPath, sourceAbs)).map((page) => page.relPath)
+        : this.flattenWikiFiles(this.scanMarkdownTree(sourceRoot.rootPath, sourceAbs)).map((page) => page.relPath)
       : [];
 
     try {
-      fs.renameSync(sourceAbs, targetAbs);
-      const newRelPath = stripMarkdownFileExtension(this.toPortableRelPath(path.relative(root.rootPath, targetAbs)));
-      if (root.builtin) {
+      this.moveLibraryPathSync(sourceAbs, targetAbs, kind);
+      const newRelPath = stripMarkdownFileExtension(this.toPortableRelPath(path.relative(targetRoot.rootPath, targetAbs)));
+      if (sourceRoot.builtin) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
           this.emit('wiki:deleted', relPath);
         }
       } else {
-        this.emit('library:changed', root.rootPath);
+        this.emit('library:changed', sourceRoot.rootPath);
+      }
+      if (crossRoot) {
+        if (targetRoot.builtin) {
+          this.emit('wiki:changed');
+        } else {
+          this.emit('library:changed', targetRoot.rootPath);
+        }
       }
       return newRelPath;
     } catch (error) {

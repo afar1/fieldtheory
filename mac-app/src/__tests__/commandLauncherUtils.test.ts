@@ -315,6 +315,29 @@ describe('flattenLibraryDirectoriesForLauncher', () => {
       }),
     ]);
   });
+
+  it('includes external library roots as selectable root folders', () => {
+    const items = flattenLibraryDirectoriesForLauncher([
+      {
+        path: '/Drive/Team Markdown',
+        label: 'Team Markdown',
+        builtin: false,
+        tree: [],
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        type: 'directory',
+        name: 'Team Markdown',
+        displayName: 'Team Markdown',
+        rootPath: '/Drive/Team Markdown',
+        rootBuiltin: false,
+        directoryPath: '/Drive/Team Markdown',
+        directoryRelPath: '',
+      }),
+    ]);
+  });
 });
 
 describe('launcher library move helpers', () => {
@@ -332,6 +355,7 @@ describe('launcher library move helpers', () => {
     displayName: 'Projects — Shared',
     keywords: ['projects'],
     rootPath: '/Drive/Notes',
+    rootBuiltin: false,
     directoryPath: '/Drive/Notes/Projects',
     directoryRelPath: 'Projects',
     hotkeyDisplay: 'folder',
@@ -339,22 +363,33 @@ describe('launcher library move helpers', () => {
 
   it('resolves valid move targets inside the same library root', () => {
     expect(getLauncherMoveDirectoryTarget(source, directory)).toEqual({
-      rootPath: '/Drive/Notes',
+      sourceRootPath: '/Drive/Notes',
+      targetRootPath: '/Drive/Notes',
       targetDirRelPath: 'Projects',
+      targetType: 'external',
     });
   });
 
-  it('rejects moving into the current parent or another library root', () => {
+  it('rejects moving into the current parent', () => {
     expect(getLauncherMoveDirectoryTarget(source, {
       ...directory,
       directoryPath: '/Drive/Notes/Inbox',
       directoryRelPath: 'Inbox',
     })).toBeNull();
+  });
+
+  it('allows moving into another visible library root', () => {
     expect(getLauncherMoveDirectoryTarget(source, {
       ...directory,
       rootPath: '/Other',
+      rootBuiltin: true,
       directoryPath: '/Other/Projects',
-    })).toBeNull();
+    })).toEqual({
+      sourceRootPath: '/Drive/Notes',
+      targetRootPath: '/Other',
+      targetDirRelPath: 'Projects',
+      targetType: 'wiki',
+    });
   });
 
   it('filters move targets by query after removing invalid folders', () => {
@@ -371,6 +406,7 @@ describe('launcher library move helpers', () => {
     expect(getLauncherMoveUndoTargetDirRelPath('Inbox/current')).toBe('Inbox');
     expect(getLauncherMovedFilePath(source, 'Projects/current')).toBe('/Drive/Notes/Projects/current.md');
     expect(getLauncherMovedFilePath({ ...source, type: 'wiki' }, 'Projects/current')).toBe('Projects/current');
+    expect(getLauncherMovedFilePath({ ...source, type: 'wiki' }, 'Projects/current', '/Other', 'external')).toBe('/Other/Projects/current.md');
   });
 });
 

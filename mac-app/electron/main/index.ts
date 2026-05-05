@@ -2189,13 +2189,13 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager.deleteLibraryDir(rootPath, dirRelPath);
   });
 
-  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): string | null => {
+  ipcMain.handle('library:moveItem', (_event, rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): string | null => {
     if (!librarianManager) return null;
     if (!canWriteFieldTheoryContent()) {
       blockWrite();
       return null;
     }
-    return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath);
+    return librarianManager.moveLibraryItem(rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath);
   });
 
   ipcMain.handle('library:pickFolder', async (): Promise<string | null> => {
