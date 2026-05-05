@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import FieldTheoryProse, { localFileUrlToFieldTheoryUrl } from '../FieldTheoryProse';
@@ -81,6 +82,14 @@ describe('FieldTheoryProse', () => {
     );
 
     expect(screen.getByText('world').closest('[data-ft-md-start]')).toBeNull();
+  });
+
+  it('wraps long fenced code block lines instead of clipping rendered markdown', () => {
+    const proseCss = readFileSync('src/prose.css', 'utf-8');
+    const preCodeRule = proseCss.match(/\.ft-prose pre code\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(preCodeRule).toContain('white-space: pre-wrap;');
+    expect(preCodeRule).toContain('overflow-wrap: anywhere;');
   });
 
   it('renders local screenshot image URLs inline', () => {
