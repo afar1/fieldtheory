@@ -3992,8 +3992,8 @@ const libraryAPI = {
     ipcRenderer.invoke('library:createDir', rootPath, dirRelPath),
   deleteDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
     ipcRenderer.invoke('library:deleteDir', rootPath, dirRelPath),
-  moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): Promise<string | null> =>
-    ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath),
+  moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
   onRootsChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
