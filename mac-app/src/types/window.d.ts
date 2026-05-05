@@ -1744,7 +1744,7 @@ declare global {
     createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
     createDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
-    moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => Promise<string | null>;
+    moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
     onRootsChanged: (callback: () => void) => () => void;
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
