@@ -1,5 +1,26 @@
 import { describe, expect, it } from 'vitest';
-import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
+import {
+  getMarkdownTaskShortcutEdit,
+  getMarkdownTaskToggleEdit,
+  isCheckedMarkdownTaskLine,
+  parseMarkdownTaskLine,
+} from '../utils/markdownTasks';
+
+describe('parseMarkdownTaskLine', () => {
+  it('recognizes bare and dash-prefixed task lines', () => {
+    expect(parseMarkdownTaskLine('[] alpha')).toMatchObject({ bullet: null, checked: false, text: 'alpha' });
+    expect(parseMarkdownTaskLine('[ ] alpha')).toMatchObject({ bullet: null, checked: false, text: 'alpha' });
+    expect(parseMarkdownTaskLine('- [ ] alpha')).toMatchObject({ bullet: '-', checked: false, text: 'alpha' });
+    expect(parseMarkdownTaskLine('- [x] alpha')).toMatchObject({ bullet: '-', checked: true, text: 'alpha' });
+  });
+
+  it('reports only checked tasks as checked', () => {
+    expect(isCheckedMarkdownTaskLine('[x] alpha')).toBe(true);
+    expect(isCheckedMarkdownTaskLine('- [x] alpha')).toBe(true);
+    expect(isCheckedMarkdownTaskLine('[] alpha')).toBe(false);
+    expect(isCheckedMarkdownTaskLine('- [ ] alpha')).toBe(false);
+  });
+});
 
 describe('getMarkdownTaskShortcutEdit', () => {
   it('turns the current plain line into an unchecked task', () => {

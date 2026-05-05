@@ -14,6 +14,20 @@ export type RecordingInputSource = 'microphone' | 'system-audio';
 export type HotMicEngine = 'default' | TranscriptionEngine;
 export type ParakeetEngine = Extract<TranscriptionEngine, 'parakeet' | 'parakeet-multilingual'>;
 
+export type ParakeetSetupErrorCode =
+  | 'missing-python'
+  | 'unsupported-python'
+  | 'python-venv-failed'
+  | 'setup-failed';
+
+export interface ParakeetSetupError {
+  code: ParakeetSetupErrorCode;
+  summary: string;
+  detail: string;
+  recoveryCommand: string;
+  moreInfo: string;
+}
+
 export const PARAKEET_ENGINE_MODEL_IDS: Record<ParakeetEngine, string> = {
   parakeet: 'nemo-parakeet-tdt-0.6b-v2',
   'parakeet-multilingual': 'nemo-parakeet-tdt-0.6b-v3',
@@ -32,6 +46,7 @@ export interface ParakeetEngineStatus {
   lastError: string | null;
   lastErrorDetail?: string | null;
   lastErrorAt: string | null;
+  setupError?: ParakeetSetupError | null;
 }
 
 export type ParakeetSetupStage =

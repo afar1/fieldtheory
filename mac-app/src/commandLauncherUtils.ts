@@ -66,6 +66,7 @@ export interface LauncherDirectoryItem extends LauncherSearchableItem {
   id: string;
   type: 'directory';
   rootPath: string;
+  rootBuiltin: boolean;
   directoryPath: string;
   directoryRelPath?: string;
   hotkeyDisplay: string;
@@ -197,6 +198,7 @@ export interface LauncherBookmarkFacetNamespaceCandidate extends LauncherVisible
 
 export interface LauncherDirectoryNamespaceCandidate extends LauncherVisibleItem {
   rootPath?: string;
+  rootBuiltin?: boolean;
   directoryPath?: string;
   directoryRelPath?: string;
   keywords?: string[];
@@ -208,6 +210,13 @@ export interface LauncherLibraryMoveSource {
   relPath: string;
   filePath: string;
   title: string;
+}
+
+export interface LauncherMoveDirectoryTarget {
+  sourceRootPath: string;
+  targetRootPath: string;
+  targetDirRelPath: string;
+  targetType: 'wiki' | 'external';
 }
 
 export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
@@ -256,8 +265,8 @@ export interface LauncherDirectoryNamespace {
 const NORMAL_MODE_SECTION_ORDER: Array<{ id: LauncherNormalModeSectionId; predicate: (item: LauncherNormalModeItem) => boolean }> = [
   { id: 'commands', predicate: (item) => item.type === 'command' },
   { id: 'recent', predicate: (item) => item.type === 'recent-file' },
-  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
   { id: 'actions', predicate: (item) => item.type === 'action' },
+  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
   { id: 'bookmarks', predicate: (item) => item.type === 'bookmark' || item.type === 'bookmark-author' || item.type === 'bookmark-facet' },
 ];
 
@@ -444,7 +453,7 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
   const seen = new Set<string>();
 
   const addDirectory = (root: LauncherLibraryRoot, relPath: string, name: string) => {
-    if (!relPath) return;
+    if (!relPath && root.builtin) return;
     const key = `${root.path}:${relPath}`;
     if (seen.has(key)) return;
     seen.add(key);
@@ -464,6 +473,7 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
         ...relPath.split('/'),
       ].filter(Boolean),
       rootPath: root.path,
+      rootBuiltin: root.builtin,
       directoryPath: joinLauncherPath(root.path, relPath),
       directoryRelPath: relPath,
       hotkeyDisplay: 'folder',
@@ -489,6 +499,7 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
   };
 
   for (const root of roots) {
+    if (!root.builtin) addDirectory(root, '', root.label);
     for (const node of root.tree) visit(root, node);
   }
 
@@ -595,12 +606,18 @@ function parentLauncherRelPath(relPath: string): string {
 export function getLauncherMoveDirectoryTarget(
   source: LauncherLibraryMoveSource,
   directory: LauncherDirectoryNamespaceCandidate,
-): { rootPath: string; targetDirRelPath: string } | null {
-  if (!directory.rootPath || directory.rootPath !== source.rootPath) return null;
+): LauncherMoveDirectoryTarget | null {
+  if (!directory.rootPath) return null;
   const targetDirRelPath = directory.directoryRelPath;
   if (targetDirRelPath === undefined) return null;
-  if (targetDirRelPath === parentLauncherRelPath(source.relPath)) return null;
-  return { rootPath: source.rootPath, targetDirRelPath };
+  if (directory.rootPath === source.rootPath && targetDirRelPath === parentLauncherRelPath(source.relPath)) return null;
+  const targetBuiltin = directory.rootBuiltin ?? (directory.rootPath === source.rootPath && source.type === 'wiki');
+  return {
+    sourceRootPath: source.rootPath,
+    targetRootPath: directory.rootPath,
+    targetDirRelPath,
+    targetType: targetBuiltin ? 'wiki' : 'external',
+  };
 }
 
 export function filterLauncherMoveTargetDirectories<T extends LauncherDirectoryNamespaceCandidate & LauncherSearchableItem>(
@@ -618,9 +635,14 @@ export function getLauncherMoveUndoTargetDirRelPath(sourceRelPath: string): stri
   return parentLauncherRelPath(sourceRelPath);
 }
 
-export function getLauncherMovedFilePath(source: LauncherLibraryMoveSource, movedRelPath: string): string {
-  if (source.type === 'wiki') return movedRelPath;
-  return joinLauncherPath(source.rootPath, `${movedRelPath}.md`);
+export function getLauncherMovedFilePath(
+  source: LauncherLibraryMoveSource,
+  movedRelPath: string,
+  targetRootPath = source.rootPath,
+  targetType: 'wiki' | 'external' = source.type,
+): string {
+  if (targetType === 'wiki') return movedRelPath;
+  return joinLauncherPath(targetRootPath, `${movedRelPath}.md`);
 }
 
 function formatBookmarkFacetKind(kind: LauncherBookmarkFacetKind): string {

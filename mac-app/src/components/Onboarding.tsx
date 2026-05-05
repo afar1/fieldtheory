@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
-import type { ParakeetSetupProgress, ParakeetStatus } from '../types/window';
+import type { ParakeetSetupError, ParakeetSetupProgress, ParakeetStatus } from '../types/window';
 import { buildHotkeyString, formatHotkeyDisplay } from '../utils/hotkeys';
 import {
   DEFAULT_VISIBLE_PARAKEET_ENGINE,
@@ -236,7 +236,7 @@ interface ModelPhaseProps {
   settingUpParakeet: boolean;
   settingUpParakeetEngine: VisibleParakeetEngine | null;
   parakeetSetupProgress: ParakeetSetupProgress | null;
-  parakeetSetupError: string | null;
+  parakeetSetupError: ParakeetSetupError | null;
   onSetupParakeet: (engine: VisibleParakeetEngine) => void;
   theme: Theme;
   styles: Record<string, React.CSSProperties>;
@@ -270,9 +270,10 @@ function ModelPhase({
   const selectedParakeetEngineStatus = selectedEngine === 'whisper'
     ? null
     : getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
-  const selectedParakeetSupportSummary = selectedParakeetEngineStatus?.lastError ?? parakeetSetupError;
+  const selectedParakeetSetupError = selectedParakeetEngineStatus?.setupError ?? parakeetSetupError;
+  const selectedParakeetSupportSummary = selectedParakeetSetupError?.summary ?? selectedParakeetEngineStatus?.lastError ?? null;
   const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
-  const selectedParakeetErrorDetail = selectedParakeetEngineStatus?.lastErrorDetail ?? null;
+  const selectedParakeetErrorDetail = selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
   const selectedParakeetProgress = selectedEngine === 'whisper'
     ? null
     : parakeetSetupProgress?.engine === selectedEngine
@@ -410,9 +411,11 @@ function ModelPhase({
             }
             summary={selectedParakeetSupportSummary}
             recoveryMessage={
-              selectedParakeetRecoveryMessage
+              selectedParakeetSetupError?.moreInfo
+              ?? selectedParakeetRecoveryMessage
               ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
             }
+            recoveryCommand={selectedParakeetSetupError?.recoveryCommand}
             detail={selectedParakeetErrorDetail}
             progress={selectedParakeetProgress}
           />
@@ -1535,7 +1538,7 @@ export default function Onboarding() {
   const [settingUpParakeet, setSettingUpParakeet] = useState(false);
   const [settingUpParakeetEngine, setSettingUpParakeetEngine] = useState<VisibleParakeetEngine | null>(null);
   const [parakeetSetupProgress, setParakeetSetupProgress] = useState<ParakeetSetupProgress | null>(null);
-  const [parakeetSetupError, setParakeetSetupError] = useState<string | null>(null);
+  const [parakeetSetupError, setParakeetSetupError] = useState<ParakeetSetupError | null>(null);
 
   // Load initial state from Electron.
   useEffect(() => {
@@ -1717,12 +1720,25 @@ export default function Onboarding() {
         const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
         setParakeetStatus(status);
       } else {
-        setParakeetSetupError(result?.error ?? 'Setup failed');
+        setParakeetSetupError(result?.setupError ?? {
+          code: 'setup-failed',
+          summary: result?.error ?? 'Setup failed',
+          detail: result?.error ?? 'Setup failed',
+          recoveryCommand: '',
+          moreInfo: 'Retry Parakeet setup. If it fails again, open Diagnostics so support can inspect the setup log.',
+        });
         const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
         setParakeetStatus(status);
       }
     } catch (err) {
-      setParakeetSetupError(err instanceof Error ? err.message : 'Setup failed');
+      const summary = err instanceof Error ? err.message : 'Setup failed';
+      setParakeetSetupError({
+        code: 'setup-failed',
+        summary,
+        detail: summary,
+        recoveryCommand: '',
+        moreInfo: 'Retry Parakeet setup. If it fails again, open Diagnostics so support can inspect the setup log.',
+      });
       const status = await window.transcribeAPI.getParakeetStatus?.() ?? null;
       setParakeetStatus(status);
     } finally {

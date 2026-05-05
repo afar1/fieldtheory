@@ -788,7 +788,7 @@ export interface TranscribeAPI {
   getParakeetStatus: () => Promise<import('./main/types/transcribe').ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string; setupError?: import('./main/types/transcribe').ParakeetSetupError }>;
   uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
@@ -1315,7 +1315,7 @@ const transcribeAPI: TranscribeAPI = {
   setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_MLX_WHISPER);
   },
-  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string }> => {
+  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string; setupError?: import('./main/types/transcribe').ParakeetSetupError }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET, engine);
   },
   uninstallParakeet: async (): Promise<{ success: boolean; error?: string }> => {
@@ -2961,6 +2961,8 @@ type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown';
+  selectionStart?: number;
+  selectionEnd?: number;
 };
 
 type ActiveLibraryFileContext = {
@@ -3992,8 +3994,8 @@ const libraryAPI = {
     ipcRenderer.invoke('library:createDir', rootPath, dirRelPath),
   deleteDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
     ipcRenderer.invoke('library:deleteDir', rootPath, dirRelPath),
-  moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): Promise<string | null> =>
-    ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath),
+  moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
   onRootsChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
@@ -4400,6 +4402,21 @@ const hotMicAPI = {
   },
   setIslandStayOnLaptop: async (value: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setIslandStayOnLaptop', value);
+  },
+  getRecordingIndicatorMode: async (): Promise<'auto' | 'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:getRecordingIndicatorMode');
+  },
+  setRecordingIndicatorMode: async (mode: 'auto' | 'notch' | 'floating'): Promise<'auto' | 'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:setRecordingIndicatorMode', mode);
+  },
+  getResolvedRecordingIndicatorMode: async (): Promise<'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:getResolvedRecordingIndicatorMode');
+  },
+  getFloatingIndicatorPosition: async (): Promise<{ x: number; y: number } | null> => {
+    return ipcRenderer.invoke('hotmic:getFloatingIndicatorPosition');
+  },
+  setFloatingIndicatorPosition: async (position: { x: number; y: number } | null): Promise<{ x: number; y: number } | null> => {
+    return ipcRenderer.invoke('hotmic:setFloatingIndicatorPosition', position);
   },
   getIslandAutoHide: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getIslandAutoHide');

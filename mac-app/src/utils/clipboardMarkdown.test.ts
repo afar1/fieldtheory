@@ -72,12 +72,78 @@ describe('clipboard markdown export', () => {
     expect(markdown).toContain('![figure A](<file:///Users/afar/Library/Application%20Support/fieldtheory-mac/users/u/figures/Screenshot%201.png>)');
   });
 
+  it('places text and transcript blocks before image blocks', () => {
+    const markdown = buildClipboardItemsMarkdown([
+      item({ id: 1, createdAt: 1000, content: 'First text' }),
+      item({ id: 2, createdAt: 2000, type: 'screenshot', imageData: 'base64' }),
+      item({ id: 3, createdAt: 3000, type: 'transcript', content: 'Spoken note' }),
+    ], { 2: '/tmp/Figure 1.png' }, 'Stack');
+
+    expect(markdown).toBe([
+      '# Stack',
+      '',
+      'First text',
+      '',
+      'Spoken note',
+      '',
+      '![Image 1](<file:///tmp/Figure%201.png>)',
+      '',
+    ].join('\n'));
+  });
+
+  it('keeps mixed chronology readable by grouping text before later and earlier images', () => {
+    const markdown = buildClipboardItemsMarkdown([
+      item({ id: 3, createdAt: 3000, type: 'screenshot', imageData: 'newer' }),
+      item({ id: 2, createdAt: 2000, content: 'Middle text' }),
+      item({ id: 1, createdAt: 1000, type: 'image', imageData: 'older' }),
+    ], {
+      1: '/tmp/Older.png',
+      3: '/tmp/Newer.png',
+    }, 'Mixed chronology');
+
+    expect(markdown).toBe([
+      '# Mixed chronology',
+      '',
+      'Middle text',
+      '',
+      '![Image 1](<file:///tmp/Older.png>)',
+      '',
+      '![Image 2](<file:///tmp/Newer.png>)',
+      '',
+    ].join('\n'));
+  });
+
   it('keeps a readable placeholder for missing image exports', () => {
     const markdown = buildClipboardItemsMarkdown([
-      item({ id: 4, type: 'screenshot', imageData: 'base64' }),
+      item({ id: 1, createdAt: 1000, content: 'Available text' }),
+      item({ id: 4, createdAt: 2000, type: 'screenshot', imageData: 'base64' }),
     ], { 4: null }, 'Missing image');
 
-    expect(markdown).toContain('> Image 1 was unavailable when this note was created.');
+    expect(markdown).toBe([
+      '# Missing image',
+      '',
+      'Available text',
+      '',
+      '> Image 1 was unavailable when this note was created.',
+      '',
+    ].join('\n'));
+  });
+
+  it('uses chronological image indexes for image alt labels after text grouping', () => {
+    const markdown = buildClipboardItemsMarkdown([
+      item({ id: 3, createdAt: 3000, type: 'screenshot', imageData: 'base64', sourceAppName: 'Safari' }),
+      item({ id: 2, createdAt: 2000, content: 'Text between images' }),
+      item({ id: 1, createdAt: 1000, type: 'image', imageData: 'base64', figureLabel: 'A' }),
+      item({ id: 4, createdAt: 4000, type: 'image', imageData: 'base64' }),
+    ], {
+      1: '/tmp/Figure A.png',
+      3: '/tmp/Safari.png',
+      4: '/tmp/Image.png',
+    }, 'Alt labels');
+
+    expect(markdown).toContain('![figure A](<file:///tmp/Figure%20A.png>)');
+    expect(markdown).toContain('![Safari image](<file:///tmp/Safari.png>)');
+    expect(markdown).toContain('![Image 3](<file:///tmp/Image.png>)');
   });
 
   it('converts local paths with spaces to file urls', () => {

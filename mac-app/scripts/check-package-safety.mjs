@@ -18,6 +18,21 @@ const allowedApps = new Set([
 
 const failures = [];
 const appIdentity = `${buildConfig.appId}|${buildConfig.productName}`;
+const expectedByIdentity = {
+  'com.fieldtheory.app|Field Theory': {
+    channel: 'production',
+    output: 'release',
+    repo: 'field-releases',
+    configLabel: 'package.json',
+  },
+  'com.fieldtheory.experimental|Field Theory Experimental': {
+    channel: 'experimental',
+    output: 'release-experimental',
+    repo: 'field-releases-experimental',
+    configLabel: 'electron-builder.experimental.json',
+    artifactName: 'Field.Theory.Experimental-${version}-${arch}.${ext}',
+  },
+};
 
 if (!allowedApps.has(appIdentity)) {
   failures.push(
@@ -26,6 +41,39 @@ if (!allowedApps.has(appIdentity)) {
       productName: buildConfig.productName,
     })}`,
   );
+}
+
+const expected = expectedByIdentity[appIdentity];
+if (expected) {
+  if (label !== expected.configLabel) {
+    failures.push(`${expected.channel} app identity must be built from ${expected.configLabel}, not ${label}`);
+  }
+
+  if (buildConfig.extraMetadata?.fieldTheoryBuildChannel !== expected.channel) {
+    failures.push(`${expected.channel} build must set extraMetadata.fieldTheoryBuildChannel=${expected.channel}`);
+  }
+
+  if (buildConfig.directories?.output !== expected.output) {
+    failures.push(`${expected.channel} build output must be ${expected.output}`);
+  }
+
+  if (buildConfig.publish?.provider !== 'github'
+    || buildConfig.publish?.owner !== 'afar1'
+    || buildConfig.publish?.repo !== expected.repo) {
+    failures.push(`${expected.channel} build must publish to afar1/${expected.repo}`);
+  }
+
+  if (buildConfig.afterSign !== 'scripts/notarize.js') {
+    failures.push(`${expected.channel} build must run scripts/notarize.js after signing`);
+  }
+
+  if (buildConfig.mac?.notarize !== false) {
+    failures.push(`${expected.channel} build must keep mac.notarize=false and use the explicit afterSign notarization script`);
+  }
+
+  if (expected.artifactName && buildConfig.artifactName !== expected.artifactName) {
+    failures.push(`${expected.channel} build must use artifactName ${expected.artifactName}`);
+  }
 }
 
 const files = buildConfig.files;

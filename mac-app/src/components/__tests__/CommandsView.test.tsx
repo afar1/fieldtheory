@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import CommandsView from '../CommandsView';
+import CommandsView, { getCommandsContentBottomPadding, getCommandsContentTopPadding } from '../CommandsView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -19,6 +19,34 @@ vi.mock('../../contexts/ThemeContext', () => ({
 vi.mock('../../supabaseClient', () => ({
   supabase: null,
 }));
+
+describe('CommandsView layout helpers', () => {
+  it('clears the focus toolbar row when the toolbar overlays command content', () => {
+    expect(getCommandsContentTopPadding({
+      isEditing: false,
+      focusChromeActive: false,
+    })).toBe(28);
+    expect(getCommandsContentTopPadding({
+      isEditing: false,
+      focusChromeActive: true,
+    })).toBe(70);
+  });
+
+  it('removes the bottom footer carve-out while focus chrome overlays the footer', () => {
+    expect(getCommandsContentBottomPadding({
+      isEditing: false,
+      focusChromeActive: false,
+    })).toBe(24);
+    expect(getCommandsContentBottomPadding({
+      isEditing: true,
+      focusChromeActive: false,
+    })).toBe(12);
+    expect(getCommandsContentBottomPadding({
+      isEditing: false,
+      focusChromeActive: true,
+    })).toBe(0);
+  });
+});
 
 describe('CommandsView command naming', () => {
   let insertMarkdownTextHandler: ((text: string) => void) | null = null;
@@ -326,7 +354,7 @@ describe('CommandsView command naming', () => {
 
     expect(onFocusChromeShortcut).toHaveBeenCalledTimes(1);
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(onFocusChromeActiveChange.mock.calls.map(([active]) => active)).toEqual([true]);
     expect(screen.queryByText('commands / existing.md')).toBeNull();
@@ -340,7 +368,7 @@ describe('CommandsView command naming', () => {
       />
     );
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(false);
     });
     expect(screen.getByText('commands / existing.md')).toBeTruthy();
 
@@ -353,14 +381,14 @@ describe('CommandsView command naming', () => {
       />
     );
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
 
     fireEvent.click(screen.getByLabelText('Exit immersive view'));
 
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(false);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(false);
     });
     expect(screen.getByText('commands / existing.md')).toBeTruthy();
 
@@ -368,8 +396,72 @@ describe('CommandsView command naming', () => {
 
     expect(onFocusChromeShortcut).toHaveBeenCalledTimes(2);
     await waitFor(() => {
-      expect(onFocusChromeActiveChange).toHaveBeenLastCalledWith(true);
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)?.[0]).toBe(true);
     });
     expect(screen.queryByText('commands / existing.md')).toBeNull();
+  });
+
+  it('uses the parent focus chrome state when switching into Commands', async () => {
+    const onFocusChromeActiveChange = vi.fn();
+    const onFocusChromeEnabledChange = vi.fn();
+    const { rerender } = render(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />
+    );
+
+    await screen.findByText('Rendered selection text');
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)).toEqual([true, false, 0]);
+    });
+    expect(screen.queryByText('commands / existing.md')).toBeNull();
+
+    rerender(
+      <CommandsView
+        onSwitchToClipboard={vi.fn()}
+        sidebarCollapsed
+        focusChromeEnabled
+        focusChromeGroupOpacity={0.5}
+        onFocusChromeActiveChange={onFocusChromeActiveChange}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />
+    );
+
+    await waitFor(() => {
+      expect(onFocusChromeActiveChange.mock.calls.at(-1)).toEqual([true, true, 0.5]);
+    });
+    expect(screen.getByText('commands / existing.md')).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Exit immersive view'));
+    expect(onFocusChromeEnabledChange).toHaveBeenCalledWith(false);
+  });
+
+  it('temporarily reveals the collapsed sidebar from the left edge', async () => {
+    const { container } = render(<CommandsView onSwitchToClipboard={vi.fn()} sidebarCollapsed />);
+
+    await screen.findByText('Rendered selection text');
+
+    const hoverStrip = container.querySelector('div[aria-hidden="true"]') as HTMLDivElement | null;
+    expect(hoverStrip).toBeTruthy();
+    const sidebarPane = hoverStrip?.nextElementSibling as HTMLDivElement | null;
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseEnter(hoverStrip!);
+
+    await waitFor(() => {
+      expect(sidebarPane?.style.width).toBe('180px');
+    });
+
+    fireEvent.mouseLeave(container.firstElementChild!);
+
+    await waitFor(() => {
+      expect(sidebarPane?.style.width).toBe('0px');
+    });
   });
 });

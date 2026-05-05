@@ -5,9 +5,9 @@ const testState = vi.hoisted(() => {
   type Listener = (...args: unknown[]) => void;
 
   let primaryDisplay = {
-    bounds: { x: 0, y: 0, width: 2560, height: 1440 },
-    workArea: { x: 0, y: 38, width: 2560, height: 1402 },
-    workAreaSize: { width: 2560, height: 1402 },
+    bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+    workArea: { x: 0, y: 38, width: 1728, height: 1079 },
+    workAreaSize: { width: 1728, height: 1079 },
     internal: true,
   };
   let cursorPoint = { x: 0, y: 0 };
@@ -37,6 +37,10 @@ const testState = vi.hoisted(() => {
     hideCalls = 0;
     showInactiveCalls = 0;
     backgroundColorCalls: string[] = [];
+    setBoundsCalls: Array<{
+      bounds: { x: number; y: number; width: number; height: number };
+      animate?: boolean;
+    }> = [];
     constructorOptions: Record<string, unknown>;
     loadTarget: { url?: string; file?: string; search?: string } = {};
     private bounds: { x: number; y: number; width: number; height: number };
@@ -109,8 +113,15 @@ const testState = vi.hoisted(() => {
       return [this.bounds.x, this.bounds.y];
     }
 
-    setBounds(bounds: { x: number; y: number; width: number; height: number }): void {
+    setBounds(bounds: { x: number; y: number; width: number; height: number }, animate?: boolean): void {
+      this.setBoundsCalls.push({ bounds, animate });
       this.bounds = { ...bounds };
+    }
+
+    setFocusable(_focusable: boolean): void {}
+
+    emitEvent(event: string, ...args: unknown[]): void {
+      this.emit(event, ...args);
     }
 
     private emit(event: string, ...args: unknown[]): void {
@@ -123,6 +134,7 @@ const testState = vi.hoisted(() => {
 
   const screenMock = {
     getPrimaryDisplay: vi.fn(() => primaryDisplay),
+    getAllDisplays: vi.fn(() => [primaryDisplay]),
     getCursorScreenPoint: vi.fn(() => cursorPoint),
     on: vi.fn((event: ScreenEvent, listener: Listener) => {
       if (!screenListeners.has(event)) {
@@ -156,7 +168,7 @@ const testState = vi.hoisted(() => {
     }
   };
 
-  const getWindowBySide = (side: 'unified' | 'left' | 'right' | 'drawer' | 'filler'): MockBrowserWindow | undefined => {
+  const getWindowBySide = (side: 'unified' | 'left' | 'right' | 'drawer' | 'filler' | 'floating'): MockBrowserWindow | undefined => {
     return MockBrowserWindow.instances.find((win) => {
       const search = win.loadTarget.search;
       const url = win.loadTarget.url;
@@ -166,9 +178,9 @@ const testState = vi.hoisted(() => {
 
   const reset = (): void => {
     primaryDisplay = {
-      bounds: { x: 0, y: 0, width: 2560, height: 1440 },
-      workArea: { x: 0, y: 38, width: 2560, height: 1402 },
-      workAreaSize: { width: 2560, height: 1402 },
+      bounds: { x: 0, y: 0, width: 1728, height: 1117 },
+      workArea: { x: 0, y: 38, width: 1728, height: 1079 },
+      workAreaSize: { width: 1728, height: 1079 },
       internal: true,
     };
     cursorPoint = { x: 0, y: 0 };
@@ -187,6 +199,7 @@ const testState = vi.hoisted(() => {
   const setPrimaryDisplay = (overrides: {
     x?: number;
     y?: number;
+    workAreaY?: number;
     boundsWidth?: number;
     workAreaWidth?: number;
     internal?: boolean;
@@ -202,7 +215,7 @@ const testState = vi.hoisted(() => {
       workArea: {
         ...primaryDisplay.workArea,
         x: overrides.x ?? primaryDisplay.workArea.x,
-        y: overrides.y ?? primaryDisplay.workArea.y,
+        y: overrides.workAreaY ?? overrides.y ?? primaryDisplay.workArea.y,
         width: overrides.workAreaWidth ?? primaryDisplay.workArea.width,
       },
       workAreaSize: {
@@ -275,7 +288,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(testState.getWindowBySide('filler')).toBeUndefined();
   });
 
-  it('creates the unified island window on external primary displays (no notch profile)', () => {
+  it('uses a floating pill on external primary displays in auto mode', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
@@ -283,9 +296,371 @@ describe('DynamicIslandManager notch-gap behavior', () => {
       queryItems: () => [],
     });
 
+    expect(manager.getResolvedRecordingIndicatorMode()).toBe('floating');
+    expect(testState.getWindowBySide('unified')).toBeUndefined();
+
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    expect(floating?.isVisible()).toBe(true);
+  });
+
+  it('sends the floating shell width separately from the middle content width', () => {
+    testState.setPrimaryInternal(false);
+
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getSize()).toEqual([94, 38]);
+    const resizeMessages = floating?.webContents.sent.filter(
+      (message) => message.channel === 'dynamic-island-resize'
+    ) ?? [];
+    const resizePayload = resizeMessages[resizeMessages.length - 1]?.args[0] as {
+      leftWidth: number;
+      rightWidth: number;
+    };
+    expect(resizePayload).toEqual({ leftWidth: 94, rightWidth: 30 });
+  });
+
+  it('expands the floating pill around a stable waveform center when screenshot pipes appear', () => {
+    testState.setPrimaryInternal(false);
+
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getSize()).toEqual([94, 38]);
+    expect(floating?.getPosition()).toEqual([817, 1055]);
+    const listener = vi.fn();
+    manager.on('floating-position-changed', listener);
+
+    manager.updateStackCount(2);
+
+    expect(floating?.getSize()).toEqual([130, 38]);
+    expect(floating?.getPosition()).toEqual([799, 1055]);
+    const growBoundsCall = floating?.setBoundsCalls[(floating?.setBoundsCalls.length ?? 0) - 1];
+    expect(growBoundsCall).toEqual({
+      bounds: { x: 799, y: 1055, width: 130, height: 38 },
+      animate: false,
+    });
+    expect((floating?.getPosition()[0] ?? 0) + ((floating?.getSize()[0] ?? 0) / 2)).toBe(864);
+    floating?.emitEvent('moved');
+    expect(listener).not.toHaveBeenCalled();
+    expect(manager.getFloatingPosition()).toBeNull();
+    let resizeMessages = floating?.webContents.sent.filter(
+      (message) => message.channel === 'dynamic-island-resize'
+    ) ?? [];
+    expect(resizeMessages[resizeMessages.length - 1]?.args[0]).toEqual({
+      leftWidth: 130,
+      rightWidth: 66,
+    });
+
+    manager.updateStackCount(0);
+
+    expect(floating?.getSize()).toEqual([94, 38]);
+    expect(floating?.getPosition()).toEqual([817, 1055]);
+    const shrinkBoundsCall = floating?.setBoundsCalls[(floating?.setBoundsCalls.length ?? 0) - 1];
+    expect(shrinkBoundsCall).toEqual({
+      bounds: { x: 817, y: 1055, width: 94, height: 38 },
+      animate: false,
+    });
+    expect((floating?.getPosition()[0] ?? 0) + ((floating?.getSize()[0] ?? 0) / 2)).toBe(864);
+    resizeMessages = floating?.webContents.sent.filter(
+      (message) => message.channel === 'dynamic-island-resize'
+    ) ?? [];
+    expect(resizeMessages[resizeMessages.length - 1]?.args[0]).toEqual({
+      leftWidth: 94,
+      rightWidth: 30,
+    });
+  });
+
+  it('keeps the notch island path when the user forces Notch on an external display', () => {
+    testState.setPrimaryInternal(false);
+
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('notch');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    expect(manager.getResolvedRecordingIndicatorMode()).toBe('notch');
+    expect(testState.getWindowBySide('unified')).toBeDefined();
+  });
+
+  it('uses floating mode for non-notch internal displays in auto mode', () => {
+    testState.setPrimaryDisplay({
+      boundsWidth: 1024,
+      workAreaWidth: 1024,
+      internal: true,
+    });
+
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    expect(manager.getResolvedRecordingIndicatorMode()).toBe('floating');
+    expect(testState.getWindowBySide('floating')).toBeUndefined();
+
+    manager.setState('recording');
+    expect(testState.getWindowBySide('floating')).toBeDefined();
+  });
+
+  it('uses persisted floating position only in floating mode', () => {
+    manager = new DynamicIslandManager();
+    manager.setFloatingPosition({ x: 320, y: 180 });
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
     const unified = testState.getWindowBySide('unified');
-    expect(unified).toBeDefined();
-    expect(unified?.isVisible()).toBe(true);
+    expect(unified?.getPosition()).not.toEqual([320, 180]);
+
+    manager.setRecordingIndicatorMode('floating');
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getPosition()).toEqual([320, 180]);
+  });
+
+  it('uses the bottom-center fallback when a saved floating position is above the work area', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    expect(manager.setFloatingPosition({ x: 907, y: 0 })).toBeNull();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getPosition()).toEqual([817, 1055]);
+  });
+
+  it('uses the bottom-center fallback for saved floating positions at the top-edge clamp', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    expect(manager.setFloatingPosition({ x: 907, y: 63 })).toBeNull();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getPosition()).toEqual([817, 1055]);
+  });
+
+  it('uses the bottom-center fallback when a saved floating position is on a zero-y work area edge', () => {
+    testState.setPrimaryDisplay({ workAreaY: 0 });
+
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    expect(manager.setFloatingPosition({ x: 907, y: 0 })).toBeNull();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getPosition()).toEqual([817, 1017]);
+  });
+
+  it('does not create a unified island while startup waits to apply floating preferences', () => {
+    manager = new DynamicIslandManager();
+    manager.setEnabled(false);
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+    manager.setRecordingIndicatorMode('floating');
+
+    expect(testState.getWindowBySide('unified')).toBeUndefined();
+    expect(testState.getWindowBySide('floating')).toBeUndefined();
+
+    manager.setEnabled(true);
+    manager.setState('recording');
+
+    expect(testState.getWindowBySide('unified')).toBeUndefined();
+    expect(testState.getWindowBySide('floating')).toBeDefined();
+  });
+
+  it('emits floating position changes after the floating pill is dragged', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const listener = vi.fn();
+    manager.on('floating-position-changed', listener);
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    floating?.setBounds({ x: 410, y: 96, width: 72, height: 38 });
+    floating?.emitEvent('moved');
+
+    expect(listener).toHaveBeenCalledWith({ x: 410, y: 96 });
+    expect(manager.getFloatingPosition()).toEqual({ x: 410, y: 96 });
+  });
+
+  it('emits floating position changes from in-progress move events', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const listener = vi.fn();
+    manager.on('floating-position-changed', listener);
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    floating?.setBounds({ x: 512, y: 144, width: 94, height: 38 });
+    floating?.emitEvent('move');
+
+    expect(listener).toHaveBeenCalledWith({ x: 512, y: 144 });
+    expect(manager.getFloatingPosition()).toEqual({ x: 512, y: 144 });
+  });
+
+  it('restores a dragged floating position on the next manager instance', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const listener = vi.fn();
+    manager.on('floating-position-changed', listener);
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    floating?.setBounds({ x: 512, y: 144, width: 94, height: 38 });
+    floating?.emitEvent('move');
+    const saved = listener.mock.calls[listener.mock.calls.length - 1]?.[0];
+    expect(saved).toEqual({ x: 512, y: 144 });
+
+    manager.destroy();
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setFloatingPosition(saved);
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+    manager.setState('recording');
+
+    const restoredFloating = testState.MockBrowserWindow.instances.find((window) => (
+      !window.isDestroyed() &&
+      (window.loadTarget.search?.includes('side=floating') === true || window.loadTarget.url?.includes('side=floating') === true)
+    ));
+    expect(restoredFloating?.getPosition()).toEqual([512, 144]);
+  });
+
+  it('clamps dragged floating positions before saving them', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const listener = vi.fn();
+    manager.on('floating-position-changed', listener);
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    floating?.setBounds({ x: 410, y: 0, width: 94, height: 38 });
+    floating?.emitEvent('moved');
+
+    expect(listener).toHaveBeenCalledWith({ x: 410, y: 62 });
+    expect(manager.getFloatingPosition()).toEqual({ x: 410, y: 62 });
+    expect(floating?.getPosition()).toEqual([410, 62]);
+  });
+
+  it('settles the floating waveform and hides before paste', () => {
+    vi.useFakeTimers();
+    try {
+      manager = new DynamicIslandManager();
+      manager.setRecordingIndicatorMode('floating');
+      manager.setClipboardManager({
+        queryItems: () => [],
+      });
+      manager.setState('recording');
+
+      const floating = testState.getWindowBySide('floating');
+      expect(floating?.isVisible()).toBe(true);
+
+      const delayMs = manager.prepareForPaste();
+
+      expect(delayMs).toBe(240);
+      expect(manager.getState()).toBe('completing');
+      const stateMessages = floating?.webContents.sent.filter(
+        (entry) => entry.channel === 'dynamic-island-state'
+      ) ?? [];
+      expect(stateMessages[stateMessages.length - 1]?.args[0]).toBe('completing');
+
+      vi.advanceTimersByTime(delayMs);
+
+      expect(floating?.isVisible()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps forced-floating auto-hide on the opacity path on notch displays', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+    manager.setState('recording');
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating?.getPosition()).toEqual([817, 1055]);
+    expect(floating?.getSize()).toEqual([94, 38]);
+
+    (
+      manager as unknown as { applyAutoHideProgress: (progress: number) => void }
+    ).applyAutoHideProgress(0.5);
+
+    expect(floating?.getPosition()).toEqual([817, 1055]);
+    expect(floating?.getSize()).toEqual([94, 38]);
+    expect(floating?.getOpacity()).toBe(0.5);
+  });
+
+  it('does not show the floating pill again for final transcript display', () => {
+    manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('floating');
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    manager.setState('transcribing');
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    expect(floating?.isVisible()).toBe(true);
+
+    manager.sendTranscript('hello world', true);
+
+    expect(manager.getState()).toBe('idle');
+    expect(floating?.isVisible()).toBe(false);
+    expect(testState.getWindowBySide('unified')).toBeUndefined();
+    const transcriptEvents = floating?.webContents.sent.filter(
+      (entry) => entry.channel === 'dynamic-island-transcript'
+    ) ?? [];
+    expect(transcriptEvents.length).toBe(0);
   });
 
   it('does not create island windows while disabled until re-enabled', () => {
@@ -305,21 +680,23 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(testState.getWindowBySide('drawer')).toBeDefined();
   });
 
-  it('keeps the unified window visible when switching primary back to internal', () => {
+  it('switches from floating back to the unified notch window when auto mode sees an internal notch display', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
     manager.setClipboardManager({
       queryItems: () => [],
     });
+    manager.setState('recording');
 
-    const unified = testState.getWindowBySide('unified');
-    expect(unified).toBeDefined();
-    expect(unified?.isVisible()).toBe(true);
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
 
     testState.setPrimaryInternal(true);
     testState.emitScreenEvent('display-metrics-changed');
 
+    const unified = testState.getWindowBySide('unified');
+    expect(unified).toBeDefined();
     expect(unified?.isVisible()).toBe(true);
   });
 
@@ -661,8 +1038,8 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
     // pillWidth=84, notchOverride=100: unified = left(84) + gapFill(100+2) + right(84) = 270
     expect(unified?.getSize()).toEqual([270, 42]);
-    // Unified X = leftWindowX(84, idle): floor((2560-100)/2 - 84) + 10 = 1156
-    expect(unified?.getPosition()).toEqual([1156, 6]);
+    // Unified X = leftWindowX(84, idle): floor((1728-100)/2 - 84) + 10 = 740
+    expect(unified?.getPosition()).toEqual([740, 6]);
   });
 
   it('uses full display width for notch profile matching even when work area width is reduced', () => {
@@ -772,6 +1149,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     testState.setPrimaryInternal(false);
 
     manager = new DynamicIslandManager();
+    manager.setRecordingIndicatorMode('notch');
     manager.setClipboardManager({
       queryItems: () => [],
     });

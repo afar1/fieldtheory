@@ -18,18 +18,32 @@ echo "Setting up Parakeet transcription engine..."
 echo "  venv: $VENV_DIR"
 
 # Require Python 3.10+
-PYTHON_CMD=""
-for candidate in python3.12 python3.11 python3.10 python3; do
-  if command -v "$candidate" &>/dev/null; then
-    version=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")
-    major="${version%%.*}"
-    minor="${version#*.}"
-    if [[ "$major" -ge 3 && "$minor" -ge 10 ]]; then
-      PYTHON_CMD="$candidate"
-      break
-    fi
+PYTHON_CMD="${FT_PARAKEET_PYTHON:-}"
+if [[ -n "$PYTHON_CMD" ]]; then
+  version=$("$PYTHON_CMD" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")
+  minor=0
+  if [[ "$version" =~ ^3\.([0-9]+)$ ]]; then
+    minor="${BASH_REMATCH[1]}"
   fi
-done
+  if [[ "$minor" -lt 10 ]]; then
+    echo "ERROR: FT_PARAKEET_PYTHON points to unsupported Python: $PYTHON_CMD ($("$PYTHON_CMD" --version 2>&1 || echo unknown))"
+    exit 1
+  fi
+else
+  for candidate in python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" &>/dev/null; then
+      version=$("$candidate" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "")
+      minor=0
+      if [[ "$version" =~ ^3\.([0-9]+)$ ]]; then
+        minor="${BASH_REMATCH[1]}"
+      fi
+      if [[ "$minor" -ge 10 ]]; then
+        PYTHON_CMD="$candidate"
+        break
+      fi
+    fi
+  done
+fi
 
 if [[ -z "$PYTHON_CMD" ]]; then
   echo "ERROR: Python 3.10+ is required but not found."
