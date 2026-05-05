@@ -8,6 +8,7 @@ import { createLogger } from './logger';
 import { loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { WaitingAgent } from './types/agentAttention';
 import type { AgentLayout } from './agentLayout';
+import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 
 const log = createLogger('DynamicIsland');
 
@@ -313,6 +314,14 @@ export class DynamicIslandManager extends EventEmitter {
     ipcMain.on('dynamic-island-open-field-theory', () => {
       // Collapse history immediately before opening the main window to avoid
       // transient expanded transparent surfaces during focus transfer.
+      appendVisibilityTrace('dynamic-island.open-field-theory.ipc', {
+        state: this.state,
+        resolvedIndicatorMode: this.getResolvedRecordingIndicatorMode(),
+        historyVisible: this.historyVisible,
+        windowVisible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        rendererReady: this.rendererReady,
+        pendingShow: this.pendingShow,
+      });
       this.collapseHistoryPanel('open-field-theory');
       this.emit('open-field-theory');
     });
@@ -737,7 +746,14 @@ export class DynamicIslandManager extends EventEmitter {
   private show(): void {
     if (!this.enabled) return;
     if (!this.shouldShowIndicatorWindow()) {
-      this.hide();
+      if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+        if (!this.window || this.window.isDestroyed()) {
+          this.createWindow();
+        }
+        this.concealIndicatorWindow();
+      } else {
+        this.hide();
+      }
       return;
     }
     this.recreateIndicatorWindowForMode();
@@ -752,8 +768,11 @@ export class DynamicIslandManager extends EventEmitter {
       }
       this.reinforceWindowBacking('left', 'left-show');
       if (this.isAutoHidden()) return;
+      this.window.setIgnoreMouseEvents(false);
       this.window.setOpacity(1);
-      this.window.showInactive();
+      if (!this.window.isVisible()) {
+        this.window.showInactive();
+      }
     }
   }
 
@@ -767,8 +786,32 @@ export class DynamicIslandManager extends EventEmitter {
   private hide(): void {
     this.pendingShow = false;
     if (this.window && !this.window.isDestroyed()) {
-      this.window.hide();
+      this.concealIndicatorWindow();
     }
+  }
+
+  private concealIndicatorWindow(): void {
+    if (!this.window || this.window.isDestroyed()) return;
+
+    if (this.getResolvedRecordingIndicatorMode() === 'floating') {
+      this.window.setOpacity(0);
+      this.window.setIgnoreMouseEvents(true);
+      if (isVisibilityTraceEnabled()) {
+        appendVisibilityTrace('dynamic-island.window.left.conceal', {
+          state: this.state,
+          resolvedIndicatorMode: this.getResolvedRecordingIndicatorMode(),
+          visible: this.window.isVisible(),
+          focused: this.window.isFocused(),
+          opacity: this.window.getOpacity(),
+        });
+      }
+      if (this.rendererReady && !this.window.isVisible()) {
+        this.window.showInactive();
+      }
+      return;
+    }
+
+    this.window.hide();
   }
 
   private createWindow(): void {
@@ -889,9 +932,14 @@ export class DynamicIslandManager extends EventEmitter {
           this.pendingShow = false;
           this.reinforceWindowBacking('left', 'left-pending-show');
           if (!this.isAutoHidden()) {
+            this.window.setIgnoreMouseEvents(false);
             this.window.setOpacity(1);
-            this.window.showInactive();
+            if (!this.window.isVisible()) {
+              this.window.showInactive();
+            }
           }
+        } else if (isFloating && !this.shouldShowFloatingIndicator()) {
+          this.concealIndicatorWindow();
         }
       }
     });
@@ -1252,11 +1300,37 @@ export class DynamicIslandManager extends EventEmitter {
     const emit = (eventName: string) => {
       if (win.isDestroyed()) return;
       this.reinforceWindowBacking(label as IslandWindowLabel, `${label}:${eventName}`);
+      if (
+        isVisibilityTraceEnabled()
+        && (
+          eventName === 'show'
+          || eventName === 'hide'
+          || eventName === 'focus'
+          || eventName === 'blur'
+          || eventName === 'ready-to-show'
+        )
+      ) {
+        const [traceX, traceY] = win.getPosition();
+        const [traceWidth, traceHeight] = win.getSize();
+        appendVisibilityTrace(`dynamic-island.window.${label}.${eventName}`, {
+          state: this.state,
+          resolvedIndicatorMode: this.getResolvedRecordingIndicatorMode(),
+          visible: win.isVisible(),
+          focused: win.isFocused(),
+          opacity: win.getOpacity(),
+          bounds: {
+            x: traceX,
+            y: traceY,
+            width: traceWidth,
+            height: traceHeight,
+          },
+        });
+      }
       if (!this.DEBUG_WINDOW_EVENT_LOGGING) {
         return;
       }
-      const [x, y] = win.getPosition();
-      const [width, height] = win.getSize();
+      const [traceX, traceY] = win.getPosition();
+      const [traceWidth, traceHeight] = win.getSize();
       const reportedBg = win.getBackgroundColor?.() ?? '(unknown)';
       const configuredTransparent = this.shouldUseTransparentWindow(label as IslandWindowLabel);
       const configuredBacking = this.getOverlayBackingColor(configuredTransparent);
@@ -1270,10 +1344,10 @@ export class DynamicIslandManager extends EventEmitter {
         configuredTransparent,
         configuredBacking,
         reportedBg,
-        x,
-        y,
-        width,
-        height
+        traceX,
+        traceY,
+        traceWidth,
+        traceHeight
       );
     };
     win.on('show', () => emit('show'));
@@ -1583,15 +1657,18 @@ export class DynamicIslandManager extends EventEmitter {
 
     if (clamped <= 0) {
       if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
-        this.window.hide();
+        this.concealIndicatorWindow();
       }
       return;
     }
 
     if (clamped >= 1) {
       if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+        this.window.setIgnoreMouseEvents(false);
         this.window.setOpacity(1);
-        this.window.showInactive();
+        if (!this.window.isVisible()) {
+          this.window.showInactive();
+        }
       }
       return;
     }
@@ -1601,6 +1678,7 @@ export class DynamicIslandManager extends EventEmitter {
         this.window.setOpacity(1);
         this.window.showInactive();
       }
+      this.window.setIgnoreMouseEvents(false);
       if (slideIntoNotch) {
         // Slide only — opacity stays 1 throughout. The window hides (clamped <= 0)
         // only after pills are fully retracted behind the notch gap.
