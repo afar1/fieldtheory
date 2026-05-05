@@ -36,6 +36,7 @@ const testState = vi.hoisted(() => {
     visible = false;
     hideCalls = 0;
     showInactiveCalls = 0;
+    ignoreMouseEventsCalls: boolean[] = [];
     backgroundColorCalls: string[] = [];
     setBoundsCalls: Array<{
       bounds: { x: number; y: number; width: number; height: number };
@@ -65,7 +66,9 @@ const testState = vi.hoisted(() => {
     }
     setVisibleOnAllWorkspaces(_visible: boolean, _options?: unknown): void {}
     setAlwaysOnTop(_alwaysOnTop: boolean, _level?: string, _relativeLevel?: number): void {}
-    setIgnoreMouseEvents(_ignore: boolean): void {}
+    setIgnoreMouseEvents(ignore: boolean): void {
+      this.ignoreMouseEventsCalls.push(ignore);
+    }
 
     loadURL(url: string): void {
       this.loadTarget.url = url;
@@ -103,6 +106,10 @@ const testState = vi.hoisted(() => {
 
     isVisible(): boolean {
       return this.visible;
+    }
+
+    isFocused(): boolean {
+      return false;
     }
 
     getSize(): [number, number] {
@@ -410,10 +417,16 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     });
 
     expect(manager.getResolvedRecordingIndicatorMode()).toBe('floating');
-    expect(testState.getWindowBySide('floating')).toBeUndefined();
+    const concealedFloating = testState.getWindowBySide('floating');
+    expect(concealedFloating).toBeDefined();
+    expect(concealedFloating?.isVisible()).toBe(true);
+    expect(concealedFloating?.getOpacity()).toBe(0);
+    expect(concealedFloating?.ignoreMouseEventsCalls.at(-1)).toBe(true);
 
     manager.setState('recording');
-    expect(testState.getWindowBySide('floating')).toBeDefined();
+    expect(concealedFloating?.isVisible()).toBe(true);
+    expect(concealedFloating?.getOpacity()).toBe(1);
+    expect(concealedFloating?.ignoreMouseEventsCalls.at(-1)).toBe(false);
   });
 
   it('uses persisted floating position only in floating mode', () => {
@@ -589,7 +602,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(floating?.getPosition()).toEqual([410, 62]);
   });
 
-  it('settles the floating waveform and hides before paste', () => {
+  it('settles the floating waveform and conceals before paste', () => {
     vi.useFakeTimers();
     try {
       manager = new DynamicIslandManager();
@@ -613,7 +626,10 @@ describe('DynamicIslandManager notch-gap behavior', () => {
 
       vi.advanceTimersByTime(delayMs);
 
-      expect(floating?.isVisible()).toBe(false);
+      expect(floating?.isVisible()).toBe(true);
+      expect(floating?.getOpacity()).toBe(0);
+      expect(floating?.ignoreMouseEventsCalls.at(-1)).toBe(true);
+      expect(floating?.hideCalls).toBe(0);
     } finally {
       vi.useRealTimers();
     }
@@ -640,7 +656,7 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(floating?.getOpacity()).toBe(0.5);
   });
 
-  it('does not reveal a forced-floating pill when hovering the notch while idle', () => {
+  it('does not reveal a concealed forced-floating pill when hovering the notch while idle', () => {
     testState.setCursorPoint({ x: 864, y: 12 });
 
     manager = new DynamicIslandManager();
@@ -654,14 +670,14 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(floating?.isVisible()).toBe(true);
 
     manager.setState('idle');
-    expect(floating?.isVisible()).toBe(false);
+    expect(floating?.isVisible()).toBe(true);
+    expect(floating?.getOpacity()).toBe(0);
+    expect(floating?.ignoreMouseEventsCalls.at(-1)).toBe(true);
 
     manager.setAutoHide(true);
-    (
-      manager as unknown as { tickAutoHide: () => void }
-    ).tickAutoHide();
 
-    expect(floating?.isVisible()).toBe(false);
+    expect(floating?.isVisible()).toBe(true);
+    expect(floating?.getOpacity()).toBe(0);
   });
 
   it('does not show the floating pill again for final transcript display', () => {
@@ -679,7 +695,9 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     manager.sendTranscript('hello world', true);
 
     expect(manager.getState()).toBe('idle');
-    expect(floating?.isVisible()).toBe(false);
+    expect(floating?.isVisible()).toBe(true);
+    expect(floating?.getOpacity()).toBe(0);
+    expect(floating?.ignoreMouseEventsCalls.at(-1)).toBe(true);
     expect(testState.getWindowBySide('unified')).toBeUndefined();
     const transcriptEvents = floating?.webContents.sent.filter(
       (entry) => entry.channel === 'dynamic-island-transcript'

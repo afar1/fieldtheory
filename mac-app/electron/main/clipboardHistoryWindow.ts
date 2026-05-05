@@ -8,6 +8,7 @@ import { createLogger } from './logger';
 import { isFinder } from './clipboardManager';
 import { isDevServerConnectionRefused, loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { NativeHelper } from './nativeHelper';
+import { appendVisibilityTrace, captureVisibilityCaller, isVisibilityTraceEnabled } from './visibilityTrace';
 
 const log = createLogger('ClipboardHistory');
 
@@ -304,21 +305,84 @@ export class ClipboardHistoryWindow {
     app.show();
   }
 
+  private getWindowFocusedForTrace(): boolean | null {
+    if (!this.window || this.window.isDestroyed()) {
+      return null;
+    }
+    const isFocused = (this.window as unknown as { isFocused?: () => boolean }).isFocused;
+    return typeof isFocused === 'function' ? isFocused.call(this.window) : null;
+  }
+
+  private getWindowTraceState(): Record<string, unknown> {
+    if (!this.window || this.window.isDestroyed()) {
+      return {
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        showing: this._isShowing,
+      };
+    }
+
+    const getBounds = (this.window as unknown as { getBounds?: () => Electron.Rectangle }).getBounds;
+    const getOpacity = (this.window as unknown as { getOpacity?: () => number }).getOpacity;
+    const isMinimized = (this.window as unknown as { isMinimized?: () => boolean }).isMinimized;
+
+    return {
+      hasWindow: true,
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      minimized: typeof isMinimized === 'function' ? isMinimized.call(this.window) : null,
+      showing: this._isShowing,
+      bounds: typeof getBounds === 'function' ? getBounds.call(this.window) : null,
+      opacity: typeof getOpacity === 'function' ? getOpacity.call(this.window) : null,
+    };
+  }
+
+  private appendWindowTrace(event: string, data: Record<string, unknown> = {}): void {
+    if (!isVisibilityTraceEnabled()) return;
+    appendVisibilityTrace(event, {
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      ...this.getWindowTraceState(),
+      ...data,
+    });
+  }
+
+  private scheduleWindowTrace(event: string, delayMs: number): void {
+    if (process.env.NODE_ENV === 'test') return;
+    if (!isVisibilityTraceEnabled()) return;
+    setTimeout(() => {
+      this.appendWindowTrace(event, { delayMs });
+    }, delayMs);
+  }
+
   private revealWindow(activateWindow: boolean, showInDock: boolean): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
     }
+
+    appendVisibilityTrace('clipboard.reveal-window', {
+      activateWindow,
+      showInDock,
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
 
     if (activateWindow) {
       this.window.show();
       this.window.moveTop();
       this.window.focus();
       this.activateApplicationForClipboardWindow(showInDock);
-      return;
+    } else {
+      this.window.showInactive();
+      this.window.moveTop();
     }
 
-    this.window.showInactive();
-    this.window.moveTop();
+    this.appendWindowTrace('clipboard.reveal-window.complete', {
+      activateWindow,
+      showInDock,
+    });
+    this.scheduleWindowTrace('clipboard.reveal-window.snapshot', 50);
+    this.scheduleWindowTrace('clipboard.reveal-window.snapshot', 250);
   }
 
   setNativeHelper(nativeHelper: Pick<NativeHelper, 'getFrontmostApp'> | null): void {
@@ -676,6 +740,17 @@ export class ClipboardHistoryWindow {
       'show:begin',
       `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} activateWindow=${activateWindow} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
     );
+    appendVisibilityTrace('clipboard.show.begin', {
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      hasWindow: Boolean(this.window && !this.window.isDestroyed()),
+      visible: this.isVisible(),
+      showing: this._isShowing,
+      showSettingsMode,
+      skipSound,
+      transcriptHistoryMode,
+      activateWindow,
+      savedBounds: savedBounds ?? null,
+    });
     // Update internal state immediately for instant toggle.
     this._isShowing = true;
     const showInDock = this.shouldUseAppWindow();
@@ -864,10 +939,22 @@ export class ClipboardHistoryWindow {
     }
 
     this.window.on('closed', () => {
+      this.appendWindowTrace('clipboard.window.closed');
       this.logLifecycle('window:closed');
       this.window = null;
       this._isShowing = false;
     });
+
+    const appendWindowEventTrace = (eventName: string) => {
+      this.appendWindowTrace(`clipboard.window.${eventName}`);
+    };
+    this.window.on('show', () => appendWindowEventTrace('show'));
+    this.window.on('hide', () => appendWindowEventTrace('hide'));
+    this.window.on('focus', () => appendWindowEventTrace('focus'));
+    this.window.on('blur', () => appendWindowEventTrace('blur'));
+    this.window.on('minimize', () => appendWindowEventTrace('minimize'));
+    this.window.on('restore', () => appendWindowEventTrace('restore'));
+    this.window.on('ready-to-show', () => appendWindowEventTrace('ready-to-show'));
 
     if (this.DEBUG_WINDOW_EVENTS) {
       const emit = (eventName: string) => this.logLifecycle(`window:${eventName}`);
@@ -997,13 +1084,51 @@ export class ClipboardHistoryWindow {
   }
 
   focusExistingWindow(): boolean {
-    if (!this.window || this.window.isDestroyed()) {
+    if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+      appendVisibilityTrace('clipboard.focus-existing.skipped', {
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        showing: this._isShowing,
+      });
       return false;
     }
 
+    appendVisibilityTrace('clipboard.focus-existing.begin', {
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
     this._isShowing = true;
     this.revealWindow(true, this.shouldUseAppWindow());
     this.logLifecycle('focus-existing-window');
+    return true;
+  }
+
+  focusVisibleWindow(reason: string = 'unspecified'): boolean {
+    if (!this.window || this.window.isDestroyed() || !this.window.isVisible()) {
+      appendVisibilityTrace('clipboard.focus-visible.skipped', {
+        reason,
+        hasWindow: Boolean(this.window),
+        destroyed: this.window?.isDestroyed() ?? null,
+        visible: this.window && !this.window.isDestroyed() ? this.window.isVisible() : null,
+        showing: this._isShowing,
+      });
+      return false;
+    }
+
+    appendVisibilityTrace('clipboard.focus-visible.begin', {
+      reason,
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      visible: this.window.isVisible(),
+      focused: this.getWindowFocusedForTrace(),
+      showing: this._isShowing,
+    });
+    this._isShowing = true;
+    this.window.focus();
+    this.logLifecycle('focus-visible-window', `reason=${reason}`);
+    this.scheduleWindowTrace('clipboard.focus-visible.snapshot', 50);
     return true;
   }
 
@@ -1036,6 +1161,17 @@ export class ClipboardHistoryWindow {
    */
   hide(hideApp: boolean = true, reason: string = 'unspecified'): void {
     const wasVisible = this.window !== null && !this.window.isDestroyed() && this.window.isVisible();
+    appendVisibilityTrace('clipboard.hide.begin', {
+      reason,
+      hideApp,
+      mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
+      wasVisible,
+      showing: this._isShowing,
+      recording: this.isRecordingActive,
+      immersive: this.isImmersiveMode,
+      sketch: this.sketchModeActive,
+      caller: captureVisibilityCaller(),
+    });
     this.logLifecycle(
       'hide:begin',
       `reason=${reason} hideApp=${hideApp} recording=${this.isRecordingActive} immersive=${this.isImmersiveMode} sketch=${this.sketchModeActive}`
@@ -1111,6 +1247,13 @@ export class ClipboardHistoryWindow {
     if (this.onHidden) {
       this.onHidden({ reason, hideApp, wasVisible });
     }
+    appendVisibilityTrace('clipboard.hide.complete', {
+      reason,
+      hideApp,
+      wasVisible,
+      visible: this.isVisible(),
+      showing: this._isShowing,
+    });
     this.logLifecycle('hide:complete');
   }
 
