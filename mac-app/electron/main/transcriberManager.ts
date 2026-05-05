@@ -172,9 +172,6 @@ export class TranscriberManager extends EventEmitter {
     filePath: string;
   }> = [];
   
-  // Clipboard history visibility checker - allows escape key to dismiss clipboard history first
-  private clipboardHistoryVisibilityChecker: (() => boolean) | null = null;
-  
   // Sketch mode checker - used to skip auto-paste when draw canvas is open
   private sketchModeChecker: (() => boolean) | null = null;
   
@@ -323,14 +320,6 @@ export class TranscriberManager extends EventEmitter {
    */
   isRecordingOverlayVisible(): boolean {
     return this.overlay.isVisible();
-  }
-
-  /**
-   * Set a callback to check if clipboard history window is visible.
-   * Used for escape key priority: dismiss clipboard history before canceling recording.
-   */
-  setClipboardHistoryVisibilityChecker(checker: () => boolean): void {
-    this.clipboardHistoryVisibilityChecker = checker;
   }
 
   setSketchModeChecker(checker: () => boolean): void {
@@ -1677,7 +1666,7 @@ export class TranscriberManager extends EventEmitter {
 
   /**
    * Register abandon recording hotkey (configurable, default: Escape).
-   * If clipboard history is visible, dismiss it first instead of canceling recording.
+   * While recording is active, Escape belongs to the recording session.
    */
   private registerAbandonHotkey(): void {
     if (this.abandonHotkeyRegistered) {
@@ -1693,12 +1682,6 @@ export class TranscriberManager extends EventEmitter {
         this.pendingAbandonConfirmation = false;
         this.overlay.hideConfirmation();
         this.cancelRecording();
-        return;
-      }
-
-      // Let clipboard history handle Escape if it's visible.
-      if (this.clipboardHistoryVisibilityChecker?.()) {
-        this.emit('dismiss-clipboard-history');
         return;
       }
 
