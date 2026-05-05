@@ -271,6 +271,41 @@ describe('TranscriptionSettings Parakeet labels', () => {
     expect(screen.getByText(/Fetching 4 files: 42%/i)).toBeTruthy();
   });
 
+  it('shows the Python recovery command and preserves raw setup detail', async () => {
+    const setupParakeet = vi.fn(async () => ({
+      success: false,
+      error: 'Python 3.10 or newer is required for Parakeet setup.',
+      setupError: {
+        code: 'missing-python' as const,
+        summary: 'Python 3.10 or newer is required for Parakeet setup.',
+        detail: 'PATH=/usr/bin\nchecked python3.12 and python3',
+        recoveryCommand: 'brew install python@3.12',
+        moreInfo: 'Install a supported Homebrew Python, then retry Parakeet setup.',
+      },
+    }));
+
+    (window as any).transcribeAPI = makeTranscribeApi({ setupParakeet });
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    render(<TranscriptionSettings />);
+
+    const verifyButtons = await screen.findAllByRole('button', { name: 'Verify' });
+
+    await act(async () => {
+      verifyButtons[0].click();
+    });
+
+    expect(await screen.findByText('brew install python@3.12')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Copy command' })).toBeTruthy();
+    expect(screen.getByText(/supported Homebrew Python/i)).toBeTruthy();
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Show details' }).click();
+    });
+
+    expect(screen.getByText(/checked python3\.12 and python3/i)).toBeTruthy();
+  });
+
   it('shows raw error details and lets the user open diagnostics or send them directly', async () => {
     const getDiagnosticsMarkdown = vi.fn(async () => '## Field Theory Diagnostics\n- ok');
     const submitTextFeedback = vi.fn(async () => ({ id: 'feedback-1' }));

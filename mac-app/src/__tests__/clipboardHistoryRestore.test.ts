@@ -65,6 +65,17 @@ describe('clipboardHistoryRestore', () => {
     });
   });
 
+  it('restores Possible as a normal Field Theory surface', () => {
+    const storage = createStorage({
+      [FIELD_THEORY_VIEW_STORAGE_KEY]: 'possible',
+    });
+
+    expect(resolveClipboardRestoreState(storage)).toEqual({
+      viewMode: 'possible',
+      showSettings: false,
+    });
+  });
+
 
   it('persists settings as the last surface without losing the base view', () => {
     const storage = createStorage({

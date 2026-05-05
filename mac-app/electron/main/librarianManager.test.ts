@@ -907,6 +907,48 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'entries/note');
   });
 
+  it('moves wiki files into registered external library roots', () => {
+    const wikiRoot = makeTempDir();
+    const externalRoot = makeTempDir();
+    fs.mkdirSync(path.join(wikiRoot, 'scratchpad'), { recursive: true });
+    fs.writeFileSync(path.join(wikiRoot, 'scratchpad', 'note.md'), '# Note\n');
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      moveLibraryItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    Object.defineProperty(manager, 'settings', { value: { libraryRoots: [externalRoot] } });
+    manager.emit = emit;
+
+    expect(manager.moveLibraryItem(wikiRoot, 'file', 'scratchpad/note', '', externalRoot)).toBe('note');
+    expect(fs.existsSync(path.join(wikiRoot, 'scratchpad', 'note.md'))).toBe(false);
+    expect(fs.readFileSync(path.join(externalRoot, 'note.md'), 'utf-8')).toBe('# Note\n');
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'scratchpad/note');
+    expect(emit).toHaveBeenCalledWith('library:changed', externalRoot);
+  });
+
+  it('keeps cross-root moves scoped to files', () => {
+    const wikiRoot = makeTempDir();
+    const externalRoot = makeTempDir();
+    fs.mkdirSync(path.join(wikiRoot, 'scratchpad'), { recursive: true });
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      moveLibraryItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => string | null;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: wikiRoot });
+    Object.defineProperty(manager, 'settings', { value: { libraryRoots: [externalRoot] } });
+    manager.emit = emit;
+
+    expect(manager.moveLibraryItem(wikiRoot, 'dir', 'scratchpad', '', externalRoot)).toBeNull();
+    expect(fs.existsSync(path.join(wikiRoot, 'scratchpad'))).toBe(true);
+    expect(emit).not.toHaveBeenCalled();
+  });
+
   it('rejects moving a folder into itself or a descendant', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'Client Notes', 'Nested'), { recursive: true });

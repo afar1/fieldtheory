@@ -9,6 +9,7 @@ import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import CommandsView from './CommandsView';
+import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeHintOpacity, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
@@ -88,7 +89,7 @@ type FieldTheoryMarkdownTarget = {
   selectionEnd?: number;
 };
 
-type TopNavMode = 'clipboard' | 'librarian' | 'commands';
+type TopNavMode = 'clipboard' | 'librarian' | 'commands' | 'possible';
 
 type FieldTheoryNavigationEntry =
   | { surface: 'librarian' }
@@ -108,7 +109,7 @@ type TopNavPaintTrace = {
 };
 
 function isTopNavMode(mode: ViewMode): mode is TopNavMode {
-  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands';
+  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands' || mode === 'possible';
 }
 
 function sameFieldTheoryNavigationEntry(
@@ -182,6 +183,12 @@ const FIELD_THEORY_CHROME_MIC_TOP_PX = 21;
 const FIELD_THEORY_CHROME_TABS_TOP_PX = 60;
 const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 12;
 const FIELD_THEORY_CHROME_OVERLAY_TOP_PX = 10;
+const FIELD_THEORY_TOP_CHROME_DRAG_STYLE = {
+  WebkitAppRegion: 'drag',
+} as React.CSSProperties;
+const FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE = {
+  WebkitAppRegion: 'no-drag',
+} as React.CSSProperties;
 
 /**
  * Check if any items in a stack have improved content.
@@ -3849,6 +3856,20 @@ export default function ClipboardHistory() {
           transition: 'opacity 140ms ease, filter 140ms ease',
         }}
       >
+      <div
+        data-field-theory-top-chrome-drag-layer
+        aria-hidden="true"
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: `${FIELD_THEORY_CHROME_TABS_TOP_PX}px`,
+          zIndex: 1,
+          cursor: 'grab',
+          ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
+        }}
+      />
       {/* Thin draggable region at very top of window for frameless window drag (NSPanel fix) */}
       {!showInDock && librarianImmersive && viewMode === 'librarian' && (
         <div
@@ -4149,6 +4170,8 @@ export default function ClipboardHistory() {
             opacity: appChromeOpacity,
             pointerEvents: appChromeInteractive ? 'auto' : 'none',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease, opacity 90ms linear',
+            cursor: 'grab',
+            ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
           }}>
           {(['clipboard'] as ViewMode[]).map((mode) => {
             const isSelected = viewMode === mode && !showSettings;
@@ -4177,6 +4200,7 @@ export default function ClipboardHistory() {
                   display: 'flex',
                   alignItems: 'center',
                   gap: '4px',
+                  ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
                 }}
                 onMouseEnter={(e) => {
                   if (!isSelected) {
@@ -4227,6 +4251,7 @@ export default function ClipboardHistory() {
               alignItems: 'center',
               gap: '4px',
               position: 'relative',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               if (viewMode !== 'librarian' || showSettings) {
@@ -4277,6 +4302,7 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               if (viewMode !== 'commands' || showSettings) {
@@ -4291,6 +4317,43 @@ export default function ClipboardHistory() {
             title="Portable commands"
           >
             Commands
+          </button>
+
+          <button
+            onClick={() => {
+              selectTopNavView('possible');
+            }}
+            data-top-nav-mode="possible"
+            tabIndex={0}
+            style={{
+              padding: '6px 8px',
+              fontSize: '11px',
+              fontWeight: 400,
+              backgroundColor: viewMode === 'possible' && !showSettings ? theme.accent : 'transparent',
+              color: viewMode === 'possible' && !showSettings ? '#fff' : theme.textSecondary,
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              transition: 'none',
+              outline: 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
+            }}
+            onMouseEnter={(e) => {
+              if (viewMode !== 'possible' || showSettings) {
+                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (viewMode !== 'possible' || showSettings) {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }
+            }}
+            title="Possible ideas"
+          >
+            Possible
           </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -4313,6 +4376,7 @@ export default function ClipboardHistory() {
                   alignItems: 'center', 
                   gap: '4px',
                   position: 'relative',
+                  ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
                 }}
                 onMouseEnter={() => transcriptionStatus === 'recording' && setShowRecordingTooltip(true)}
                 onMouseLeave={() => setShowRecordingTooltip(false)}
@@ -4399,6 +4463,7 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '3px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
@@ -4438,6 +4503,7 @@ export default function ClipboardHistory() {
               alignItems: 'center',
               gap: '3px',
               position: 'relative',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               if (viewMode !== 'feedback' || showSettings) {
@@ -4487,6 +4553,7 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '3px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               if (!showSettings) {
@@ -4520,6 +4587,8 @@ export default function ClipboardHistory() {
             padding: `${showInDock ? 22 : 14}px 16px 8px 16px`,
             marginBottom: '8px',
             position: 'relative',
+            cursor: 'grab',
+            ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
           }}>
           {/* Left: Back button */}
           <button
@@ -4547,6 +4616,7 @@ export default function ClipboardHistory() {
               display: 'flex',
               alignItems: 'center',
               gap: '4px',
+              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
             }}
             onMouseEnter={(e) => {
               e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
@@ -4606,6 +4676,7 @@ export default function ClipboardHistory() {
                 cursor: sketchHasChanges ? 'pointer' : 'default',
                 transition: 'all 0.15s ease',
                 outline: 'none',
+                ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
               }}
               onMouseEnter={(e) => {
                 if (sketchHasChanges) {
@@ -4638,6 +4709,7 @@ export default function ClipboardHistory() {
                 cursor: sketchHasChanges ? 'pointer' : 'default',
                 transition: 'all 0.15s ease',
                 outline: 'none',
+                ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
               }}
               onMouseEnter={(e) => {
                 if (sketchHasChanges) {
@@ -4786,6 +4858,8 @@ export default function ClipboardHistory() {
           onNavigateForward={() => navigateFieldTheoryHistory(1)}
           onSelectedCommandPathChange={setSelectedCommandPath}
         />
+      ) : viewMode === 'possible' ? (
+        <PossibleGraphView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'sketch' ? (
         <Suspense fallback={<div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Loading...</div>}>
           <SketchView

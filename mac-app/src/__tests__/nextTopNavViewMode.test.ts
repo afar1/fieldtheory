@@ -2,14 +2,16 @@ import { describe, it, expect } from 'vitest';
 import { nextTopNavViewMode, shouldCycleTopNavWithControlTab } from '../types/clipboard';
 
 describe('nextTopNavViewMode', () => {
-  it('cycles forward through clipboard → librarian → commands → clipboard', () => {
+  it('cycles forward through clipboard → librarian → commands → possible → clipboard', () => {
     expect(nextTopNavViewMode('clipboard', 1, true)).toBe('librarian');
     expect(nextTopNavViewMode('librarian', 1, true)).toBe('commands');
-    expect(nextTopNavViewMode('commands', 1, true)).toBe('clipboard');
+    expect(nextTopNavViewMode('commands', 1, true)).toBe('possible');
+    expect(nextTopNavViewMode('possible', 1, true)).toBe('clipboard');
   });
 
   it('cycles backward with Shift+Tab', () => {
-    expect(nextTopNavViewMode('clipboard', -1, true)).toBe('commands');
+    expect(nextTopNavViewMode('clipboard', -1, true)).toBe('possible');
+    expect(nextTopNavViewMode('possible', -1, true)).toBe('commands');
     expect(nextTopNavViewMode('commands', -1, true)).toBe('librarian');
     expect(nextTopNavViewMode('librarian', -1, true)).toBe('clipboard');
   });
@@ -17,7 +19,8 @@ describe('nextTopNavViewMode', () => {
   it('keeps librarian in the nav cycle when librarian automation is disabled', () => {
     expect(nextTopNavViewMode('clipboard', 1, false)).toBe('librarian');
     expect(nextTopNavViewMode('librarian', 1, false)).toBe('commands');
-    expect(nextTopNavViewMode('clipboard', -1, false)).toBe('commands');
+    expect(nextTopNavViewMode('commands', 1, false)).toBe('possible');
+    expect(nextTopNavViewMode('clipboard', -1, false)).toBe('possible');
   });
 
   it('falls back to the first tab when starting from a view outside the carousel', () => {

@@ -91,6 +91,12 @@ if (typeof document !== 'undefined' && !document.getElementById(STYLESHEET_ID)) 
       border-radius: 0 0 16px 0;
       padding: 0 10px 0 8px;
     }
+    .di-section--floating {
+      justify-content: center;
+      border-radius: 0;
+      padding: 0;
+      background: transparent;
+    }
   `;
   document.head.appendChild(sheet);
 }

@@ -340,11 +340,6 @@ export class AuthManager extends EventEmitter {
    * This keeps users signed in after manual drag-replace installs.
    */
   private migrateLegacySessionStorageIfNeeded(targetUserDataPath: string): void {
-    // Experimental builds intentionally isolate data from production.
-    if (process.env.EXPERIMENTAL === 'true') {
-      return;
-    }
-
     const targetSessionPath = path.join(targetUserDataPath, 'supabase-session.json');
     if (this.isSessionFileUsable(targetSessionPath)) {
       return;

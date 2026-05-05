@@ -34,13 +34,6 @@
       background: var(--color-bg-alt, #2a2a2a);
       border-color: var(--color-border, #3a3a3a);
     }
-    /* Upgrade note */
-    .upgrade-note {
-      font-size: 0.7rem;
-      color: var(--color-text-muted, #6b6b6b);
-      text-align: right;
-      margin: 0.5rem 0 0 0;
-    }
     /* Download button wrapper */
     .download-btn-wrapper {
       display: inline-flex;
@@ -119,7 +112,7 @@
 
       <div class="hero-buttons">
         <div class="download-btn-wrapper">
-          <a href="https://github.com/afar1/field-releases/releases/download/v0.1.103/Field.Theory-0.1.103-arm64.dmg" class="btn btn-primary btn-large">
+          <a href="https://github.com/afar1/field-releases/releases/download/v0.2.1/Field.Theory-0.2.1-arm64.dmg" class="btn btn-primary btn-large">
             <span class="desktop-download-text">Download for Mac</span>
             <span class="mobile-download-text">Visit on Mac to download</span>
           </a><span class="free-pill">Free</span>
@@ -135,10 +128,10 @@
     <div class="container">
       <hr class="dotted-line">
 
-      <!-- Feature 1: Portable Commands -->
+      <!-- Feature 1: Portable context -->
       <article class="feature">
         <div class="feature-content">
-          <h2>Portable Commands — Cursor commands now work everywhere.</h2>
+          <h2>Portable context — commands, markdown files, etcetera now work everywhere.</h2>
           <p class="feature-problem">Point Field Theory at any folder of markdown commands. They become available in Claude, ChatGPT, Cursor, or anywhere else you type.</p>
           <div class="feature-badges">
             <span class="shortcut-badge">command + shift + k</span>
@@ -146,7 +139,7 @@
           </div>
         </div>
         <div class="feature-image">
-          <img src="images/portablecommands.gif" alt="Portable commands feature showing Cursor commands available everywhere">
+          <img src="images/portablecommands.gif" alt="Portable context feature showing commands available everywhere">
         </div>
       </article>
 
@@ -249,50 +242,34 @@
     <div class="container">
       <hr class="dotted-line">
       <h2>Pricing</h2>
-      <p class="hero-tagline">All features available for Basic users.<br class="mobile-break"> Pro for the workhorses.</p>
+      <p class="hero-tagline">All features available for all users for free.</p>
 
       <!-- Pricing tiers -->
-      <div id="pricing" class="pricing-grid">
+      <div id="pricing" class="pricing-grid single-tier">
         <div class="pricing-card featured">
-          <h3>Basic</h3>
+          <h3>Pro</h3>
           <div class="price">$0 <span>/ mo</span></div>
           <ul>
-            <li>Local transcription <span class="limit-unlimited">∞</span></li>
-            <li>Screenshots <span class="limit-unlimited">∞</span></li>
-            <li>Drawings <span class="limit-unlimited">∞</span></li>
-            <li>Manual stacking <span class="limit-unlimited">∞</span></li>
-            <li>Single image stacking <span class="limit-unlimited">∞</span></li>
+            <li>Local transcription (Parakeet) <span class="limit-unlimited">∞</span></li>
+            <li>Context stacking <span class="limit-unlimited">∞</span></li>
+            <li>Multi-image stacking <span class="limit-unlimited">∞</span></li>
+            <li>Markdown editor <span class="limit-unlimited">∞</span></li>
             <li>The Librarian <span class="limit-unlimited">∞</span></li>
-            <li>Portable commands <span class="limit-badge">100 uses / mo</span></li>
-            <li>Priority mic <span class="limit-badge">500 min / mo</span></li>
-            <li>Auto-stacks <span class="limit-badge">50 stacks / mo</span></li>
-            <li>Auto-improve text <span class="limit-badge">5,000 words / mo</span></li>
-          </ul>
-        </div>
-
-        <div class="pricing-card">
-          <h3>Pro</h3>
-          <div class="price">$14 <span>/ mo</span></div>
-          <ul>
-            <li class="included-free"><em>Local transcription</em> <span class="limit-unlimited">∞</span></li>
-            <li class="included-free"><em>Screenshots</em> <span class="limit-unlimited">∞</span></li>
-            <li class="included-free"><em>Drawings</em> <span class="limit-unlimited">∞</span></li>
-            <li class="included-free"><em>Manual stacking</em> <span class="limit-unlimited">∞</span></li>
-            <li class="included-free"><em>Single image stacking</em> <span class="limit-unlimited">∞</span></li>
-            <li class="included-free"><em>The Librarian</em> <span class="limit-unlimited">∞</span></li>
+            <li>Bookmarks canvas <span class="limit-unlimited">∞</span></li>
             <li>Portable commands <span class="limit-unlimited">∞</span></li>
             <li>Priority mic <span class="limit-unlimited">∞</span></li>
+            <li>Hot Mic <span class="limit-unlimited">∞</span></li>
             <li>Auto-stacks <span class="limit-unlimited">∞</span></li>
-            <li>Auto-improve text <span class="limit-badge">50,000 words / mo</span></li>
+            <li>Drawings <span class="limit-unlimited">∞</span></li>
+            <li>Screenshots <span class="limit-unlimited">∞</span></li>
           </ul>
-          <p class="upgrade-note">*Upgrade in-app</p>
         </div>
       </div>
 
       <!-- Single download button -->
       <div class="download-cta" id="download">
         <div class="download-btn-wrapper">
-          <a href="https://github.com/afar1/field-releases/releases/download/v0.1.103/Field.Theory-0.1.103-arm64.dmg" class="btn btn-primary btn-large" id="bottom-download-btn">
+          <a href="https://github.com/afar1/field-releases/releases/download/v0.2.1/Field.Theory-0.2.1-arm64.dmg" class="btn btn-primary btn-large" id="bottom-download-btn">
             <span class="desktop-download-text">Download for Mac</span>
             <span class="mobile-download-text">Visit on Mac to download</span>
           </a><span class="free-pill">Free</span>

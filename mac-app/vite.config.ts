@@ -33,6 +33,7 @@ export default defineConfig(({ mode }) => {
     define: {
       'import.meta.env.VITE_SUPABASE_URL': JSON.stringify(env.VITE_SUPABASE_URL),
       'import.meta.env.VITE_SUPABASE_ANON_KEY': JSON.stringify(env.VITE_SUPABASE_ANON_KEY),
+      'import.meta.env.VITE_FIELD_THEORY_BUILD_CHANNEL': JSON.stringify(env.VITE_FIELD_THEORY_BUILD_CHANNEL || env.FIELD_THEORY_BUILD_CHANNEL || 'production'),
     },
   };
 });

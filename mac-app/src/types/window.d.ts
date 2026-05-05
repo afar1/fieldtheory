@@ -229,6 +229,20 @@ interface SoundOption {
   category: string;
 }
 
+export type ParakeetSetupErrorCode =
+  | 'missing-python'
+  | 'unsupported-python'
+  | 'python-venv-failed'
+  | 'setup-failed';
+
+export interface ParakeetSetupError {
+  code: ParakeetSetupErrorCode;
+  summary: string;
+  detail: string;
+  recoveryCommand: string;
+  moreInfo: string;
+}
+
 export interface ParakeetEngineStatus {
   engine: 'parakeet' | 'parakeet-multilingual';
   label: string;
@@ -237,6 +251,7 @@ export interface ParakeetEngineStatus {
   lastError: string | null;
   lastErrorDetail?: string | null;
   lastErrorAt: string | null;
+  setupError?: ParakeetSetupError | null;
 }
 
 export type ParakeetSetupStage =
@@ -304,7 +319,7 @@ interface TranscribeAPI {
   getParakeetStatus?: () => Promise<ParakeetStatus | null>;
   isAppleSilicon?: () => Promise<boolean>;
   setupMlxWhisper?: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
+  setupParakeet?: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }>;
   uninstallParakeet?: () => Promise<{ success: boolean; error?: string }>;
   getDownloadingModels?: () => Promise<string[]>;
   toggleRecording?: () => Promise<void>;
@@ -1401,6 +1416,11 @@ interface HotMicAPI {
   } | null>;
   getIslandStayOnLaptop: () => Promise<boolean>;
   setIslandStayOnLaptop: (value: boolean) => Promise<boolean>;
+  getRecordingIndicatorMode: () => Promise<'auto' | 'notch' | 'floating'>;
+  setRecordingIndicatorMode: (mode: 'auto' | 'notch' | 'floating') => Promise<'auto' | 'notch' | 'floating'>;
+  getResolvedRecordingIndicatorMode: () => Promise<'notch' | 'floating'>;
+  getFloatingIndicatorPosition: () => Promise<{ x: number; y: number } | null>;
+  setFloatingIndicatorPosition: (position: { x: number; y: number } | null) => Promise<{ x: number; y: number } | null>;
   getIslandAutoHide: () => Promise<boolean>;
   setIslandAutoHide: (value: boolean) => Promise<boolean>;
   getSubmitWord: () => Promise<string>;
@@ -1746,10 +1766,96 @@ declare global {
     createFile: (rootPath: string, folderRelPath: string, fileName: string) => Promise<WikiPage | null>;
     createDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
-    moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string) => Promise<string | null>;
+    moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
     onRootsChanged: (callback: () => void) => () => void;
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
+  }
+
+  interface PossibleIdeaFrame {
+    id: string;
+    name: string;
+    axisA?: { label?: string; rubricSentence?: string };
+    axisB?: { label?: string; rubricSentence?: string };
+    quadrantLabels?: {
+      highHigh?: string;
+      highLow?: string;
+      lowHigh?: string;
+      lowLow?: string;
+    };
+  }
+
+  interface PossibleIdeaBatchSummary {
+    id: string;
+    batchPath: string;
+    createdAt: string;
+    seedId: string;
+    seedArtifactIds: string[];
+    frameId: string;
+    frameName: string;
+    depth: string;
+    model: string;
+    nodeTarget: number;
+    totalDotCount: number;
+    considerationIds: string[];
+    repos: string[];
+  }
+
+  interface PossibleIdeaLibraryLink {
+    title: string;
+    relPath: string;
+    path: string;
+  }
+
+  interface PossibleIdeaBookmarkSource {
+    artifactId: string;
+    bookmarkId: string;
+    authorHandle: string;
+    url: string;
+    postedAt: string;
+    bookmarkedAt: string;
+    category: string;
+    domain: string;
+    title: string;
+    excerpt: string;
+    artifactPath: string;
+  }
+
+  interface PossibleIdeaNode {
+    id: string;
+    title: string;
+    summary: string;
+    essay: string;
+    rationale: string;
+    repoSurface: string;
+    effortEstimate: string;
+    axisAScore: number;
+    axisAJustification: string;
+    axisBScore: number;
+    axisBJustification: string;
+    exportablePrompt: string;
+    implementationPrompt: string;
+    repo: string;
+    repoName: string;
+    runId: string;
+    artifactPath: string;
+    rank: number;
+    libraryLinks: PossibleIdeaLibraryLink[];
+  }
+
+  interface PossibleIdeaBatch extends PossibleIdeaBatchSummary {
+    axisA: string;
+    axisB: string;
+    frame: PossibleIdeaFrame | null;
+    seedTitle: string;
+    seedNotes: string;
+    bookmarkSources: PossibleIdeaBookmarkSource[];
+    nodes: PossibleIdeaNode[];
+  }
+
+  interface PossibleAPI {
+    listBatches: () => Promise<PossibleIdeaBatchSummary[]>;
+    getBatch: (batchId?: string) => Promise<PossibleIdeaBatch | null>;
   }
 
   interface WikiAPI {
@@ -2228,6 +2334,7 @@ declare global {
     librarianAPI?: LibrarianAPI;
     libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
+    possibleAPI?: PossibleAPI;
     externalAPI?: ExternalAPI;
     recentAPI?: RecentAPI;
     bookmarksAPI?: BookmarksAPI;

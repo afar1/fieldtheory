@@ -1090,6 +1090,121 @@ describe('TranscriberManager standard real-time chunking', () => {
     vi.clearAllMocks();
   });
 
+  it('cancels standard recording without taking the normal transcribe-and-paste path', async () => {
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      nativeHelper: {
+        cancelRecording: vi.fn(async () => undefined),
+      },
+      detachStandardChunkListener: vi.fn(),
+      clearStandardLiveTranscript: vi.fn(),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showStatus: vi.fn(),
+      },
+      unregisterAbandonHotkey: vi.fn(),
+      currentStack: [1],
+      screenshotMetadata: [{ itemId: 1 }],
+      detectedCommands: [{ name: 'debug', filePath: '/tmp/debug.md' }],
+      pasteStack,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.cancelActiveSession();
+
+    expect(manager.nativeHelper.cancelRecording).toHaveBeenCalledTimes(1);
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.status).toBe('idle');
+    expect(manager.currentStack).toEqual([]);
+    expect(manager.screenshotMetadata).toEqual([]);
+    expect(manager.detectedCommands).toEqual([]);
+  });
+
+  it('discard-cancels an in-flight transcription before it stores or pastes text', async () => {
+    let resolveTranscribe: (text: string) => void = () => {};
+    const transcribePromise = new Promise<string>((resolve) => {
+      resolveTranscribe = resolve;
+    });
+    const storeText = vi.fn(async () => 1);
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        cancelRecording: vi.fn(async () => undefined),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(() => {
+        manager.standardLiveTranscript = '';
+      }),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText,
+      },
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(() => transcribePromise),
+      getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
+      insertFigureReferences: vi.fn((text: string) => text),
+      preferences: { getPreference: vi.fn(() => 'whisper') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const finishPromise = manager.stopRecordingAndTranscribe();
+    for (let i = 0; i < 10 && manager.transcribeWithEngineFallback.mock.calls.length === 0; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    }
+    expect(manager.transcribeWithEngineFallback).toHaveBeenCalled();
+
+    await manager.cancelActiveSession();
+    resolveTranscribe('finished text');
+    await finishPromise;
+
+    expect(storeText).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(manager.status).toBe('idle');
+  });
+
   it('runs full-file transcription even when real-time transcript text exists', async () => {
     const transcribeWithEngineFallback = vi.fn(async () => 'full file text');
     const manager: any = {
@@ -1274,6 +1389,66 @@ describe('TranscriberManager standard real-time chunking', () => {
 
     resolveUsage();
     await Promise.resolve();
+  });
+
+  it('waits for paste-starting listeners before pasting', async () => {
+    const order: string[] = [];
+    const transcribeWithEngineFallback = vi.fn(async () => 'finished text');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn(),
+      overlay: { showTranscribing: vi.fn() },
+      standardLiveTranscript: '',
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      lastTranscription: '',
+      pasteStack: vi.fn(async () => {
+        order.push('paste');
+      }),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback,
+      preferences: { getPreference: vi.fn(() => 'whisper') },
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    manager.on('paste-starting', async () => {
+      order.push('fade-start');
+      await Promise.resolve();
+      order.push('fade-done');
+    });
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(order).toEqual(['fade-start', 'fade-done', 'paste']);
   });
 
   it('resets quietly when the helper has no active recording to stop', async () => {
@@ -2282,7 +2457,11 @@ describe('TranscriberManager parakeet uninstall', () => {
     const result = await manager.setupParakeet('parakeet-multilingual');
 
     expect(result).toEqual({ success: true });
-    expect(manager.installParakeetRuntime).toHaveBeenCalledWith('/tmp/build-parakeet/venv', expect.any(Function));
+    expect(manager.installParakeetRuntime).toHaveBeenCalledWith(
+      '/tmp/build-parakeet/venv',
+      expect.any(String),
+      expect.any(Function)
+    );
     expect(manager.prefetchParakeetModel).toHaveBeenCalledWith(
       'parakeet-multilingual',
       900000,

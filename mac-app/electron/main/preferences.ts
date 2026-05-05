@@ -276,6 +276,8 @@ interface Preferences {
   // Dynamic Island display preference.
   // When true, the island stays on the built-in laptop display even when an external monitor is primary.
   hotMicIslandStayOnLaptop?: boolean;
+  recordingIndicatorMode?: 'auto' | 'notch' | 'floating';
+  floatingIndicatorPosition?: { x: number; y: number } | null;
 
   // Auto-hide the Dynamic Island pills (left + right + gap filler) until
   // the cursor approaches the notch or a non-idle state / hot-mic becomes active.
@@ -367,6 +369,8 @@ const DEFAULT_PREFERENCES: Preferences = {
   hotMicBackgroundFilterStrength: 4,
   hotMicDrawerTextSize: 14,
   hotMicIslandStayOnLaptop: false,
+  recordingIndicatorMode: 'auto',
+  floatingIndicatorPosition: null,
   hotMicIslandAutoHide: false,
   hotMicIslandNotchWidthOverride: 0,
   hotMicIslandPillWidth: 72,
