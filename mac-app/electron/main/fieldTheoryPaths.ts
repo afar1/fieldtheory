@@ -1,3 +1,4 @@
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
@@ -40,7 +41,13 @@ export function commandsDir(options?: FieldTheoryPathOptions): string {
 }
 
 export function bookmarkDataDir(options?: FieldTheoryPathOptions): string {
-  return canonicalBookmarkDataDir(options);
+  const dataOverride = pathEnv(options).FT_DATA_DIR;
+  if (dataOverride) return dataOverride;
+
+  const canonical = canonicalBookmarkDataDir(options);
+  const legacy = legacyBookmarkDataDir(options);
+  if (fs.existsSync(canonical) || !fs.existsSync(legacy)) return canonical;
+  return legacy;
 }
 
 export function libraryDir(options?: FieldTheoryPathOptions): string {
