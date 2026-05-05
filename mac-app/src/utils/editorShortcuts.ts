@@ -1,3 +1,5 @@
+import type { MarkdownFormattingKind } from './markdownFormatting';
+
 /** Shared keyboard + click helpers for library-style reader/editor views.
  *  Extracted from LibrarianView + CommandsView so both views behave the same. */
 
@@ -35,6 +37,20 @@ export function isMarkdownTaskShortcut(e: KeyboardEvent | React.KeyboardEvent): 
 
 export function isMarkdownTaskToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
   return e.key === 'Enter' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
+export function getMarkdownFormattingShortcut(e: KeyboardEvent | React.KeyboardEvent): MarkdownFormattingKind | null {
+  if (!e.metaKey || e.shiftKey || e.ctrlKey || e.altKey) return null;
+  switch (e.key.toLowerCase()) {
+    case 'b':
+      return 'bold';
+    case 'i':
+      return 'italic';
+    case 'u':
+      return 'underline';
+    default:
+      return null;
+  }
 }
 
 export function isSidebarToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
@@ -82,6 +98,7 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
   { keys: 'J / K', label: 'Move through files' },
   { keys: 'Tab', label: 'Cycle note task state forward' },
   { keys: 'Shift+Tab', label: 'Cycle note task state backward' },
+  { keys: 'Command+B / I / U', label: 'Bold, italic, or underline selection' },
   { keys: 'Command+Enter', label: 'Toggle task checkbox line' },
   { keys: 'Command+Shift+0', label: 'Cycle task line' },
   { keys: 'Command+.', label: 'Toggle rendered/markdown' },

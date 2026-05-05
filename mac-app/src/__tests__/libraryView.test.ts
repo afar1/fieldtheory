@@ -18,7 +18,7 @@ import {
   getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
-  getLibrarianContentBottomPadding,
+  getLibrarianContentBottomScrollSpace,
   getLibrarianContentTopPadding,
   highlightFileFindMatches,
   formatBreadcrumb,
@@ -97,6 +97,7 @@ import {
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
+  toggleSidebarPinnedItemIds,
   virtualizeBookmarksGroup,
   wikiTreeHasRelPath,
   type LibrarySidebarNode,
@@ -1411,9 +1412,19 @@ describe('librarian content top padding', () => {
     expect(focusPadding - normalPadding).toBe(42);
   });
 
-  it('keeps bottom document padding while focus chrome overlays the footer', () => {
-    expect(getLibrarianContentBottomPadding({ focusChromeActive: false })).toBe(59.2);
-    expect(getLibrarianContentBottomPadding({ focusChromeActive: true })).toBe(59.2);
+  it('keeps bottom room as rendered scroll space while focus chrome overlays the footer', () => {
+    expect(getLibrarianContentBottomScrollSpace({
+      contentMode: 'rendered',
+      focusChromeActive: false,
+    })).toBe(59.2);
+    expect(getLibrarianContentBottomScrollSpace({
+      contentMode: 'rendered',
+      focusChromeActive: true,
+    })).toBe(59.2);
+    expect(getLibrarianContentBottomScrollSpace({
+      contentMode: 'markdown',
+      focusChromeActive: true,
+    })).toBe(0);
   });
 });
 
@@ -1827,6 +1838,13 @@ describe('recursive sidebar tree helpers', () => {
       false,
       true,
     ]);
+  });
+
+  it('allows the Librarian Artifacts root to be unpinned', () => {
+    const unpinned = toggleSidebarPinnedItemIds(new Set(['artifacts']), 'artifacts');
+
+    expect(unpinned.has('artifacts')).toBe(false);
+    expect(toggleSidebarPinnedItemIds(unpinned, 'artifacts').has('artifacts')).toBe(true);
   });
 
   it('keeps pinned wiki docs and folders pinned after rename', () => {
