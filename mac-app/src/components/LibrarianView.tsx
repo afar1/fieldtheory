@@ -28,6 +28,7 @@ import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  getMarkdownFormattingShortcut,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
   isImmersiveToggleShortcut,
@@ -63,6 +64,7 @@ import {
   type LibrarianLineHeightId,
   type LibrarianTypographyPresetId,
 } from '../utils/librarianTypography';
+import { getMarkdownFormattingEdit } from '../utils/markdownFormatting';
 import {
   MARKDOWN_URL_PASTE_OPTIONS,
   getMarkdownUrlPasteEdit,
@@ -90,9 +92,11 @@ import {
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
   getWikiLinkTargetKey,
+  refreshMarkdownLinkRelationDocumentHits,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
+  upsertMarkdownLinkRelationDocument,
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
@@ -342,7 +346,7 @@ const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
 const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
-const LIBRARIAN_CONTENT_BOTTOM_PADDING_PX = 59.2;
+const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
 const RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED = false;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
@@ -1535,10 +1539,12 @@ export function getLibrarianContentTopPadding(input: {
     : normalTopPadding;
 }
 
-export function getLibrarianContentBottomPadding(input: {
+export function getLibrarianContentBottomScrollSpace(input: {
+  contentMode: 'rendered' | 'markdown';
   focusChromeActive: boolean;
 }): number {
-  return LIBRARIAN_CONTENT_BOTTOM_PADDING_PX;
+  if (input.contentMode === 'markdown') return 0;
+  return LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX;
 }
 
 interface LibrarianViewProps {
@@ -1981,7 +1987,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusChromeActive,
     isFullScreen,
   });
-  const contentBottomPadding = getLibrarianContentBottomPadding({ focusChromeActive });
+  const contentBottomScrollSpace = getLibrarianContentBottomScrollSpace({ contentMode, focusChromeActive });
   const toggleFocusChromeShortcut = useCallback(() => {
     if (!selectedItemUsesLegacyImmersive && focusChromeActive) {
       setFocusImmersive(false);
@@ -2031,6 +2037,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [wikiIndexPages, setWikiIndexPages] = useState<WikiIndexInput[]>([]);
   const [markdownLinkRelationDocuments, setMarkdownLinkRelationDocuments] = useState<MarkdownLinkRelationDocument[]>([]);
   const [commandIndexPages, setCommandIndexPages] = useState<WikiIndexInput[]>([]);
+  const wikiIndexRef = useRef<ReturnType<typeof buildWikiIndex> | null>(null);
   const [navigationHistory, setNavigationHistory] = useState<LibrarianNavigationHistory>(EMPTY_LIBRARIAN_NAVIGATION_HISTORY);
   const historyNavigationTargetRef = useRef<LibrarianNavigationEntry | null>(null);
 
@@ -2645,9 +2652,24 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         : prev));
     }
 
+    const relationTarget: WikiLinkTarget | null = targetType === 'wiki' && wikiSelectedRelPath
+      ? { kind: 'wiki', relPath: wikiSelectedRelPath }
+      : targetType === 'artifact' && targetPath
+        ? { kind: 'artifact', path: targetPath }
+        : null;
+    const currentWikiIndex = wikiIndexRef.current;
+    if (relationTarget && currentWikiIndex) {
+      setMarkdownLinkRelationDocuments((prev) => upsertMarkdownLinkRelationDocument(prev, {
+        target: relationTarget,
+        title: fallbackTitle,
+        content,
+        linkHits: getMarkdownEditorLinkHits(content, currentWikiIndex),
+      }));
+    }
+
     lastSavedContentRef.current = content;
     if (version) lastSavedVersionRef.current = version;
-  }, []);
+  }, [wikiSelectedRelPath]);
 
   const resolveSaveConflict = useCallback(async (
     result: DocumentSaveResult,
@@ -2770,6 +2792,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     })),
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
+  wikiIndexRef.current = wikiIndex;
 
   const markdownWikiLinkSuggestionItems = useMemo(() => {
     const seen = new Set<string>();
@@ -2885,15 +2908,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return null;
   }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
 
+  const indexedMarkdownLinkRelationDocuments = useMemo(
+    () => refreshMarkdownLinkRelationDocumentHits(markdownLinkRelationDocuments, wikiIndex),
+    [markdownLinkRelationDocuments, wikiIndex],
+  );
+
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!activeReading) return [];
+    const sourceContent = contentMode === 'markdown' ? editContent : activeReading.content;
     return getMarkdownLinkedDocuments(
       activeLinkTarget,
-      activeReading.content,
-      markdownLinkRelationDocuments,
+      sourceContent,
+      indexedMarkdownLinkRelationDocuments,
       wikiIndex,
     );
-  }, [activeLinkTarget, activeReading, markdownLinkRelationDocuments, wikiIndex]);
+  }, [activeLinkTarget, activeReading, contentMode, editContent, indexedMarkdownLinkRelationDocuments, wikiIndex]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -3510,6 +3539,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         event.preventDefault();
         return true;
       }
+    }
+
+    const formattingKind = getMarkdownFormattingShortcut(event);
+    if (formattingKind) {
+      const edit = getMarkdownFormattingEdit(value, selection.start, selection.end, formattingKind);
+      event.preventDefault();
+      applyMarkdownCodeEditorTextEdit(edit);
+      return true;
     }
 
     if (isMarkdownTaskToggleShortcut(event)) {
@@ -5643,7 +5680,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             width: `min(100%, calc(${typographyPreset.maxWidth} + 64px))`,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
-            padding: `${contentTopPadding}px 32px ${contentBottomPadding}px 32px`,
+            padding: `${contentTopPadding}px 32px 0 32px`,
+            scrollPaddingBottom: `${contentBottomScrollSpace}px`,
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -6321,6 +6359,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     ))}
                   </div>
                 </section>
+              )}
+              {contentBottomScrollSpace > 0 && (
+                <div
+                  aria-hidden="true"
+                  data-ft-rendered-bottom-scroll-space="library"
+                  style={{ height: `${contentBottomScrollSpace}px`, flexShrink: 0 }}
+                />
               )}
             </div>
             {RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED && contentMode === 'rendered' && renderedSelectionToolbar && (

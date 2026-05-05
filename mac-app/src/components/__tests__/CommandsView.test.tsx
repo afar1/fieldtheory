@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import CommandsView, { getCommandsContentBottomPadding, getCommandsContentTopPadding } from '../CommandsView';
+import CommandsView, { getCommandsContentBottomScrollSpace, getCommandsContentTopPadding } from '../CommandsView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -32,23 +32,23 @@ describe('CommandsView layout helpers', () => {
     })).toBe(70);
   });
 
-  it('keeps bottom command padding while focus chrome overlays the footer', () => {
-    expect(getCommandsContentBottomPadding({
+  it('keeps bottom room as rendered scroll space while focus chrome overlays the footer', () => {
+    expect(getCommandsContentBottomScrollSpace({
       isEditing: false,
       focusChromeActive: false,
     })).toBe(44.4);
-    expect(getCommandsContentBottomPadding({
+    expect(getCommandsContentBottomScrollSpace({
       isEditing: true,
       focusChromeActive: false,
-    })).toBe(22.2);
-    expect(getCommandsContentBottomPadding({
+    })).toBe(0);
+    expect(getCommandsContentBottomScrollSpace({
       isEditing: false,
       focusChromeActive: true,
     })).toBe(44.4);
-    expect(getCommandsContentBottomPadding({
+    expect(getCommandsContentBottomScrollSpace({
       isEditing: true,
       focusChromeActive: true,
-    })).toBe(22.2);
+    })).toBe(0);
   });
 });
 
@@ -244,12 +244,31 @@ describe('CommandsView command naming', () => {
     fireEvent.click(screen.getByLabelText('Markdown source'));
 
     const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
-    expect(editor.style.paddingBottom).toBe('22.2px');
+    expect(editor.style.paddingBottom).toBe('0px');
+    expect(editor.style.scrollPaddingBottom).toBe('22.2px');
 
     fireEvent.click(screen.getByLabelText('Rendered'));
 
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+    });
+  });
+
+  it('applies common markdown formatting shortcuts in source mode', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    fireEvent.click(screen.getByLabelText('Markdown source'));
+
+    const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
+    const selectionStart = editor.value.indexOf('Rendered selection text');
+    const selectionEnd = selectionStart + 'Rendered selection text'.length;
+    editor.setSelectionRange(selectionStart, selectionEnd);
+    fireEvent.keyDown(editor, { key: 'b', metaKey: true });
+
+    await waitFor(() => {
+      expect((screen.getByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement).value)
+        .toContain('**Rendered selection text**');
     });
   });
 
@@ -279,6 +298,10 @@ describe('CommandsView command naming', () => {
     await screen.findByText('Rendered selection text');
 
     expect(await screen.findByText('Linked')).toBeTruthy();
+    const linkedSection = await screen.findByLabelText('Linked');
+    const bottomScrollSpace = screen.getByTestId('command-rendered-bottom-scroll-space');
+    expect(bottomScrollSpace.style.height).toBe('44.4px');
+    expect(Boolean(linkedSection.compareDocumentPosition(bottomScrollSpace) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(await screen.findByTitle('Links back to this document')).toBeTruthy();
     expect(screen.getAllByText('Command').length).toBeGreaterThan(0);
   });

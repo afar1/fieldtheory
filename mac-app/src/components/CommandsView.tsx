@@ -21,8 +21,9 @@ import {
   SidebarFolderIcon,
   SidebarMarkdownIcon,
 } from './SidebarIcons';
-import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
+import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, getMarkdownFormattingShortcut, isImmersiveToggleShortcut, isMarkdownModeToggleShortcut, isMarkdownTaskShortcut, isMarkdownTaskToggleShortcut, isSearchFocusShortcut, restoreRenderedEditClickMode, shouldEnterEditOnClick } from '../utils/editorShortcuts';
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
+import { getMarkdownFormattingEdit } from '../utils/markdownFormatting';
 import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils/markdownTasks';
 import {
   buildWikiIndex,
@@ -42,9 +43,9 @@ import {
 const COPY_PATH_FEEDBACK_MS = 1600;
 const COMMANDS_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
 const COMMANDS_MARKDOWN_CONTENT_TOP_PADDING_PX = 8;
-const COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX = 22.2;
+const COMMANDS_MARKDOWN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 22.2;
 const COMMANDS_RENDERED_CONTENT_TOP_PADDING_PX = 28;
-const COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX = 44.4;
+const COMMANDS_RENDERED_CONTENT_BOTTOM_SCROLL_SPACE_PX = 44.4;
 
 export function getCommandsContentTopPadding(input: {
   isEditing: boolean;
@@ -59,13 +60,11 @@ export function getCommandsContentTopPadding(input: {
     : normalTopPadding;
 }
 
-export function getCommandsContentBottomPadding(input: {
+export function getCommandsContentBottomScrollSpace(input: {
   isEditing: boolean;
   focusChromeActive: boolean;
 }): number {
-  return input.isEditing
-    ? COMMANDS_MARKDOWN_CONTENT_BOTTOM_PADDING_PX
-    : COMMANDS_RENDERED_CONTENT_BOTTOM_PADDING_PX;
+  return input.isEditing ? 0 : COMMANDS_RENDERED_CONTENT_BOTTOM_SCROLL_SPACE_PX;
 }
 
 /** Inline text input used for both "new command" and "rename command" flows.
@@ -339,7 +338,7 @@ export default function CommandsView({
   const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
   const focusToolbarControlsVisible = !focusChromeActive || focusChromeVisualVisible;
   const commandContentTopPadding = getCommandsContentTopPadding({ isEditing, focusChromeActive });
-  const commandContentBottomPadding = getCommandsContentBottomPadding({ isEditing, focusChromeActive });
+  const commandContentBottomScrollSpace = getCommandsContentBottomScrollSpace({ isEditing, focusChromeActive });
   const toggleFocusImmersive = useCallback(() => {
     if (!focusImmersive) {
       onFocusChromeShortcut?.();
@@ -352,6 +351,26 @@ export default function CommandsView({
       e.stopPropagation();
       e.nativeEvent.stopImmediatePropagation?.();
       toggleFocusImmersive();
+      return;
+    }
+
+    const formattingKind = getMarkdownFormattingShortcut(e);
+    if (formattingKind) {
+      e.preventDefault();
+      const formattingEdit = getMarkdownFormattingEdit(
+        e.currentTarget.value,
+        e.currentTarget.selectionStart,
+        e.currentTarget.selectionEnd,
+        formattingKind,
+      );
+      const scrollTop = e.currentTarget.scrollTop;
+      setEditContent(formattingEdit.nextValue);
+      requestAnimationFrame(() => {
+        const editor = editTextareaRef.current;
+        if (!editor || editor.value !== formattingEdit.nextValue) return;
+        editor.setSelectionRange(formattingEdit.selectionStart, formattingEdit.selectionEnd);
+        editor.scrollTop = scrollTop;
+      });
       return;
     }
 
@@ -2213,7 +2232,8 @@ export default function CommandsView({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: `${commandContentTopPadding}px 20px ${commandContentBottomPadding}px 20px`,
+            padding: `${commandContentTopPadding}px 20px 0 20px`,
+            scrollPaddingBottom: `${commandContentBottomScrollSpace}px`,
             display: 'flex',
             justifyContent: 'center',
           }}
@@ -2246,7 +2266,8 @@ export default function CommandsView({
                   style={{
                     flex: 1,
                     minHeight: 0,
-                    padding: `0 0 ${commandContentBottomPadding}px 0`,
+                    padding: 0,
+                    scrollPaddingBottom: `${COMMANDS_MARKDOWN_CONTENT_BOTTOM_SCROLL_SPACE_PX}px`,
                     fontSize: textSizes[textSize].base,
                     lineHeight: 1.5,
                     fontFamily: fonts.sans,
@@ -2432,7 +2453,14 @@ export default function CommandsView({
                       </div>
                     </section>
                   )}
-                  <div style={{ height: '50vh', flexShrink: 0 }} />
+                  {commandContentBottomScrollSpace > 0 && (
+                    <div
+                      aria-hidden="true"
+                      data-testid="command-rendered-bottom-scroll-space"
+                      data-ft-rendered-bottom-scroll-space="commands"
+                      style={{ height: `${commandContentBottomScrollSpace}px`, flexShrink: 0 }}
+                    />
+                  )}
                 </>
               )}
             </div>

@@ -370,6 +370,30 @@ export function getWikiLinkTargetKey(target: WikiLinkTarget): string {
   }
 }
 
+export function refreshMarkdownLinkRelationDocumentHits(
+  documents: MarkdownLinkRelationDocument[],
+  index: WikiIndex,
+): MarkdownLinkRelationDocument[] {
+  return documents.map((document) => ({
+    ...document,
+    linkHits: getMarkdownEditorLinkHits(document.content, index),
+  }));
+}
+
+export function upsertMarkdownLinkRelationDocument(
+  documents: MarkdownLinkRelationDocument[],
+  document: MarkdownLinkRelationDocument,
+): MarkdownLinkRelationDocument[] {
+  const targetKey = getWikiLinkTargetKey(document.target);
+  let found = false;
+  const next = documents.map((existing) => {
+    if (getWikiLinkTargetKey(existing.target) !== targetKey) return existing;
+    found = true;
+    return document;
+  });
+  return found ? next : [...next, document];
+}
+
 function getLinkTargetFromAction(action: LinkAction): WikiLinkTarget | null {
   switch (action.kind) {
     case 'wiki':

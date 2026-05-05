@@ -4,6 +4,7 @@ import {
   TEXT_CURSOR_BLINK_STORAGE_KEY,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  getMarkdownFormattingShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
   isMarkdownModeToggleShortcut,
@@ -154,6 +155,21 @@ describe('isMarkdownTaskToggleShortcut', () => {
   });
 });
 
+describe('getMarkdownFormattingShortcut', () => {
+  it('maps plain Cmd+B, Cmd+I, and Cmd+U to markdown formatting actions', () => {
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'b', metaKey: true }))).toBe('bold');
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'I', metaKey: true }))).toBe('italic');
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'u', metaKey: true }))).toBe('underline');
+  });
+
+  it('rejects shifted or unrelated modified formatting chords', () => {
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'b', metaKey: true, shiftKey: true }))).toBeNull();
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'i', metaKey: true, altKey: true }))).toBeNull();
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'u', metaKey: true, ctrlKey: true }))).toBeNull();
+    expect(getMarkdownFormattingShortcut(mkKey({ key: 'x', metaKey: true }))).toBeNull();
+  });
+});
+
 describe('isSidebarToggleShortcut', () => {
   it('accepts Cmd+Comma', () => {
     expect(isSidebarToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(true);
@@ -204,6 +220,7 @@ describe('shortcut reference rows', () => {
         { keys: 'Command+/', label: 'Toggle focus mode' },
         { keys: 'Command+,', label: 'Toggle sidebar' },
         { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+        { keys: 'Command+B / I / U', label: 'Bold, italic, or underline selection' },
       ])
     );
   });
