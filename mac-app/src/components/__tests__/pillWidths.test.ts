@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   computeLeftPillWidth,
   computeRightPillWidth,
+  floatingPipeSlotWidthForCount,
   pipeSlotWidthForCount,
 } from '../pillWidths';
 
@@ -82,13 +83,13 @@ describe('computeRightPillWidth', () => {
   it('waveform alone adds one chip with no trailing gap', () => {
     const base = computeRightPillWidth({ waveformActive: false, pipeCount: 0 });
     const withWave = computeRightPillWidth({ waveformActive: true, pipeCount: 0 });
-    expect(withWave - base).toBe(22);
+    expect(withWave - base).toBe(30);
   });
 
   it('waveform adds a gap only when a stack chip follows it', () => {
     expect(
       computeRightPillWidth({ waveformActive: true, pipeCount: 1 })
-    ).toBe(18 + 22 + 8 + 22);
+    ).toBe(18 + 30 + 8 + 22);
   });
 
   it('1–3 pipes add 22', () => {
@@ -127,5 +128,15 @@ describe('pipeSlotWidthForCount', () => {
     expect(pipeSlotWidthForCount(9)).toBe(32);
     expect(pipeSlotWidthForCount(10)).toBe(38);
     expect(pipeSlotWidthForCount(42)).toBe(38);
+  });
+});
+
+describe('floatingPipeSlotWidthForCount', () => {
+  it('keeps screenshot chips compact in the floating pill', () => {
+    expect(floatingPipeSlotWidthForCount(1)).toBe(8);
+    expect(floatingPipeSlotWidthForCount(2)).toBe(12);
+    expect(floatingPipeSlotWidthForCount(3)).toBe(16);
+    expect(floatingPipeSlotWidthForCount(4)).toBe(22);
+    expect(floatingPipeSlotWidthForCount(10)).toBe(28);
   });
 });

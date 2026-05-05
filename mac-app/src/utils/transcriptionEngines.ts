@@ -1,3 +1,5 @@
+import type { ParakeetSetupError } from '../types/window';
+
 export type VisibleTranscriptionEngine = 'whisper' | 'parakeet' | 'parakeet-multilingual';
 export type VisibleParakeetEngine = Exclude<VisibleTranscriptionEngine, 'whisper'>;
 
@@ -8,6 +10,7 @@ export type VisibleParakeetEngineStatus = {
   lastError: string | null;
   lastErrorDetail?: string | null;
   lastErrorAt?: string | null;
+  setupError?: ParakeetSetupError | null;
 };
 
 export type VisibleParakeetActionLabel = 'Install' | 'Verify' | 'Retry' | 'Repair model' | 'Reinstall';
@@ -138,6 +141,19 @@ export function getVisibleParakeetRecoveryMessage(error: string | null | undefin
   }
 
   const normalized = error.toLowerCase();
+  if (
+    normalized.includes('python 3.10') ||
+    normalized.includes('python 3.12') ||
+    normalized.includes('missing-python') ||
+    normalized.includes('unsupported-python')
+  ) {
+    return 'Install a supported Python with Homebrew, then retry Parakeet setup.';
+  }
+
+  if (normalized.includes('virtual environment') || normalized.includes('python -m venv') || normalized.includes('venv')) {
+    return 'Field Theory found Python, but it could not create a virtual environment. Install Homebrew Python 3.12, then retry Parakeet setup.';
+  }
+
   if (
     normalized.includes('failed to load') ||
     normalized.includes('exited during startup') ||

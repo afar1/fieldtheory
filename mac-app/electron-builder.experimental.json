@@ -1,9 +1,20 @@
 {
   "appId": "com.fieldtheory.experimental",
   "productName": "Field Theory Experimental",
+  "artifactName": "Field.Theory.Experimental-${version}-${arch}.${ext}",
   "beforeBuild": "scripts/electron-builder-before-build.js",
+  "afterSign": "scripts/notarize.js",
+  "extraMetadata": {
+    "fieldTheoryBuildChannel": "experimental"
+  },
+  "publish": {
+    "provider": "github",
+    "owner": "afar1",
+    "repo": "field-releases-experimental"
+  },
   "mac": {
     "category": "public.app-category.productivity",
+    "notarize": false,
     "minimumSystemVersion": "13.0",
     "target": [
       "dmg",

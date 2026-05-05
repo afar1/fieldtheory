@@ -788,7 +788,7 @@ export interface TranscribeAPI {
   getParakeetStatus: () => Promise<import('./main/types/transcribe').ParakeetStatus | null>;
   isAppleSilicon: () => Promise<boolean>;
   setupMlxWhisper: () => Promise<{ success: boolean; error?: string }>;
-  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string }>;
+  setupParakeet: (engine?: 'parakeet' | 'parakeet-multilingual') => Promise<{ success: boolean; error?: string; setupError?: import('./main/types/transcribe').ParakeetSetupError }>;
   uninstallParakeet: () => Promise<{ success: boolean; error?: string }>;
   toggleRecording: () => Promise<void>;
   getSoundConfig: () => Promise<SoundConfig>;
@@ -1315,7 +1315,7 @@ const transcribeAPI: TranscribeAPI = {
   setupMlxWhisper: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_MLX_WHISPER);
   },
-  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string }> => {
+  setupParakeet: async (engine?: 'parakeet' | 'parakeet-multilingual'): Promise<{ success: boolean; error?: string; setupError?: import('./main/types/transcribe').ParakeetSetupError }> => {
     return ipcRenderer.invoke(TranscribeIPCChannels.SETUP_PARAKEET, engine);
   },
   uninstallParakeet: async (): Promise<{ success: boolean; error?: string }> => {
@@ -3898,6 +3898,87 @@ interface LibraryMigrationExecutionResult {
   errors: string[];
 }
 
+interface PossibleIdeaFrame {
+  id: string;
+  name: string;
+  axisA?: { label?: string; rubricSentence?: string };
+  axisB?: { label?: string; rubricSentence?: string };
+  quadrantLabels?: {
+    highHigh?: string;
+    highLow?: string;
+    lowHigh?: string;
+    lowLow?: string;
+  };
+}
+
+interface PossibleIdeaBatchSummary {
+  id: string;
+  batchPath: string;
+  createdAt: string;
+  seedId: string;
+  seedArtifactIds: string[];
+  frameId: string;
+  frameName: string;
+  depth: string;
+  model: string;
+  nodeTarget: number;
+  totalDotCount: number;
+  considerationIds: string[];
+  repos: string[];
+}
+
+interface PossibleIdeaLibraryLink {
+  title: string;
+  relPath: string;
+  path: string;
+}
+
+interface PossibleIdeaBookmarkSource {
+  artifactId: string;
+  bookmarkId: string;
+  authorHandle: string;
+  url: string;
+  postedAt: string;
+  bookmarkedAt: string;
+  category: string;
+  domain: string;
+  title: string;
+  excerpt: string;
+  artifactPath: string;
+}
+
+interface PossibleIdeaNode {
+  id: string;
+  title: string;
+  summary: string;
+  essay: string;
+  rationale: string;
+  repoSurface: string;
+  effortEstimate: string;
+  axisAScore: number;
+  axisAJustification: string;
+  axisBScore: number;
+  axisBJustification: string;
+  exportablePrompt: string;
+  implementationPrompt: string;
+  repo: string;
+  repoName: string;
+  runId: string;
+  artifactPath: string;
+  rank: number;
+  libraryLinks: PossibleIdeaLibraryLink[];
+}
+
+interface PossibleIdeaBatch extends PossibleIdeaBatchSummary {
+  axisA: string;
+  axisB: string;
+  frame: PossibleIdeaFrame | null;
+  seedTitle: string;
+  seedNotes: string;
+  bookmarkSources: PossibleIdeaBookmarkSource[];
+  nodes: PossibleIdeaNode[];
+}
+
 const libraryAPI = {
   getRoots: (): Promise<LibraryRoot[]> => ipcRenderer.invoke('library:getRoots'),
   previewMigration: (): Promise<LibraryMigrationPlan> => ipcRenderer.invoke('library:previewMigration'),
@@ -3913,8 +3994,8 @@ const libraryAPI = {
     ipcRenderer.invoke('library:createDir', rootPath, dirRelPath),
   deleteDir: (rootPath: string, dirRelPath: string): Promise<boolean> =>
     ipcRenderer.invoke('library:deleteDir', rootPath, dirRelPath),
-  moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string): Promise<string | null> =>
-    ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath),
+  moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> =>
+    ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
   onRootsChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
@@ -3977,8 +4058,15 @@ const wikiAPI = {
     return () => ipcRenderer.removeListener('wiki:openScratchpad', handler);
   },
 };
+
+const possibleAPI = {
+  listBatches: (): Promise<PossibleIdeaBatchSummary[]> => ipcRenderer.invoke('possible:listBatches'),
+  getBatch: (batchId?: string): Promise<PossibleIdeaBatch | null> => ipcRenderer.invoke('possible:getBatch', batchId),
+};
+
 contextBridge.exposeInMainWorld('libraryAPI', libraryAPI);
 contextBridge.exposeInMainWorld('wikiAPI', wikiAPI);
+contextBridge.exposeInMainWorld('possibleAPI', possibleAPI);
 
 // Local agent kickoff — invoke `claude` or `codex` CLI on a markdown file.
 type AgentKickoffModel = 'claude' | 'codex';
@@ -4314,6 +4402,21 @@ const hotMicAPI = {
   },
   setIslandStayOnLaptop: async (value: boolean): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:setIslandStayOnLaptop', value);
+  },
+  getRecordingIndicatorMode: async (): Promise<'auto' | 'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:getRecordingIndicatorMode');
+  },
+  setRecordingIndicatorMode: async (mode: 'auto' | 'notch' | 'floating'): Promise<'auto' | 'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:setRecordingIndicatorMode', mode);
+  },
+  getResolvedRecordingIndicatorMode: async (): Promise<'notch' | 'floating'> => {
+    return ipcRenderer.invoke('hotmic:getResolvedRecordingIndicatorMode');
+  },
+  getFloatingIndicatorPosition: async (): Promise<{ x: number; y: number } | null> => {
+    return ipcRenderer.invoke('hotmic:getFloatingIndicatorPosition');
+  },
+  setFloatingIndicatorPosition: async (position: { x: number; y: number } | null): Promise<{ x: number; y: number } | null> => {
+    return ipcRenderer.invoke('hotmic:setFloatingIndicatorPosition', position);
   },
   getIslandAutoHide: async (): Promise<boolean> => {
     return ipcRenderer.invoke('hotmic:getIslandAutoHide');

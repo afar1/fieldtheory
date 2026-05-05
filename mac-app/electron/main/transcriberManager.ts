@@ -40,6 +40,7 @@ import {
   PARAKEET_ENGINE_MODEL_IDS,
   isParakeetEngine,
   isTranscriptionEngine,
+  type ParakeetSetupError,
   type ParakeetSetupProgress,
   type ParakeetSetupStage,
   type ParakeetStatus,
@@ -48,6 +49,7 @@ import {
   type HotMicEngine,
   type ParakeetEngine,
 } from './types/transcribe';
+import { runParakeetPythonPreflight } from './parakeetPythonPreflight';
 import type { HotMicEngineReadiness, HotMicEngineStatus } from './types/hotMic';
 import * as plist from 'plist';
 import { createLogger } from './logger';
@@ -65,6 +67,7 @@ interface PersistedParakeetEngineState {
   lastError?: string | null;
   lastErrorDetail?: string | null;
   lastErrorAt?: string | null;
+  setupError?: ParakeetSetupError | null;
 }
 
 interface PersistedParakeetState {
@@ -79,6 +82,7 @@ type ParakeetProcessError = Error & {
   stderr?: string;
   detail?: string | null;
   killed?: boolean;
+  setupError?: ParakeetSetupError;
 };
 
 /**
@@ -104,6 +108,7 @@ export type { HotMicEngineReadiness, HotMicEngineStatus };
 export interface TranscriberEvents {
   statusChanged: (status: TranscriptionStatus) => void;
   result: (text: string) => void;
+  'paste-starting': () => void | Promise<void>;
   error: (error: Error) => void;
   parakeetSetupProgress: (progress: ParakeetSetupProgress) => void;
   stackChanged: (count: number) => void;
@@ -200,6 +205,7 @@ export class TranscriberManager extends EventEmitter {
   private lastExternalPasteTargetBundleId: string | null = null;
   private fieldTheoryMarkdownInsertionTarget: FieldTheoryMarkdownInsertionTarget | null = null;
   private activeRecordingSource: RecordingInputSource | null = null;
+  private standardSessionCancelRequested: boolean = false;
   private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
     'com.fieldtheory.app',
     'com.fieldtheory.experimental',
@@ -656,6 +662,24 @@ export class TranscriberManager extends EventEmitter {
     await this.handleHotkeyPress(false);
   }
 
+  async cancelActiveSession(): Promise<void> {
+    if (this.status === 'silentStacking') {
+      this.cancelSilentStacking();
+      return;
+    }
+
+    if (this.status === 'recording') {
+      this.standardSessionCancelRequested = true;
+      await this.cancelRecording();
+      return;
+    }
+
+    if (this.status === 'transcribing') {
+      this.standardSessionCancelRequested = true;
+      this.discardCancelledStandardSession('transcribing-cancel-requested');
+    }
+  }
+
   /**
    * Handle hotkey press - toggle recording with double-tap detection.
    * Double-tap in idle → silentStacking mode
@@ -788,6 +812,7 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
+      this.standardSessionCancelRequested = false;
       this.setStatus('recording');
       
       // Track recording start time for quota calculation.
@@ -1034,6 +1059,7 @@ export class TranscriberManager extends EventEmitter {
       const asrStart = performance.now();
       const rawChunkText = await this.transcribeWithEngineFallback(wavPath, engine);
       const asrMs = Math.round(performance.now() - asrStart);
+      if (this.standardSessionCancelRequested || (this.status !== 'recording' && this.status !== 'transcribing')) return;
       const chunkText = this.sanitizeTranscriptText(rawChunkText);
       const liveChunkText = this.stripFigureReferences(chunkText);
       if (!liveChunkText) return;
@@ -1309,6 +1335,12 @@ export class TranscriberManager extends EventEmitter {
           // Snapshot can fail when no audio has accumulated yet; continue with normal stop.
         }
       }
+
+      if (this.standardSessionCancelRequested) {
+        await this.nativeHelper.cancelRecording().catch(() => {});
+        this.discardCancelledStandardSession('cancel-before-stop');
+        return;
+      }
       
       // Stop recording and get WAV file path
       const stopStart = performance.now();
@@ -1343,6 +1375,11 @@ export class TranscriberManager extends EventEmitter {
         helperActive: helperRecordingActive,
         wavBytes,
       });
+
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-after-stop', wavPath);
+        return;
+      }
 
       const immediateSquaresAction = this.pendingImmediateSquaresAction;
       this.pendingImmediateSquaresAction = null;
@@ -1403,6 +1440,10 @@ export class TranscriberManager extends EventEmitter {
           const asrStart = performance.now();
           const text = await this.transcribeWithEngineFallback(wavPath, engine);
           finalAsrMs = Math.round(performance.now() - asrStart);
+          if (this.standardSessionCancelRequested) {
+            this.discardCancelledStandardSession('cancel-after-asr', wavPath);
+            return;
+          }
           cleanedText = this.sanitizeTranscriptText(text);
 
           // If full-file ASR returned empty but live chunks had content, use them.
@@ -1412,6 +1453,11 @@ export class TranscriberManager extends EventEmitter {
             log.debug('Final-pass ASR empty; using live transcript (%d chars)', cleanedText.length);
           }
         }
+      }
+
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-after-final-text', wavPath);
+        return;
       }
 
       // Check for Squares voice commands (e.g., "grid", "focus", "horizontal").
@@ -1549,8 +1595,13 @@ export class TranscriberManager extends EventEmitter {
       // Paste, check accessibility in parallel for UI feedback.
       // Don't clear stack after auto-paste so Super Paste (Cmd+Shift+V) can re-paste if needed.
       // Stack is cleared when next recording starts.
+      if (this.standardSessionCancelRequested) {
+        this.discardCancelledStandardSession('cancel-before-paste', wavPath);
+        return;
+      }
       const pasteStart = performance.now();
       const accessibilityCheckPromise = this.nativeHelper.checkFocusedTextInput();
+      await this.notifyPasteStarting();
       await this.pasteStack(false);
       this.emit('stackChanged', 0);
       if (deferredSquaresAction && this.squaresManager) {
@@ -1625,6 +1676,35 @@ export class TranscriberManager extends EventEmitter {
   private handleOverlayAfterTranscription(): void {
     this.overlay.dismiss();
   }
+
+  private async notifyPasteStarting(): Promise<void> {
+    const listeners = this.listeners('paste-starting');
+    if (listeners.length === 0) return;
+
+    for (const listener of listeners) {
+      try {
+        await Promise.resolve((listener as () => void | Promise<void>)());
+      } catch (error) {
+        log.warn('Paste-starting listener failed:', error);
+      }
+    }
+  }
+
+  private discardCancelledStandardSession(reason: string, wavPath?: string): void {
+    appendTranscriberTrace('finish.cancelled', { reason });
+    if (wavPath) {
+      void fs.promises.unlink(wavPath).catch(() => {});
+    }
+    this.pendingImmediateSquaresAction = null;
+    this.pendingImmediateSquaresText = '';
+    this.activeRecordingSource = null;
+    this.detachStandardChunkListener();
+    this.clearStandardLiveTranscript();
+    this.clearStack();
+    this.setStatus('idle');
+    this.handleOverlayAfterTranscription();
+    this.overlay.showStatus(MESSAGES.overlay.cancelled);
+  }
   
   /**
    * Cancel recording (called by abandon hotkey).
@@ -1635,6 +1715,7 @@ export class TranscriberManager extends EventEmitter {
     }
 
     try {
+      this.standardSessionCancelRequested = true;
       // Note: Cancel sound removed to avoid audio feedback on abandoned recordings.
       await this.nativeHelper.cancelRecording();
       this.activeRecordingSource = null;
@@ -1644,6 +1725,7 @@ export class TranscriberManager extends EventEmitter {
       this.hasAudioContent = false;
       this.currentStack = [];
       this.screenshotMetadata = [];
+      this.detectedCommands = [];
       this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     } catch (error) {
@@ -1655,6 +1737,7 @@ export class TranscriberManager extends EventEmitter {
       this.hasAudioContent = false;
       this.currentStack = [];
       this.screenshotMetadata = [];
+      this.detectedCommands = [];
       this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     }
@@ -2630,6 +2713,11 @@ export class TranscriberManager extends EventEmitter {
   }
 
   private normalizeParakeetErrorDetail(error: unknown): string | null {
+    const setupDetail = (error as ParakeetProcessError | null | undefined)?.setupError?.detail;
+    if (typeof setupDetail === 'string' && setupDetail.trim()) {
+      return setupDetail.trim().slice(0, 8000);
+    }
+
     const detail = (error as ParakeetProcessError | null | undefined)?.detail;
     if (typeof detail === 'string' && detail.trim()) {
       return detail.trim().slice(0, 8000);
@@ -2644,6 +2732,43 @@ export class TranscriberManager extends EventEmitter {
     const message = error instanceof Error ? error.message.trim() : String(error).trim();
     const combined = [stderr, stdout, message].filter(Boolean).join('\n\n').trim();
     return combined ? combined.slice(0, 8000) : null;
+  }
+
+  private buildParakeetSetupError(error: unknown): ParakeetSetupError {
+    const existing = (error as ParakeetProcessError | null | undefined)?.setupError;
+    if (existing) return existing;
+
+    const summary = this.normalizeParakeetErrorMessage(error) || 'Parakeet setup failed.';
+    const detail = this.normalizeParakeetErrorDetail(error) ?? this.normalizeParakeetErrorMessage(error);
+    const normalized = `${summary}\n${detail}`.toLowerCase();
+    let moreInfo = 'Retry Parakeet setup once. If it fails again, open Diagnostics so support can inspect the setup log.';
+    if (normalized.includes('timed out')) {
+      moreInfo = 'The runtime installed, but the model did not finish downloading or loading in time. Retry on a stable internet connection. If it repeats, open Diagnostics so support can inspect the setup log.';
+    } else if (this.isParakeetRepairableCacheError(error)) {
+      moreInfo = 'Field Theory found a broken Parakeet model download. Repair the model to clear the cached snapshot and download it again.';
+    } else if (
+      normalized.includes('failed to load') ||
+      normalized.includes('exited during startup') ||
+      normalized.includes('onnx-asr is not installed') ||
+      normalized.includes('no such file or directory')
+    ) {
+      moreInfo = 'Field Theory could not start the Parakeet runtime cleanly. Remove Parakeet and install it again. If it repeats, open Diagnostics so support can inspect the setup log.';
+    }
+
+    return {
+      code: 'setup-failed',
+      summary,
+      detail,
+      recoveryCommand: '',
+      moreInfo,
+    };
+  }
+
+  private createParakeetSetupError(error: ParakeetSetupError): ParakeetProcessError {
+    const processError = new Error(error.summary) as ParakeetProcessError;
+    processError.detail = error.detail;
+    processError.setupError = error;
+    return processError;
   }
 
   private getParakeetHubCacheDir(): string {
@@ -2793,18 +2918,19 @@ export class TranscriberManager extends EventEmitter {
       lastError: null,
       lastErrorDetail: null,
       lastErrorAt: null,
+      setupError: null,
     });
   }
 
-  private markParakeetEngineFailure(engine: ParakeetEngine, error: unknown): string {
-    const message = this.normalizeParakeetErrorMessage(error);
-    const detail = this.normalizeParakeetErrorDetail(error);
+  private markParakeetEngineFailure(engine: ParakeetEngine, error: unknown): ParakeetSetupError {
+    const setupError = this.buildParakeetSetupError(error);
     this.updatePersistedParakeetEngineState(engine, {
-      lastError: message,
-      lastErrorDetail: detail,
+      lastError: setupError.summary,
+      lastErrorDetail: setupError.detail,
       lastErrorAt: new Date().toISOString(),
+      setupError,
     });
-    return message;
+    return setupError;
   }
 
   isParakeetInstalled(): boolean {
@@ -2826,6 +2952,7 @@ export class TranscriberManager extends EventEmitter {
 
   private async installParakeetRuntime(
     venvDir: string,
+    pythonCommand: string,
     reportProgress?: ParakeetSetupReporter
   ): Promise<void> {
     const setupScript = this.getParakeetSetupScriptPath();
@@ -2838,6 +2965,7 @@ export class TranscriberManager extends EventEmitter {
         env: {
           ...process.env,
           ...this.getParakeetProcessEnv(),
+          FT_PARAKEET_PYTHON: pythonCommand,
         },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
@@ -3072,12 +3200,13 @@ export class TranscriberManager extends EventEmitter {
           lastError,
           lastErrorDetail: state?.lastErrorDetail ?? null,
           lastErrorAt: state?.lastErrorAt ?? null,
+          setupError: state?.setupError ?? null,
         };
       }),
     };
   }
 
-  async setupParakeet(engine: ParakeetEngine = 'parakeet'): Promise<{ success: boolean; error?: string }> {
+  async setupParakeet(engine: ParakeetEngine = 'parakeet'): Promise<{ success: boolean; error?: string; setupError?: ParakeetSetupError }> {
     const venvDir = path.join(this.getParakeetBasePath(), 'venv');
     const reportProgress: ParakeetSetupReporter = (progress) => {
       this.emitParakeetSetupProgress(engine, progress);
@@ -3100,13 +3229,18 @@ export class TranscriberManager extends EventEmitter {
     };
 
     try {
+      const preflight = await runParakeetPythonPreflight();
+      if (!preflight.ok) {
+        throw this.createParakeetSetupError(preflight.setupError);
+      }
+
       reportProgress({
         stage: 'installing-runtime',
         message: 'Installing the Parakeet runtime…',
         percent: null,
-        detail: `venv: ${venvDir}`,
+        detail: `${preflight.detail}\nvenv: ${venvDir}`,
       });
-      await this.installParakeetRuntime(venvDir, reportProgress);
+      await this.installParakeetRuntime(venvDir, preflight.pythonCommand, reportProgress);
 
       let repairedCorruptCache = false;
       while (true) {
@@ -3144,15 +3278,15 @@ export class TranscriberManager extends EventEmitter {
       return { success: true };
     } catch (error: any) {
       this.stopParakeetServer();
-      const message = this.markParakeetEngineFailure(engine, error);
+      const setupError = this.markParakeetEngineFailure(engine, error);
       reportProgress({
         stage: 'failed',
-        message,
+        message: setupError.summary,
         percent: null,
-        detail: this.normalizeParakeetErrorDetail(error),
+        detail: setupError.detail,
       });
-      log.error('Parakeet setup failed: %s', message);
-      return { success: false, error: message };
+      log.error('Parakeet setup failed: %s', setupError.summary);
+      return { success: false, error: setupError.summary, setupError };
     }
   }
 
@@ -3213,8 +3347,8 @@ export class TranscriberManager extends EventEmitter {
       await this.getOrCreateParakeetServer(engine).start();
       this.markParakeetEngineVerified(engine);
     } catch (error) {
-      const message = this.markParakeetEngineFailure(engine, error);
-      throw new Error(message);
+      const setupError = this.markParakeetEngineFailure(engine, error);
+      throw new Error(setupError.summary);
     }
   }
 

@@ -160,6 +160,7 @@ function IslandGeometrySliders({ theme }: { theme: Theme }) {
   const [geometry, setGeometry] = useState<IslandGeometrySettings>(DEFAULT_ISLAND_GEOMETRY);
   const [resolved, setResolved] = useState<ResolvedGeometry | null>(null);
   const [stayOnLaptop, setStayOnLaptop] = useState(false);
+  const [recordingIndicatorMode, setRecordingIndicatorMode] = useState<'auto' | 'notch' | 'floating'>('auto');
 
   useEffect(() => {
     window.hotMicAPI?.getIslandGeometry?.().then((g) => {
@@ -170,6 +171,9 @@ function IslandGeometrySliders({ theme }: { theme: Theme }) {
     }).catch(() => {});
     window.hotMicAPI?.getIslandStayOnLaptop?.().then((v) => {
       setStayOnLaptop(v);
+    }).catch(() => {});
+    window.hotMicAPI?.getRecordingIndicatorMode?.().then((mode) => {
+      setRecordingIndicatorMode(mode);
     }).catch(() => {});
   }, []);
 
@@ -210,12 +214,32 @@ function IslandGeometrySliders({ theme }: { theme: Theme }) {
     opacity: active ? 1 : 0.7,
   });
 
+  const modeButtonStyle = (active: boolean) => ({
+    ...btnStyle(active),
+    minWidth: '68px',
+  });
+
   const displayValues = isAllAuto && resolved
     ? { ...resolved, _detected: undefined } as IslandGeometrySettings
     : geometry;
 
   return (
     <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+        <span style={{ fontSize: '12px', color: theme.text, marginRight: '4px' }}>Recording indicator</span>
+        {(['auto', 'notch', 'floating'] as const).map((mode) => (
+          <button
+            key={mode}
+            onClick={() => {
+              setRecordingIndicatorMode(mode);
+              void window.hotMicAPI?.setRecordingIndicatorMode?.(mode);
+            }}
+            style={modeButtonStyle(recordingIndicatorMode === mode)}
+          >
+            {mode === 'auto' ? 'Auto' : mode === 'notch' ? 'Notch' : 'Floating'}
+          </button>
+        ))}
+      </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
         <button onClick={() => void handleAuto()} style={btnStyle(isAllAuto)}>
           Auto

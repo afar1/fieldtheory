@@ -7,6 +7,22 @@ import type { PreferencesManager } from './preferences';
 import { createLogger } from './logger';
 
 const log = createLogger('Tray');
+// Keep this aligned with src/utils/audioWaveform.ts; electron main is built from electron/.
+const TRAY_WAVEFORM_BAR_COUNT = 7;
+const TRAY_WAVEFORM_CHARS = ['▁', '▂', '▃', '▄', '▅', '▆', '▇'];
+
+function scaleTrayAudioLevel(rawLevel: number): number {
+  if (rawLevel <= 0) return 0;
+  return Math.min(1, Math.sqrt(rawLevel * 8));
+}
+
+function renderTrayWaveformTitle(levels: number[]): string {
+  return levels.map((level) => {
+    const scaled = scaleTrayAudioLevel(level);
+    const index = Math.round(scaled * (TRAY_WAVEFORM_CHARS.length - 1));
+    return TRAY_WAVEFORM_CHARS[index];
+  }).join('');
+}
 
 /**
  * TrayManager creates and manages the menu bar icon and context menu.
@@ -41,6 +57,9 @@ export class TrayManager {
   private transcriptionHotkey: string = 'Option+Shift+Space';
   private screenshotHotkey: string = 'Command+4';
   private taggedDocsUnreadCount: number = 0;
+  private recordingActive: boolean = false;
+  private recordingWaveformLevels: number[] = new Array(TRAY_WAVEFORM_BAR_COUNT).fill(0);
+  private recordingWaveformWriteIndex: number = 0;
 
   constructor(audioManager: AudioManager, quotaManager?: QuotaManager, preferencesManager?: PreferencesManager) {
     this.audioManager = audioManager;
@@ -117,6 +136,26 @@ export class TrayManager {
     if (this.tray) {
       this.updateTray(this.audioManager.getState());
     }
+  }
+
+  setRecordingActive(active: boolean): void {
+    const nextActive = Boolean(active);
+    if (this.recordingActive === nextActive) return;
+    this.recordingActive = nextActive;
+    this.resetRecordingWaveform();
+    if (this.tray) {
+      this.updateTrayTitle(this.audioManager.getState());
+    }
+  }
+
+  updateRecordingAudioLevel(level: number): void {
+    if (!this.recordingActive || !this.tray) return;
+    const normalizedLevel = Number.isFinite(level)
+      ? Math.max(0, Math.min(1, level))
+      : 0;
+    this.recordingWaveformLevels[this.recordingWaveformWriteIndex % TRAY_WAVEFORM_BAR_COUNT] = normalizedLevel;
+    this.recordingWaveformWriteIndex += 1;
+    this.updateTrayTitle(this.audioManager.getState());
   }
 
   /**
@@ -204,15 +243,7 @@ export class TrayManager {
     const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
     const priorityDeviceName = priorityDevice?.name || 'None';
 
-    // Show abbreviated mic name next to tray icon when priority mic is set.
-    // Format: ":Air" or ":Blu" - first 3 letters, capitalized.
-    const unreadTitle = this.taggedDocsUnreadCount > 0 ? ` •${this.taggedDocsUnreadCount}` : '';
-    if (priorityDeviceId && priorityDevice) {
-      const abbrev = priorityDeviceName.slice(0, 3);
-      this.tray.setTitle(`:${abbrev}${unreadTitle}`);
-    } else {
-      this.tray.setTitle(unreadTitle.trimStart());
-    }
+    this.updateTrayTitle(state);
 
     let tooltip: string;
     if (!priorityDeviceId) {
@@ -236,6 +267,41 @@ export class TrayManager {
       const contextMenu = Menu.buildFromTemplate(fallbackMenuItems);
       this.tray.setContextMenu(contextMenu);
     }
+  }
+
+  private updateTrayTitle(state: AudioState): void {
+    if (!this.tray) return;
+
+    const { priorityDeviceId, devices } = state;
+    const priorityDevice = devices.find((d) => d.id === priorityDeviceId);
+    const unreadTitle = this.taggedDocsUnreadCount > 0 ? ` •${this.taggedDocsUnreadCount}` : '';
+
+    if (this.recordingActive) {
+      const waveformTitle = renderTrayWaveformTitle(this.getOrderedRecordingWaveformLevels());
+      this.tray.setTitle(`${waveformTitle}${unreadTitle}`);
+      return;
+    }
+
+    if (priorityDeviceId && priorityDevice) {
+      const abbrev = priorityDevice.name.slice(0, 3);
+      this.tray.setTitle(`:${abbrev}${unreadTitle}`);
+    } else {
+      this.tray.setTitle(unreadTitle.trimStart());
+    }
+  }
+
+  private resetRecordingWaveform(): void {
+    this.recordingWaveformLevels.fill(0);
+    this.recordingWaveformWriteIndex = 0;
+  }
+
+  private getOrderedRecordingWaveformLevels(): number[] {
+    const result: number[] = [];
+    const start = this.recordingWaveformWriteIndex;
+    for (let i = 0; i < TRAY_WAVEFORM_BAR_COUNT; i++) {
+      result.push(this.recordingWaveformLevels[(start + i) % TRAY_WAVEFORM_BAR_COUNT]);
+    }
+    return result;
   }
 
   private stripAccelerators(items: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
