@@ -14,8 +14,10 @@ import {
   getWikiOutboundLinks,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
+  refreshMarkdownLinkRelationDocumentHits,
   resolveWikiLink,
   transformWikiLinks,
+  upsertMarkdownLinkRelationDocument,
 } from '../utils/wikiLinks';
 
 const index = buildWikiIndex([
@@ -573,6 +575,85 @@ describe('getMarkdownLinkedDocuments', () => {
         target: { kind: 'wiki', relPath: 'scratchpad/source' },
         title: 'Source',
         excerpt: 'Cached relation content without links.',
+        direction: 'inbound',
+      },
+    ]);
+  });
+
+  it('refreshes cached relation hits when a new wiki target enters the index', () => {
+    const staleIndex = buildWikiIndex([
+      { relPath: 'scratchpad/source', title: 'Source' },
+    ]);
+    const freshIndex = buildWikiIndex([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: 'scratchpad/new-target', title: 'New Target' },
+    ]);
+    const staleDocuments = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'See [[New Target]].',
+        linkHits: getMarkdownEditorLinkHits('See [[New Target]].', staleIndex),
+      },
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/new-target' },
+        title: 'New Target',
+        content: '',
+      },
+    ];
+
+    const refreshedDocuments = refreshMarkdownLinkRelationDocumentHits(staleDocuments, freshIndex);
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/new-target' },
+      '',
+      refreshedDocuments,
+      freshIndex,
+    )).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/source' },
+        title: 'Source',
+        excerpt: 'See [[New Target]].',
+        direction: 'inbound',
+      },
+    ]);
+  });
+
+  it('upserts a saved document so backlinks use the latest markdown', () => {
+    const freshIndex = buildWikiIndex([
+      { relPath: 'scratchpad/source', title: 'Source' },
+      { relPath: 'scratchpad/new-target', title: 'New Target' },
+    ]);
+    const documents = [
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/source' },
+        title: 'Source',
+        content: 'No link yet.',
+        linkHits: getMarkdownEditorLinkHits('No link yet.', freshIndex),
+      },
+      {
+        target: { kind: 'wiki' as const, relPath: 'scratchpad/new-target' },
+        title: 'New Target',
+        content: '',
+      },
+    ];
+    const updatedDocuments = upsertMarkdownLinkRelationDocument(documents, {
+      target: { kind: 'wiki', relPath: 'scratchpad/source' },
+      title: 'Source',
+      content: 'See [[New Target]].',
+      linkHits: getMarkdownEditorLinkHits('See [[New Target]].', freshIndex),
+    });
+
+    expect(getMarkdownLinkedDocuments(
+      { kind: 'wiki', relPath: 'scratchpad/new-target' },
+      '',
+      updatedDocuments,
+      freshIndex,
+    )).toEqual([
+      {
+        target: { kind: 'wiki', relPath: 'scratchpad/source' },
+        title: 'Source',
+        excerpt: 'See [[New Target]].',
         direction: 'inbound',
       },
     ]);

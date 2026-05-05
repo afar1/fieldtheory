@@ -297,8 +297,12 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-content': {
             caretColor: caretColor ?? color,
             padding: '0',
-            paddingBottom: `${bottomRoomPx}px`,
             cursor: 'text',
+          },
+          '.cm-content::after': {
+            content: '""',
+            display: 'block',
+            height: `${bottomRoomPx}px`,
           },
           '.cm-line': {
             padding: '0',
