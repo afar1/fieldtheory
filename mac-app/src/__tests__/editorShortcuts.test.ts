@@ -281,11 +281,11 @@ describe('isKeyboardShortcutsHelpShortcut', () => {
 });
 
 describe('shouldEnterEditOnClick', () => {
-  it('allows a plain click on text by default', () => {
+  it('rejects a plain click on text by default', () => {
     const p = document.createElement('p');
     p.textContent = 'hi';
     document.body.appendChild(p);
-    expect(shouldEnterEditOnClick({ target: p })).toBe(true);
+    expect(shouldEnterEditOnClick({ target: p })).toBe(false);
   });
 
   it('allows a Cmd-click on text by default', () => {
@@ -293,6 +293,13 @@ describe('shouldEnterEditOnClick', () => {
     p.textContent = 'hi';
     document.body.appendChild(p);
     expect(shouldEnterEditOnClick({ target: p, metaKey: true })).toBe(true);
+  });
+
+  it('allows a plain click when click mode is explicitly enabled', () => {
+    const p = document.createElement('p');
+    p.textContent = 'hi';
+    document.body.appendChild(p);
+    expect(shouldEnterEditOnClick({ target: p }, 'click')).toBe(true);
   });
 
   it('rejects a plain click when Command-click mode is enabled', () => {
@@ -344,14 +351,19 @@ describe('shouldEnterEditOnClick', () => {
 });
 
 describe('rendered edit click mode persistence', () => {
-  it('defaults to click mode', () => {
+  it('defaults to Command-click mode', () => {
     const storage = { getItem: () => null };
-    expect(restoreRenderedEditClickMode(storage)).toBe('click');
+    expect(restoreRenderedEditClickMode(storage)).toBe('command-click');
   });
 
   it('restores Command-click mode', () => {
     const storage = { getItem: (key: string) => key === RENDERED_EDIT_CLICK_MODE_STORAGE_KEY ? 'command-click' : null };
     expect(restoreRenderedEditClickMode(storage)).toBe('command-click');
+  });
+
+  it('restores click mode', () => {
+    const storage = { getItem: (key: string) => key === RENDERED_EDIT_CLICK_MODE_STORAGE_KEY ? 'click' : null };
+    expect(restoreRenderedEditClickMode(storage)).toBe('click');
   });
 
   it('persists the selected mode', () => {

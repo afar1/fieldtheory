@@ -99,6 +99,6 @@ describe('ContentToolbar', () => {
     );
 
     const spacer = container.querySelector('[data-content-toolbar-spacer]') as HTMLDivElement | null;
-    expect(spacer?.style.WebkitAppRegion).toBe('no-drag');
+    expect((spacer?.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag');
   });
 });
