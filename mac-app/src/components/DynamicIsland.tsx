@@ -245,9 +245,6 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
 
   const waveformSlotMargin = pipeCount > 0 ? (floating ? FLOATING_WAVEFORM_STACK_GAP : 8) : 0;
   const pipeSlotWidth = floating ? floatingPipeSlotWidthForCount(pipeCount) : pipeSlotWidthForCount(pipeCount);
-  const floatingWaveformBalanceWidth = floating && waveformActive && pipeCount > 0
-    ? waveformSlotMargin + pipeSlotWidth
-    : 0;
   const displayedWaveformLevels = waveformSettled
     ? STATIC_WAVEFORM_LEVELS
     : waveformLevels;
@@ -267,9 +264,6 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
         WebkitAppRegion: floating ? 'drag' : undefined,
       } as React.CSSProperties}
     >
-      <PillSlot visible={floatingWaveformBalanceWidth > 0} width={floatingWaveformBalanceWidth} marginRight={0}>
-        <div aria-hidden="true" />
-      </PillSlot>
       <PillSlot visible={waveformActive} width={WAVEFORM_WIDTH} marginRight={waveformSlotMargin}>
         <div aria-hidden="true" style={rightStyles.waveformContainer}>
           <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
@@ -1770,10 +1764,6 @@ function FloatingPill() {
     };
   }, []);
 
-  const openFieldTheory = useCallback(() => {
-    (window as any).dynamicIslandAPI?.openFieldTheory?.();
-  }, []);
-
   const cancelSession = useCallback(() => {
     if (cancelTimerRef.current) return;
     setFadingOut(true);
@@ -1807,23 +1797,6 @@ function FloatingPill() {
     >
       <button
         type="button"
-        className="di-floating-button di-floating-open"
-        title="open Field Theory"
-        aria-label="open Field Theory"
-        onClick={openFieldTheory}
-        style={{
-          ...floatingButtonStyle,
-          opacity: hovered ? 1 : 0,
-          pointerEvents: hovered && !fadingOut ? 'auto' : 'none',
-        }}
-      >
-        <svg width="14" height="12" viewBox="0 0 14 12" fill="none" aria-hidden="true">
-          <path d="M2 3H12M2 6H12M2 9H12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-        </svg>
-      </button>
-      <RightPill sectionWidth={rightWidth} floating />
-      <button
-        type="button"
         className="di-floating-button di-floating-cancel"
         title="cancel session"
         aria-label="cancel session"
@@ -1836,9 +1809,10 @@ function FloatingPill() {
         }}
       >
         <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-          <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="rgba(255,255,255,0.78)" strokeWidth="1.2" strokeLinecap="round" />
+          <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
         </svg>
       </button>
+      <RightPill sectionWidth={rightWidth} floating />
     </div>
   );
 }

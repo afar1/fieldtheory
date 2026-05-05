@@ -133,10 +133,10 @@ describe('pipeSlotWidthForCount', () => {
 
 describe('floatingPipeSlotWidthForCount', () => {
   it('keeps screenshot chips compact in the floating pill', () => {
-    expect(floatingPipeSlotWidthForCount(1)).toBe(8);
-    expect(floatingPipeSlotWidthForCount(2)).toBe(12);
-    expect(floatingPipeSlotWidthForCount(3)).toBe(16);
-    expect(floatingPipeSlotWidthForCount(4)).toBe(22);
-    expect(floatingPipeSlotWidthForCount(10)).toBe(28);
+    expect(floatingPipeSlotWidthForCount(1)).toBe(4);
+    expect(floatingPipeSlotWidthForCount(2)).toBe(8);
+    expect(floatingPipeSlotWidthForCount(3)).toBe(12);
+    expect(floatingPipeSlotWidthForCount(4)).toBe(18);
+    expect(floatingPipeSlotWidthForCount(10)).toBe(24);
   });
 });

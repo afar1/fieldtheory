@@ -342,7 +342,7 @@ const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
 const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
-const LIBRARIAN_CONTENT_BOTTOM_PADDING_PX = 32;
+const LIBRARIAN_CONTENT_BOTTOM_PADDING_PX = 59.2;
 const RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED = false;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
@@ -1538,7 +1538,7 @@ export function getLibrarianContentTopPadding(input: {
 export function getLibrarianContentBottomPadding(input: {
   focusChromeActive: boolean;
 }): number {
-  return input.focusChromeActive ? 0 : LIBRARIAN_CONTENT_BOTTOM_PADDING_PX;
+  return LIBRARIAN_CONTENT_BOTTOM_PADDING_PX;
 }
 
 interface LibrarianViewProps {
@@ -5758,7 +5758,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     blinkCursor={blinkTextCursor}
                     placeholder="Write your markdown here..."
-                    bottomRoomPx={focusChromeActive ? 0 : undefined}
                     dataAttributes={{
                       'data-ft-agent-context': 'markdown',
                       'data-ft-agent-file-path': activeReading.path,
