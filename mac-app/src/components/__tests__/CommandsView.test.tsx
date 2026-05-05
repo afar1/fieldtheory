@@ -254,6 +254,19 @@ describe('CommandsView command naming', () => {
     });
   });
 
+  it('requires Command-click before rendered commands open source by default', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const renderedText = await screen.findByText('Rendered selection text');
+    fireEvent.click(renderedText);
+
+    expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+
+    fireEvent.click(renderedText, { metaKey: true });
+
+    expect(await screen.findByPlaceholderText('Write your command markdown here...')).toBeTruthy();
+  });
+
   it('applies common markdown formatting shortcuts in source mode', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 

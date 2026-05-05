@@ -104,7 +104,7 @@ describe('LibrarianView render', () => {
   });
 
   it('renders without throwing during hook initialization', async () => {
-    render(<LibrarianView sidebarCollapsed={false} />);
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
@@ -122,7 +122,7 @@ describe('LibrarianView render', () => {
       mtime: 0,
     }]);
 
-    const { container } = render(<LibrarianView sidebarCollapsed />);
+    const { container } = render(<LibrarianView sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
 
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();

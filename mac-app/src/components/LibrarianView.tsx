@@ -918,7 +918,7 @@ export function getRenderedMarkdownClickBehavior(input: {
   ctrlKey?: boolean;
   altKey?: boolean;
   shiftKey?: boolean;
-}, mode: RenderedEditClickMode = 'click'): 'source' | null {
+}, mode: RenderedEditClickMode = 'command-click'): 'source' | null {
   if (typeof input.detail === 'number' && input.detail > 1) return null;
   if (input.altKey || input.ctrlKey || input.shiftKey) return null;
   if (!shouldEnterEditOnClick(input, mode)) return null;
