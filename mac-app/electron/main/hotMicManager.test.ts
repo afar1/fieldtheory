@@ -27,7 +27,7 @@ const testState = vi.hoisted(() => {
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => '/tmp') },
   globalShortcut: {
-    register: vi.fn(),
+    register: vi.fn(() => true),
     unregister: vi.fn(),
     unregisterAll: vi.fn(),
     isRegistered: vi.fn(() => false),
@@ -72,6 +72,7 @@ vi.mock('./logger', () => ({
   }),
 }));
 
+import { globalShortcut } from 'electron';
 import { HotMicManager } from './hotMicManager';
 
 function createManager(preferences: Record<string, unknown> = {}) {
@@ -1148,6 +1149,62 @@ describe('HotMicManager transcriber handoff', () => {
     await manager.resumeAfterTranscriber();
 
     expect(nativeHelper.startRecording).not.toHaveBeenCalled();
+    manager.destroy();
+  });
+
+  it('releases Escape to standard recording during handoff and restores it after resume', async () => {
+    const { manager, nativeHelper } = createManager();
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+    vi.mocked(globalShortcut.unregister).mockClear();
+
+    (manager as any).setState('listening');
+    nativeHelper.isRecordingActive
+      .mockReturnValueOnce(true)
+      .mockReturnValueOnce(false);
+
+    await manager.yieldToTranscriber();
+    expect(globalShortcut.unregister).toHaveBeenCalledWith('Escape');
+
+    await manager.resumeAfterTranscriber();
+    expect(globalShortcut.register).toHaveBeenCalledWith('Escape', expect.any(Function));
+    expect(globalShortcut.register).toHaveBeenCalledTimes(2);
+    manager.destroy();
+  });
+});
+
+describe('HotMicManager Escape dismissal', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('requires two Escape presses before dismissing Hot Mic and releasing Escape', () => {
+    const { manager } = createManager();
+    const cursorStatusManager = { showRecordingNote: vi.fn() };
+    const deactivated = vi.fn();
+    const inputModeResetRequested = vi.fn();
+
+    manager.setCursorStatusManager(cursorStatusManager as any);
+    manager.on('deactivated', deactivated);
+    manager.on('inputModeResetRequested', inputModeResetRequested);
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+    vi.mocked(globalShortcut.unregister).mockClear();
+
+    (manager as any).setState('listening');
+    const escapeHandler = vi.mocked(globalShortcut.register).mock.calls.find(
+      ([accelerator]) => accelerator === 'Escape'
+    )?.[1] as () => void;
+
+    escapeHandler();
+    expect(cursorStatusManager.showRecordingNote).toHaveBeenCalledWith(
+      'Press Esc again to stop Hot Mic'
+    );
+    expect(deactivated).not.toHaveBeenCalled();
+    expect(inputModeResetRequested).not.toHaveBeenCalled();
+
+    escapeHandler();
+    expect(deactivated).toHaveBeenCalledTimes(1);
+    expect(inputModeResetRequested).toHaveBeenCalledTimes(1);
+    expect(globalShortcut.unregister).toHaveBeenCalledWith('Escape');
     manager.destroy();
   });
 });
