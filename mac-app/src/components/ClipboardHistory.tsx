@@ -8,7 +8,6 @@ import React, { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffe
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
-import CommandsView from './CommandsView';
 import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeHintOpacity, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
@@ -89,16 +88,7 @@ type FieldTheoryMarkdownTarget = {
   selectionEnd?: number;
 };
 
-type TopNavMode = 'clipboard' | 'librarian' | 'commands' | 'possible';
-
-type FieldTheoryNavigationEntry =
-  | { surface: 'librarian' }
-  | { surface: 'commands'; commandPath: string };
-
-type FieldTheoryNavigationHistory = {
-  entries: FieldTheoryNavigationEntry[];
-  index: number;
-};
+type TopNavMode = 'clipboard' | 'librarian' | 'possible';
 
 type TopNavPaintTrace = {
   from: ViewMode;
@@ -109,35 +99,7 @@ type TopNavPaintTrace = {
 };
 
 function isTopNavMode(mode: ViewMode): mode is TopNavMode {
-  return mode === 'clipboard' || mode === 'librarian' || mode === 'commands' || mode === 'possible';
-}
-
-function sameFieldTheoryNavigationEntry(
-  a: FieldTheoryNavigationEntry | null,
-  b: FieldTheoryNavigationEntry | null,
-): boolean {
-  if (!a || !b || a.surface !== b.surface) return false;
-  if (a.surface === 'librarian') return true;
-  if (b.surface !== 'commands') return false;
-  return a.commandPath === b.commandPath;
-}
-
-function pushFieldTheoryNavigationEntry(
-  history: FieldTheoryNavigationHistory,
-  entry: FieldTheoryNavigationEntry,
-): FieldTheoryNavigationHistory {
-  if (sameFieldTheoryNavigationEntry(history.entries[history.index] ?? null, entry)) return history;
-  const entries = [...history.entries.slice(0, history.index + 1), entry];
-  return { entries, index: entries.length - 1 };
-}
-
-function moveFieldTheoryNavigationHistory(
-  history: FieldTheoryNavigationHistory,
-  delta: -1 | 1,
-): { history: FieldTheoryNavigationHistory; entry: FieldTheoryNavigationEntry } | null {
-  const index = history.index + delta;
-  if (index < 0 || index >= history.entries.length) return null;
-  return { history: { entries: history.entries, index }, entry: history.entries[index] };
+  return mode === 'clipboard' || mode === 'librarian' || mode === 'possible';
 }
 
 function traceTopNav(event: string, details: Record<string, unknown> = {}) {
@@ -147,6 +109,30 @@ function traceTopNav(event: string, details: Record<string, unknown> = {}) {
 function shouldRestoreLibrarianImmersive(storage: Pick<Storage, 'getItem'>): boolean {
   return storage.getItem(LIBRARIAN_IMMERSIVE_STORAGE_KEY) === 'true'
     && restoreLibrarianSelection(storage)?.type === 'bookmarks';
+}
+
+function normalizeFsPathForMatch(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function commandPathToLibraryOpenTarget(
+  commandPath: string,
+  libraryRoots: Array<{ path: string; builtin: boolean }> | undefined,
+): FieldTheoryMarkdownTarget {
+  const normalizedCommandPath = normalizeFsPathForMatch(commandPath);
+  const builtinRoot = libraryRoots?.find((root) => {
+    if (!root.builtin) return false;
+    const normalizedRoot = normalizeFsPathForMatch(root.path);
+    return normalizedCommandPath === normalizedRoot || normalizedCommandPath.startsWith(`${normalizedRoot}/`);
+  });
+
+  if (builtinRoot) {
+    const normalizedRoot = normalizeFsPathForMatch(builtinRoot.path);
+    const relPath = normalizedCommandPath.slice(normalizedRoot.length + 1).replace(/\.md$/i, '');
+    if (relPath) return { kind: 'wiki', path: relPath };
+  }
+
+  return { kind: 'external', path: commandPath };
 }
 
 function cssTimeToMs(value: string): number {
@@ -529,10 +515,6 @@ export default function ClipboardHistory() {
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
   const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(null);
-  const [pendingCommandPath, setPendingCommandPath] = useState<string | null>(null);
-  const [selectedCommandPath, setSelectedCommandPath] = useState<string | null>(null);
-  const [fieldTheoryNavigationHistory, setFieldTheoryNavigationHistory] = useState<FieldTheoryNavigationHistory>({ entries: [], index: -1 });
-  const fieldTheoryNavigationTargetRef = useRef<FieldTheoryNavigationEntry | null>(null);
   // Path of an artifact the librarian auto-popped that the user hasn't navigated
   // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
@@ -549,7 +531,7 @@ export default function ClipboardHistory() {
     focusChromeGlobalEnabledRef.current = enabled;
     setFocusChromeGlobalEnabledState(enabled);
   }, []);
-  const isFocusChromeSurface = (viewMode === 'librarian' || viewMode === 'commands') && !showSettings;
+  const isFocusChromeSurface = viewMode === 'librarian' && !showSettings;
   const focusChromeSurfaceEnabled = focusChromeChildActive || focusChromeGlobalEnabled;
   const focusChromeOverlayActive = isFocusChromeSurface && focusChromeSurfaceEnabled;
   const appChromeOpacity = getFocusChromeSurfaceOpacity({
@@ -593,35 +575,6 @@ export default function ClipboardHistory() {
     rafId = requestAnimationFrame(sample);
     return () => cancelAnimationFrame(rafId);
   }, [footerChromeHidden, isWindowVisible]);
-  const currentFieldTheoryNavigationEntry = useMemo((): FieldTheoryNavigationEntry | null => {
-    if (showSettings) return null;
-    if (viewMode === 'librarian') return { surface: 'librarian' };
-    if (viewMode === 'commands' && selectedCommandPath) {
-      return { surface: 'commands', commandPath: selectedCommandPath };
-    }
-    return null;
-  }, [selectedCommandPath, showSettings, viewMode]);
-  const openFieldTheoryNavigationEntry = useCallback((entry: FieldTheoryNavigationEntry) => {
-    fieldTheoryNavigationTargetRef.current = entry;
-    setShowSettings(false);
-    if (entry.surface === 'librarian') {
-      setViewMode('librarian');
-      return;
-    }
-    setSelectedCommandPath(entry.commandPath);
-    setPendingCommandPath(entry.commandPath);
-    setViewMode('commands');
-  }, []);
-  const navigateFieldTheoryHistory = useCallback((delta: -1 | 1) => {
-    const next = moveFieldTheoryNavigationHistory(fieldTheoryNavigationHistory, delta);
-    if (!next) return;
-    setFieldTheoryNavigationHistory(next.history);
-    openFieldTheoryNavigationEntry(next.entry);
-  }, [fieldTheoryNavigationHistory, openFieldTheoryNavigationEntry]);
-  const canNavigateFieldTheoryBack = fieldTheoryNavigationHistory.index > 0;
-  const canNavigateFieldTheoryForward =
-    fieldTheoryNavigationHistory.index >= 0 &&
-    fieldTheoryNavigationHistory.index < fieldTheoryNavigationHistory.entries.length - 1;
   const enableGlobalFocusChrome = useCallback(() => {
     if (focusChromePreviousSidebarCollapsedRef.current === null) {
       focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
@@ -682,15 +635,6 @@ export default function ClipboardHistory() {
   }, [navSidebarToggleEnabled, toggleNavSidebarCollapsed]);
 
   useEffect(() => {
-    if (!currentFieldTheoryNavigationEntry) return;
-    if (sameFieldTheoryNavigationEntry(fieldTheoryNavigationTargetRef.current, currentFieldTheoryNavigationEntry)) {
-      fieldTheoryNavigationTargetRef.current = null;
-      return;
-    }
-    setFieldTheoryNavigationHistory((history) => pushFieldTheoryNavigationEntry(history, currentFieldTheoryNavigationEntry));
-  }, [currentFieldTheoryNavigationEntry]);
-
-  useEffect(() => {
     if (!focusChromeOverlayActive) {
       setFocusChromeGroupOpacity(0);
       return;
@@ -727,11 +671,18 @@ export default function ClipboardHistory() {
   const handleLibrarianReadingConsumed = useCallback(() => setPendingReadingPath(null), []);
   const handleLibrarianOpenTargetConsumed = useCallback(() => setPendingLibraryOpenTarget(null), []);
   const handleAutoPopArtifactSuperseded = useCallback(() => setAutoPopArtifactPath(null), []);
-  const handleLibrarianOpenCommandPath = useCallback((path: string) => {
-    setSelectedCommandPath(path);
-    setPendingCommandPath(path);
-    setViewMode('commands');
+  const openCommandPathInLibrary = useCallback((path: string) => {
+    setShowSettings(false);
+    setLibraryKeepsCurrentSizeKey(false);
+    setViewMode('librarian');
+    void (async () => {
+      const roots = await window.libraryAPI?.getRoots?.().catch(() => undefined);
+      setPendingLibraryOpenTarget(commandPathToLibraryOpenTarget(path, roots));
+    })();
   }, []);
+  const handleLibrarianOpenCommandPath = useCallback((path: string) => {
+    openCommandPathInLibrary(path);
+  }, [openCommandPathInLibrary]);
   const selectTopNavView = useCallback((mode: TopNavMode) => {
     const previous = viewModeRef.current;
     if (previous !== mode || showSettings) {
@@ -2253,13 +2204,13 @@ export default function ClipboardHistory() {
     const unsubscribe = window.commandsAPI?.onOpenMarkdownFromLauncher?.((target) => {
       setShowSettings(false);
       if (target.kind === 'command') {
-        setSelectedCommandPath(target.path);
-        setPendingCommandPath(target.path);
-        setViewMode('commands');
+        openCommandPathInLibrary(target.path);
         return;
       }
       if (target.kind === 'commands') {
-        setViewMode('commands');
+        setPendingLibraryOpenTarget(null);
+        setLibraryKeepsCurrentSizeKey(false);
+        setViewMode('librarian');
         return;
       }
       if (target.kind === 'clipboard') {
@@ -2283,7 +2234,7 @@ export default function ClipboardHistory() {
     });
 
     return () => unsubscribe?.();
-  }, []);
+  }, [openCommandPathInLibrary]);
 
   // Hotkey-driven scratchpad create → jump straight into Library and preserve
   // the target in case LibrarianView mounts after the one-shot IPC event.
@@ -3006,7 +2957,7 @@ export default function ClipboardHistory() {
       }
 
       if (key === 'Escape') {
-        // If in settings, return to clipboard view (like commands tab)
+        // If in settings, return to the previous Field Theory surface.
         if (showSettings) {
           e.preventDefault();
           setShowSettings(false);
@@ -4282,45 +4233,6 @@ export default function ClipboardHistory() {
             )}
           </button>
 
-          {/* Commands button — sits alongside Fields / Library in the left
-              group. Matches their typography so the three read as peers. */}
-          <button
-            onClick={() => {
-              selectTopNavView('commands');
-            }}
-            data-top-nav-mode="commands"
-            tabIndex={0}
-            style={{
-              padding: '6px 8px',
-              fontSize: '11px',
-              fontWeight: 400,
-              backgroundColor: viewMode === 'commands' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'commands' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'none',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'commands' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Portable commands"
-          >
-            Commands
-          </button>
-
           <button
             onClick={() => {
               selectTopNavView('possible');
@@ -4843,23 +4755,6 @@ export default function ClipboardHistory() {
             Loading...
           </div>
         )
-      ) : viewMode === 'commands' ? (
-        <CommandsView
-          onSwitchToClipboard={() => setViewMode('clipboard')}
-          sidebarCollapsed={navSidebarCollapsed}
-          onFocusChromeActiveChange={handleFocusChromeActiveChange}
-          focusChromeEnabled={focusChromeGlobalEnabled}
-          onFocusChromeEnabledChange={handleGlobalFocusChromeChange}
-          focusChromeGroupOpacity={focusChromeGroupOpacity}
-          initialCommandPath={pendingCommandPath}
-          onInitialCommandConsumed={() => setPendingCommandPath(null)}
-          onFocusChromeShortcut={enableGlobalFocusChrome}
-          canNavigateBack={canNavigateFieldTheoryBack}
-          canNavigateForward={canNavigateFieldTheoryForward}
-          onNavigateBack={() => navigateFieldTheoryHistory(-1)}
-          onNavigateForward={() => navigateFieldTheoryHistory(1)}
-          onSelectedCommandPathChange={setSelectedCommandPath}
-        />
       ) : viewMode === 'possible' ? (
         <PossibleGraphView onSwitchToClipboard={() => setViewMode('clipboard')} />
       ) : viewMode === 'sketch' ? (

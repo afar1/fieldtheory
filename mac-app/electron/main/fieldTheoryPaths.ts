@@ -37,7 +37,7 @@ export function canonicalLibraryDir(options?: FieldTheoryPathOptions): string {
 }
 
 export function commandsDir(options?: FieldTheoryPathOptions): string {
-  return pathEnv(options).FT_COMMANDS_DIR ?? path.join(fieldTheoryDir(options), 'commands');
+  return pathEnv(options).FT_COMMANDS_DIR ?? path.join(canonicalLibraryDir(options), 'Commands');
 }
 
 export function ideasDir(options?: FieldTheoryPathOptions): string {

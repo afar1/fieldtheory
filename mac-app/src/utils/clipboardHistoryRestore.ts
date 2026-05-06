@@ -8,7 +8,6 @@ const RESTORABLE_VIEW_MODES = new Set<ViewMode>([
   'clipboard',
   'todo',
   'feedback',
-  'commands',
   'possible',
   'librarian',
 ]);

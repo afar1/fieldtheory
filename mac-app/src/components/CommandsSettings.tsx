@@ -333,7 +333,7 @@ export default function CommandsSettings() {
               value={newPath}
               onChange={(e) => setNewPath(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && handleAddDirectory()}
-              placeholder="Enter path (e.g., ~/.fieldtheory/commands)"
+              placeholder="Enter path (e.g., ~/.fieldtheory/library/Commands)"
               style={{
                 flex: 1,
                 padding: '8px 12px',
@@ -375,7 +375,7 @@ export default function CommandsSettings() {
               lineHeight: '1.5',
             }}>
               <strong>Common locations:</strong><br />
-              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.fieldtheory/commands</code> — Field Theory commands
+              • <code style={{ fontSize: '10px', backgroundColor: theme.isDark ? '#2d2d2d' : '#f3f4f6', padding: '1px 4px', borderRadius: '3px' }}>~/.fieldtheory/library/Commands</code> — Field Theory commands
             </p>
           )}
         </div>
@@ -395,7 +395,7 @@ export default function CommandsSettings() {
             fontSize: '12px',
             color: theme.textSecondary,
           }}>
-            View and edit commands in the <strong>Commands</strong> tab.
+            View and edit commands as markdown files in your watched folders. The default is <code style={{ fontSize: '11px' }}>~/.fieldtheory/library/Commands</code>.
           </p>
         )}
 

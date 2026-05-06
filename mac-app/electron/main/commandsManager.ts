@@ -26,8 +26,37 @@ import { createLogger } from './logger';
 import { commandsDir } from './fieldTheoryPaths';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { existingPathInsideRoots, isMarkdownDocumentPath, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
+import { parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
 
 const log = createLogger('Commands');
+
+function yamlQuoted(value: string): string {
+  return JSON.stringify(value);
+}
+
+function withCommandFrontmatter(content: string, title: string): string {
+  const parsed = parseMarkdownFrontmatter(content);
+  const existingKind = (parsed.meta.kind ?? parsed.meta.type)?.trim().toLowerCase();
+  if (existingKind === 'command') return content;
+
+  const commandLines = [
+    'kind: command',
+    parsed.meta.title ? null : `title: ${yamlQuoted(title)}`,
+    parsed.meta.enabled ? null : 'enabled: true',
+  ].filter((line): line is string => Boolean(line));
+
+  if (parsed.raw !== null) {
+    const frontmatterLines = parsed.raw.trim().length > 0
+      ? parsed.lines.filter((line) => !/^\s*(kind|type)\s*:/i.test(line))
+      : [];
+    return `---\n${[
+      ...frontmatterLines,
+      ...commandLines,
+    ].join('\n')}\n---\n\n${parsed.body}`;
+  }
+
+  return `---\n${commandLines.join('\n')}\n---\n\n${content.replace(/^\n+/, '')}`;
+}
 
 const DEFAULT_INTERNAL_COMMAND_TEMPLATES: Array<{ name: string; content: string }> = [
   {
@@ -220,10 +249,6 @@ export class CommandsManager extends EventEmitter {
 
     this.loadSettings();
 
-    if (this.settings.watchedDirs.length === 0) {
-      await this.createDefaultDirectory();
-    }
-
     // Rescan all directories
     await this.initialize();
   }
@@ -283,6 +308,8 @@ export class CommandsManager extends EventEmitter {
    * Initialize the manager - scan all watched directories.
    */
   async initialize(): Promise<void> {
+    await this.createDefaultDirectory();
+
     // Scan all watched directories
     for (const dirPath of this.settings.watchedDirs) {
       await this.scanDirectory(dirPath);
@@ -303,9 +330,38 @@ export class CommandsManager extends EventEmitter {
     for (const command of DEFAULT_INTERNAL_COMMAND_TEMPLATES) {
       const filePath = path.join(defaultDir, `${command.name}.md`);
       if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, command.content);
+        fs.writeFileSync(filePath, withCommandFrontmatter(command.content, command.name));
       }
     }
+  }
+
+  private legacyCommandsDirectoryForDefault(defaultDir: string): string | null {
+    const parentDir = path.dirname(defaultDir);
+    if (path.basename(defaultDir) !== 'Commands' || path.basename(parentDir) !== 'library') {
+      return null;
+    }
+    return path.join(path.dirname(parentDir), 'commands');
+  }
+
+  private async addLegacyCommandsDirectoryIfPresent(defaultDir: string): Promise<void> {
+    const legacyDir = this.legacyCommandsDirectoryForDefault(defaultDir);
+    if (!legacyDir || this.normalizePath(legacyDir) === this.normalizePath(defaultDir)) return;
+    try {
+      if (!fs.existsSync(legacyDir) || !fs.statSync(legacyDir).isDirectory()) return;
+    } catch {
+      return;
+    }
+    if (this.settings.watchedDirs.includes(this.normalizePath(legacyDir))) return;
+    await this.addWatchedDir(legacyDir);
+  }
+
+  private preferWatchedDir(dirPath: string): void {
+    const normalizedPath = this.normalizePath(dirPath);
+    const index = this.settings.watchedDirs.indexOf(normalizedPath);
+    if (index <= 0) return;
+    this.settings.watchedDirs.splice(index, 1);
+    this.settings.watchedDirs.unshift(normalizedPath);
+    this.saveSettings();
   }
 
   /**
@@ -334,6 +390,8 @@ export class CommandsManager extends EventEmitter {
         await this.scanDirectory(defaultDir);
         this.emit('commandsChanged', this.getCommands());
       }
+      this.preferWatchedDir(defaultDir);
+      await this.addLegacyCommandsDirectoryIfPresent(defaultDir);
       if (result) {
         return defaultDir;
       }
@@ -537,7 +595,7 @@ export class CommandsManager extends EventEmitter {
         } else if (entry.isFile() && this.isMarkdownFile(entry.name)) {
           // Add markdown file as a command
           const command = this.createCommandFromFile(fullPath);
-          if (command) {
+          if (command && !this.commands.has(command.name)) {
             this.commands.set(command.name, command);
           }
         }
@@ -1230,7 +1288,7 @@ End of User Commands
       }
 
       // Create the file
-      fs.writeFileSync(filePath, content, 'utf-8');
+      fs.writeFileSync(filePath, withCommandFrontmatter(content, fileName.replace(/\.(md|markdown)$/i, '')), 'utf-8');
 
       // Add to commands map immediately (don't wait for file watcher)
       const command = this.createCommandFromFile(filePath);

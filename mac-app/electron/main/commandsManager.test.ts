@@ -44,7 +44,7 @@ describe('CommandsManager default internal commands', () => {
   beforeEach(() => {
     tempRoot = mkdtempSync(join(tmpdir(), 'commands-manager-test-'));
     originalCommandsDir = process.env.FT_COMMANDS_DIR;
-    process.env.FT_COMMANDS_DIR = join(tempRoot, '.fieldtheory', 'commands');
+    process.env.FT_COMMANDS_DIR = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mockApp.getPath.mockImplementation((name: string) => {
       if (name === 'userData') return join(tempRoot, 'app-data');
       if (name === 'home') return tempRoot;
@@ -66,10 +66,11 @@ describe('CommandsManager default internal commands', () => {
   it('creates the Field Theory default directory and seeds the built-in commands on first reinitialize', async () => {
     await manager.reinitializeForUser();
 
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     expect(manager.getDefaultDirectory()).toBe(defaultDir);
     expect(manager.getWatchedDirs().map(dir => dir.path)).toContain(defaultDir);
 
+    expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('kind: command');
     expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('Refactor those.');
     expect(readFileSync(join(defaultDir, 'review.md'), 'utf8')).toContain('Feel free to use the questions command');
     expect(readFileSync(join(defaultDir, 'questions.md'), 'utf8')).toContain('Ask me as many questions');
@@ -84,7 +85,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('does not overwrite an existing default commands directory that already has markdown commands', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(join(defaultDir, 'custom.md'), '# Custom\n');
 
@@ -96,8 +97,46 @@ describe('CommandsManager default internal commands', () => {
     expect(manager.getCommands().map(command => command.name)).toEqual(['custom']);
   });
 
+  it('keeps the legacy commands root watched when moving the default under Library', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
+
+    await manager.reinitializeForUser();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir, legacyDir]);
+    expect(manager.getCommands().map(command => command.name)).toContain('legacy-only');
+  });
+
+  it('prefers Library commands over duplicate legacy commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'refactor.md'), '# Old Refactor\n');
+
+    await manager.reinitializeForUser();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir, legacyDir]);
+    expect(manager.getCommand('refactor')?.filePath).toBe(join(defaultDir, 'refactor.md'));
+  });
+
+  it('adds the Library commands root when legacy commands were already configured', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    mkdirSync(legacyDir, { recursive: true });
+    writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
+    await manager.addWatchedDir(legacyDir);
+
+    await manager.initialize();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir, legacyDir]);
+    expect(manager.getCommands().map(command => command.name)).toContain('legacy-only');
+    expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('kind: command');
+  });
+
   it('reseeds and rescans when the default directory is already watched but currently empty', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
 
     await manager.addWatchedDir(defaultDir);
@@ -115,7 +154,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('rejects command names that would write outside the selected directory', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
 
@@ -128,8 +167,34 @@ describe('CommandsManager default internal commands', () => {
     expect(existsSync(join(defaultDir, '.hidden.md'))).toBe(false);
   });
 
+  it('adds command frontmatter to newly created commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+
+    const command = manager.createCommand(defaultDir, 'fresh', '# Fresh\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    expect(readFileSync(command!.path, 'utf8')).toBe(
+      '---\nkind: command\ntitle: "fresh"\nenabled: true\n---\n\n# Fresh\n\nBody\n'
+    );
+  });
+
+  it('forces the command kind when created content has non-command frontmatter', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+
+    const command = manager.createCommand(defaultDir, 'typed', '---\nkind: note\ntitle: Existing\n---\n\n# Typed\n');
+
+    expect(command).not.toBeNull();
+    expect(readFileSync(command!.path, 'utf8')).toBe(
+      '---\ntitle: Existing\nkind: command\nenabled: true\n---\n\n# Typed\n'
+    );
+  });
+
   it('only saves commands inside watched directories', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const outsidePath = join(tempRoot, 'outside.md');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(outsidePath, 'original\n');
@@ -141,7 +206,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('reports a conflict when a command changed since it was opened', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
     const command = manager.createCommand(defaultDir, 'conflict', 'original\n');
@@ -161,7 +226,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('moves deleted commands to Trash only when they are inside a watched directory', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const outsidePath = join(tempRoot, 'outside.md');
     mkdirSync(defaultDir, { recursive: true });
     writeFileSync(outsidePath, 'outside\n');
@@ -179,7 +244,7 @@ describe('CommandsManager default internal commands', () => {
   });
 
   it('rejects command renames that would leave the watched directory', async () => {
-    const defaultDir = join(tempRoot, '.fieldtheory', 'commands');
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
     const command = manager.createCommand(defaultDir, 'inside', 'body\n');
