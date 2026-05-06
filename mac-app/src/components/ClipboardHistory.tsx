@@ -90,6 +90,17 @@ type FieldTheoryMarkdownTarget = {
 
 type TopNavMode = 'clipboard' | 'librarian' | 'possible';
 
+type FooterLocalCommandStatus = {
+  status: 'running' | 'success' | 'error' | 'notice';
+  message: string;
+  commandName?: string;
+  filePath?: string;
+  mode?: 'document' | 'selection';
+  phase?: string;
+  error?: string;
+  updatedAt: number;
+};
+
 type TopNavPaintTrace = {
   from: ViewMode;
   to: TopNavMode;
@@ -1437,6 +1448,7 @@ export default function ClipboardHistory() {
   const [agentImproveTool, setAgentImproveTool] = useState<'codex' | 'claude'>('codex');
   const [agentImproveLaunching, setAgentImproveLaunching] = useState(false);
   const [agentImproveStatus, setAgentImproveStatus] = useState<string | null>(null);
+  const [localCommandStatus, setLocalCommandStatus] = useState<FooterLocalCommandStatus | null>(null);
 
   // DM modal state - for sending DMs to contacts.
   const [showDMModal, setShowDMModal] = useState(false);
@@ -2561,6 +2573,67 @@ export default function ClipboardHistory() {
     return () => window.clearTimeout(timeout);
   }, [agentImproveStatus]);
 
+  useEffect(() => {
+    return window.commandsAPI?.onLocalCommandStatus?.((status) => {
+      setLocalCommandStatus(status);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!localCommandStatus) return;
+    const timeoutMs = localCommandStatus.status === 'running'
+      ? 300000
+      : localCommandStatus.status === 'error'
+        ? 9000
+        : 3500;
+    const timeout = window.setTimeout(() => setLocalCommandStatus(null), timeoutMs);
+    return () => window.clearTimeout(timeout);
+  }, [localCommandStatus]);
+
+  const runLocalImproveSelection = useCallback(async () => {
+    if (viewMode !== 'librarian' || showSettings) {
+      setLocalCommandStatus({
+        status: 'error',
+        message: 'Open a Field Theory document to improve text',
+        commandName: 'improve',
+        mode: 'selection',
+        error: 'Open a Field Theory document to improve text',
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+    if (!window.commandsAPI?.runLocalCommand) {
+      setLocalCommandStatus({
+        status: 'error',
+        message: 'Local commands are unavailable',
+        commandName: 'improve',
+        mode: 'selection',
+        error: 'Local commands are unavailable',
+        updatedAt: Date.now(),
+      });
+      return;
+    }
+    const context = getAgentImproveContext();
+    const selectedText = context?.kind === 'selection' ? context.content : '';
+    try {
+      await window.commandsAPI.runLocalCommand({
+        commandName: 'improve',
+        mode: 'selection',
+        selection: selectedText.trim() ? { text: selectedText } : null,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Local improve failed';
+      setLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: 'improve',
+        mode: 'selection',
+        error: message,
+        updatedAt: Date.now(),
+      });
+    }
+  }, [showSettings, viewMode]);
+
   const openAgentImproveDialog = useCallback(() => {
     const context = getAgentImproveContext();
     if (!context) {
@@ -2627,10 +2700,10 @@ export default function ClipboardHistory() {
       const activeElement = document.activeElement;
       const isTypingInTextEntry = isTextEntryElement(activeElement);
 
-      // Cmd+Shift+I: improve selected text, or the whole open markdown file.
+      // Cmd+Shift+I: improve selected text with the local model.
       if (key === 'i' && hasMeta && hasShift && !hasCtrl && !hasAlt) {
         e.preventDefault();
-        openAgentImproveDialog();
+        void runLocalImproveSelection();
         return;
       }
 
@@ -3520,7 +3593,7 @@ export default function ClipboardHistory() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, openAgentImproveDialog, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -6836,23 +6909,23 @@ export default function ClipboardHistory() {
               ) : null}
         </div>
 
-        {agentImproveStatus && (
+        {(localCommandStatus || agentImproveStatus) && (
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
             <span
               style={{
                 fontSize: '9px',
-                color: theme.textSecondary,
+                color: localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary,
                 opacity: 0.85,
               }}
             >
-              {agentImproveStatus}
+              {localCommandStatus?.message ?? agentImproveStatus}
             </span>
           </div>
         )}
 
         {/* Center: Bookmarks sync time, active Library timestamp, or fieldtheory.dev link */}
         {(() => {
-          const showCenterLabel = !agentImproveStatus &&
+          const showCenterLabel = !localCommandStatus && !agentImproveStatus &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
           const centerLabel = showCenterLabel
             ? (bookmarksFooterSyncLabel ?? libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))

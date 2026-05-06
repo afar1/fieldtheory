@@ -1,0 +1,104 @@
+import { act, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import LocalModelSettings from '../LocalModelSettings';
+
+vi.mock('../../contexts/ThemeContext', () => ({
+  useTheme: () => ({
+    theme: {
+      text: '#111111',
+      textSecondary: '#666666',
+      border: '#d1d5db',
+      accent: '#0f766e',
+      success: '#16a34a',
+      warning: '#d97706',
+      info: '#2563eb',
+      selectedBg: '#f3f4f6',
+      surface1: '#ffffff',
+      surface2: '#f8fafc',
+      isDark: false,
+    },
+  }),
+}));
+
+const modelId = 'gemma-4-E4B-it-Q4_K_M';
+
+function makeModel() {
+  return {
+    name: 'Gemma 4 E4B Instruct Q4_K_M',
+    filename: 'gemma-4-E4B-it-Q4_K_M.gguf',
+    sizeBytes: 5_335_289_824,
+    description: 'Offline local command model',
+    license: 'Apache-2.0',
+    sourceUrl: 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF',
+    baseModelUrl: 'https://huggingface.co/google/gemma-4-E4B-it',
+  };
+}
+
+function makeHealth(status: 'ready' | 'missing' | 'corrupt') {
+  return {
+    status,
+    modelPath: status === 'ready'
+      ? '/Users/afar/Library/Application Support/Atomic Chat/data/llamacpp/models/unsloth/gemma-4-E4B-it-Q4_K_M/model.gguf'
+      : '/Users/afar/Library/Application Support/Field Theory/models/gemma-4-E4B-it-Q4_K_M.gguf',
+    fileSizeBytes: status === 'ready' ? 4_977_164_416 : null,
+    expectedSizeBytes: 5_335_289_824,
+    minValidSizeBytes: 2_667_649_912,
+  };
+}
+
+describe('LocalModelSettings', () => {
+  const setLocalLLMSelected = vi.fn(async () => ({ success: true }));
+  const setUseLocalLLM = vi.fn(async () => ({ success: true }));
+  const downloadLocalLLM = vi.fn(async () => ({ success: true, reusedExisting: true }));
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    (window as any).clipboardAPI = {
+      getLocalLLMModels: vi.fn(async () => ({ [modelId]: makeModel() })),
+      getLocalLLMSelected: vi.fn(async () => modelId),
+      getLocalLLMHealth: vi.fn(async () => ({ [modelId]: makeHealth('ready') })),
+      setLocalLLMSelected,
+      setUseLocalLLM,
+      downloadLocalLLM,
+    };
+  });
+
+  afterEach(() => {
+    delete (window as any).clipboardAPI;
+  });
+
+  it('offers to use an already-present local model instead of downloading it', async () => {
+    render(<LocalModelSettings />);
+
+    const button = await screen.findByRole('button', { name: 'Use local model' });
+    expect(screen.getByText('Ready')).toBeTruthy();
+    expect(screen.getByText(/Atomic Chat/)).toBeTruthy();
+
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+
+    expect(setLocalLLMSelected).toHaveBeenCalledWith(modelId);
+    expect(setUseLocalLLM).toHaveBeenCalledWith(true);
+    expect(downloadLocalLLM).not.toHaveBeenCalled();
+    expect(await screen.findByText('Using the existing local model.')).toBeTruthy();
+  });
+
+  it('runs the install path when the model is missing', async () => {
+    (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({ [modelId]: makeHealth('missing') });
+
+    render(<LocalModelSettings />);
+
+    const button = await screen.findByRole('button', { name: 'Find or download' });
+    await act(async () => {
+      button.click();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(downloadLocalLLM).toHaveBeenCalledWith(modelId);
+    });
+    expect(await screen.findByText('Found and linked the existing local model.')).toBeTruthy();
+  });
+});

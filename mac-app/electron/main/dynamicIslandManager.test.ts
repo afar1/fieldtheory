@@ -680,6 +680,27 @@ describe('DynamicIslandManager notch-gap behavior', () => {
     expect(floating?.getOpacity()).toBe(0);
   });
 
+  it('does not reveal a concealed floating pill during window property refresh', () => {
+    testState.setPrimaryInternal(false);
+
+    manager = new DynamicIslandManager();
+    manager.setClipboardManager({
+      queryItems: () => [],
+    });
+
+    const floating = testState.getWindowBySide('floating');
+    expect(floating).toBeDefined();
+    expect(floating?.isVisible()).toBe(true);
+    expect(floating?.getOpacity()).toBe(0);
+    expect(floating?.ignoreMouseEventsCalls.at(-1)).toBe(true);
+
+    manager.refreshWindowProperties('test-idle-floating-refresh');
+
+    expect(floating?.isVisible()).toBe(true);
+    expect(floating?.getOpacity()).toBe(0);
+    expect(floating?.ignoreMouseEventsCalls.at(-1)).toBe(true);
+  });
+
   it('does not show the floating pill again for final transcript display', () => {
     manager = new DynamicIslandManager();
     manager.setRecordingIndicatorMode('floating');

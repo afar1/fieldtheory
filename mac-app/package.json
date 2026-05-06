@@ -21,6 +21,7 @@
     "build:electron": "tsc -p tsconfig.electron.json",
     "build:native": "cd electron/native && swift build -c release && mkdir -p build && cp .build/release/FieldTheoryHelper build/ && codesign --force --deep --sign - build/FieldTheoryHelper",
     "build:whisper": "scripts/build-whisper.sh",
+    "build:gemma": "bash scripts/setup-gemma.sh",
     "build:all": "npm run build:native && npm run build:whisper && npm run build",
     "build:experimental": "FIELD_THEORY_BUILD_CHANNEL=experimental VITE_FIELD_THEORY_BUILD_CHANNEL=experimental EXPERIMENTAL=true npm run build",
     "guard:release-channel": "node scripts/check-release-channel.mjs production",
@@ -28,8 +29,8 @@
     "guard:tracked-sources": "bash scripts/check-untracked-source.sh",
     "guard:package-safety": "node scripts/check-package-safety.mjs",
     "guard:package-safety:experimental": "node scripts/check-package-safety.mjs electron-builder.experimental.json",
-    "rebuild": "electron-rebuild -f -w better-sqlite3,node-llama-cpp",
-    "postinstall": "electron-rebuild -f -w better-sqlite3,node-llama-cpp",
+    "rebuild": "electron-rebuild -f -w better-sqlite3",
+    "postinstall": "electron-rebuild -f -w better-sqlite3",
     "start": "electron .",
     "package": "npm run guard:release-channel && npm run guard:tracked-sources && npm run guard:package-safety && FIELD_THEORY_BUILD_CHANNEL=production VITE_FIELD_THEORY_BUILD_CHANNEL=production npm run build:all && FIELD_THEORY_BUILD_CHANNEL=production VITE_FIELD_THEORY_BUILD_CHANNEL=production electron-builder",
     "package:experimental": "npm run guard:release-channel:experimental && npm run guard:tracked-sources && npm run guard:package-safety:experimental && FIELD_THEORY_BUILD_CHANNEL=experimental VITE_FIELD_THEORY_BUILD_CHANNEL=experimental EXPERIMENTAL=true npm run build:all && FIELD_THEORY_BUILD_CHANNEL=experimental VITE_FIELD_THEORY_BUILD_CHANNEL=experimental EXPERIMENTAL=true electron-builder --config electron-builder.experimental.json",
@@ -178,6 +179,14 @@
           "to": "chatterbox"
         },
         {
+          "from": "scripts/gemma-generate.mjs",
+          "to": "scripts/gemma-generate.mjs"
+        },
+        {
+          "from": "scripts/setup-gemma.sh",
+          "to": "scripts/setup-gemma.sh"
+        },
+        {
           "from": "scripts/find-mlx-python.sh",
           "to": "scripts/find-mlx-python.sh"
         },
@@ -203,6 +212,8 @@
       "dist/**/*",
       "electron-dist/**/*",
       "package.json",
+      "scripts/gemma-generate.mjs",
+      "scripts/setup-gemma.sh",
       "node_modules/**/*",
       "!electron-dist/**/*.test.js",
       "!electron-dist/**/*.test.js.map",

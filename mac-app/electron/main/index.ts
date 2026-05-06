@@ -81,11 +81,19 @@ import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './
 import { QuotaManager } from './quotaManager';
 import { AccountStatusManager } from './accountStatusManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
-import { CommandsManager, PortableCommand } from './commandsManager';
+import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
+import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId } from './localLlmManager';
 import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
-import { CommandsIPCChannels } from './types/commands';
+import {
+  CommandsIPCChannels,
+  type LocalCommandRunMode,
+  type LocalCommandRunRequest,
+  type LocalCommandRunResult,
+  type LocalCommandSelectionInput,
+  type LocalCommandStatus,
+} from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
@@ -477,6 +485,8 @@ let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
 let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
+let localLlmManager: LocalLlmManager | null = null;
+let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let librarySyncService: LibrarySyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
@@ -494,6 +504,71 @@ let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
 let lastScratchpadOpenAt = 0;
+
+function emitLocalCommandStatus(status: Omit<LocalCommandStatus, 'updatedAt'>): LocalCommandStatus {
+  const payload = { ...status, updatedAt: Date.now() };
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(CommandsIPCChannels.LOCAL_COMMAND_STATUS, payload);
+    }
+  });
+  return payload;
+}
+
+function normalizeLocalCommandRequest(raw: unknown): LocalCommandRunRequest | null {
+  if (typeof raw === 'string') {
+    const commandName = raw.trim();
+    return commandName ? { commandName } : null;
+  }
+  if (!raw || typeof raw !== 'object') return null;
+  const request = raw as LocalCommandRunRequest;
+  const commandName = typeof request.commandName === 'string' ? request.commandName.trim() : undefined;
+  const customInstruction = typeof request.customInstruction === 'string' ? request.customInstruction.trim() : undefined;
+  const mode = request.mode === 'selection' ? 'selection' : 'document';
+  const selection = request.selection && typeof request.selection === 'object' ? request.selection : null;
+  if (!commandName && !customInstruction) return null;
+  return {
+    commandName,
+    customInstruction,
+    mode,
+    selection,
+  };
+}
+
+function resolveLocalCommandSelection(
+  selection: LocalCommandSelectionInput | null | undefined,
+  targetContent: string,
+): { ok: true; start: number; end: number; text: string } | { ok: false; error: string } {
+  if (!selection) return { ok: false, error: 'Select text to improve' };
+  if (typeof selection.start === 'number' && typeof selection.end === 'number') {
+    const start = Math.max(0, Math.min(selection.start, targetContent.length));
+    const end = Math.max(start, Math.min(selection.end, targetContent.length));
+    const text = targetContent.slice(start, end);
+    if (start === end || text.trim().length === 0) return { ok: false, error: 'Select text to improve' };
+    return { ok: true, start, end, text };
+  }
+
+  if (typeof selection.text !== 'string' || selection.text.trim().length === 0) {
+    return { ok: false, error: 'Select text to improve' };
+  }
+  const first = targetContent.indexOf(selection.text);
+  if (first < 0) return { ok: false, error: 'Selected text is not in the current document' };
+  const second = targetContent.indexOf(selection.text, first + selection.text.length);
+  if (second >= 0) {
+    return { ok: false, error: 'Selected text appears more than once. Use Markdown edit mode to improve the exact selection.' };
+  }
+  return { ok: true, start: first, end: first + selection.text.length, text: selection.text };
+}
+
+async function ensureLocalImproveCommand(): Promise<PortableCommand | null> {
+  if (!commandsManager) return null;
+  const existing = commandsManager.getCommand('improve');
+  if (existing) return existing;
+  const defaultDir = await commandsManager.createDefaultDirectory();
+  if (!defaultDir) return null;
+  const created = commandsManager.createCommand(defaultDir, 'improve', DEFAULT_IMPROVE_COMMAND_CONTENT);
+  return created ? commandsManager.getCommand(created.name) : commandsManager.getCommand('improve');
+}
 
 function broadcastTodosChanged(todos: Todo[]): void {
   BrowserWindow.getAllWindows().forEach(win => {
@@ -564,6 +639,90 @@ function blockWrite(reason: string = 'read_only'): { blocked: true; reason: stri
     }
   });
   return { blocked: true, reason };
+}
+
+function getLocalLlmManager(): LocalLlmManager {
+  if (!localLlmManager) {
+    localLlmManager = new LocalLlmManager();
+  }
+  return localLlmManager;
+}
+
+function getLocalLlmSetupScriptPath(): string | null {
+  const candidates = [
+    path.join(process.resourcesPath ?? '', 'scripts', 'setup-gemma.sh'),
+    path.join(app.getAppPath(), 'scripts', 'setup-gemma.sh'),
+    path.join(process.cwd(), 'scripts', 'setup-gemma.sh'),
+  ].filter(Boolean);
+
+  return candidates.find(candidate => fs.existsSync(candidate)) ?? null;
+}
+
+async function installOrAccessLocalLlmModel(model: string): Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> {
+  const manager = getLocalLlmManager();
+  if (!isLocalLlmModelId(model)) {
+    return { success: false, error: 'Unsupported local model.' };
+  }
+
+  const selected = manager.setSelectedModel(model);
+  if (!selected.success) return selected;
+
+  const modelId = model as LocalLlmModelId;
+  const currentHealth = manager.getModelHealth(modelId);
+  if (currentHealth.status === 'ready') {
+    return {
+      success: true,
+      modelPath: currentHealth.modelPath,
+      reusedExisting: true,
+    };
+  }
+
+  if (localLlmInstallInFlight) return localLlmInstallInFlight;
+
+  localLlmInstallInFlight = (async () => {
+    try {
+      const setupScript = getLocalLlmSetupScriptPath();
+      if (!setupScript) {
+        return { success: false, error: 'Gemma setup script was not found.' };
+      }
+
+      const installPath = manager.getDefaultInstallPath(modelId);
+      fs.mkdirSync(path.dirname(installPath), { recursive: true });
+
+      const result = await execFileAsync('bash', [setupScript], {
+        cwd: app.getAppPath(),
+        timeout: 60 * 60 * 1000,
+        maxBuffer: 10 * 1024 * 1024,
+        env: {
+          ...process.env,
+          PATH: ['/opt/homebrew/bin', '/usr/local/bin', process.env.PATH ?? ''].filter(Boolean).join(':'),
+          FT_LOCAL_LLM_MODEL_PATH: installPath,
+          FT_GEMMA_REUSE_EXISTING: '1',
+        },
+      });
+      const health = manager.getModelHealth(modelId);
+      if (health.status === 'ready') {
+        const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+        return {
+          success: true,
+          modelPath: health.modelPath,
+          reusedExisting: /already present|linking|existing model/i.test(output),
+        };
+      }
+      return {
+        success: false,
+        error: `Gemma setup finished, but the model is still ${health.status}.`,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gemma setup failed.';
+      log.error('Local Gemma setup failed:', error);
+      return { success: false, error: message };
+    } finally {
+      localLlmInstallInFlight = null;
+    }
+  })();
+
+  return localLlmInstallInFlight;
 }
 
 function openScratchpadDefaultFromHotkey(): WikiPage | null {
@@ -5217,6 +5376,48 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  // Local LLM model management for offline command execution.
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_MODELS, async () => {
+    return getLocalLlmManager().getAvailableModels();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS, async () => {
+    return getLocalLlmManager().getDownloadStatus();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_HEALTH, async () => {
+    return getLocalLlmManager().getModelHealthMap();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_LOCAL_LLM_SELECTED, async () => {
+    return getLocalLlmManager().getSelectedModel();
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_LOCAL_LLM_SELECTED, async (_event, model: string) => {
+    return getLocalLlmManager().setSelectedModel(model);
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.DOWNLOAD_LOCAL_LLM, async (_event, model: string) => {
+    return installOrAccessLocalLlmModel(model);
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.DELETE_LOCAL_LLM, async () => {
+    return {
+      success: false,
+      error: 'Bundled local models are removed by deleting the model file from resources/models.',
+    };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_USE_LOCAL_LLM, async () => {
+    return true;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SET_USE_LOCAL_LLM, async (_event, useLocal: boolean) => {
+    return useLocal
+      ? { success: true }
+      : { success: false, error: 'Offline commands require the local model.' };
+  });
+
   // =========================================================================
   // Improved Content Management - Save/clear improved versions of transcriptions
   // =========================================================================
@@ -6620,6 +6821,228 @@ function setupClipboardIPCHandlers(): void {
       title: context.title,
     };
     return true;
+  });
+
+  ipcMain.handle(CommandsIPCChannels.RUN_LOCAL_COMMAND, async (_event, rawRequest: unknown): Promise<LocalCommandRunResult> => {
+    if (!commandsManager || !librarianManager) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Field Theory command system is not ready',
+        error: 'Field Theory command system is not ready',
+      });
+      return { success: false, error: 'Field Theory command system is not ready' };
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Field Theory is read-only',
+        error: 'Field Theory is read-only',
+      });
+      return { success: false, error: 'Field Theory is read-only' };
+    }
+    const request = normalizeLocalCommandRequest(rawRequest);
+    if (!request) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Invalid local command',
+        error: 'Invalid local command',
+      });
+      return { success: false, error: 'Invalid command' };
+    }
+    const mode: LocalCommandRunMode = request.mode ?? 'document';
+    const customInstruction = request.customInstruction?.trim();
+    const requestedCommandName = request.commandName?.trim();
+    const statusCommandName = customInstruction ? 'local' : requestedCommandName;
+    if (!activeLibraryFileContext) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'No current Field Theory document',
+        commandName: statusCommandName,
+        mode,
+        error: 'No current Field Theory document',
+      });
+      return { success: false, error: 'No current Field Theory document' };
+    }
+    if (!fs.existsSync(activeLibraryFileContext.filePath)) {
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Current document no longer exists',
+        commandName: statusCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        error: 'Current document no longer exists',
+      });
+      return { success: false, error: 'Current document no longer exists' };
+    }
+
+    const command = customInstruction
+      ? null
+      : requestedCommandName?.toLowerCase() === 'improve'
+        ? await ensureLocalImproveCommand()
+        : requestedCommandName
+          ? commandsManager.getCommand(requestedCommandName)
+          : null;
+    if (!customInstruction && !command) {
+      const error = 'Command not found';
+      emitLocalCommandStatus({
+        status: 'error',
+        message: requestedCommandName ? `Command not found: ${requestedCommandName}` : error,
+        commandName: requestedCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        error,
+      });
+      return { success: false, error };
+    }
+
+    try {
+      emitLocalCommandStatus({
+        status: 'running',
+        message: customInstruction
+          ? 'Preparing local instruction...'
+          : `Loading ${command!.displayName || command!.name}...`,
+        commandName: statusCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        phase: 'loading',
+      });
+      const loaded = customInstruction
+        ? { name: 'local', content: customInstruction, filePath: null as string | null }
+        : await commandsManager.loadCommandContent(command!);
+      if (!loaded) {
+        const error = 'Command file could not be loaded';
+        emitLocalCommandStatus({
+          status: 'error',
+          message: error,
+          commandName: statusCommandName,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          error,
+        });
+        return { success: false, error };
+      }
+
+      const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
+      const targetContent = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
+      appendCommandLauncherTrace('run-local-command-start', {
+        commandName: loaded.name,
+        commandPath: loaded.filePath,
+        targetType: activeLibraryFileContext.type,
+        targetPath: activeLibraryFileContext.filePath,
+        mode,
+      });
+
+      emitLocalCommandStatus({
+        status: 'running',
+        message: mode === 'selection'
+          ? `Improving selected text locally...`
+          : `Running ${customInstruction ? 'local instruction' : loaded.name} locally...`,
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        phase: 'generating',
+      });
+
+      let replacement: string;
+      if (mode === 'selection') {
+        const selection = resolveLocalCommandSelection(request.selection, targetContent);
+        if (!selection.ok) {
+          emitLocalCommandStatus({
+            status: 'error',
+            message: selection.error,
+            commandName: loaded.name,
+            filePath: activeLibraryFileContext.filePath,
+            mode,
+            error: selection.error,
+          });
+          return { success: false, error: selection.error, commandName: loaded.name, mode };
+        }
+        const selectedReplacement = await getLocalLlmManager().runSelectionCommand({
+          commandName: loaded.name,
+          commandContent: loaded.content,
+          targetTitle: activeLibraryFileContext.title,
+          targetPath: activeLibraryFileContext.filePath,
+          targetContent,
+          selectedText: selection.text,
+        });
+        replacement = `${targetContent.slice(0, selection.start)}${selectedReplacement}${targetContent.slice(selection.end)}`;
+      } else {
+        replacement = await getLocalLlmManager().runReplacementCommand({
+          commandName: loaded.name,
+          commandContent: loaded.content,
+          targetTitle: activeLibraryFileContext.title,
+          targetPath: activeLibraryFileContext.filePath,
+          targetContent,
+        });
+      }
+
+      emitLocalCommandStatus({
+        status: 'running',
+        message: mode === 'selection' ? 'Saving improved text...' : 'Saving local command result...',
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        phase: 'saving',
+      });
+
+      const saveResult = activeLibraryFileContext.type === 'wiki'
+        ? librarianManager.saveWikiPage(activeLibraryFileContext.relPath, replacement, expectedVersion)
+        : librarianManager.saveReading(activeLibraryFileContext.filePath, replacement, expectedVersion);
+
+      if (!saveResult.ok) {
+        const error = saveResult.reason === 'conflict'
+          ? 'Current document changed while the local command was running'
+          : `Could not save local command result: ${saveResult.reason}`;
+        appendCommandLauncherTrace('run-local-command-save-error', {
+          commandName: loaded.name,
+          targetPath: activeLibraryFileContext.filePath,
+          reason: saveResult.reason,
+        });
+        emitLocalCommandStatus({
+          status: 'error',
+          message: error,
+          commandName: loaded.name,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          error,
+        });
+        return { success: false, error, commandName: loaded.name, mode };
+      }
+
+      appendCommandLauncherTrace('run-local-command-success', {
+        commandName: loaded.name,
+        commandPath: loaded.filePath,
+        targetPath: activeLibraryFileContext.filePath,
+        mode,
+      });
+      await quotaManager?.updateUsage('portable_commands', 1);
+      metricsManager?.recordCommandExecuted();
+      emitLocalCommandStatus({
+        status: 'success',
+        message: mode === 'selection'
+          ? 'Improved selected text'
+          : `Ran ${customInstruction ? 'local instruction' : loaded.name} locally`,
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        phase: 'done',
+      });
+      return { success: true, filePath: activeLibraryFileContext.filePath, commandName: loaded.name, mode };
+    } catch (error) {
+      log.error('Error running local command:', error);
+      const message = error instanceof Error ? error.message : 'Local command failed';
+      appendCommandLauncherTrace('run-local-command-error', { commandName: statusCommandName, mode, error });
+      emitLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: statusCommandName,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        error: message,
+      });
+      return { success: false, error: message, commandName: statusCommandName, mode };
+    }
   });
 
   ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number }) => {
@@ -10017,6 +10440,7 @@ if (!gotTheLock) {
     librarySyncService?.dispose();
     commandSyncService?.destroy();
     todoStore?.destroy();
+    localLlmManager?.stop();
 
     // Sync metrics before quitting (fire-and-forget, don't block quit)
     if (metricsManager) {

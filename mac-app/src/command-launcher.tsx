@@ -70,7 +70,7 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory';
+type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory';
 
 interface LauncherRecentEntry {
   kind: 'wiki' | 'external';
@@ -122,6 +122,9 @@ interface LauncherItem {
   lastOpenedAt?: number;
   // For actions
   actionId?: string;
+  // For local model command runs
+  localCommandName?: string;
+  localInstruction?: string;
   // For handoffs - relative time display
   timeAgo?: string;
   // For bookmark authors
@@ -223,6 +226,12 @@ interface LauncherCommandsAPI {
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
+  runLocalCommand: (request: string | {
+    commandName?: string;
+    customInstruction?: string;
+    mode?: 'document' | 'selection';
+    selection?: { start?: number; end?: number; text?: string } | null;
+  }) => Promise<{ success: boolean; error?: string; filePath?: string; commandName?: string; mode?: 'document' | 'selection' }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
@@ -317,6 +326,8 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
 function launcherItemTypeLabel(item: LauncherItem): string {
   switch (item.type) {
     case 'command': return 'Command';
+    case 'local-command': return 'Local';
+    case 'local-instruction': return 'Local';
     case 'action': return 'Action';
     case 'recent-file': return 'Recent';
     case 'handoff': return 'Handoff';
@@ -1112,6 +1123,53 @@ function CommandLauncher() {
 
     const q = query.toLowerCase();
 
+    const localMatch = query.trim().match(/^local(?:\s+([\s\S]*))?$/i);
+    if (localMatch) {
+      const localQuery = (localMatch[1] ?? '').trim();
+      const localQueryLower = localQuery.toLowerCase();
+      const commandMatches = (localQuery
+        ? commandItems
+            .map(item => ({ item, score: scoreLauncherItem(item, localQueryLower) }))
+            .filter(({ score }) => score > 0)
+            .sort((a, b) => b.score - a.score)
+            .map(({ item }) => item)
+        : commandItems.slice().sort((a, b) => a.name.localeCompare(b.name)))
+        .slice(0, 12)
+        .map(item => ({
+          ...item,
+          id: `local-${item.id}`,
+          type: 'local-command' as const,
+          displayName: `Run locally: ${item.displayName || item.name}`,
+          keywords: [...item.keywords, 'local', 'gemma', 'offline'],
+          localCommandName: item.name,
+        }));
+
+      const exactCommandMatch = localQuery
+        ? commandMatches.some(item =>
+            item.localCommandName?.toLowerCase() === localQueryLower ||
+            item.displayName.toLowerCase() === `run locally: ${localQueryLower}`
+          )
+        : false;
+      const customInstructionItem: LauncherItem[] = localQuery
+        ? [{
+            id: `local-instruction-${localQuery}`,
+            type: 'local-instruction',
+            name: localQuery,
+            displayName: `Run local instruction: ${localQuery}`,
+            keywords: ['local', 'custom', 'instruction', localQuery],
+            localInstruction: localQuery,
+            hotkeyDisplay: 'custom',
+          }]
+        : [];
+      const results = exactCommandMatch
+        ? [...commandMatches, ...customInstructionItem]
+        : [...customInstructionItem, ...commandMatches];
+      setFiltered(results.slice(0, 14));
+      selectIndex(0);
+      resizeForResults(results.length, true);
+      return;
+    }
+
     if (moveSource) {
       const results = filterLauncherMoveTargetDirectories(directoryItems, moveSource, q);
       setFiltered(results);
@@ -1594,6 +1652,23 @@ function CommandLauncher() {
       openFieldTheoryTarget: options.openFieldTheoryTarget ?? false,
       insertWikiLink: options.insertWikiLink ?? false,
     });
+    if (item.type === 'local-command' || item.type === 'local-instruction') {
+      if (!latestContext?.fieldTheoryActive) {
+        showInvocationError('run-local-command-no-field-theory', 'Open a Field Theory document to run locally', 'Open a Field Theory document to run locally');
+        return;
+      }
+      void commandsAPI.runLocalCommand(item.type === 'local-instruction'
+        ? { customInstruction: item.localInstruction }
+        : { commandName: item.localCommandName ?? item.name }
+      ).catch((error) => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Local command failed',
+      })).then((result) => {
+        if (!result.success) traceLauncher('run-local-command-error', { error: result.error ?? 'Local command failed' });
+      });
+      commandsAPI.launcherClose({ skipActivation: true });
+      return;
+    }
     if (options.openFieldTheoryTarget && !fieldTheoryTarget) return;
     if (fieldTheoryTarget) {
       if (options.openFieldTheoryTarget) {
@@ -1603,7 +1678,17 @@ function CommandLauncher() {
         }
         return;
       }
-      if (options.insertWikiLink || item.type === 'command') {
+      if (item.type === 'command' && !options.insertWikiLink) {
+        void commandsAPI.runLocalCommand({ commandName: item.name }).catch((error) => ({
+          success: false,
+          error: error instanceof Error ? error.message : 'Local command failed',
+        })).then((result) => {
+          if (!result.success) traceLauncher('run-local-command-error', { error: result.error ?? 'Local command failed' });
+        });
+        commandsAPI.launcherClose({ skipActivation: true });
+        return;
+      }
+      if (options.insertWikiLink) {
         const result = await commandsAPI.insertMarkdownText(getWikiLinkText(item)).catch((error) => ({
           success: false,
           error: error instanceof Error ? error.message : 'Insert failed',

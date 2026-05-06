@@ -74,10 +74,12 @@ describe('CommandsManager default internal commands', () => {
     expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('Refactor those.');
     expect(readFileSync(join(defaultDir, 'review.md'), 'utf8')).toContain('Feel free to use the questions command');
     expect(readFileSync(join(defaultDir, 'questions.md'), 'utf8')).toContain('Ask me as many questions');
+    expect(readFileSync(join(defaultDir, 'improve.md'), 'utf8')).toContain('Improve the selected text');
     expect(readFileSync(join(defaultDir, 'commit.md'), 'utf8')).toContain('# Remove AI code slop');
 
     expect(manager.getCommands().map(command => command.name).sort()).toEqual([
       'commit',
+      'improve',
       'questions',
       'refactor',
       'review',
@@ -177,6 +179,7 @@ describe('CommandsManager default internal commands', () => {
     expect(created).toBe(defaultDir);
     expect(manager.getCommands().map(command => command.name).sort()).toEqual([
       'commit',
+      'improve',
       'questions',
       'refactor',
       'review',

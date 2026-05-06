@@ -43,6 +43,7 @@ export const ClipboardIPCChannels = {
   // Local LLM model management
   GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
   GET_LOCAL_LLM_STATUS: 'clipboard:getLocalLLMStatus',
+  GET_LOCAL_LLM_HEALTH: 'clipboard:getLocalLLMHealth',
   GET_LOCAL_LLM_SELECTED: 'clipboard:getLocalLLMSelected',
   SET_LOCAL_LLM_SELECTED: 'clipboard:setLocalLLMSelected',
   DOWNLOAD_LOCAL_LLM: 'clipboard:downloadLocalLLM',

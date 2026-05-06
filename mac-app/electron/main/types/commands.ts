@@ -19,10 +19,12 @@ export const CommandsIPCChannels = {
 
   // Direct invocation (from command launcher)
   INVOKE_COMMAND: 'commands:invoke',
+  RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
 
   // Events
   COMMANDS_CHANGED: 'commands:commandsChanged',
   DIRECTORY_CHANGED: 'commands:directoryChanged',
+  LOCAL_COMMAND_STATUS: 'commands:localCommandStatus',
 
   // Multi-directory management
   INITIALIZE: 'commands:initialize',
@@ -57,6 +59,40 @@ export interface PortableCommandInfo {
   name: string;           // Command name (filename without extension)
   displayName: string;    // Human-readable name
   filePath: string;       // Full path to the markdown file
+}
+
+export type LocalCommandRunMode = 'document' | 'selection';
+
+export interface LocalCommandSelectionInput {
+  start?: number;
+  end?: number;
+  text?: string;
+}
+
+export interface LocalCommandRunRequest {
+  commandName?: string;
+  customInstruction?: string;
+  mode?: LocalCommandRunMode;
+  selection?: LocalCommandSelectionInput | null;
+}
+
+export interface LocalCommandRunResult {
+  success: boolean;
+  error?: string;
+  filePath?: string;
+  commandName?: string;
+  mode?: LocalCommandRunMode;
+}
+
+export interface LocalCommandStatus {
+  status: 'running' | 'success' | 'error' | 'notice';
+  message: string;
+  commandName?: string;
+  filePath?: string;
+  mode?: LocalCommandRunMode;
+  phase?: string;
+  error?: string;
+  updatedAt: number;
 }
 
 /**
