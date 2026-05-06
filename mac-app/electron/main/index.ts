@@ -8354,19 +8354,9 @@ async function initTranscriberSystem(): Promise<void> {
   });
   commandLauncherWindow.preload();
 
-  // Set up escape key priority: dismiss clipboard history before canceling recording
-  transcriberManager.setClipboardHistoryVisibilityChecker(() => {
-    return clipboardHistoryWindow?.isVisible() ?? false;
-  });
-  
   // Skip auto-paste only when draw canvas is actively visible
   transcriberManager.setSketchModeChecker(() => {
     return (clipboardHistoryWindow?.isSketchModeActive() && clipboardHistoryWindow?.isVisible()) ?? false;
-  });
-  
-  // Listen for dismiss event from escape key handler
-  transcriberManager.on('dismiss-clipboard-history', () => {
-    clipboardHistoryWindow?.hide(false, 'transcriber-dismiss'); // false = don't hide the app (recording continues)
   });
 
   // Initialize auth manager first - single source of truth for authentication.
