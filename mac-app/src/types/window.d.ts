@@ -690,6 +690,7 @@ interface OnboardingAPI {
  */
 interface UpdaterAPI {
   getVersion: () => string;
+  isEnabled: () => boolean;
   getStatus: () => Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null>;
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;

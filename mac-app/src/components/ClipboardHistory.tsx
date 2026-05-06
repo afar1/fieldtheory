@@ -1051,6 +1051,7 @@ export default function ClipboardHistory() {
 
   // App version for footer display.
   const [appVersion] = useState(() => window.updaterAPI?.getVersion?.() || '0.0.0');
+  const [updaterEnabled] = useState(() => window.updaterAPI?.isEnabled?.() ?? true);
   
   // Release notes popup - shows once automatically after update, or manually via toggle button.
   const [showReleaseNotes, setShowReleaseNotes] = useState(false);
@@ -1415,6 +1416,7 @@ export default function ClipboardHistory() {
   // Subscribe to update events for in-app notification.
   useEffect(() => {
     if (!window.updaterAPI) return;
+    if (!updaterEnabled) return;
     
     // Query current update status on mount (in case we missed the IPC event).
     window.updaterAPI.getStatus().then((info) => {
@@ -1458,7 +1460,7 @@ export default function ClipboardHistory() {
     ];
     
     return () => cleanups.forEach(cleanup => cleanup());
-  }, []);
+  }, [updaterEnabled]);
 
   const [currentStatIndex, setCurrentStatIndex] = useState(0);
   const [statFading, setStatFading] = useState(false);
@@ -7270,7 +7272,7 @@ export default function ClipboardHistory() {
                 onMouseLeave={() => setVersionHovered(false)}
                 style={{ display: 'flex', gap: '6px', alignItems: 'center' }}
               >
-                {versionHovered ? (
+                {versionHovered && updaterEnabled ? (
                   updateStatus === 'uptodate' ? (
                     <span style={{ color: theme.success, fontSize: '9px' }}>
                       Up to date ✓

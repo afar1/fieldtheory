@@ -98,13 +98,13 @@ class FakeAudioManager extends EventEmitter {
   clearUserOverride = vi.fn();
 }
 
-function createTrayManager(): { manager: TrayManager; tray: InstanceType<typeof electronMock.MockTray> } {
+function createTrayManager(options: { checkForUpdates?: () => void } = {}): { manager: TrayManager; tray: InstanceType<typeof electronMock.MockTray> } {
   const audioManager = new FakeAudioManager();
   const preferencesManager = {
     get: () => ({ onboardingComplete: true }),
   };
   const manager = new TrayManager(audioManager as any, undefined, preferencesManager as any);
-  manager.init();
+  manager.init(undefined, options.checkForUpdates);
   const tray = electronMock.MockTray.instances[0];
   return { manager, tray };
 }
@@ -142,5 +142,30 @@ describe('TrayManager recording waveform title', () => {
 
     manager.setRecordingActive(true);
     expect(tray.titles.at(-1)).toBe('▁▁▁▁▁▁▁ •2');
+  });
+});
+
+describe('TrayManager update menu', () => {
+  beforeEach(() => {
+    electronMock.MockTray.instances = [];
+    vi.clearAllMocks();
+  });
+
+  it('omits the update item when updates are disabled', () => {
+    const { tray } = createTrayManager();
+    const items = tray.contextMenu as Array<{ label?: string }>;
+
+    expect(items.some((item) => item.label?.includes('Update'))).toBe(false);
+  });
+
+  it('shows the update item when a check callback is provided', () => {
+    const checkForUpdates = vi.fn();
+    const { tray } = createTrayManager({ checkForUpdates });
+    const items = tray.contextMenu as Array<{ label?: string; click?: () => void }>;
+    const item = items.find((candidate) => candidate.label === 'Check for Updates…');
+
+    expect(item).toBeDefined();
+    item?.click?.();
+    expect(checkForUpdates).toHaveBeenCalledTimes(1);
   });
 });
