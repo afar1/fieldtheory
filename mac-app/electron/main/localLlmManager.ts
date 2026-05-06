@@ -98,7 +98,7 @@ export function isLocalLlmModelId(value: unknown): value is LocalLlmModelId {
 }
 
 export function resolveLocalLlmHarness(value: unknown): LocalLlmHarness {
-  return value === 'direct' ? 'direct' : 'codex';
+  return value === 'codex' ? 'codex' : 'direct';
 }
 
 export function stripWholeMarkdownFence(text: string): string {
@@ -113,22 +113,38 @@ export function stripWholeMarkdownFence(text: string): string {
   return match ? match[1].trim() : trimmed;
 }
 
-export function buildLocalCommandPrompt(input: LocalCommandPromptInput): string {
+type LocalCommandOutputMode = 'markdown' | 'json';
+
+export function buildLocalCommandPrompt(input: LocalCommandPromptInput, outputMode: LocalCommandOutputMode = 'markdown'): string {
+  const outputRules = outputMode === 'json'
+    ? [
+        '- Return exactly one JSON object.',
+        '- Put the complete replacement Markdown document in replacementMarkdown.',
+        '- Do not add explanations before or after the JSON.',
+        '- Do not wrap the JSON in a code fence.',
+        '- Do not include private reasoning, thinking tags, or status text.',
+      ]
+    : [
+        '- Return only the complete replacement Markdown document.',
+        '- Do not add explanations before or after the Markdown.',
+        '- Do not wrap the answer in a code fence.',
+        '- Do not include private reasoning, thinking tags, JSON metadata, or status text.',
+      ];
   return [
     'You are running a local Field Theory command against a markdown document.',
     '',
     'Rules:',
     '- Use the command markdown as the function instructions.',
-    '- Return exactly one JSON object.',
-    '- Put the complete replacement Markdown document in replacementMarkdown.',
-    '- Do not add explanations before or after the JSON.',
-    '- Do not wrap the JSON in a code fence.',
-    '- Do not include private reasoning, thinking tags, or status text.',
+    ...outputRules,
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- If the source is incomplete, keep it as a clarification task instead of inventing missing intent.',
-    '',
-    'JSON shape:',
-    '{"replacementMarkdown":"<complete replacement Markdown document>","summary":"<one sentence summary>"}',
+    ...(outputMode === 'json'
+      ? [
+          '',
+          'JSON shape:',
+          '{"replacementMarkdown":"<complete replacement Markdown document>","summary":"<one sentence summary>"}',
+        ]
+      : []),
     '',
     `Command name: ${input.commandName}`,
     '',
@@ -147,23 +163,38 @@ export function buildLocalCommandPrompt(input: LocalCommandPromptInput): string 
   ].join('\n');
 }
 
-export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPromptInput): string {
+export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPromptInput, outputMode: LocalCommandOutputMode = 'markdown'): string {
+  const outputRules = outputMode === 'json'
+    ? [
+        '- Return exactly one JSON object.',
+        '- Put only the replacement text for the selected markdown in replacementText.',
+        '- Do not return the full document.',
+        '- Do not add explanations before or after the JSON.',
+        '- Do not wrap the JSON in a code fence.',
+        '- Do not include private reasoning, thinking tags, or status text.',
+      ]
+    : [
+        '- Return only the replacement text for the selected markdown.',
+        '- Do not return the full document.',
+        '- Do not add explanations before or after the replacement.',
+        '- Do not wrap the answer in a code fence.',
+        '- Do not include private reasoning, thinking tags, JSON metadata, or status text.',
+      ];
   return [
     'You are running a local Field Theory command against selected markdown text.',
     '',
     'Rules:',
     '- Use the command markdown as the function instructions.',
-    '- Return exactly one JSON object.',
-    '- Put only the replacement text for the selected markdown in replacementText.',
-    '- Do not return the full document.',
-    '- Do not add explanations before or after the JSON.',
-    '- Do not wrap the JSON in a code fence.',
-    '- Do not include private reasoning, thinking tags, or status text.',
+    ...outputRules,
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- Preserve surrounding markdown style unless the command explicitly asks to change it.',
-    '',
-    'JSON shape:',
-    '{"replacementText":"<replacement text for the selected markdown>","summary":"<one sentence summary>"}',
+    ...(outputMode === 'json'
+      ? [
+          '',
+          'JSON shape:',
+          '{"replacementText":"<replacement text for the selected markdown>","summary":"<one sentence summary>"}',
+        ]
+      : []),
     '',
     `Command name: ${input.commandName}`,
     '',
@@ -193,6 +224,17 @@ export function parseLocalCommandReplacement(raw: string, replacementField: 'rep
   const replacement = parsed?.[replacementField];
   if (typeof replacement === 'string') {
     return stripWholeMarkdownFence(replacement);
+  }
+  throw new Error(`Local command returned invalid output; expected JSON with ${replacementField}. No changes were saved.`);
+}
+
+export function parseSimpleLocalCommandReplacement(raw: string): string {
+  const cleaned = stripWholeMarkdownFence(raw);
+  if (/^\s*\{/.test(cleaned) || /"replacement(?:Markdown|Text)"\s*:/.test(cleaned)) {
+    throw new Error('Local command returned structured output in simple mode. No changes were saved.');
+  }
+  if (/^\s*(?:i(?:'|’)ll|i will|i see|here(?:'|’)s|here is|sure|okay|great)\b/i.test(cleaned)) {
+    throw new Error('Local command returned assistant text instead of replacement Markdown. No changes were saved.');
   }
   return cleaned;
 }
@@ -330,15 +372,21 @@ export class LocalLlmManager {
   }
 
   async runReplacementCommand(input: LocalCommandPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {
-    const prompt = buildLocalCommandPrompt(input);
+    const harness = this.getHarness();
+    const prompt = buildLocalCommandPrompt(input, harness === 'codex' ? 'json' : 'markdown');
     const raw = await this.generate(prompt, { maxTokens: 4096, temperature: 0.1, onProgress: options.onProgress });
-    return parseLocalCommandReplacement(raw, 'replacementMarkdown');
+    return harness === 'codex'
+      ? parseLocalCommandReplacement(raw, 'replacementMarkdown')
+      : parseSimpleLocalCommandReplacement(raw);
   }
 
   async runSelectionCommand(input: LocalCommandSelectionPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {
-    const prompt = buildLocalSelectionCommandPrompt(input);
+    const harness = this.getHarness();
+    const prompt = buildLocalSelectionCommandPrompt(input, harness === 'codex' ? 'json' : 'markdown');
     const raw = await this.generate(prompt, { maxTokens: 2048, temperature: 0.1, onProgress: options.onProgress });
-    return parseLocalCommandReplacement(raw, 'replacementText');
+    return harness === 'codex'
+      ? parseLocalCommandReplacement(raw, 'replacementText')
+      : parseSimpleLocalCommandReplacement(raw);
   }
 
   stop(): void {

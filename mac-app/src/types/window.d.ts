@@ -1188,6 +1188,7 @@ interface LocalCommandRunResult {
   filePath?: string;
   commandName?: string;
   mode?: LocalCommandRunMode;
+  runId?: string;
 }
 
 interface LocalCommandStatus {
@@ -1198,6 +1199,7 @@ interface LocalCommandStatus {
   commandName?: string;
   filePath?: string;
   mode?: LocalCommandRunMode;
+  runId?: string;
   phase?: string;
   changedLines?: number;
   changedBytes?: number;
