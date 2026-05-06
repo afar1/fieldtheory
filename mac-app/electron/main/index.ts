@@ -83,7 +83,7 @@ import { AccountStatusManager } from './accountStatusManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
-import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId } from './localLlmManager';
+import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
 import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
@@ -513,6 +513,30 @@ function emitLocalCommandStatus(status: Omit<LocalCommandStatus, 'updatedAt'>): 
     }
   });
   return payload;
+}
+
+function compactLocalCommandDetail(value: string | undefined, maxLength = 140): string | undefined {
+  const compacted = value?.replace(/\s+/g, ' ').trim();
+  if (!compacted) return undefined;
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength - 3)}...`
+    : compacted;
+}
+
+function summarizeLocalCommandChange(before: string, after: string): { changedLines: number; changedBytes: number; detail: string } {
+  const beforeLines = before.split(/\r?\n/);
+  const afterLines = after.split(/\r?\n/);
+  let changedLines = 0;
+  const maxLines = Math.max(beforeLines.length, afterLines.length);
+  for (let index = 0; index < maxLines; index += 1) {
+    if (beforeLines[index] !== afterLines[index]) {
+      changedLines += 1;
+    }
+  }
+  const changedBytes = Buffer.byteLength(after, 'utf8') - Buffer.byteLength(before, 'utf8');
+  const lineDetail = changedLines === 1 ? '1 line changed' : `${changedLines} lines changed`;
+  const byteDetail = changedBytes === 0 ? 'same size' : `${changedBytes > 0 ? '+' : ''}${changedBytes} bytes`;
+  return { changedLines, changedBytes, detail: `${lineDetail}, ${byteDetail}` };
 }
 
 function normalizeLocalCommandRequest(raw: unknown): LocalCommandRunRequest | null {
@@ -6932,6 +6956,19 @@ function setupClipboardIPCHandlers(): void {
         targetPath: activeLibraryFileContext.filePath,
         mode,
       });
+      const targetFilePath = activeLibraryFileContext.filePath;
+      const emitHarnessProgress = (event: LocalLlmProgressEvent) => {
+        emitLocalCommandStatus({
+          status: 'running',
+          message: event.message,
+          detail: compactLocalCommandDetail(event.detail),
+          eventKind: event.kind,
+          commandName: loaded.name,
+          filePath: targetFilePath,
+          mode,
+          phase: event.phase ?? 'generating',
+        });
+      };
 
       emitLocalCommandStatus({
         status: 'running',
@@ -6965,6 +7002,8 @@ function setupClipboardIPCHandlers(): void {
           targetPath: activeLibraryFileContext.filePath,
           targetContent,
           selectedText: selection.text,
+        }, {
+          onProgress: emitHarnessProgress,
         });
         replacement = `${targetContent.slice(0, selection.start)}${selectedReplacement}${targetContent.slice(selection.end)}`;
       } else {
@@ -6974,16 +7013,23 @@ function setupClipboardIPCHandlers(): void {
           targetTitle: activeLibraryFileContext.title,
           targetPath: activeLibraryFileContext.filePath,
           targetContent,
+        }, {
+          onProgress: emitHarnessProgress,
         });
       }
 
+      const changeSummary = summarizeLocalCommandChange(targetContent, replacement);
       emitLocalCommandStatus({
         status: 'running',
         message: mode === 'selection' ? 'Saving improved text...' : 'Saving local command result...',
+        detail: changeSummary.detail,
+        eventKind: 'file_change',
         commandName: loaded.name,
         filePath: activeLibraryFileContext.filePath,
         mode,
         phase: 'saving',
+        changedLines: changeSummary.changedLines,
+        changedBytes: changeSummary.changedBytes,
       });
 
       const saveResult = activeLibraryFileContext.type === 'wiki'
@@ -7023,10 +7069,14 @@ function setupClipboardIPCHandlers(): void {
         message: mode === 'selection'
           ? 'Improved selected text'
           : `Ran ${customInstruction ? 'local instruction' : loaded.name} locally`,
+        detail: changeSummary.detail,
+        eventKind: 'file_change',
         commandName: loaded.name,
         filePath: activeLibraryFileContext.filePath,
         mode,
         phase: 'done',
+        changedLines: changeSummary.changedLines,
+        changedBytes: changeSummary.changedBytes,
       });
       return { success: true, filePath: activeLibraryFileContext.filePath, commandName: loaded.name, mode };
     } catch (error) {

@@ -36,6 +36,24 @@ export function formatTimeAgo(timestamp: number): string {
 }
 
 // =============================================================================
+// Local Instruction Fallback
+// =============================================================================
+
+export function shouldOfferLocalInstructionFallback(input: {
+  query: string;
+  resultCount: number;
+  fieldTheoryActive: boolean;
+  hasActiveLibraryFileContext: boolean;
+  inScopedMode?: boolean;
+}): boolean {
+  return input.query.trim().length > 0
+    && input.resultCount === 0
+    && input.fieldTheoryActive
+    && input.hasActiveLibraryFileContext
+    && !input.inScopedMode;
+}
+
+// =============================================================================
 // Library Markdown Flattening
 // =============================================================================
 

@@ -24,6 +24,9 @@ import {
   buildLocalSelectionCommandPrompt,
   DEFAULT_LOCAL_LLM_MODEL,
   LocalLlmManager,
+  parseLocalLlmProgressEvent,
+  parseLocalCommandReplacement,
+  resolveLocalLlmHarness,
   stripWholeMarkdownFence,
 } from './localLlmManager';
 
@@ -52,6 +55,19 @@ describe('LocalLlmManager', () => {
     }));
   });
 
+  it('uses the Codex OSS harness by default and allows direct fallback mode', () => {
+    const manager = new LocalLlmManager({ userDataPath: tempDir });
+    const directManager = new LocalLlmManager({
+      userDataPath: tempDir,
+      env: { FT_LOCAL_LLM_HARNESS: 'direct' },
+    });
+
+    expect(resolveLocalLlmHarness(undefined)).toBe('codex');
+    expect(resolveLocalLlmHarness('direct')).toBe('direct');
+    expect(manager.getHarness()).toBe('codex');
+    expect(directManager.getHarness()).toBe('direct');
+  });
+
   it('builds a replacement prompt from command markdown and target markdown', () => {
     const prompt = buildLocalCommandPrompt({
       commandName: 'tidy',
@@ -62,7 +78,8 @@ describe('LocalLlmManager', () => {
     });
 
     expect(prompt).toContain('Use the command markdown as the function instructions.');
-    expect(prompt).toContain('Return only the complete replacement Markdown document.');
+    expect(prompt).toContain('Return exactly one JSON object.');
+    expect(prompt).toContain('replacementMarkdown');
     expect(prompt).toContain('Command name: tidy');
     expect(prompt).toContain('# Tidy\nGroup related tasks.');
     expect(prompt).toContain('Document path: /tmp/Scratchpad.md');
@@ -80,7 +97,8 @@ describe('LocalLlmManager', () => {
     });
 
     expect(prompt).toContain('selected markdown text');
-    expect(prompt).toContain('Return only the replacement text for the selected markdown.');
+    expect(prompt).toContain('Return exactly one JSON object.');
+    expect(prompt).toContain('replacementText');
     expect(prompt).toContain('Do not return the full document.');
     expect(prompt).toContain('Command name: improve');
     expect(prompt).toContain('rough sentence');
@@ -89,7 +107,39 @@ describe('LocalLlmManager', () => {
 
   it('strips whole markdown fences and common reasoning wrappers from model output', () => {
     expect(stripWholeMarkdownFence('```markdown\n# Clean\n```')).toBe('# Clean');
+    expect(stripWholeMarkdownFence('```json\n{"replacementText":"clean"}\n```')).toBe('{"replacementText":"clean"}');
     expect(stripWholeMarkdownFence('<think>hidden</think>\n```md\n# Clean\n```<eos>')).toBe('# Clean');
+  });
+
+  it('extracts structured replacement fields from local harness output', () => {
+    expect(parseLocalCommandReplacement(
+      JSON.stringify({ replacementMarkdown: '# Clean\n\nBody', summary: 'Cleaned up.' }),
+      'replacementMarkdown',
+    )).toBe('# Clean\n\nBody');
+    expect(parseLocalCommandReplacement(
+      'Here is the result:\n```json\n{"replacementText":"clean sentence"}\n```',
+      'replacementText',
+    )).toBe('clean sentence');
+  });
+
+  it('normalizes local runner progress events', () => {
+    expect(parseLocalLlmProgressEvent({
+      event: 'progress',
+      kind: 'model_output',
+      message: 'Gemma is generating locally',
+      detail: ' gemma-4 ',
+      phase: 'model',
+    })).toEqual({
+      kind: 'model_output',
+      message: 'Gemma is generating locally',
+      detail: 'gemma-4',
+      phase: 'model',
+    });
+    expect(parseLocalLlmProgressEvent({ event: 'progress', message: '' })).toBeNull();
+  });
+
+  it('falls back to raw markdown when local harness output is not JSON', () => {
+    expect(parseLocalCommandReplacement('```markdown\n# Clean\n```', 'replacementMarkdown')).toBe('# Clean');
   });
 
   it('resolves model paths from explicit env before bundled paths', () => {
@@ -157,7 +207,7 @@ describe('LocalLlmManager', () => {
     let capturedArgs: string[] = [];
     const server = {
       start: vi.fn(async () => {}),
-      send: vi.fn(async () => ({ ok: true, text: '```markdown\n# Clean\n```' })),
+      send: vi.fn(async () => ({ ok: true, text: JSON.stringify({ replacementMarkdown: '# Clean' }) })),
       stop: vi.fn(),
     };
     const manager = new LocalLlmManager({
@@ -181,11 +231,62 @@ describe('LocalLlmManager', () => {
     })).resolves.toBe('# Clean');
 
     expect(server.start).toHaveBeenCalledTimes(1);
-    expect(server.send).toHaveBeenCalledWith(expect.objectContaining({
-      cmd: 'generate',
-      temperature: 0.1,
-    }));
-    expect(capturedArgs).toEqual(expect.arrayContaining(['--model', modelPath]));
+    expect(server.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cmd: 'generate',
+        harness: 'codex',
+        temperature: 0.1,
+      }),
+      expect.objectContaining({ onEvent: expect.any(Function) }),
+    );
+    expect(capturedArgs).toEqual(expect.arrayContaining(['--model', modelPath, '--codex-model', DEFAULT_LOCAL_LLM_MODEL]));
+  });
+
+  it('forwards local runner progress events while running commands', async () => {
+    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    fs.closeSync(fs.openSync(modelPath, 'w'));
+    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+
+    const server = {
+      start: vi.fn(async () => {}),
+      send: vi.fn(async (_cmd: Record<string, unknown>, options?: { onEvent?: (event: Record<string, unknown>) => void }) => {
+        options?.onEvent?.({
+          event: 'progress',
+          kind: 'status',
+          message: 'Codex local harness started',
+          detail: 'Gemma 4',
+          phase: 'codex',
+        });
+        return { ok: true, text: JSON.stringify({ replacementMarkdown: '# Clean' }) };
+      }),
+      stop: vi.fn(),
+    };
+    const manager = new LocalLlmManager({
+      userDataPath: tempDir,
+      resourcesPath: tempDir,
+      appPath: tempDir,
+      cwd: process.cwd(),
+      env: { FT_LOCAL_LLM_MODEL_PATH: modelPath },
+      serverFactory: () => server,
+    });
+    const events: unknown[] = [];
+
+    await expect(manager.runReplacementCommand({
+      commandName: 'tidy',
+      commandContent: 'Clean this up.',
+      targetTitle: 'Note',
+      targetPath: '/tmp/Note.md',
+      targetContent: 'mess',
+    }, {
+      onProgress: (event) => events.push(event),
+    })).resolves.toBe('# Clean');
+
+    expect(events).toEqual([{
+      kind: 'status',
+      message: 'Codex local harness started',
+      detail: 'Gemma 4',
+      phase: 'codex',
+    }]);
   });
 
   it('runs selected-text commands through a local stdio server', async () => {
@@ -195,7 +296,7 @@ describe('LocalLlmManager', () => {
 
     const server = {
       start: vi.fn(async () => {}),
-      send: vi.fn(async () => ({ ok: true, text: '```markdown\nclean sentence\n```' })),
+      send: vi.fn(async () => ({ ok: true, text: JSON.stringify({ replacementText: 'clean sentence' }) })),
       stop: vi.fn(),
     };
     const manager = new LocalLlmManager({
@@ -216,10 +317,13 @@ describe('LocalLlmManager', () => {
       selectedText: 'rough sentence',
     })).resolves.toBe('clean sentence');
 
-    expect(server.send).toHaveBeenCalledWith(expect.objectContaining({
-      cmd: 'generate',
-      maxTokens: 2048,
-      temperature: 0.1,
-    }));
+    expect(server.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cmd: 'generate',
+        maxTokens: 2048,
+        temperature: 0.1,
+      }),
+      expect.objectContaining({ onEvent: expect.any(Function) }),
+    );
   });
 });
