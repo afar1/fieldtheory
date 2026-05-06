@@ -20,6 +20,7 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
+import { appendVisibilityTrace, captureVisibilityCaller } from './visibilityTrace';
 
 const log = createLogger('CommandLauncher');
 
@@ -358,6 +359,10 @@ export class CommandLauncherWindow {
     } else {
       // Fallback to app.hide() if we don't know the previous app
       appendCommandLauncherTrace('hide-app-hide-fallback');
+      appendVisibilityTrace('command-launcher.app-hide', {
+        reason: 'hide-no-previous-app',
+        caller: captureVisibilityCaller(),
+      });
       app.hide();
     }
   }
@@ -370,6 +375,10 @@ export class CommandLauncherWindow {
       if (bundleId.includes('"') || bundleId.includes("'")) {
         log.error('Invalid bundleId contains quotes:', bundleId);
         appendCommandLauncherTrace('activate-previous-app-invalid-bundle', { bundleId });
+        appendVisibilityTrace('command-launcher.app-hide', {
+          reason: 'invalid-previous-app-bundle',
+          caller: captureVisibilityCaller(),
+        });
         app.hide();
         return;
       }
@@ -380,6 +389,12 @@ export class CommandLauncherWindow {
     } catch (error) {
       log.error('Failed to activate previous app:', error);
       appendCommandLauncherTrace('activate-previous-app-error', { bundleId, error });
+      appendVisibilityTrace('command-launcher.app-hide', {
+        reason: 'activate-previous-app-error',
+        bundleId,
+        error,
+        caller: captureVisibilityCaller(),
+      });
       app.hide(); // Fallback
     }
   }
