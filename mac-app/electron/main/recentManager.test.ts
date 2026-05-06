@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { upsertRecent, removeRecent, type RecentEntry } from './recentManager';
+import { upsertRecent, removeRecent, isLegacyCommandsRecentEntry, type RecentEntry } from './recentManager';
 
 const e = (kind: 'wiki' | 'external', p: string, t: number): RecentEntry => ({
   kind,
@@ -59,5 +59,13 @@ describe('removeRecent', () => {
     const before = [e('wiki', 'a', 1)];
     const out = removeRecent(before, 'wiki', 'missing');
     expect(out).toEqual(before);
+  });
+});
+
+describe('isLegacyCommandsRecentEntry', () => {
+  it('identifies old Field Theory command files as stale external recent items', () => {
+    expect(isLegacyCommandsRecentEntry(e('external', '/Users/afar/.fieldtheory/commands/refactor.md', 1))).toBe(true);
+    expect(isLegacyCommandsRecentEntry(e('external', '/Users/afar/.fieldtheory/library/Commands/refactor.md', 1))).toBe(false);
+    expect(isLegacyCommandsRecentEntry(e('wiki', 'Commands/refactor', 1))).toBe(false);
   });
 });
