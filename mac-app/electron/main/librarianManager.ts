@@ -6,7 +6,7 @@ import { EventEmitter } from 'events';
 import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
-import { libraryDir } from './fieldTheoryPaths';
+import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import {
   existingPathInsideRoots,
@@ -85,7 +85,7 @@ const DEFAULT_LIBRARIAN_RULE_CONTENT =
 const DEFAULT_LIBRARY_README_HELP = `## Useful Shortcuts
 
 Invoke a portable command from any app with Command+Shift+K, type the command name, then press Enter.
-Create or edit portable commands in Field Theory's Commands tab; each one is a Markdown file in a watched commands folder such as ~/.fieldtheory/commands/.
+Create or edit portable commands as Markdown files in a watched commands folder such as ~/.fieldtheory/library/Commands/.
 Create a scratchpad note from anywhere with Control+Option+Command+Space.
 Inside Library, use Command+N to create a page in the selected folder and Command+Shift+N to create a folder.
 Use Command+F or / to search, Command+, to switch between rendered and Markdown, and Command+S to save Markdown edits.
@@ -147,7 +147,7 @@ Use this folder for rough captures before they become entries.
     relPath: 'debates',
     ...buildDefaultFolderReadme(`# README: Debates
 
-Run the portable command at ~/.fieldtheory/commands/debate.md when you want a debate.
+Run the portable command at ~/.fieldtheory/library/Commands/debate.md when you want a debate.
 It starts a structured comparison between models or approaches, then saves the result so you can come back to the reasoning later.
 `, `# Debates
 
@@ -160,11 +160,11 @@ Use the portable command at .cursor/commands/debate.md when you want one generat
     relPath: 'Plans',
     ...buildDefaultFolderReadme(`# README: Plans
 
-Run the portable command at ~/.fieldtheory/commands/plan.md when you want a plan saved here.
+Run the portable command at ~/.fieldtheory/library/Commands/plan.md when you want a plan saved here.
 It turns the current proposal or next steps into a Markdown plan with a clear filename, outside any repo, so the plan is easy to find later.
 `, `# Plans
 
-Run the portable command at ~/.fieldtheory/commands/plan.md when you want a plan saved here.
+Run the portable command at ~/.fieldtheory/library/Commands/plan.md when you want a plan saved here.
 It turns the current proposal or next steps into a Markdown plan with a clear filename, outside any repo, so the plan is easy to find later.
 `),
   },
@@ -174,7 +174,7 @@ It turns the current proposal or next steps into a Markdown plan with a clear fi
     ...buildDefaultFolderReadme(`# README: Entries
 
 Entries are durable wiki notes.
-Use portable commands from ~/.fieldtheory/commands/ when you want the app or an agent to create one.
+Use portable commands from ~/.fieldtheory/library/Commands/ when you want the app or an agent to create one.
 `, `# Entries
 
 Entries are durable wiki notes.
@@ -4656,11 +4656,11 @@ You may find the reading changes what you think matters about the task.`;
    * This is the single source of truth for Librarian instructions.
    */
   private getLibrarianCommandPath(): string {
-    return path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md');
+    return path.join(commandsDir(), 'librarian.md');
   }
 
   private getFieldTheoryMarkdownCommandPath(): string {
-    return path.join(os.homedir(), '.fieldtheory', 'commands', 'write-ft-markdown.md');
+    return path.join(commandsDir(), 'write-ft-markdown.md');
   }
 
   private writeFieldTheoryMarkdownCommandFile(): boolean {
@@ -4681,7 +4681,7 @@ You may find the reading changes what you think matters about the task.`;
   }
 
   /**
-   * Write the full Librarian instructions to ~/.fieldtheory/commands/librarian.md
+   * Write the full Librarian instructions to the default Field Theory commands directory.
    * This is the single source of truth that CLAUDE.md references.
    */
   private writeLibrarianCommandFile(): boolean {
@@ -5868,7 +5868,7 @@ PreToolUse Auto-Approve Hook for Field Theory Read Permissions
 
 Auto-approves Read/Write/Edit operations for:
 - ~/Library/Application Support/fieldtheory-mac/users/*/figures/* (screenshot figures)
-- ~/.fieldtheory/commands/* and .cursor/commands/* (portable commands)
+- ~/.fieldtheory/library/Commands/*, ~/.fieldtheory/commands/*, and .cursor/commands/* (portable commands)
 
 This is separate from Librarian functionality.
 Never blocks - only auto-approves or passes through to normal flow.
@@ -5899,7 +5899,7 @@ def main():
             sys.exit(0)
 
         # Check for portable commands.
-        if "/.fieldtheory/commands/" in file_path or "/.cursor/commands/" in file_path:
+        if "/.fieldtheory/library/Commands/" in file_path or "/.fieldtheory/commands/" in file_path or "/.cursor/commands/" in file_path:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",

@@ -963,7 +963,7 @@ describe('getLauncherAreaActionIdForQuery', () => {
   it('maps exact area queries to app-area actions', () => {
     expect(getLauncherAreaActionIdForQuery('clipboard')).toBe('open-history');
     expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
-    expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-commands');
+    expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-library');
   });
 
   it('does not route partial area words', () => {
@@ -1009,7 +1009,7 @@ describe('SQUARES_ACTION_DEFS', () => {
     // These are built-in action IDs that should NOT be routed to squaresAPI
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
-      'open-library', 'open-commands', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
+      'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
       'undo-library-move', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
@@ -1072,17 +1072,15 @@ describe('buildBuiltInLauncherActions', () => {
     expect(bookmarksAction?.keywords).toEqual(expect.arrayContaining(['bookmarks', 'view bookmarks']));
   });
 
-  it('includes app-area actions for library and commands queries', () => {
+  it('includes commands keywords on the Library app-area action', () => {
     const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
 
     expect(actions.find((action) => action.actionId === 'open-library')).toEqual(expect.objectContaining({
       name: 'library',
       displayName: 'Open Library',
+      keywords: expect.arrayContaining(['commands', 'portable commands']),
     }));
-    expect(actions.find((action) => action.actionId === 'open-commands')).toEqual(expect.objectContaining({
-      name: 'commands',
-      displayName: 'Open Commands',
-    }));
+    expect(actions.find((action) => action.actionId === 'open-commands')).toBeUndefined();
   });
 
   it('includes move and undo move actions', () => {

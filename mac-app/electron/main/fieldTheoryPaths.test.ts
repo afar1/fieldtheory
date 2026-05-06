@@ -20,7 +20,7 @@ describe('Field Theory path contract', () => {
 
     expect(canonicalBookmarkDataDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'bookmarks'));
     expect(canonicalLibraryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library'));
-    expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'commands'));
+    expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'Commands'));
     expect(ideasDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'ideas'));
   });
 
@@ -39,6 +39,17 @@ describe('Field Theory path contract', () => {
     expect(libraryDir(options)).toBe('/tmp/ft-library');
     expect(commandsDir(options)).toBe('/tmp/ft-commands');
     expect(ideasDir(options)).toBe('/tmp/ft-ideas');
+  });
+
+  it('places default commands inside a custom Library root', () => {
+    const options = {
+      homeDir,
+      env: {
+        FT_LIBRARY_DIR: '/tmp/ft-library',
+      },
+    };
+
+    expect(commandsDir(options)).toBe(path.join('/tmp/ft-library', 'Commands'));
   });
 
   it('uses canonical bookmark data when neither bookmark data root exists', () => {

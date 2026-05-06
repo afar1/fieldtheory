@@ -1057,12 +1057,12 @@ describe('default folder readmes', () => {
       expect(readme).toContain('Command+Shift+K');
       expect(readme).toContain('Control+Option+Command+Space');
       expect(readme).toContain('Command+N');
-      expect(readme).toContain("Field Theory's Commands tab");
+      expect(readme).toContain('watched commands folder');
     }
     expect(fs.existsSync(path.join(root, 'artifacts', 'README.md'))).toBe(false);
     expect(fs.readFileSync(path.join(root, 'scratchpad', 'README.md'), 'utf-8')).toContain('Create a Scratchpad note from anywhere');
-    expect(fs.readFileSync(path.join(root, 'debates', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/commands/debate.md');
-    expect(fs.readFileSync(path.join(root, 'Plans', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/commands/plan.md');
+    expect(fs.readFileSync(path.join(root, 'debates', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/library/Commands/debate.md');
+    expect(fs.readFileSync(path.join(root, 'Plans', 'README.md'), 'utf-8')).toContain('~/.fieldtheory/library/Commands/plan.md');
     expect(fs.existsSync(path.join(root, 'bookmarks', 'README.md'))).toBe(false);
     expect(manager.settings.readmesSeeded).toEqual([
       'scratchpad',
