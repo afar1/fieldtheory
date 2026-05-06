@@ -365,14 +365,23 @@ export class CommandsManager extends EventEmitter {
 
     const normalizedLegacyDir = this.normalizePath(legacyDir);
     const beforeWatched = this.settings.watchedDirs.length;
-    this.settings.watchedDirs = this.settings.watchedDirs.filter(dirPath => this.normalizePath(dirPath) !== normalizedLegacyDir);
+    const removedWatchedDirs = this.settings.watchedDirs.filter(dirPath =>
+      isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(dirPath)))
+    );
+    this.settings.watchedDirs = this.settings.watchedDirs.filter(dirPath =>
+      !isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(dirPath)))
+    );
 
     const beforeMobileSync = this.settings.mobileSyncDirs.length;
-    this.settings.mobileSyncDirs = this.settings.mobileSyncDirs.filter(dirPath => this.normalizePath(dirPath) !== normalizedLegacyDir);
+    this.settings.mobileSyncDirs = this.settings.mobileSyncDirs.filter(dirPath =>
+      !isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(dirPath)))
+    );
 
-    this.unwatchDirectory(normalizedLegacyDir);
+    for (const removedDir of removedWatchedDirs) {
+      this.unwatchDirectory(this.normalizePath(this.expandPath(removedDir)));
+    }
     for (const [name, command] of this.commands) {
-      if (isPathInside(normalizedLegacyDir, command.filePath)) {
+      if (isPathInside(normalizedLegacyDir, this.normalizePath(this.expandPath(command.filePath)))) {
         this.commands.delete(name);
       }
     }
@@ -1497,9 +1506,11 @@ End of User Commands
 
     // Only include commands from directories with mobile sync enabled
     for (const command of this.commands.values()) {
+      if (this.isLegacyCommandPath(command.filePath)) continue;
+
       // Check if this command's directory has mobile sync enabled
       const commandDir = path.dirname(command.filePath);
-      const isMobileSynced = this.settings.mobileSyncDirs.some(syncDir =>
+      const isMobileSynced = this.getMobileSyncDirs().some(syncDir =>
         commandDir.startsWith(syncDir)
       );
 
@@ -1533,7 +1544,7 @@ End of User Commands
    * Used for fetching command content when needed.
    */
   async getCommandWithContent(name: string): Promise<SyncableCommand | null> {
-    const command = this.commands.get(name.toLowerCase());
+    const command = this.getCommand(name);
     if (!command) {
       return null;
     }
