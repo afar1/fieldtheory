@@ -36,3 +36,13 @@ export function releaseRepoForBuildChannel(channel: FieldTheoryBuildChannel): st
     ? FIELD_THEORY_EXPERIMENTAL_RELEASE_REPO
     : FIELD_THEORY_PRODUCTION_RELEASE_REPO;
 }
+
+export function isAutoUpdaterEnabledForBuildChannel(channel: FieldTheoryBuildChannel): boolean {
+  return channel === 'production';
+}
+
+export function autoUpdaterReleaseRepoForBuildChannel(channel: FieldTheoryBuildChannel): string | null {
+  return isAutoUpdaterEnabledForBuildChannel(channel)
+    ? releaseRepoForBuildChannel(channel)
+    : null;
+}

@@ -93,7 +93,7 @@ import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFo
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
-import { releaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
+import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import {
@@ -429,6 +429,8 @@ const fieldTheoryBuildChannel = resolveFieldTheoryBuildChannel({
   metadataChannel: readPackagedBuildChannel(),
 });
 const isExperimentalBuild = fieldTheoryBuildChannel === 'experimental';
+const autoUpdaterReleaseRepo = autoUpdaterReleaseRepoForBuildChannel(fieldTheoryBuildChannel);
+const isAutoUpdaterEnabled = autoUpdaterReleaseRepo !== null;
 
 // Pin userData paths explicitly so auth/session storage is shared across release channels.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
@@ -438,14 +440,16 @@ if (isExperimentalBuild) {
   app.setName('Field Theory Experimental');
 }
 
-// Configure autoUpdater for manual update flow.
-autoUpdater.autoDownload = false;
-autoUpdater.allowPrerelease = isExperimentalBuild;
-autoUpdater.setFeedURL({
-  provider: 'github',
-  owner: 'afar1',
-  repo: releaseRepoForBuildChannel(fieldTheoryBuildChannel),
-});
+// Configure autoUpdater for the production manual update flow.
+if (isAutoUpdaterEnabled) {
+  autoUpdater.autoDownload = false;
+  autoUpdater.allowPrerelease = false;
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'afar1',
+    repo: autoUpdaterReleaseRepo,
+  });
+}
 
 let mainWindow: BrowserWindow | null = null;
 let nativeHelper: NativeHelper | null = null;
@@ -1008,6 +1012,14 @@ async function saveAndApplyHotMicDrawerTextSize(value: unknown): Promise<number>
 
 // Track pending update state so windows can query it when they open.
 let pendingUpdateInfo: { status: 'available' | 'downloading' | 'ready'; version: string } | null = null;
+
+function sendUpdateNotAvailable(): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:updateNotAvailable');
+    }
+  });
+}
 
 // Consolidated user state logging - single line showing auth/tier state
 function logUserState(_context: string) {
@@ -9580,12 +9592,13 @@ if (!gotTheLock) {
       });
     }
 
-    // Manual update check function for tray menu.
-    function checkForUpdatesManual(): void {
-      autoUpdater.checkForUpdates().catch((err) => {
-        log.error('Update check failed:', err);
-      });
-    }
+    const checkForUpdatesManual = isAutoUpdaterEnabled
+      ? () => {
+        autoUpdater.checkForUpdates().catch((err) => {
+          log.error('Update check failed:', err);
+        });
+      }
+      : undefined;
 
     await initAudioSystem(checkForUpdatesManual);
     await initTranscriberSystem();
@@ -9643,8 +9656,7 @@ if (!gotTheLock) {
       });
     }
 
-    // Check for updates on startup and periodically (production only).
-    {
+    if (isAutoUpdaterEnabled) {
       // Initial check after 5s delay to not block UI.
       setTimeout(() => {
         autoUpdater.checkForUpdates();
@@ -9654,88 +9666,87 @@ if (!gotTheLock) {
       setInterval(() => {
         autoUpdater.checkForUpdates();
       }, 30 * 60 * 1000);
+
+      // Auto-updater event handlers - send to renderer for in-app notification UI.
+      autoUpdater.on('checking-for-update', () => {
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:checkingForUpdate');
+          }
+        });
+      });
+
+      autoUpdater.on('update-available', (info) => {
+        pendingUpdateInfo = { status: 'available', version: info.version };
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:updateAvailable', { version: info.version });
+          }
+        });
+      });
+
+      autoUpdater.on('update-not-available', (_info) => {
+        sendUpdateNotAvailable();
+      });
+
+      autoUpdater.on('error', (err) => {
+        log.error('Updater error:', err);
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:error', err.message);
+          }
+        });
+      });
+
+      autoUpdater.on('download-progress', (progress) => {
+        const percent = Math.round(progress.percent);
+        if (pendingUpdateInfo) {
+          pendingUpdateInfo.status = 'downloading';
+        }
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:downloadProgress', percent);
+          }
+        });
+      });
+
+      autoUpdater.on('update-downloaded', (info) => {
+        pendingUpdateInfo = { status: 'ready', version: info.version };
+        BrowserWindow.getAllWindows().forEach((window) => {
+          if (!window.isDestroyed()) {
+            window.webContents.send('updater:updateDownloaded', { version: info.version });
+          }
+        });
+      });
     }
-
-    // Auto-updater event handlers - send to renderer for in-app notification UI.
-    autoUpdater.on('checking-for-update', () => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:checkingForUpdate');
-        }
-      });
-    });
-
-    autoUpdater.on('update-available', (info) => {
-      pendingUpdateInfo = { status: 'available', version: info.version };
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:updateAvailable', { version: info.version });
-        }
-      });
-    });
-
-    autoUpdater.on('update-not-available', (_info) => {
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:updateNotAvailable');
-        }
-      });
-    });
-
-    autoUpdater.on('error', (err) => {
-      log.error('Updater error:', err);
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:error', err.message);
-        }
-      });
-    });
-
-    autoUpdater.on('download-progress', (progress) => {
-      const percent = Math.round(progress.percent);
-      if (pendingUpdateInfo) {
-        pendingUpdateInfo.status = 'downloading';
-      }
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:downloadProgress', percent);
-        }
-      });
-    });
-
-    autoUpdater.on('update-downloaded', (info) => {
-      pendingUpdateInfo = { status: 'ready', version: info.version };
-      BrowserWindow.getAllWindows().forEach((window) => {
-        if (!window.isDestroyed()) {
-          window.webContents.send('updater:updateDownloaded', { version: info.version });
-        }
-      });
-    });
 
     // App version (sync for immediate access).
     ipcMain.on('app:getVersion', (event) => {
       event.returnValue = app.getVersion();
     });
 
+    ipcMain.on('updater:isEnabled', (event) => {
+      event.returnValue = isAutoUpdaterEnabled;
+    });
+
     // Updater IPC handlers.
     ipcMain.handle('updater:checkForUpdates', () => {
+      if (!isAutoUpdaterEnabled) return;
       if (app.isPackaged) {
         autoUpdater.checkForUpdates();
       } else {
-        // In dev mode, simulate "up to date" response
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (!window.isDestroyed()) {
-            window.webContents.send('updater:updateNotAvailable');
-          }
-        });
+        // In dev mode, simulate "up to date" response.
+        sendUpdateNotAvailable();
       }
     });
 
     ipcMain.handle('updater:downloadUpdate', () => {
+      if (!isAutoUpdaterEnabled) return;
       autoUpdater.downloadUpdate();
     });
 
     ipcMain.handle('updater:installUpdate', () => {
+      if (!isAutoUpdaterEnabled) return;
       autoUpdater.quitAndInstall();
     });
 

@@ -2111,6 +2111,10 @@ const updaterAPI = {
     return ipcRenderer.sendSync('app:getVersion');
   },
 
+  isEnabled: (): boolean => {
+    return ipcRenderer.sendSync('updater:isEnabled');
+  },
+
   getStatus: async (): Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null> => {
     return ipcRenderer.invoke('updater:getStatus');
   },
