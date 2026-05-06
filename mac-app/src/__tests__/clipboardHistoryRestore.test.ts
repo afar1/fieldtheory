@@ -26,14 +26,14 @@ function createStorage(initial: Record<string, string> = {}) {
 }
 
 describe('clipboardHistoryRestore', () => {
-  it('restores settings as the last surface while keeping the stored base view', () => {
+  it('restores settings while dropping the retired Commands surface as the base view', () => {
     const storage = createStorage({
       [FIELD_THEORY_VIEW_STORAGE_KEY]: 'commands',
       [FIELD_THEORY_LAST_SURFACE_STORAGE_KEY]: 'settings',
     });
 
     expect(resolveClipboardRestoreState(storage)).toEqual({
-      viewMode: 'commands',
+      viewMode: 'clipboard',
       showSettings: true,
     });
   });

@@ -91,7 +91,7 @@ import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './comma
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
-import { libraryDir } from './fieldTheoryPaths';
+import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
 import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
@@ -3224,7 +3224,7 @@ function setupLibrarianIPCHandlers(): void {
   ipcMain.handle('librarian:getConfigPaths', (): { claudeMd: string; librarianCommand: string } => {
     return {
       claudeMd: path.join(os.homedir(), '.claude', 'CLAUDE.md'),
-      librarianCommand: path.join(os.homedir(), '.fieldtheory', 'commands', 'librarian.md'),
+      librarianCommand: path.join(commandsDir(), 'librarian.md'),
     };
   });
 
@@ -6594,7 +6594,7 @@ function setupClipboardIPCHandlers(): void {
 
     const sizeKey: ClipboardHistorySizeKey = target.kind === 'bookmarks'
       ? clipboardHistoryWindow.getCurrentSizeKey()
-      : target.kind === 'command' || target.kind === 'commands' || target.kind === 'clipboard'
+      : target.kind === 'clipboard'
         ? 'fields'
         : 'library';
     if (clipboardHistoryWindow.isVisible()) {

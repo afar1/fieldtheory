@@ -933,7 +933,7 @@ export function getLauncherAreaActionIdForQuery(query: string): string | null {
     case 'library':
       return 'open-library';
     case 'commands':
-      return 'open-commands';
+      return 'open-library';
     default:
       return null;
   }
@@ -1019,16 +1019,8 @@ export function buildBuiltInLauncherActions(
       type: 'action',
       name: 'library',
       displayName: 'Open Library',
-      keywords: ['library', 'markdown', 'wiki', 'files'],
+      keywords: ['library', 'markdown', 'wiki', 'files', 'commands', 'portable commands', 'command library'],
       actionId: 'open-library',
-    },
-    {
-      id: 'action-open-commands',
-      type: 'action',
-      name: 'commands',
-      displayName: 'Open Commands',
-      keywords: ['commands', 'portable commands', 'command library'],
-      actionId: 'open-commands',
     },
     {
       id: 'action-view-bookmarks',
