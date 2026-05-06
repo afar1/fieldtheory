@@ -43,6 +43,7 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldOfferLocalInstructionFallback,
   type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
@@ -94,6 +95,11 @@ type ActiveWebPage = {
   title: string;
   bundleId: string;
   appName: string;
+};
+
+type LauncherContextState = {
+  fieldTheoryActive: boolean;
+  hasActiveLibraryFileContext: boolean;
 };
 
 type LauncherPreviewPayload =
@@ -190,6 +196,18 @@ function scoreLauncherItem(item: LauncherItem, query: string): number {
   if (item.type === 'handoff') typeScore += 3;
 
   return textScore + typeScore;
+}
+
+function buildLocalInstructionFallbackItem(instruction: string): LauncherItem {
+  return {
+    id: 'local-instruction-fallback',
+    type: 'local-instruction',
+    name: instruction,
+    displayName: `Run locally on this file: ${instruction}`,
+    keywords: ['local', 'custom', 'instruction', instruction],
+    localInstruction: instruction,
+    hotkeyDisplay: 'local',
+  };
 }
 
 const LAUNCHER_USAGE_STORAGE_KEY = 'launcherItemUsage.v1';
@@ -514,6 +532,10 @@ function CommandLauncher() {
   const [webBookmarkItems, setWebBookmarkItems] = useState<LauncherItem[]>([]);
   const [webBookmarks, setWebBookmarks] = useState<Bookmark[]>([]);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
+  const [launcherContext, setLauncherContext] = useState<LauncherContextState>({
+    fieldTheoryActive: false,
+    hasActiveLibraryFileContext: false,
+  });
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<LauncherPreviewPayload | null>(null);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
@@ -672,6 +694,20 @@ function CommandLauncher() {
     }
   }, []);
 
+  const refreshLauncherContext = useCallback(async () => {
+    const activeLibraryFilePromise = commandsAPI.getActiveLibraryFileContext
+      ? commandsAPI.getActiveLibraryFileContext().catch(() => null)
+      : Promise.resolve(null);
+    const [context, activeLibraryFile] = await Promise.all([
+      commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false })),
+      activeLibraryFilePromise,
+    ]);
+    setLauncherContext({
+      fieldTheoryActive: Boolean(context?.fieldTheoryActive),
+      hasActiveLibraryFileContext: Boolean(activeLibraryFile?.filePath),
+    });
+  }, []);
+
   const loadAuthorBookmarks = useCallback(async (handle: string) => {
     const requestId = ++authorBookmarkRequestRef.current;
     try {
@@ -756,6 +792,7 @@ function CommandLauncher() {
     loadBookmarkAuthors();
     loadWebBookmarks();
     loadActiveWebPage();
+    refreshLauncherContext();
 
     // Load current Field Theory theme preference and keep this separate window in sync.
     themeAPI.getTheme().then(applyTheme).catch(() => {});
@@ -798,6 +835,7 @@ function CommandLauncher() {
       loadBookmarkAuthors();
       loadWebBookmarks();
       loadActiveWebPage();
+      refreshLauncherContext();
       // Refresh theme state
       const dark = await themeAPI.getTheme().catch(() => payload?.isDarkMode ?? themeAPI.initialTheme ?? false);
       applyTheme(dark ?? payload?.isDarkMode ?? false);
@@ -827,7 +865,7 @@ function CommandLauncher() {
       unsubscribeBookmarks?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, loadAuthorBookmarks, loadBookmarkNamespace, resizeLauncher, selectIndex]);
+  }, [applyTheme, loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, loadAuthorBookmarks, loadBookmarkNamespace, refreshLauncherContext, resizeLauncher, selectIndex]);
 
   useEffect(() => () => {
     if (resizeFrameRef.current !== null) {
@@ -1060,6 +1098,20 @@ function CommandLauncher() {
     return q === 'help' || q === '?';
   }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query]);
 
+  const localInstructionFallbackForQuery = useCallback((rawQuery: string, resultCount: number, inScopedMode = false): LauncherItem | null => {
+    const instruction = rawQuery.trim();
+    if (!shouldOfferLocalInstructionFallback({
+      query: instruction,
+      resultCount,
+      fieldTheoryActive: launcherContext.fieldTheoryActive,
+      hasActiveLibraryFileContext: launcherContext.hasActiveLibraryFileContext,
+      inScopedMode,
+    })) {
+      return null;
+    }
+    return buildLocalInstructionFallbackItem(instruction);
+  }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
+
   // Filter items when query changes.
   useEffect(() => {
     const filterStartedAt = performance.now();
@@ -1075,12 +1127,13 @@ function CommandLauncher() {
       resizeLauncher(inputHeight + listHeight);
     };
 
-    if (allItems.length === 0 && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
-      setFiltered([]);
+    if (allItems.length === 0 && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
+      const fallback = localInstructionFallbackForQuery(query, 0, isHelpQuery);
+      setFiltered(fallback ? [fallback] : []);
       selectIndex(0);
       // Don't show empty state height when still loading (query is empty)
       // Only show it when user has typed but no results found
-      resizeLauncher(inputHeight);
+      resizeForResults(fallback ? 1 : 0);
       return;
     }
 
@@ -1261,12 +1314,14 @@ function CommandLauncher() {
     const scoresById = new Map(scored.map(({ item, score }) => [item.id, score]));
     const scoredMatches = matches.map(item => ({ item, score: scoresById.get(item.id) ?? 0 }));
     const balancedMatches = balanceLauncherNormalModeMatches(scoredMatches);
+    const fallback = localInstructionFallbackForQuery(query, balancedMatches.length);
+    const results = fallback ? [fallback] : balancedMatches;
 
-    setFiltered(balancedMatches);
+    setFiltered(results);
     selectIndex(0);
 
     // Resize window.
-    resizeForResults(balancedMatches.length, true);
+    resizeForResults(results.length, true);
     traceLauncher('filter-results', {
       queryLength: query.length,
       namespacePrefix: namespacePrefix ?? null,
@@ -1274,11 +1329,12 @@ function CommandLauncher() {
       hasMoveSource: Boolean(moveSource),
       hasAuthorNamespace: Boolean(authorNamespace),
       hasBookmarkNamespace: Boolean(bookmarkNamespace),
-      resultCount: balancedMatches.length,
+      resultCount: results.length,
+      usedLocalInstructionFallback: Boolean(fallback),
       totalResultCount: matches.length,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, resizeLauncher, selectIndex, usageByItemId]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -1627,13 +1683,20 @@ function CommandLauncher() {
         const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
         const selectedItem = filtered[currentIndex];
         if (selectedItem) invokeItem(selectedItem, { insertWikiLink: selectedItem.type !== 'command' });
+        return;
+      }
+      const fallback = localInstructionFallbackForQuery(query, 0, Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource));
+      if (fallback) {
+        invokeItem(fallback);
       }
     }
   };
 
   // Invoke the selected item.
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean; openFieldTheoryTarget?: boolean } = {}) => {
-    noteItemUsage(item.id);
+    if (item.type !== 'local-instruction') {
+      noteItemUsage(item.id);
+    }
     dismissPreview();
     const showInvocationError = (event: string, error: string | undefined, fallback: string) => {
       const message = error ?? fallback;

@@ -2895,10 +2895,14 @@ type LocalCommandRunResult = {
 type LocalCommandStatus = {
   status: 'running' | 'success' | 'error' | 'notice';
   message: string;
+  detail?: string;
+  eventKind?: 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
   commandName?: string;
   filePath?: string;
   mode?: LocalCommandRunMode;
   phase?: string;
+  changedLines?: number;
+  changedBytes?: number;
   error?: string;
   updatedAt: number;
 };
