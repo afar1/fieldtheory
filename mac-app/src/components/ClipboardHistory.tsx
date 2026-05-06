@@ -93,13 +93,30 @@ type TopNavMode = 'clipboard' | 'librarian' | 'possible';
 type FooterLocalCommandStatus = {
   status: 'running' | 'success' | 'error' | 'notice';
   message: string;
+  detail?: string;
+  eventKind?: 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
   commandName?: string;
   filePath?: string;
   mode?: 'document' | 'selection';
   phase?: string;
+  changedLines?: number;
+  changedBytes?: number;
   error?: string;
   updatedAt: number;
 };
+
+function formatFooterLocalCommandStatus(status: FooterLocalCommandStatus): string {
+  const detail = compactFooterStatusDetail(status.detail);
+  return detail ? `${status.message} - ${detail}` : status.message;
+}
+
+function compactFooterStatusDetail(value: string | undefined, maxLength = 96): string | undefined {
+  const compacted = value?.replace(/\s+/g, ' ').trim();
+  if (!compacted) return undefined;
+  return compacted.length > maxLength
+    ? `${compacted.slice(0, maxLength - 3)}...`
+    : compacted;
+}
 
 type TopNavPaintTrace = {
   from: ViewMode;
@@ -6916,9 +6933,13 @@ export default function ClipboardHistory() {
                 fontSize: '9px',
                 color: localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary,
                 opacity: 0.85,
+                maxWidth: 'min(560px, 48vw)',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
               }}
             >
-              {localCommandStatus?.message ?? agentImproveStatus}
+              {localCommandStatus ? formatFooterLocalCommandStatus(localCommandStatus) : agentImproveStatus}
             </span>
           </div>
         )}
