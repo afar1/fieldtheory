@@ -81,7 +81,7 @@ export function nextTopNavViewMode(
   direction: 1 | -1,
   _librarianEnabled: boolean,
 ): ViewMode {
-  const tabs: ViewMode[] = ['clipboard', 'librarian', 'possible'];
+  const tabs: ViewMode[] = ['librarian', 'clipboard', 'possible'];
   const idx = tabs.indexOf(prev);
   const nextIdx = idx === -1 ? 0 : (idx + direction + tabs.length) % tabs.length;
   return tabs[nextIdx];

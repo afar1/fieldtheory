@@ -48,10 +48,14 @@ describe('DynamicIsland floating pill', () => {
     expect(cancelButton).toBeTruthy();
 
     expect(container.querySelector('.di-floating-open')).toBeNull();
-    expect(cancelButton.querySelector('svg')?.getAttribute('width')).toBe('10');
+    expect(cancelButton.querySelector('svg')?.getAttribute('width')).toBe('8');
     expect(cancelButton.style.color).toBe('rgba(255, 255, 255, 0.78)');
     expect(cancelButton.style.borderRadius).toBe('');
     expect(cancelButton.style.transition).toBe('opacity 140ms ease');
+    expect(cancelButton.style.position).toBe('absolute');
+    expect(cancelButton.style.left).toBe('6px');
+    expect(cancelButton.style.top).toBe('50%');
+    expect(cancelButton.style.transform).toBe('translateY(-50%)');
     expect(cancelButton.style.opacity).toBe('0');
     expect(cancelButton.style.pointerEvents).toBe('none');
 
@@ -73,6 +77,7 @@ describe('DynamicIsland floating pill', () => {
     const visibleSlots = container.querySelectorAll('.di-slot--visible');
     expect(visibleSlots.length).toBeGreaterThanOrEqual(2);
     expect((visibleSlots[0] as HTMLElement).style.getPropertyValue('--di-slot-w')).toBe('30px');
+    expect((visibleSlots[0] as HTMLElement).style.justifyContent).toBe('center');
     expect((visibleSlots[1] as HTMLElement).style.getPropertyValue('--di-slot-w')).toBe('8px');
     await act(async () => {
       callbacks.resize.forEach((cb) => cb({ leftWidth: 80, rightWidth: 42 }));

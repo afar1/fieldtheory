@@ -46,7 +46,6 @@ const LIBRARIAN_INDEX_VERSION = 2;
 export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'artifacts',
   'scratchpad',
-  'Shared Markdown',
   'debates',
   'Plans',
   'bookmarks-from-x',
@@ -3479,7 +3478,6 @@ export class LibrarianManager extends EventEmitter {
     const root = this.resolveLibraryRootForWrite(rootPath);
     const normalizedDir = this.normalizeLibraryRelPath(dirRelPath);
     if (!root || !normalizedDir) return false;
-    if (root.builtin && DEFAULT_LIBRARY_FOLDER_ID_SET.has(normalizedDir)) return false;
 
     const dirPath = path.resolve(root.rootPath, normalizedDir);
     if (!this.isInsidePath(root.rootPath, dirPath)) return false;
@@ -3502,6 +3500,34 @@ export class LibrarianManager extends EventEmitter {
       return true;
     } catch (error) {
       log.error(`Error trashing library dir ${normalizedDir}:`, error);
+      return false;
+    }
+  }
+
+  async deleteExternalLibraryFile(filePath: string): Promise<boolean> {
+    const normalizedPath = this.normalizePath(this.expandPath(filePath));
+
+    let canonicalPath: string;
+    try {
+      canonicalPath = fs.realpathSync(normalizedPath);
+    } catch {
+      return false;
+    }
+
+    const rootPath = this.getSafeLibraryRootPaths().find((savedRoot) => {
+      const normalizedRoot = this.normalizePath(this.expandPath(savedRoot));
+      const rootKey = this.libraryRootKey(normalizedRoot);
+      const relative = path.relative(rootKey, canonicalPath);
+      return !!relative && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    });
+    if (!rootPath || !fs.existsSync(canonicalPath) || !fs.statSync(canonicalPath).isFile()) return false;
+
+    try {
+      await shell.trashItem(canonicalPath);
+      this.emit('library:changed', this.normalizePath(this.expandPath(rootPath)));
+      return true;
+    } catch (error) {
+      log.error(`Error trashing external library file ${canonicalPath}:`, error);
       return false;
     }
   }
@@ -5868,7 +5894,7 @@ PreToolUse Auto-Approve Hook for Field Theory Read Permissions
 
 Auto-approves Read/Write/Edit operations for:
 - ~/Library/Application Support/fieldtheory-mac/users/*/figures/* (screenshot figures)
-- ~/.fieldtheory/library/Commands/*, ~/.fieldtheory/commands/*, and .cursor/commands/* (portable commands)
+- ~/.fieldtheory/library/Commands/* and .cursor/commands/* (portable commands)
 
 This is separate from Librarian functionality.
 Never blocks - only auto-approves or passes through to normal flow.
@@ -5899,7 +5925,7 @@ def main():
             sys.exit(0)
 
         # Check for portable commands.
-        if "/.fieldtheory/library/Commands/" in file_path or "/.fieldtheory/commands/" in file_path or "/.cursor/commands/" in file_path:
+        if "/.fieldtheory/library/Commands/" in file_path or "/.cursor/commands/" in file_path:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",

@@ -2045,6 +2045,20 @@ export default function ClipboardHistory() {
       );
     });
 
+    const unsubscribeShowLibrary = window.clipboardAPI.onShowLibrary?.(() => {
+      setSearchQuery('');
+      setDebouncedSearchQuery('');
+      setSelectedIndex(0);
+      setSelectedIds(new Set());
+      setIsMultiSelect(false);
+      setFilter('all');
+      setShowSettings(false);
+      setPendingReadingPath(null);
+      setLibraryKeepsCurrentSizeKey(false);
+      setViewMode('librarian');
+      setLibrarianImmersive(shouldRestoreLibrarianImmersive(localStorage));
+    });
+
     const unsubscribeShowTranscriptHistory = window.clipboardAPI.onShowTranscriptHistory?.(() => {
       setSearchQuery('');
       setDebouncedSearchQuery('');
@@ -2177,6 +2191,7 @@ export default function ClipboardHistory() {
 
     return () => {
       unsubscribeShowHistory();
+      unsubscribeShowLibrary?.();
       unsubscribeShowTranscriptHistory?.();
       unsubscribeShowSettings?.();
       unsubscribeCollapseImmersive?.();
@@ -4126,7 +4141,11 @@ export default function ClipboardHistory() {
             cursor: 'grab',
             ...FIELD_THEORY_TOP_CHROME_DRAG_STYLE,
           }}>
-          {(['clipboard'] as ViewMode[]).map((mode) => {
+          {([
+            ['librarian', 'Library', 'Personal wiki'],
+            ['clipboard', TAB_LABELS.clipboard, undefined],
+            ['possible', 'Possible', 'Possible ideas'],
+          ] as const).map(([mode, label, title]) => {
             const isSelected = viewMode === mode && !showSettings;
             const bgColor = isSelected ? theme.accent : 'transparent';
 
@@ -4165,8 +4184,9 @@ export default function ClipboardHistory() {
                     e.currentTarget.style.backgroundColor = 'transparent';
                   }
                 }}
+                title={title}
               >
-                {TAB_LABELS[mode]}
+                {label}
                 {/* New reading indicator for Librarian tab */}
                 {mode === 'librarian' && hasNewReading && viewMode !== 'librarian' && (
                   <span style={{
@@ -4182,93 +4202,6 @@ export default function ClipboardHistory() {
               </button>
             );
           })}
-          {/* Librarian button */}
-          <button
-            onClick={() => {
-              selectTopNavView('librarian');
-            }}
-            data-top-nav-mode="librarian"
-            tabIndex={0}
-            style={{
-              padding: '6px 8px',
-              fontSize: '11px',
-              fontWeight: 400,
-              backgroundColor: viewMode === 'librarian' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'librarian' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'none',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              position: 'relative',
-              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'librarian' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'librarian' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Personal wiki"
-          >
-            Library
-            {/* New reading indicator */}
-            {hasNewReading && viewMode !== 'librarian' && (
-              <span style={{
-                position: 'absolute',
-                top: '-2px',
-                right: '-2px',
-                width: '6px',
-                height: '6px',
-                borderRadius: '50%',
-                backgroundColor: theme.info,
-              }} />
-            )}
-          </button>
-
-          <button
-            onClick={() => {
-              selectTopNavView('possible');
-            }}
-            data-top-nav-mode="possible"
-            tabIndex={0}
-            style={{
-              padding: '6px 8px',
-              fontSize: '11px',
-              fontWeight: 400,
-              backgroundColor: viewMode === 'possible' && !showSettings ? theme.accent : 'transparent',
-              color: viewMode === 'possible' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              transition: 'none',
-              outline: 'none',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '4px',
-              ...FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE,
-            }}
-            onMouseEnter={(e) => {
-              if (viewMode !== 'possible' || showSettings) {
-                e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)';
-              }
-            }}
-            onMouseLeave={(e) => {
-              if (viewMode !== 'possible' || showSettings) {
-                e.currentTarget.style.backgroundColor = 'transparent';
-              }
-            }}
-            title="Possible ideas"
-          >
-            Possible
-          </button>
 
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '8px' }}>
             {actionFeedback && (

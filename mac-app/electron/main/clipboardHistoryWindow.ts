@@ -26,6 +26,8 @@ type ClipboardContextMenuActions = {
   addWordToDictionary: (word: string) => void;
 };
 
+type ClipboardHistoryInitialViewMode = 'clipboard' | 'library';
+
 export function buildClipboardContextMenuTemplate(
   params: ClipboardContextMenuParams,
   actions: ClipboardContextMenuActions
@@ -264,7 +266,7 @@ export class ClipboardHistoryWindow {
   }
 
   private sendRendererEvent(
-    channel: 'clipboard:showHistory' | 'clipboard:showTranscriptHistory' | 'clipboard:showSettings',
+    channel: 'clipboard:showHistory' | 'clipboard:showLibrary' | 'clipboard:showTranscriptHistory' | 'clipboard:showSettings',
   ): void {
     if (!this.window || this.window.isDestroyed()) {
       return;
@@ -683,6 +685,7 @@ export class ClipboardHistoryWindow {
     skipSound: boolean = false,
     transcriptHistoryMode: boolean = false,
     activateWindow: boolean = true,
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
   ): void {
     const cachedFrontmost = this.getCachedFrontmostExternalApp();
     if (cachedFrontmost) {
@@ -691,7 +694,23 @@ export class ClipboardHistoryWindow {
       this.commitPreviousAppForFreshShow(null);
       this.beginPreviousAppCapture('show');
     }
-    this.show(savedBounds, showSettingsMode, skipSound, transcriptHistoryMode, activateWindow);
+    this.show(savedBounds, showSettingsMode, skipSound, transcriptHistoryMode, activateWindow, initialViewMode);
+  }
+
+  showLibrary(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    skipSound: boolean = false,
+    activateWindow: boolean = true,
+  ): void {
+    this.show(savedBounds, false, skipSound, false, activateWindow, 'library');
+  }
+
+  capturePreviousAppAndShowLibrary(
+    savedBounds?: { x: number; y: number; width: number; height: number },
+    skipSound: boolean = false,
+    activateWindow: boolean = true,
+  ): void {
+    this.capturePreviousAppAndShow(savedBounds, false, skipSound, false, activateWindow, 'library');
   }
 
   private restoreWindowFocusabilitySoon(): void {
@@ -728,6 +747,7 @@ export class ClipboardHistoryWindow {
    * @param skipSound If true, skip playing open sound (used when sound was already played externally for faster feedback)
    * @param transcriptHistoryMode If true, renderer opens directly in transcript-only history mode
    * @param activateWindow If false, show the window without making Field Theory frontmost
+   * @param initialViewMode Which top-level view to show when the renderer opens
    */
   show(
     savedBounds?: { x: number; y: number; width: number; height: number },
@@ -735,10 +755,11 @@ export class ClipboardHistoryWindow {
     skipSound: boolean = false,
     transcriptHistoryMode: boolean = false,
     activateWindow: boolean = true,
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
   ): void {
     this.logLifecycle(
       'show:begin',
-      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} activateWindow=${activateWindow} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
+      `showSettingsMode=${showSettingsMode} skipSound=${skipSound} transcriptHistoryMode=${transcriptHistoryMode} activateWindow=${activateWindow} initialViewMode=${initialViewMode} savedBounds=${savedBounds ? JSON.stringify(savedBounds) : 'none'}`
     );
     appendVisibilityTrace('clipboard.show.begin', {
       mode: resolveFieldTheoryWindowMode(this.preferencesManager.get()),
@@ -749,6 +770,7 @@ export class ClipboardHistoryWindow {
       skipSound,
       transcriptHistoryMode,
       activateWindow,
+      initialViewMode,
       savedBounds: savedBounds ?? null,
     });
     // Update internal state immediately for instant toggle.
@@ -789,7 +811,7 @@ export class ClipboardHistoryWindow {
       this.logLifecycle('show:existing-window-complete');
 
       // Notify renderer to reset search query.
-      this.sendRendererEvent('clipboard:showHistory');
+      this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
       if (transcriptHistoryMode) {
         this.sendRendererEvent('clipboard:showTranscriptHistory');
       }
@@ -810,7 +832,7 @@ export class ClipboardHistoryWindow {
     }
 
     // Create new window.
-    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode, activateWindow);
+    this.createWindow(savedBounds, showSettingsMode, false, transcriptHistoryMode, activateWindow, initialViewMode);
     this.logLifecycle('show:created-window');
 
     // Fetch app data in background (don't await).
@@ -852,6 +874,7 @@ export class ClipboardHistoryWindow {
    * @param savedBounds Optional saved bounds for position/size (absolute screen coords)
    * @param showSettingsMode If true, send settings mode event after content loads
    * @param preloadOnly If true, don't show window after load (for background preloading)
+   * @param initialViewMode Which top-level view to show after content loads
    */
   private createWindow(
     savedBounds?: { x: number; y: number; width: number; height: number },
@@ -859,6 +882,7 @@ export class ClipboardHistoryWindow {
     preloadOnly: boolean = false,
     transcriptHistoryMode: boolean = false,
     activateWindow: boolean = true,
+    initialViewMode: ClipboardHistoryInitialViewMode = 'clipboard',
   ): void {
     // Calculate window position/size.
     // savedBounds are now in absolute screen coordinates (simpler than old overlay-relative).
@@ -1035,7 +1059,7 @@ export class ClipboardHistoryWindow {
         this.prepareWindowForShow();
         this.revealWindow(activateWindow, showInDock);
         // Notify renderer to reset search query.
-        this.sendRendererEvent('clipboard:showHistory');
+        this.sendRendererEvent(initialViewMode === 'library' ? 'clipboard:showLibrary' : 'clipboard:showHistory');
         if (transcriptHistoryMode) {
           this.sendRendererEvent('clipboard:showTranscriptHistory');
         }
@@ -1560,10 +1584,8 @@ export class ClipboardHistoryWindow {
       this.blurDismissSuppressedUntil = Date.now() + 400;
     }
 
-    // Dock stays hidden - panel mode is the only mode now.
-    // Don't show dock when entering immersive mode.
-
-    // Only adjust alwaysOnTop in panel mode (not showInDock mode)
+    // Only adjust alwaysOnTop in panel mode. App-window mode already owns Dock
+    // visibility and normal window ordering.
     const showInDock = this.shouldUseAppWindow();
     if (!showInDock && this.window && !this.window.isDestroyed()) {
       if (immersive) {

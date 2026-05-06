@@ -27,7 +27,7 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, type ClipboardHistoryBounds } from './preferences';
+import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, resolveFieldTheoryWindowMode, type ClipboardHistoryBounds } from './preferences';
 
 const sampleBounds = (w: number): ClipboardHistoryBounds => ({
   width: w,
@@ -167,13 +167,19 @@ describe('PreferencesManager', () => {
     expect(saved.clickAwayToDismiss).toBe(true);
   });
 
-  it('keeps current panel mechanics as the default Field Theory window mode', async () => {
+  it('uses app mode as the default Field Theory window mode', async () => {
     const preferences = new PreferencesManager();
     const loaded = await preferences.load();
 
-    expect(loaded.fieldTheoryWindowMode).toBe('panel');
-    expect(loaded.showInDock).toBe(false);
-    expect(loaded.clickAwayToDismiss).toBe(true);
+    expect(loaded.fieldTheoryWindowMode).toBe('app');
+    expect(loaded.showInDock).toBe(true);
+    expect(loaded.clickAwayToDismiss).toBe(false);
+  });
+
+  it('resolves missing window-mode preferences to app mode while honoring legacy panel settings', () => {
+    expect(resolveFieldTheoryWindowMode({})).toBe('app');
+    expect(resolveFieldTheoryWindowMode({ showInDock: false })).toBe('panel');
+    expect(resolveFieldTheoryWindowMode({ clickAwayToDismiss: true })).toBe('panel');
   });
 
   it('mirrors hotkeys to shared prefs and preserves them when signed out', async () => {
@@ -224,11 +230,11 @@ describe('PreferencesManager', () => {
     expect(signedOutPrefs.clipboardHistoryHotkey).toBe('Command+Option+Space');
     expect(signedOutPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
     expect(signedOutPrefs.transcriptionHotkey).toBe('Control+Space');
-    expect(signedOutPrefs.showInDock).toBe(false);
+    expect(signedOutPrefs.showInDock).toBe(true);
 
     const reloadedSignedOutPrefs = await preferences.load();
     expect(reloadedSignedOutPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
-    expect(reloadedSignedOutPrefs.showInDock).toBe(false);
+    expect(reloadedSignedOutPrefs.showInDock).toBe(true);
   });
 
   it('mirrors null hotkey tombstones to shared prefs', async () => {

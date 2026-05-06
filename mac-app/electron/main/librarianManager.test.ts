@@ -709,18 +709,24 @@ describe('recursive wiki tree scan', () => {
     expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Client Notes/note');
   });
 
-  it('does not delete FT-created wiki folders', async () => {
+  it('moves FT-created wiki folders to Trash', async () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'Shared Markdown'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'Shared Markdown', 'note.md'), '# Note\n');
     const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
 
+    const emit = vi.fn();
     const manager = Object.create(LibrarianManager.prototype) as {
       deleteLibraryDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
+      emit: typeof emit;
     };
     Object.defineProperty(manager, 'wikiDir', { value: root });
+    manager.emit = emit;
 
-    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(false);
-    expect(trashItem).not.toHaveBeenCalled();
+    expect(await manager.deleteLibraryDir(root, 'Shared Markdown')).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Shared Markdown'));
+    expect(emit).toHaveBeenCalledWith('wiki:changed');
+    expect(emit).toHaveBeenCalledWith('wiki:deleted', 'Shared Markdown/note');
   });
 
   it('moves external library folders to Trash and emits a library change', async () => {
@@ -742,6 +748,50 @@ describe('recursive wiki tree scan', () => {
     expect(trashItem).toHaveBeenCalledWith(path.join(root, 'Client Notes'));
     expect(emit).toHaveBeenCalledWith('library:changed', root);
     expect(emit).not.toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('moves external library files to Trash and emits a library change', async () => {
+    const root = makeTempDir();
+    const filePath = path.join(root, 'hello-yolo-.txt');
+    fs.writeFileSync(filePath, '# Hello\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      deleteExternalLibraryFile: (filePath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(await manager.deleteExternalLibraryFile(filePath)).toBe(true);
+    expect(trashItem).toHaveBeenCalledWith(fs.realpathSync(filePath));
+    expect(emit).toHaveBeenCalledWith('library:changed', root);
+    expect(emit).not.toHaveBeenCalledWith('wiki:changed');
+  });
+
+  it('does not delete external files outside registered library roots', async () => {
+    const root = makeTempDir();
+    const outside = makeTempDir();
+    const filePath = path.join(outside, 'outside.md');
+    fs.writeFileSync(filePath, '# Outside\n');
+    const trashItem = vi.mocked(shell.trashItem).mockResolvedValue(undefined);
+
+    const emit = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      settings: { libraryRoots: string[] };
+      deleteExternalLibraryFile: (filePath: string) => Promise<boolean>;
+      emit: typeof emit;
+    };
+    Object.defineProperty(manager, 'wikiDir', { value: path.join(root, 'wiki') });
+    manager.settings = { libraryRoots: [root] };
+    manager.emit = emit;
+
+    expect(await manager.deleteExternalLibraryFile(filePath)).toBe(false);
+    expect(trashItem).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalled();
   });
 
   it('does not delete a library root as a folder', async () => {
@@ -989,9 +1039,9 @@ describe('hidden default library folders', () => {
   it('normalizes persisted folder ids to FT folders first, then custom folders', () => {
     expect(normalizeHiddenDefaultFolders(['Client Notes', 'entries', '../bad', 'entries', 'artifacts', 'Shared Markdown'])).toEqual([
       'artifacts',
-      'Shared Markdown',
       'entries',
       'Client Notes',
+      'Shared Markdown',
     ]);
     expect(normalizeHiddenDefaultFolders('entries')).toEqual([]);
   });

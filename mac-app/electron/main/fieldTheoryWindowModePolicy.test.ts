@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   shouldHideFieldTheoryWindowsForAlfred,
   shouldRestoreFieldTheoryFocusAfterFloatingRecording,
+  shouldShowClipboardWindowOnStartup,
   shouldToggleCloseFieldTheoryFromDynamicIsland,
 } from './fieldTheoryWindowModePolicy';
 
@@ -64,5 +65,16 @@ describe('shouldRestoreFieldTheoryFocusAfterFloatingRecording', () => {
       true,
       true
     )).toBe(false);
+  });
+});
+
+describe('shouldShowClipboardWindowOnStartup', () => {
+  it('opens the clipboard window for direct launches after onboarding is complete', () => {
+    expect(shouldShowClipboardWindowOnStartup(true, false)).toBe(true);
+  });
+
+  it('keeps login-item and onboarding launches quiet', () => {
+    expect(shouldShowClipboardWindowOnStartup(true, true)).toBe(false);
+    expect(shouldShowClipboardWindowOnStartup(false, false)).toBe(false);
   });
 });
