@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  autoUpdaterReleaseRepoForBuildChannel,
+  isAutoUpdaterEnabledForBuildChannel,
   releaseRepoForBuildChannel,
   resolveFieldTheoryBuildChannel,
 } from './buildChannel';
@@ -35,8 +37,18 @@ describe('buildChannel', () => {
     })).toBe('experimental');
   });
 
-  it('uses a separate release repo for experimental updates', () => {
+  it('keeps the release repo mapping separate by channel', () => {
     expect(releaseRepoForBuildChannel('production')).toBe('field-releases');
     expect(releaseRepoForBuildChannel('experimental')).toBe('field-releases-experimental');
+  });
+
+  it('only enables the auto-updater for production builds', () => {
+    expect(isAutoUpdaterEnabledForBuildChannel('production')).toBe(true);
+    expect(isAutoUpdaterEnabledForBuildChannel('experimental')).toBe(false);
+  });
+
+  it('does not expose an auto-updater feed for experimental builds', () => {
+    expect(autoUpdaterReleaseRepoForBuildChannel('production')).toBe('field-releases');
+    expect(autoUpdaterReleaseRepoForBuildChannel('experimental')).toBeNull();
   });
 });

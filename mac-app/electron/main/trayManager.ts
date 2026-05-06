@@ -504,17 +504,17 @@ export class TrayManager {
       });
     }
 
-    // Check network status at menu build time to show offline state.
-    const isOnline = net.isOnline();
-    items.push({
-      label: isOnline ? 'Check for Updates…' : 'Check for Updates (Offline)',
-      enabled: isOnline,
-      click: () => {
-        if (this.checkForUpdatesCallback) {
-          this.checkForUpdatesCallback();
-        }
-      },
-    });
+    if (this.checkForUpdatesCallback) {
+      // Check network status at menu build time to show offline state.
+      const isOnline = net.isOnline();
+      items.push({
+        label: isOnline ? 'Check for Updates…' : 'Check for Updates (Offline)',
+        enabled: isOnline,
+        click: () => {
+          this.checkForUpdatesCallback?.();
+        },
+      });
+    }
 
     items.push({
       label: 'Quit Field Theory',
