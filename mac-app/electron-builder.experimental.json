@@ -2,6 +2,9 @@
   "appId": "com.fieldtheory.experimental",
   "productName": "Field Theory Experimental",
   "artifactName": "Field.Theory.Experimental-${version}-${arch}.${ext}",
+  "dmg": {
+    "sign": true
+  },
   "beforeBuild": "scripts/electron-builder-before-build.js",
   "afterSign": "scripts/notarize.js",
   "extraMetadata": {
