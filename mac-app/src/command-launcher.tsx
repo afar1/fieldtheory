@@ -213,7 +213,7 @@ type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
 type FieldTheoryMarkdownTarget = LauncherFieldTheoryMarkdownTarget;
 
 let WIKI_COMMAND_PATH: string | null = null;
-try { WIKI_COMMAND_PATH = `${process.env.HOME}/.fieldtheory/commands/wiki.md`; } catch {}
+try { WIKI_COMMAND_PATH = `${process.env.HOME}/.fieldtheory/library/Commands/wiki.md`; } catch {}
 
 // Window API types for the launcher's standalone renderer context.
 // In the launcher window, these APIs are always available (not optional).
@@ -1699,7 +1699,7 @@ function CommandLauncher() {
         case 'open-commands': {
           const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'commands', path: 'commands' });
           if (!result.success) {
-            showInvocationError('open-commands-error', result.error, 'Open commands failed');
+            showInvocationError('open-commands-error', result.error, 'Open library failed');
           }
           return;
         }
