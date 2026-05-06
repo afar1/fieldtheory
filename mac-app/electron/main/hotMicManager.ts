@@ -394,7 +394,8 @@ export class HotMicManager extends EventEmitter {
     'com.github.electron',
   ]);
 
-  // Escape key — reserved for future double-tap implementation
+  private escapeDismissHotkeyRegistered: boolean = false;
+  private pendingEscapeDismiss: boolean = false;
 
   // Local HTTP server for hook triggers
   private server: http.Server | null = null;
@@ -941,6 +942,7 @@ export class HotMicManager extends EventEmitter {
     if (this.state !== 'listening' && this.state !== 'recording') return;
     log.info('Hot Mic: yielding to regular transcriber');
 
+    this.unregisterEscapeDismissHotkey();
     this.stopAudioMonitoring();
     this.stopBufferDiscardTimer();
     this.resumeInFlight = false;
@@ -995,6 +997,7 @@ export class HotMicManager extends EventEmitter {
             this.yieldedToTranscriber = false;
             this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
             this.startAudioMonitoring();
+            this.registerEscapeDismissHotkey();
             return;
           }
           if (this.audioManager) {
@@ -1006,6 +1009,7 @@ export class HotMicManager extends EventEmitter {
           this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
           this.startAudioMonitoring();
           this.updateOrangeDot();
+          this.registerEscapeDismissHotkey();
           return;
         } catch (error) {
           log.error('Hot Mic: failed to resume recording (attempt %d):', attempt + 1, error);
@@ -1014,6 +1018,7 @@ export class HotMicManager extends EventEmitter {
             this.yieldedToTranscriber = false;
             this.setCondition(this.whisperFallbackActive ? 'degraded' : 'ready');
             this.startAudioMonitoring();
+            this.registerEscapeDismissHotkey();
             return;
           }
           // Clear stale helper state if the previous stream never fully released.
@@ -1332,6 +1337,48 @@ export class HotMicManager extends EventEmitter {
   handleLongPress(): void {
     this.deactivate();
     this.emit('inputModeResetRequested');
+  }
+
+  private registerEscapeDismissHotkey(): void {
+    if (this.escapeDismissHotkeyRegistered) {
+      return;
+    }
+
+    const registered = globalShortcut.register('Escape', () => {
+      this.handleEscapeDismiss();
+    });
+
+    if (registered) {
+      this.escapeDismissHotkeyRegistered = true;
+    } else {
+      log.warn('Hot Mic: failed to register Escape dismiss hotkey');
+    }
+  }
+
+  private unregisterEscapeDismissHotkey(): void {
+    if (!this.escapeDismissHotkeyRegistered) {
+      this.pendingEscapeDismiss = false;
+      return;
+    }
+
+    globalShortcut.unregister('Escape');
+    this.escapeDismissHotkeyRegistered = false;
+    this.pendingEscapeDismiss = false;
+  }
+
+  private handleEscapeDismiss(): void {
+    if (!this.isActive || this.yieldedToTranscriber) {
+      return;
+    }
+
+    if (!this.pendingEscapeDismiss) {
+      this.pendingEscapeDismiss = true;
+      this.cursorStatusManager?.showRecordingNote('Press Esc again to stop Hot Mic');
+      return;
+    }
+
+    this.pendingEscapeDismiss = false;
+    this.handleLongPress();
   }
 
   // ---------------------------------------------------------------------------
@@ -3726,6 +3773,13 @@ export class HotMicManager extends EventEmitter {
     const prev = this.state;
     this.state = state;
     log.info('Hot Mic state: %s → %s', prev, state);
+
+    if (state === 'idle' || this.yieldedToTranscriber) {
+      this.unregisterEscapeDismissHotkey();
+    } else {
+      this.registerEscapeDismissHotkey();
+    }
+
     this.emit('stateChanged', state);
     this.emit('statusChanged', this.getStatus());
 
@@ -3755,6 +3809,7 @@ export class HotMicManager extends EventEmitter {
   // ---------------------------------------------------------------------------
 
   private cleanup(): void {
+    this.unregisterEscapeDismissHotkey();
     this.stopAudioMonitoring();
     this.stopBufferDiscardTimer();
     this.clearDrawerSpeakingSignal();
