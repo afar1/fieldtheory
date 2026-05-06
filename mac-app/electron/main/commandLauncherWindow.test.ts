@@ -189,6 +189,22 @@ describe('CommandLauncherWindow.show()', () => {
     expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.apple.Safari', name: 'Safari' });
     expect(launcher.wasFieldTheoryActiveOnShow()).toBe(false);
   });
+
+  it('treats other Electron-based apps as external command targets', async () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.superhuman.electron', name: 'Superhuman' })),
+      getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    await launcher.show({
+      anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
+    });
+
+    expect(launcher.getPreviousApp()).toEqual({ bundleId: 'com.superhuman.electron', name: 'Superhuman' });
+    expect(launcher.wasFieldTheoryActiveOnShow()).toBe(false);
+  });
 });
 
 describe('CommandLauncherWindow.preload()', () => {

@@ -53,9 +53,11 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   const bundleIdLower = bundleId.toLowerCase();
   const currentAppName = app.getName().toLowerCase();
 
+  // Be specific about dev Electron; many real target apps also include
+  // "electron" in their bundle id and still need to receive command pastes.
   return (
     bundleIdLower.includes('fieldtheory') ||
-    bundleIdLower.includes('electron') ||
+    bundleIdLower === 'com.github.electron' ||
     appNameLower.includes('field theory') ||
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
