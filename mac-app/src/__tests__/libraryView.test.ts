@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   cycleMarkdownTodoState,
   deletedLibraryItemMatchesSelection,
+  documentVersionsEqual,
   editorSessionMatchesSelection,
   findNextMarkdownMatch,
   getCarrotListEnterEdit,
@@ -55,6 +56,7 @@ import {
   isTextEntryInputType,
   splitFrontmatter,
   setMarkdownTodoState,
+  shouldApplyLiveMarkdownFileUpdate,
   toggleMarkdownTaskLine,
   toggleMarkdownTaskLineAtIndex,
 } from '../components/LibrarianView';
@@ -687,6 +689,62 @@ describe('getNewlyCheckedMarkdownTasks', () => {
 
   it('ignores newly added tasks that are already checked', () => {
     expect(getNewlyCheckedMarkdownTasks('', '- [x] new task')).toEqual([]);
+  });
+});
+
+describe('shouldApplyLiveMarkdownFileUpdate', () => {
+  it('applies disk updates while reading rendered markdown', () => {
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'rendered',
+      editContent: 'local draft',
+      lastSavedContent: 'old disk',
+    })).toBe(true);
+  });
+
+  it('applies disk updates in markdown mode only when there is no local edit', () => {
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'markdown',
+      editContent: 'same content',
+      lastSavedContent: 'same content',
+    })).toBe(true);
+
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'markdown',
+      editContent: 'local edit',
+      lastSavedContent: 'old disk',
+    })).toBe(false);
+  });
+
+  it('does not apply disk updates over unknown markdown state or pending rendered saves', () => {
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'markdown',
+      editContent: 'content',
+      lastSavedContent: null,
+    })).toBe(false);
+
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'rendered',
+      editContent: 'content',
+      lastSavedContent: 'content',
+      hasPendingRenderedSave: true,
+    })).toBe(false);
+  });
+});
+
+describe('documentVersionsEqual', () => {
+  it('treats matching size and content hash as the same document version', () => {
+    expect(documentVersionsEqual(
+      { mtimeMs: 1, size: 12, sha256: 'abc' },
+      { mtimeMs: 2, size: 12, sha256: 'abc' },
+    )).toBe(true);
+  });
+
+  it('treats missing versions or changed content hashes as different', () => {
+    expect(documentVersionsEqual(null, { mtimeMs: 1, size: 12, sha256: 'abc' })).toBe(false);
+    expect(documentVersionsEqual(
+      { mtimeMs: 1, size: 12, sha256: 'abc' },
+      { mtimeMs: 2, size: 12, sha256: 'def' },
+    )).toBe(false);
   });
 });
 
