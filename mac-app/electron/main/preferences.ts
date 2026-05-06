@@ -86,7 +86,14 @@ export function resolveFieldTheoryWindowMode(
     return prefs.fieldTheoryWindowMode;
   }
 
-  return prefs?.showInDock === true || prefs?.clickAwayToDismiss === false ? 'app' : 'panel';
+  if (prefs?.showInDock === true || prefs?.clickAwayToDismiss === false) {
+    return 'app';
+  }
+  if (prefs?.showInDock === false || prefs?.clickAwayToDismiss === true) {
+    return 'panel';
+  }
+
+  return 'app';
 }
 
 function normalizeFieldTheoryWindowMode(prefs: Partial<Preferences>): Partial<Preferences> {
@@ -336,14 +343,14 @@ const DEFAULT_PREFERENCES: Preferences = {
   // Hide status text labels - show only colored dots (red/purple/green). Disabled by default.
   hideStatusLabels: false,
 
-  // Show in Dock - disabled by default (panel mode). Kept for legacy callers.
-  showInDock: false,
+  // Show in Dock by default. Kept for legacy callers.
+  showInDock: true,
 
-  // Field Theory opens as the existing floating panel by default.
-  fieldTheoryWindowMode: 'panel',
+  // Field Theory opens as a normal app window by default.
+  fieldTheoryWindowMode: 'app',
 
-  // Click-away dismissal matches the existing panel behavior by default.
-  clickAwayToDismiss: true,
+  // App-window mode does not hide just because focus moves elsewhere.
+  clickAwayToDismiss: false,
 
   // Dark mode - disabled by default (light mode).
   darkMode: false,

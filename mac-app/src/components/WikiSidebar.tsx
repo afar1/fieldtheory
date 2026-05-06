@@ -35,7 +35,6 @@ export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
 export const LIBRARY_DEFAULT_FOLDER_IDS = [
   'artifacts',
   SCRATCHPAD_FOLDER_NAME,
-  'Shared Markdown',
   'debates',
   'Plans',
   'bookmarks-from-x',
@@ -1728,8 +1727,8 @@ function WikiSidebar({
   const contextUserFolderId = contextDir ? getUserFolderVisibilityId(contextDir) : null;
   const contextHideFolderId = contextDefaultFolderId ?? contextUserFolderId;
   const contextHideDirLabel = contextDefaultFolderId ? 'Hide folder' : contextUserFolderId ? 'Remove from FT' : null;
-  const canDeleteContextDir = !!contextDir?.canDeleteDir && !contextDefaultFolderId;
-  const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact';
+  const canDeleteContextDir = !!contextDir?.canDeleteDir;
+  const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact' || contextFile?.type === 'external';
   const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
   const canRenameContextFile = contextFile?.type === 'wiki' && !!contextFile.relPath;
   const contextFileFinderPath = contextFile?.type !== 'bookmarks' ? contextFile?.absPath : undefined;
@@ -1807,7 +1806,7 @@ function WikiSidebar({
   const deleteContextFile = useCallback(() => {
     const target = contextFile;
     closeContextMenu();
-    if (!target || (target.type !== 'wiki' && target.type !== 'artifact')) return;
+    if (!target || (target.type !== 'wiki' && target.type !== 'artifact' && target.type !== 'external')) return;
 
     if (target.type === 'wiki') {
       if (!target.relPath) return;
@@ -1826,9 +1825,26 @@ function WikiSidebar({
       return;
     }
 
+    if (target.type === 'external') {
+      confirmDelete({
+        title: 'Delete file?',
+        message: `Move "${target.title}" to Trash?`,
+        confirmLabel: 'Move to Trash',
+        onConfirm: async () => {
+          const success = await window.externalAPI?.delete(target.absPath);
+          if (success) {
+            onDeletedItem?.(target);
+            await loadTree('external-file-deleted');
+          }
+        },
+      });
+      return;
+    }
+
     confirmDelete({
       title: 'Delete artifact?',
-      message: `Delete "${target.title}"? This cannot be undone.`,
+      message: `Move "${target.title}" to Trash?`,
+      confirmLabel: 'Move to Trash',
       onConfirm: async () => {
         const shareStatus = await window.librarianAPI?.getShareStatus(target.absPath);
         if (shareStatus?.shared) {

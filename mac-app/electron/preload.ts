@@ -831,6 +831,7 @@ export interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowLibrary: (callback: () => void) => () => void;
   onShowTranscriptHistory: (callback: () => void) => () => void;
   onShowSettings: (callback: () => void) => () => void;
   onCollapseImmersive: (callback: () => void) => () => void;
@@ -1544,6 +1545,16 @@ const clipboardAPI: ClipboardAPI = {
     ipcRenderer.on('clipboard:showHistory', handler);
     return () => {
       ipcRenderer.removeListener('clipboard:showHistory', handler);
+    };
+  },
+
+  onShowLibrary: (callback: () => void): (() => void) => {
+    const handler = () => {
+      callback();
+    };
+    ipcRenderer.on('clipboard:showLibrary', handler);
+    return () => {
+      ipcRenderer.removeListener('clipboard:showLibrary', handler);
     };
   },
 
@@ -4138,6 +4149,8 @@ const externalAPI = {
     ipcRenderer.invoke('external:findLibraryFileByDocumentVersion', version, previousAbsPath),
   rename: (absPath: string, newName: string): Promise<ExternalMarkdownFile | null> =>
     ipcRenderer.invoke('external:rename', absPath, newName),
+  delete: (absPath: string): Promise<boolean> =>
+    ipcRenderer.invoke('external:delete', absPath),
   onOpenExternal: (callback: (absPath: string) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, absPath: string) => callback(absPath);
     ipcRenderer.on('external:openPage', handler);

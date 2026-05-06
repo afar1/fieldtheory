@@ -105,6 +105,7 @@ const HISTORY_LAYOUT_MIN_WIDTH_PX = 120;
 const FLOATING_CANCEL_FADE_MS = 180;
 const FLOATING_COMPLETE_SETTLE_MS = 60;
 const FLOATING_CONTENT_FALLBACK_WIDTH = WAVEFORM_WIDTH;
+const FLOATING_BUTTON_EDGE_INSET_PX = 6;
 const STATIC_WAVEFORM_LEVELS = new Array(WAVEFORM_BAR_COUNT).fill(0);
 const DRAWER_TEXT_SIZE_DEFAULT = 14;
 const DRAWER_TEXT_SIZE_MIN = 11;
@@ -264,7 +265,12 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
         WebkitAppRegion: floating ? 'drag' : undefined,
       } as React.CSSProperties}
     >
-      <PillSlot visible={waveformActive} width={WAVEFORM_WIDTH} marginRight={waveformSlotMargin}>
+      <PillSlot
+        visible={waveformActive}
+        width={WAVEFORM_WIDTH}
+        marginRight={waveformSlotMargin}
+        style={floating ? { justifyContent: 'center' } : undefined}
+      >
         <div aria-hidden="true" style={rightStyles.waveformContainer}>
           <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
         </div>
@@ -1784,8 +1790,8 @@ function FloatingPill() {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        gap: '4px',
-        padding: '0 6px',
+        position: 'relative',
+        padding: 0,
         boxSizing: 'border-box',
         borderRadius: '19px',
         background: '#000',
@@ -1804,12 +1810,16 @@ function FloatingPill() {
         onClick={cancelSession}
         style={{
           ...floatingButtonStyle,
+          position: 'absolute',
+          left: FLOATING_BUTTON_EDGE_INSET_PX,
+          top: '50%',
+          transform: 'translateY(-50%)',
           opacity: hovered ? 1 : 0,
           pointerEvents: hovered && !fadingOut ? 'auto' : 'none',
         }}
       >
-        <svg width="10" height="10" viewBox="0 0 10 10" fill="none" aria-hidden="true">
-          <path d="M1.5 1.5L8.5 8.5M8.5 1.5L1.5 8.5" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
+        <svg width="8" height="8" viewBox="0 0 10 10" fill="none" aria-hidden="true">
+          <path d="M1.75 1.75L8.25 8.25M8.25 1.75L1.75 8.25" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" />
         </svg>
       </button>
       <RightPill sectionWidth={rightWidth} floating />
