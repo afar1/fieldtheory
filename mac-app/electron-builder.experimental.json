@@ -58,6 +58,14 @@
         "to": "chatterbox"
       },
       {
+        "from": "scripts/gemma-generate.mjs",
+        "to": "scripts/gemma-generate.mjs"
+      },
+      {
+        "from": "scripts/setup-gemma.sh",
+        "to": "scripts/setup-gemma.sh"
+      },
+      {
         "from": "scripts/find-mlx-python.sh",
         "to": "scripts/find-mlx-python.sh"
       },
@@ -83,6 +91,8 @@
     "dist/**/*",
     "electron-dist/**/*",
     "package.json",
+    "scripts/gemma-generate.mjs",
+    "scripts/setup-gemma.sh",
     "node_modules/**/*",
     "!electron-dist/**/*.test.js",
     "!electron-dist/**/*.test.js.map",

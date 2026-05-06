@@ -1170,6 +1170,11 @@ export class DynamicIslandManager extends EventEmitter {
     );
     win.setAlwaysOnTop(true, 'screen-saver', zLevel);
 
+    if (label === 'left' && this.getResolvedRecordingIndicatorMode() === 'floating' && !this.shouldShowFloatingIndicator()) {
+      this.concealIndicatorWindow();
+      return;
+    }
+
     if (win.isVisible() && !this.isAutoHidden()) {
       win.setOpacity(1);
     }

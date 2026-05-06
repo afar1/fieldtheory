@@ -30,6 +30,8 @@ import { parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
 
 const log = createLogger('Commands');
 
+export const DEFAULT_IMPROVE_COMMAND_CONTENT = "Improve the selected text for clarity while preserving meaning, tone, markdown formatting, links, filenames, screenshots, and checkbox state. Return only the improved replacement text.\n";
+
 function yamlQuoted(value: string): string {
   return JSON.stringify(value);
 }
@@ -70,6 +72,10 @@ const DEFAULT_INTERNAL_COMMAND_TEMPLATES: Array<{ name: string; content: string 
   {
     name: 'questions',
     content: "Ask me as many questions as you may need until you have a full comprehension of my intent and what I'm trying to do and any important dependencies. I'm happy to answer as many questions as you'd like, even after I've answered some of your first sets of questions.\n",
+  },
+  {
+    name: 'improve',
+    content: DEFAULT_IMPROVE_COMMAND_CONTENT,
   },
   {
     name: 'commit',

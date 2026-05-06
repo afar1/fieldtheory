@@ -14,6 +14,7 @@ import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
+import LocalModelSettings from './LocalModelSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
@@ -36,6 +37,7 @@ type SettingsSection =
   | 'audio'
   | 'keyboard'
   | 'librarian'
+  | 'local-model'
   | 'commands'
   | 'sounds'
   | 'stats'
@@ -68,6 +70,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'audio': 'Audio & Transcription',
   'keyboard': 'Keyboard Shortcuts',
   'librarian': 'Librarian',
+  'local-model': 'Local model',
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
@@ -85,6 +88,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'hot-mic', // Hot Mic
   'keyboard',
   'librarian',
+  'local-model',
   'commands', // Portable Commands
   'sounds',
   'stats',
@@ -2096,6 +2100,13 @@ export default function SettingsPanel({
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
         />
+      </div>
+      )}
+
+      {/* Local model Section */}
+      {selectedSection === 'local-model' && (
+      <div style={styles.section}>
+        <LocalModelSettings />
       </div>
       )}
 

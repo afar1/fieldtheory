@@ -3631,6 +3631,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    if (event.key.toLowerCase() === 'i' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
+      event.preventDefault();
+      event.stopPropagation();
+      const run = window.commandsAPI?.runLocalCommand?.({
+        commandName: 'improve',
+        mode: 'selection',
+        selection: {
+          start: selection.start,
+          end: selection.end,
+        },
+      });
+      void run?.catch(() => {});
+      return true;
+    }
+
     if (event.key.toLowerCase() === 'z' && event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
       if (restoreMarkdownCodeEditorProgrammaticUndo()) {
         event.preventDefault();

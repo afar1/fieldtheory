@@ -133,6 +133,7 @@ const ClipboardIPCChannels = {
   // Local LLM model management
   GET_LOCAL_LLM_MODELS: 'clipboard:getLocalLLMModels',
   GET_LOCAL_LLM_STATUS: 'clipboard:getLocalLLMStatus',
+  GET_LOCAL_LLM_HEALTH: 'clipboard:getLocalLLMHealth',
   GET_LOCAL_LLM_SELECTED: 'clipboard:getLocalLLMSelected',
   SET_LOCAL_LLM_SELECTED: 'clipboard:setLocalLLMSelected',
   DOWNLOAD_LOCAL_LLM: 'clipboard:downloadLocalLLM',
@@ -854,11 +855,12 @@ export interface ClipboardAPI {
   startDrag: (stackId: string) => Promise<void>;
 
   // Local LLM model management
-  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string }>>;
+  getLocalLLMModels: () => Promise<Record<string, { name: string; filename: string; sizeBytes: number; description: string; license: string; sourceUrl: string; baseModelUrl: string }>>;
   getLocalLLMStatus: () => Promise<Record<string, boolean>>;
+  getLocalLLMHealth: () => Promise<Record<string, { status: 'ready' | 'missing' | 'corrupt'; modelPath: string; fileSizeBytes: number | null; expectedSizeBytes: number; minValidSizeBytes: number }>>;
   getLocalLLMSelected: () => Promise<string>;
   setLocalLLMSelected: (model: string) => Promise<{ success: boolean; error?: string }>;
-  downloadLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
+  downloadLocalLLM: (model: string) => Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }>;
   deleteLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
   getUseLocalLLM: () => Promise<boolean>;
   setUseLocalLLM: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
@@ -1693,6 +1695,10 @@ const clipboardAPI: ClipboardAPI = {
 
   getLocalLLMStatus: async () => {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_STATUS);
+  },
+
+  getLocalLLMHealth: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_LOCAL_LLM_HEALTH);
   },
 
   getLocalLLMSelected: async () => {
@@ -2868,6 +2874,35 @@ const agentImproveAPI = {
 
 type AgentImproveAPI = typeof agentImproveAPI;
 
+type LocalCommandRunMode = 'document' | 'selection';
+type LocalCommandRunRequest = {
+  commandName?: string;
+  customInstruction?: string;
+  mode?: LocalCommandRunMode;
+  selection?: {
+    start?: number;
+    end?: number;
+    text?: string;
+  } | null;
+};
+type LocalCommandRunResult = {
+  success: boolean;
+  error?: string;
+  filePath?: string;
+  commandName?: string;
+  mode?: LocalCommandRunMode;
+};
+type LocalCommandStatus = {
+  status: 'running' | 'success' | 'error' | 'notice';
+  message: string;
+  commandName?: string;
+  filePath?: string;
+  mode?: LocalCommandRunMode;
+  phase?: string;
+  error?: string;
+  updatedAt: number;
+};
+
 const diagnosticsAPI: DiagnosticsAPI = {
   getDiagnostics: async (): Promise<unknown> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS);
@@ -2889,8 +2924,10 @@ const CommandsIPCChannels = {
   GET_COMMANDS: 'commands:getCommands',
   REFRESH_COMMANDS: 'commands:refreshCommands',
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
+  RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
   COMMANDS_CHANGED: 'commands:commandsChanged',
   DIRECTORY_CHANGED: 'commands:directoryChanged',
+  LOCAL_COMMAND_STATUS: 'commands:localCommandStatus',
   // Multi-directory management
   INITIALIZE: 'commands:initialize',
   GET_WATCHED_DIRS: 'commands:getWatchedDirs',
@@ -3119,6 +3156,16 @@ const commandsAPI = {
   // Invoke a command by name (paste file or reference to target app).
   invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:invoke', commandName);
+  },
+
+  runLocalCommand: async (request: string | LocalCommandRunRequest): Promise<LocalCommandRunResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.RUN_LOCAL_COMMAND, request);
+  },
+
+  onLocalCommandStatus: (callback: (status: LocalCommandStatus) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: LocalCommandStatus) => callback(status);
+    ipcRenderer.on(CommandsIPCChannels.LOCAL_COMMAND_STATUS, handler);
+    return () => ipcRenderer.removeListener(CommandsIPCChannels.LOCAL_COMMAND_STATUS, handler);
   },
 
   // Resize the command launcher window.

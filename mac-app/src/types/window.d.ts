@@ -447,6 +447,24 @@ interface TargetAppInfo {
   runningApps: RunningApp[];
 }
 
+interface LocalLlmModelInfo {
+  name: string;
+  filename: string;
+  sizeBytes: number;
+  description: string;
+  license: string;
+  sourceUrl: string;
+  baseModelUrl: string;
+}
+
+interface LocalLlmHealth {
+  status: 'ready' | 'missing' | 'corrupt';
+  modelPath: string;
+  fileSizeBytes: number | null;
+  expectedSizeBytes: number;
+  minValidSizeBytes: number;
+}
+
 /**
  * The clipboard API exposed by the preload script.
  */
@@ -496,6 +514,18 @@ interface ClipboardAPI {
   getUniqueStacks?: () => Promise<StackInfo[]>;
   updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   startDrag?: (stackId: string) => Promise<void>;
+
+  // Local LLM model management
+  getLocalLLMModels?: () => Promise<Record<string, LocalLlmModelInfo>>;
+  getLocalLLMStatus?: () => Promise<Record<string, boolean>>;
+  getLocalLLMHealth?: () => Promise<Record<string, LocalLlmHealth>>;
+  getLocalLLMSelected?: () => Promise<string>;
+  setLocalLLMSelected?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  downloadLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }>;
+  deleteLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
+  getUseLocalLLM?: () => Promise<boolean>;
+  setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
   // Improved content management - store/clear improved versions of transcriptions
   saveImprovedContent?: (itemId: number, improvedContent: string) => Promise<{ success: boolean; error?: string }>;
@@ -1139,6 +1169,38 @@ interface AgentImproveAPI {
   launch: (request: AgentImproveLaunchRequest) => Promise<AgentImproveLaunchResult>;
 }
 
+type LocalCommandRunMode = 'document' | 'selection';
+
+interface LocalCommandRunRequest {
+  commandName?: string;
+  customInstruction?: string;
+  mode?: LocalCommandRunMode;
+  selection?: {
+    start?: number;
+    end?: number;
+    text?: string;
+  } | null;
+}
+
+interface LocalCommandRunResult {
+  success: boolean;
+  error?: string;
+  filePath?: string;
+  commandName?: string;
+  mode?: LocalCommandRunMode;
+}
+
+interface LocalCommandStatus {
+  status: 'running' | 'success' | 'error' | 'notice';
+  message: string;
+  commandName?: string;
+  filePath?: string;
+  mode?: LocalCommandRunMode;
+  phase?: string;
+  error?: string;
+  updatedAt: number;
+}
+
 /**
  * Diagnostics API for system diagnostics.
  */
@@ -1288,6 +1350,8 @@ interface CommandsAPI {
 
   // Command launcher (Cmd+Shift+K)
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
+  runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
+  onLocalCommandStatus?: (callback: (status: LocalCommandStatus) => void) => () => void;
   launcherResize?: (height: number) => void;
   launcherClose?: (options?: { skipActivation?: boolean }) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
