@@ -84,6 +84,7 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
+import { MaxwellRunManager } from './maxwellRunManager';
 import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
@@ -486,6 +487,7 @@ let bookmarksManager: BookmarksManager | null = null;
 let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let localLlmManager: LocalLlmManager | null = null;
+let maxwellRunManager: MaxwellRunManager | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let librarySyncService: LibrarySyncService | null = null;
@@ -670,6 +672,17 @@ function getLocalLlmManager(): LocalLlmManager {
     localLlmManager = new LocalLlmManager();
   }
   return localLlmManager;
+}
+
+function getMaxwellRunManager(): MaxwellRunManager {
+  if (!maxwellRunManager) {
+    maxwellRunManager = new MaxwellRunManager();
+  }
+  const dbPath = userDataManager?.isLoggedIn()
+    ? userDataManager.getUserDataPath('maxwell.db')
+    : path.join(app.getPath('userData'), 'maxwell.db');
+  maxwellRunManager.setDatabasePath(dbPath);
+  return maxwellRunManager;
 }
 
 function getLocalLlmSetupScriptPath(): string | null {
@@ -6920,6 +6933,20 @@ function setupClipboardIPCHandlers(): void {
       return { success: false, error };
     }
 
+    let maxwellRuns: MaxwellRunManager | null = null;
+    let maxwellRunId: string | undefined;
+    const updateMaxwellRun = (
+      action: string,
+      update: (manager: MaxwellRunManager, runId: string) => void,
+    ): void => {
+      if (!maxwellRuns || !maxwellRunId) return;
+      try {
+        update(maxwellRuns, maxwellRunId);
+      } catch (error) {
+        log.warn(`Could not ${action}:`, error);
+      }
+    };
+
     try {
       emitLocalCommandStatus({
         status: 'running',
@@ -6949,39 +6976,7 @@ function setupClipboardIPCHandlers(): void {
 
       const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
       const targetContent = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
-      appendCommandLauncherTrace('run-local-command-start', {
-        commandName: loaded.name,
-        commandPath: loaded.filePath,
-        targetType: activeLibraryFileContext.type,
-        targetPath: activeLibraryFileContext.filePath,
-        mode,
-      });
-      const targetFilePath = activeLibraryFileContext.filePath;
-      const emitHarnessProgress = (event: LocalLlmProgressEvent) => {
-        emitLocalCommandStatus({
-          status: 'running',
-          message: event.message,
-          detail: compactLocalCommandDetail(event.detail),
-          eventKind: event.kind,
-          commandName: loaded.name,
-          filePath: targetFilePath,
-          mode,
-          phase: event.phase ?? 'generating',
-        });
-      };
-
-      emitLocalCommandStatus({
-        status: 'running',
-        message: mode === 'selection'
-          ? `Improving selected text locally...`
-          : `Running ${customInstruction ? 'local instruction' : loaded.name} locally...`,
-        commandName: loaded.name,
-        filePath: activeLibraryFileContext.filePath,
-        mode,
-        phase: 'generating',
-      });
-
-      let replacement: string;
+      let resolvedSelection: { start: number; end: number; text: string } | null = null;
       if (mode === 'selection') {
         const selection = resolveLocalCommandSelection(request.selection, targetContent);
         if (!selection.ok) {
@@ -6995,7 +6990,72 @@ function setupClipboardIPCHandlers(): void {
           });
           return { success: false, error: selection.error, commandName: loaded.name, mode };
         }
-        const selectedReplacement = await getLocalLlmManager().runSelectionCommand({
+        resolvedSelection = selection;
+      }
+
+      const localManager = getLocalLlmManager();
+      const maxwellStartedAt = Date.now();
+      try {
+        maxwellRuns = getMaxwellRunManager();
+        const run = maxwellRuns.createPendingRun({
+          commandName: loaded.name,
+          commandPath: loaded.filePath,
+          commandContent: loaded.content,
+          targetPath: activeLibraryFileContext.filePath,
+          targetRelPath: activeLibraryFileContext.type === 'wiki' ? activeLibraryFileContext.relPath : null,
+          targetType: activeLibraryFileContext.type === 'wiki' ? 'wiki' : 'reading',
+          mode,
+          preContent: targetContent,
+          preVersion: expectedVersion,
+          model: localManager.getSelectedModel(),
+          harness: localManager.getHarness(),
+        });
+        maxwellRunId = run.runId;
+      } catch (error) {
+        log.warn('Could not create Maxwell run row:', error);
+      }
+      appendCommandLauncherTrace('run-local-command-start', {
+        commandName: loaded.name,
+        commandPath: loaded.filePath,
+        targetType: activeLibraryFileContext.type,
+        targetPath: activeLibraryFileContext.filePath,
+        mode,
+        maxwellRunId: maxwellRunId ?? null,
+      });
+      const targetFilePath = activeLibraryFileContext.filePath;
+      const emitHarnessProgress = (event: LocalLlmProgressEvent) => {
+        updateMaxwellRun('append Maxwell progress event', (manager, runId) => {
+          manager.appendProgressEvent(runId, event);
+        });
+        emitLocalCommandStatus({
+          status: 'running',
+          message: event.message,
+          detail: compactLocalCommandDetail(event.detail),
+          eventKind: event.kind,
+          commandName: loaded.name,
+          filePath: targetFilePath,
+          mode,
+          runId: maxwellRunId,
+          phase: event.phase ?? 'generating',
+        });
+      };
+
+      emitLocalCommandStatus({
+        status: 'running',
+        message: mode === 'selection'
+          ? `Improving selected text locally...`
+          : `Running ${customInstruction ? 'local instruction' : loaded.name} locally...`,
+        commandName: loaded.name,
+        filePath: activeLibraryFileContext.filePath,
+        mode,
+        runId: maxwellRunId,
+        phase: 'generating',
+      });
+
+      let replacement: string;
+      if (mode === 'selection') {
+        const selection = resolvedSelection!;
+        const selectedReplacement = await localManager.runSelectionCommand({
           commandName: loaded.name,
           commandContent: loaded.content,
           targetTitle: activeLibraryFileContext.title,
@@ -7007,7 +7067,7 @@ function setupClipboardIPCHandlers(): void {
         });
         replacement = `${targetContent.slice(0, selection.start)}${selectedReplacement}${targetContent.slice(selection.end)}`;
       } else {
-        replacement = await getLocalLlmManager().runReplacementCommand({
+        replacement = await localManager.runReplacementCommand({
           commandName: loaded.name,
           commandContent: loaded.content,
           targetTitle: activeLibraryFileContext.title,
@@ -7017,6 +7077,11 @@ function setupClipboardIPCHandlers(): void {
           onProgress: emitHarnessProgress,
         });
       }
+      updateMaxwellRun('mark Maxwell run generated', (manager, runId) => {
+        manager.markGenerated(runId, replacement, {
+          generationMs: Date.now() - maxwellStartedAt,
+        });
+      });
 
       const changeSummary = summarizeLocalCommandChange(targetContent, replacement);
       emitLocalCommandStatus({
@@ -7027,6 +7092,7 @@ function setupClipboardIPCHandlers(): void {
         commandName: loaded.name,
         filePath: activeLibraryFileContext.filePath,
         mode,
+        runId: maxwellRunId,
         phase: 'saving',
         changedLines: changeSummary.changedLines,
         changedBytes: changeSummary.changedBytes,
@@ -7044,6 +7110,17 @@ function setupClipboardIPCHandlers(): void {
           commandName: loaded.name,
           targetPath: activeLibraryFileContext.filePath,
           reason: saveResult.reason,
+          maxwellRunId: maxwellRunId ?? null,
+        });
+        updateMaxwellRun('mark Maxwell save failure', (manager, runId) => {
+          if (saveResult.reason === 'conflict') {
+            manager.markSaveConflict(runId, {
+              generatedContent: replacement,
+              errorMessage: error,
+            });
+          } else {
+            manager.markError(runId, 'save_error', error);
+          }
         });
         emitLocalCommandStatus({
           status: 'error',
@@ -7051,9 +7128,10 @@ function setupClipboardIPCHandlers(): void {
           commandName: loaded.name,
           filePath: activeLibraryFileContext.filePath,
           mode,
+          runId: maxwellRunId,
           error,
         });
-        return { success: false, error, commandName: loaded.name, mode };
+        return { success: false, error, commandName: loaded.name, mode, runId: maxwellRunId };
       }
 
       appendCommandLauncherTrace('run-local-command-success', {
@@ -7061,6 +7139,16 @@ function setupClipboardIPCHandlers(): void {
         commandPath: loaded.filePath,
         targetPath: activeLibraryFileContext.filePath,
         mode,
+        maxwellRunId: maxwellRunId ?? null,
+      });
+      updateMaxwellRun('mark Maxwell run success', (manager, runId) => {
+        manager.markSuccess(runId, {
+          generatedContent: replacement,
+          postContent: replacement,
+          postVersion: saveResult.version,
+          summary: changeSummary.detail,
+          timings: { totalMs: Date.now() - maxwellStartedAt },
+        });
       });
       await quotaManager?.updateUsage('portable_commands', 1);
       metricsManager?.recordCommandExecuted();
@@ -7074,24 +7162,29 @@ function setupClipboardIPCHandlers(): void {
         commandName: loaded.name,
         filePath: activeLibraryFileContext.filePath,
         mode,
+        runId: maxwellRunId,
         phase: 'done',
         changedLines: changeSummary.changedLines,
         changedBytes: changeSummary.changedBytes,
       });
-      return { success: true, filePath: activeLibraryFileContext.filePath, commandName: loaded.name, mode };
+      return { success: true, filePath: activeLibraryFileContext.filePath, commandName: loaded.name, mode, runId: maxwellRunId };
     } catch (error) {
       log.error('Error running local command:', error);
       const message = error instanceof Error ? error.message : 'Local command failed';
-      appendCommandLauncherTrace('run-local-command-error', { commandName: statusCommandName, mode, error });
+      updateMaxwellRun('mark Maxwell generation failure', (manager, runId) => {
+        manager.markError(runId, 'generation_error', message);
+      });
+      appendCommandLauncherTrace('run-local-command-error', { commandName: statusCommandName, mode, error, maxwellRunId: maxwellRunId ?? null });
       emitLocalCommandStatus({
         status: 'error',
         message,
         commandName: statusCommandName,
         filePath: activeLibraryFileContext.filePath,
         mode,
+        runId: maxwellRunId,
         error: message,
       });
-      return { success: false, error: message, commandName: statusCommandName, mode };
+      return { success: false, error: message, commandName: statusCommandName, mode, runId: maxwellRunId };
     }
   });
 

@@ -2891,6 +2891,7 @@ type LocalCommandRunResult = {
   filePath?: string;
   commandName?: string;
   mode?: LocalCommandRunMode;
+  runId?: string;
 };
 type LocalCommandStatus = {
   status: 'running' | 'success' | 'error' | 'notice';
@@ -2900,6 +2901,7 @@ type LocalCommandStatus = {
   commandName?: string;
   filePath?: string;
   mode?: LocalCommandRunMode;
+  runId?: string;
   phase?: string;
   changedLines?: number;
   changedBytes?: number;
