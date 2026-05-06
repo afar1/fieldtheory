@@ -319,6 +319,100 @@ describe('CommandsView command naming', () => {
     expect(screen.getAllByText('Command').length).toBeGreaterThan(0);
   });
 
+  it('does not rebuild every linked command document when selection changes', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+    };
+    const getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nReview body\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = getCommandByPath;
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    await waitFor(() => {
+      expect(getCommandByPath.mock.calls.some(([path]) => path === reviewCommand.filePath)).toBe(true);
+    });
+    getCommandByPath.mockClear();
+
+    fireEvent.click(screen.getAllByText('review')[0]);
+
+    expect(await screen.findByText('Review body')).toBeTruthy();
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(getCommandByPath.mock.calls.map(([path]) => path)).toEqual([reviewCommand.filePath]);
+  });
+
+  it('does not rebuild linked command documents for mtime-only command refreshes', async () => {
+    const existingCommand = {
+      name: 'existing',
+      displayName: 'existing',
+      filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
+    };
+    const reviewCommand = {
+      name: 'review',
+      displayName: 'review',
+      filePath: '/tmp/commands/review.md',
+      lastModified: 0,
+    };
+    let commandsChangedHandler: ((commands: typeof existingCommand[]) => void) | null = null;
+    const getCommandByPath = vi.fn(async (filePath: string) => ({
+      ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
+      filePath,
+      lastModified: 0,
+      documentVersion: { mtimeMs: 0, size: 0, sha256: 'test-version' },
+      content: filePath.endsWith('review.md')
+        ? '# review\n\nSee [[existing]].\n'
+        : '# existing\n\nRendered selection text\n',
+    }));
+    window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
+    window.commandsAPI!.getCommandByPath = getCommandByPath;
+    window.commandsAPI!.onCommandsChanged = vi.fn((callback) => {
+      commandsChangedHandler = callback;
+      return () => {};
+    });
+
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Rendered selection text');
+    await waitFor(() => {
+      expect(getCommandByPath.mock.calls.some(([path]) => path === reviewCommand.filePath)).toBe(true);
+    });
+    getCommandByPath.mockClear();
+
+    act(() => {
+      commandsChangedHandler?.([
+        { ...existingCommand, lastModified: 1 },
+        { ...reviewCommand, lastModified: 1 },
+      ]);
+    });
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getCommandByPath).not.toHaveBeenCalled();
+  });
+
   it('autosaves markdown edits without toolbar save controls', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 

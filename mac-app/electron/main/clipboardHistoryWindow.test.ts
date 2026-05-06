@@ -97,7 +97,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window = new ClipboardHistoryWindow({
-      get: vi.fn(() => ({})),
+      get: vi.fn(() => ({ fieldTheoryWindowMode: 'panel', clickAwayToDismiss: true })),
       getPreference: vi.fn((key: string) => {
         if (key === 'clickAwayToDismiss') return true;
         return false;
@@ -125,7 +125,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
       bundleId: 'com.apple.Safari',
       name: 'Safari',
     });
-    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false);
+    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false, 'clipboard');
   });
 
   it('shows immediately while previous-app capture continues in background when cache is unavailable', async () => {
@@ -149,7 +149,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     window.capturePreviousAppAndShow(bounds, false, true, true, false);
 
     expect(callOrder).toEqual(['capture-start', 'show']);
-    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false);
+    expect(window.show).toHaveBeenCalledWith(bounds, false, true, true, false, 'clipboard');
 
     resolveCapture();
     await Promise.resolve();
@@ -226,6 +226,8 @@ describe('ClipboardHistoryWindow helper methods', () => {
     const animateBounds = vi.spyOn(window as any, 'animateBounds').mockImplementation(() => {});
     (window as any).currentSizeKey = 'library';
     (window as any).preferencesManager.get.mockReturnValue({
+      fieldTheoryWindowMode: 'panel',
+      clickAwayToDismiss: true,
       clipboardHistoryBoundsByView: {
         library: { x: 100, y: 100, width: 900, height: 600 },
       },
@@ -476,6 +478,39 @@ describe('ClipboardHistoryWindow helper methods', () => {
       'clipboard:showHistory',
       'clipboard:showSettings',
     ]);
+  });
+
+  it('showLibrary opens library mode when reusing an existing window', () => {
+    const send = vi.fn();
+    attachExistingWindow(window, send);
+
+    window.showLibrary(undefined, true);
+
+    expect(send.mock.calls.map(([channel]) => channel)).toEqual([
+      'clipboard:showLibrary',
+    ]);
+  });
+
+  it('showLibrary opens library mode in app-window mode', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    attachExistingWindow(window, send);
+
+    window.showLibrary(undefined, true);
+
+    expect(mockApp.show).toHaveBeenCalled();
+    expect(send.mock.calls.map(([channel]) => channel)).toEqual([
+      'clipboard:showLibrary',
+    ]);
+  });
+
+  it('capturePreviousAppAndShowLibrary forwards the library initial mode', () => {
+    const bounds = { x: 10, y: 20, width: 900, height: 600 };
+    vi.spyOn(window, 'capturePreviousAppAndShow').mockImplementation(() => {});
+
+    window.capturePreviousAppAndShowLibrary(bounds, true, false);
+
+    expect(window.capturePreviousAppAndShow).toHaveBeenCalledWith(bounds, false, true, false, false, 'library');
   });
 
   it('activates panel mode with app.focus instead of app.show', () => {

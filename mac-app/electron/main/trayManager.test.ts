@@ -2,6 +2,8 @@ import { EventEmitter } from 'events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const electronMock = vi.hoisted(() => {
+  const createdDataUrls: string[] = [];
+
   class MockTray {
     static instances: MockTray[] = [];
 
@@ -46,10 +48,19 @@ const electronMock = vi.hoisted(() => {
       createFromPath: vi.fn(() => ({
         isEmpty: () => false,
       })),
+      createFromDataURL: vi.fn((dataUrl: string) => {
+        createdDataUrls.push(dataUrl);
+        return {
+          dataUrl,
+          isEmpty: () => false,
+          setTemplateImage: vi.fn(),
+        };
+      }),
     },
+    createdDataUrls,
     app: {
       isPackaged: false,
-      getAppPath: vi.fn(() => '/mock-app'),
+      getAppPath: vi.fn(() => process.cwd()),
       quit: vi.fn(),
     },
     net: {
@@ -109,9 +120,17 @@ function createTrayManager(options: { checkForUpdates?: () => void } = {}): { ma
   return { manager, tray };
 }
 
-describe('TrayManager recording waveform title', () => {
+function getLatestRecordingSvg(): string {
+  const dataUrl = electronMock.createdDataUrls.at(-1);
+  if (!dataUrl) return '';
+  const encoded = dataUrl.split(',')[1] ?? '';
+  return Buffer.from(encoded, 'base64').toString('utf8');
+}
+
+describe('TrayManager recording waveform image', () => {
   beforeEach(() => {
     electronMock.MockTray.instances = [];
+    electronMock.createdDataUrls.length = 0;
     vi.clearAllMocks();
   });
 
@@ -119,16 +138,19 @@ describe('TrayManager recording waveform title', () => {
     vi.useRealTimers();
   });
 
-  it('replaces the priority mic title with a live waveform while recording', () => {
+  it('replaces the priority mic title with a compact centered waveform image while recording', () => {
     const { manager, tray } = createTrayManager();
 
     expect(tray.titles.at(-1)).toBe(':Mac');
 
     manager.setRecordingActive(true);
-    expect(tray.titles.at(-1)).toBe('▁▁▁▁▁▁▁');
+    expect(tray.titles.at(-1)).toBe('');
+    expect(getLatestRecordingSvg()).toContain('width="43" height="16"');
+    expect(getLatestRecordingSvg().match(/<rect /g)).toHaveLength(7);
 
     manager.updateRecordingAudioLevel(0.05);
-    expect(tray.titles.at(-1)).toBe('▁▁▁▁▁▁▅');
+    expect(tray.titles.at(-1)).toBe('');
+    expect(getLatestRecordingSvg()).toContain('x="41" y="3.5" width="2" height="9"');
 
     manager.setRecordingActive(false);
     expect(tray.titles.at(-1)).toBe(':Mac');
@@ -141,7 +163,7 @@ describe('TrayManager recording waveform title', () => {
     expect(tray.titles.at(-1)).toBe(':Mac •2');
 
     manager.setRecordingActive(true);
-    expect(tray.titles.at(-1)).toBe('▁▁▁▁▁▁▁ •2');
+    expect(tray.titles.at(-1)).toBe(' •2');
   });
 });
 
