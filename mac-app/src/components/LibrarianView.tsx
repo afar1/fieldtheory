@@ -3,7 +3,7 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { Children, cloneElement, isValidElement, useEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
+import { Children, cloneElement, isValidElement, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
@@ -260,6 +260,21 @@ export function rebaseMarkdownTodoStateChange(
   };
 }
 
+export function shouldApplyLiveMarkdownFileUpdate(input: {
+  contentMode: 'rendered' | 'markdown';
+  editContent: string;
+  lastSavedContent: string | null;
+  hasPendingRenderedSave?: boolean;
+}): boolean {
+  if (input.hasPendingRenderedSave) return false;
+  if (input.contentMode !== 'markdown') return true;
+  return input.lastSavedContent !== null && input.editContent === input.lastSavedContent;
+}
+
+export function documentVersionsEqual(left: DocumentVersion | null | undefined, right: DocumentVersion | null | undefined): boolean {
+  return !!left && !!right && left.size === right.size && left.sha256 === right.sha256;
+}
+
 export function shouldHandleMarkdownTodoTabShortcut(input: {
   key: string;
   shiftKey: boolean;
@@ -341,6 +356,7 @@ const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
 const LIBRARIAN_CONTENT_BOTTOM_PADDING_PX = 0;
+const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED = false;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
@@ -1765,6 +1781,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ? restoredEditorSession?.contentMode ?? 'rendered'
       : 'rendered'
   ));
+  const contentModeRef = useRef(contentMode);
+  const editContentRef = useRef(editContent);
+  useLayoutEffect(() => {
+    contentModeRef.current = contentMode;
+    editContentRef.current = editContent;
+  }, [contentMode, editContent]);
   const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
   const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
@@ -2502,16 +2524,44 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [applySavedDocumentState]);
 
+  const applyLiveDiskDocumentState = useCallback((
+    targetType: LibrarianSelectedItemType,
+    targetPath: string | null,
+    reading: Reading,
+  ): boolean => {
+    if (documentVersionsEqual(reading.documentVersion, lastSavedVersionRef.current)) {
+      return false;
+    }
+
+    const currentContentMode = contentModeRef.current;
+    if (!shouldApplyLiveMarkdownFileUpdate({
+      contentMode: currentContentMode,
+      editContent: editContentRef.current,
+      lastSavedContent: lastSavedContentRef.current,
+      hasPendingRenderedSave: pendingRenderedSaveRef.current !== null,
+    })) {
+      return false;
+    }
+
+    applySavedDocumentState(targetType, targetPath, reading.content, reading.documentVersion, reading.title);
+    const nextEditContent = currentContentMode === 'markdown'
+      ? removeEmptyMarkdownCommentPlaceholders(reading.content)
+      : reading.content;
+    setEditContent(nextEditContent);
+    if (currentContentMode === 'markdown') {
+      lastSavedContentRef.current = nextEditContent;
+    }
+    return true;
+  }, [applySavedDocumentState]);
+
   const refreshActiveAgentFile = useCallback(async (filePath: string) => {
-    if (contentMode === 'markdown' || activeReading?.path !== filePath) return;
+    if (activeReading?.path !== filePath) return;
 
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
       const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
       if (!page || page.absPath !== filePath) return;
       const reading = readingFromWikiPage(page);
-      setWikiSelectedPage(reading);
-      lastSavedContentRef.current = reading.content;
-      lastSavedVersionRef.current = reading.documentVersion;
+      applyLiveDiskDocumentState('wiki', reading.path, reading);
       return;
     }
 
@@ -2519,13 +2569,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const file = await window.externalAPI?.open(filePath);
       if (!file) return;
       const reading = readingFromExternalMarkdownFile(file);
-      setExternalOpenFile((prev) => prev?.path === file.path ? reading : prev);
-      if (activeReading.path === reading.path) {
-        lastSavedContentRef.current = reading.content;
-        lastSavedVersionRef.current = reading.documentVersion;
-      }
+      applyLiveDiskDocumentState('external', reading.path, reading);
     }
-  }, [activeReading?.path, contentMode, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading?.path, applyLiveDiskDocumentState, selectedItemType, wikiSelectedRelPath]);
+
+  const refreshActiveDiskDocument = useCallback(async () => {
+    const activePath = activeReading?.path;
+    if (!activePath) return;
+
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
+      if (!page || page.absPath !== activePath) return;
+      const reading = readingFromWikiPage(page);
+      applyLiveDiskDocumentState('wiki', reading.path, reading);
+      return;
+    }
+
+    if (selectedItemType === 'external') {
+      const file = await window.externalAPI?.open(activePath);
+      if (!file) return;
+      const reading = readingFromExternalMarkdownFile(file);
+      applyLiveDiskDocumentState('external', reading.path, reading);
+      return;
+    }
+
+  }, [activeReading?.path, applyLiveDiskDocumentState, selectedItemType, wikiSelectedRelPath]);
 
   useEffect(() => {
     const unsubscribe = window.agentKickoffAPI?.onStatus((event) => {
@@ -2533,6 +2601,27 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
     return () => unsubscribe?.();
   }, [refreshActiveAgentFile]);
+
+  useEffect(() => {
+    if (
+      !active
+      || !activeReading?.path
+      || (selectedItemType !== 'wiki' && selectedItemType !== 'external')
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const refresh = () => {
+      if (!cancelled) void refreshActiveDiskDocument();
+    };
+    refresh();
+    const intervalId = window.setInterval(refresh, ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [active, activeReading?.path, refreshActiveDiskDocument, selectedItemType]);
 
   useEffect(() => {
     if (!activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) return;
@@ -2651,6 +2740,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     return linesByRenderedLine;
   }, [activeReading?.content, sourceTaskLines]);
+  const renderedDocumentVersionKey = activeReading?.documentVersion
+    ? `${activeReading.path}:${activeReading.documentVersion.size}:${activeReading.documentVersion.sha256}`
+    : activeReading?.path ?? 'empty';
 
   useEffect(() => {
     if (!active) {
@@ -4051,7 +4143,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     let cancelled = false;
     const unsubscribe = window.wikiAPI?.onPageChanged(async () => {
       const page = await window.wikiAPI?.getPage(wikiSelectedRelPath);
-      if (page) return;
+      if (page) {
+        const reading = readingFromWikiPage(page);
+        applyLiveDiskDocumentState('wiki', reading.path, reading);
+        return;
+      }
       const previousVersion = lastSavedVersionRef.current;
       if (previousVersion) {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -4091,7 +4187,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       cancelled = true;
       unsubscribe?.();
     };
-  }, [contentMode, editContent, wikiSelectedRelPath]);
+  }, [applyLiveDiskDocumentState, contentMode, editContent, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (selectedItemType !== 'external' || !externalOpenFile?.path) return;
@@ -4099,7 +4195,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const previousPath = externalOpenFile.path;
     const unsubscribe = window.libraryAPI?.onRootsChanged(async () => {
       const file = await window.externalAPI?.open(previousPath);
-      if (file) return;
+      if (file) {
+        const reading = readingFromExternalMarkdownFile(file);
+        applyLiveDiskDocumentState('external', reading.path, reading);
+        return;
+      }
       const previousVersion = lastSavedVersionRef.current;
       if (previousVersion) {
         await new Promise((resolve) => setTimeout(resolve, 250));
@@ -4137,7 +4237,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       cancelled = true;
       unsubscribe?.();
     };
-  }, [contentMode, editContent, externalOpenFile?.path, selectedItemType]);
+  }, [applyLiveDiskDocumentState, contentMode, editContent, externalOpenFile?.path, selectedItemType]);
 
   useEffect(() => {
     const unsubscribe = window.wikiAPI?.onPageRenamed?.(async (event) => {
@@ -4295,13 +4395,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       // Reload content if this is the selected reading
       if (selectedPath === reading.path) {
         window.librarianAPI?.getReading(reading.path).then((result) => {
-          setSelectedReading(result || null);
+          if (result) {
+            applyLiveDiskDocumentState('artifact', result.path, result);
+          } else {
+            setSelectedReading(null);
+          }
         });
       }
     });
 
     return () => unsubscribe?.();
-  }, [selectedPath]);
+  }, [applyLiveDiskDocumentState, selectedPath]);
 
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingRenamed?.(({ oldPath, reading, traceId, emittedAt }) => {
@@ -5779,6 +5883,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               }}
             >
               <FieldTheoryProse
+                key={renderedDocumentVersionKey}
                 className={todoMarker === 'square' ? 'ft-prose-todo-square' : undefined}
                 color={documentTextStyle.color}
                 fontFamily={typographyPreset.fontFamily}
