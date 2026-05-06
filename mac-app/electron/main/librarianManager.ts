@@ -5868,7 +5868,7 @@ PreToolUse Auto-Approve Hook for Field Theory Read Permissions
 
 Auto-approves Read/Write/Edit operations for:
 - ~/Library/Application Support/fieldtheory-mac/users/*/figures/* (screenshot figures)
-- ~/.fieldtheory/library/Commands/*, ~/.fieldtheory/commands/*, and .cursor/commands/* (portable commands)
+- ~/.fieldtheory/library/Commands/* and .cursor/commands/* (portable commands)
 
 This is separate from Librarian functionality.
 Never blocks - only auto-approves or passes through to normal flow.
@@ -5899,7 +5899,7 @@ def main():
             sys.exit(0)
 
         # Check for portable commands.
-        if "/.fieldtheory/library/Commands/" in file_path or "/.fieldtheory/commands/" in file_path or "/.cursor/commands/" in file_path:
+        if "/.fieldtheory/library/Commands/" in file_path or "/.cursor/commands/" in file_path:
             print(json.dumps({
                 "hookSpecificOutput": {
                     "hookEventName": "PreToolUse",
