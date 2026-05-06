@@ -1,12 +1,21 @@
 import { app } from 'electron';
 import fs from 'fs';
 import path from 'path';
-import { StdioJsonServer } from './stdioJsonServer';
+import { StdioJsonServer, type ServerEvent, type ServerSendOptions } from './stdioJsonServer';
 import { createLogger } from './logger';
 
 const log = createLogger('LocalLLM');
 
 export type LocalLlmModelId = 'gemma-4-E4B-it-Q4_K_M';
+export type LocalLlmHarness = 'codex' | 'direct';
+export type LocalLlmProgressKind = 'status' | 'model_output' | 'tool_call' | 'file_change' | 'error';
+
+export interface LocalLlmProgressEvent {
+  kind: LocalLlmProgressKind;
+  message: string;
+  detail?: string;
+  phase?: string;
+}
 
 export interface LocalLlmModelInfo {
   name: string;
@@ -38,6 +47,22 @@ export interface LocalCommandSelectionPromptInput extends LocalCommandPromptInpu
   selectedText: string;
 }
 
+export interface LocalLlmRunOptions {
+  maxTokens?: number;
+  temperature?: number;
+  onProgress?: (event: LocalLlmProgressEvent) => void;
+}
+
+export interface LocalLlmCommandOptions {
+  onProgress?: (event: LocalLlmProgressEvent) => void;
+}
+
+type LocalLlmServer = {
+  start: () => Promise<void>;
+  send: (cmd: Record<string, unknown>, options?: ServerSendOptions) => Promise<{ ok: boolean; text?: string; error?: string }>;
+  stop: () => void;
+};
+
 export interface LocalLlmManagerOptions {
   userDataPath?: string;
   resourcesPath?: string;
@@ -51,7 +76,7 @@ export interface LocalLlmManagerOptions {
     timeoutMs: number;
     startupTimeoutMs: number;
     env: NodeJS.ProcessEnv;
-  }) => Pick<StdioJsonServer, 'start' | 'send' | 'stop'>;
+  }) => LocalLlmServer;
 }
 
 const LOCAL_LLM_MODELS: Record<LocalLlmModelId, LocalLlmModelInfo> = {
@@ -72,6 +97,10 @@ export function isLocalLlmModelId(value: unknown): value is LocalLlmModelId {
   return typeof value === 'string' && Object.prototype.hasOwnProperty.call(LOCAL_LLM_MODELS, value);
 }
 
+export function resolveLocalLlmHarness(value: unknown): LocalLlmHarness {
+  return value === 'direct' ? 'direct' : 'codex';
+}
+
 export function stripWholeMarkdownFence(text: string): string {
   const withoutThought = text
     .replace(/^<think>[\s\S]*?<\/think>/i, '')
@@ -80,7 +109,7 @@ export function stripWholeMarkdownFence(text: string): string {
     .replace(/^<\|channel\>final\n/i, '')
     .replace(/<\|end\|>|<eos>|<\/s>/gi, '');
   const trimmed = withoutThought.trim();
-  const match = trimmed.match(/^```(?:markdown|md)?\s*\n([\s\S]*?)\n```$/i);
+  const match = trimmed.match(/^```(?:markdown|md|json)?\s*\n([\s\S]*?)\n```$/i);
   return match ? match[1].trim() : trimmed;
 }
 
@@ -90,12 +119,16 @@ export function buildLocalCommandPrompt(input: LocalCommandPromptInput): string 
     '',
     'Rules:',
     '- Use the command markdown as the function instructions.',
-    '- Return only the complete replacement Markdown document.',
-    '- Do not add explanations before or after the Markdown.',
-    '- Do not wrap the answer in a code fence.',
-    '- Do not include private reasoning, thinking tags, JSON metadata, or status text.',
+    '- Return exactly one JSON object.',
+    '- Put the complete replacement Markdown document in replacementMarkdown.',
+    '- Do not add explanations before or after the JSON.',
+    '- Do not wrap the JSON in a code fence.',
+    '- Do not include private reasoning, thinking tags, or status text.',
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- If the source is incomplete, keep it as a clarification task instead of inventing missing intent.',
+    '',
+    'JSON shape:',
+    '{"replacementMarkdown":"<complete replacement Markdown document>","summary":"<one sentence summary>"}',
     '',
     `Command name: ${input.commandName}`,
     '',
@@ -120,13 +153,17 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
     '',
     'Rules:',
     '- Use the command markdown as the function instructions.',
-    '- Return only the replacement text for the selected markdown.',
+    '- Return exactly one JSON object.',
+    '- Put only the replacement text for the selected markdown in replacementText.',
     '- Do not return the full document.',
-    '- Do not add explanations before or after the replacement.',
-    '- Do not wrap the answer in a code fence.',
-    '- Do not include private reasoning, thinking tags, JSON metadata, or status text.',
+    '- Do not add explanations before or after the JSON.',
+    '- Do not wrap the JSON in a code fence.',
+    '- Do not include private reasoning, thinking tags, or status text.',
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- Preserve surrounding markdown style unless the command explicitly asks to change it.',
+    '',
+    'JSON shape:',
+    '{"replacementText":"<replacement text for the selected markdown>","summary":"<one sentence summary>"}',
     '',
     `Command name: ${input.commandName}`,
     '',
@@ -150,10 +187,33 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
   ].join('\n');
 }
 
+export function parseLocalCommandReplacement(raw: string, replacementField: 'replacementMarkdown' | 'replacementText'): string {
+  const cleaned = stripWholeMarkdownFence(raw);
+  const parsed = parseJsonObject(cleaned) ?? parseJsonObject(extractJsonObject(cleaned));
+  const replacement = parsed?.[replacementField];
+  if (typeof replacement === 'string') {
+    return stripWholeMarkdownFence(replacement);
+  }
+  return cleaned;
+}
+
+export function parseLocalLlmProgressEvent(event: ServerEvent): LocalLlmProgressEvent | null {
+  if (event.event !== 'progress') return null;
+  const message = typeof event.message === 'string' ? event.message.trim() : '';
+  if (!message) return null;
+  const kind = isLocalLlmProgressKind(event.kind) ? event.kind : 'status';
+  const detail = typeof event.detail === 'string' && event.detail.trim()
+    ? event.detail.trim()
+    : undefined;
+  const phase = typeof event.phase === 'string' && event.phase.trim()
+    ? event.phase.trim()
+    : undefined;
+  return { kind, message, detail, phase };
+}
 
 export class LocalLlmManager {
   private selectedModel: LocalLlmModelId = DEFAULT_LOCAL_LLM_MODEL;
-  private server: Pick<StdioJsonServer, 'start' | 'send' | 'stop'> | null = null;
+  private server: LocalLlmServer | null = null;
   private serverModelPath: string | null = null;
 
   constructor(private readonly options: LocalLlmManagerOptions = {}) {}
@@ -164,6 +224,10 @@ export class LocalLlmManager {
 
   getSelectedModel(): LocalLlmModelId {
     return this.selectedModel;
+  }
+
+  getHarness(): LocalLlmHarness {
+    return resolveLocalLlmHarness(this.options.env?.FT_LOCAL_LLM_HARNESS ?? process.env.FT_LOCAL_LLM_HARNESS);
   }
 
   setSelectedModel(model: string): { success: boolean; error?: string } {
@@ -239,7 +303,7 @@ export class LocalLlmManager {
     };
   }
 
-  async generate(prompt: string, options: { maxTokens?: number; temperature?: number } = {}): Promise<string> {
+  async generate(prompt: string, options: LocalLlmRunOptions = {}): Promise<string> {
     const health = this.getModelHealth(this.selectedModel);
     if (health.status !== 'ready') {
       throw new Error(`Gemma model is ${health.status}. Open Settings > Local model to download or link ${LOCAL_LLM_MODELS[this.selectedModel].filename}.`);
@@ -252,6 +316,12 @@ export class LocalLlmManager {
       prompt,
       maxTokens: options.maxTokens ?? 4096,
       temperature: options.temperature ?? 0.1,
+      harness: this.getHarness(),
+    }, {
+      onEvent: (event) => {
+        const progress = parseLocalLlmProgressEvent(event);
+        if (progress) options.onProgress?.(progress);
+      },
     });
     if (!response.ok || typeof response.text !== 'string') {
       throw new Error(response.error ?? 'Local Gemma generation failed');
@@ -259,16 +329,16 @@ export class LocalLlmManager {
     return response.text;
   }
 
-  async runReplacementCommand(input: LocalCommandPromptInput): Promise<string> {
+  async runReplacementCommand(input: LocalCommandPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {
     const prompt = buildLocalCommandPrompt(input);
-    const raw = await this.generate(prompt, { maxTokens: 4096, temperature: 0.1 });
-    return stripWholeMarkdownFence(raw);
+    const raw = await this.generate(prompt, { maxTokens: 4096, temperature: 0.1, onProgress: options.onProgress });
+    return parseLocalCommandReplacement(raw, 'replacementMarkdown');
   }
 
-  async runSelectionCommand(input: LocalCommandSelectionPromptInput): Promise<string> {
+  async runSelectionCommand(input: LocalCommandSelectionPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {
     const prompt = buildLocalSelectionCommandPrompt(input);
-    const raw = await this.generate(prompt, { maxTokens: 2048, temperature: 0.1 });
-    return stripWholeMarkdownFence(raw);
+    const raw = await this.generate(prompt, { maxTokens: 2048, temperature: 0.1, onProgress: options.onProgress });
+    return parseLocalCommandReplacement(raw, 'replacementText');
   }
 
   stop(): void {
@@ -301,7 +371,7 @@ export class LocalLlmManager {
     return [...new Set(candidates.map(candidate => path.resolve(candidate)))];
   }
 
-  private getServer(modelPath: string): Pick<StdioJsonServer, 'start' | 'send' | 'stop'> {
+  private getServer(modelPath: string): LocalLlmServer {
     if (this.server && this.serverModelPath === modelPath) {
       return this.server;
     }
@@ -316,7 +386,7 @@ export class LocalLlmManager {
     const config = {
       name: 'Gemma',
       command: process.execPath,
-      args: [scriptPath, '--model', modelPath],
+      args: [scriptPath, '--model', modelPath, '--codex-model', this.selectedModel],
       timeoutMs: 240_000,
       startupTimeoutMs: 120_000,
       env,
@@ -358,4 +428,30 @@ export class LocalLlmManager {
   private getCwd(): string {
     return this.options.cwd ?? process.cwd();
   }
+}
+
+function isLocalLlmProgressKind(value: unknown): value is LocalLlmProgressKind {
+  return value === 'status'
+    || value === 'model_output'
+    || value === 'tool_call'
+    || value === 'file_change'
+    || value === 'error';
+}
+
+function parseJsonObject(text: string | null): Record<string, unknown> | null {
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function extractJsonObject(text: string): string | null {
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  return start >= 0 && end > start ? text.slice(start, end + 1) : null;
 }

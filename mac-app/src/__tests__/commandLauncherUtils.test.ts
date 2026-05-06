@@ -31,6 +31,7 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldOfferLocalInstructionFallback,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -94,6 +95,48 @@ describe('formatTimeAgo', () => {
   it('returns formatted date for 7+ days', () => {
     const result = formatTimeAgo(Date.now() - 10 * 86_400_000);
     expect(result).toMatch(/^[A-Z][a-z]+ \d+$/); // e.g. "Feb 23"
+  });
+});
+
+describe('shouldOfferLocalInstructionFallback', () => {
+  it('offers the fallback only for no-result typing inside an active Field Theory document', () => {
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'rewrite this more cleanly',
+      resultCount: 0,
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: true,
+    })).toBe(true);
+
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'rewrite this more cleanly',
+      resultCount: 1,
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: true,
+    })).toBe(false);
+
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'rewrite this more cleanly',
+      resultCount: 0,
+      fieldTheoryActive: false,
+      hasActiveLibraryFileContext: true,
+    })).toBe(false);
+
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'rewrite this more cleanly',
+      resultCount: 0,
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: false,
+    })).toBe(false);
+  });
+
+  it('does not offer the fallback while searching inside a launcher namespace', () => {
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'misc',
+      resultCount: 0,
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: true,
+      inScopedMode: true,
+    })).toBe(false);
   });
 });
 
