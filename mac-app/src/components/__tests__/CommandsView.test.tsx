@@ -584,6 +584,7 @@ describe('CommandsView command naming', () => {
 
     const hoverStrip = container.querySelector('div[aria-hidden="true"]') as HTMLDivElement | null;
     expect(hoverStrip).toBeTruthy();
+    expect(hoverStrip?.style.width).toBe('30px');
     const sidebarPane = hoverStrip?.nextElementSibling as HTMLDivElement | null;
     expect(sidebarPane?.style.width).toBe('0px');
 
