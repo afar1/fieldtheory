@@ -475,6 +475,7 @@ interface ClipboardAPI {
   onItemAdded: (callback: (id: number) => void) => () => void;
   onItemDeleted: (callback: (id: number) => void) => () => void;
   onShowHistory: (callback: () => void) => () => void;
+  onShowLibrary?: (callback: () => void) => () => void;
   onShowTranscriptHistory?: (callback: () => void) => () => void;
   onShowSettings?: (callback: () => void) => () => void;
   onCollapseImmersive?: (callback: () => void) => () => void;
@@ -1893,6 +1894,7 @@ declare global {
     save: (absPath: string, content: string, expectedVersion?: DocumentVersion | null) => Promise<DocumentSaveResult>;
     findLibraryFileByDocumentVersion: (version: DocumentVersion, previousAbsPath?: string) => Promise<ExternalMarkdownFile | null>;
     rename: (absPath: string, newName: string) => Promise<ExternalMarkdownFile | null>;
+    delete: (absPath: string) => Promise<boolean>;
     onOpenExternal: (callback: (absPath: string) => void) => () => void;
   }
 

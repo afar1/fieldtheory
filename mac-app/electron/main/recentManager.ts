@@ -50,11 +50,16 @@ export function removeRecent(
   return entries.filter((e) => !(e.kind === kind && e.path === path));
 }
 
+export function isLegacyCommandsRecentEntry(entry: RecentEntry): boolean {
+  const legacyCommandsSegment = `${path.sep}.fieldtheory${path.sep}commands${path.sep}`;
+  return entry.kind === 'external' && path.normalize(entry.path).includes(legacyCommandsSegment);
+}
+
 function parseRecentFile(raw: string): RecentEntry[] {
   try {
     const parsed = JSON.parse(raw) as Partial<RecentFile>;
     if (!parsed?.entries || !Array.isArray(parsed.entries)) return [];
-    return parsed.entries.filter(isValidEntry);
+    return parsed.entries.filter(isValidEntry).filter((entry) => !isLegacyCommandsRecentEntry(entry));
   } catch {
     return [];
   }
@@ -123,6 +128,9 @@ export class RecentManager {
 
   visit(entry: RecentEntry): RecentEntry[] {
     this.ensureLoaded();
+    if (isLegacyCommandsRecentEntry(entry)) {
+      return this.entries.slice();
+    }
     this.entries = upsertRecent(this.entries, entry);
     this.writeToDisk();
     return this.entries.slice();

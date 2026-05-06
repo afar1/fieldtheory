@@ -1,4 +1,4 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LibrarianView from '../LibrarianView';
 
@@ -100,6 +100,7 @@ describe('LibrarianView render', () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.restoreAllMocks();
   });
 
@@ -109,6 +110,47 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
+  });
+
+  it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
+    const relPath = "scratchpad/Monday May 4th - to do's";
+    const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
+    const makePage = (content: string, sha256: string): WikiPage => ({
+      relPath,
+      absPath,
+      name: "Monday May 4th - to do's",
+      title: "Monday May 4th - to do's",
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256 },
+    });
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage)
+      .mockResolvedValueOnce(makePage('old rendered body', 'old-version'))
+      .mockResolvedValueOnce(makePage('old rendered body', 'old-version'))
+      .mockResolvedValue(makePage('fresh rendered body', 'fresh-version'));
+    window.librarianAPI!.getReadings = vi.fn(async () => [{
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+    }]);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('old rendered body')).toBeTruthy();
+
+    await waitFor(() => {
+      expect(screen.getByText('fresh rendered body')).toBeTruthy();
+    }, { timeout: 2000 });
   });
 
   it('collapses the temporary sidebar reveal when the pointer leaves the surface', async () => {

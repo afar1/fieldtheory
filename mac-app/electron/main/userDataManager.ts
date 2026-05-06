@@ -283,17 +283,6 @@ export class UserDataManager extends EventEmitter {
       }
     }
 
-    // Migrate ~/.fieldtheory/commands to user-specific location
-    const commandsSrc = path.join(this.baseFieldTheoryPath, 'commands');
-    const commandsDst = path.join(this.baseFieldTheoryPath, 'users', callsign, 'commands');
-    if (await fs.pathExists(commandsSrc)) {
-      try {
-        await fs.ensureDir(path.dirname(commandsDst));
-        await fs.move(commandsSrc, commandsDst);
-      } catch (err) {
-        log.error('Failed to migrate commands/', err);
-      }
-    }
   }
 }
 

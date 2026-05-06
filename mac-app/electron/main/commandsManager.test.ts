@@ -97,7 +97,7 @@ describe('CommandsManager default internal commands', () => {
     expect(manager.getCommands().map(command => command.name)).toEqual(['custom']);
   });
 
-  it('keeps the legacy commands root watched when moving the default under Library', async () => {
+  it('drops the legacy commands root when moving the default under Library', async () => {
     const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
     mkdirSync(legacyDir, { recursive: true });
@@ -105,8 +105,9 @@ describe('CommandsManager default internal commands', () => {
 
     await manager.reinitializeForUser();
 
-    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir, legacyDir]);
-    expect(manager.getCommands().map(command => command.name)).toContain('legacy-only');
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getCommands().map(command => command.name)).not.toContain('legacy-only');
+    expect(existsSync(join(defaultDir, 'legacy-only.md'))).toBe(false);
   });
 
   it('prefers Library commands over duplicate legacy commands', async () => {
@@ -117,22 +118,51 @@ describe('CommandsManager default internal commands', () => {
 
     await manager.reinitializeForUser();
 
-    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir, legacyDir]);
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
     expect(manager.getCommand('refactor')?.filePath).toBe(join(defaultDir, 'refactor.md'));
   });
 
-  it('adds the Library commands root when legacy commands were already configured', async () => {
+  it('rejects manually adding the legacy commands root', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
+    const legacySubdir = join(legacyDir, 'nested');
+    mkdirSync(legacyDir, { recursive: true });
+    mkdirSync(legacySubdir, { recursive: true });
+    writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
+    writeFileSync(join(legacySubdir, 'nested.md'), '# Nested Legacy\n');
+
+    await manager.reinitializeForUser();
+    await expect(manager.addWatchedDir(legacyDir)).resolves.toBeNull();
+    await expect(manager.addWatchedDir(legacySubdir)).resolves.toBeNull();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getCommands().map(command => command.name)).not.toContain('legacy-only');
+    expect(manager.getCommands().map(command => command.name)).not.toContain('nested');
+  });
+
+  it('removes configured legacy commands instead of keeping them active', async () => {
+    await manager.onUserLoggedOut();
+
     const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     const legacyDir = join(tempRoot, '.fieldtheory', 'commands');
     mkdirSync(legacyDir, { recursive: true });
     writeFileSync(join(legacyDir, 'legacy-only.md'), '# Legacy\n');
-    await manager.addWatchedDir(legacyDir);
+    mkdirSync(join(tempRoot, 'app-data', 'users', 'user-1'), { recursive: true });
+    writeFileSync(join(tempRoot, 'app-data', 'users', 'user-1', 'commands-settings.json'), JSON.stringify({
+      watchedDirs: [legacyDir],
+      mobileSyncDirs: [legacyDir],
+    }, null, 2));
 
-    await manager.initialize();
+    manager = new CommandsManager();
+    manager.setUserDataManager(mockUserDataManager as any);
 
-    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir, legacyDir]);
-    expect(manager.getCommands().map(command => command.name)).toContain('legacy-only');
+    await manager.reinitializeForUser();
+
+    expect(manager.getWatchedDirs().map(dir => dir.path)).toEqual([defaultDir]);
+    expect(manager.getMobileSyncDirs()).toEqual([]);
+    expect(manager.getCommands().map(command => command.name)).not.toContain('legacy-only');
     expect(readFileSync(join(defaultDir, 'refactor.md'), 'utf8')).toContain('kind: command');
+    expect(existsSync(join(defaultDir, 'legacy-only.md'))).toBe(false);
   });
 
   it('reseeds and rescans when the default directory is already watched but currently empty', async () => {
