@@ -9,6 +9,11 @@ import crypto from 'crypto';
 import { parseEnvContent } from './envUtils';
 import { NativeHelper } from './nativeHelper';
 import { isAlfredApp } from './alfredVisibility';
+import {
+  shouldHideFieldTheoryWindowsForAlfred,
+  shouldRestoreFieldTheoryFocusAfterFloatingRecording,
+  shouldToggleCloseFieldTheoryFromDynamicIsland,
+} from './fieldTheoryWindowModePolicy';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import { TranscriberManager } from './transcriberManager';
@@ -83,6 +88,7 @@ import { CommandsIPCChannels } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
+import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { libraryDir } from './fieldTheoryPaths';
@@ -611,8 +617,76 @@ function getCommandLauncherTargetApp(): { bundleId: string; name: string } | nul
   return lastExternalCommandTargetApp;
 }
 
+let visibilityAppTraceInstalled = false;
+
+function getBrowserWindowVisibilitySnapshot(window: BrowserWindow): Record<string, unknown> {
+  if (window.isDestroyed()) {
+    return {
+      id: window.id,
+      destroyed: true,
+    };
+  }
+
+  return {
+    id: window.id,
+    title: window.getTitle(),
+    visible: window.isVisible(),
+    focused: window.isFocused(),
+    minimized: window.isMinimized(),
+    bounds: window.getBounds(),
+  };
+}
+
+function appendAppVisibilityTrace(event: string, data: Record<string, unknown> = {}): void {
+  if (!isVisibilityTraceEnabled()) return;
+  appendVisibilityTrace(event, {
+    hidden: process.platform === 'darwin' ? app.isHidden() : null,
+    focusedWindowId: BrowserWindow.getFocusedWindow()?.id ?? null,
+    mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+    clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+    clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+    windows: BrowserWindow.getAllWindows().map(getBrowserWindowVisibilitySnapshot),
+    ...data,
+  });
+}
+
+function installAppVisibilityTrace(): void {
+  if (!isVisibilityTraceEnabled()) return;
+  if (visibilityAppTraceInstalled) return;
+  visibilityAppTraceInstalled = true;
+
+  app.on('activate', () => appendAppVisibilityTrace('app.activate'));
+  app.on('browser-window-focus', (_event, window) => {
+    appendAppVisibilityTrace('app.browser-window-focus', {
+      window: getBrowserWindowVisibilitySnapshot(window),
+    });
+  });
+  app.on('browser-window-blur', (_event, window) => {
+    appendAppVisibilityTrace('app.browser-window-blur', {
+      window: getBrowserWindowVisibilitySnapshot(window),
+    });
+  });
+}
+
 function hideFieldTheoryForAlfred(): void {
   commandLauncherWindow?.hide(true);
+
+  if (!shouldHideFieldTheoryWindowsForAlfred(getFieldTheoryWindowMode())) {
+    appendVisibilityTrace('main.alfred-hide.skipped-app-mode', {
+      mode: getFieldTheoryWindowMode(),
+      clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+      clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+      mainVisible: mainWindow && !mainWindow.isDestroyed() ? mainWindow.isVisible() : null,
+    });
+    return;
+  }
+
+  appendVisibilityTrace('main.alfred-hide.begin', {
+    mode: getFieldTheoryWindowMode(),
+    clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+    clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+    mainVisible: mainWindow && !mainWindow.isDestroyed() ? mainWindow.isVisible() : null,
+  });
 
   if (clipboardHistoryWindow?.isShowing() || clipboardHistoryWindow?.isVisible()) {
     clipboardHistoryWindow.hide(false, 'alfred-activated');
@@ -1962,13 +2036,22 @@ function showSettingsInClipboardWindow(): void {
 function showClipboardHistoryOnActivate(): void {
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
+  appendVisibilityTrace('app-activate.show-clipboard.request', {
+    mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+    onboardingComplete: prefs?.onboardingComplete ?? null,
+    clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+    clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+    commandLauncherShowingOrVisible: commandLauncherWindow?.isShowingOrVisible() ?? null,
+  });
   if (!prefs?.onboardingComplete) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'onboarding-incomplete' });
     return;
   }
 
   // Don't show clipboard history if the command launcher is visible OR showing.
   // Using isShowingOrVisible() closes the TOCTTOU race window during async show().
   if (commandLauncherWindow?.isShowingOrVisible()) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'command-launcher-visible' });
     return;
   }
 
@@ -1979,10 +2062,12 @@ function showClipboardHistoryOnActivate(): void {
   // If clipboard history is already visible (e.g., immersive mode), don't call show().
   // Calling show() triggers moveTop() which would steal focus from other windows.
   if (clipboardHistoryWindow.isVisible()) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'already-visible' });
     return;
   }
 
   if (shouldUseClipboardAppWindowMode() && clipboardHistoryWindow.focusExistingWindow()) {
+    appendVisibilityTrace('app-activate.show-clipboard.action', { action: 'focus-existing' });
     cursorStatusManager?.refreshWindowProperties();
     dynamicIslandManager?.refreshWindowProperties('clipboard-history:focus-app-activate');
     return;
@@ -1991,6 +2076,10 @@ function showClipboardHistoryOnActivate(): void {
   // Show the clipboard window when app is activated (e.g., Dock icon click).
   const boundsToUse = restoreClipboardHistoryBounds();
   suspendDynamicIslandFocusForClipboardHistory('show-app-activate');
+  appendVisibilityTrace('app-activate.show-clipboard.action', {
+    action: 'show',
+    bounds: boundsToUse,
+  });
   clipboardHistoryWindow.show(boundsToUse);
   // Re-assert transparent overlay properties after clipboard window show.
   cursorStatusManager?.refreshWindowProperties();
@@ -7108,6 +7197,37 @@ async function checkPermissions(): Promise<{ accessibilityGranted: boolean }> {
   }
 }
 
+function isClipboardHistoryWindowFocused(): boolean {
+  const window = clipboardHistoryWindow?.getWindow();
+  return Boolean(window && !window.isDestroyed() && window.isFocused());
+}
+
+function restoreClipboardHistoryFocusAfterFloatingRecording(): void {
+  [120, 260].forEach((delayMs) => setTimeout(() => {
+    const window = clipboardHistoryWindow?.getWindow();
+    const shouldRestore = getFieldTheoryWindowMode() === 'app'
+      && dynamicIslandManager?.getResolvedRecordingIndicatorMode() === 'floating'
+      && transcriberManager?.getStatus() === 'recording'
+      && Boolean(window && !window.isDestroyed() && window.isVisible())
+      && !Boolean(window && !window.isDestroyed() && window.isFocused());
+
+    appendVisibilityTrace('main.floating-recording-focus-restore.check', {
+      delayMs,
+      shouldRestore,
+      mode: getFieldTheoryWindowMode(),
+      resolvedIndicatorMode: dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+      transcriberStatus: transcriberManager?.getStatus() ?? null,
+      clipboardVisible: window && !window.isDestroyed() ? window.isVisible() : null,
+      clipboardFocused: window && !window.isDestroyed() ? window.isFocused() : null,
+    });
+
+    if (!shouldRestore) return;
+
+    appendVisibilityTrace('main.floating-recording-focus-restore.action');
+    clipboardHistoryWindow?.focusVisibleWindow('floating-recording-focus-restore');
+  }, delayMs));
+}
+
 /**
  * Broadcast transcription events to all renderer windows.
  */
@@ -7115,6 +7235,26 @@ function broadcastTranscribeEvents(): void {
   if (!transcriberManager) return;
 
   transcriberManager.on('statusChanged', (status) => {
+    const clipboardFocused = isClipboardHistoryWindowFocused();
+    const shouldRestoreFocusAfterFloatingRecording = shouldRestoreFieldTheoryFocusAfterFloatingRecording(
+      preferencesManager ? getFieldTheoryWindowMode() : null,
+      dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+      status,
+      clipboardHistoryWindow?.isVisible() ?? false,
+      clipboardFocused,
+    );
+    appendVisibilityTrace('transcriber.status-changed', {
+      status,
+      mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+      recordingIndicatorMode: preferencesManager?.getPreference('recordingIndicatorMode') ?? null,
+      clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
+      clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
+      clipboardFocused,
+      restoreFocusAfterFloatingRecording: shouldRestoreFocusAfterFloatingRecording,
+      dynamicIslandState: dynamicIslandManager?.getState() ?? null,
+      resolvedIndicatorMode: dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+    });
+
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send(TranscribeIPCChannels.STATUS_CHANGED, status);
@@ -7132,6 +7272,9 @@ function broadcastTranscribeEvents(): void {
         dynamicIslandManager.setState('silentStacking');
       } else if (status === 'recording') {
         dynamicIslandManager.setState('recording');
+        if (shouldRestoreFocusAfterFloatingRecording) {
+          restoreClipboardHistoryFocusAfterFloatingRecording();
+        }
       } else if (status === 'transcribing') {
         dynamicIslandManager.setState('transcribing');
       } else if (status === 'idle') {
@@ -7981,10 +8124,32 @@ async function initTranscriberSystem(): Promise<void> {
         if (!clipboardHistoryWindow) {
           clipboardHistoryWindow = initClipboardHistoryWindow();
         }
-        if (clipboardHistoryWindow.isShowing()) {
-          await clipboardHistoryWindow.hideAndRestorePreviousApp('dynamic-island-toggle-history-window');
+        appendVisibilityTrace('dynamic-island.open-field-theory.received', {
+          mode: getFieldTheoryWindowMode(),
+          toggleCloseAllowed: shouldToggleCloseFieldTheoryFromDynamicIsland(getFieldTheoryWindowMode()),
+          clipboardVisible: clipboardHistoryWindow.isVisible(),
+          clipboardShowing: clipboardHistoryWindow.isShowing(),
+          lastHideReason: clipboardHistoryLastHideReason,
+          lastHideAgeMs: clipboardHistoryLastHideAt > 0 ? Date.now() - clipboardHistoryLastHideAt : null,
+          dynamicIslandState: dynamicIslandManager?.getState() ?? null,
+          resolvedIndicatorMode: dynamicIslandManager?.getResolvedRecordingIndicatorMode() ?? null,
+        });
+        if (clipboardHistoryWindow.isVisible()) {
+          if (shouldToggleCloseFieldTheoryFromDynamicIsland(getFieldTheoryWindowMode())) {
+            appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+              action: 'toggle-close',
+              reason: 'visible-panel-mode',
+            });
+            await clipboardHistoryWindow.hideAndRestorePreviousApp('dynamic-island-toggle-history-window');
+          } else {
+            appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+              action: 'focus-visible-app-window',
+              reason: 'visible-app-mode',
+            });
+            clipboardHistoryWindow.focusExistingWindow();
+          }
           cursorStatusManager?.refreshWindowProperties();
-          dynamicIslandManager?.refreshWindowProperties('clipboard-history:hide-open-field-theory');
+          dynamicIslandManager?.refreshWindowProperties('clipboard-history:open-field-theory-visible');
           return;
         }
 
@@ -7994,9 +8159,17 @@ async function initTranscriberSystem(): Promise<void> {
           clipboardHistoryLastHideReason === 'window-blur-handler' &&
           Date.now() - clipboardHistoryLastHideAt <= DYNAMIC_ISLAND_BLUR_TOGGLE_SUPPRESS_MS
         ) {
+          appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+            action: 'suppress-reopen-after-blur-hide',
+            lastHideAgeMs: Date.now() - clipboardHistoryLastHideAt,
+          });
           return;
         }
 
+        appendVisibilityTrace('dynamic-island.open-field-theory.action', {
+          action: 'show-app-window',
+          reason: 'not-visible',
+        });
         clipboardHistoryWindow.playOpenSound();
         const boundsToUse = restoreClipboardHistoryBounds();
         suspendDynamicIslandFocusForClipboardHistory('show-open-field-theory');
@@ -8708,6 +8881,8 @@ if (!gotTheLock) {
     // Show clipboard history when user tries to launch app again
     showClipboardHistoryOnActivate();
   });
+
+  installAppVisibilityTrace();
 
   app.whenReady().then(async () => {
     log.info('App ready');

@@ -501,18 +501,32 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
-  it('focuses a hidden app-mode window without resetting renderer state', () => {
+  it('does not focus a hidden app-mode window through the visible-window shortcut', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const send = vi.fn();
     const windowRef = attachExistingWindow(window, send);
     windowRef.isVisible.mockReturnValue(false);
 
-    expect(window.focusExistingWindow()).toBe(true);
+    expect(window.focusExistingWindow()).toBe(false);
 
-    expect(windowRef.show).toHaveBeenCalled();
-    expect(windowRef.moveTop).toHaveBeenCalled();
+    expect(windowRef.show).not.toHaveBeenCalled();
+    expect(windowRef.moveTop).not.toHaveBeenCalled();
+    expect(windowRef.focus).not.toHaveBeenCalled();
+    expect(mockApp.show).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('quietly focuses a visible app-mode window without revealing it again', () => {
+    (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
+    const send = vi.fn();
+    const windowRef = attachExistingWindow(window, send);
+
+    expect(window.focusVisibleWindow('floating-recording-focus-restore')).toBe(true);
+
     expect(windowRef.focus).toHaveBeenCalled();
-    expect(mockApp.show).toHaveBeenCalled();
+    expect(windowRef.show).not.toHaveBeenCalled();
+    expect(windowRef.moveTop).not.toHaveBeenCalled();
+    expect(mockApp.show).not.toHaveBeenCalled();
     expect(send).not.toHaveBeenCalled();
   });
 
