@@ -36,8 +36,10 @@ import {
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
+  type WikiIndex,
   type WikiIndexInput,
   type WikiLinkTarget,
+  upsertMarkdownLinkRelationDocument,
 } from '../utils/wikiLinks';
 
 const COPY_PATH_FEEDBACK_MS = 1600;
@@ -317,6 +319,7 @@ export default function CommandsView({
   const sidebarInnerRef = useRef<HTMLDivElement | null>(null);
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const commandContentRef = useRef<HTMLDivElement | null>(null);
+  const wikiIndexRef = useRef<WikiIndex | null>(null);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
@@ -583,7 +586,14 @@ export default function CommandsView({
     return '';
   }, [fieldTheorySyncEnabled, selectedCommand, selectedPopularCommand, viewMode]);
 
-  const commandIndexPages = useMemo(() => commandsToWikiIndexPages(commands), [commands]);
+  const commandIndexKey = useMemo(
+    () => JSON.stringify(commands.map(({ name, displayName, filePath }) => [name, displayName, filePath])),
+    [commands],
+  );
+  const commandIndexPages = useMemo(() => commandsToWikiIndexPages(commands), [commandIndexKey]);
+  const commandTitleByPath = useMemo(() => new Map(
+    commands.map((command) => [command.filePath, command.displayName || command.name]),
+  ), [commandIndexKey]);
   const wikiIndex = useMemo(() => buildWikiIndex([
     ...wikiIndexPages,
     ...readings.map((reading) => ({
@@ -593,6 +603,19 @@ export default function CommandsView({
     })),
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
+  wikiIndexRef.current = wikiIndex;
+
+  const upsertCommandRelationDocument = useCallback((filePath: string, title: string | undefined, content: string) => {
+    const currentWikiIndex = wikiIndexRef.current;
+    if (!currentWikiIndex) return;
+    const commandTitle = title || commandTitleByPath.get(filePath) || filePath;
+    setMarkdownLinkRelationDocuments((prev) => upsertMarkdownLinkRelationDocument(prev, {
+      target: { kind: 'command', path: filePath },
+      title: commandTitle,
+      content,
+      linkHits: getMarkdownEditorLinkHits(content, currentWikiIndex),
+    }));
+  }, [commandTitleByPath]);
 
   // Strip leading h1 from markdown to avoid duplicate heading (we render h1 from filename)
   const displayContent = useMemo(() => {
@@ -819,7 +842,7 @@ export default function CommandsView({
     });
   }, [editContent, isEditing, selectedCommand]);
 
-  const saveCommandContent = useCallback(async (filePath: string, content: string) => {
+  const saveCommandContent = useCallback(async (filePath: string, content: string, title?: string) => {
     try {
       const expectedVersion = lastSavedVersionRef.current;
       const result = expectedVersion
@@ -832,6 +855,7 @@ export default function CommandsView({
             ? { ...prev, content: result.currentContent, documentVersion: result.currentVersion }
             : prev
           );
+          upsertCommandRelationDocument(filePath, title, result.currentContent);
           setEditContent(result.currentContent);
           lastSavedContentRef.current = result.currentContent;
           lastSavedVersionRef.current = result.currentVersion;
@@ -845,6 +869,7 @@ export default function CommandsView({
             ? { ...prev, content, ...(nextVersion ? { documentVersion: nextVersion } : {}) }
             : prev
           );
+          upsertCommandRelationDocument(filePath, title, content);
           lastSavedContentRef.current = content;
           lastSavedVersionRef.current = nextVersion ?? result.currentVersion;
           return true;
@@ -857,6 +882,7 @@ export default function CommandsView({
           ? { ...prev, content, ...(nextVersion ? { documentVersion: nextVersion } : {}) }
           : prev
         );
+        upsertCommandRelationDocument(filePath, title, content);
         lastSavedContentRef.current = content;
         if (nextVersion) lastSavedVersionRef.current = nextVersion;
         return true;
@@ -865,13 +891,13 @@ export default function CommandsView({
       console.error('Failed to save command:', err);
     }
     return false;
-  }, []);
+  }, [upsertCommandRelationDocument]);
 
   const flushCurrentEdit = useCallback(async () => {
     const pendingSave = flushSaveRef.current;
     if (pendingSave) return pendingSave();
     if (!selectedCommand || !isDirty) return true;
-    return saveCommandContent(selectedCommand.filePath, editContent);
+    return saveCommandContent(selectedCommand.filePath, editContent, selectedCommand.displayName || selectedCommand.name);
   }, [editContent, isDirty, saveCommandContent, selectedCommand]);
 
   const exitEditMode = useCallback(async () => {
@@ -964,12 +990,13 @@ export default function CommandsView({
     if (editContent === lastSavedContentRef.current) return;
 
     const targetPath = selectedCommand.filePath;
+    const targetTitle = selectedCommand.displayName || selectedCommand.name;
     const targetContent = editContent;
     let done = false;
     const doSave = async () => {
       if (done) return true;
       done = true;
-      const saved = await saveCommandContent(targetPath, targetContent);
+      const saved = await saveCommandContent(targetPath, targetContent, targetTitle);
       if (flushSaveRef.current === doSave) flushSaveRef.current = null;
       return saved;
     };
@@ -1105,7 +1132,7 @@ export default function CommandsView({
     return () => {
       cancelled = true;
     };
-  }, [commandIndexPages, readings, selectedCommand?.content, wikiIndex, wikiIndexPages]);
+  }, [commandIndexPages, readings, wikiIndex, wikiIndexPages]);
 
   // Check if selected command is already shared
   useEffect(() => {

@@ -19,7 +19,6 @@ interface LibrarianSettingsProps {
 const LIBRARY_FOLDER_TOGGLES = [
   { id: 'artifacts', label: 'Artifacts', hint: 'Agent-written reading artifacts' },
   { id: 'scratchpad', label: 'Scratchpad', hint: 'Quick notes and captures' },
-  { id: 'Shared Markdown', label: 'Shared Markdown', hint: 'Shared markdown pages' },
   { id: 'debates', label: 'Debates', hint: 'Structured debate notes' },
   { id: 'Plans', label: 'Plans', hint: 'Saved planning notes' },
   { id: 'bookmarks-from-x', label: 'Bookmarks from x.com', hint: 'Synced bookmark categories, domains, and entities' },

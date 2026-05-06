@@ -460,7 +460,7 @@ describe('isGeneratedBookmarkTaxonomyPath', () => {
     expect(isGeneratedBookmarkTaxonomyPath('categories/commerce')).toBe(true);
     expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/domains/commerce.md')).toBe(true);
     expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/entries/commerce.md')).toBe(false);
-    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/commands/categories/commerce.md')).toBe(false);
+    expect(isGeneratedBookmarkTaxonomyPath('/Users/a/.fieldtheory/library/Commands/categories/commerce.md')).toBe(false);
   });
 });
 
@@ -877,7 +877,7 @@ describe('resolveLauncherCommandOpenTarget', () => {
       type: 'command',
       name: 'assess',
       displayName: 'assess.md',
-      filePath: '/Users/afar/.fieldtheory/commands/assess.md',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/assess.md',
       keywords: ['assess'],
     },
     {
@@ -885,7 +885,7 @@ describe('resolveLauncherCommandOpenTarget', () => {
       type: 'command',
       name: 'refactor',
       displayName: 'refactor.md',
-      filePath: '/Users/afar/.fieldtheory/commands/refactor.md',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/refactor.md',
       keywords: ['refactor'],
     },
   ];
@@ -953,9 +953,9 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
       type: 'command',
       name: 'refactor',
       displayName: 'refactor.md',
-      filePath: '/Users/afar/.fieldtheory/commands/refactor.md',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/refactor.md',
       keywords: ['refactor'],
-    })).toEqual({ kind: 'command', path: '/Users/afar/.fieldtheory/commands/refactor.md' });
+    })).toEqual({ kind: 'command', path: '/Users/afar/.fieldtheory/library/Commands/refactor.md' });
   });
 });
 
