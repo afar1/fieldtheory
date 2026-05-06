@@ -174,7 +174,7 @@ describe('LibrarianView render', () => {
     const getHoverStrip = () => Array.from(root.querySelectorAll('div[aria-hidden="true"]'))
       .find((element) => {
         const style = (element as HTMLElement).style;
-        return style.width === '14px' && style.left === '0px';
+        return style.width === '30px' && style.left === '0px';
       }) as HTMLElement | undefined;
 
     expect(getHoverStrip()).toBeTruthy();
