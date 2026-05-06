@@ -82,6 +82,7 @@ import {
   getLibraryDragData,
   getPrimaryArtifactsFinderPath,
   getSidebarFolderFinderPath,
+  getSidebarFolderHeaderPositionStyle,
   getSelectedWikiAutoExpandKey,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
@@ -1846,6 +1847,35 @@ describe('recursive sidebar tree helpers', () => {
       false,
       true,
     ]);
+  });
+
+  it('keeps pinned nested folders inside their parent directory', () => {
+    const pinned = new Set(['/wiki::z-parent/z-pinned']);
+    const result = applyPinnedSidebarOrder([
+      dir('a-root'),
+      dir('z-parent', [
+        dir('z-parent/z-pinned', [
+          file('Nested file', 5),
+        ]),
+        dir('z-parent/a-notes'),
+      ]),
+    ], 'alpha', pinned);
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'A-root',
+      'Z-parent',
+    ]);
+
+    const parent = result.find((node) => node.kind === 'dir' && node.name === 'z-parent');
+    expect(parent?.kind === 'dir' ? parent.children.map((node) => node.kind === 'dir' ? node.label : node.item.title) : []).toEqual([
+      'Z-parent/z-pinned',
+      'Z-parent/a-notes',
+    ]);
+  });
+
+  it('only makes top-level folder headers sticky in the left nav', () => {
+    expect(getSidebarFolderHeaderPositionStyle(0)).toEqual({ position: 'sticky', top: 0, zIndex: 3 });
+    expect(getSidebarFolderHeaderPositionStyle(1)).toEqual({});
   });
 
   it('allows the Librarian Artifacts root to be unpinned', () => {

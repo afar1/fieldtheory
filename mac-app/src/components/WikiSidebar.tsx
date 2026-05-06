@@ -70,6 +70,10 @@ const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): Re
   maskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
 });
 
+export function getSidebarFolderHeaderPositionStyle(depth: number): React.CSSProperties {
+  return depth === 0 ? { position: 'sticky', top: 0, zIndex: 3 } : {};
+}
+
 function libraryRenameTraceEnabled(): boolean {
   try {
     return localStorage.getItem('fieldtheory.libraryRenameTrace') === 'true';
@@ -2439,9 +2443,7 @@ function TreeNode({
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.bg)}
           style={{
-            position: 'sticky',
-            top: 0,
-            zIndex: 3,
+            ...getSidebarFolderHeaderPositionStyle(depth),
             display: 'flex',
             alignItems: 'center',
             gap: SIDEBAR_ICON_TEXT_GAP,
