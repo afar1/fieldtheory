@@ -343,16 +343,43 @@ export class CommandsManager extends EventEmitter {
     return path.join(path.dirname(parentDir), 'commands');
   }
 
-  private async addLegacyCommandsDirectoryIfPresent(defaultDir: string): Promise<void> {
+  private legacyCommandsDirectory(): string | null {
+    return this.legacyCommandsDirectoryForDefault(this.getDefaultDirectory());
+  }
+
+  private isLegacyCommandsDirectoryPath(dirPath: string): boolean {
+    const legacyDir = this.legacyCommandsDirectory();
+    if (!legacyDir) return false;
+    return isPathInside(this.normalizePath(legacyDir), this.normalizePath(this.expandPath(dirPath)));
+  }
+
+  private isLegacyCommandPath(filePath: string): boolean {
+    const legacyDir = this.legacyCommandsDirectory();
+    if (!legacyDir) return false;
+    return isPathInside(this.normalizePath(legacyDir), this.normalizePath(this.expandPath(filePath)));
+  }
+
+  private removeLegacyCommandsDirectoryFromSettings(defaultDir: string): void {
     const legacyDir = this.legacyCommandsDirectoryForDefault(defaultDir);
     if (!legacyDir || this.normalizePath(legacyDir) === this.normalizePath(defaultDir)) return;
-    try {
-      if (!fs.existsSync(legacyDir) || !fs.statSync(legacyDir).isDirectory()) return;
-    } catch {
-      return;
+
+    const normalizedLegacyDir = this.normalizePath(legacyDir);
+    const beforeWatched = this.settings.watchedDirs.length;
+    this.settings.watchedDirs = this.settings.watchedDirs.filter(dirPath => this.normalizePath(dirPath) !== normalizedLegacyDir);
+
+    const beforeMobileSync = this.settings.mobileSyncDirs.length;
+    this.settings.mobileSyncDirs = this.settings.mobileSyncDirs.filter(dirPath => this.normalizePath(dirPath) !== normalizedLegacyDir);
+
+    this.unwatchDirectory(normalizedLegacyDir);
+    for (const [name, command] of this.commands) {
+      if (isPathInside(normalizedLegacyDir, command.filePath)) {
+        this.commands.delete(name);
+      }
     }
-    if (this.settings.watchedDirs.includes(this.normalizePath(legacyDir))) return;
-    await this.addWatchedDir(legacyDir);
+
+    if (this.settings.watchedDirs.length !== beforeWatched || this.settings.mobileSyncDirs.length !== beforeMobileSync) {
+      this.saveSettings();
+    }
   }
 
   private preferWatchedDir(dirPath: string): void {
@@ -391,7 +418,7 @@ export class CommandsManager extends EventEmitter {
         this.emit('commandsChanged', this.getCommands());
       }
       this.preferWatchedDir(defaultDir);
-      await this.addLegacyCommandsDirectoryIfPresent(defaultDir);
+      this.removeLegacyCommandsDirectoryFromSettings(defaultDir);
       if (result) {
         return defaultDir;
       }
@@ -424,6 +451,14 @@ export class CommandsManager extends EventEmitter {
       expandedPath = path.join(homeDir, expandedPath.slice(2));
     } else if (expandedPath === '~') {
       expandedPath = process.env.HOME || process.env.USERPROFILE || '';
+    }
+
+    if (expandedPath && this.isLegacyCommandsDirectoryPath(expandedPath)) {
+      this.removeLegacyCommandsDirectoryFromSettings(this.getDefaultDirectory());
+      this.directoryPath = null;
+      this.emit('directoryChanged', null);
+      this.emit('commandsChanged', this.getCommands());
+      return;
     }
 
     this.directoryPath = expandedPath;
@@ -459,21 +494,23 @@ export class CommandsManager extends EventEmitter {
    * Get all available commands.
    */
   getCommands(): PortableCommand[] {
-    return Array.from(this.commands.values());
+    return Array.from(this.commands.values()).filter(command => !this.isLegacyCommandPath(command.filePath));
   }
 
   /**
    * Get a command by name (case-insensitive).
    */
   getCommand(name: string): PortableCommand | null {
-    return this.commands.get(name.toLowerCase()) || null;
+    const command = this.commands.get(name.toLowerCase()) || null;
+    if (command && this.isLegacyCommandPath(command.filePath)) return null;
+    return command;
   }
 
   /**
    * Check if a command exists.
    */
   hasCommand(name: string): boolean {
-    return this.commands.has(name.toLowerCase());
+    return this.getCommand(name) !== null;
   }
 
   /**
@@ -497,7 +534,9 @@ export class CommandsManager extends EventEmitter {
   }
 
   private watchedRootPaths(): string[] {
-    return this.settings.watchedDirs.map(dirPath => this.normalizePath(this.expandPath(dirPath)));
+    return this.settings.watchedDirs
+      .filter(dirPath => !this.isLegacyCommandsDirectoryPath(dirPath))
+      .map(dirPath => this.normalizePath(this.expandPath(dirPath)));
   }
 
   private isInsideWatchedRoot(filePath: string): boolean {
@@ -536,6 +575,8 @@ export class CommandsManager extends EventEmitter {
   private async scanDirectory(dirPath?: string): Promise<void> {
     // If specific path provided, scan that directory
     if (dirPath) {
+      if (this.isLegacyCommandsDirectoryPath(dirPath)) return;
+
       try {
         // Check if directory exists
         if (!fs.existsSync(dirPath)) {
@@ -1144,7 +1185,7 @@ End of User Commands
    * Get all watched directories.
    */
   getWatchedDirs(): WatchedDir[] {
-    return this.settings.watchedDirs.map(dirPath => ({
+    return this.settings.watchedDirs.filter(dirPath => !this.isLegacyCommandsDirectoryPath(dirPath)).map(dirPath => ({
       path: dirPath,
       enabled: true,
       mobileSyncEnabled: this.settings.mobileSyncDirs.includes(dirPath),
@@ -1158,6 +1199,12 @@ End of User Commands
   async addWatchedDir(dirPath: string): Promise<WatchedDir | null> {
     const expandedPath = this.expandPath(dirPath);
     const normalizedPath = this.normalizePath(expandedPath);
+
+    if (this.isLegacyCommandsDirectoryPath(normalizedPath)) {
+      this.removeLegacyCommandsDirectoryFromSettings(this.getDefaultDirectory());
+      this.emit('commandsChanged', this.getCommands());
+      return null;
+    }
 
     // Check if directory exists
     if (!fs.existsSync(normalizedPath)) {
@@ -1385,6 +1432,11 @@ End of User Commands
   setMobileSyncEnabled(dirPath: string, enabled: boolean): boolean {
     const normalizedPath = this.normalizePath(dirPath);
 
+    if (this.isLegacyCommandsDirectoryPath(normalizedPath)) {
+      this.removeLegacyCommandsDirectoryFromSettings(this.getDefaultDirectory());
+      return false;
+    }
+
     // Check if this directory is watched
     if (!this.settings.watchedDirs.includes(normalizedPath)) {
       log.warn(`Cannot set mobile sync: ${normalizedPath} is not a watched directory`);
@@ -1418,6 +1470,7 @@ End of User Commands
    */
   isMobileSyncEnabled(dirPath: string): boolean {
     const normalizedPath = this.normalizePath(dirPath);
+    if (this.isLegacyCommandsDirectoryPath(normalizedPath)) return false;
     return this.settings.mobileSyncDirs.includes(normalizedPath);
   }
 
@@ -1425,7 +1478,7 @@ End of User Commands
    * Get all directories with mobile sync enabled.
    */
   getMobileSyncDirs(): string[] {
-    return [...this.settings.mobileSyncDirs];
+    return this.settings.mobileSyncDirs.filter(dirPath => !this.isLegacyCommandsDirectoryPath(dirPath));
   }
 
   /**

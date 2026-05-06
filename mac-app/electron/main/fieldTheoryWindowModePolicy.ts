@@ -27,3 +27,10 @@ export function shouldRestoreFieldTheoryFocusAfterFloatingRecording(
     && clipboardVisible
     && clipboardFocused;
 }
+
+export function shouldShowClipboardWindowOnStartup(
+  onboardingComplete: boolean | null | undefined,
+  openedAsLoginItem: boolean
+): boolean {
+  return onboardingComplete === true && !openedAsLoginItem;
+}

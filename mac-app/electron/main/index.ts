@@ -12,6 +12,7 @@ import { isAlfredApp } from './alfredVisibility';
 import {
   shouldHideFieldTheoryWindowsForAlfred,
   shouldRestoreFieldTheoryFocusAfterFloatingRecording,
+  shouldShowClipboardWindowOnStartup,
   shouldToggleCloseFieldTheoryFromDynamicIsland,
 } from './fieldTheoryWindowModePolicy';
 import { AudioManager } from './audioManager';
@@ -580,7 +581,7 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
   if (!page) return null;
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-scratchpad-hotkey');
-  clipboardHistoryWindow.show(boundsToUse);
+  clipboardHistoryWindow.showLibrary(boundsToUse);
   clipboardHistoryWindow.openScratchpad({
     relPath: page.relPath,
   });
@@ -1258,9 +1259,9 @@ function registerHotkeysAfterOnboarding(): void {
 
     if (!showing) {
       clipboardHistoryWindow.playOpenSound();
-      const boundsToUse = restoreClipboardHistoryBounds();
+      const boundsToUse = restoreClipboardHistoryBounds('library');
       suspendDynamicIslandFocusForClipboardHistory('show-hotkey');
-      clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
+      clipboardHistoryWindow.capturePreviousAppAndShowLibrary(boundsToUse, true);
       // Opening clipboard history during recording can corrupt transparent
       // overlay backing on some macOS compositor paths.
       cursorStatusManager?.refreshWindowProperties();
@@ -1960,6 +1961,32 @@ function shouldUseClipboardAppWindowMode(): boolean {
   return getFieldTheoryWindowMode() === 'app';
 }
 
+function wasOpenedAsLoginItem(): boolean {
+  if (process.platform !== 'darwin' || !app.isPackaged) return false;
+  try {
+    const settings = app.getLoginItemSettings();
+    return Boolean(settings.wasOpenedAtLogin || settings.wasOpenedAsHidden);
+  } catch {
+    return false;
+  }
+}
+
+function showClipboardHistoryOnStartup(): void {
+  const prefs = preferencesManager?.get();
+  const openedAsLoginItem = wasOpenedAsLoginItem();
+  if (!shouldShowClipboardWindowOnStartup(prefs?.onboardingComplete, openedAsLoginItem)) {
+    appendVisibilityTrace('app-startup.show-clipboard.skipped', {
+      reason: openedAsLoginItem ? 'login-item' : 'onboarding-incomplete',
+      onboardingComplete: prefs?.onboardingComplete ?? null,
+      openedAsLoginItem,
+    });
+    return;
+  }
+
+  appendVisibilityTrace('app-startup.show-clipboard.action', { action: 'show', initialViewMode: 'library' });
+  showClipboardHistoryOnActivate();
+}
+
 async function prepareClipboardWindowStyleTransition(): Promise<void> {
   const window = clipboardHistoryWindow?.getWindow();
   if (!window || window.isDestroyed() || !window.isVisible()) return;
@@ -2050,6 +2077,7 @@ function showClipboardHistoryOnActivate(): void {
   const prefs = preferencesManager?.get();
   appendVisibilityTrace('app-activate.show-clipboard.request', {
     mode: preferencesManager ? getFieldTheoryWindowMode() : null,
+    initialViewMode: 'library',
     onboardingComplete: prefs?.onboardingComplete ?? null,
     clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
     clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
@@ -2086,13 +2114,14 @@ function showClipboardHistoryOnActivate(): void {
   }
 
   // Show the clipboard window when app is activated (e.g., Dock icon click).
-  const boundsToUse = restoreClipboardHistoryBounds();
+  const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-app-activate');
   appendVisibilityTrace('app-activate.show-clipboard.action', {
     action: 'show',
+    initialViewMode: 'library',
     bounds: boundsToUse,
   });
-  clipboardHistoryWindow.show(boundsToUse);
+  clipboardHistoryWindow.showLibrary(boundsToUse);
   // Re-assert transparent overlay properties after clipboard window show.
   cursorStatusManager?.refreshWindowProperties();
   dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
@@ -2113,7 +2142,7 @@ function routeOpenMarkdown(inputPath: string): void {
   }
   const boundsToUse = restoreClipboardHistoryBounds('library');
   suspendDynamicIslandFocusForClipboardHistory('show-reading');
-  clipboardHistoryWindow.show(boundsToUse);
+  clipboardHistoryWindow.showLibrary(boundsToUse);
   const webContents = clipboardHistoryWindow.getWindow()?.webContents;
   if (!webContents) return;
   if (resolved.kind === 'wiki') {
@@ -2664,6 +2693,15 @@ function setupLibrarianIPCHandlers(): void {
       }
     },
   );
+
+  ipcMain.handle('external:delete', async (_event, absPath: string): Promise<boolean> => {
+    if (!librarianManager) return false;
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return false;
+    }
+    return librarianManager.deleteExternalLibraryFile(absPath);
+  });
 
   if (librarianManager) {
     librarianManager.startWikiWatcher();
@@ -5895,7 +5933,7 @@ function setupClipboardIPCHandlers(): void {
   // Show in Dock - legacy API; maps onto Field Theory window behavior.
   ipcMain.handle('clipboard:getShowInDock', async () => {
     if (!preferencesManager) {
-      return false;
+      return true;
     }
     return shouldUseClipboardAppWindowMode();
   });
@@ -5922,9 +5960,9 @@ function setupClipboardIPCHandlers(): void {
   // Click-away dismissal - controls whether the panel hides when another app gets focus.
   ipcMain.handle('clipboard:getClickAwayToDismiss', async () => {
     if (!preferencesManager) {
-      return true;
+      return false;
     }
-    return preferencesManager.getPreference('clickAwayToDismiss') ?? true;
+    return preferencesManager.getPreference('clickAwayToDismiss') ?? false;
   });
 
   ipcMain.handle('clipboard:setClickAwayToDismiss', async (_event, enabled: boolean) => {
@@ -5975,7 +6013,7 @@ function setupClipboardIPCHandlers(): void {
     if (process.platform === 'darwin' && app.isPackaged) {
       app.setLoginItemSettings({
         openAtLogin: enabled,
-        openAsHidden: true, // Start in background (menu bar app)
+        openAsHidden: true, // Keep login-item launches quiet; direct launches show the window.
       });
 
       // Verify the setting was applied
@@ -6603,7 +6641,11 @@ function setupClipboardIPCHandlers(): void {
     } else {
       const boundsToUse = restoreClipboardHistoryBounds(sizeKey);
       suspendDynamicIslandFocusForClipboardHistory('command-launcher-open-markdown');
-      clipboardHistoryWindow.show(boundsToUse);
+      if (target.kind === 'clipboard') {
+        clipboardHistoryWindow.show(boundsToUse);
+      } else {
+        clipboardHistoryWindow.showLibrary(boundsToUse);
+      }
     }
 
     commandLauncherWindow?.hide(true);
@@ -7857,7 +7899,7 @@ async function initTranscriberSystem(): Promise<void> {
 
       const boundsToUse = restoreClipboardHistoryBounds('library');
       suspendDynamicIslandFocusForClipboardHistory('show-auto-artifact');
-      clipboardHistoryWindow.show(boundsToUse, false, true, false, shouldStealFocus);
+      clipboardHistoryWindow.showLibrary(boundsToUse, true, shouldStealFocus);
       // Showing/focusing clipboard history can corrupt transparent overlay backing
       // on some macOS compositor paths — reinforce window properties.
       cursorStatusManager?.refreshWindowProperties();
@@ -8183,9 +8225,9 @@ async function initTranscriberSystem(): Promise<void> {
           reason: 'not-visible',
         });
         clipboardHistoryWindow.playOpenSound();
-        const boundsToUse = restoreClipboardHistoryBounds();
+        const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-open-field-theory');
-        clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
+        clipboardHistoryWindow.capturePreviousAppAndShowLibrary(boundsToUse, true);
         // Opening clipboard history while recording can affect overlay transparency;
         // refresh transparent overlay window properties to keep them stable.
         cursorStatusManager?.refreshWindowProperties();
@@ -8806,7 +8848,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
-        clipboardHistoryWindow.show(boundsToUse);
+        clipboardHistoryWindow.showLibrary(boundsToUse);
         clipboardHistoryWindow.getWindow()?.webContents.send('wiki:openPage', relPath);
         if (immersive) {
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
@@ -8839,7 +8881,7 @@ async function handleProtocolUrl(url: string): Promise<void> {
       if (clipboardHistoryWindow) {
         const boundsToUse = restoreClipboardHistoryBounds('library');
         suspendDynamicIslandFocusForClipboardHistory('show-reading');
-        clipboardHistoryWindow.show(boundsToUse);
+        clipboardHistoryWindow.showLibrary(boundsToUse);
         // If fullscreen requested, notify renderer to enter fullscreen mode
         if (fullscreen) {
           clipboardHistoryWindow.getWindow()?.webContents.send('librarian:setFullscreen', true);
@@ -9637,7 +9679,7 @@ if (!gotTheLock) {
     }
 
     // Apply Dock visibility setting.
-    // Default is panel mode (hidden from Dock). This is a WIP feature.
+    // Default is app-window mode, with Dock/Cmd+Tab presence.
     if (process.platform === 'darwin') {
       const showInDock = shouldUseClipboardAppWindowMode();
       if (showInDock) {
@@ -9798,6 +9840,7 @@ if (!gotTheLock) {
         await preferencesManager?.save({ onboardingComplete: true });
       }
       registerHotkeysAfterOnboarding();
+      showClipboardHistoryOnStartup();
     } else {
       // Missing requirements - force onboarding flow
 
