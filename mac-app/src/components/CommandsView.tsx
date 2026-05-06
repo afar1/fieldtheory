@@ -1601,7 +1601,7 @@ export default function CommandsView({
             top: 0,
             bottom: 0,
             left: 0,
-            width: '14px',
+            width: '30px',
             zIndex: 25,
             cursor: 'default',
           }}
