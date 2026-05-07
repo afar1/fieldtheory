@@ -1414,14 +1414,14 @@ interface CommandsAPI {
   redoMaxwellRun?: (runId: string) => Promise<MaxwellRedoResult>;
   onLocalCommandStatus?: (callback: (status: LocalCommandStatus) => void) => () => void;
   launcherResize?: (height: number) => void;
-  launcherClose?: (options?: { skipActivation?: boolean }) => void;
+  launcherClose?: (options?: { skipActivation?: boolean; generation?: number }) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
   launcherPreviewResize?: (height: number) => void;
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
-  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean }) => void) => () => void;
+  onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
