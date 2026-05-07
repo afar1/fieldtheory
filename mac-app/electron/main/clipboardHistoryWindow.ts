@@ -137,6 +137,9 @@ export class ClipboardHistoryWindow {
   // The app that was active before we showed the clipboard history.
   // This is the default target for pasting.
   private previousApp: RunningApp | null = null;
+
+  // Last non-Field-Theory app seen by the native app switch monitor.
+  private lastExternalApp: RunningApp | null = null;
   
   // User-selected target app (if different from previousApp).
   private selectedTargetApp: RunningApp | null = null;
@@ -404,22 +407,39 @@ export class ClipboardHistoryWindow {
   }
 
   private commitPreviousAppForFreshShow(frontmostApp: RunningApp | null): void {
-    this.previousApp = frontmostApp;
+    this.previousApp = frontmostApp ?? this.lastExternalApp;
     this.selectedTargetApp = null;
     this.sendTargetAppInfo();
   }
 
   private commitPreviousAppIfCaptured(frontmostApp: RunningApp | null): RunningApp | null {
-    if (!frontmostApp) {
+    const appToCommit = frontmostApp ?? this.lastExternalApp;
+    if (!appToCommit) {
       return null;
     }
 
     const isFirstCapture = this.previousApp === null;
-    this.previousApp = frontmostApp;
+    this.previousApp = appToCommit;
     if (isFirstCapture) {
       this.selectedTargetApp = null;
     }
+    this.sendTargetAppInfo();
     return this.previousApp;
+  }
+
+  rememberExternalApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
+    const bundleId = appInfo?.bundleId ?? null;
+    const name = appInfo?.name ?? null;
+    if (!bundleId || !name || isElectronApp(bundleId, name)) {
+      return;
+    }
+
+    this.lastExternalApp = { bundleId, name };
+
+    if (this.shouldUseAppWindow() && this.isVisible()) {
+      this.previousApp = this.lastExternalApp;
+      this.sendTargetAppInfo();
+    }
   }
 
   private beginPreviousAppCapture(reason: string): void {
@@ -1405,7 +1425,7 @@ export class ClipboardHistoryWindow {
 
     const targetApp = this.getTargetApp();
     this.window.webContents.send('clipboard:targetAppInfo', {
-      previousApp: this.previousApp,
+      previousApp: this.getPreviousApp(),
       targetApp,
       runningApps: this.runningApps,
     });
@@ -1749,6 +1769,9 @@ export class ClipboardHistoryWindow {
     if (this.previousApp) {
       return this.previousApp;
     }
+    if (this.lastExternalApp) {
+      return this.lastExternalApp;
+    }
     // Fallback: use first running app if available
     if (this.runningApps.length > 0) {
       return this.runningApps[0];
@@ -1760,7 +1783,7 @@ export class ClipboardHistoryWindow {
    * Get the previous app (the app that was active before showing clipboard history).
    */
   getPreviousApp(): RunningApp | null {
-    return this.previousApp;
+    return this.previousApp ?? this.lastExternalApp;
   }
 
   /**
