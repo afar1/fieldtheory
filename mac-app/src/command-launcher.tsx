@@ -97,6 +97,16 @@ type ActiveWebPage = {
   appName: string;
 };
 
+type LauncherCloseOptions = {
+  skipActivation?: boolean;
+  generation?: number;
+};
+
+type LauncherResetPayload = {
+  isDarkMode?: boolean;
+  generation?: number;
+};
+
 type LauncherContextState = {
   fieldTheoryActive: boolean;
   hasActiveLibraryFileContext: boolean;
@@ -256,11 +266,11 @@ interface LauncherCommandsAPI {
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
-  launcherClose: (options?: { skipActivation?: boolean }) => void;
+  launcherClose: (options?: LauncherCloseOptions) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
-  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean }) => void) => () => void;
+  onLauncherReset: (callback: (payload?: LauncherResetPayload) => void) => () => void;
 }
 
 interface LauncherClipboardAPI {
@@ -555,6 +565,7 @@ function CommandLauncher() {
   const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
+  const launcherGenerationRef = useRef(0);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const lastMousePositionRef = useRef<{ x: number; y: number } | null>(null);
@@ -800,9 +811,12 @@ function CommandLauncher() {
 
     // Listen for reset events (when window is shown).
     // Reload commands and handoffs each time to pick up newly added ones without restart.
-    const handleReset = async (payload?: { isDarkMode?: boolean }) => {
+    const handleReset = async (payload?: LauncherResetPayload) => {
       if (typeof payload?.isDarkMode === 'boolean') {
         applyTheme(payload.isDarkMode);
+      }
+      if (typeof payload?.generation === 'number') {
+        launcherGenerationRef.current = payload.generation;
       }
       authorNamespaceRef.current = null;
       bookmarkNamespaceRef.current = null;
@@ -1415,6 +1429,7 @@ function CommandLauncher() {
     source: LauncherLibraryMoveSource,
     directory: LauncherItem,
   ): Promise<boolean> => {
+    const closeGeneration = launcherGenerationRef.current;
     const target = getLauncherMoveDirectoryTarget(source, directory);
     if (!target) {
       showLauncherMessage('Choose a Library folder');
@@ -1439,11 +1454,12 @@ function CommandLauncher() {
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     await loadLibraryMarkdown();
     await openMovedLibraryFile(source, target, movedRelPath);
-    commandsAPI.launcherClose({ skipActivation: true });
+    commandsAPI.launcherClose({ skipActivation: true, generation: closeGeneration });
     return true;
   }, [loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, selectIndex, showLauncherMessage]);
 
   const undoLastLibraryMove = useCallback(async (): Promise<boolean> => {
+    const closeGeneration = launcherGenerationRef.current;
     if (!lastLibraryMove) {
       showLauncherMessage('No move to undo');
       return false;
@@ -1475,7 +1491,7 @@ function CommandLauncher() {
       },
       restoredRelPath,
     );
-    commandsAPI.launcherClose({ skipActivation: true });
+    commandsAPI.launcherClose({ skipActivation: true, generation: closeGeneration });
     return true;
   }, [lastLibraryMove, loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, showLauncherMessage]);
 
@@ -1694,6 +1710,10 @@ function CommandLauncher() {
 
   // Invoke the selected item.
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean; openFieldTheoryTarget?: boolean } = {}) => {
+    const invocationGeneration = launcherGenerationRef.current;
+    const closeForInvocation = (closeOptions: Omit<LauncherCloseOptions, 'generation'> = {}) => {
+      commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
+    };
     if (item.type !== 'local-instruction') {
       noteItemUsage(item.id);
     }
@@ -1729,7 +1749,7 @@ function CommandLauncher() {
       })).then((result) => {
         if (!result.success) traceLauncher('run-local-command-error', { error: result.error ?? 'Local command failed' });
       });
-      commandsAPI.launcherClose({ skipActivation: true });
+      closeForInvocation({ skipActivation: true });
       return;
     }
     if (options.openFieldTheoryTarget && !fieldTheoryTarget) return;
@@ -1748,7 +1768,7 @@ function CommandLauncher() {
         })).then((result) => {
           if (!result.success) traceLauncher('run-local-command-error', { error: result.error ?? 'Local command failed' });
         });
-        commandsAPI.launcherClose({ skipActivation: true });
+        closeForInvocation({ skipActivation: true });
         return;
       }
       if (options.insertWikiLink) {
@@ -1777,7 +1797,7 @@ function CommandLauncher() {
         showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
         return;
       }
-      commandsAPI.launcherClose({ skipActivation: true });
+      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'directory') {
       if (moveSource) {
         await moveLibraryFileToDirectory(moveSource, item);
@@ -1796,7 +1816,7 @@ function CommandLauncher() {
       if (item.authorHandle) {
         await bookmarksAPI?.invokeAuthorTimeline(item.authorHandle);
       }
-      commandsAPI.launcherClose();
+      closeForInvocation();
     } else if (item.type === 'bookmark-facet') {
       if (item.facetPaths?.length) {
         setBookmarkNamespace({ kind: 'facet', label: item.displayName, paths: item.facetPaths });
@@ -1807,22 +1827,22 @@ function CommandLauncher() {
       if (item.bookmarkId) {
         await bookmarksAPI?.invokeBookmark(item.bookmarkId);
       }
-      commandsAPI.launcherClose();
+      closeForInvocation();
     } else if (item.type === 'recent-file') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
-      commandsAPI.launcherClose({ skipActivation: true });
+      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
-      commandsAPI.launcherClose({ skipActivation: true });
+      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'handoff') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
       }
-      commandsAPI.launcherClose({ skipActivation: true });
+      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'action') {
       // Handle built-in actions.
       switch (item.actionId) {
@@ -1941,7 +1961,7 @@ function CommandLauncher() {
           }
           break;
       }
-      commandsAPI.launcherClose();
+      closeForInvocation();
     }
   }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 

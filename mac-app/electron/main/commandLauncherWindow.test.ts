@@ -67,6 +67,19 @@ vi.mock('child_process', () => ({
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { BrowserWindow } from 'electron';
 
+type CommandLauncherResetPayload = {
+  isDarkMode: boolean;
+  generation: number;
+};
+
+function getLastResetPayload(): CommandLauncherResetPayload {
+  const resetCall = [...mockWindow.webContents.send.mock.calls]
+    .reverse()
+    .find(([channel]) => channel === 'command-launcher:reset');
+  expect(resetCall).toBeTruthy();
+  return resetCall?.[1] as CommandLauncherResetPayload;
+}
+
 describe('CommandLauncherWindow.show()', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -152,7 +165,7 @@ describe('CommandLauncherWindow.show()', () => {
 
     await launcher.show();
 
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: false });
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: false, generation: 1 });
     expect(mockWindow.webContents.send.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.show.mock.invocationCallOrder[0]);
     expect(mockWindow.show.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.focus.mock.invocationCallOrder[0]);
   });
@@ -248,7 +261,7 @@ describe('CommandLauncherWindow.preload()', () => {
 
     await launcher.show();
 
-    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: true });
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: true, generation: 1 });
   });
 
   it('uses a transparent launcher background so rounded corners stay clean', () => {
@@ -305,6 +318,34 @@ describe('CommandLauncherWindow.hide()', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
 
     mockIpcMainHandlers.get('command-launcher:close')?.({}, { skipActivation: true });
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
+  it('ignores renderer close requests from an older launcher generation', async () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    await launcher.show();
+    const staleGeneration = getLastResetPayload().generation;
+    await launcher.show();
+    expect(getLastResetPayload().generation).toBe(staleGeneration + 1);
+    mockWindow.hide.mockClear();
+
+    mockIpcMainHandlers.get('command-launcher:close')?.({}, { skipActivation: true, generation: staleGeneration });
+
+    expect(mockWindow.hide).not.toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
+  it('honors renderer close requests for the current launcher generation', async () => {
+    const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    await launcher.show();
+    const currentGeneration = getLastResetPayload().generation;
+    mockWindow.hide.mockClear();
+
+    mockIpcMainHandlers.get('command-launcher:close')?.({}, { skipActivation: true, generation: currentGeneration });
 
     expect(mockWindow.hide).toHaveBeenCalled();
     expect(activatePreviousApp).not.toHaveBeenCalled();
