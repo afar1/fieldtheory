@@ -14,6 +14,7 @@ import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeHintOpaci
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
+import MaxwellHistoryPopover from './MaxwellHistoryPopover';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
@@ -98,6 +99,7 @@ type FooterLocalCommandStatus = {
   commandName?: string;
   filePath?: string;
   mode?: 'document' | 'selection';
+  runId?: string;
   phase?: string;
   changedLines?: number;
   changedBytes?: number;
@@ -105,9 +107,14 @@ type FooterLocalCommandStatus = {
   updatedAt: number;
 };
 
-function formatFooterLocalCommandStatus(status: FooterLocalCommandStatus): string {
+const LOCAL_COMMAND_ACTIVITY_FRAMES = ['|', '/', '-', '\\'] as const;
+
+function formatFooterLocalCommandStatus(status: FooterLocalCommandStatus, activityFrame?: string): string {
   const detail = compactFooterStatusDetail(status.detail);
-  return detail ? `${status.message} - ${detail}` : status.message;
+  const message = status.status === 'running' && activityFrame
+    ? `[${activityFrame}] ${status.message}`
+    : status.message;
+  return detail ? `${message} - ${detail}` : message;
 }
 
 function compactFooterStatusDetail(value: string | undefined, maxLength = 96): string | undefined {
@@ -1466,6 +1473,9 @@ export default function ClipboardHistory() {
   const [agentImproveLaunching, setAgentImproveLaunching] = useState(false);
   const [agentImproveStatus, setAgentImproveStatus] = useState<string | null>(null);
   const [localCommandStatus, setLocalCommandStatus] = useState<FooterLocalCommandStatus | null>(null);
+  const [localCommandActivityFrameIndex, setLocalCommandActivityFrameIndex] = useState(0);
+  const [maxwellHistoryOpen, setMaxwellHistoryOpen] = useState(false);
+  const footerRef = useRef<HTMLDivElement | null>(null);
 
   // DM modal state - for sending DMs to contacts.
   const [showDMModal, setShowDMModal] = useState(false);
@@ -2595,6 +2605,17 @@ export default function ClipboardHistory() {
       setLocalCommandStatus(status);
     });
   }, []);
+
+  useEffect(() => {
+    if (localCommandStatus?.status !== 'running') {
+      setLocalCommandActivityFrameIndex(0);
+      return undefined;
+    }
+    const interval = window.setInterval(() => {
+      setLocalCommandActivityFrameIndex((index) => (index + 1) % LOCAL_COMMAND_ACTIVITY_FRAMES.length);
+    }, 180);
+    return () => window.clearInterval(interval);
+  }, [localCommandStatus?.status]);
 
   useEffect(() => {
     if (!localCommandStatus) return;
@@ -3860,6 +3881,45 @@ export default function ClipboardHistory() {
     </button>
   );
 
+  const renderMaxwellHistoryButton = (extraStyle: React.CSSProperties = {}) => (
+    <button
+      onClick={() => setMaxwellHistoryOpen((open) => !open)}
+      title="Maxwell history"
+      aria-label="Maxwell history"
+      style={{
+        width: '18px',
+        height: '18px',
+        padding: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: maxwellHistoryOpen ? theme.accent : 'transparent',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '4px',
+        cursor: 'pointer',
+        transition: 'background-color 0.15s ease',
+        flexShrink: 0,
+        ...extraStyle,
+      }}
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={maxwellHistoryOpen ? '#fff' : theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 12a9 9 0 1 0 3-6.7" />
+        <path d="M3 3v6h6" />
+        <path d="M12 7v5l3 2" />
+      </svg>
+    </button>
+  );
+
+  const localCommandActivityFrame = LOCAL_COMMAND_ACTIVITY_FRAMES[localCommandActivityFrameIndex] ?? LOCAL_COMMAND_ACTIVITY_FRAMES[0];
+  const footerStatusLabel = localCommandStatus
+    ? formatFooterLocalCommandStatus(
+      localCommandStatus,
+      localCommandStatus.status === 'running' ? localCommandActivityFrame : undefined,
+    )
+    : agentImproveStatus;
+  const showFocusStatusOverlay = focusChromeOverlayActive && !footerChromeInteractive && !!footerStatusLabel;
+  const focusStatusOverlayColor = localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary;
+
   // Window fills the entire BrowserWindow now (no overlay).
   // Native macOS vibrancy handles the blur effect at the window level.
   return (
@@ -3889,6 +3949,10 @@ export default function ClipboardHistory() {
         @keyframes focusLogoFadeIn {
           from { opacity: 0; }
           to { opacity: 0.62; }
+        }
+        @keyframes localStatusFadeOut {
+          0%, 68% { opacity: 0.9; }
+          100% { opacity: 0; }
         }
       `}</style>
 
@@ -6806,9 +6870,48 @@ export default function ClipboardHistory() {
         </div>
       )}
 
+      <MaxwellHistoryPopover
+        open={maxwellHistoryOpen && !bookmarksCanvasChromeActive}
+        onClose={() => setMaxwellHistoryOpen(false)}
+        footerRef={footerRef}
+      />
+
+      {showFocusStatusOverlay && (
+        <div
+          style={{
+            position: 'absolute',
+            left: '50%',
+            bottom: '14px',
+            transform: 'translateX(-50%)',
+            zIndex: 24,
+            maxWidth: 'min(620px, calc(100% - 48px))',
+            padding: '4px 8px',
+            borderRadius: '4px',
+            backgroundColor: theme.isDark ? 'rgba(20, 23, 29, 0.76)' : 'rgba(255, 255, 255, 0.86)',
+            border: `1px solid ${theme.border}`,
+            color: focusStatusOverlayColor,
+            fontSize: '10px',
+            lineHeight: 1.35,
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            pointerEvents: 'none',
+            opacity: 0.9,
+            transition: 'opacity 160ms ease',
+            animation: localCommandStatus && localCommandStatus.status !== 'running'
+              ? `localStatusFadeOut ${localCommandStatus.status === 'error' ? 9 : 3.5}s ease forwards`
+              : undefined,
+          }}
+        >
+          {footerStatusLabel}
+        </div>
+      )}
+
       {/* Footer - three-column layout: left=stats, center=recording, right=controls */}
       {/* Fades in focus mode; the theme toggle floats separately. */}
       <div
+        ref={footerRef}
         style={{
           position: focusChromeOverlayActive ? 'absolute' : 'relative',
           left: focusChromeOverlayActive ? 0 : undefined,
@@ -6926,21 +7029,24 @@ export default function ClipboardHistory() {
               ) : null}
         </div>
 
-        {(localCommandStatus || agentImproveStatus) && (
-          <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-            <span
-              style={{
-                fontSize: '9px',
-                color: localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary,
-                opacity: 0.85,
-                maxWidth: 'min(560px, 48vw)',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-              }}
-            >
-              {localCommandStatus ? formatFooterLocalCommandStatus(localCommandStatus) : agentImproveStatus}
-            </span>
+        {footerStatusLabel && (
+          <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, maxWidth: 'min(620px, 54vw)' }}>
+              {localCommandStatus ? renderMaxwellHistoryButton() : null}
+              <span
+                style={{
+                  fontSize: '9px',
+                  color: localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary,
+                  opacity: 0.85,
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {footerStatusLabel}
+              </span>
+            </div>
           </div>
         )}
 
@@ -6959,24 +7065,36 @@ export default function ClipboardHistory() {
               : undefined;
 
           return centerLabel ? (
-            <div style={{ flex: 1, display: 'flex', justifyContent: 'center' }}>
-              <span
-                onClick={() => {
-                  if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
-                }}
-                title={centerLabelTitle}
-                style={{
-                  fontSize: '9px',
-                  color: theme.textSecondary,
-                  cursor: centerLabelOpensSite ? 'pointer' : 'default',
-                  opacity: 0.7,
-                  transition: 'opacity 0.15s',
-                }}
-                onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-              >
-                {centerLabel}
-              </span>
+            <div
+              style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}
+            >
+              <div style={{ position: 'relative', display: 'flex', alignItems: 'center', minWidth: 0 }}>
+                {renderMaxwellHistoryButton({
+                  position: 'absolute',
+                  right: '100%',
+                  marginRight: '6px',
+                })}
+                <span
+                  onClick={() => {
+                    if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
+                  }}
+                  title={centerLabelTitle}
+                  style={{
+                    fontSize: '9px',
+                    color: theme.textSecondary,
+                    cursor: centerLabelOpensSite ? 'pointer' : 'default',
+                    opacity: 0.7,
+                    transition: 'opacity 0.15s',
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis',
+                    whiteSpace: 'nowrap',
+                  }}
+                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
+                >
+                  {centerLabel}
+                </span>
+              </div>
             </div>
           ) : null;
         })()}

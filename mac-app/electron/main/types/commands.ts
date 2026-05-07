@@ -20,6 +20,9 @@ export const CommandsIPCChannels = {
   // Direct invocation (from command launcher)
   INVOKE_COMMAND: 'commands:invoke',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
+  LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
+  UNDO_MAXWELL_RUN: 'commands:undoMaxwellRun',
+  REDO_MAXWELL_RUN: 'commands:redoMaxwellRun',
 
   // Events
   COMMANDS_CHANGED: 'commands:commandsChanged',
@@ -100,6 +103,78 @@ export interface LocalCommandStatus {
   error?: string;
   updatedAt: number;
 }
+
+export type MaxwellRunStatus =
+  | 'pending'
+  | 'generated'
+  | 'success'
+  | 'generation_error'
+  | 'selection_error'
+  | 'save_conflict'
+  | 'save_error'
+  | 'cancelled'
+  | 'reverted';
+
+export type MaxwellRunMode = 'document' | 'selection';
+export type MaxwellTargetType = 'wiki' | 'reading';
+
+export interface MaxwellRunSummary {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: MaxwellRunStatus;
+  commandName: string;
+  targetPath: string;
+  targetRelPath: string | null;
+  targetType: MaxwellTargetType;
+  mode: MaxwellRunMode;
+  summary: string | null;
+  errorMessage: string | null;
+  model: string | null;
+  harness: string | null;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+export type MaxwellUndoFailureReason =
+  | 'not-ready'
+  | 'not-found'
+  | 'not-applied'
+  | 'not-reverted'
+  | 'conflict'
+  | 'blocked'
+  | 'save-error'
+  | 'error';
+
+export type MaxwellRedoFailureReason = MaxwellUndoFailureReason;
+
+export type MaxwellUndoResult =
+  | {
+      success: true;
+      run: MaxwellRunSummary;
+      filePath: string;
+      commandName: string;
+    }
+  | {
+      success: false;
+      reason: MaxwellUndoFailureReason;
+      error: string;
+      run?: MaxwellRunSummary;
+    };
+
+export type MaxwellRedoResult =
+  | {
+      success: true;
+      run: MaxwellRunSummary;
+      filePath: string;
+      commandName: string;
+    }
+  | {
+      success: false;
+      reason: MaxwellRedoFailureReason;
+      error: string;
+      run?: MaxwellRunSummary;
+    };
 
 /**
  * Represents a watched directory.
