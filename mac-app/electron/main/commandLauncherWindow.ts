@@ -45,6 +45,11 @@ type CommandLauncherWindowOptions = {
   getInitialDarkMode?: () => boolean;
 };
 
+type CommandLauncherCloseOptions = {
+  skipActivation?: boolean;
+  generation?: number;
+};
+
 /**
  * Check if an app is the Electron app itself (should be excluded from target apps).
  */
@@ -81,6 +86,7 @@ export class CommandLauncherWindow {
   private _isShowing: boolean = false;
   private suppressActivationUntilHidden = false;
   private suppressActivationUntilMs = 0;
+  private showGeneration = 0;
   private readonly SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS = 3000;
 
   // Window dimensions - starts small, expands for results.
@@ -136,12 +142,25 @@ export class CommandLauncherWindow {
     });
     
     // Listen for close requests from renderer.
-    ipcMain.on('command-launcher:close', (_event, options?: { skipActivation?: boolean }) => {
+    ipcMain.on('command-launcher:close', (_event, options?: CommandLauncherCloseOptions) => {
       const skipActivation = options?.skipActivation === true;
+      const closeGeneration = options?.generation;
+      if (typeof closeGeneration === 'number' && closeGeneration !== this.showGeneration) {
+        appendCommandLauncherTrace('renderer-close-request-ignored-stale', {
+          visible: this.isVisible(),
+          isShowing: this._isShowing,
+          skipActivation,
+          closeGeneration,
+          currentGeneration: this.showGeneration,
+        });
+        return;
+      }
       appendCommandLauncherTrace('renderer-close-request', {
         visible: this.isVisible(),
         isShowing: this._isShowing,
         skipActivation,
+        closeGeneration: closeGeneration ?? null,
+        currentGeneration: this.showGeneration,
       });
       this.hide(skipActivation);
     });
@@ -191,11 +210,13 @@ export class CommandLauncherWindow {
     // Mark as showing BEFORE any async work to close the race window.
     // This allows other code to check isShowingOrVisible() during the await.
     this._isShowing = true;
+    this.showGeneration += 1;
     this.suppressActivationUntilHidden = false;
     this.suppressActivationUntilMs = 0;
     appendCommandLauncherTrace('show-start', {
       hasWindow: Boolean(this.window),
       windowVisible: this.isVisible(),
+      generation: this.showGeneration,
     });
 
     try {
@@ -289,6 +310,7 @@ export class CommandLauncherWindow {
       // Reset before focus so early typed characters are not cleared after show.
       this.window!.webContents.send('command-launcher:reset', {
         isDarkMode: this.getInitialDarkMode(),
+        generation: this.showGeneration,
       });
       appendCommandLauncherTrace('show-sent-reset');
 
@@ -498,9 +520,12 @@ export class CommandLauncherWindow {
 
     // Hide on blur (clicking away).
     this.window.on('blur', () => {
+      const frontmostApp = this.nativeHelper?.getFrontmostApp() ?? null;
       appendCommandLauncherTrace('window-blur-event', {
         windowVisible: this.isVisible(),
         fieldTheoryActiveOnShow: this.fieldTheoryActiveOnShow,
+        frontmostBundleId: frontmostApp?.bundleId ?? null,
+        frontmostName: frontmostApp?.name ?? null,
       });
       this.hide();
     });

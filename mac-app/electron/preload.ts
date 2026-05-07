@@ -3247,7 +3247,7 @@ const commandsAPI = {
   },
 
   // Close the command launcher window.
-  launcherClose: (options?: { skipActivation?: boolean }): void => {
+  launcherClose: (options?: { skipActivation?: boolean; generation?: number }): void => {
     ipcRenderer.send('command-launcher:close', options);
   },
 

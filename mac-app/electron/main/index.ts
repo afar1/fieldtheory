@@ -176,6 +176,8 @@ type BookmarkBackgroundSyncResult =
   | { status: 'failed'; error: string };
 
 let bookmarkBackgroundSyncInFlight: Promise<BookmarkBackgroundSyncResult> | null = null;
+const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 2;
+const MAIN_PROCESS_STARTED_AT = new Date().toISOString();
 let bookmarkBackgroundSyncLastAttemptAt = 0;
 
 function findFieldTheoryCli(): string | null {
@@ -329,21 +331,29 @@ function activateAndPasteFromCommandLauncher(
   options: { clipboardTrace?: () => Record<string, unknown> } = {},
 ): Promise<boolean> {
   commandLauncherWindow?.suppressActivationForExternalInvocation();
+  appendCommandLauncherTrace('command-launcher-paste-strategy', {
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    strategy: 'applescript',
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+  });
   return activateAndPaste(targetApp, {
     beforePaste: () => commandLauncherWindow?.hide(true),
     clipboardTrace: options.clipboardTrace,
   });
 }
 
-async function typeCommandTextFromCommandLauncher(
+async function typeTextFromCommandLauncher(
   targetApp: { bundleId: string; name: string },
   text: string,
+  tracePrefix: 'invoke-command' | 'invoke-handoff',
 ): Promise<boolean> {
   commandLauncherWindow?.suppressActivationForExternalInvocation();
   commandLauncherWindow?.hide(true);
 
   if (!nativeHelper) {
-    appendCommandLauncherTrace('invoke-command-native-type-unavailable', {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-unavailable`, {
+      version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
       reason: 'missing-native-helper',
@@ -351,17 +361,29 @@ async function typeCommandTextFromCommandLauncher(
     return false;
   }
 
-  appendCommandLauncherTrace('invoke-command-native-type-start', {
+  appendCommandLauncherTrace('command-launcher-paste-strategy', {
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    strategy: 'native-helper',
+    tracePrefix,
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+  });
+  const frontmostBeforeType = nativeHelper.getFrontmostApp();
+  appendCommandLauncherTrace(`${tracePrefix}-native-type-start`, {
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     targetBundleId: targetApp.bundleId,
     targetName: targetApp.name,
     textLength: text.length,
     clipboard: readCommandPasteClipboardTrace(),
+    frontmostBundleId: frontmostBeforeType?.bundleId ?? null,
+    frontmostName: frontmostBeforeType?.name ?? null,
   });
 
   try {
     const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
     const frontmost = nativeHelper.getFrontmostApp();
-    appendCommandLauncherTrace('invoke-command-native-type-result', {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-result`, {
+      version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
       success: result.success,
@@ -372,7 +394,8 @@ async function typeCommandTextFromCommandLauncher(
     });
     return result.success;
   } catch (error) {
-    appendCommandLauncherTrace('invoke-command-native-type-error', {
+    appendCommandLauncherTrace(`${tracePrefix}-native-type-error`, {
+      version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
       targetName: targetApp.name,
       error,
@@ -7540,21 +7563,59 @@ function setupClipboardIPCHandlers(): void {
         commandLauncherWindow?.hide(true);
         appendCommandLauncherTrace('invoke-handoff-no-target', { filePath });
         return { success: false, error: 'No external target app available' };
-        }
-        const isTerminal = isTerminalApp(targetApp.bundleId);
-        const isIDE = isIDEWithTerminal(targetApp.bundleId);
+      }
+      const isTerminal = isTerminalApp(targetApp.bundleId);
+      const isIDE = isIDEWithTerminal(targetApp.bundleId);
       const fileName = path.basename(filePath);
+      let handoffText: string | null = null;
 
       if (isTerminal || isIDE) {
-        clipboard.writeText(`${fileName}\n${filePath} `);
+        handoffText = `${fileName}\n${filePath} `;
+        clipboard.writeText(handoffText);
         clipboardManager?.syncClipboardHash();
+        appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
+          format: 'text',
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          filePath,
+          ...commandPayloadTrace(handoffText),
+          textLength: handoffText.length,
+          clipboard: readCommandPasteClipboardTrace(),
+        });
       } else {
         const plistData = plist.build([filePath]);
         clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
         clipboardManager?.syncClipboardHash();
+        appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
+          format: 'file-list',
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          filePath,
+          availableFormats: clipboard.availableFormats(),
+        });
       }
 
-      await activateAndPasteFromCommandLauncher(targetApp);
+      let pasted = false;
+      if (handoffText) {
+        pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+        if (!pasted) {
+          appendCommandLauncherTrace('invoke-handoff-native-type-fallback', {
+            filePath,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+          });
+        }
+      }
+      if (!pasted) {
+        pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+          clipboardTrace: readCommandPasteClipboardTrace,
+        });
+      }
+      if (!pasted) {
+        cursorStatusManager?.showNoTargetError('Portable command paste failed');
+        return { success: false, error: 'Could not paste into target app' };
+      }
+
       appendCommandLauncherTrace('invoke-handoff-success', {
         filePath,
         targetBundleId: targetApp.bundleId,
@@ -7645,7 +7706,7 @@ function setupClipboardIPCHandlers(): void {
 
         let pasted = false;
         if (terminalCommandReferenceText) {
-          pasted = await typeCommandTextFromCommandLauncher(targetApp, terminalCommandReferenceText);
+          pasted = await typeTextFromCommandLauncher(targetApp, terminalCommandReferenceText, 'invoke-command');
           if (!pasted) {
             appendCommandLauncherTrace('invoke-command-native-type-fallback', {
               commandName,
@@ -9289,6 +9350,13 @@ async function initTranscriberSystem(): Promise<void> {
   // Pass nativeHelper for instant access to cached frontmost app info.
   commandLauncherWindow = new CommandLauncherWindow(nativeHelper ?? undefined, {
     getInitialDarkMode: () => preferencesManager?.getPreference('darkMode') ?? false,
+  });
+  appendCommandLauncherTrace('command-launcher-main-ready', {
+    pasteTraceVersion: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    mainProcessStartedAt: MAIN_PROCESS_STARTED_AT,
+    pid: process.pid,
+    nativeHelperAvailable: Boolean(nativeHelper),
+    payloadTraceEnabled: isCommandPayloadTraceEnabled(),
   });
   commandLauncherWindow.preload();
 
