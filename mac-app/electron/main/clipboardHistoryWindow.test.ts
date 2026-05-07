@@ -155,6 +155,56 @@ describe('ClipboardHistoryWindow helper methods', () => {
     await Promise.resolve();
   });
 
+  it('sends target app info after async previous-app capture updates', async () => {
+    const send = vi.fn();
+    (window as any).window = {
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => true),
+      webContents: { send },
+    };
+    vi.spyOn(window as any, 'getFrontmostExternalApp').mockResolvedValue({
+      bundleId: 'com.mitchellh.ghostty',
+      name: 'Ghostty',
+    });
+
+    await window.capturePreviousApp();
+
+    expect(send).toHaveBeenCalledWith('clipboard:targetAppInfo', {
+      previousApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      targetApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      runningApps: [],
+    });
+  });
+
+  it('refreshes the default paste target when a visible app window sees a new external app', () => {
+    const appWindow = new ClipboardHistoryWindow({
+      get: vi.fn(() => ({ fieldTheoryWindowMode: 'app', clickAwayToDismiss: true })),
+      getPreference: vi.fn((key: string) => {
+        if (key === 'clickAwayToDismiss') return true;
+        return false;
+      }),
+    } as any);
+    const send = vi.fn();
+    (appWindow as any).window = {
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => true),
+      webContents: { send },
+    };
+
+    appWindow.rememberExternalApp({ bundleId: 'com.tinyspeck.slackmacgap', name: 'Slack' });
+    appWindow.rememberExternalApp({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' });
+
+    expect(appWindow.getPreviousApp()).toEqual({
+      bundleId: 'com.mitchellh.ghostty',
+      name: 'Ghostty',
+    });
+    expect(send).toHaveBeenLastCalledWith('clipboard:targetAppInfo', {
+      previousApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      targetApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
+      runningApps: [],
+    });
+  });
+
   it('uses one shared blur-dismiss rule for panel mode', () => {
     expect(window.shouldAutoHideOnBlur()).toBe(true);
 

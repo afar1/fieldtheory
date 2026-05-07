@@ -1207,6 +1207,58 @@ interface LocalCommandStatus {
   updatedAt: number;
 }
 
+type MaxwellRunStatus =
+  | 'pending'
+  | 'generated'
+  | 'success'
+  | 'generation_error'
+  | 'selection_error'
+  | 'save_conflict'
+  | 'save_error'
+  | 'cancelled'
+  | 'reverted';
+
+type MaxwellRunMode = 'document' | 'selection';
+type MaxwellTargetType = 'wiki' | 'reading';
+
+interface MaxwellRunSummary {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: MaxwellRunStatus;
+  commandName: string;
+  targetPath: string;
+  targetRelPath: string | null;
+  targetType: MaxwellTargetType;
+  mode: MaxwellRunMode;
+  summary: string | null;
+  errorMessage: string | null;
+  model: string | null;
+  harness: string | null;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+type MaxwellUndoFailureReason =
+  | 'not-ready'
+  | 'not-found'
+  | 'not-applied'
+  | 'not-reverted'
+  | 'conflict'
+  | 'blocked'
+  | 'save-error'
+  | 'error';
+
+type MaxwellRedoFailureReason = MaxwellUndoFailureReason;
+
+type MaxwellUndoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellUndoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellRedoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellRedoFailureReason; error: string; run?: MaxwellRunSummary };
+
 /**
  * Diagnostics API for system diagnostics.
  */
@@ -1357,6 +1409,9 @@ interface CommandsAPI {
   // Command launcher (Cmd+Shift+K)
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
   runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
+  listMaxwellRuns?: (limit?: number) => Promise<MaxwellRunSummary[]>;
+  undoMaxwellRun?: (runId: string) => Promise<MaxwellUndoResult>;
+  redoMaxwellRun?: (runId: string) => Promise<MaxwellRedoResult>;
   onLocalCommandStatus?: (callback: (status: LocalCommandStatus) => void) => () => void;
   launcherResize?: (height: number) => void;
   launcherClose?: (options?: { skipActivation?: boolean }) => void;
