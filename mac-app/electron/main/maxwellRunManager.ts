@@ -93,6 +93,26 @@ export type MaxwellUndoPrepareResult =
       postContent?: string;
     };
 
+export type MaxwellRedoPrepareResult =
+  | {
+      ok: true;
+      run: MaxwellRunRecord;
+      targetPath: string;
+      targetRelPath: string | null;
+      targetType: MaxwellTargetType;
+      postContent: string;
+      expectedVersion: DocumentVersion;
+    }
+  | {
+      ok: false;
+      reason: 'not-found' | 'not-reverted' | 'conflict';
+      run?: MaxwellRunRecord;
+      currentVersion?: DocumentVersion;
+      expectedVersion?: DocumentVersion;
+      currentContent?: string;
+      postContent?: string;
+    };
+
 interface MaxwellRunRow {
   run_id: string;
   created_at: number;
@@ -288,6 +308,19 @@ export class MaxwellRunManager {
     return this.getRun(runId);
   }
 
+  markRedone(runId: string, postVersion: DocumentVersion): MaxwellRunRecord | null {
+    this.requireDb().prepare(`
+      UPDATE maxwell_runs
+      SET status = 'success',
+          post_version_json = ?,
+          revert_version_json = NULL,
+          error_message = NULL,
+          updated_at = ?
+      WHERE run_id = ?
+    `).run(JSON.stringify(postVersion), Date.now(), runId);
+    return this.getRun(runId);
+  }
+
   getRun(runId: string): MaxwellRunRecord | null {
     const row = this.requireDb()
       .prepare('SELECT * FROM maxwell_runs WHERE run_id = ?')
@@ -305,7 +338,7 @@ export class MaxwellRunManager {
   prepareUndo(runId: string, currentVersion: DocumentVersion, currentContent?: string): MaxwellUndoPrepareResult {
     const run = this.getRun(runId);
     if (!run) return { ok: false, reason: 'not-found' };
-    if (run.status !== 'success' || !run.postVersion || !run.postContent) {
+    if (run.status !== 'success' || !run.postVersion || run.postContent === null) {
       return {
         ok: false,
         reason: 'not-applied',
@@ -334,6 +367,39 @@ export class MaxwellRunManager {
       targetType: run.targetType,
       preContent: run.preContent,
       expectedVersion: run.postVersion,
+    };
+  }
+
+  prepareRedo(runId: string, currentVersion: DocumentVersion, currentContent?: string): MaxwellRedoPrepareResult {
+    const run = this.getRun(runId);
+    if (!run) return { ok: false, reason: 'not-found' };
+    if (run.status !== 'reverted' || !run.revertVersion || run.postContent === null) {
+      return {
+        ok: false,
+        reason: 'not-reverted',
+        run,
+        postContent: run.postContent ?? undefined,
+      };
+    }
+    if (!documentVersionsMatch(currentVersion, run.revertVersion)) {
+      return {
+        ok: false,
+        reason: 'conflict',
+        run,
+        currentVersion,
+        expectedVersion: run.revertVersion,
+        currentContent,
+        postContent: run.postContent,
+      };
+    }
+    return {
+      ok: true,
+      run,
+      targetPath: run.targetPath,
+      targetRelPath: run.targetRelPath,
+      targetType: run.targetType,
+      postContent: run.postContent,
+      expectedVersion: run.revertVersion,
     };
   }
 

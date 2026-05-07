@@ -89,6 +89,17 @@ vi.mock('better-sqlite3', () => {
       }
 
       if (/SET status = 'success'/.test(this.sql)) {
+        if (/revert_version_json = NULL/.test(this.sql)) {
+          const [postVersionJson, updatedAt, runId] = args;
+          return this.update(String(runId), {
+            status: 'success',
+            post_version_json: postVersionJson,
+            revert_version_json: null,
+            error_message: null,
+            updated_at: updatedAt,
+          });
+        }
+
         const [generatedContent, postContent, postVersionJson, summary, timingsJson, updatedAt, runId] = args;
         const row = this.db.rows.get(String(runId));
         if (!row) return { changes: 0 };
@@ -287,5 +298,104 @@ describe('MaxwellRunManager', () => {
       expectedVersion: version('post', 5),
       targetPath: '/tmp/today.md',
     }));
+  });
+
+  it('prepares guarded undo for an applied empty document', () => {
+    const run = manager.createPendingRun({
+      commandName: 'clear',
+      targetPath: '/tmp/today.md',
+      targetType: 'reading',
+      mode: 'document',
+      preContent: 'before',
+      preVersion: version('pre', 6),
+    });
+    manager.markSuccess(run.runId, {
+      postContent: '',
+      postVersion: version('empty', 0),
+    });
+
+    expect(manager.prepareUndo(run.runId, version('empty', 0))).toEqual(expect.objectContaining({
+      ok: true,
+      preContent: 'before',
+      expectedVersion: version('empty', 0),
+    }));
+  });
+
+  it('prepares guarded redo only when the current document still matches the reverted version', () => {
+    const run = manager.createPendingRun({
+      commandName: 'tidy',
+      targetPath: '/tmp/today.md',
+      targetType: 'reading',
+      mode: 'document',
+      preContent: 'before',
+      preVersion: version('pre', 6),
+    });
+    manager.markSuccess(run.runId, {
+      postContent: 'after',
+      postVersion: version('post', 5),
+    });
+    manager.markReverted(run.runId, version('revert', 6));
+
+    expect(manager.prepareRedo(run.runId, version('other', 6), 'changed')).toEqual(expect.objectContaining({
+      ok: false,
+      reason: 'conflict',
+      currentContent: 'changed',
+      postContent: 'after',
+    }));
+
+    expect(manager.prepareRedo(run.runId, version('revert', 6))).toEqual(expect.objectContaining({
+      ok: true,
+      postContent: 'after',
+      expectedVersion: version('revert', 6),
+      targetPath: '/tmp/today.md',
+    }));
+
+    const redone = manager.markRedone(run.runId, version('post2', 5));
+    expect(redone?.status).toBe('success');
+    expect(redone?.postVersion).toEqual(version('post2', 5));
+    expect(redone?.revertVersion).toBeNull();
+  });
+
+  it('lists recent runs and marks a successful run as reverted', () => {
+    let now = 1000;
+    const dateNow = vi.spyOn(Date, 'now').mockImplementation(() => {
+      now += 10;
+      return now;
+    });
+    try {
+      const first = manager.createPendingRun({
+        commandName: 'tidy',
+        targetPath: '/tmp/one.md',
+        targetType: 'reading',
+        mode: 'document',
+        preContent: 'one',
+        preVersion: version('one', 3),
+      });
+      const second = manager.createPendingRun({
+        commandName: 'entry',
+        targetPath: '/tmp/two.md',
+        targetType: 'reading',
+        mode: 'document',
+        preContent: 'two',
+        preVersion: version('two', 3),
+      });
+
+      manager.markSuccess(second.runId, {
+        postContent: 'after',
+        postVersion: version('post', 5),
+      });
+      const reverted = manager.markReverted(second.runId, version('revert', 3));
+
+      expect(manager.listRuns(1).map(run => run.runId)).toEqual([second.runId]);
+      expect(manager.listRuns(5).map(run => run.runId)).toEqual([second.runId, first.runId]);
+      expect(reverted?.status).toBe('reverted');
+      expect(reverted?.revertVersion).toEqual(version('revert', 3));
+      expect(manager.prepareUndo(second.runId, version('post', 5))).toEqual(expect.objectContaining({
+        ok: false,
+        reason: 'not-applied',
+      }));
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 });

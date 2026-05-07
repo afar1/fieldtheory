@@ -84,7 +84,7 @@ import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
-import { MaxwellRunManager } from './maxwellRunManager';
+import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
@@ -94,6 +94,11 @@ import {
   type LocalCommandRunResult,
   type LocalCommandSelectionInput,
   type LocalCommandStatus,
+  type MaxwellRedoFailureReason,
+  type MaxwellRedoResult,
+  type MaxwellRunSummary,
+  type MaxwellUndoFailureReason,
+  type MaxwellUndoResult,
 } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
@@ -249,7 +254,7 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
   targetApp: { bundleId: string; name: string } | null,
-  options: { beforePaste?: () => void | Promise<void> } = {},
+  options: { beforePaste?: () => void | Promise<void>; clipboardTrace?: () => Record<string, unknown> } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('activate-and-paste-start', {
     targetBundleId: targetApp?.bundleId ?? null,
@@ -278,6 +283,7 @@ async function activateAndPaste(
       targetBundleId: bundleId,
       frontmostBundleId: beforeKeystroke?.bundleId ?? null,
       frontmostName: beforeKeystroke?.name ?? null,
+      ...(options.clipboardTrace ? { clipboard: options.clipboardTrace() } : {}),
     });
     await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "v" using command down'], { timeout: 3000 });
   } else {
@@ -294,11 +300,85 @@ async function activateAndPaste(
   return true;
 }
 
-function activateAndPasteFromCommandLauncher(targetApp: { bundleId: string; name: string }): Promise<boolean> {
+function readCommandPasteClipboardTrace(): Record<string, unknown> {
+  try {
+    const text = clipboard.readText();
+    const trace: Record<string, unknown> = {
+      textLength: text.length,
+      availableFormats: clipboard.availableFormats(),
+    };
+    if (isCommandPayloadTraceEnabled()) {
+      trace.text = text;
+    }
+    return trace;
+  } catch (error) {
+    return { error };
+  }
+}
+
+function isCommandPayloadTraceEnabled(): boolean {
+  return ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_COMMAND_PAYLOAD_TRACE ?? '').toLowerCase());
+}
+
+function commandPayloadTrace(text: string): Record<string, unknown> {
+  return isCommandPayloadTraceEnabled() ? { payload: text } : {};
+}
+
+function activateAndPasteFromCommandLauncher(
+  targetApp: { bundleId: string; name: string },
+  options: { clipboardTrace?: () => Record<string, unknown> } = {},
+): Promise<boolean> {
   commandLauncherWindow?.suppressActivationForExternalInvocation();
   return activateAndPaste(targetApp, {
     beforePaste: () => commandLauncherWindow?.hide(true),
+    clipboardTrace: options.clipboardTrace,
   });
+}
+
+async function typeCommandTextFromCommandLauncher(
+  targetApp: { bundleId: string; name: string },
+  text: string,
+): Promise<boolean> {
+  commandLauncherWindow?.suppressActivationForExternalInvocation();
+  commandLauncherWindow?.hide(true);
+
+  if (!nativeHelper) {
+    appendCommandLauncherTrace('invoke-command-native-type-unavailable', {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      reason: 'missing-native-helper',
+    });
+    return false;
+  }
+
+  appendCommandLauncherTrace('invoke-command-native-type-start', {
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    textLength: text.length,
+    clipboard: readCommandPasteClipboardTrace(),
+  });
+
+  try {
+    const result = await nativeHelper.typeIntoApp(targetApp.bundleId, text, false);
+    const frontmost = nativeHelper.getFrontmostApp();
+    appendCommandLauncherTrace('invoke-command-native-type-result', {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      success: result.success,
+      error: result.error ?? null,
+      frontmostBundleId: frontmost?.bundleId ?? null,
+      frontmostName: frontmost?.name ?? null,
+      clipboard: readCommandPasteClipboardTrace(),
+    });
+    return result.success;
+  } catch (error) {
+    appendCommandLauncherTrace('invoke-command-native-type-error', {
+      targetBundleId: targetApp.bundleId,
+      targetName: targetApp.name,
+      error,
+    });
+    return false;
+  }
 }
 
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
@@ -683,6 +763,70 @@ function getMaxwellRunManager(): MaxwellRunManager {
     : path.join(app.getPath('userData'), 'maxwell.db');
   maxwellRunManager.setDatabasePath(dbPath);
   return maxwellRunManager;
+}
+
+function summarizeMaxwellRun(run: MaxwellRunRecord): MaxwellRunSummary {
+  return {
+    runId: run.runId,
+    createdAt: run.createdAt,
+    updatedAt: run.updatedAt,
+    status: run.status,
+    commandName: run.commandName,
+    targetPath: run.targetPath,
+    targetRelPath: run.targetRelPath,
+    targetType: run.targetType,
+    mode: run.mode,
+    summary: run.summary,
+    errorMessage: run.errorMessage,
+    model: run.model,
+    harness: run.harness,
+    canUndo: run.status === 'success' && !!run.postVersion && run.postContent !== null,
+    canRedo: run.status === 'reverted' && !!run.revertVersion && run.postContent !== null,
+  };
+}
+
+function emitMaxwellUndoFailure(
+  reason: MaxwellUndoFailureReason,
+  error: string,
+  run?: MaxwellRunRecord | null,
+): MaxwellUndoResult {
+  emitLocalCommandStatus({
+    status: 'error',
+    message: error,
+    commandName: run?.commandName,
+    filePath: run?.targetPath,
+    mode: run?.mode,
+    runId: run?.runId,
+    error,
+  });
+  return {
+    success: false,
+    reason,
+    error,
+    run: run ? summarizeMaxwellRun(run) : undefined,
+  };
+}
+
+function emitMaxwellRedoFailure(
+  reason: MaxwellRedoFailureReason,
+  error: string,
+  run?: MaxwellRunRecord | null,
+): MaxwellRedoResult {
+  emitLocalCommandStatus({
+    status: 'error',
+    message: error,
+    commandName: run?.commandName,
+    filePath: run?.targetPath,
+    mode: run?.mode,
+    runId: run?.runId,
+    error,
+  });
+  return {
+    success: false,
+    reason,
+    error,
+    run: run ? summarizeMaxwellRun(run) : undefined,
+  };
 }
 
 function getLocalLlmSetupScriptPath(): string | null {
@@ -2115,6 +2259,7 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   // Wire up native helper for fast sound playback if available.
   if (nativeHelper) {
     window.setNativeHelper(nativeHelper);
+    window.rememberExternalApp(nativeHelper.getFrontmostApp());
     window.getSoundManager().setNativeHelper(nativeHelper);
   }
 
@@ -7188,6 +7333,154 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  ipcMain.handle(CommandsIPCChannels.LIST_MAXWELL_RUNS, (_event, rawLimit?: unknown): MaxwellRunSummary[] => {
+    const limit = typeof rawLimit === 'number' && Number.isFinite(rawLimit) ? rawLimit : 20;
+    try {
+      return getMaxwellRunManager().listRuns(limit).map(summarizeMaxwellRun);
+    } catch (error) {
+      log.warn('Could not list Maxwell runs:', error);
+      return [];
+    }
+  });
+
+  ipcMain.handle(CommandsIPCChannels.UNDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellUndoResult => {
+    if (!librarianManager) {
+      return emitMaxwellUndoFailure('not-ready', 'Field Theory library is not ready');
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return emitMaxwellUndoFailure('blocked', 'Field Theory is read-only');
+    }
+    const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
+    if (!runId) {
+      return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
+    }
+
+    const manager = getMaxwellRunManager();
+    const run = manager.getRun(runId);
+    if (!run) {
+      return emitMaxwellUndoFailure('not-found', 'Maxwell run not found');
+    }
+
+    let currentVersion: DocumentVersion;
+    let currentContent: string;
+    try {
+      currentVersion = readDocumentVersion(run.targetPath);
+      currentContent = fs.readFileSync(run.targetPath, 'utf-8');
+    } catch {
+      return emitMaxwellUndoFailure('not-found', 'Current document no longer exists', run);
+    }
+
+    const undo = manager.prepareUndo(runId, currentVersion, currentContent);
+    if (!undo.ok) {
+      const error = undo.reason === 'conflict'
+        ? 'Current document changed since Maxwell saved this result'
+        : 'This Maxwell run cannot be undone';
+      return emitMaxwellUndoFailure(undo.reason, error, undo.run ?? run);
+    }
+
+    const saveResult = undo.targetType === 'wiki'
+      ? undo.targetRelPath
+        ? librarianManager.saveWikiPage(undo.targetRelPath, undo.preContent, undo.expectedVersion)
+        : { ok: false as const, reason: 'not-found' as const }
+      : librarianManager.saveReading(undo.targetPath, undo.preContent, undo.expectedVersion);
+
+    if (!saveResult.ok) {
+      const error = saveResult.reason === 'conflict'
+        ? 'Current document changed while Maxwell was undoing this run'
+        : `Could not undo Maxwell run: ${saveResult.reason}`;
+      return emitMaxwellUndoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
+    }
+
+    const reverted = manager.markReverted(runId, saveResult.version) ?? run;
+    emitLocalCommandStatus({
+      status: 'success',
+      message: `Undid ${run.commandName}`,
+      detail: 'Restored previous document version',
+      eventKind: 'file_change',
+      commandName: run.commandName,
+      filePath: run.targetPath,
+      mode: run.mode,
+      runId,
+      phase: 'done',
+    });
+    return {
+      success: true,
+      run: summarizeMaxwellRun(reverted),
+      filePath: run.targetPath,
+      commandName: run.commandName,
+    };
+  });
+
+  ipcMain.handle(CommandsIPCChannels.REDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellRedoResult => {
+    if (!librarianManager) {
+      return emitMaxwellRedoFailure('not-ready', 'Field Theory library is not ready');
+    }
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return emitMaxwellRedoFailure('blocked', 'Field Theory is read-only');
+    }
+    const runId = typeof rawRunId === 'string' ? rawRunId.trim() : '';
+    if (!runId) {
+      return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
+    }
+
+    const manager = getMaxwellRunManager();
+    const run = manager.getRun(runId);
+    if (!run) {
+      return emitMaxwellRedoFailure('not-found', 'Maxwell run not found');
+    }
+
+    let currentVersion: DocumentVersion;
+    let currentContent: string;
+    try {
+      currentVersion = readDocumentVersion(run.targetPath);
+      currentContent = fs.readFileSync(run.targetPath, 'utf-8');
+    } catch {
+      return emitMaxwellRedoFailure('not-found', 'Current document no longer exists', run);
+    }
+
+    const redo = manager.prepareRedo(runId, currentVersion, currentContent);
+    if (!redo.ok) {
+      const error = redo.reason === 'conflict'
+        ? 'Current document changed since Maxwell was undone'
+        : 'This Maxwell run cannot be redone';
+      return emitMaxwellRedoFailure(redo.reason, error, redo.run ?? run);
+    }
+
+    const saveResult = redo.targetType === 'wiki'
+      ? redo.targetRelPath
+        ? librarianManager.saveWikiPage(redo.targetRelPath, redo.postContent, redo.expectedVersion)
+        : { ok: false as const, reason: 'not-found' as const }
+      : librarianManager.saveReading(redo.targetPath, redo.postContent, redo.expectedVersion);
+
+    if (!saveResult.ok) {
+      const error = saveResult.reason === 'conflict'
+        ? 'Current document changed while Maxwell was redoing this run'
+        : `Could not redo Maxwell run: ${saveResult.reason}`;
+      return emitMaxwellRedoFailure(saveResult.reason === 'conflict' ? 'conflict' : 'save-error', error, run);
+    }
+
+    const redone = manager.markRedone(runId, saveResult.version) ?? run;
+    emitLocalCommandStatus({
+      status: 'success',
+      message: `Redid ${run.commandName}`,
+      detail: 'Reapplied Maxwell result',
+      eventKind: 'file_change',
+      commandName: run.commandName,
+      filePath: run.targetPath,
+      mode: run.mode,
+      runId,
+      phase: 'done',
+    });
+    return {
+      success: true,
+      run: summarizeMaxwellRun(redone),
+      filePath: run.targetPath,
+      commandName: run.commandName,
+    };
+  });
+
   ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number }) => {
     if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
@@ -7247,9 +7540,9 @@ function setupClipboardIPCHandlers(): void {
         commandLauncherWindow?.hide(true);
         appendCommandLauncherTrace('invoke-handoff-no-target', { filePath });
         return { success: false, error: 'No external target app available' };
-      }
-      const isTerminal = isTerminalApp(targetApp.bundleId);
-      const isIDE = isIDEWithTerminal(targetApp.bundleId);
+        }
+        const isTerminal = isTerminalApp(targetApp.bundleId);
+        const isIDE = isIDEWithTerminal(targetApp.bundleId);
       const fileName = path.basename(filePath);
 
       if (isTerminal || isIDE) {
@@ -7315,14 +7608,20 @@ function setupClipboardIPCHandlers(): void {
 
       const clipboardSnapshot = captureClipboardSnapshot();
       try {
+        let terminalCommandReferenceText: string | null = null;
         if (isTerminal || isIDE) {
           const commandReferenceText = `[${command.name}.md]\n${command.filePath} `;
+          terminalCommandReferenceText = commandReferenceText;
           clipboard.writeText(commandReferenceText);
           clipboardManager?.syncClipboardHash();
           appendCommandLauncherTrace('invoke-command-clipboard-written', {
             commandName,
             format: 'text',
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            ...commandPayloadTrace(commandReferenceText),
             textLength: commandReferenceText.length,
+            clipboard: readCommandPasteClipboardTrace(),
           });
         } else {
           const fileUrl = pathToFileURL(command.filePath).toString();
@@ -7335,13 +7634,31 @@ function setupClipboardIPCHandlers(): void {
           appendCommandLauncherTrace('invoke-command-clipboard-written', {
             commandName,
             format: 'file-list+file-url+text',
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            ...commandPayloadTrace(command.filePath),
             filePath: command.filePath,
             fileUrl,
-            availableFormats: clipboard.availableFormats(),
+            clipboard: readCommandPasteClipboardTrace(),
           });
         }
 
-        const pasted = await activateAndPasteFromCommandLauncher(targetApp);
+        let pasted = false;
+        if (terminalCommandReferenceText) {
+          pasted = await typeCommandTextFromCommandLauncher(targetApp, terminalCommandReferenceText);
+          if (!pasted) {
+            appendCommandLauncherTrace('invoke-command-native-type-fallback', {
+              commandName,
+              targetBundleId: targetApp.bundleId,
+              targetName: targetApp.name,
+            });
+          }
+        }
+        if (!pasted) {
+          pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+            clipboardTrace: readCommandPasteClipboardTrace,
+          });
+        }
         if (!pasted) {
           cursorStatusManager?.showNoTargetError('Portable command paste failed');
           return { success: false, error: 'Could not paste into target app' };
@@ -8094,6 +8411,7 @@ async function initAudioSystem(checkForUpdatesCallback?: () => void): Promise<vo
 
   nativeHelper.on('frontmostAppChanged', (appInfo) => {
     rememberCommandTargetApp(appInfo);
+    clipboardHistoryWindow?.rememberExternalApp(appInfo);
     if (isAlfredApp(appInfo)) {
       hideFieldTheoryForAlfred();
     }

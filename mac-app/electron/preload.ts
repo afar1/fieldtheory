@@ -2931,6 +2931,9 @@ const CommandsIPCChannels = {
   REFRESH_COMMANDS: 'commands:refreshCommands',
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
+  LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
+  UNDO_MAXWELL_RUN: 'commands:undoMaxwellRun',
+  REDO_MAXWELL_RUN: 'commands:redoMaxwellRun',
   COMMANDS_CHANGED: 'commands:commandsChanged',
   DIRECTORY_CHANGED: 'commands:directoryChanged',
   LOCAL_COMMAND_STATUS: 'commands:localCommandStatus',
@@ -3001,6 +3004,58 @@ type DocumentVersion = {
 type DocumentSaveResult =
   | { ok: true; version: DocumentVersion }
   | { ok: false; reason: 'blocked' | 'conflict' | 'error' | 'not-found'; currentContent?: string; currentVersion?: DocumentVersion };
+
+type MaxwellRunStatus =
+  | 'pending'
+  | 'generated'
+  | 'success'
+  | 'generation_error'
+  | 'selection_error'
+  | 'save_conflict'
+  | 'save_error'
+  | 'cancelled'
+  | 'reverted';
+
+type MaxwellRunMode = 'document' | 'selection';
+type MaxwellTargetType = 'wiki' | 'reading';
+
+interface MaxwellRunSummary {
+  runId: string;
+  createdAt: number;
+  updatedAt: number;
+  status: MaxwellRunStatus;
+  commandName: string;
+  targetPath: string;
+  targetRelPath: string | null;
+  targetType: MaxwellTargetType;
+  mode: MaxwellRunMode;
+  summary: string | null;
+  errorMessage: string | null;
+  model: string | null;
+  harness: string | null;
+  canUndo: boolean;
+  canRedo: boolean;
+}
+
+type MaxwellUndoFailureReason =
+  | 'not-ready'
+  | 'not-found'
+  | 'not-applied'
+  | 'not-reverted'
+  | 'conflict'
+  | 'blocked'
+  | 'save-error'
+  | 'error';
+
+type MaxwellRedoFailureReason = MaxwellUndoFailureReason;
+
+type MaxwellUndoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellUndoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellRedoResult =
+  | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
+  | { success: false; reason: MaxwellRedoFailureReason; error: string; run?: MaxwellRunSummary };
 
 type HandoffInfo = {
   name: string;
@@ -3166,6 +3221,18 @@ const commandsAPI = {
 
   runLocalCommand: async (request: string | LocalCommandRunRequest): Promise<LocalCommandRunResult> => {
     return ipcRenderer.invoke(CommandsIPCChannels.RUN_LOCAL_COMMAND, request);
+  },
+
+  listMaxwellRuns: async (limit?: number): Promise<MaxwellRunSummary[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.LIST_MAXWELL_RUNS, limit);
+  },
+
+  undoMaxwellRun: async (runId: string): Promise<MaxwellUndoResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.UNDO_MAXWELL_RUN, runId);
+  },
+
+  redoMaxwellRun: async (runId: string): Promise<MaxwellRedoResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.REDO_MAXWELL_RUN, runId);
   },
 
   onLocalCommandStatus: (callback: (status: LocalCommandStatus) => void): (() => void) => {
