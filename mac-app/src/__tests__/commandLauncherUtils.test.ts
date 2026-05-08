@@ -34,6 +34,7 @@ import {
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
   shouldOfferLocalInstructionFallback,
+  shouldPastePortableCommand,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -181,6 +182,32 @@ describe('getLauncherStatusText', () => {
       loading: true,
       hasLoadedItems: false,
     })).toBeNull();
+  });
+});
+
+describe('shouldPastePortableCommand', () => {
+  it('keeps Enter on portable commands on the paste path', () => {
+    expect(shouldPastePortableCommand({
+      itemType: 'command',
+      openFieldTheoryTarget: false,
+      insertWikiLink: false,
+    })).toBe(true);
+  });
+
+  it('does not paste when Tab is opening the command markdown file', () => {
+    expect(shouldPastePortableCommand({
+      itemType: 'command',
+      openFieldTheoryTarget: true,
+      insertWikiLink: false,
+    })).toBe(false);
+  });
+
+  it('does not paste non-command rows', () => {
+    expect(shouldPastePortableCommand({
+      itemType: 'wiki-page',
+      openFieldTheoryTarget: false,
+      insertWikiLink: false,
+    })).toBe(false);
   });
 });
 

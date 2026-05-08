@@ -68,6 +68,16 @@ export function getLauncherStatusText(input: {
   return input.loading && !input.hasLoadedItems ? 'Loading results...' : 'No matches found';
 }
 
+export function shouldPastePortableCommand(input: {
+  itemType?: string | null;
+  openFieldTheoryTarget?: boolean;
+  insertWikiLink?: boolean;
+}): boolean {
+  return input.itemType === 'command'
+    && input.openFieldTheoryTarget !== true
+    && input.insertWikiLink !== true;
+}
+
 // =============================================================================
 // Library Markdown Flattening
 // =============================================================================
