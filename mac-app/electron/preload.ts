@@ -229,6 +229,9 @@ const UpdaterIPCChannels = {
 const DiagnosticsIPCChannels = {
   GET_DIAGNOSTICS: 'diagnostics:get',
   GET_DIAGNOSTICS_MARKDOWN: 'diagnostics:getMarkdown',
+  APPEND_RENDERED_EDITOR_DEBUG: 'diagnostics:appendRenderedEditorDebug',
+  GET_RENDERED_EDITOR_DEBUG_LOG_PATH: 'diagnostics:getRenderedEditorDebugLogPath',
+  CLEAR_RENDERED_EDITOR_DEBUG_LOG: 'diagnostics:clearRenderedEditorDebugLog',
 } as const;
 
 // Types (only for TypeScript checking, not runtime)
@@ -976,6 +979,9 @@ export interface PermissionsAPI {
 export interface DiagnosticsAPI {
   getDiagnostics: () => Promise<unknown>;
   getDiagnosticsMarkdown: () => Promise<string>;
+  appendRenderedEditorDebug: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  getRenderedEditorDebugLogPath: () => Promise<string>;
+  clearRenderedEditorDebugLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
 }
 
 const audioAPI: AudioAPI = {
@@ -2915,6 +2921,15 @@ const diagnosticsAPI: DiagnosticsAPI = {
   },
   getDiagnosticsMarkdown: async (): Promise<string> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS_MARKDOWN);
+  },
+  appendRenderedEditorDebug: async (entry: unknown): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.APPEND_RENDERED_EDITOR_DEBUG, entry);
+  },
+  getRenderedEditorDebugLogPath: async (): Promise<string> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_RENDERED_EDITOR_DEBUG_LOG_PATH);
+  },
+  clearRenderedEditorDebugLog: async (): Promise<{ ok: boolean; path: string; error?: string }> => {
+    return ipcRenderer.invoke(DiagnosticsIPCChannels.CLEAR_RENDERED_EDITOR_DEBUG_LOG);
   },
 };
 

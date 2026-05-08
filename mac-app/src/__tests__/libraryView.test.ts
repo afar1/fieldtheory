@@ -10,7 +10,6 @@ import {
   getMarkdownListEnterEdit,
   getMarkdownBodySelectionRange,
   getMarkdownListToggleEdit,
-  getRenderedMarkdownClickBehavior,
   getRenderedMarkdownNodeStartLine,
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
@@ -27,6 +26,8 @@ import {
   getGroupedFocusChromeProximityOpacity,
   getMarkdownTaskLines,
   getMarkdownRenderedBodyStartLineIndex,
+  getRenderedCaretEnsureSourceOffset,
+  getRenderedMarkdownDisplayContent,
   getRenderedTaskLinesByRenderedLine,
   getScrollRatio,
   getScrollTopForRatio,
@@ -46,7 +47,6 @@ import {
   rebaseMarkdownTodoStateChange,
   removeEmptyMarkdownCommentPlaceholders,
   replaceLibrarianNavigationEntry,
-  resolveMarkdownCaretOffsetFromRenderedText,
   resolveMarkdownSelectionRangeFromRenderedText,
   restoreLibrarianEditorSession,
   restoreLibrarianTodoMarker,
@@ -379,15 +379,24 @@ describe('shouldInsertClipboardImagePathForPaste', () => {
   });
 });
 
-describe('preserveMarkdownBlankLines', () => {
+describe('getRenderedMarkdownDisplayContent', () => {
+  const emptyWikiIndex = { byTitle: new Map(), byRelPath: new Set<string>() };
+
   it('turns empty source lines into rendered blank-line markers', () => {
+    expect(getRenderedMarkdownDisplayContent('', emptyWikiIndex)).toBe('\n\u00A0\n');
+    expect(getRenderedMarkdownDisplayContent('  ', emptyWikiIndex)).toBe('\n\u00A0\u00A0\n');
     expect(preserveMarkdownBlankLines('First\n\nSecond')).toBe('First\n\n\u00A0\n\nSecond');
+    expect(getRenderedMarkdownDisplayContent('First\n\nSecond', emptyWikiIndex)).toBe('First\n\n\u00A0\n\nSecond');
   });
 
   it('leaves fenced code block spacing alone', () => {
     expect(preserveMarkdownBlankLines('Before\n\n```\na\n\nb\n```\n\nAfter')).toBe(
       'Before\n\n\u00A0\n\n```\na\n\nb\n```\n\n\u00A0\n\nAfter',
     );
+  });
+
+  it('still normalizes scratchpad task shorthand before rendering', () => {
+    expect(getRenderedMarkdownDisplayContent('[ ] first\n[x] second', emptyWikiIndex)).toBe('- [ ] first\n- [x] second');
   });
 
   it('does not add visible blank-line markers between carrot list groups', () => {
@@ -793,12 +802,18 @@ describe('getNewlyCheckedMarkdownTasks', () => {
 });
 
 describe('shouldApplyLiveMarkdownFileUpdate', () => {
-  it('applies disk updates while reading rendered markdown', () => {
+  it('applies disk updates while rendered markdown has no local edit', () => {
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'rendered',
+      editContent: 'same content',
+      lastSavedContent: 'same content',
+    })).toBe(true);
+
     expect(shouldApplyLiveMarkdownFileUpdate({
       contentMode: 'rendered',
       editContent: 'local draft',
       lastSavedContent: 'old disk',
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it('applies disk updates in markdown mode only when there is no local edit', () => {
@@ -828,6 +843,39 @@ describe('shouldApplyLiveMarkdownFileUpdate', () => {
       lastSavedContent: 'content',
       hasPendingRenderedSave: true,
     })).toBe(false);
+
+    expect(shouldApplyLiveMarkdownFileUpdate({
+      contentMode: 'rendered',
+      editContent: 'content',
+      lastSavedContent: 'content',
+      hasRenderedSaveInFlight: true,
+    })).toBe(false);
+  });
+});
+
+describe('getRenderedCaretEnsureSourceOffset', () => {
+  it('preserves a trusted active caret before using the browser selection', () => {
+    expect(getRenderedCaretEnsureSourceOffset({
+      activeSourceOffset: 9,
+      selectionRange: { start: 2, end: 2 },
+      contentLength: 20,
+    })).toBe(9);
+  });
+
+  it('uses a collapsed mapped selection before falling back to the document end', () => {
+    expect(getRenderedCaretEnsureSourceOffset({
+      activeSourceOffset: null,
+      selectionRange: { start: 7, end: 7 },
+      contentLength: 20,
+    })).toBe(7);
+  });
+
+  it('uses the document end only when there is no trusted caret or collapsed mapped selection', () => {
+    expect(getRenderedCaretEnsureSourceOffset({
+      activeSourceOffset: null,
+      selectionRange: { start: 4, end: 9 },
+      contentLength: 20,
+    })).toBe(20);
   });
 });
 
@@ -869,21 +917,6 @@ describe('highlightFileFindMatches', () => {
 
     expect(root.textContent).toBe('Alpha beta alpha');
     expect(root.querySelectorAll('mark[data-ft-file-find-mark]')).toHaveLength(2);
-  });
-});
-
-describe('resolveMarkdownCaretOffsetFromRenderedText', () => {
-  it('maps a rendered text-node offset back into the markdown source', () => {
-    expect(resolveMarkdownCaretOffsetFromRenderedText('# Friday Notes\n', 'Friday Notes', 6)).toBe(8);
-  });
-
-  it('falls back to the rendered prefix when the full rendered text is not contiguous in source', () => {
-    expect(resolveMarkdownCaretOffsetFromRenderedText('hello **world** today', 'hello world today', 11)).toBe(13);
-  });
-
-  it('maps rendered body text after frontmatter', () => {
-    const markdown = '---\ntags: [Friday Notes]\n---\n\n# Friday Notes\n';
-    expect(resolveMarkdownCaretOffsetFromRenderedText(markdown, 'Friday Notes', 6)).toBe(markdown.indexOf('# Friday Notes') + 8);
   });
 });
 
@@ -982,53 +1015,6 @@ describe('rendered markdown edit helpers', () => {
       left: 40,
     });
     expect(getRenderedMarkdownSelectionToolbarState('same same', 'same', { top: 50, left: 20, width: 40 })).toBeNull();
-  });
-});
-
-describe('rendered markdown click behavior', () => {
-  it('does not open source mode for a plain rendered click by default', () => {
-    const p = document.createElement('p');
-    p.textContent = 'hi';
-    document.body.appendChild(p);
-    expect(getRenderedMarkdownClickBehavior({ target: p })).toBeNull();
-    p.remove();
-  });
-
-  it('opens source mode for Command-click by default', () => {
-    const p = document.createElement('p');
-    p.textContent = 'hi';
-    document.body.appendChild(p);
-    expect(getRenderedMarkdownClickBehavior({ target: p, metaKey: true })).toBe('source');
-    p.remove();
-  });
-
-  it('requires Command-click when Command-click mode is enabled', () => {
-    const p = document.createElement('p');
-    p.textContent = 'hi';
-    document.body.appendChild(p);
-    expect(getRenderedMarkdownClickBehavior({ target: p }, 'command-click')).toBeNull();
-    expect(getRenderedMarkdownClickBehavior({ target: p, metaKey: true }, 'command-click')).toBe('source');
-    p.remove();
-  });
-
-  it('preserves explicit click mode as plain-click source', () => {
-    const p = document.createElement('p');
-    p.textContent = 'hi';
-    document.body.appendChild(p);
-    expect(getRenderedMarkdownClickBehavior({ target: p }, 'click')).toBe('source');
-    p.remove();
-  });
-
-  it('leaves double-click selection to the browser instead of placing a rendered caret', () => {
-    const p = document.createElement('p');
-    p.textContent = 'hi';
-    document.body.appendChild(p);
-    expect(getRenderedMarkdownClickBehavior({ target: p, detail: 2 })).toBeNull();
-    p.remove();
-  });
-
-  it('keeps the rendered toolbar hidden for ambiguous selected text', () => {
-    expect(resolveMarkdownSelectionRangeFromRenderedText('repeat repeat', 'repeat')).toBeNull();
   });
 });
 

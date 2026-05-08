@@ -1265,6 +1265,9 @@ type MaxwellRedoResult =
 interface DiagnosticsAPI {
   getDiagnostics: () => Promise<unknown>;
   getDiagnosticsMarkdown: () => Promise<string>;
+  appendRenderedEditorDebug: (entry: unknown) => Promise<{ ok: boolean; path: string; error?: string }>;
+  getRenderedEditorDebugLogPath: () => Promise<string>;
+  clearRenderedEditorDebugLog: () => Promise<{ ok: boolean; path: string; error?: string }>;
 }
 
 /**
