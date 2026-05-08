@@ -12,6 +12,7 @@
  */
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import ReactDOM from 'react-dom/client';
 import {
   buildBuiltInLauncherActions,
@@ -45,6 +46,7 @@ import {
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
   shouldOfferLocalInstructionFallback,
+  shouldPastePortableCommand,
   type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
@@ -548,6 +550,7 @@ function CommandLauncher() {
   const [webBookmarks, setWebBookmarks] = useState<Bookmark[]>([]);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [launcherDataLoading, setLauncherDataLoading] = useState(true);
+  const [launcherSessionReady, setLauncherSessionReady] = useState(false);
   const [launcherContext, setLauncherContext] = useState<LauncherContextState>({
     fieldTheoryActive: false,
     hasActiveLibraryFileContext: false,
@@ -816,6 +819,46 @@ function CommandLauncher() {
     }
   }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, refreshLauncherContext]);
 
+  const clearLauncherSessionState = useCallback(() => {
+    authorNamespaceRef.current = null;
+    bookmarkNamespaceRef.current = null;
+    authorBookmarkRequestRef.current += 1;
+    bookmarkNamespaceRequestRef.current += 1;
+    activeWebPageRequestRef.current += 1;
+    previewRequestRef.current += 1;
+    manualPreviewRef.current = false;
+    hasNavigatedRef.current = false;
+    hasExplicitSelectionRef.current = false;
+    lastMousePositionRef.current = null;
+    setQuery('');
+    setNamespacePrefix(null);
+    setDirectoryNamespace(null);
+    setAuthorNamespace(null);
+    setBookmarkNamespace(null);
+    setMoveSource(null);
+    setActiveWebPage(null);
+    setPreviewOpen(false);
+    setPreviewPayload(null);
+    setAuthorBookmarks([]);
+    setAuthorBookmarkItems([]);
+    setBookmarkNamespaceBookmarks([]);
+    setBookmarkNamespaceItems([]);
+    setFiltered([]);
+    setHasExplicitSelection(false);
+    selectIndex(0);
+  }, [selectIndex]);
+
+  const prepareLauncherForNextOpen = useCallback(() => {
+    flushSync(() => {
+      setLauncherSessionReady(false);
+      clearLauncherSessionState();
+    });
+    resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+    window.requestAnimationFrame(() => {
+      setLauncherSessionReady(true);
+    });
+  }, [clearLauncherSessionState, resizeLauncher]);
+
   // Load commands, handoffs, and hotkeys on mount.
   useEffect(() => {
     // Set initial height immediately to prevent layout shift
@@ -830,41 +873,28 @@ function CommandLauncher() {
     // Listen for reset events (when window is shown).
     // Reload commands and handoffs each time to pick up newly added ones without restart.
     const handleReset = async (payload?: LauncherResetPayload) => {
+      flushSync(() => {
+        setLauncherSessionReady(false);
+      });
       if (typeof payload?.isDarkMode === 'boolean') {
         applyTheme(payload.isDarkMode);
       }
       if (typeof payload?.generation === 'number') {
         launcherGenerationRef.current = payload.generation;
       }
-      authorNamespaceRef.current = null;
-      bookmarkNamespaceRef.current = null;
-      authorBookmarkRequestRef.current += 1;
-      bookmarkNamespaceRequestRef.current += 1;
-      activeWebPageRequestRef.current += 1;
-      manualPreviewRef.current = false;
-      setQuery('');
-      setNamespacePrefix(null);
-      setDirectoryNamespace(null);
-      setAuthorNamespace(null);
-      setBookmarkNamespace(null);
-      setMoveSource(null);
-      setActiveWebPage(null);
-      previewRequestRef.current += 1;
-      setPreviewOpen(false);
-      setPreviewPayload(null);
-      setAuthorBookmarks([]);
-      setAuthorBookmarkItems([]);
-      setBookmarkNamespaceBookmarks([]);
-      setBookmarkNamespaceItems([]);
-      setFiltered([]);
-      selectIndex(0);
-      inputRef.current?.focus();
+      flushSync(() => {
+        clearLauncherSessionState();
+      });
       void loadLauncherData();
       // Refresh theme state
       const dark = await themeAPI.getTheme().catch(() => payload?.isDarkMode ?? themeAPI.initialTheme ?? false);
       applyTheme(dark ?? payload?.isDarkMode ?? false);
       // Reset height to input-only
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+      setLauncherSessionReady(true);
+      window.requestAnimationFrame(() => {
+        inputRef.current?.focus();
+      });
     };
 
     const unsubscribe = commandsAPI.onLauncherReset(handleReset);
@@ -889,7 +919,14 @@ function CommandLauncher() {
       unsubscribeBookmarks?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, resizeLauncher, selectIndex]);
+  }, [applyTheme, clearLauncherSessionState, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, resizeLauncher]);
+
+  useEffect(() => {
+    window.addEventListener('blur', prepareLauncherForNextOpen);
+    return () => {
+      window.removeEventListener('blur', prepareLauncherForNextOpen);
+    };
+  }, [prepareLauncherForNextOpen]);
 
   useEffect(() => () => {
     if (resizeFrameRef.current !== null) {
@@ -1459,9 +1496,10 @@ function CommandLauncher() {
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     await loadLibraryMarkdown();
     await openMovedLibraryFile(source, target, movedRelPath);
+    prepareLauncherForNextOpen();
     commandsAPI.launcherClose({ skipActivation: true, generation: closeGeneration });
     return true;
-  }, [loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, selectIndex, showLauncherMessage]);
+  }, [loadLibraryMarkdown, openMovedLibraryFile, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage]);
 
   const undoLastLibraryMove = useCallback(async (): Promise<boolean> => {
     const closeGeneration = launcherGenerationRef.current;
@@ -1496,9 +1534,10 @@ function CommandLauncher() {
       },
       restoredRelPath,
     );
+    prepareLauncherForNextOpen();
     commandsAPI.launcherClose({ skipActivation: true, generation: closeGeneration });
     return true;
-  }, [lastLibraryMove, loadLibraryMarkdown, openMovedLibraryFile, resizeLauncher, showLauncherMessage]);
+  }, [lastLibraryMove, loadLibraryMarkdown, openMovedLibraryFile, prepareLauncherForNextOpen, resizeLauncher, showLauncherMessage]);
 
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -1513,6 +1552,7 @@ function CommandLauncher() {
         setPreviewPayload(null);
         return;
       }
+      prepareLauncherForNextOpen();
       commandsAPI.launcherClose();
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
@@ -1706,7 +1746,16 @@ function CommandLauncher() {
         if (selectedItem) invokeItem(selectedItem, { insertWikiLink: selectedItem.type !== 'command' });
         return;
       }
-      const fallback = localInstructionFallbackForQuery(query, 0, Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource));
+      const rawQuery = query.trim();
+      const inScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
+      const commandTarget = inScopedMode
+        ? null
+        : resolveLauncherCommandOpenTarget([], commandItems, 0, rawQuery, false);
+      if (commandTarget) {
+        invokeItem(commandTarget, { insertWikiLink: false });
+        return;
+      }
+      const fallback = localInstructionFallbackForQuery(rawQuery, 0, inScopedMode);
       if (fallback) {
         invokeItem(fallback);
       }
@@ -1717,6 +1766,7 @@ function CommandLauncher() {
   const invokeItem = useCallback(async (item: LauncherItem, options: { insertWikiLink?: boolean; openFieldTheoryTarget?: boolean } = {}) => {
     const invocationGeneration = launcherGenerationRef.current;
     const closeForInvocation = (closeOptions: Omit<LauncherCloseOptions, 'generation'> = {}) => {
+      prepareLauncherForNextOpen();
       commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
     };
     if (item.type !== 'local-instruction') {
@@ -1740,6 +1790,26 @@ function CommandLauncher() {
       openFieldTheoryTarget: options.openFieldTheoryTarget ?? false,
       insertWikiLink: options.insertWikiLink ?? false,
     });
+    if (shouldPastePortableCommand({
+      itemType: item.type,
+      openFieldTheoryTarget: options.openFieldTheoryTarget,
+      insertWikiLink: options.insertWikiLink,
+    })) {
+      traceLauncher('invoke-command-paste-request', {
+        commandName: item.name,
+        fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
+      });
+      const result = await commandsAPI.invokeCommand(item.name).catch((error) => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Command paste failed',
+      }));
+      if (!result.success) {
+        showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
+        return;
+      }
+      closeForInvocation({ skipActivation: true });
+      return;
+    }
     if (item.type === 'local-command' || item.type === 'local-instruction') {
       if (!latestContext?.fieldTheoryActive) {
         showInvocationError('run-local-command-no-field-theory', 'Open a Field Theory document to run locally', 'Open a Field Theory document to run locally');
@@ -1766,16 +1836,6 @@ function CommandLauncher() {
         }
         return;
       }
-      if (item.type === 'command' && !options.insertWikiLink) {
-        void commandsAPI.runLocalCommand({ commandName: item.name }).catch((error) => ({
-          success: false,
-          error: error instanceof Error ? error.message : 'Local command failed',
-        })).then((result) => {
-          if (!result.success) traceLauncher('run-local-command-error', { error: result.error ?? 'Local command failed' });
-        });
-        closeForInvocation({ skipActivation: true });
-        return;
-      }
       if (options.insertWikiLink) {
         const result = await commandsAPI.insertMarkdownText(getWikiLinkText(item)).catch((error) => ({
           success: false,
@@ -1793,17 +1853,7 @@ function CommandLauncher() {
       return;
     }
 
-    if (item.type === 'command') {
-      const result = await commandsAPI.invokeCommand(item.name).catch((error) => ({
-        success: false,
-        error: error instanceof Error ? error.message : 'Command paste failed',
-      }));
-      if (!result.success) {
-        showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
-        return;
-      }
-      closeForInvocation({ skipActivation: true });
-    } else if (item.type === 'directory') {
+    if (item.type === 'directory') {
       if (moveSource) {
         await moveLibraryFileToDirectory(moveSource, item);
         return;
@@ -1968,7 +2018,7 @@ function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   if (isDarkMode === null) {
     return <div style={{ width: '100vw', height: '100vh', background: 'transparent' }} />;
@@ -1988,7 +2038,10 @@ function CommandLauncher() {
   });
 
   return (
-    <div style={styles.container}>
+    <div style={{
+      ...styles.container,
+      visibility: launcherSessionReady ? 'visible' : 'hidden',
+    }}>
       <style>
         {`
           .command-launcher-input::placeholder {
