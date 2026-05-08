@@ -20,6 +20,7 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
+import { isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
 import { appendVisibilityTrace, captureVisibilityCaller } from './visibilityTrace';
 
 const log = createLogger('CommandLauncher');
@@ -61,8 +62,7 @@ function isElectronApp(bundleId: string, appName: string): boolean {
   // Be specific about dev Electron; many real target apps also include
   // "electron" in their bundle id and still need to receive command pastes.
   return (
-    bundleIdLower.includes('fieldtheory') ||
-    bundleIdLower === 'com.github.electron' ||
+    isFieldTheoryCommandTargetBundleId(bundleId) ||
     appNameLower.includes('field theory') ||
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
@@ -90,9 +90,9 @@ export class CommandLauncherWindow {
   private readonly SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS = 3000;
 
   // Window dimensions - starts small, expands for results.
-  private readonly WINDOW_WIDTH = 366;
-  private readonly WINDOW_HEIGHT_COLLAPSED = 43;
-  private readonly WINDOW_HEIGHT_RESULTS = 354;
+  private readonly WINDOW_WIDTH = 520;
+  private readonly WINDOW_HEIGHT_COLLAPSED = 52;
+  private readonly WINDOW_HEIGHT_RESULTS = 430;
   private readonly PREVIEW_WINDOW_WIDTH = 520;
   private readonly PREVIEW_WINDOW_MAX_HEIGHT = 560;
   private readonly PREVIEW_WINDOW_MIN_HEIGHT = 120;

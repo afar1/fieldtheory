@@ -17,7 +17,7 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { EditorState, Compartment, RangeSetBuilder } from '@codemirror/state';
+import { EditorState, Compartment, RangeSetBuilder, Transaction } from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
@@ -41,23 +41,47 @@ import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
+export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
   blur: () => void;
   getValue: () => string;
   getSelectionRange: () => { start: number; end: number };
+  getSelectionSnapshot: () => MarkdownCodeEditorSelectionSnapshot | null;
   setSelectionRange: (start: number, end: number) => void;
   scrollTop: number;
   scrollHeight: number;
   clientHeight: number;
 }
 
+export interface MarkdownCodeEditorSourcePosition {
+  offset: number;
+  line: number;
+  column: number;
+  lineStart: number;
+  lineEnd: number;
+  lineLength: number;
+  before: string;
+  after: string;
+}
+
 export interface MarkdownCodeEditorSelectionSnapshot {
   value: string;
   selectionStart: number;
   selectionEnd: number;
+  selectionAnchor: number;
+  selectionHead: number;
+  isCollapsed: boolean;
+  selectionStartSource: MarkdownCodeEditorSourcePosition;
+  selectionEndSource: MarkdownCodeEditorSourcePosition;
+  selectionHeadSource: MarkdownCodeEditorSourcePosition;
   caretPosition: { top: number; left: number } | null;
+  caretRect: {
+    viewport: { left: number; top: number; width: number; height: number };
+    editor: { left: number; top: number; width: number; height: number };
+  } | null;
+  scroll: { top: number; height: number; clientHeight: number };
   docChanged: boolean;
   inputType?: string;
   inputData?: string | null;
@@ -150,6 +174,33 @@ export const checkedMarkdownTaskLineExtension = ViewPlugin.fromClass(
   },
 );
 
+export function isMarkdownCodeEditorFileSwapUpdate(update: { transactions: readonly Transaction[] }): boolean {
+  return update.transactions.some((transaction) => transaction.isUserEvent(MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT));
+}
+
+export function dispatchMarkdownCodeEditorFileSwap(
+  view: EditorView,
+  historyCompartment: Compartment,
+  value: string,
+): void {
+  const current = view.state.doc.toString();
+  if (current === value) return;
+
+  view.dispatch({
+    effects: historyCompartment.reconfigure([]),
+  });
+  view.dispatch({
+    changes: { from: 0, to: current.length, insert: value },
+    annotations: [
+      Transaction.userEvent.of(MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT),
+      Transaction.addToHistory.of(false),
+    ],
+  });
+  view.dispatch({
+    effects: historyCompartment.reconfigure(history()),
+  });
+}
+
 function getCodeEditorCaretPosition(
   view: EditorView,
   position: number,
@@ -160,6 +211,80 @@ function getCodeEditorCaretPosition(
   return {
     top: caret.bottom - container.top + 6,
     left: Math.max(0, Math.min(caret.left - container.left, container.width - 260)),
+  };
+}
+
+function getCodeEditorCaretRect(
+  view: EditorView,
+  position: number,
+): MarkdownCodeEditorSelectionSnapshot['caretRect'] {
+  const caret = view.coordsAtPos(position);
+  if (!caret) return null;
+  const container = view.dom.getBoundingClientRect();
+  return {
+    viewport: {
+      left: Math.round(caret.left),
+      top: Math.round(caret.top),
+      width: Math.round(caret.right - caret.left),
+      height: Math.round(caret.bottom - caret.top),
+    },
+    editor: {
+      left: Math.round(caret.left - container.left),
+      top: Math.round(caret.top - container.top),
+      width: Math.round(caret.right - caret.left),
+      height: Math.round(caret.bottom - caret.top),
+    },
+  };
+}
+
+export function getMarkdownCodeEditorSourcePosition(
+  value: string,
+  offset: number,
+): MarkdownCodeEditorSourcePosition {
+  const clampedOffset = Math.max(0, Math.min(value.length, offset));
+  const line = value.slice(0, clampedOffset).split('\n').length;
+  const previousLineBreak = clampedOffset === 0 ? -1 : value.lastIndexOf('\n', clampedOffset - 1);
+  const lineStart = previousLineBreak + 1;
+  const lineEndIndex = value.indexOf('\n', clampedOffset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  return {
+    offset: clampedOffset,
+    line,
+    column: clampedOffset - lineStart + 1,
+    lineStart,
+    lineEnd,
+    lineLength: lineEnd - lineStart,
+    before: value.slice(Math.max(lineStart, clampedOffset - 40), clampedOffset),
+    after: value.slice(clampedOffset, Math.min(lineEnd, clampedOffset + 40)),
+  };
+}
+
+export function getMarkdownCodeEditorSelectionSnapshot(
+  view: EditorView,
+  input: { docChanged?: boolean; inputType?: string; inputData?: string | null } = {},
+): MarkdownCodeEditorSelectionSnapshot {
+  const value = view.state.doc.toString();
+  const selection = view.state.selection.main;
+  return {
+    value,
+    selectionStart: selection.from,
+    selectionEnd: selection.to,
+    selectionAnchor: selection.anchor,
+    selectionHead: selection.head,
+    isCollapsed: selection.empty,
+    selectionStartSource: getMarkdownCodeEditorSourcePosition(value, selection.from),
+    selectionEndSource: getMarkdownCodeEditorSourcePosition(value, selection.to),
+    selectionHeadSource: getMarkdownCodeEditorSourcePosition(value, selection.head),
+    caretPosition: getCodeEditorCaretPosition(view, selection.head),
+    caretRect: getCodeEditorCaretRect(view, selection.head),
+    scroll: {
+      top: view.scrollDOM.scrollTop,
+      height: view.scrollDOM.scrollHeight,
+      clientHeight: view.scrollDOM.clientHeight,
+    },
+    docChanged: input.docChanged ?? false,
+    inputType: input.inputType,
+    inputData: input.inputData,
   };
 }
 
@@ -240,6 +365,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const lastAppliedValueRef = useRef(value);
     const themeCompartment = useRef(new Compartment()).current;
     const syntaxHighlightCompartment = useRef(new Compartment()).current;
+    const historyCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
     const scrollFpsSamplerRef = useScrollFpsSampler('markdown');
@@ -351,7 +477,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       const startState = EditorState.create({
         doc: value,
         extensions: [
-          history(),
+          historyCompartment.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           markdown(),
           syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
@@ -364,23 +490,18 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           themeCompartment.of(editorTheme),
           readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
           EditorView.updateListener.of((update) => {
-            if (update.docChanged) {
+            if (update.docChanged && !isMarkdownCodeEditorFileSwapUpdate(update)) {
               const next = update.state.doc.toString();
               onChangeRef.current?.(next);
             }
             if (update.docChanged || update.selectionSet) {
-              const selection = update.state.selection.main;
               const input = update.docChanged ? lastBeforeInputRef.current : null;
               if (update.docChanged) lastBeforeInputRef.current = null;
-              onSelectionChangeRef.current?.({
-                value: update.state.doc.toString(),
-                selectionStart: selection.from,
-                selectionEnd: selection.to,
-                caretPosition: getCodeEditorCaretPosition(update.view, selection.head),
+              onSelectionChangeRef.current?.(getMarkdownCodeEditorSelectionSnapshot(update.view, {
                 docChanged: update.docChanged,
                 inputType: input?.inputType,
                 inputData: input?.data,
-              });
+              }));
             }
           }),
           EditorView.domEventHandlers({
@@ -468,10 +589,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       lastAppliedValueRef.current = value;
       const current = view.state.doc.toString();
       if (current === value) return;
-      view.dispatch({
-        changes: { from: 0, to: current.length, insert: value },
-      });
-    }, [value]);
+      dispatchMarkdownCodeEditorFileSwap(view, historyCompartment, value);
+    }, [historyCompartment, value]);
 
     // Reconfigure theme when style props or color scheme change.
     useEffect(() => {
@@ -530,6 +649,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             start: range?.from ?? 0,
             end: range?.to ?? 0,
           };
+        },
+        getSelectionSnapshot: () => {
+          const view = viewRef.current;
+          return view ? getMarkdownCodeEditorSelectionSnapshot(view) : null;
         },
         setSelectionRange: (start, end) => {
           const view = viewRef.current;
