@@ -1,14 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
+import { history, undo } from '@codemirror/commands';
 import {
   MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS,
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
+  MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
   checkedMarkdownTaskLineExtension,
+  dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
   getMarkdownCodeEditorCursorScrollMargin,
+  getMarkdownCodeEditorSelectionSnapshot,
+  getMarkdownCodeEditorSourcePosition,
   handleMarkdownCodeEditorCapturedKeyDown,
+  isMarkdownCodeEditorFileSwapUpdate,
   shouldMoveCaretToDocumentEndFromClick,
 } from '../MarkdownCodeEditor';
 
@@ -34,6 +40,69 @@ describe('MarkdownCodeEditor cursor scroll margin', () => {
   it('can remove bottom room when a caller explicitly opts out', () => {
     expect(getMarkdownCodeEditorBottomRoom(0)).toBe(0);
     expect(getMarkdownCodeEditorCursorScrollMargin(0)).toEqual({ x: 5, y: 0 });
+  });
+});
+
+describe('MarkdownCodeEditor cursor telemetry', () => {
+  it('reports exact source line and column for a markdown offset', () => {
+    expect(getMarkdownCodeEditorSourcePosition('alpha\nbeta\ncharlie', 8)).toMatchObject({
+      offset: 8,
+      line: 2,
+      column: 3,
+      lineStart: 6,
+      lineEnd: 10,
+      lineLength: 4,
+      before: 'be',
+      after: 'ta',
+    });
+
+    expect(getMarkdownCodeEditorSourcePosition('\nfirst', 0)).toMatchObject({
+      offset: 0,
+      line: 1,
+      column: 1,
+      lineStart: 0,
+    });
+  });
+
+  it('captures selection head, source position, and scroll in snapshots', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'alpha\nbeta',
+        selection: EditorSelection.cursor(8),
+      }),
+      parent,
+    });
+
+    const snapshot = getMarkdownCodeEditorSelectionSnapshot(view, {
+      docChanged: true,
+      inputType: 'insertText',
+      inputData: 'x',
+    });
+
+    expect(snapshot).toMatchObject({
+      selectionStart: 8,
+      selectionEnd: 8,
+      selectionHead: 8,
+      selectionAnchor: 8,
+      isCollapsed: true,
+      docChanged: true,
+      inputType: 'insertText',
+      inputData: 'x',
+      selectionHeadSource: {
+        line: 2,
+        column: 3,
+        before: 'be',
+        after: 'ta',
+      },
+      scroll: {
+        top: 0,
+      },
+    });
+
+    view.destroy();
+    parent.remove();
   });
 });
 
@@ -118,6 +187,77 @@ describe('MarkdownCodeEditor checked task decorations', () => {
     expect(lines[1].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
     expect(lines[2].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(true);
     expect(lines[3].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
+
+    view.destroy();
+    parent.remove();
+  });
+});
+
+describe('MarkdownCodeEditor file swaps', () => {
+  it('does not report swap transactions as user edits', () => {
+    const state = EditorState.create({ doc: 'File A' });
+    const swap = state.update({
+      changes: { from: 0, to: state.doc.length, insert: 'File B' },
+      annotations: Transaction.userEvent.of(MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT),
+    });
+    const input = state.update({
+      changes: { from: state.doc.length, insert: ' typed' },
+      annotations: Transaction.userEvent.of('input.type'),
+    });
+
+    expect(isMarkdownCodeEditorFileSwapUpdate({ transactions: [swap] })).toBe(true);
+    expect(isMarkdownCodeEditorFileSwapUpdate({ transactions: [input] })).toBe(false);
+  });
+
+  it('drops the previous file history when swapping documents', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const historyCompartment = new Compartment();
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'File A',
+        extensions: [historyCompartment.of(history())],
+      }),
+      parent,
+    });
+
+    view.dispatch({ changes: { from: view.state.doc.length, insert: ' typed' } });
+    expect(view.state.doc.toString()).toBe('File A typed');
+
+    dispatchMarkdownCodeEditorFileSwap(view, historyCompartment, 'File B');
+    expect(view.state.doc.toString()).toBe('File B');
+    expect(undo(view)).toBe(false);
+    expect(view.state.doc.toString()).toBe('File B');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps file swaps out of the parent onChange path', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const historyCompartment = new Compartment();
+    const onChange = vi.fn();
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'File A',
+        extensions: [
+          historyCompartment.of(history()),
+          EditorView.updateListener.of((update) => {
+            if (update.docChanged && !isMarkdownCodeEditorFileSwapUpdate(update)) {
+              onChange(update.state.doc.toString());
+            }
+          }),
+        ],
+      }),
+      parent,
+    });
+
+    dispatchMarkdownCodeEditorFileSwap(view, historyCompartment, 'File B');
+    expect(onChange).not.toHaveBeenCalled();
+
+    view.dispatch({ changes: { from: view.state.doc.length, insert: ' typed' } });
+    expect(onChange).toHaveBeenCalledWith('File B typed');
 
     view.destroy();
     parent.remove();

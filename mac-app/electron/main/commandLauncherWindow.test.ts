@@ -21,8 +21,9 @@ const mockWindow = vi.hoisted(() => ({
 }));
 
 const mockIpcMainHandlers = vi.hoisted(() => new Map<string, (...args: any[]) => void>());
-const LAUNCHER_WIDTH = 366;
-const LAUNCHER_COLLAPSED_HEIGHT = 43;
+const LAUNCHER_WIDTH = 520;
+const LAUNCHER_COLLAPSED_HEIGHT = 52;
+const LAUNCHER_RESULTS_HEIGHT = 430;
 
 const mockApp = vi.hoisted(() => ({
   hide: vi.fn(),
@@ -103,7 +104,7 @@ describe('CommandLauncherWindow.show()', () => {
     expect(nativeHelper.getFrontmostWindowBounds).not.toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: Math.round(100 + (900 - LAUNCHER_WIDTH) / 2),
-      y: 323,
+      y: Math.round(200 + (700 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
       height: LAUNCHER_COLLAPSED_HEIGHT,
     });
@@ -126,7 +127,7 @@ describe('CommandLauncherWindow.show()', () => {
     expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: Math.round(1400 + (1100 - LAUNCHER_WIDTH) / 2),
-      y: 343,
+      y: Math.round(120 + (900 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
       height: LAUNCHER_COLLAPSED_HEIGHT,
     });
@@ -149,7 +150,7 @@ describe('CommandLauncherWindow.show()', () => {
     expect(nativeHelper.getFrontmostWindowBounds).toHaveBeenCalled();
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: Math.round(50 + (1000 - LAUNCHER_WIDTH) / 2),
-      y: 273,
+      y: Math.round(100 + (800 - LAUNCHER_RESULTS_HEIGHT) / 2 - 50),
       width: LAUNCHER_WIDTH,
       height: LAUNCHER_COLLAPSED_HEIGHT,
     });
@@ -524,13 +525,13 @@ describe('CommandLauncherWindow resize IPC', () => {
     const launcher = new CommandLauncherWindow();
     (launcher as any).window = mockWindow;
 
-    mockIpcMainHandlers.get('command-launcher:resize')?.({}, 526);
+    mockIpcMainHandlers.get('command-launcher:resize')?.({}, 390);
 
     expect(mockWindow.setBounds).toHaveBeenCalledWith({
       x: 10,
       y: 20,
       width: LAUNCHER_WIDTH,
-      height: 354,
+      height: 390,
     });
   });
 
@@ -544,7 +545,7 @@ describe('CommandLauncherWindow resize IPC', () => {
       x: 10,
       y: 20,
       width: LAUNCHER_WIDTH,
-      height: 354,
+      height: LAUNCHER_RESULTS_HEIGHT,
     });
   });
 });

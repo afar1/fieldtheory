@@ -11,6 +11,7 @@ import {
   filterLauncherNamespaceItems,
   flattenLibraryRootsForLauncher,
   balanceLauncherNormalModeMatches,
+  LAUNCHER_NORMAL_MODE_MAX_RESULTS,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   dedupeLauncherPersonItems,
@@ -20,6 +21,7 @@ import {
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
   getLauncherUsageScore,
+  getLauncherStatusText,
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
   isGeneratedBookmarkTaxonomyPath,
@@ -140,6 +142,48 @@ describe('shouldOfferLocalInstructionFallback', () => {
   });
 });
 
+describe('getLauncherStatusText', () => {
+  it('stays hidden before the user searches or enters a namespace', () => {
+    expect(getLauncherStatusText({
+      hasQuery: false,
+      namespaceLabel: null,
+      resultCount: 0,
+      loading: true,
+      hasLoadedItems: false,
+    })).toBeNull();
+  });
+
+  it('shows loading while a cold launcher is still fetching results', () => {
+    expect(getLauncherStatusText({
+      hasQuery: true,
+      namespaceLabel: null,
+      resultCount: 0,
+      loading: true,
+      hasLoadedItems: false,
+    })).toBe('Loading results...');
+  });
+
+  it('shows no matches once loaded data has no results', () => {
+    expect(getLauncherStatusText({
+      hasQuery: true,
+      namespaceLabel: null,
+      resultCount: 0,
+      loading: false,
+      hasLoadedItems: true,
+    })).toBe('No matches found');
+  });
+
+  it('stays hidden when there are visible results', () => {
+    expect(getLauncherStatusText({
+      hasQuery: true,
+      namespaceLabel: null,
+      resultCount: 1,
+      loading: true,
+      hasLoadedItems: false,
+    })).toBeNull();
+  });
+});
+
 describe('balanceLauncherNormalModeMatches', () => {
   const item = (id: string, type: string, lastOpenedAt?: number) => ({
     id,
@@ -191,6 +235,34 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
 
     expect(results.map(result => result.id)).toEqual(['newer', 'middle', 'older']);
+  });
+
+  it('caps single-section searches to the normal launcher result budget', () => {
+    const results = balanceLauncherNormalModeMatches(
+      Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS + 5 }, (_, index) => ({
+        item: item(`command-${index}`, 'command'),
+        score: 1000 - index,
+      })),
+    );
+
+    expect(results).toHaveLength(LAUNCHER_NORMAL_MODE_MAX_RESULTS);
+    expect(results.map(result => result.id)).toEqual(
+      Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS }, (_, index) => `command-${index}`),
+    );
+  });
+
+  it('caps recent-only searches while keeping latest-opened order', () => {
+    const results = balanceLauncherNormalModeMatches(
+      Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS + 5 }, (_, index) => ({
+        item: item(`recent-${index}`, 'recent-file', index),
+        score: index,
+      })),
+    );
+
+    expect(results).toHaveLength(LAUNCHER_NORMAL_MODE_MAX_RESULTS);
+    expect(results.map(result => result.id)).toEqual(
+      Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS }, (_, index) => `recent-${LAUNCHER_NORMAL_MODE_MAX_RESULTS + 4 - index}`),
+    );
   });
 });
 
@@ -941,8 +1013,25 @@ describe('resolveLauncherCommandOpenTarget', () => {
     expect(resolveLauncherCommandOpenTarget([commandItems[0]], commandItems, 0, 'refactor.md', false)).toBe(commandItems[1]);
   });
 
+  it('uses the selected command row for a blank query', () => {
+    expect(resolveLauncherCommandOpenTarget(commandItems, commandItems, 1, '', false)).toBe(commandItems[1]);
+  });
+
   it('honors an explicit selected command row', () => {
     expect(resolveLauncherCommandOpenTarget(commandItems, commandItems, 0, 'refactor', true)).toBe(commandItems[0]);
+  });
+
+  it('ignores a non-command selected row when the typed command is clear', () => {
+    expect(resolveLauncherCommandOpenTarget([
+      {
+        id: 'wiki-refactor',
+        type: 'wiki-page',
+        name: 'refactor',
+        displayName: 'Refactor Notes',
+        filePath: '/Users/afar/.fieldtheory/library/entries/refactor.md',
+        keywords: ['refactor'],
+      },
+    ], commandItems, 0, 'refactor', false)).toBe(commandItems[1]);
   });
 
   it('does not open row zero for an unrelated query', () => {

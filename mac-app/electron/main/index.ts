@@ -102,6 +102,7 @@ import {
 } from './types/commands';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
+import { isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
@@ -154,7 +155,40 @@ import {
 } from './types/gaze';
 
 const log = createLogger('Main');
+const renderedEditorDebugLogPath = path.join(process.cwd(), '.logs', 'rendered-editor-debug.jsonl');
 const LIBRARY_RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
+
+function writeRenderedEditorDebugLog(entry: unknown): { ok: boolean; path: string; error?: string } {
+  try {
+    fs.mkdirSync(path.dirname(renderedEditorDebugLogPath), { recursive: true });
+    fs.appendFileSync(
+      renderedEditorDebugLogPath,
+      `${JSON.stringify({ receivedAt: Date.now(), entry })}\n`,
+      'utf-8',
+    );
+    return { ok: true, path: renderedEditorDebugLogPath };
+  } catch (error) {
+    return {
+      ok: false,
+      path: renderedEditorDebugLogPath,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+function clearRenderedEditorDebugLog(): { ok: boolean; path: string; error?: string } {
+  try {
+    fs.mkdirSync(path.dirname(renderedEditorDebugLogPath), { recursive: true });
+    fs.writeFileSync(renderedEditorDebugLogPath, '', 'utf-8');
+    return { ok: true, path: renderedEditorDebugLogPath };
+  } catch (error) {
+    return {
+      ok: false,
+      path: renderedEditorDebugLogPath,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
 
 function traceLibraryRename(stage: string, payload: Record<string, unknown>): void {
   if (!LIBRARY_RENAME_TRACE_ENABLED) return;
@@ -176,7 +210,7 @@ type BookmarkBackgroundSyncResult =
   | { status: 'failed'; error: string };
 
 let bookmarkBackgroundSyncInFlight: Promise<BookmarkBackgroundSyncResult> | null = null;
-const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 2;
+const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 3;
 const MAIN_PROCESS_STARTED_AT = new Date().toISOString();
 let bookmarkBackgroundSyncLastAttemptAt = 0;
 
@@ -326,6 +360,37 @@ function commandPayloadTrace(text: string): Record<string, unknown> {
   return isCommandPayloadTraceEnabled() ? { payload: text } : {};
 }
 
+async function activateCommandLauncherTargetApp(
+  targetApp: { bundleId: string; name: string },
+  tracePrefix: string,
+): Promise<boolean> {
+  const bundleId = targetApp.bundleId;
+  if (bundleId.includes('"') || bundleId.includes("'")) {
+    log.error('activateCommandLauncherTargetApp: invalid bundleId contains quotes:', bundleId);
+    appendCommandLauncherTrace(`${tracePrefix}-invalid-bundle`, { bundleId });
+    return false;
+  }
+  try {
+    const activateScript = `tell application id "${bundleId}"\n  activate\nend tell`;
+    await execFileAsync('osascript', ['-e', activateScript], { timeout: 3000 });
+    const afterActivate = nativeHelper?.getFrontmostApp() ?? null;
+    appendCommandLauncherTrace(`${tracePrefix}-after-activate`, {
+      targetBundleId: bundleId,
+      targetName: targetApp.name,
+      frontmostBundleId: afterActivate?.bundleId ?? null,
+      frontmostName: afterActivate?.name ?? null,
+    });
+    return true;
+  } catch (error) {
+    appendCommandLauncherTrace(`${tracePrefix}-activate-error`, {
+      targetBundleId: bundleId,
+      targetName: targetApp.name,
+      error,
+    });
+    return false;
+  }
+}
+
 function activateAndPasteFromCommandLauncher(
   targetApp: { bundleId: string; name: string },
   options: { clipboardTrace?: () => Record<string, unknown> } = {},
@@ -349,9 +414,9 @@ async function typeTextFromCommandLauncher(
   tracePrefix: 'invoke-command' | 'invoke-handoff',
 ): Promise<boolean> {
   commandLauncherWindow?.suppressActivationForExternalInvocation();
-  commandLauncherWindow?.hide(true);
 
   if (!nativeHelper) {
+    commandLauncherWindow?.hide(true);
     appendCommandLauncherTrace(`${tracePrefix}-native-type-unavailable`, {
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
@@ -360,6 +425,13 @@ async function typeTextFromCommandLauncher(
     });
     return false;
   }
+
+  const activated = await activateCommandLauncherTargetApp(targetApp, `${tracePrefix}-native-type`);
+  commandLauncherWindow?.hide(true);
+  if (!activated) {
+    return false;
+  }
+  await new Promise(resolve => setTimeout(resolve, 40));
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
@@ -405,9 +477,7 @@ async function typeTextFromCommandLauncher(
 }
 
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
-  if (!bundleId) return false;
-  const lower = bundleId.toLowerCase();
-  return lower.includes('fieldtheory') || lower.includes('electron');
+  return isFieldTheoryCommandTargetBundleId(bundleId);
 }
 
 function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
@@ -6674,6 +6744,14 @@ function setupClipboardIPCHandlers(): void {
     const report = await diagnosticsCollector.collect();
     return diagnosticsCollector.formatAsMarkdown(report);
   });
+
+  ipcMain.handle('diagnostics:appendRenderedEditorDebug', (_event, entry: unknown) => {
+    return writeRenderedEditorDebugLog(entry);
+  });
+
+  ipcMain.handle('diagnostics:getRenderedEditorDebugLogPath', () => renderedEditorDebugLogPath);
+
+  ipcMain.handle('diagnostics:clearRenderedEditorDebugLog', () => clearRenderedEditorDebugLog());
 
   // =========================================================================
   // Commands IPC Handlers - Portable commands management

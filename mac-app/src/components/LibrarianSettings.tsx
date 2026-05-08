@@ -854,10 +854,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={{ fontSize: '12px', fontWeight: 500, color: theme.text }}>
-              Single-click rendered pages to open markdown source
+              Single-click rendered command pages to open markdown source
             </span>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
-              Turn on to open source from a plain rendered-page click
+              Library rendered pages edit directly; this only affects command pages
             </span>
           </div>
           <input
