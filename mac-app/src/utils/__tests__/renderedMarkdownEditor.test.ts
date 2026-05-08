@@ -13,6 +13,7 @@ import {
   setRenderedMarkdownSelectionAtOffset,
   setRenderedMarkdownSelectionFromPoint,
   shouldHandleRenderedKeyDownEdit,
+  shouldUseRenderedNativeTextInsertion,
 } from '../renderedMarkdownEditor';
 
 function selectText(root: HTMLElement, startNode: Text, startOffset: number, endNode = startNode, endOffset = startOffset): Selection {
@@ -175,6 +176,17 @@ describe('rendered markdown native text-field edits', () => {
     startNodeType: 1,
     endNodeType: 1,
   };
+  const nativeTextSelection = {
+    exists: true,
+    inRoot: true,
+    rangeCount: 1,
+    isCollapsed: true,
+    sameNode: true,
+    startNodeType: 3,
+    endNodeType: 3,
+    startText: 'hello world',
+    endText: 'hello world',
+  };
 
   it('infers insertText when Electron beforeinput omits inputType', () => {
     expect(getRenderedBeforeInputType({ data: 'a' })).toBe('insertText');
@@ -240,6 +252,34 @@ describe('rendered markdown native text-field edits', () => {
     expect(shouldHandleRenderedKeyDownEdit({
       inputType: 'insertText',
       selection: boundarySelection,
+    })).toBe(false);
+  });
+
+  it('uses native insertion only for plain single-character rendered text edits', () => {
+    expect(shouldUseRenderedNativeTextInsertion({
+      inputType: 'insertText',
+      data: 'x',
+      selection: nativeTextSelection,
+    })).toBe(true);
+    expect(shouldUseRenderedNativeTextInsertion({
+      inputType: 'insertText',
+      data: '[',
+      selection: nativeTextSelection,
+    })).toBe(false);
+    expect(shouldUseRenderedNativeTextInsertion({
+      inputType: 'insertText',
+      data: '\n',
+      selection: nativeTextSelection,
+    })).toBe(false);
+    expect(shouldUseRenderedNativeTextInsertion({
+      inputType: 'insertText',
+      data: 'x',
+      selection: boundarySelection,
+    })).toBe(false);
+    expect(shouldUseRenderedNativeTextInsertion({
+      inputType: 'insertText',
+      data: 'x',
+      selection: { ...nativeTextSelection, startText: '\u00A0', endText: '\u00A0' },
     })).toBe(false);
   });
 

@@ -57,6 +57,7 @@ import {
   isRenderedDeleteInputType,
   setRenderedMarkdownSelectionAtOffset,
   shouldHandleRenderedKeyDownEdit,
+  shouldUseRenderedNativeTextInsertion,
   shouldUseRenderedSourceCaretFallback,
   type RenderedEditorDebugApi,
   type RenderedEditorDebugEntry,
@@ -467,7 +468,9 @@ type RenderedMarkdownEditOptions = {
   previousContent?: string;
   pushUndo?: boolean;
   updateRenderedDisplayContent?: boolean;
+  updateReactState?: boolean;
   preserveCompletion?: boolean;
+  skipSelectionToolbarUpdate?: boolean;
 };
 
 function parseCarrotListLine(line: string): { indent: string; markers: string; text: string } | null {
@@ -3641,15 +3644,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const applyRenderedContentLocalState = useCallback((
     nextContent: string,
-    options: { updateRenderedDisplayContent?: boolean } = {},
+    options: { updateRenderedDisplayContent?: boolean; updateReactState?: boolean } = {},
   ) => {
     const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
     const activePath = activeReadingPathRef.current;
+    const shouldUpdateReactState = options.updateReactState !== false;
     recordRenderedEditorDebug('local-content-state-apply', {
       targetType: selectedItemType,
       activePath,
       nextLength: normalizedContent.length,
       updateRenderedDisplayContent: options.updateRenderedDisplayContent === true,
+      updateReactState: shouldUpdateReactState,
       cursorBeforeApply: getRenderedCursorDebugState('local-content-state-before-apply'),
     });
     if (activePath) {
@@ -3660,6 +3665,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     activeReadingContentRef.current = normalizedContent;
     editContentRef.current = normalizedContent;
+    if (!shouldUpdateReactState) return;
     if (selectedItemType === 'wiki') {
       setWikiSelectedPage((prev) => prev ? { ...prev, content: normalizedContent } : prev);
     } else if (selectedItemType === 'external') {
@@ -3740,6 +3746,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     edit: MarkdownTextEdit,
     options: RenderedMarkdownEditOptions = {},
   ) => {
+    const shouldUpdateReactState = options.updateReactState !== false;
     if (options.pushUndo !== false) {
       const previousContent = options.previousContent ?? activeReadingContentRef.current ?? activeReading?.content;
       if (previousContent !== undefined) pushRenderedUndoSnapshot(previousContent);
@@ -3749,19 +3756,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       selectionEnd: edit.selectionEnd,
       nextLength: edit.nextValue.length,
       updateRenderedDisplayContent: options.updateRenderedDisplayContent !== false,
+      updateReactState: shouldUpdateReactState,
       cursorBeforeApply: getRenderedCursorDebugState('typing-edit-before-apply'),
     });
-    pendingRenderedCaretOffsetRef.current = edit.selectionStart;
+    pendingRenderedCaretOffsetRef.current = shouldUpdateReactState ? edit.selectionStart : null;
     activeRenderedCaretOffsetRef.current = edit.selectionStart;
-    flushSync(() => {
+    const applyLocalState = () => {
       applyRenderedContentLocalState(edit.nextValue, {
         updateRenderedDisplayContent: options.updateRenderedDisplayContent !== false,
+        updateReactState: shouldUpdateReactState,
       });
-    });
+    };
+    if (shouldUpdateReactState) {
+      flushSync(applyLocalState);
+    } else {
+      applyLocalState();
+    }
     if (!options.preserveCompletion) setMarkdownWikiLinkCompletion(null);
-    setRenderedSelectionToolbar(null);
+    if (!options.skipSelectionToolbarUpdate) setRenderedSelectionToolbar(null);
     requestRenderedContentSave(edit.nextValue);
-    scheduleEditorCursorSettledDebug('rendered-input');
+    if (shouldUpdateReactState) scheduleEditorCursorSettledDebug('rendered-input');
   }, [
     activeReading?.content,
     applyRenderedContentLocalState,
@@ -4163,6 +4177,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const applyRenderedNativeInput = useCallback((
     inputType: string,
     data?: string | null,
+    options: RenderedMarkdownEditOptions = {},
   ): boolean => {
     if (!activeReading || contentMode !== 'rendered') {
       recordRenderedEditorDebug('edit-skipped', {
@@ -4265,7 +4280,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       nextLength: transactionEdit.nextValue.length,
       cursor: getRenderedCursorDebugState(usedSourceOffsetEdit ? 'edit-mapped-from-source-offset' : 'edit-mapped'),
     });
-    applyRenderedMarkdownTypingEdit(transactionEdit, { previousContent: sourceContent });
+    applyRenderedMarkdownTypingEdit(transactionEdit, {
+      previousContent: sourceContent,
+      updateRenderedDisplayContent: options.updateRenderedDisplayContent,
+      updateReactState: options.updateReactState,
+      preserveCompletion: options.preserveCompletion,
+      skipSelectionToolbarUpdate: options.skipSelectionToolbarUpdate,
+    });
     return true;
   }, [activeReading, applyRenderedMarkdownTypingEdit, contentMode, getRenderedCursorDebugState, recordRenderedEditorDebug]);
 
@@ -4593,6 +4614,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         inputType,
       });
       return;
+    }
+    const root = renderedContentRef.current;
+    const selection = root ? getRenderedSelectionDebug(root) : null;
+    if (shouldUseRenderedNativeTextInsertion({ inputType, data, selection })) {
+      if (!renderedEditingActiveRef.current) activateRenderedEditing();
+      const applied = applyRenderedNativeInput(inputType, data, {
+        updateRenderedDisplayContent: false,
+        updateReactState: false,
+        preserveCompletion: true,
+        skipSelectionToolbarUpdate: true,
+      });
+      lastRenderedBeforeInputRef.current = {
+        inputType: event.inputType,
+        resolvedInputType: inputType,
+        dataLength: data?.length ?? 0,
+        fallbackKey,
+        preventedDefault: event.defaultPrevented,
+        nativeTextInsertion: applied,
+      };
+      recordRenderedEditorDebug(applied ? 'beforeinput-native-text' : 'beforeinput-native-text-not-applied', {
+        inputType,
+        dataLength: data?.length ?? 0,
+        selection,
+      });
+      if (applied) return;
     }
     event.preventDefault();
     event.stopPropagation();
@@ -7702,6 +7748,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 recordRenderedEditorDebug('focus', { state: getRenderedEditorDebugState() });
               }}
               onInput={(event) => {
+                syncRenderedSourceCaretFromSelection('native-input');
                 recordRenderedEditorDebug('native-input', {
                   textLength: event.currentTarget.textContent?.length ?? 0,
                   activeReadingContentLength: activeReading?.content.length ?? null,

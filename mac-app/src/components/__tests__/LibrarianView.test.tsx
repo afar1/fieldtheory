@@ -294,8 +294,20 @@ describe('LibrarianView render', () => {
         inputType: 'insertText',
         data: 'x',
       });
-      expect(fireEvent(renderedRoot, beforeInput)).toBe(false);
-      expect(beforeInput.defaultPrevented).toBe(true);
+      expect(fireEvent(renderedRoot, beforeInput)).toBe(true);
+      expect(beforeInput.defaultPrevented).toBe(false);
+      const nativeInsertionRange = selection.getRangeAt(0);
+      const nativeInsertionText = nativeInsertionRange.startContainer;
+      if (nativeInsertionText.nodeType !== Node.TEXT_NODE) {
+        throw new Error('Native insertion text node missing');
+      }
+      (nativeInsertionText as Text).insertData(nativeInsertionRange.startOffset, 'x');
+      const nativeCaret = renderedRoot.ownerDocument.createRange();
+      nativeCaret.setStart(nativeInsertionText, nativeInsertionRange.startOffset + 1);
+      nativeCaret.collapse(true);
+      selection.removeAllRanges();
+      selection.addRange(nativeCaret);
+      fireEvent.input(renderedRoot);
 
       await waitFor(() => {
         expect(window.wikiAPI!.save).toHaveBeenCalledWith(
@@ -310,6 +322,72 @@ describe('LibrarianView render', () => {
     } finally {
       Range.prototype.getBoundingClientRect = originalGetBoundingClientRect;
     }
+  });
+
+  it('lets plain rendered typing use native text insertion while updating the saved source', async () => {
+    const relPath = 'scratchpad/rendered-native-typing-test';
+    const content = 'hello world';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-native-typing-test',
+      title: 'rendered-native-typing-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'native-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'native-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('hello world');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.focus(renderedRoot);
+
+    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
+      .find((node) => node.textContent === 'hello world');
+    const text = paragraph?.firstChild;
+    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered text node missing');
+
+    const selection = renderedRoot.ownerDocument.getSelection();
+    if (!selection) throw new Error('Selection API unavailable');
+    const range = renderedRoot.ownerDocument.createRange();
+    range.setStart(text, 5);
+    range.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const beforeInput = new InputEvent('beforeinput', {
+      bubbles: true,
+      cancelable: true,
+      inputType: 'insertText',
+      data: 'x',
+    });
+    expect(fireEvent(renderedRoot, beforeInput)).toBe(true);
+    expect(beforeInput.defaultPrevented).toBe(false);
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'hellox world',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
   });
 
   it('applies rendered formatting shortcuts and undo/redo in the visible editor', async () => {

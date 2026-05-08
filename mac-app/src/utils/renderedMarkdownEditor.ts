@@ -148,6 +148,25 @@ export function shouldHandleRenderedKeyDownEdit(input: {
   return !input.metaKey && !input.ctrlKey && !input.altKey;
 }
 
+export function shouldUseRenderedNativeTextInsertion(input: {
+  inputType: string | null;
+  data?: string | null;
+  selection: Record<string, unknown> | null;
+}): boolean {
+  const { inputType, data, selection } = input;
+  if (inputType !== 'insertText' || typeof data !== 'string' || data.length !== 1) return false;
+  if (data === '\r' || data === '\n' || isMarkdownSourceSyntaxChar(data)) return false;
+  return selection?.exists === true
+    && selection.inRoot === true
+    && selection.rangeCount === 1
+    && selection.isCollapsed === true
+    && selection.sameNode === true
+    && selection.startNodeType === 3
+    && selection.endNodeType === 3
+    && !isGeneratedRenderedWhitespaceText(selection.startText)
+    && !isGeneratedRenderedWhitespaceText(selection.endText);
+}
+
 function isEditableRenderedTextNode(node: Node): boolean {
   const text = node.textContent ?? '';
   if (!text) return false;
