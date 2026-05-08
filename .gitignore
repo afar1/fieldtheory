@@ -96,6 +96,7 @@ local.properties
 # Logs
 *.log
 .log
+.logs/
 logs/
 
 # Temporary files

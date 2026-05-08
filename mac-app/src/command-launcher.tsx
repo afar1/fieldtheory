@@ -35,6 +35,7 @@ import {
   getLauncherMoveUndoTargetDirRelPath,
   getLauncherAreaActionIdForQuery,
   getLauncherUsageScore,
+  getLauncherStatusText,
   isGeneratedBookmarkTaxonomyPath,
   nextLauncherArrowIndex,
   resolveHighlightedLauncherIndex,
@@ -385,7 +386,8 @@ function compactLauncherUrl(rawUrl: string): string {
 // =============================================================================
 
 const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
-const LAUNCHER_COLLAPSED_HEIGHT = 43;
+const LAUNCHER_COLLAPSED_HEIGHT = 52;
+const LAUNCHER_MAX_LIST_HEIGHT = 378;
 const COMMAND_LAUNCHER_RADIUS = 16;
 
 // =============================================================================
@@ -408,11 +410,11 @@ const getStyles = (isDark: boolean) => ({
     alignItems: 'center',
     minHeight: `${LAUNCHER_COLLAPSED_HEIGHT}px`,
     boxSizing: 'border-box' as const,
-    padding: '12px 10px',
-    gap: '6px',
+    padding: '13px 14px',
+    gap: '9px',
   },
   icon: {
-    width: '14px',
+    width: '16px',
     height: 'auto',
     flexShrink: 0,
   },
@@ -421,9 +423,9 @@ const getStyles = (isDark: boolean) => ({
     background: 'transparent',
     border: 'none',
     outline: 'none',
-    fontSize: '11px',
+    fontSize: '14px',
     color: isDark ? '#fff' : '#171717',
-    fontFamily: 'SF Mono, Monaco, Menlo, monospace',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
   namespaceTag: {
     display: 'inline-flex',
@@ -433,43 +435,46 @@ const getStyles = (isDark: boolean) => ({
     borderRadius: '4px',
     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)',
     color: isDark ? '#f2f2f2' : '#242424',
-    fontSize: '10px',
+    fontSize: '11px',
     fontFamily: 'SF Mono, Monaco, Menlo, monospace',
     flexShrink: 0,
   },
   list: {
     listStyle: 'none',
     margin: 0,
-    padding: '3px 0 6px 0',
-    maxHeight: '318px',
+    padding: '4px 0 8px 0',
+    maxHeight: `${LAUNCHER_MAX_LIST_HEIGHT}px`,
     overflowY: 'auto' as const,
   },
   listItem: {
-    padding: '4px 12px',
+    minHeight: '30px',
+    boxSizing: 'border-box' as const,
+    padding: '6px 14px',
     cursor: 'pointer',
     color: isDark ? '#e0e0e0' : '#262626',
-    fontSize: '10px',
-    fontFamily: 'SF Mono, Monaco, Menlo, monospace',
+    fontSize: '12px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     display: 'flex',
     alignItems: 'center',
-    gap: '6px',
+    gap: '8px',
   },
   listItemSelected: {
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.075)',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.13)' : 'rgba(0, 0, 0, 0.085)',
+    boxShadow: `inset 3px 0 0 ${isDark ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.32)'}`,
   },
   listItemSelectedSoft: {
     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.038)',
   },
   itemName: {
     flex: 1,
-    fontWeight: 400,
+    fontWeight: 500,
     letterSpacing: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
   },
   itemHotkey: {
-    fontSize: '9px',
+    fontSize: '11px',
     color: isDark ? '#888' : '#6b6b6b',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     flexShrink: 0,
@@ -481,9 +486,9 @@ const getStyles = (isDark: boolean) => ({
     flexShrink: 0,
   },
   itemTypeTag: {
-    fontSize: '7px',
-    lineHeight: '11px',
-    padding: '0 4px',
+    fontSize: '8px',
+    lineHeight: '12px',
+    padding: '0 5px',
     borderRadius: '3px',
     color: isDark ? '#8b8b8b' : '#767676',
     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.055)' : 'rgba(0, 0, 0, 0.045)',
@@ -492,16 +497,16 @@ const getStyles = (isDark: boolean) => ({
     letterSpacing: '0.3px',
   },
   emptyState: {
-    padding: '6px 10px',
+    padding: '9px 12px',
     color: isDark ? '#666' : '#777',
-    fontSize: '9px',
-    fontFamily: 'SF Mono, Monaco, Menlo, monospace',
+    fontSize: '12px',
+    fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
     textAlign: 'center' as const,
   },
   sectionHeader: {
-    padding: '2px 8px 1px 12px',
-    fontSize: '7px',
-    lineHeight: '10px',
+    padding: '5px 12px 3px 14px',
+    fontSize: '9px',
+    lineHeight: '12px',
     color: isDark ? '#5f5f5f' : '#858585',
     textTransform: 'uppercase' as const,
     textAlign: 'right' as const,
@@ -542,6 +547,7 @@ function CommandLauncher() {
   const [webBookmarkItems, setWebBookmarkItems] = useState<LauncherItem[]>([]);
   const [webBookmarks, setWebBookmarks] = useState<Bookmark[]>([]);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
+  const [launcherDataLoading, setLauncherDataLoading] = useState(true);
   const [launcherContext, setLauncherContext] = useState<LauncherContextState>({
     fieldTheoryActive: false,
     hasActiveLibraryFileContext: false,
@@ -565,6 +571,7 @@ function CommandLauncher() {
   const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
+  const launcherDataRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
@@ -789,21 +796,32 @@ function CommandLauncher() {
     }
   }, []);
 
+  const loadLauncherData = useCallback(async () => {
+    const requestId = ++launcherDataRequestRef.current;
+    setLauncherDataLoading(true);
+    await Promise.allSettled([
+      loadCommands(),
+      loadHandoffs(),
+      loadHotkeys(),
+      loadLibraryMarkdown(),
+      loadArtifacts(),
+      loadRecentEntries(),
+      loadBookmarkAuthors(),
+      loadWebBookmarks(),
+      loadActiveWebPage(),
+      refreshLauncherContext(),
+    ]);
+    if (requestId === launcherDataRequestRef.current) {
+      setLauncherDataLoading(false);
+    }
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, refreshLauncherContext]);
+
   // Load commands, handoffs, and hotkeys on mount.
   useEffect(() => {
     // Set initial height immediately to prevent layout shift
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
 
-    loadCommands();
-    loadHandoffs();
-    loadHotkeys();
-    loadLibraryMarkdown();
-    loadArtifacts();
-    loadRecentEntries();
-    loadBookmarkAuthors();
-    loadWebBookmarks();
-    loadActiveWebPage();
-    refreshLauncherContext();
+    void loadLauncherData();
 
     // Load current Field Theory theme preference and keep this separate window in sync.
     themeAPI.getTheme().then(applyTheme).catch(() => {});
@@ -841,15 +859,7 @@ function CommandLauncher() {
       setFiltered([]);
       selectIndex(0);
       inputRef.current?.focus();
-      loadCommands();
-      loadHandoffs();
-      loadLibraryMarkdown();
-      loadArtifacts();
-      loadRecentEntries();
-      loadBookmarkAuthors();
-      loadWebBookmarks();
-      loadActiveWebPage();
-      refreshLauncherContext();
+      void loadLauncherData();
       // Refresh theme state
       const dark = await themeAPI.getTheme().catch(() => payload?.isDarkMode ?? themeAPI.initialTheme ?? false);
       applyTheme(dark ?? payload?.isDarkMode ?? false);
@@ -879,7 +889,7 @@ function CommandLauncher() {
       unsubscribeBookmarks?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, loadAuthorBookmarks, loadBookmarkNamespace, refreshLauncherContext, resizeLauncher, selectIndex]);
+  }, [applyTheme, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, resizeLauncher, selectIndex]);
 
   useEffect(() => () => {
     if (resizeFrameRef.current !== null) {
@@ -1130,11 +1140,11 @@ function CommandLauncher() {
   useEffect(() => {
     const filterStartedAt = performance.now();
     const inputHeight = LAUNCHER_COLLAPSED_HEIGHT;
-    const emptyStateHeight = 26;
-    const maxListHeight = 318;
+    const emptyStateHeight = 34;
+    const maxListHeight = LAUNCHER_MAX_LIST_HEIGHT;
 
     const resizeForResults = (resultCount: number, forceEmptyState = false) => {
-      const itemHeight = 22;
+      const itemHeight = 30;
       const listHeight = resultCount > 0
         ? Math.min(resultCount * itemHeight + 10, maxListHeight)
         : (forceEmptyState ? emptyStateHeight : 0);
@@ -1142,12 +1152,13 @@ function CommandLauncher() {
     };
 
     if (allItems.length === 0 && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
-      const fallback = localInstructionFallbackForQuery(query, 0, isHelpQuery);
+      const waitingForResults = launcherDataLoading && query.trim() !== '';
+      const fallback = waitingForResults ? null : localInstructionFallbackForQuery(query, 0, isHelpQuery);
       setFiltered(fallback ? [fallback] : []);
       selectIndex(0);
       // Don't show empty state height when still loading (query is empty)
       // Only show it when user has typed but no results found
-      resizeForResults(fallback ? 1 : 0);
+      resizeForResults(fallback ? 1 : 0, waitingForResults);
       return;
     }
 
@@ -1175,9 +1186,9 @@ function CommandLauncher() {
       selectIndex(0);
 
       // Resize for all items.
-      const itemHeight = 22;
+      const itemHeight = 30;
       const sectionHeaderHeight = 20;
-      const padding = 10;
+      const padding = 12;
       const numSections = (actions.length > 0 ? 1 : 0) + (hoffs.length > 0 ? 1 : 0) + (cmds.length > 0 ? 1 : 0);
       const totalItems = actions.length + hoffs.length + cmds.length;
       const listHeight = Math.min(
@@ -1316,18 +1327,11 @@ function CommandLauncher() {
       return;
     }
 
-    const scored = allItems.map(item => {
+    const scoredMatches = allItems.map(item => {
       const baseScore = scoreLauncherItem(item, q);
       return { item, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
-    });
-
-    const matches = dedupeLauncherPersonItems(scored
-      .filter(s => s.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .map(s => s.item));
-    const scoresById = new Map(scored.map(({ item, score }) => [item.id, score]));
-    const scoredMatches = matches.map(item => ({ item, score: scoresById.get(item.id) ?? 0 }));
-    const balancedMatches = balanceLauncherNormalModeMatches(scoredMatches);
+    }).filter(s => s.score > 0);
+    const balancedMatches = dedupeLauncherPersonItems(balanceLauncherNormalModeMatches(scoredMatches));
     const fallback = localInstructionFallbackForQuery(query, balancedMatches.length);
     const results = fallback ? [fallback] : balancedMatches;
 
@@ -1345,10 +1349,11 @@ function CommandLauncher() {
       hasBookmarkNamespace: Boolean(bookmarkNamespace),
       resultCount: results.length,
       usedLocalInstructionFallback: Boolean(fallback),
-      totalResultCount: matches.length,
+      totalResultCount: scoredMatches.length,
+      launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId, launcherDataLoading]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -1974,6 +1979,13 @@ function CommandLauncher() {
     if (index !== selectedIndex) return {};
     return hasExplicitSelection ? styles.listItemSelected : styles.listItemSelectedSoft;
   };
+  const statusText = getLauncherStatusText({
+    hasQuery: query.trim() !== '',
+    namespaceLabel,
+    resultCount: filtered.length,
+    loading: launcherDataLoading,
+    hasLoadedItems: allItems.length > 0,
+  });
 
   return (
     <div style={styles.container}>
@@ -2127,8 +2139,8 @@ function CommandLauncher() {
         </ul>
       )}
 
-      {(query.trim() !== '' || namespaceLabel) && filtered.length === 0 && (
-        <div style={styles.emptyState}>No matches found</div>
+      {statusText && (
+        <div style={styles.emptyState}>{statusText}</div>
       )}
     </div>
   );

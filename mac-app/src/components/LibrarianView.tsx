@@ -4,6 +4,7 @@
 // =============================================================================
 
 import { Children, cloneElement, isValidElement, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
@@ -26,7 +27,6 @@ import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
-  RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
   getMarkdownFormattingShortcut,
   isCommandDeleteShortcut,
@@ -38,11 +38,29 @@ import {
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
   isSidebarToggleShortcut,
-  restoreRenderedEditClickMode,
   restoreTextCursorBlink,
-  shouldEnterEditOnClick,
-  type RenderedEditClickMode,
 } from '../utils/editorShortcuts';
+import {
+  RENDERED_BLANK_LINE_ATTR,
+  RENDERED_EDITOR_DEBUG_ENTRY_LIMIT,
+  RENDERED_EDITOR_DEBUG_STORAGE_KEY,
+  RENDERED_TRAILING_SPACE_ATTR,
+  getElementDebugSummary,
+  getRectDebugSummary,
+  getRenderedBeforeInputData,
+  getRenderedBeforeInputType,
+  getRenderedMarkdownInputEditAtSourceOffset,
+  getRenderedMarkdownInputEditFromSelection,
+  getRenderedMarkdownRangeFromSelection,
+  getRenderedSelectionDebug,
+  getTrustedRenderedCaretSourceOffset,
+  isRenderedDeleteInputType,
+  setRenderedMarkdownSelectionAtOffset,
+  shouldHandleRenderedKeyDownEdit,
+  shouldUseRenderedSourceCaretFallback,
+  type RenderedEditorDebugApi,
+  type RenderedEditorDebugEntry,
+} from '../utils/renderedMarkdownEditor';
 import {
   getMarkdownTodoState,
   parseMarkdownFrontmatter,
@@ -97,6 +115,7 @@ import {
   normalizeWikiRelPath,
   transformWikiLinks,
   upsertMarkdownLinkRelationDocument,
+  type WikiIndex,
   type LinkAction,
   type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
@@ -115,6 +134,7 @@ type FieldTheoryMarkdownTarget = {
 
 export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
 const COPY_PATH_FEEDBACK_MS = 1600;
+const RENDERED_EDITOR_HISTORY_LIMIT = 100;
 
 function libraryRenameTraceEnabled(): boolean {
   try {
@@ -271,10 +291,31 @@ export function shouldApplyLiveMarkdownFileUpdate(input: {
   editContent: string;
   lastSavedContent: string | null;
   hasPendingRenderedSave?: boolean;
+  hasRenderedSaveInFlight?: boolean;
 }): boolean {
   if (input.hasPendingRenderedSave) return false;
-  if (input.contentMode !== 'markdown') return true;
+  if (input.hasRenderedSaveInFlight) return false;
   return input.lastSavedContent !== null && input.editContent === input.lastSavedContent;
+}
+
+export function getRenderedCaretEnsureSourceOffset(input: {
+  activeSourceOffset: number | null;
+  selectionRange: { start: number; end: number } | null;
+  contentLength: number;
+}): number {
+  const contentLength = Math.max(0, input.contentLength);
+  const clamp = (offset: number) => Math.max(0, Math.min(contentLength, offset));
+  if (typeof input.activeSourceOffset === 'number' && Number.isFinite(input.activeSourceOffset)) {
+    return clamp(input.activeSourceOffset);
+  }
+  if (
+    input.selectionRange
+    && input.selectionRange.start === input.selectionRange.end
+    && Number.isFinite(input.selectionRange.start)
+  ) {
+    return clamp(input.selectionRange.start);
+  }
+  return contentLength;
 }
 
 export function documentVersionsEqual(left: DocumentVersion | null | undefined, right: DocumentVersion | null | undefined): boolean {
@@ -356,6 +397,7 @@ export function isTextEntryInputType(type: string | null | undefined): boolean {
 }
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
+const PRESERVED_BLANK_MARKDOWN_LINE_PATTERN = /^\u00A0+$/;
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
 const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
 const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
@@ -421,6 +463,13 @@ type MarkdownUndoSnapshot = {
   selectionEnd: number;
 };
 
+type RenderedMarkdownEditOptions = {
+  previousContent?: string;
+  pushUndo?: boolean;
+  updateRenderedDisplayContent?: boolean;
+  preserveCompletion?: boolean;
+};
+
 function parseCarrotListLine(line: string): { indent: string; markers: string; text: string } | null {
   const match = line.match(/^(\s*)(›+)(?:[ \t](.*)|[ \t]*)$/);
   if (!match) return null;
@@ -436,8 +485,6 @@ function isNormalizedCarrotListLine(line: string): boolean {
 }
 
 export function preserveMarkdownBlankLines(content: string): string {
-  if (!content || !content.trim()) return content;
-
   const output: string[] = [];
   const lines = content.split('\n');
   let inFence = false;
@@ -454,7 +501,7 @@ export function preserveMarkdownBlankLines(content: string): string {
         output.push(line);
         continue;
       }
-      output.push('', PRESERVED_BLANK_MARKDOWN_LINE, '');
+      output.push('', PRESERVED_BLANK_MARKDOWN_LINE.repeat(Math.max(1, line.length)), '');
       continue;
     }
 
@@ -529,6 +576,11 @@ export function normalizeMarkdownCarrotLists(content: string): string {
   }
 
   return output.join('\n');
+}
+
+export function getRenderedMarkdownDisplayContent(body: string, wikiIndex: WikiIndex): string {
+  const linked = transformWikiLinks(body, wikiIndex);
+  return preserveMarkdownBlankLines(normalizeMarkdownCarrotLists(normalizeMarkdownTodoLines(linked)));
 }
 
 export function getMarkdownBodySelectionRange(value: string): { start: number; end: number } | null {
@@ -927,20 +979,6 @@ export function getRenderedMarkdownSelectionFormatEdit(
   return getRenderedMarkdownInlineToggleEdit(value, start, end, open, close);
 }
 
-export function getRenderedMarkdownClickBehavior(input: {
-  target: EventTarget | null;
-  detail?: number;
-  metaKey?: boolean;
-  ctrlKey?: boolean;
-  altKey?: boolean;
-  shiftKey?: boolean;
-}, mode: RenderedEditClickMode = 'command-click'): 'source' | null {
-  if (typeof input.detail === 'number' && input.detail > 1) return null;
-  if (input.altKey || input.ctrlKey || input.shiftKey) return null;
-  if (!shouldEnterEditOnClick(input, mode)) return null;
-  return 'source';
-}
-
 export function toggleMarkdownTaskLine(content: string, text: string, checked: boolean): string {
   const target = text.trim();
   if (!target) return content;
@@ -1075,32 +1113,6 @@ export function findNextMarkdownMatch(content: string, query: string, fromIndex:
   const forward = haystack.indexOf(needle, startFrom);
   const wrapped = forward >= 0 ? forward : haystack.indexOf(needle, 0);
   return wrapped >= 0 ? { start: wrapped, end: wrapped + needle.length } : null;
-}
-
-export function resolveMarkdownCaretOffsetFromRenderedText(
-  markdown: string,
-  renderedText: string,
-  renderedOffset: number,
-): number | null {
-  if (!renderedText) return null;
-  const body = splitFrontmatter(markdown).body;
-  const bodyStart = getMarkdownBodyStartOffset(markdown);
-  const clampedOffset = Math.max(0, Math.min(renderedOffset, renderedText.length));
-  const sourceIndex = body.indexOf(renderedText);
-  if (sourceIndex >= 0) return bodyStart + sourceIndex + clampedOffset;
-
-  const before = renderedText.slice(0, clampedOffset);
-  if (!before) return null;
-  const beforeIndex = body.indexOf(before);
-  if (beforeIndex >= 0) return bodyStart + beforeIndex + before.length;
-
-  let renderedCount = 0;
-  for (let index = 0; index < body.length; index += 1) {
-    if (/[*_`#>\[\]()!-]/.test(body[index])) continue;
-    renderedCount += 1;
-    if (renderedCount >= clampedOffset) return bodyStart + index + 1;
-  }
-  return null;
 }
 
 function clearFileFindMarks(root: HTMLElement): void {
@@ -1606,6 +1618,10 @@ type MarkdownRenderNode = {
   position?: {
     start?: {
       line?: unknown;
+      offset?: unknown;
+    };
+    end?: {
+      offset?: unknown;
     };
   };
   properties?: {
@@ -1613,16 +1629,6 @@ type MarkdownRenderNode = {
     checked?: unknown;
     type?: unknown;
   };
-};
-
-type CaretPointDocument = Document & {
-  caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
-  caretRangeFromPoint?: (x: number, y: number) => Range | null;
-};
-
-type RenderedTextPoint = {
-  text: string;
-  offset: number;
 };
 
 type RenderedTaskToggleDebugEntry = {
@@ -1641,6 +1647,70 @@ type RenderedTaskDebugApi = {
   isEnabled: () => boolean;
   snapshot: () => RenderedTaskToggleDebugEntry[];
 };
+
+type RestoredRenderedCaret = {
+  content: string;
+  sourceOffset: number;
+  domSourceOffset: number | null;
+  approximate: boolean;
+};
+
+function getRestoredRenderedCaretDebug(caret: RestoredRenderedCaret | null): Record<string, unknown> | null {
+  if (!caret) return null;
+  return {
+    sourceOffset: caret.sourceOffset,
+    domSourceOffset: caret.domSourceOffset,
+    approximate: caret.approximate,
+    contentLength: caret.content.length,
+  };
+}
+
+function getMarkdownSourceOffsetDebug(content: string | null, offset: number | null): Record<string, unknown> | null {
+  if (typeof content !== 'string' || typeof offset !== 'number' || !Number.isFinite(offset)) return null;
+  const clampedOffset = Math.max(0, Math.min(content.length, offset));
+  let line = 1;
+  let lineStart = 0;
+  for (let index = 0; index < clampedOffset; index += 1) {
+    if (content.charCodeAt(index) === 10) {
+      line += 1;
+      lineStart = index + 1;
+    }
+  }
+  const nextLineBreak = content.indexOf('\n', clampedOffset);
+  const lineEnd = nextLineBreak === -1 ? content.length : nextLineBreak;
+  return {
+    offset: clampedOffset,
+    line,
+    column: clampedOffset - lineStart + 1,
+    lineStart,
+    lineEnd,
+    lineLength: lineEnd - lineStart,
+    before: content.slice(Math.max(lineStart, clampedOffset - 40), clampedOffset),
+    after: content.slice(clampedOffset, Math.min(lineEnd, clampedOffset + 40)),
+  };
+}
+
+function isRenderedSelectionElementBoundary(selection: Record<string, unknown>): boolean {
+  return selection.startNodeType !== Node.TEXT_NODE
+    || selection.endNodeType !== Node.TEXT_NODE
+    || selection.caretRect === null;
+}
+
+function getMarkdownNodeTrailingWhitespace(node: unknown, source: string): string {
+  const position = (node as MarkdownRenderNode | null)?.position;
+  const startOffset = position?.start?.offset;
+  const endOffset = position?.end?.offset;
+  if (
+    typeof startOffset !== 'number'
+    || typeof endOffset !== 'number'
+    || startOffset < 0
+    || endOffset < startOffset
+  ) {
+    return '';
+  }
+  const sourceSlice = source.slice(startOffset, Math.min(endOffset, source.length));
+  return sourceSlice.match(/[ \t]+$/)?.[0] ?? '';
+}
 
 const RENDERED_TASK_DEBUG_ENTRY_LIMIT = 20;
 
@@ -1738,26 +1808,6 @@ const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
   command: 'Command',
 };
 
-function getRenderedTextCaretFromPoint(event: React.MouseEvent): RenderedTextPoint | null {
-  const doc = event.currentTarget.ownerDocument as CaretPointDocument;
-  const position = doc.caretPositionFromPoint?.(event.clientX, event.clientY);
-  if (position?.offsetNode.nodeType === Node.TEXT_NODE) {
-    const textNode = position.offsetNode as Text;
-    return {
-      text: textNode.textContent ?? '',
-      offset: position.offset,
-    };
-  }
-
-  const range = doc.caretRangeFromPoint?.(event.clientX, event.clientY);
-  if (range?.startContainer.nodeType !== Node.TEXT_NODE) return null;
-  const textNode = range.startContainer as Text;
-  return {
-    text: textNode.textContent ?? '',
-    offset: range.startOffset,
-  };
-}
-
 function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
@@ -1784,6 +1834,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // "typed a char then deleted it" case.
   const lastSavedContentRef = useRef<string | null>(null);
   const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
+  const lastSeededPathRef = useRef<string | null>(null);
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
@@ -1801,7 +1852,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     restoreLibrarianTodoMarker(localStorage)
   ));
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
-  const [renderedEditClickMode, setRenderedEditClickMode] = useState(() => restoreRenderedEditClickMode(localStorage));
   const [renderedSelectionToolbar, setRenderedSelectionToolbar] = useState<{
     start: number;
     end: number;
@@ -1873,10 +1923,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
   const renderedLinkMouseDownHandledRef = useRef(false);
+  const activeReadingPathRef = useRef<string | null>(null);
+  const activeReadingContentRef = useRef<string | null>(null);
+  const renderedEditorDebugEntriesRef = useRef<RenderedEditorDebugEntry[]>([]);
   const renderedTaskDebugEntriesRef = useRef<RenderedTaskToggleDebugEntry[]>([]);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
   const renderedSaveTimerRef = useRef<number | null>(null);
   const pendingRenderedSaveRef = useRef<(() => void) | null>(null);
+  const renderedSaveInFlightRef = useRef(0);
+  const pendingRenderedCaretOffsetRef = useRef<number | null>(null);
+  const activeRenderedCaretOffsetRef = useRef<number | null>(null);
+  const restoredRenderedCaretRef = useRef<RestoredRenderedCaret | null>(null);
+  const latestRenderedContentRef = useRef<{ path: string; content: string } | null>(null);
+  const renderedDisplayContentRef = useRef<{ path: string; content: string } | null>(null);
+  const latestMarkdownCursorSnapshotRef = useRef<(MarkdownCodeEditorSelectionSnapshot & { timestamp: number; stage: string }) | null>(null);
+  const editorCursorSettleTimerRef = useRef<number | null>(null);
+  const renderedFocusEnsureFrameRef = useRef<number | null>(null);
+  const lastRenderedKeyDownRef = useRef<string | null>(null);
+  const lastRenderedKeyEventRef = useRef<Record<string, unknown> | null>(null);
+  const lastRenderedBeforeInputRef = useRef<Record<string, unknown> | null>(null);
+  const suppressNextRenderedBeforeInputRef = useRef<{ inputType: string; data: string | null; timestamp: number } | null>(null);
 
   const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
   const setContentScrollRef = useCallback(
@@ -1924,6 +1990,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const pendingScrollRatioRef = useRef<number | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
   const markdownEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
+  const renderedEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
+  const renderedEditRedoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
 
   const activateSidebarKeyboard = useCallback(() => {
     sidebarKeyboardActiveRef.current = true;
@@ -1970,12 +2038,350 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ? restoredEditorSession?.contentMode ?? 'rendered'
       : 'rendered'
   ));
+  const [renderedEditingActive, setRenderedEditingActive] = useState(false);
+  const [renderedDocumentRenderRevision, setRenderedDocumentRenderRevision] = useState(0);
+  const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
+    localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
+  ));
+  const renderedEditingActiveRef = useRef(renderedEditingActive);
   const contentModeRef = useRef(contentMode);
   const editContentRef = useRef(editContent);
   useLayoutEffect(() => {
     contentModeRef.current = contentMode;
     editContentRef.current = editContent;
-  }, [contentMode, editContent]);
+    renderedEditingActiveRef.current = renderedEditingActive;
+  }, [contentMode, editContent, renderedEditingActive]);
+  const getRenderedCursorDebugState = useCallback((label = 'cursor'): Record<string, unknown> => {
+    const root = renderedContentRef.current;
+    const content = activeReadingContentRef.current;
+    const doc = root?.ownerDocument ?? document;
+    const activeElement = doc.activeElement;
+    const scrollEl = contentScrollRef.current;
+    const selection = root ? getRenderedSelectionDebug(root) : { exists: false, reason: 'no-rendered-root' };
+    const mappedRange = root && content !== null
+      ? getRenderedMarkdownRangeFromSelection(content, root, root.ownerDocument.getSelection())
+      : null;
+    const activeSourceOffset = activeRenderedCaretOffsetRef.current;
+    const mappedStart = mappedRange?.start ?? null;
+    return {
+      label,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      editingActive: renderedEditingActiveRef.current,
+      rootExists: !!root,
+      contentLength: content?.length ?? null,
+      activeSourceOffset,
+      pendingSourceOffset: pendingRenderedCaretOffsetRef.current,
+      restoredCaret: getRestoredRenderedCaretDebug(restoredRenderedCaretRef.current),
+      mappedSelection: mappedRange
+        ? {
+            start: mappedRange.start,
+            end: mappedRange.end,
+            collapsed: mappedRange.start === mappedRange.end,
+          }
+        : null,
+      sourceDrift: typeof activeSourceOffset === 'number' && typeof mappedStart === 'number'
+        ? mappedStart - activeSourceOffset
+        : null,
+      activeSource: getMarkdownSourceOffsetDebug(content, activeSourceOffset),
+      mappedSource: getMarkdownSourceOffsetDebug(content, mappedStart),
+      selection,
+      focus: {
+        activeElement: getElementDebugSummary(activeElement),
+        rootIsActiveElement: activeElement === root,
+        rootContainsActiveElement: !!root && !!activeElement && root.contains(activeElement),
+      },
+      scroll: scrollEl ? {
+        top: scrollEl.scrollTop,
+        height: scrollEl.scrollHeight,
+        clientHeight: scrollEl.clientHeight,
+      } : null,
+    };
+  }, []);
+  const getMarkdownCursorDebugState = useCallback((
+    label = 'markdown-cursor',
+    snapshot?: MarkdownCodeEditorSelectionSnapshot | null,
+  ): Record<string, unknown> => {
+    const editor = markdownCodeEditorRef.current;
+    const latestSnapshot = latestMarkdownCursorSnapshotRef.current;
+    const liveSnapshot = snapshot
+      ?? editor?.getSelectionSnapshot()
+      ?? latestSnapshot
+      ?? null;
+    const value = liveSnapshot?.value ?? editor?.getValue() ?? editContentRef.current;
+    const selectionRange = editor?.getSelectionRange();
+    const selectionStart = liveSnapshot?.selectionStart ?? selectionRange?.start ?? 0;
+    const selectionEnd = liveSnapshot?.selectionEnd ?? selectionRange?.end ?? selectionStart;
+    const selectionHead = liveSnapshot?.selectionHead ?? selectionEnd;
+    const selectionAnchor = liveSnapshot?.selectionAnchor ?? selectionStart;
+    const doc = document;
+    const activeElement = doc.activeElement;
+    return {
+      label,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      live: !!editor,
+      snapshotOnly: !editor && !!latestSnapshot,
+      contentLength: value.length,
+      snapshotAgeMs: latestSnapshot ? Date.now() - latestSnapshot.timestamp : null,
+      snapshotStage: latestSnapshot?.stage ?? null,
+      selectionStart,
+      selectionEnd,
+      selectionAnchor,
+      selectionHead,
+      isCollapsed: liveSnapshot?.isCollapsed ?? selectionStart === selectionEnd,
+      selectionStartSource: liveSnapshot?.selectionStartSource ?? getMarkdownSourceOffsetDebug(value, selectionStart),
+      selectionEndSource: liveSnapshot?.selectionEndSource ?? getMarkdownSourceOffsetDebug(value, selectionEnd),
+      selectionHeadSource: liveSnapshot?.selectionHeadSource ?? getMarkdownSourceOffsetDebug(value, selectionHead),
+      caretPosition: liveSnapshot?.caretPosition ?? null,
+      caretRect: liveSnapshot?.caretRect ?? null,
+      input: liveSnapshot
+        ? {
+            docChanged: liveSnapshot.docChanged,
+            inputType: liveSnapshot.inputType ?? null,
+            inputDataLength: liveSnapshot.inputData?.length ?? 0,
+          }
+        : null,
+      focus: {
+        activeElement: getElementDebugSummary(activeElement),
+        activeElementIsCodeMirror: activeElement instanceof Element
+          ? !!activeElement.closest('.cm-editor, .cm-content')
+          : false,
+      },
+      scroll: liveSnapshot?.scroll ?? (editor ? {
+        top: editor.scrollTop,
+        height: editor.scrollHeight,
+        clientHeight: editor.clientHeight,
+      } : null),
+    };
+  }, []);
+  const getEditorCursorDebugState = useCallback((
+    label = 'editor-cursor',
+    markdownSnapshot?: MarkdownCodeEditorSelectionSnapshot | null,
+  ): Record<string, unknown> => {
+    const markdown = getMarkdownCursorDebugState(`${label}-markdown`, markdownSnapshot);
+    const rendered = getRenderedCursorDebugState(`${label}-rendered`);
+    const markdownHead = typeof markdown.selectionHead === 'number' ? markdown.selectionHead : null;
+    const renderedSource = typeof rendered.activeSourceOffset === 'number' ? rendered.activeSourceOffset : null;
+    const activeSurface = contentModeRef.current === 'markdown' ? 'markdown' : 'rendered';
+    return {
+      label,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      activeSurface,
+      activeCursor: {
+        surface: activeSurface,
+        sourceOffset: activeSurface === 'markdown' ? markdownHead : renderedSource,
+        source: activeSurface === 'markdown' ? markdown.selectionHeadSource ?? null : rendered.activeSource ?? null,
+      },
+      markdown,
+      rendered,
+      sourceOffsetComparison: {
+        markdownHead,
+        markdownLive: markdown.live === true,
+        renderedSource,
+        renderedLive: rendered.rootExists === true,
+        delta: typeof markdownHead === 'number' && typeof renderedSource === 'number'
+          ? markdownHead - renderedSource
+          : null,
+      },
+    };
+  }, [getMarkdownCursorDebugState, getRenderedCursorDebugState]);
+  const getRenderedEditorDebugState = useCallback((): Record<string, unknown> => {
+    const root = renderedContentRef.current;
+    const doc = root?.ownerDocument ?? document;
+    const activeElement = doc.activeElement;
+    const scrollEl = contentScrollRef.current;
+    return {
+      enabled: localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true',
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      editingActive: renderedEditingActiveRef.current,
+      activeCaretOffset: activeRenderedCaretOffsetRef.current,
+      pendingCaretOffset: pendingRenderedCaretOffsetRef.current,
+      restoredCaret: getRestoredRenderedCaretDebug(restoredRenderedCaretRef.current),
+      pendingSave: !!pendingRenderedSaveRef.current,
+      renderedSaveInFlight: renderedSaveInFlightRef.current,
+      saveTimerActive: renderedSaveTimerRef.current !== null,
+      activeElement: getElementDebugSummary(activeElement),
+      renderedRoot: {
+        exists: !!root,
+        isActiveElement: activeElement === root,
+        containsActiveElement: !!root && !!activeElement && root.contains(activeElement),
+        tabIndex: root?.tabIndex ?? null,
+        rect: getRectDebugSummary(root?.getBoundingClientRect()),
+      },
+      selection: root ? getRenderedSelectionDebug(root) : { exists: false, reason: 'no-rendered-root' },
+      scroll: scrollEl ? {
+        top: scrollEl.scrollTop,
+        height: scrollEl.scrollHeight,
+        clientHeight: scrollEl.clientHeight,
+      } : null,
+      recentStages: renderedEditorDebugEntriesRef.current.slice(-8).map((entry) => entry.stage),
+      cursor: getRenderedCursorDebugState('state'),
+      editorCursor: getEditorCursorDebugState('state'),
+    };
+  }, [getEditorCursorDebugState, getRenderedCursorDebugState]);
+  const recordRenderedEditorDebug = useCallback((stage: string, details: Record<string, unknown> = {}) => {
+    const entry: RenderedEditorDebugEntry = {
+      timestamp: Date.now(),
+      stage,
+      path: activeReadingPathRef.current,
+      contentMode: contentModeRef.current,
+      editingActive: renderedEditingActiveRef.current,
+      scrollTop: contentScrollRef.current?.scrollTop ?? null,
+      details,
+    };
+    renderedEditorDebugEntriesRef.current = [...renderedEditorDebugEntriesRef.current, entry].slice(-RENDERED_EDITOR_DEBUG_ENTRY_LIMIT);
+    const api = (window as Window & { ftDebugRenderedEditor?: RenderedEditorDebugApi }).ftDebugRenderedEditor;
+    void window.diagnosticsAPI?.appendRenderedEditorDebug?.(entry);
+    if (api?.isEnabled()) {
+      console.log('[RenderedEditor]', stage, entry);
+    }
+    window.dispatchEvent(new CustomEvent('fieldtheory:rendered-editor-debug', { detail: entry }));
+    return entry;
+  }, []);
+  const scheduleEditorCursorSettledDebug = useCallback((
+    reason: string,
+    markdownSnapshot?: MarkdownCodeEditorSelectionSnapshot | null,
+  ) => {
+    latestMarkdownCursorSnapshotRef.current = markdownSnapshot
+      ? { ...markdownSnapshot, timestamp: Date.now(), stage: reason }
+      : latestMarkdownCursorSnapshotRef.current;
+    if (editorCursorSettleTimerRef.current !== null) {
+      window.clearTimeout(editorCursorSettleTimerRef.current);
+    }
+    recordRenderedEditorDebug('editor-cursor-observed', {
+      reason,
+      cursor: getEditorCursorDebugState(`${reason}-observed`, markdownSnapshot),
+    });
+    editorCursorSettleTimerRef.current = window.setTimeout(() => {
+      editorCursorSettleTimerRef.current = null;
+      recordRenderedEditorDebug('editor-cursor-settled', {
+        reason,
+        cursor: getEditorCursorDebugState(`${reason}-settled`),
+      });
+    }, 650);
+  }, [getEditorCursorDebugState, recordRenderedEditorDebug]);
+  const cancelRenderedFocusEnsureFrame = useCallback(() => {
+    if (renderedFocusEnsureFrameRef.current === null) return;
+    cancelAnimationFrame(renderedFocusEnsureFrameRef.current);
+    renderedFocusEnsureFrameRef.current = null;
+  }, []);
+  useEffect(() => () => {
+    if (editorCursorSettleTimerRef.current !== null) {
+      window.clearTimeout(editorCursorSettleTimerRef.current);
+      editorCursorSettleTimerRef.current = null;
+    }
+    cancelRenderedFocusEnsureFrame();
+  }, [cancelRenderedFocusEnsureFrame]);
+  useEffect(() => {
+    const isEnabled = () => localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
+    const setEnabled = (enabled: boolean) => {
+      localStorage.setItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY, enabled ? 'true' : 'false');
+      setRenderedEditorDebugEnabled(enabled);
+    };
+    const api: RenderedEditorDebugApi = {
+      enable: () => {
+        setEnabled(true);
+        recordRenderedEditorDebug('debug-enabled', { state: getRenderedEditorDebugState() });
+        console.log('[RenderedEditor]', 'debug enabled', {
+          commands: [
+            'window.ftDebugRenderedEditor.state()',
+            'window.ftDebugRenderedEditor.cursor()',
+            'window.ftDebugRenderedEditor.markdownCursor()',
+            'window.ftDebugRenderedEditor.renderedCursor()',
+            'window.ftDebugRenderedEditor.snapshot()',
+            'window.ftDebugRenderedEditor.mark("label")',
+          ],
+        });
+      },
+      disable: () => {
+        recordRenderedEditorDebug('debug-disabled', { state: getRenderedEditorDebugState() });
+        setEnabled(false);
+        console.log('[RenderedEditor]', 'debug disabled');
+      },
+      isEnabled,
+      state: getRenderedEditorDebugState,
+      cursor: () => getEditorCursorDebugState('api-cursor'),
+      markdownCursor: () => getMarkdownCursorDebugState('api-markdown-cursor'),
+      renderedCursor: () => getRenderedCursorDebugState('api-rendered-cursor'),
+      snapshot: () => [...renderedEditorDebugEntriesRef.current],
+      last: () => renderedEditorDebugEntriesRef.current[renderedEditorDebugEntriesRef.current.length - 1] ?? null,
+      clear: () => {
+        renderedEditorDebugEntriesRef.current = [];
+        void window.diagnosticsAPI?.clearRenderedEditorDebugLog?.();
+        recordRenderedEditorDebug('debug-cleared');
+      },
+      mark: (label = 'manual') => recordRenderedEditorDebug('debug-mark', {
+        label,
+        state: getRenderedEditorDebugState(),
+      }),
+      root: () => renderedContentRef.current,
+    };
+    const debugWindow = window as Window & { ftDebugRenderedEditor?: RenderedEditorDebugApi };
+    debugWindow.ftDebugRenderedEditor = api;
+    if (api.isEnabled()) {
+      setRenderedEditorDebugEnabled(true);
+      recordRenderedEditorDebug('debug-api-installed', { state: getRenderedEditorDebugState() });
+    }
+    return () => {
+      if (debugWindow.ftDebugRenderedEditor === api) {
+        delete debugWindow.ftDebugRenderedEditor;
+      }
+    };
+  }, [getEditorCursorDebugState, getMarkdownCursorDebugState, getRenderedCursorDebugState, getRenderedEditorDebugState, recordRenderedEditorDebug]);
+  useEffect(() => {
+    const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
+      const debugEnabled = localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
+      if (!debugEnabled && !renderedEditingActiveRef.current) return;
+      const beforeScrollTop = contentScrollRef.current?.scrollTop ?? null;
+      recordRenderedEditorDebug('document-keydown-capture', {
+        key: event.key,
+        code: event.code,
+        defaultPrevented: event.defaultPrevented,
+        target: getElementDebugSummary(event.target instanceof Element ? event.target : null),
+        state: getRenderedEditorDebugState(),
+      });
+      window.setTimeout(() => {
+        const afterScrollTop = contentScrollRef.current?.scrollTop ?? null;
+        recordRenderedEditorDebug('document-keydown-after-default', {
+          key: event.key,
+          code: event.code,
+          defaultPrevented: event.defaultPrevented,
+          beforeScrollTop,
+          afterScrollTop,
+          scrollDelta: typeof beforeScrollTop === 'number' && typeof afterScrollTop === 'number'
+            ? afterScrollTop - beforeScrollTop
+            : null,
+          state: getRenderedEditorDebugState(),
+        });
+      }, 0);
+    };
+    window.addEventListener('keydown', handleDocumentKeyDownCapture, true);
+    return () => window.removeEventListener('keydown', handleDocumentKeyDownCapture, true);
+  }, [getRenderedEditorDebugState, recordRenderedEditorDebug]);
+  const clearRenderedEditingState = useCallback((reason = 'clear') => {
+    recordRenderedEditorDebug('clear', { reason });
+    cancelRenderedFocusEnsureFrame();
+    renderedDisplayContentRef.current = null;
+    renderedEditingActiveRef.current = false;
+    setRenderedEditingActive(false);
+    setRenderedDocumentRenderRevision((revision) => revision + 1);
+    pendingRenderedCaretOffsetRef.current = null;
+    activeRenderedCaretOffsetRef.current = null;
+    restoredRenderedCaretRef.current = null;
+  }, [cancelRenderedFocusEnsureFrame, recordRenderedEditorDebug]);
+
+  const activateRenderedEditing = useCallback(() => {
+    const path = activeReadingPathRef.current;
+    const content = activeReadingContentRef.current;
+    if (path && content !== null && renderedDisplayContentRef.current?.path !== path) {
+      renderedDisplayContentRef.current = { path, content };
+    }
+    renderedEditingActiveRef.current = true;
+    setRenderedEditingActive(true);
+  }, []);
   const canUseFocusImmersive = selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external';
   const isFocusedWritingMode = canUseFocusImmersive && !isFullScreen && sidebarCollapsed && contentMode === 'markdown';
   const bookmarksFullscreenChromeActive = isBookmarksCanvasChromeActive({
@@ -2232,16 +2638,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, []);
 
-  useEffect(() => {
-    const syncRenderedEditClickMode = () => setRenderedEditClickMode(restoreRenderedEditClickMode(localStorage));
-    window.addEventListener('storage', syncRenderedEditClickMode);
-    window.addEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
-    return () => {
-      window.removeEventListener('storage', syncRenderedEditClickMode);
-      window.removeEventListener(RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, syncRenderedEditClickMode);
-    };
-  }, []);
-
   // Check mute status on mount
   useEffect(() => {
     window.librarianAPI?.isMutedForToday().then((muted) => {
@@ -2482,6 +2878,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'wiki' ? wikiSelectedPage :
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
+  const activeReadingPath = activeReading?.path ?? null;
+  const latestRenderedContent = latestRenderedContentRef.current;
+  const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
+    ? latestRenderedContent.content
+    : activeReading?.content ?? null;
+  activeReadingPathRef.current = activeReadingPath;
+  activeReadingContentRef.current = activeReadingContent;
+  const frozenRenderedDisplayContent = contentMode === 'rendered'
+    && renderedEditingActive
+    && activeReadingPath
+    && renderedDisplayContentRef.current?.path === activeReadingPath
+    ? renderedDisplayContentRef.current.content
+    : null;
+  const renderedDisplayReadingContent = frozenRenderedDisplayContent ?? activeReadingContent;
   const activeTitlePath =
     activeReading && (selectedItemType === 'wiki' || selectedItemType === 'external')
       ? activeReading.path
@@ -2634,6 +3044,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     if (options.focusBody) focusMarkdownBody();
   }, [
+    activateRenderedEditing,
     activeReading,
     activeTitlePath,
     focusMarkdownBody,
@@ -2649,6 +3060,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     void commitTitleEdit();
   }, [activeTitlePath, commitTitleEdit, editingTitlePath]);
 
+  const rememberSavedDocumentContent = useCallback((
+    targetPath: string | null,
+    content: string,
+    version: DocumentVersion | null,
+  ) => {
+    if (targetPath) {
+      latestRenderedContentRef.current = { path: targetPath, content };
+    }
+    if (activeReadingPathRef.current === targetPath) {
+      activeReadingContentRef.current = content;
+      editContentRef.current = content;
+    }
+    lastSavedContentRef.current = content;
+    if (version) lastSavedVersionRef.current = version;
+  }, []);
+
   const applySavedDocumentState = useCallback((
     targetType: LibrarianSelectedItemType,
     targetPath: string | null,
@@ -2659,6 +3086,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const nextTodoState = splitFrontmatter(content).todoState ?? undefined;
     const versionPatch = version ? { documentVersion: version } : {};
     const mtime = Date.now();
+    rememberSavedDocumentContent(targetPath, content, version);
 
     if (targetType === 'wiki') {
       setWikiSelectedPage((prev) => (prev && prev.path === targetPath
@@ -2689,9 +3117,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }));
     }
 
-    lastSavedContentRef.current = content;
-    if (version) lastSavedVersionRef.current = version;
-  }, [wikiSelectedRelPath]);
+  }, [rememberSavedDocumentContent, wikiSelectedRelPath]);
 
   const resolveSaveConflict = useCallback(async (
     result: DocumentSaveResult,
@@ -2733,6 +3159,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       editContent: editContentRef.current,
       lastSavedContent: lastSavedContentRef.current,
       hasPendingRenderedSave: pendingRenderedSaveRef.current !== null,
+      hasRenderedSaveInFlight: renderedSaveInFlightRef.current > 0,
     })) {
       return false;
     }
@@ -2874,8 +3301,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const markdownDisplay = useMemo(() => {
     if ((selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
-    return splitFrontmatter(activeReading.content);
-  }, [selectedItemType, activeReading]);
+    return splitFrontmatter(renderedDisplayReadingContent ?? activeReading.content);
+  }, [selectedItemType, activeReading, renderedDisplayReadingContent]);
 
   const wikiIndex = useMemo(() => buildWikiIndex([
     ...wikiIndexPages,
@@ -2918,21 +3345,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return rankMarkdownWikiLinkSuggestions(markdownWikiLinkSuggestionItems, markdownWikiLinkCompletion.query);
   }, [markdownWikiLinkCompletion, markdownWikiLinkSuggestionItems]);
 
-  const rawDisplaySourceBody = markdownDisplay ? markdownDisplay.body : (activeReading?.content ?? '');
+  const rawDisplaySourceBody = markdownDisplay ? markdownDisplay.body : (renderedDisplayReadingContent ?? activeReading?.content ?? '');
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
   const displayContent = useMemo(() => {
-    const raw = displaySourceBody;
-    const linked = transformWikiLinks(raw, wikiIndex);
-    return preserveMarkdownBlankLines(normalizeMarkdownCarrotLists(normalizeMarkdownTodoLines(linked)));
+    return getRenderedMarkdownDisplayContent(displaySourceBody, wikiIndex);
   }, [displaySourceBody, wikiIndex]);
   const sourceTaskLinesByRenderedLine = useMemo(() => {
-    return getRenderedTaskLinesByRenderedLine(activeReading?.content ?? '');
-  }, [activeReading?.content]);
-  const renderedDocumentVersionKey = activeReading?.documentVersion
-    ? `${activeReading.path}:${activeReading.documentVersion.size}:${activeReading.documentVersion.sha256}`
-    : activeReading?.path ?? 'empty';
+    return getRenderedTaskLinesByRenderedLine(renderedDisplayReadingContent ?? activeReading?.content ?? '');
+  }, [activeReading?.content, renderedDisplayReadingContent]);
+  const renderedDocumentPathKey = `${activeReading?.path ?? 'empty'}:${renderedDocumentRenderRevision}`;
 
   useEffect(() => {
     if (!active) {
@@ -3012,14 +3435,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
     if (!activeReading) return [];
-    const sourceContent = contentMode === 'markdown' ? editContent : activeReading.content;
+    const sourceContent = contentMode === 'markdown' ? editContent : activeReadingContent ?? activeReading.content;
     return getMarkdownLinkedDocuments(
       activeLinkTarget,
       sourceContent,
       indexedMarkdownLinkRelationDocuments,
       wikiIndex,
     );
-  }, [activeLinkTarget, activeReading, contentMode, editContent, indexedMarkdownLinkRelationDocuments, wikiIndex]);
+  }, [activeLinkTarget, activeReading, activeReadingContent, contentMode, editContent, indexedMarkdownLinkRelationDocuments, wikiIndex]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -3056,14 +3479,91 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, []);
 
+  const restoreRenderedCaretAfterRender = useCallback((
+    stage: string,
+    content: string,
+    caretOffset: number | null,
+  ) => {
+    if (typeof caretOffset !== 'number' || !Number.isFinite(caretOffset)) return;
+    const restore = (phase: 'sync' | 'frame') => {
+      if (contentModeRef.current !== 'rendered' || !renderedEditingActiveRef.current) return;
+      const root = renderedContentRef.current;
+      if (!root) {
+        recordRenderedEditorDebug('caret-restore-after-render-skipped', {
+          stage,
+          phase,
+          reason: 'no-rendered-root',
+          caretOffset,
+        });
+        return;
+      }
+      const activePath = activeReadingPathRef.current;
+      const latestRenderedContent = latestRenderedContentRef.current;
+      if (activePath && latestRenderedContent?.path === activePath && latestRenderedContent.content !== content) {
+        recordRenderedEditorDebug('caret-restore-after-render-skipped', {
+          stage,
+          phase,
+          reason: 'stale-content',
+          caretOffset,
+          latestLength: latestRenderedContent.content.length,
+          restoreContentLength: content.length,
+        });
+        return;
+      }
+      const clampedOffset = Math.max(0, Math.min(content.length, caretOffset));
+      root.focus({ preventScroll: true });
+      const caretGeometry = setRenderedMarkdownSelectionAtOffset(root, content, clampedOffset);
+      const trustedSourceOffset = caretGeometry
+        ? getTrustedRenderedCaretSourceOffset(caretGeometry, clampedOffset)
+        : clampedOffset;
+      restoredRenderedCaretRef.current = caretGeometry
+        ? {
+            content,
+            sourceOffset: trustedSourceOffset,
+            domSourceOffset: caretGeometry.domSourceOffset,
+            approximate: caretGeometry.approximate,
+          }
+        : null;
+      activeRenderedCaretOffsetRef.current = caretGeometry ? trustedSourceOffset : activeRenderedCaretOffsetRef.current;
+      recordRenderedEditorDebug(caretGeometry ? 'caret-restored-after-render' : 'caret-restore-after-render-failed', {
+        stage,
+        phase,
+        caretOffset: clampedOffset,
+        trustedSourceOffset,
+        caretGeometry,
+        selection: getRenderedSelectionDebug(root),
+        cursor: getRenderedCursorDebugState(`${stage}-caret-restored-after-render`),
+      });
+      if (caretGeometry) {
+        scheduleEditorCursorSettledDebug(`rendered-${stage}-${phase}`);
+      }
+    };
+    restore('sync');
+    requestAnimationFrame(() => restore('frame'));
+  }, [getRenderedCursorDebugState, recordRenderedEditorDebug, scheduleEditorCursorSettledDebug]);
+
   const saveRenderedContent = useCallback(async (nextContent: string) => {
-    if (!activeReading) return;
+    if (!activeReading) {
+      recordRenderedEditorDebug('save-skipped', { reason: 'no-active-reading' });
+      return;
+    }
     const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
     const expectedVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetType = selectedItemType;
     const targetPath = activeReading.path;
     const targetTitle = activeReading.title;
-    setSaveStatus('saving');
+    const deferReactState = contentModeRef.current === 'rendered'
+      && renderedEditingActiveRef.current
+      && activeReadingPathRef.current === targetPath;
+    recordRenderedEditorDebug('save-start', {
+      targetType,
+      contentLength: normalizedContent.length,
+      expectedVersion,
+      deferReactState,
+      cursor: getRenderedCursorDebugState('save-start'),
+    });
+    if (!deferReactState) setSaveStatus('saving');
+    renderedSaveInFlightRef.current += 1;
     try {
       let result: DocumentSaveResult | null | undefined;
       let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
@@ -3077,25 +3577,89 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         result = await window.librarianAPI?.saveReading(activeReading.path, normalizedContent, expectedVersion);
         overwrite = (version) => window.librarianAPI?.saveReading(activeReading.path, normalizedContent, version) ?? Promise.resolve(undefined);
       } else {
+        recordRenderedEditorDebug('save-skipped', { reason: 'no-target-path', targetType });
         return;
       }
 
       if (isDocumentSaveConflict(result)) {
+        recordRenderedEditorDebug('save-conflict', { targetType });
         const resolved = await resolveSaveConflict(result, targetType, targetPath, normalizedContent, targetTitle, overwrite);
         setSaveStatus(resolved ? 'saved' : 'idle');
+        recordRenderedEditorDebug('save-conflict-resolved', { resolved });
         return;
       }
       if (!isDocumentSaveOk(result)) throw new Error('save failed');
-      applySavedDocumentState(targetType, targetPath, normalizedContent, getDocumentSaveVersion(result), targetTitle);
+      const caretOffsetAfterSave = activeRenderedCaretOffsetRef.current;
+      const nextVersion = getDocumentSaveVersion(result);
+      if (deferReactState) {
+        rememberSavedDocumentContent(targetPath, normalizedContent, nextVersion);
+        recordRenderedEditorDebug('save-ok', {
+          targetType,
+          nextVersion,
+          deferredReactState: true,
+          cursor: getRenderedCursorDebugState('save-ok-deferred'),
+        });
+        return;
+      }
+      applySavedDocumentState(targetType, targetPath, normalizedContent, nextVersion, targetTitle);
       setEditContent(normalizedContent);
       setSaveStatus('saved');
-    } catch {
-      setSaveStatus('idle');
+      restoreRenderedCaretAfterRender('save-ok', normalizedContent, caretOffsetAfterSave);
+      recordRenderedEditorDebug('save-ok', {
+        targetType,
+        nextVersion,
+        cursor: getRenderedCursorDebugState('save-ok'),
+      });
+    } catch (error) {
+      if (!deferReactState) setSaveStatus('idle');
+      recordRenderedEditorDebug('save-error', {
+        message: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      renderedSaveInFlightRef.current = Math.max(0, renderedSaveInFlightRef.current - 1);
     }
-  }, [activeReading, applySavedDocumentState, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, getRenderedCursorDebugState, recordRenderedEditorDebug, rememberSavedDocumentContent, resolveSaveConflict, restoreRenderedCaretAfterRender, selectedItemType, wikiSelectedRelPath]);
 
-  const applyRenderedContentLocalState = useCallback((nextContent: string) => {
+  const pushRenderedUndoSnapshot = useCallback((
+    content: string,
+    selectionStart?: number,
+    selectionEnd?: number,
+  ) => {
+    const fallbackSelection = activeRenderedCaretOffsetRef.current ?? Math.max(0, Math.min(content.length, content.length));
+    const start = typeof selectionStart === 'number' ? selectionStart : fallbackSelection;
+    const end = typeof selectionEnd === 'number' ? selectionEnd : start;
+    renderedEditUndoStackRef.current = [
+      ...renderedEditUndoStackRef.current,
+      {
+        value: content,
+        selectionStart: Math.max(0, Math.min(start, content.length)),
+        selectionEnd: Math.max(0, Math.min(end, content.length)),
+      },
+    ].slice(-RENDERED_EDITOR_HISTORY_LIMIT);
+    renderedEditRedoStackRef.current = [];
+  }, []);
+
+  const applyRenderedContentLocalState = useCallback((
+    nextContent: string,
+    options: { updateRenderedDisplayContent?: boolean } = {},
+  ) => {
     const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
+    const activePath = activeReadingPathRef.current;
+    recordRenderedEditorDebug('local-content-state-apply', {
+      targetType: selectedItemType,
+      activePath,
+      nextLength: normalizedContent.length,
+      updateRenderedDisplayContent: options.updateRenderedDisplayContent === true,
+      cursorBeforeApply: getRenderedCursorDebugState('local-content-state-before-apply'),
+    });
+    if (activePath) {
+      latestRenderedContentRef.current = { path: activePath, content: normalizedContent };
+      if (options.updateRenderedDisplayContent) {
+        renderedDisplayContentRef.current = { path: activePath, content: normalizedContent };
+      }
+    }
+    activeReadingContentRef.current = normalizedContent;
+    editContentRef.current = normalizedContent;
     if (selectedItemType === 'wiki') {
       setWikiSelectedPage((prev) => prev ? { ...prev, content: normalizedContent } : prev);
     } else if (selectedItemType === 'external') {
@@ -3104,7 +3668,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setSelectedReading((prev) => prev ? { ...prev, content: normalizedContent } : prev);
     }
     setEditContent(normalizedContent);
-  }, [selectedItemType]);
+  }, [getRenderedCursorDebugState, recordRenderedEditorDebug, selectedItemType]);
 
   const flushPendingRenderedSave = useCallback(() => {
     if (renderedSaveTimerRef.current !== null) {
@@ -3113,8 +3677,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     const pending = pendingRenderedSaveRef.current;
     pendingRenderedSaveRef.current = null;
+    if (pending) recordRenderedEditorDebug('save-flush');
     pending?.();
-  }, []);
+  }, [recordRenderedEditorDebug]);
 
   const requestRenderedContentSave = useCallback((nextContent: string) => {
     if (renderedSaveTimerRef.current !== null) {
@@ -3123,20 +3688,385 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     pendingRenderedSaveRef.current = () => {
       void saveRenderedContent(nextContent);
     };
+    recordRenderedEditorDebug('save-scheduled', {
+      contentLength: nextContent.length,
+      delayMs: 400,
+      cursor: getRenderedCursorDebugState('save-scheduled'),
+    });
     renderedSaveTimerRef.current = window.setTimeout(() => {
       renderedSaveTimerRef.current = null;
       const pending = pendingRenderedSaveRef.current;
       pendingRenderedSaveRef.current = null;
+      if (pending) recordRenderedEditorDebug('save-timer-fired');
       pending?.();
     }, 400);
-  }, [saveRenderedContent]);
+  }, [getRenderedCursorDebugState, recordRenderedEditorDebug, saveRenderedContent]);
 
-  const applyRenderedMarkdownEdit = useCallback((edit: MarkdownTextEdit) => {
-    applyRenderedContentLocalState(edit.nextValue);
+  const applyRenderedMarkdownEdit = useCallback((
+    edit: MarkdownTextEdit,
+    options: RenderedMarkdownEditOptions = {},
+  ) => {
+    const previousContent = options.previousContent ?? activeReadingContentRef.current ?? activeReading?.content;
+    if (options.pushUndo !== false && previousContent !== undefined) {
+      pushRenderedUndoSnapshot(previousContent);
+    }
+    recordRenderedEditorDebug('format-edit-applied', {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+      nextLength: edit.nextValue.length,
+      updateRenderedDisplayContent: options.updateRenderedDisplayContent !== false,
+    });
+    pendingRenderedCaretOffsetRef.current = edit.selectionEnd;
+    activeRenderedCaretOffsetRef.current = edit.selectionEnd;
+    flushSync(() => {
+      applyRenderedContentLocalState(edit.nextValue, {
+        updateRenderedDisplayContent: options.updateRenderedDisplayContent !== false,
+      });
+    });
+    if (!options.preserveCompletion) setMarkdownWikiLinkCompletion(null);
     setRenderedSelectionToolbar(null);
-    (renderedContentRef.current?.ownerDocument.getSelection() ?? window.getSelection())?.removeAllRanges();
     requestRenderedContentSave(edit.nextValue);
-  }, [applyRenderedContentLocalState, requestRenderedContentSave]);
+    scheduleEditorCursorSettledDebug('rendered-format-edit');
+  }, [
+    activeReading?.content,
+    applyRenderedContentLocalState,
+    pushRenderedUndoSnapshot,
+    recordRenderedEditorDebug,
+    requestRenderedContentSave,
+    scheduleEditorCursorSettledDebug,
+  ]);
+
+  const applyRenderedMarkdownTypingEdit = useCallback((
+    edit: MarkdownTextEdit,
+    options: RenderedMarkdownEditOptions = {},
+  ) => {
+    if (options.pushUndo !== false) {
+      const previousContent = options.previousContent ?? activeReadingContentRef.current ?? activeReading?.content;
+      if (previousContent !== undefined) pushRenderedUndoSnapshot(previousContent);
+    }
+    recordRenderedEditorDebug('typing-edit-applied', {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+      nextLength: edit.nextValue.length,
+      updateRenderedDisplayContent: options.updateRenderedDisplayContent !== false,
+      cursorBeforeApply: getRenderedCursorDebugState('typing-edit-before-apply'),
+    });
+    pendingRenderedCaretOffsetRef.current = edit.selectionStart;
+    activeRenderedCaretOffsetRef.current = edit.selectionStart;
+    flushSync(() => {
+      applyRenderedContentLocalState(edit.nextValue, {
+        updateRenderedDisplayContent: options.updateRenderedDisplayContent !== false,
+      });
+    });
+    if (!options.preserveCompletion) setMarkdownWikiLinkCompletion(null);
+    setRenderedSelectionToolbar(null);
+    requestRenderedContentSave(edit.nextValue);
+    scheduleEditorCursorSettledDebug('rendered-input');
+  }, [
+    activeReading?.content,
+    applyRenderedContentLocalState,
+    getRenderedCursorDebugState,
+    pushRenderedUndoSnapshot,
+    recordRenderedEditorDebug,
+    requestRenderedContentSave,
+    scheduleEditorCursorSettledDebug,
+  ]);
+
+  const restoreRenderedProgrammaticHistory = useCallback((direction: 'undo' | 'redo'): boolean => {
+    const fromStack = direction === 'undo' ? renderedEditUndoStackRef.current : renderedEditRedoStackRef.current;
+    const snapshot = fromStack.pop();
+    const currentContent = activeReadingContentRef.current ?? activeReading?.content;
+    if (!snapshot || currentContent === undefined) return false;
+
+    const currentSelection = activeRenderedCaretOffsetRef.current ?? Math.max(0, Math.min(currentContent.length, currentContent.length));
+    const toStack = direction === 'undo' ? renderedEditRedoStackRef : renderedEditUndoStackRef;
+    toStack.current = [
+      ...toStack.current,
+      {
+        value: currentContent,
+        selectionStart: currentSelection,
+        selectionEnd: currentSelection,
+      },
+    ].slice(-RENDERED_EDITOR_HISTORY_LIMIT);
+
+    pendingRenderedCaretOffsetRef.current = snapshot.selectionEnd;
+    activeRenderedCaretOffsetRef.current = snapshot.selectionEnd;
+    restoredRenderedCaretRef.current = null;
+    setMarkdownWikiLinkCompletion(null);
+    setRenderedSelectionToolbar(null);
+    recordRenderedEditorDebug(`history-${direction}-applied`, {
+      selectionStart: snapshot.selectionStart,
+      selectionEnd: snapshot.selectionEnd,
+      nextLength: snapshot.value.length,
+    });
+    flushSync(() => {
+      applyRenderedContentLocalState(snapshot.value, { updateRenderedDisplayContent: true });
+    });
+    requestRenderedContentSave(snapshot.value);
+    scheduleEditorCursorSettledDebug(`rendered-history-${direction}`);
+    return true;
+  }, [
+    activeReading?.content,
+    applyRenderedContentLocalState,
+    recordRenderedEditorDebug,
+    requestRenderedContentSave,
+    scheduleEditorCursorSettledDebug,
+  ]);
+
+  useLayoutEffect(() => {
+    if (contentMode !== 'rendered' || !renderedEditingActive || !activeReading) return;
+    const caretOffset = pendingRenderedCaretOffsetRef.current;
+    if (caretOffset === null) return;
+    pendingRenderedCaretOffsetRef.current = null;
+    const root = renderedContentRef.current;
+    if (!root) {
+      recordRenderedEditorDebug('caret-restore-skipped', { reason: 'no-rendered-root', caretOffset });
+      return;
+    }
+    recordRenderedEditorDebug('caret-restore-start', {
+      caretOffset,
+      cursor: getRenderedCursorDebugState('caret-restore-start'),
+    });
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+    root.focus({ preventScroll: true });
+    const caretGeometry = setRenderedMarkdownSelectionAtOffset(root, sourceContent, caretOffset);
+    const trustedSourceOffset = caretGeometry
+      ? getTrustedRenderedCaretSourceOffset(caretGeometry, caretOffset)
+      : caretOffset;
+    restoredRenderedCaretRef.current = caretGeometry
+      ? {
+          content: sourceContent,
+          sourceOffset: trustedSourceOffset,
+          domSourceOffset: caretGeometry.domSourceOffset,
+          approximate: caretGeometry.approximate,
+        }
+      : null;
+    activeRenderedCaretOffsetRef.current = caretGeometry ? trustedSourceOffset : activeRenderedCaretOffsetRef.current;
+    recordRenderedEditorDebug(caretGeometry ? 'caret-restored' : 'caret-restore-failed', {
+      caretOffset,
+      trustedSourceOffset,
+      caretGeometry,
+      selection: getRenderedSelectionDebug(root),
+      cursor: getRenderedCursorDebugState(caretGeometry ? 'caret-restored' : 'caret-restore-failed'),
+    });
+  }, [activeReading?.content, contentMode, getRenderedCursorDebugState, recordRenderedEditorDebug, renderedEditingActive]);
+
+  const syncRenderedSourceCaretFromSelection = useCallback((stage: string) => {
+    const root = renderedContentRef.current;
+    if (!activeReading || !root) return;
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+    const selection = root.ownerDocument.getSelection();
+    const selectionDebug = getRenderedSelectionDebug(root);
+    recordRenderedEditorDebug('caret-source-sync-observed', {
+      stage,
+      cursor: getRenderedCursorDebugState(`${stage}-observed`),
+    });
+    if (
+      selectionDebug.rangeCount !== 1
+      || selectionDebug.isCollapsed !== true
+    ) {
+      recordRenderedEditorDebug('caret-source-sync-skipped', {
+        stage,
+        reason: 'selection-not-collapsed',
+        selection: selectionDebug,
+        cursor: getRenderedCursorDebugState(`${stage}-not-collapsed`),
+      });
+      return;
+    }
+    const range = getRenderedMarkdownRangeFromSelection(sourceContent, root, selection);
+    if (!range || range.start !== range.end) {
+      recordRenderedEditorDebug('caret-source-sync-skipped', {
+        stage,
+        reason: 'selection-not-mappable',
+        selection: selectionDebug,
+        mappedSelection: range,
+        cursor: getRenderedCursorDebugState(`${stage}-not-mappable`),
+      });
+      return;
+    }
+    const restoredCaret = restoredRenderedCaretRef.current;
+    const selectionIsElementBoundary = isRenderedSelectionElementBoundary(selectionDebug);
+    const activeSourceOffset = activeRenderedCaretOffsetRef.current;
+    if (
+      selectionIsElementBoundary
+      && typeof activeSourceOffset === 'number'
+      && activeSourceOffset !== range.start
+    ) {
+      const caretGeometry = setRenderedMarkdownSelectionAtOffset(root, sourceContent, activeSourceOffset);
+      restoredRenderedCaretRef.current = caretGeometry
+        ? {
+            content: sourceContent,
+            sourceOffset: activeSourceOffset,
+            domSourceOffset: caretGeometry.domSourceOffset,
+            approximate: caretGeometry.approximate,
+          }
+        : null;
+      recordRenderedEditorDebug('caret-source-sync-skipped', {
+        stage,
+        reason: 'element-boundary-preserve-active-caret',
+        sourceOffset: activeSourceOffset,
+        selectionMappedOffset: range.start,
+        selection: selectionDebug,
+        caretGeometry,
+        cursor: getRenderedCursorDebugState(`${stage}-element-boundary-preserve-active-caret`),
+      });
+      return;
+    }
+    if (selectionIsElementBoundary && typeof activeSourceOffset !== 'number') {
+      recordRenderedEditorDebug('caret-source-sync-skipped', {
+        stage,
+        reason: 'element-boundary-no-trusted-caret',
+        selectionMappedOffset: range.start,
+        selection: selectionDebug,
+        cursor: getRenderedCursorDebugState(`${stage}-element-boundary-no-trusted-caret`),
+      });
+      return;
+    }
+    if (
+      restoredCaret?.approximate
+      && restoredCaret.content === sourceContent
+      && restoredCaret.sourceOffset !== range.start
+    ) {
+      activeRenderedCaretOffsetRef.current = range.start;
+      restoredRenderedCaretRef.current = null;
+      recordRenderedEditorDebug('caret-source-synced', {
+        stage,
+        reason: 'programmatic-approximate-caret-normalized',
+        sourceOffset: range.start,
+        previousSourceOffset: restoredCaret.sourceOffset,
+        selection: selectionDebug,
+        cursor: getRenderedCursorDebugState(`${stage}-programmatic-approximate-caret-normalized`),
+      });
+      return;
+    }
+    activeRenderedCaretOffsetRef.current = range.start;
+    restoredRenderedCaretRef.current = null;
+    recordRenderedEditorDebug('caret-source-synced', {
+      stage,
+      sourceOffset: range.start,
+      selection: selectionDebug,
+      cursor: getRenderedCursorDebugState(`${stage}-synced`),
+    });
+  }, [activeReading, getRenderedCursorDebugState, recordRenderedEditorDebug]);
+
+  const ensureRenderedCaretInsideRoot = useCallback((stage: string): number | null => {
+    const root = renderedContentRef.current;
+    if (!activeReading || !root) return null;
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+    const selectionDebug = getRenderedSelectionDebug(root);
+    const selectionRange = getRenderedMarkdownRangeFromSelection(
+      sourceContent,
+      root,
+      root.ownerDocument.getSelection(),
+    );
+    const selectionIsElementBoundary = isRenderedSelectionElementBoundary(selectionDebug);
+    if (selectionRange && selectionRange.start === selectionRange.end && !selectionIsElementBoundary) {
+      activeRenderedCaretOffsetRef.current = selectionRange.start;
+      return selectionRange.start;
+    }
+
+    const activeSourceOffset = activeRenderedCaretOffsetRef.current;
+    const sourceOffset = getRenderedCaretEnsureSourceOffset({
+      activeSourceOffset,
+      selectionRange,
+      contentLength: sourceContent.length,
+    });
+    const sourceOffsetReason = typeof activeSourceOffset === 'number'
+      ? 'active-caret'
+      : selectionRange && selectionRange.start === selectionRange.end
+        ? 'mapped-selection'
+        : 'document-end';
+    root.focus({ preventScroll: true });
+    const caretGeometry = setRenderedMarkdownSelectionAtOffset(root, sourceContent, sourceOffset);
+    if (!caretGeometry) {
+      recordRenderedEditorDebug('caret-ensure-failed', {
+        stage,
+        sourceOffset,
+        sourceOffsetReason,
+        selectionMappedOffset: selectionRange?.start ?? null,
+        previousSelection: selectionDebug,
+        cursor: getRenderedCursorDebugState(`${stage}-ensure-failed`),
+      });
+      return null;
+    }
+    activeRenderedCaretOffsetRef.current = sourceOffset;
+    restoredRenderedCaretRef.current = {
+      content: sourceContent,
+      sourceOffset,
+      domSourceOffset: caretGeometry.domSourceOffset,
+      approximate: caretGeometry.approximate,
+    };
+    recordRenderedEditorDebug('caret-ensured', {
+      stage,
+      sourceOffset,
+      sourceOffsetReason,
+      selectionMappedOffset: selectionRange?.start ?? null,
+      previousSelection: selectionDebug,
+      caretGeometry,
+      selection: getRenderedSelectionDebug(root),
+      cursor: getRenderedCursorDebugState(`${stage}-ensured`),
+    });
+    return sourceOffset;
+  }, [activeReading, getRenderedCursorDebugState, recordRenderedEditorDebug]);
+
+  const repairRenderedBoundaryCaretToActive = useCallback((
+    stage: string,
+    key?: string,
+    code?: string,
+  ): boolean => {
+    const root = renderedContentRef.current;
+    const activeSourceOffset = activeRenderedCaretOffsetRef.current;
+    if (
+      !activeReading
+      || contentModeRef.current !== 'rendered'
+      || !root
+      || typeof activeSourceOffset !== 'number'
+      || !Number.isFinite(activeSourceOffset)
+    ) {
+      return false;
+    }
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+
+    const previousSelection = getRenderedSelectionDebug(root);
+    if (!shouldUseRenderedSourceCaretFallback(previousSelection)) return false;
+
+    const selectionRange = getRenderedMarkdownRangeFromSelection(
+      sourceContent,
+      root,
+      root.ownerDocument.getSelection(),
+    );
+    if (selectionRange?.start === activeSourceOffset && selectionRange.end === activeSourceOffset) {
+      return false;
+    }
+
+    root.focus({ preventScroll: true });
+    const caretGeometry = setRenderedMarkdownSelectionAtOffset(root, sourceContent, activeSourceOffset);
+    const trustedSourceOffset = caretGeometry
+      ? getTrustedRenderedCaretSourceOffset(caretGeometry, activeSourceOffset)
+      : activeSourceOffset;
+    restoredRenderedCaretRef.current = caretGeometry
+      ? {
+          content: sourceContent,
+          sourceOffset: trustedSourceOffset,
+          domSourceOffset: caretGeometry.domSourceOffset,
+          approximate: caretGeometry.approximate,
+        }
+      : null;
+    activeRenderedCaretOffsetRef.current = caretGeometry ? trustedSourceOffset : activeSourceOffset;
+    recordRenderedEditorDebug(caretGeometry ? 'caret-boundary-repaired' : 'caret-boundary-repair-failed', {
+      stage,
+      key,
+      code,
+      sourceOffset: activeSourceOffset,
+      trustedSourceOffset,
+      previousSelectionMappedOffset: selectionRange?.start ?? null,
+      previousSelection,
+      selection: getRenderedSelectionDebug(root),
+      caretGeometry,
+      cursor: getRenderedCursorDebugState(`${stage}-boundary-repaired`),
+    });
+    return !!caretGeometry;
+  }, [activeReading, getRenderedCursorDebugState, recordRenderedEditorDebug]);
 
   const updateRenderedSelectionToolbar = useCallback(() => {
     if (!RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) {
@@ -3161,7 +4091,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     const rect = range.getBoundingClientRect();
-    const toolbar = getRenderedMarkdownSelectionToolbarState(activeReading.content, selection.toString(), rect);
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+    const toolbar = getRenderedMarkdownSelectionToolbarState(sourceContent, selection.toString(), rect);
     if (!toolbar) {
       setRenderedSelectionToolbar(null);
       return;
@@ -3172,26 +4103,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const applyRenderedSelectionFormat = useCallback((action: RenderedMarkdownFormatAction) => {
     if (!activeReading || !renderedSelectionToolbar) return;
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
     const edit = getRenderedMarkdownSelectionFormatEdit(
-      activeReading.content,
+      sourceContent,
       renderedSelectionToolbar.start,
       renderedSelectionToolbar.end,
       action,
     );
     if (!edit) return;
-    applyRenderedMarkdownEdit(edit);
+    applyRenderedMarkdownEdit(edit, { previousContent: sourceContent });
   }, [activeReading, applyRenderedMarkdownEdit, renderedSelectionToolbar]);
 
   useEffect(() => {
-    if (!RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) return;
     if (contentMode !== 'rendered') return;
     const selectionDocument = renderedContentRef.current?.ownerDocument ?? document;
     let frame: number | null = null;
     const updateAfterSelectionChange = () => {
+      syncRenderedSourceCaretFromSelection('selectionchange');
       if (frame !== null) cancelAnimationFrame(frame);
       frame = requestAnimationFrame(() => {
         frame = null;
-        updateRenderedSelectionToolbar();
+        if (RENDERED_MARKDOWN_INLINE_FORMATTING_ENABLED) {
+          updateRenderedSelectionToolbar();
+        }
       });
     };
     selectionDocument.addEventListener('selectionchange', updateAfterSelectionChange);
@@ -3199,11 +4133,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (frame !== null) cancelAnimationFrame(frame);
       selectionDocument.removeEventListener('selectionchange', updateAfterSelectionChange);
     };
-  }, [contentMode, updateRenderedSelectionToolbar]);
+  }, [contentMode, syncRenderedSourceCaretFromSelection, updateRenderedSelectionToolbar]);
 
   useEffect(() => {
     setRenderedSelectionToolbar(null);
   }, [activeReading?.path, contentMode]);
+
+  useEffect(() => {
+    clearRenderedEditingState('path-or-mode-changed');
+    renderedEditUndoStackRef.current = [];
+    renderedEditRedoStackRef.current = [];
+  }, [activeReading?.path, clearRenderedEditingState, contentMode]);
 
   useEffect(() => {
     return () => {
@@ -3213,17 +4153,525 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const toggleRenderedTask = useCallback((lineIndex: number, checked: boolean) => {
     if (!activeReading) return;
-    const nextContent = toggleMarkdownTaskLineAtIndex(activeReading.content, lineIndex, checked);
-    if (nextContent === activeReading.content) return;
-    applyRenderedContentLocalState(nextContent);
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+    const nextContent = toggleMarkdownTaskLineAtIndex(sourceContent, lineIndex, checked);
+    if (nextContent === sourceContent) return;
+    applyRenderedContentLocalState(nextContent, { updateRenderedDisplayContent: true });
     requestRenderedContentSave(nextContent);
   }, [activeReading, applyRenderedContentLocalState, requestRenderedContentSave]);
+
+  const applyRenderedNativeInput = useCallback((
+    inputType: string,
+    data?: string | null,
+  ): boolean => {
+    if (!activeReading || contentMode !== 'rendered') {
+      recordRenderedEditorDebug('edit-skipped', {
+        inputType,
+        reason: 'inactive',
+        hasActiveReading: !!activeReading,
+        contentMode,
+      });
+      return false;
+    }
+    const root = renderedContentRef.current;
+    if (!root) {
+      recordRenderedEditorDebug('edit-skipped', { inputType, reason: 'no-rendered-root' });
+      return false;
+    }
+    const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+    const selection = getRenderedSelectionDebug(root);
+    const nativeSelection = root.ownerDocument.getSelection();
+    const selectionRange = getRenderedMarkdownRangeFromSelection(
+      sourceContent,
+      root,
+      nativeSelection,
+    );
+    const selectionEdit = getRenderedMarkdownInputEditFromSelection(
+      sourceContent,
+      root,
+      nativeSelection,
+      inputType,
+      data,
+    );
+    const activeSourceOffset = activeRenderedCaretOffsetRef.current;
+    const restoredCaret = restoredRenderedCaretRef.current;
+    const shouldUseRestoredCaret = !!(
+      restoredCaret?.approximate
+      && restoredCaret.content === sourceContent
+      && activeSourceOffset === restoredCaret.sourceOffset
+      && selection.isCollapsed === true
+    );
+    const shouldUseSourceOffsetEdit = activeSourceOffset !== null && (
+      shouldUseRenderedSourceCaretFallback(selection)
+      || shouldUseRestoredCaret
+    );
+    const sourceOffsetEdit = shouldUseSourceOffsetEdit
+      ? getRenderedMarkdownInputEditAtSourceOffset(sourceContent, activeSourceOffset, inputType, data)
+      : null;
+    const selectionMappedCaretOffset = selectionRange && selectionRange.start === selectionRange.end
+      ? selectionRange.start
+      : null;
+    const shouldPreferSourceOffsetEdit = !!(
+      sourceOffsetEdit
+      && (
+        shouldUseRestoredCaret
+        || (
+          activeSourceOffset !== null
+          && selectionMappedCaretOffset !== null
+          && selectionMappedCaretOffset !== activeSourceOffset
+          && shouldUseRenderedSourceCaretFallback(selection)
+        )
+      )
+    );
+    const edit = shouldPreferSourceOffsetEdit
+      ? sourceOffsetEdit ?? selectionEdit
+      : selectionEdit ?? sourceOffsetEdit;
+    if (!edit) {
+      recordRenderedEditorDebug('edit-skipped', {
+        inputType,
+        reason: 'selection-not-mappable',
+        dataLength: data?.length ?? 0,
+        activeSourceOffset,
+        restoredCaret: getRestoredRenderedCaretDebug(restoredCaret),
+        selection,
+        cursor: getRenderedCursorDebugState('edit-skipped-selection-not-mappable'),
+      });
+      return false;
+    }
+    const autoCloseEdit = inputType === 'insertText' && data === '['
+      ? getMarkdownWikiLinkAutoCloseEdit(edit.nextValue, edit.selectionStart, edit.selectionEnd)
+      : null;
+    const transactionEdit = autoCloseEdit ?? edit;
+    const usedSourceOffsetEdit = !!sourceOffsetEdit && edit === sourceOffsetEdit;
+    recordRenderedEditorDebug(usedSourceOffsetEdit ? 'edit-mapped-from-source-offset' : 'edit-mapped', {
+      inputType,
+      dataLength: data?.length ?? 0,
+      autoClosedWikiLink: !!autoCloseEdit,
+      activeSourceOffset,
+      selectionMappedOffset: selectionRange?.start ?? null,
+      selectionRangeEnd: selectionRange?.end ?? null,
+      selectionEditCaretOffset: selectionEdit?.selectionStart ?? null,
+      sourceOffsetReason: usedSourceOffsetEdit
+        ? shouldUseRestoredCaret
+          ? 'programmatic-approximate-caret'
+          : selectionMappedCaretOffset !== activeSourceOffset
+            ? 'trusted-caret-over-selection-fallback'
+            : 'selection-fallback'
+        : null,
+      restoredCaret: getRestoredRenderedCaretDebug(restoredCaret),
+      selection,
+      selectionStart: transactionEdit.selectionStart,
+      selectionEnd: transactionEdit.selectionEnd,
+      nextLength: transactionEdit.nextValue.length,
+      cursor: getRenderedCursorDebugState(usedSourceOffsetEdit ? 'edit-mapped-from-source-offset' : 'edit-mapped'),
+    });
+    applyRenderedMarkdownTypingEdit(transactionEdit, { previousContent: sourceContent });
+    return true;
+  }, [activeReading, applyRenderedMarkdownTypingEdit, contentMode, getRenderedCursorDebugState, recordRenderedEditorDebug]);
+
+  const handleRenderedKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      event.stopPropagation();
+      clearRenderedEditingState('escape');
+      renderedContentRef.current?.blur();
+      return;
+    }
+
+    if (
+      event.key.toLowerCase() === 'z'
+      && event.metaKey
+      && !event.altKey
+      && !event.ctrlKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      activateRenderedEditing();
+      restoreRenderedProgrammaticHistory(event.shiftKey ? 'redo' : 'undo');
+      return;
+    }
+
+    if (
+      event.key.toLowerCase() === 'y'
+      && event.metaKey
+      && !event.shiftKey
+      && !event.altKey
+      && !event.ctrlKey
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      activateRenderedEditing();
+      restoreRenderedProgrammaticHistory('redo');
+      return;
+    }
+
+    repairRenderedBoundaryCaretToActive('keydown-start', event.key, event.code);
+
+    const formattingKind = getMarkdownFormattingShortcut(event);
+    if (formattingKind) {
+      event.preventDefault();
+      event.stopPropagation();
+      const root = renderedContentRef.current;
+      const selection = root?.ownerDocument.getSelection() ?? null;
+      if (!activeReading || !root) {
+        recordRenderedEditorDebug('keydown-format-skipped', {
+          key: event.key,
+          code: event.code,
+          reason: 'inactive',
+          formattingKind,
+        });
+        return;
+      }
+      const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+      const mappedRange = selection && selection.rangeCount > 0
+        ? getRenderedMarkdownRangeFromSelection(sourceContent, root, selection)
+        : null;
+      const fallbackOffset = mappedRange
+        ? null
+        : ensureRenderedCaretInsideRoot('format-shortcut');
+      const editRange = mappedRange ?? (
+        fallbackOffset === null ? null : { start: fallbackOffset, end: fallbackOffset }
+      );
+      const edit = editRange
+        ? getMarkdownFormattingEdit(sourceContent, editRange.start, editRange.end, formattingKind)
+        : null;
+      if (!edit) {
+        recordRenderedEditorDebug('keydown-format-skipped', {
+          key: event.key,
+          code: event.code,
+          reason: 'selection-not-mappable',
+          formattingKind,
+          selection: getRenderedSelectionDebug(root),
+        });
+        return;
+      }
+      applyRenderedMarkdownEdit(edit, { previousContent: sourceContent });
+      recordRenderedEditorDebug('keydown-format-applied', {
+        key: event.key,
+        code: event.code,
+        formattingKind,
+      });
+      return;
+    }
+
+    const keyInputType = getRenderedBeforeInputType({
+      key: event.key,
+      altKey: event.altKey,
+      metaKey: event.metaKey,
+      shiftKey: event.shiftKey,
+    });
+    const keyData = keyInputType === 'insertText' ? event.key : null;
+    const root = renderedContentRef.current;
+    let selection = root ? getRenderedSelectionDebug(root) : null;
+    if (
+      activeReading
+      && contentMode === 'rendered'
+      && root
+      && selection?.inRoot === false
+    ) {
+      ensureRenderedCaretInsideRoot('keydown-before-map');
+      selection = getRenderedSelectionDebug(root);
+    }
+    let shouldHandleSelection = selection;
+    let selectionMappedOffsetBeforeRepair: number | null = null;
+    if (activeReading && root && selection) {
+      const selectionRangeBeforeRepair = getRenderedMarkdownRangeFromSelection(
+        activeReadingContentRef.current ?? activeReading.content,
+        root,
+        root.ownerDocument.getSelection(),
+      );
+      selectionMappedOffsetBeforeRepair = selectionRangeBeforeRepair && selectionRangeBeforeRepair.start === selectionRangeBeforeRepair.end
+        ? selectionRangeBeforeRepair.start
+        : null;
+    }
+    const activeSourceOffsetBeforeKey = activeRenderedCaretOffsetRef.current;
+    if (
+      keyInputType
+      && activeReading
+      && contentMode === 'rendered'
+      && root
+      && selection
+      && shouldUseRenderedSourceCaretFallback(selection)
+      && typeof activeSourceOffsetBeforeKey === 'number'
+      && Number.isFinite(activeSourceOffsetBeforeKey)
+      && selectionMappedOffsetBeforeRepair !== activeSourceOffsetBeforeKey
+    ) {
+      const previousSelection = selection;
+      const sourceContent = activeReadingContentRef.current ?? activeReading.content;
+      const caretGeometry = setRenderedMarkdownSelectionAtOffset(root, sourceContent, activeSourceOffsetBeforeKey);
+      const trustedSourceOffset = caretGeometry
+        ? getTrustedRenderedCaretSourceOffset(caretGeometry, activeSourceOffsetBeforeKey)
+        : activeSourceOffsetBeforeKey;
+      restoredRenderedCaretRef.current = caretGeometry
+        ? {
+            content: sourceContent,
+            sourceOffset: trustedSourceOffset,
+            domSourceOffset: caretGeometry.domSourceOffset,
+            approximate: caretGeometry.approximate,
+          }
+        : null;
+      activeRenderedCaretOffsetRef.current = caretGeometry ? trustedSourceOffset : activeSourceOffsetBeforeKey;
+      selection = getRenderedSelectionDebug(root);
+      shouldHandleSelection = previousSelection;
+      recordRenderedEditorDebug(caretGeometry ? 'caret-repaired-before-keydown' : 'caret-repair-before-keydown-failed', {
+        key: event.key,
+        code: event.code,
+        inputType: keyInputType,
+        sourceOffset: activeSourceOffsetBeforeKey,
+        trustedSourceOffset,
+        previousSelectionMappedOffset: selectionMappedOffsetBeforeRepair,
+        previousSelection,
+        selection,
+        caretGeometry,
+        cursor: getRenderedCursorDebugState('keydown-before-map-repaired'),
+      });
+    }
+    const shouldHandleEdit = !!(
+      keyInputType
+      && activeReading
+      && contentMode === 'rendered'
+      && root
+      && shouldHandleSelection
+      && shouldHandleRenderedKeyDownEdit({
+        inputType: keyInputType,
+        selection: shouldHandleSelection,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        altKey: event.altKey,
+        isComposing: event.nativeEvent.isComposing,
+      })
+    );
+    lastRenderedKeyEventRef.current = {
+      key: event.key,
+      code: event.code,
+      inputType: keyInputType,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      shiftKey: event.shiftKey,
+      isComposing: event.nativeEvent.isComposing,
+      shouldHandleEdit,
+      defaultPrevented: event.defaultPrevented,
+      selection,
+    };
+    if (
+      keyInputType
+      && activeReading
+      && contentMode === 'rendered'
+      && root
+      && selection
+      && shouldHandleEdit
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      lastRenderedKeyDownRef.current = null;
+      activateRenderedEditing();
+      recordRenderedEditorDebug('keydown-edit-intent', {
+        key: event.key,
+        code: event.code,
+        inputType: keyInputType,
+        source: keyInputType === 'insertText'
+          ? 'boundary-fallback'
+          : isRenderedDeleteInputType(keyInputType)
+            ? 'delete-key'
+            : 'editing-key',
+        metaKey: event.metaKey,
+        altKey: event.altKey,
+        shiftKey: event.shiftKey,
+        activeSourceOffset: activeRenderedCaretOffsetRef.current,
+        selection,
+      });
+      const applied = applyRenderedNativeInput(keyInputType, keyData);
+      if (applied) {
+        suppressNextRenderedBeforeInputRef.current = {
+          inputType: keyInputType,
+          data: keyData,
+          timestamp: Date.now(),
+        };
+      }
+      recordRenderedEditorDebug(applied ? 'keydown-edit-applied' : 'keydown-edit-not-applied', {
+        key: event.key,
+        code: event.code,
+        inputType: keyInputType,
+      });
+      return;
+    }
+
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End', 'PageUp', 'PageDown'].includes(event.key)) {
+      restoredRenderedCaretRef.current = null;
+    }
+    lastRenderedKeyDownRef.current = event.key;
+    recordRenderedEditorDebug('keydown-native', {
+      key: event.key,
+      code: event.code,
+      metaKey: event.metaKey,
+      ctrlKey: event.ctrlKey,
+      altKey: event.altKey,
+      isComposing: event.nativeEvent.isComposing,
+    });
+  }, [
+    activeReading,
+    applyRenderedMarkdownEdit,
+    applyRenderedNativeInput,
+    clearRenderedEditingState,
+    contentMode,
+    ensureRenderedCaretInsideRoot,
+    getRenderedCursorDebugState,
+    recordRenderedEditorDebug,
+    repairRenderedBoundaryCaretToActive,
+    restoreRenderedProgrammaticHistory,
+  ]);
+
+  const handleRenderedBeforeInputEvent = useCallback((event: InputEvent & { dataTransfer?: DataTransfer | null }) => {
+    if (!activeReading || contentMode !== 'rendered') return;
+    const fallbackKey = lastRenderedKeyDownRef.current;
+    const data = getRenderedBeforeInputData({
+      data: event.data,
+      dataTransferText: event.dataTransfer?.getData('text/plain') ?? null,
+      fallbackKey,
+    });
+    const inputType = getRenderedBeforeInputType({
+      inputType: event.inputType,
+      data,
+      key: fallbackKey,
+    });
+    lastRenderedKeyDownRef.current = null;
+    const suppressedBeforeInput = suppressNextRenderedBeforeInputRef.current;
+    if (
+      suppressedBeforeInput
+      && Date.now() - suppressedBeforeInput.timestamp < 120
+      && suppressedBeforeInput.inputType === inputType
+      && suppressedBeforeInput.data === data
+    ) {
+      suppressNextRenderedBeforeInputRef.current = null;
+      event.preventDefault();
+      event.stopPropagation();
+      lastRenderedBeforeInputRef.current = {
+        inputType: event.inputType,
+        resolvedInputType: inputType,
+        dataLength: data?.length ?? 0,
+        fallbackKey,
+        preventedDefault: event.defaultPrevented,
+        suppressedAfterKeyDown: true,
+      };
+      recordRenderedEditorDebug('beforeinput-ignored', {
+        reason: 'keydown-already-applied',
+        inputType,
+        dataLength: data?.length ?? 0,
+      });
+      return;
+    }
+    if (!inputType) {
+      lastRenderedBeforeInputRef.current = {
+        inputType: event.inputType,
+        resolvedInputType: null,
+        dataLength: data?.length ?? 0,
+        fallbackKey,
+        preventedDefault: event.defaultPrevented,
+      };
+      recordRenderedEditorDebug('beforeinput-ignored', {
+        reason: 'input-type-unknown',
+        dataLength: data?.length ?? 0,
+        fallbackKey,
+      });
+      return;
+    }
+    if (inputType === 'historyUndo' || inputType === 'historyRedo') {
+      event.preventDefault();
+      event.stopPropagation();
+      activateRenderedEditing();
+      const applied = restoreRenderedProgrammaticHistory(inputType === 'historyUndo' ? 'undo' : 'redo');
+      lastRenderedBeforeInputRef.current = {
+        inputType: event.inputType,
+        resolvedInputType: inputType,
+        dataLength: 0,
+        fallbackKey,
+        preventedDefault: event.defaultPrevented,
+        historyApplied: applied,
+      };
+      recordRenderedEditorDebug(applied ? 'beforeinput-history-applied' : 'beforeinput-history-not-applied', {
+        inputType,
+      });
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    activateRenderedEditing();
+    lastRenderedBeforeInputRef.current = {
+      inputType: event.inputType,
+      resolvedInputType: inputType,
+      dataLength: data?.length ?? 0,
+      fallbackKey,
+      preventedDefault: event.defaultPrevented,
+    };
+    recordRenderedEditorDebug('beforeinput', {
+      inputType,
+      dataLength: data?.length ?? 0,
+      preventedDefault: event.defaultPrevented,
+    });
+    const applied = applyRenderedNativeInput(inputType, data);
+    recordRenderedEditorDebug(applied ? 'beforeinput-applied' : 'beforeinput-not-applied', {
+      inputType,
+      preventedDefault: event.defaultPrevented,
+    });
+  }, [
+    activateRenderedEditing,
+    activeReading,
+    applyRenderedNativeInput,
+    contentMode,
+    recordRenderedEditorDebug,
+    restoreRenderedProgrammaticHistory,
+  ]);
+
+  useEffect(() => {
+    if (contentMode !== 'rendered') return;
+    const root = renderedContentRef.current;
+    if (!root) return;
+    const handleBeforeInput = (event: Event) => {
+      handleRenderedBeforeInputEvent(event as InputEvent & { dataTransfer?: DataTransfer | null });
+    };
+    root.addEventListener('beforeinput', handleBeforeInput);
+    return () => {
+      root.removeEventListener('beforeinput', handleBeforeInput);
+    };
+  }, [contentMode, handleRenderedBeforeInputEvent]);
+
+  const handleRenderedPaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    if (!activeReading || contentMode !== 'rendered') return;
+    event.preventDefault();
+    event.stopPropagation();
+    activateRenderedEditing();
+    const text = event.clipboardData.getData('text/plain');
+    recordRenderedEditorDebug('paste-edit-intent', {
+      dataLength: text.length,
+      preventedDefault: event.defaultPrevented,
+    });
+    applyRenderedNativeInput('insertFromPaste', text);
+  }, [activateRenderedEditing, activeReading, applyRenderedNativeInput, contentMode, recordRenderedEditorDebug]);
+
+  const handleRenderedCut = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    if (!activeReading || contentMode !== 'rendered') return;
+    const root = renderedContentRef.current;
+    const selection = root?.ownerDocument.getSelection() ?? null;
+    if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return;
+    const selectedText = selection.toString();
+    if (!selectedText) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.clipboardData.setData('text/plain', selectedText);
+    activateRenderedEditing();
+    recordRenderedEditorDebug('cut-edit-intent', {
+      selectedTextLength: selectedText.length,
+      preventedDefault: event.defaultPrevented,
+    });
+    applyRenderedNativeInput('deleteByCut');
+  }, [activateRenderedEditing, activeReading, applyRenderedNativeInput, contentMode, recordRenderedEditorDebug]);
 
   const cycleSelectedMarkdownTodoState = useCallback(async (direction: 'forward' | 'backward' = 'forward'): Promise<boolean> => {
     if (!activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) return false;
     if (selectedItemType === 'wiki' && !wikiSelectedRelPath) return false;
 
-    const sourceContent = contentMode === 'markdown' ? editContent : activeReading.content;
+    const sourceContent = contentMode === 'markdown' ? editContent : activeReadingContentRef.current ?? activeReading.content;
     const next = cycleMarkdownTodoState(sourceContent, direction);
     if (next.content === sourceContent) return false;
 
@@ -3471,6 +4919,26 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       snapshot.caretPosition,
     ));
   }, [applyMarkdownCodeEditorTextEdit, markdownUrlPasteChoice, scheduleEditorSessionPersist]);
+
+  const handleMarkdownCodeEditorSelectionChange = useCallback((
+    snapshot: MarkdownCodeEditorSelectionSnapshot,
+  ) => {
+    const reason = snapshot.docChanged ? 'markdown-input' : 'markdown-selection';
+    latestMarkdownCursorSnapshotRef.current = { ...snapshot, timestamp: Date.now(), stage: reason };
+    recordRenderedEditorDebug('markdown-cursor-change', {
+      reason,
+      cursor: getMarkdownCursorDebugState(reason, snapshot),
+      editorCursor: getEditorCursorDebugState(reason, snapshot),
+    });
+    scheduleEditorCursorSettledDebug(reason, snapshot);
+    updateMarkdownCodeEditorWikiLinkCompletion(snapshot);
+  }, [
+    getEditorCursorDebugState,
+    getMarkdownCursorDebugState,
+    recordRenderedEditorDebug,
+    scheduleEditorCursorSettledDebug,
+    updateMarkdownCodeEditorWikiLinkCompletion,
+  ]);
 
   const applyMarkdownWikiLinkSuggestion = useCallback((
     suggestion: MarkdownWikiLinkSuggestion,
@@ -3883,11 +5351,30 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const enterEditMode = useCallback((selectionStart?: number | null) => {
     captureContentScrollRatio();
+    const hadPendingRenderedSave = pendingRenderedSaveRef.current !== null;
+    flushPendingRenderedSave();
+    const activePath = activeReadingPathRef.current;
+    const latestRenderedContent = latestRenderedContentRef.current;
+    const shouldUseLatestRenderedContent = !!activePath && latestRenderedContent?.path === activePath;
+    const nextEditContent = shouldUseLatestRenderedContent
+      ? latestRenderedContent.content
+      : activeReading?.content;
+    if (activePath && typeof nextEditContent === 'string') {
+      const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextEditContent);
+      setEditContent(normalizedContent);
+      editContentRef.current = normalizedContent;
+      lastSeededPathRef.current = activePath;
+    }
+    recordRenderedEditorDebug('enter-markdown-source', {
+      selectionStart: typeof selectionStart === 'number' ? selectionStart : null,
+      usedLatestRenderedContent: shouldUseLatestRenderedContent,
+      flushedPendingRenderedSave: hadPendingRenderedSave,
+    });
     focusMarkdownEditorOnOpenRef.current = true;
     pendingRenderedEditSelectionRef.current = typeof selectionStart === 'number' ? selectionStart : null;
     pendingRenderedEditSelectionEndRef.current = typeof selectionStart === 'number' ? selectionStart : null;
     setContentMode('markdown');
-  }, [captureContentScrollRatio]);
+  }, [activeReading?.content, captureContentScrollRatio, flushPendingRenderedSave, recordRenderedEditorDebug]);
 
   useEffect(() => {
     if (contentMode !== 'markdown' || !focusMarkdownEditorOnOpenRef.current) return;
@@ -4132,12 +5619,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (deletedSelection) clearSelectedLibraryItem();
   }, [clearSelectedLibraryItem, selectedItemId, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
+  useEffect(() => {
+    if (!activeReading || contentMode === 'markdown') return;
+    const normalizedContent = removeEmptyMarkdownCommentPlaceholders(activeReading.content);
+    setEditContent(normalizedContent);
+    lastSavedContentRef.current = normalizedContent;
+    lastSavedVersionRef.current = activeReading.documentVersion;
+  }, [activeReading?.path, contentMode]);
+
   // Seed editContent when the user enters markdown mode on a file, or when
   // they switch to a different file while editing. Guarded by path so that
   // activeReading updates caused by our own save don't clobber in-progress
   // edits (setWikiSelectedPage after a write produces a new object but the
   // path is unchanged).
-  const lastSeededPathRef = useRef<string | null>(null);
   useEffect(() => {
     if (contentMode !== 'markdown' || !activeReading) {
       lastSeededPathRef.current = null;
@@ -5926,7 +7420,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       window.librarianAPI?.setMarkdownEditorFocused(false);
                       setMarkdownWikiLinkCompletion(null);
                     }}
-                    onSelectionChange={updateMarkdownCodeEditorWikiLinkCompletion}
+                    onSelectionChange={handleMarkdownCodeEditorSelectionChange}
                     onScroll={() => {
                       scheduleEditorSessionPersist();
                       updateMarkdownEditorFades(markdownCodeEditorRef.current);
@@ -6128,11 +7622,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 )}
               </div>
             )}
-            {/* Content - markdown renders the title. Click gesture opens source. */}
+            {/* Rendered document content. The surface itself is the editing host. */}
             <div
               ref={renderedContentRef}
               className="librarian-content"
-              onMouseDown={() => {
+              data-ft-rendered-editor-root="true"
+              data-ft-rendered-editor-active={renderedEditingActive ? 'true' : 'false'}
+              data-ft-rendered-editor-debug={renderedEditorDebugEnabled ? 'true' : 'false'}
+              data-ft-rendered-editor-mode={contentMode}
+              data-ft-rendered-editor-path={activeReading?.path ?? undefined}
+              role={activeReading ? 'textbox' : undefined}
+              aria-multiline={activeReading ? true : undefined}
+              contentEditable={activeReading ? 'true' : undefined}
+              suppressContentEditableWarning
+              spellCheck
+              tabIndex={activeReading ? 0 : undefined}
+              onMouseDown={(event) => {
+                restoredRenderedCaretRef.current = null;
                 deactivateSidebarKeyboard();
               }}
               onMouseUp={() => {
@@ -6144,26 +7650,79 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               onClick={(e) => {
                 if (!activeReading) return;
                 const target = e.target instanceof Element ? e.target : null;
-                if (target?.closest('a')) return;
-                const behavior = getRenderedMarkdownClickBehavior(e, renderedEditClickMode);
-                if (!behavior) return;
-                const caret = getRenderedTextCaretFromPoint(e);
-                if (!caret) return;
-                const selectionStart = resolveMarkdownCaretOffsetFromRenderedText(activeReading.content, caret.text, caret.offset);
-                if (selectionStart === null) return;
-                enterEditMode(selectionStart);
+                if (target?.closest('a')) {
+                  recordRenderedEditorDebug('click-ignored', { reason: 'link-target', tagName: target.tagName });
+                  return;
+                }
+                recordRenderedEditorDebug('click', {
+                  detail: e.detail,
+                  tagName: target?.tagName ?? null,
+                  metaKey: e.metaKey,
+                  ctrlKey: e.ctrlKey,
+                  altKey: e.altKey,
+                  shiftKey: e.shiftKey,
+                });
+                activateRenderedEditing();
+                syncRenderedSourceCaretFromSelection('click');
               }}
+              onKeyDown={handleRenderedKeyDown}
+              onPaste={handleRenderedPaste}
+              onCut={handleRenderedCut}
               onCopy={flashCopyPathCopied}
+              onFocus={() => {
+                activateRenderedEditing();
+                syncRenderedSourceCaretFromSelection('focus');
+                cancelRenderedFocusEnsureFrame();
+                renderedFocusEnsureFrameRef.current = requestAnimationFrame(() => {
+                  renderedFocusEnsureFrameRef.current = null;
+                  if (contentModeRef.current !== 'rendered' || !renderedEditingActiveRef.current) {
+                    recordRenderedEditorDebug('caret-ensure-skipped', {
+                      stage: 'focus-after-default',
+                      reason: 'editing-inactive',
+                      cursor: getRenderedCursorDebugState('focus-after-default-editing-inactive'),
+                    });
+                    return;
+                  }
+                  const root = renderedContentRef.current;
+                  const sourceContent = activeReadingContentRef.current ?? activeReading?.content;
+                  const selectionRange = root && sourceContent
+                    ? getRenderedMarkdownRangeFromSelection(sourceContent, root, root.ownerDocument.getSelection())
+                    : null;
+                  if (selectionRange && selectionRange.start !== selectionRange.end) {
+                    recordRenderedEditorDebug('caret-ensure-skipped', {
+                      stage: 'focus-after-default',
+                      reason: 'selection-not-collapsed',
+                      selectionRange,
+                      cursor: getRenderedCursorDebugState('focus-after-default-selection-not-collapsed'),
+                    });
+                    return;
+                  }
+                  ensureRenderedCaretInsideRoot('focus-after-default');
+                });
+                recordRenderedEditorDebug('focus', { state: getRenderedEditorDebugState() });
+              }}
+              onInput={(event) => {
+                recordRenderedEditorDebug('native-input', {
+                  textLength: event.currentTarget.textContent?.length ?? 0,
+                  activeReadingContentLength: activeReading?.content.length ?? null,
+                  latestRenderedContentLength: latestRenderedContentRef.current?.content.length ?? null,
+                  lastKeyEvent: lastRenderedKeyEventRef.current,
+                  lastBeforeInput: lastRenderedBeforeInputRef.current,
+                  state: getRenderedEditorDebugState(),
+                });
+              }}
+              onBlur={() => clearRenderedEditingState('blur')}
               style={{
                 ...documentTextStyle,
                 position: 'relative',
                 outline: 'none',
                 userSelect: 'text',
                 cursor: activeReading ? 'text' : 'default',
+                caretColor: theme.accent,
               }}
             >
               <FieldTheoryProse
-                key={renderedDocumentVersionKey}
+                key={renderedDocumentPathKey}
                 className={todoMarker === 'square' ? 'ft-prose-todo-square' : undefined}
                 color={documentTextStyle.color}
                 fontFamily={typographyPreset.fontFamily}
@@ -6184,7 +7743,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     const normalizedText = textContent.trim();
                     const hasBraille = /[\u2800-\u28FF]/.test(textContent);
                     const isModelSignatureLine = isArtifactModelSignatureText(normalizedText);
-                    const isPreservedBlankLine = textContent === PRESERVED_BLANK_MARKDOWN_LINE;
+                    const isPreservedBlankLine = PRESERVED_BLANK_MARKDOWN_LINE_PATTERN.test(textContent);
+                    const trailingWhitespace = getMarkdownNodeTrailingWhitespace(node, displayContent);
+                    const trailingSpacePlaceholder = trailingWhitespace
+                      ? (
+                          <span
+                            {...{ [RENDERED_TRAILING_SPACE_ATTR]: 'true' }}
+                          >
+                            {'\u00A0'.repeat(trailingWhitespace.length)}
+                          </span>
+                        )
+                      : null;
 
                     if (hasBraille) {
                       return (
@@ -6212,21 +7781,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     if (isPreservedBlankLine) {
                       return (
                         <p
-                          aria-hidden="true"
+                          {...{ [RENDERED_BLANK_LINE_ATTR]: 'true' }}
                           style={{
                             margin: 0,
-                            height: '0.3em',
-                            lineHeight: 0.3,
+                            minHeight: '1lh',
+                            lineHeight: 1,
                             overflow: 'hidden',
                           }}
                         >
-                          {children}
+                          {textContent}
                         </p>
                       );
                     }
 
                     return (
-                      <p>{children}</p>
+                      <p>{children}{trailingSpacePlaceholder}</p>
                     );
                   },
                   input: ({ node: _node, type, checked, ...props }) => {
@@ -6266,7 +7835,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         recordRenderedTaskToggleDebug({
                           renderedLine,
                           sourceLineIndex: taskLine?.lineIndex ?? null,
-                          sourceLine: taskLine ? activeReading?.content.split('\n')[taskLine.lineIndex] ?? null : null,
+                          sourceLine: taskLine ? (activeReadingContentRef.current ?? activeReading?.content ?? '').split('\n')[taskLine.lineIndex] ?? null : null,
                           taskText,
                           checked: nextChecked,
                           mapped: !!taskLine,
@@ -6420,6 +7989,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               {linkedDocuments.length > 0 && (
                 <section
                   aria-label="Linked"
+                  contentEditable={false}
                   style={{
                     marginTop: '32px',
                     paddingTop: '16px',
@@ -6507,6 +8077,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               {contentBottomScrollSpace > 0 && (
                 <div
                   aria-hidden="true"
+                  contentEditable={false}
                   data-ft-rendered-bottom-scroll-space="library"
                   style={{ height: `${contentBottomScrollSpace}px`, flexShrink: 0 }}
                 />
