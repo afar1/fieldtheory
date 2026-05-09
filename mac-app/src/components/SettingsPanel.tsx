@@ -4,7 +4,7 @@
 // Styled consistently with the clipboard history window's design language.
 // =============================================================================
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, type CSSProperties } from 'react';
 import AudioSettingsPanel from './AudioSettingsPanel';
 import TranscriptionSettings from './TranscriptionSettings';
 import SoundsSettings from './SoundsSettings';
@@ -46,6 +46,7 @@ type SettingsSection =
   | 'rectangle';
 
 type FieldTheoryWindowMode = 'panel' | 'app';
+type SettingsStyles = Record<string, CSSProperties>;
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -94,6 +95,22 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'stats',
   'rectangle', // Window Management
 ];
+
+function SectionHeader({ title, onHiddenReveal, styles }: { title: string; onHiddenReveal?: () => void; styles: SettingsStyles }) {
+  return (
+    <div
+      style={styles.sectionHeader}
+      onClick={(event) => {
+        if (event.altKey) {
+          onHiddenReveal?.();
+        }
+      }}
+    >
+      <span style={styles.sectionTitle}>{title}</span>
+      <div style={styles.sectionLine} />
+    </div>
+  );
+}
 
 interface SettingsPanelProps {
   onNavigateToSignIn?: () => void;
@@ -1321,21 +1338,6 @@ export default function SettingsPanel({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
 
-  // Section header component for consistent divider styling
-  const SectionHeader = ({ title, onHiddenReveal }: { title: string; onHiddenReveal?: () => void }) => (
-    <div
-      style={styles.sectionHeader}
-      onClick={(event) => {
-        if (event.altKey) {
-          onHiddenReveal?.();
-        }
-      }}
-    >
-      <span style={styles.sectionTitle}>{title}</span>
-      <div style={styles.sectionLine} />
-    </div>
-  );
-
   return (
     <div style={styles.settingsLayout}>
       {/* Left Sidebar Navigation */}
@@ -1371,7 +1373,7 @@ export default function SettingsPanel({
       {selectedSection === 'appearance' && (
         <>
       <div style={styles.section}>
-        <SectionHeader title="Appearance" />
+        <SectionHeader title="Appearance" styles={styles} />
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span style={styles.rowLabel}>Dark Mode</span>
@@ -1504,7 +1506,7 @@ export default function SettingsPanel({
 
       {/* Dynamic Island */}
       <div style={styles.section}>
-        <SectionHeader title="Dynamic Island" />
+        <SectionHeader title="Dynamic Island" styles={styles} />
 
         <div style={styles.row}>
           <div>
@@ -1541,7 +1543,7 @@ export default function SettingsPanel({
       {/* System Access Section - Permission status with quick links to settings */}
       {systemPermissions && (
         <div style={styles.section}>
-          <SectionHeader title="System Access" />
+          <SectionHeader title="System Access" styles={styles} />
           
           {/* Microphone */}
           <div style={styles.row}>
@@ -1598,7 +1600,7 @@ export default function SettingsPanel({
 
       {/* Data Retention Section */}
       <div style={styles.section}>
-        <SectionHeader title="Data Retention" />
+        <SectionHeader title="Data Retention" styles={styles} />
         <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
           Automatically delete clipboard history older than the selected period.
         </p>
@@ -1632,7 +1634,7 @@ export default function SettingsPanel({
       {/* Keyboard Shortcuts Section - First for easy access */}
       {selectedSection === 'keyboard' && (
       <div style={styles.section}>
-        <SectionHeader title="Keyboard Shortcuts" />
+        <SectionHeader title="Keyboard Shortcuts" styles={styles} />
         
         {/* Open Field Theory - primary action, shown first */}
         <div style={styles.row}>
@@ -1943,7 +1945,7 @@ export default function SettingsPanel({
       {selectedSection === 'audio' && (
       <>
       <div style={styles.section}>
-        <SectionHeader title="Microphone" />
+        <SectionHeader title="Microphone" styles={styles} />
         <AudioSettingsPanel />
       </div>
 
@@ -1954,7 +1956,7 @@ export default function SettingsPanel({
 
       {/* Word Substitutions Section */}
       <div style={styles.section}>
-        <SectionHeader title="Word Corrections" />
+        <SectionHeader title="Word Corrections" styles={styles} />
         <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
           Fix common transcription mistakes. Words on the left will be replaced with words on the right.
         </p>
@@ -2085,7 +2087,7 @@ export default function SettingsPanel({
       {selectedSection === 'commands' && (
       <>
       <div style={styles.section}>
-        <SectionHeader title="Portable Commands" />
+        <SectionHeader title="Portable Commands" styles={styles} />
         <CommandsSettings />
       </div>
 
@@ -2095,7 +2097,7 @@ export default function SettingsPanel({
       {/* Librarian Section */}
       {selectedSection === 'librarian' && (
       <div style={styles.section}>
-        <SectionHeader title="Librarian" />
+        <SectionHeader title="Librarian" styles={styles} />
         <LibrarianSettings
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
@@ -2113,7 +2115,7 @@ export default function SettingsPanel({
       {/* Allowlist Section */}
       {selectedSection === 'terminal-commands' && (
       <div style={styles.section}>
-        <SectionHeader title="Allowlist" />
+        <SectionHeader title="Allowlist" styles={styles} />
         <ClaudeSettings />
       </div>
       )}
@@ -2128,7 +2130,7 @@ export default function SettingsPanel({
       {/* Hot Mic Section */}
       {selectedSection === 'hot-mic' && (
       <div style={styles.section}>
-        <SectionHeader title="Hot Mic" />
+        <SectionHeader title="Hot Mic" styles={styles} />
         <HotMicSettings />
       </div>
       )}
@@ -2143,7 +2145,7 @@ export default function SettingsPanel({
       {/* Sounds Section */}
       {selectedSection === 'sounds' && (
       <div style={styles.section}>
-        <SectionHeader title="Sounds" />
+        <SectionHeader title="Sounds" styles={styles} />
         <SoundsSettings />
       </div>
       )}
@@ -2167,7 +2169,7 @@ export default function SettingsPanel({
 
         return (
           <div style={styles.section}>
-            <SectionHeader title="Account" onHiddenReveal={() => setShowInternalSyncToggle(true)} />
+            <SectionHeader title="Account" onHiddenReveal={() => setShowInternalSyncToggle(true)} styles={styles} />
 
             {initialAuthLoading ? (
               <div style={styles.row}>
@@ -2359,7 +2361,7 @@ export default function SettingsPanel({
             )}
 
             {/* Support section - shown for all users */}
-            <SectionHeader title="Support" />
+            <SectionHeader title="Support" styles={styles} />
             <div style={styles.row}>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <span style={styles.rowLabel}>Launch on Login</span>
@@ -2561,7 +2563,7 @@ export default function SettingsPanel({
 }
 
 // Styles consistent with ClipboardHistory styling
-const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
+const getStyles = (theme: Theme): SettingsStyles => ({
   // New sidebar layout
   settingsLayout: {
     display: 'flex',
