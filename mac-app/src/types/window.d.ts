@@ -1289,6 +1289,7 @@ interface PortableCommandInfo {
   name: string;           // Command name (filename without extension)
   displayName: string;    // Human-readable name
   filePath: string;       // Full path to the markdown file
+  lastModified: number;   // File modification time
 }
 
 /**
