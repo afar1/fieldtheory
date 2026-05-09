@@ -1307,7 +1307,11 @@ export class TranscriberManager extends EventEmitter {
 
       let snapshotMs = 0;
       let snapshotStatus = 'skipped';
-      if (activeRecordingSource === 'microphone' && !this.pendingImmediateSquaresAction) {
+      const shouldSnapshotTail =
+        activeRecordingSource === 'microphone' &&
+        !this.pendingImmediateSquaresAction &&
+        liveCharsAtFinish > 0;
+      if (shouldSnapshotTail) {
         const snapshotStart = performance.now();
         try {
           const tailChunkPath = await this.nativeHelper.snapshotRecording();
@@ -1323,6 +1327,8 @@ export class TranscriberManager extends EventEmitter {
           snapshotStatus = 'failed';
           // Snapshot can fail when no audio has accumulated yet; continue with normal stop.
         }
+      } else if (activeRecordingSource === 'microphone' && !this.pendingImmediateSquaresAction) {
+        snapshotStatus = 'skipped-no-live-transcript';
       }
 
       if (this.standardSessionCancelRequested) {
