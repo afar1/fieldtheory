@@ -29,12 +29,14 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   balanceLauncherNormalModeMatches,
+  compareLauncherItemsByRecency,
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
   getLauncherAreaActionIdForQuery,
+  getLauncherItemRecency,
   getLauncherUsageScore,
   getLauncherStatusText,
   isGeneratedBookmarkTaxonomyPath,
@@ -65,6 +67,7 @@ interface PortableCommandInfo {
   name: string;
   displayName: string;
   filePath: string;
+  lastModified: number;
 }
 
 interface HandoffInfo {
@@ -694,6 +697,11 @@ function CommandLauncher() {
       const snapshot = await bookmarksAPI?.getAll();
       const bookmarks = (snapshot?.bookmarks ?? [])
         .filter((bookmark) => bookmark.sourceType === 'web')
+        .sort((a, b) => {
+          const aTime = new Date(a.savedAt ?? a.postedAt).getTime();
+          const bTime = new Date(b.savedAt ?? b.postedAt).getTime();
+          return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+        })
         .slice(0, 100);
       setWebBookmarks(bookmarks);
       setWebBookmarkItems(buildBookmarkPostLauncherItems(bookmarks));
@@ -966,6 +974,7 @@ function CommandLauncher() {
       displayName: cmd.displayName,
       keywords: [cmd.name, cmd.displayName, ...cmd.name.split('-'), ...cmd.name.split('_')],
       filePath: cmd.filePath,
+      lastUpdated: cmd.lastModified,
     })), [commands]);
 
   const recentFileItems = useMemo((): LauncherItem[] => {
@@ -1004,6 +1013,7 @@ function CommandLauncher() {
       displayName: h.displayName,
       keywords: [h.name, h.displayName, 'handoff', 'session', ...h.displayName.split('-')],
       filePath: h.filePath,
+      lastUpdated: h.lastModified,
       timeAgo: formatTimeAgo(h.lastModified),
     }));
 
@@ -1210,11 +1220,11 @@ function CommandLauncher() {
         .filter(item => item.type === 'action')
         .sort((a, b) => a.displayName.localeCompare(b.displayName));
       const hoffs = allItems
-        .filter(item => item.type === 'handoff');
-      // Handoffs are already sorted by recency from the backend
+        .filter(item => item.type === 'handoff')
+        .sort(compareLauncherItemsByRecency);
       const cmds = allItems
         .filter(item => item.type === 'command')
-        .sort((a, b) => a.name.localeCompare(b.name));
+        .sort(compareLauncherItemsByRecency);
 
       setFiltered([...actions, ...hoffs, ...cmds]);
       selectIndex(0);
@@ -1243,9 +1253,12 @@ function CommandLauncher() {
         ? commandItems
             .map(item => ({ item, score: scoreLauncherItem(item, localQueryLower) }))
             .filter(({ score }) => score > 0)
-            .sort((a, b) => b.score - a.score)
+            .sort((a, b) => {
+              const recencyDelta = getLauncherItemRecency(b.item) - getLauncherItemRecency(a.item);
+              return recencyDelta || b.score - a.score;
+            })
             .map(({ item }) => item)
-        : commandItems.slice().sort((a, b) => a.name.localeCompare(b.name)))
+        : commandItems.slice().sort(compareLauncherItemsByRecency))
         .slice(0, 12)
         .map(item => ({
           ...item,

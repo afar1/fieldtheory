@@ -198,6 +198,7 @@ export interface LauncherBookmarkAuthorItem extends LauncherSearchableItem {
   authorHandle: string;
   bookmarkCount: number;
   hotkeyDisplay: string;
+  lastUpdated?: number;
 }
 
 export interface LauncherBookmarkPostSource {
@@ -220,6 +221,7 @@ export interface LauncherBookmarkPostItem extends LauncherSearchableItem {
   authorHandle: string;
   postedAt: string;
   hotkeyDisplay: string;
+  lastUpdated?: number;
 }
 
 export interface LauncherVisibleItem {
@@ -292,6 +294,8 @@ export type LauncherNormalModeSectionId = 'commands' | 'recent' | 'files' | 'act
 export interface LauncherNormalModeItem {
   type?: string;
   lastOpenedAt?: number;
+  lastUpdated?: number;
+  postedAt?: string;
 }
 
 export interface ScoredLauncherNormalModeItem<T extends LauncherNormalModeItem> {
@@ -333,7 +337,7 @@ function insertByScore<T extends LauncherNormalModeItem>(
   match: ScoredLauncherNormalModeItem<T>,
   limit: number,
 ): void {
-  const insertAt = matches.findIndex(existing => match.score > existing.score);
+  const insertAt = matches.findIndex(existing => compareScoredLauncherMatches(match, existing) < 0);
   if (insertAt === -1) {
     if (matches.length < limit) matches.push(match);
     return;
@@ -343,26 +347,33 @@ function insertByScore<T extends LauncherNormalModeItem>(
   if (matches.length > limit) matches.pop();
 }
 
-function insertRecentByLastOpened<T extends LauncherNormalModeItem>(
-  matches: ScoredLauncherNormalModeItem<T>[],
-  match: ScoredLauncherNormalModeItem<T>,
-): void {
-  const lastOpenedAt = match.item.lastOpenedAt ?? 0;
-  const insertAt = matches.findIndex(existing => lastOpenedAt > (existing.item.lastOpenedAt ?? 0));
-  if (insertAt === -1) {
-    if (matches.length < LAUNCHER_NORMAL_MODE_MAX_RESULTS) matches.push(match);
-    return;
-  }
+function parseLauncherTimestamp(value: string | undefined): number {
+  if (!value) return 0;
+  const timestamp = new Date(value).getTime();
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
 
-  matches.splice(insertAt, 0, match);
-  if (matches.length > LAUNCHER_NORMAL_MODE_MAX_RESULTS) matches.pop();
+export function getLauncherItemRecency(item: LauncherNormalModeItem): number {
+  if (typeof item.lastOpenedAt === 'number') return item.lastOpenedAt;
+  if (typeof item.lastUpdated === 'number') return item.lastUpdated;
+  return parseLauncherTimestamp(item.postedAt);
+}
+
+function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
+  a: ScoredLauncherNormalModeItem<T>,
+  b: ScoredLauncherNormalModeItem<T>,
+): number {
+  const aRecency = getLauncherItemRecency(a.item);
+  const bRecency = getLauncherItemRecency(b.item);
+  if ((aRecency || bRecency) && aRecency !== bRecency) return bRecency - aRecency;
+  if (a.score !== b.score) return b.score - a.score;
+  return 0;
 }
 
 export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
   matches: ScoredLauncherNormalModeItem<T>[],
 ): T[] {
   const groups = new Map<LauncherNormalModeSectionId, ScoredLauncherNormalModeItem<T>[]>();
-  const recentByLastOpened: ScoredLauncherNormalModeItem<T>[] = [];
 
   for (const match of matches) {
     if (match.score <= 0) continue;
@@ -371,15 +382,9 @@ export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeIte
     const group = groups.get(sectionId) ?? [];
     insertByScore(group, match, LAUNCHER_NORMAL_MODE_MAX_RESULTS);
     groups.set(sectionId, group);
-    if (sectionId === 'recent') {
-      insertRecentByLastOpened(recentByLastOpened, match);
-    }
   }
 
   const activeSectionCount = NORMAL_MODE_SECTION_ORDER.filter(section => (groups.get(section.id)?.length ?? 0) > 0).length;
-  if (activeSectionCount === 1 && recentByLastOpened.length > 0) {
-    return recentByLastOpened.map(({ item }) => item);
-  }
   if (activeSectionCount <= 1) {
     const onlySection = NORMAL_MODE_SECTION_ORDER.find(section => (groups.get(section.id)?.length ?? 0) > 0);
     return (onlySection ? groups.get(onlySection.id) ?? [] : []).map(({ item }) => item);
@@ -508,14 +513,16 @@ function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: st
   return best;
 }
 
-export function filterLauncherNamespaceItems<T extends LauncherSearchableItem>(items: T[], search: string): T[] {
+export function filterLauncherNamespaceItems<T extends LauncherSearchableItem & LauncherNormalModeItem>(items: T[], search: string): T[] {
   const normalizedSearch = search.trim().toLowerCase();
-  if (!normalizedSearch) return items;
-  return items.filter(item =>
-    item.name.toLowerCase().includes(normalizedSearch) ||
-    item.displayName.toLowerCase().includes(normalizedSearch) ||
-    item.keywords.some(k => k.toLowerCase().includes(normalizedSearch))
-  );
+  const filtered = normalizedSearch
+    ? items.filter(item =>
+      item.name.toLowerCase().includes(normalizedSearch) ||
+      item.displayName.toLowerCase().includes(normalizedSearch) ||
+      item.keywords.some(k => k.toLowerCase().includes(normalizedSearch))
+    )
+    : items;
+  return filtered.slice().sort(compareLauncherItemsByRecency);
 }
 
 function joinLauncherPath(parent: string, child: string): string {
@@ -629,7 +636,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     for (const node of root.tree) visit(root, node);
   }
 
-  return items;
+  return items.sort(compareLauncherItemsByRecency);
 }
 
 function isDescendantPath(path: string | undefined, directoryPath: string): boolean {
@@ -649,6 +656,13 @@ function compareLauncherDirectoryItemsByRecency<T extends LauncherSearchableItem
   const aUpdated = typeof a.lastUpdated === 'number' ? a.lastUpdated : 0;
   const bUpdated = typeof b.lastUpdated === 'number' ? b.lastUpdated : 0;
   if (aUpdated !== bUpdated) return bUpdated - aUpdated;
+  return a.displayName.localeCompare(b.displayName);
+}
+
+export function compareLauncherItemsByRecency<T extends LauncherSearchableItem & LauncherNormalModeItem>(a: T, b: T): number {
+  const aRecency = getLauncherItemRecency(a);
+  const bRecency = getLauncherItemRecency(b);
+  if (aRecency !== bRecency) return bRecency - aRecency;
   return a.displayName.localeCompare(b.displayName);
 }
 
@@ -815,12 +829,14 @@ export function buildBookmarkAuthorLauncherItems(authors: BookmarkAuthorSummary[
       authorHandle: handle,
       bookmarkCount: author.count,
       hotkeyDisplay: `${author.count} ${author.count === 1 ? 'bookmark' : 'bookmarks'}`,
+      lastUpdated: parseLauncherTimestamp(author.lastPostedAt),
     };
-  }).filter((item) => item.authorHandle || item.displayName);
+  }).filter((item) => item.authorHandle || item.displayName)
+    .sort(compareLauncherItemsByRecency);
 }
 
 export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSource[]): LauncherBookmarkPostItem[] {
-  return bookmarks.map((bookmark) => {
+  return bookmarks.map((bookmark): LauncherBookmarkPostItem => {
     const date = formatLauncherBookmarkDate(bookmark.postedAt);
     const handle = bookmark.authorHandle.trim().replace(/^@+/, '');
     const displayName = truncateLauncherBookmarkText(
@@ -848,8 +864,9 @@ export function buildBookmarkPostLauncherItems(bookmarks: LauncherBookmarkPostSo
       authorHandle: handle,
       postedAt: bookmark.postedAt,
       hotkeyDisplay: date,
+      lastUpdated: parseLauncherTimestamp(bookmark.postedAt),
     };
-  });
+  }).sort(compareLauncherItemsByRecency);
 }
 
 export function dedupeLauncherPersonItems<T extends LauncherVisibleItem>(items: T[]): T[] {
