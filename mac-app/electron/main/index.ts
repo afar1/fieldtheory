@@ -6808,6 +6808,7 @@ function setupClipboardIPCHandlers(): void {
       name: cmd.name,
       displayName: cmd.displayName,
       filePath: cmd.filePath,
+      lastModified: cmd.lastModified,
     }));
   });
 
@@ -6820,6 +6821,7 @@ function setupClipboardIPCHandlers(): void {
       name: cmd.name,
       displayName: cmd.displayName,
       filePath: cmd.filePath,
+      lastModified: cmd.lastModified,
     }));
   });
 
@@ -9428,6 +9430,7 @@ async function initTranscriberSystem(): Promise<void> {
           name: cmd.name,
           displayName: cmd.displayName,
           filePath: cmd.filePath,
+          lastModified: cmd.lastModified,
         })));
       }
     });
