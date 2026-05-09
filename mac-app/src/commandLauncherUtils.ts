@@ -370,26 +370,10 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   return 0;
 }
 
-function insertRecentByLastOpened<T extends LauncherNormalModeItem>(
-  matches: ScoredLauncherNormalModeItem<T>[],
-  match: ScoredLauncherNormalModeItem<T>,
-): void {
-  const lastOpenedAt = match.item.lastOpenedAt ?? 0;
-  const insertAt = matches.findIndex(existing => lastOpenedAt > (existing.item.lastOpenedAt ?? 0));
-  if (insertAt === -1) {
-    if (matches.length < LAUNCHER_NORMAL_MODE_MAX_RESULTS) matches.push(match);
-    return;
-  }
-
-  matches.splice(insertAt, 0, match);
-  if (matches.length > LAUNCHER_NORMAL_MODE_MAX_RESULTS) matches.pop();
-}
-
 export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
   matches: ScoredLauncherNormalModeItem<T>[],
 ): T[] {
   const groups = new Map<LauncherNormalModeSectionId, ScoredLauncherNormalModeItem<T>[]>();
-  const recentByLastOpened: ScoredLauncherNormalModeItem<T>[] = [];
 
   for (const match of matches) {
     if (match.score <= 0) continue;
@@ -398,15 +382,9 @@ export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeIte
     const group = groups.get(sectionId) ?? [];
     insertByScore(group, match, LAUNCHER_NORMAL_MODE_MAX_RESULTS);
     groups.set(sectionId, group);
-    if (sectionId === 'recent') {
-      insertRecentByLastOpened(recentByLastOpened, match);
-    }
   }
 
   const activeSectionCount = NORMAL_MODE_SECTION_ORDER.filter(section => (groups.get(section.id)?.length ?? 0) > 0).length;
-  if (activeSectionCount === 1 && recentByLastOpened.length > 0) {
-    return recentByLastOpened.map(({ item }) => item);
-  }
   if (activeSectionCount <= 1) {
     const onlySection = NORMAL_MODE_SECTION_ORDER.find(section => (groups.get(section.id)?.length ?? 0) > 0);
     return (onlySection ? groups.get(onlySection.id) ?? [] : []).map(({ item }) => item);
