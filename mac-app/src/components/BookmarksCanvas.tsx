@@ -324,6 +324,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     const freePool: HTMLDivElement[] = [];
     const activeMap = new Map<string, ActiveEntry>();
     const elToBookmark = new WeakMap<HTMLDivElement, Bookmark>();
+    const cardCopyButtonCleanups: Array<() => void> = [];
+    const copyResetTimers = new Set<ReturnType<typeof setTimeout>>();
+    const scheduleCopyReset = (callback: () => void) => {
+      const timer = setTimeout(() => {
+        copyResetTimers.delete(timer);
+        callback();
+      }, 1200);
+      copyResetTimers.add(timer);
+    };
 
     // Text-card colors come from CSS custom properties on the viewport, so
     // theme toggles propagate to existing pool elements without a rebuild.
@@ -409,15 +418,15 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
             <polyline points="20 6 9 17 4 12"></polyline>
           </svg>
         `;
-        cardCopyBtn.addEventListener('mousedown', (event) => {
+        const onCardCopyMouseDown = (event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
-        });
-        cardCopyBtn.addEventListener('mouseup', (event) => {
+        };
+        const onCardCopyMouseUp = (event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
-        });
-        cardCopyBtn.addEventListener('click', (event) => {
+        };
+        const onCardCopyClick = (event: MouseEvent) => {
           event.preventDefault();
           event.stopPropagation();
           const bookmark = elToBookmark.get(el);
@@ -427,12 +436,20 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
             cardCopyBtn.dataset.copied = '1';
             cardCopyBtn.setAttribute('aria-label', 'Copied');
             cardCopyBtn.title = 'Copied';
-            setTimeout(() => {
+            scheduleCopyReset(() => {
               delete cardCopyBtn.dataset.copied;
               cardCopyBtn.setAttribute('aria-label', 'Copy bookmark content');
               cardCopyBtn.title = 'Copy bookmark content';
-            }, 1200);
+            });
           });
+        };
+        cardCopyBtn.addEventListener('mousedown', onCardCopyMouseDown);
+        cardCopyBtn.addEventListener('mouseup', onCardCopyMouseUp);
+        cardCopyBtn.addEventListener('click', onCardCopyClick);
+        cardCopyButtonCleanups.push(() => {
+          cardCopyBtn.removeEventListener('mousedown', onCardCopyMouseDown);
+          cardCopyBtn.removeEventListener('mouseup', onCardCopyMouseUp);
+          cardCopyBtn.removeEventListener('click', onCardCopyClick);
         });
         el.appendChild(cardCopyBtn);
 
@@ -984,7 +1001,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const pngBlob: Blob = await new Promise((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'));
         await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
         copyBtn.dataset.copied = '1';
-        setTimeout(() => { delete copyBtn.dataset.copied; }, 1200);
+        scheduleCopyReset(() => { delete copyBtn.dataset.copied; });
       } catch (err) {
         console.error('[BookmarksCanvas] copy image failed', err);
       }
@@ -998,7 +1015,7 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         const result = await window.bookmarksAPI?.copyForAgent(bm.id);
         if (!result?.success) throw new Error(result?.error ?? 'Copy failed');
         agentCopyBtn.dataset.copied = '1';
-        setTimeout(() => { delete agentCopyBtn.dataset.copied; }, 1200);
+        scheduleCopyReset(() => { delete agentCopyBtn.dataset.copied; });
       } catch (err) {
         console.error('[BookmarksCanvas] copy content failed', err);
       }
@@ -1092,6 +1109,10 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
         agentCopyBtn.removeEventListener('click', onAgentCopyClick);
         openBtn.removeEventListener('click', onOpenClick);
         linkEl.removeEventListener('click', onLinkClick);
+        cardCopyButtonCleanups.forEach((cleanup) => cleanup());
+        cardCopyButtonCleanups.length = 0;
+        copyResetTimers.forEach(clearTimeout);
+        copyResetTimers.clear();
         if (state.lightbox) {
           state.lightbox.clone.remove();
           state.lightbox.sourceEl.style.visibility = '';
@@ -1102,6 +1123,8 @@ export default function BookmarksCanvas({ bookmarks }: { bookmarks: Bookmark[] }
     };
 
     return () => {
+      copyResetTimers.forEach((timer) => clearTimeout(timer));
+      copyResetTimers.clear();
       controllerRef.current?.destroy();
       controllerRef.current = null;
     };

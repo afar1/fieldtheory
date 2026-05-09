@@ -32,9 +32,6 @@ export default function ParakeetSupportPanel({
 
   const detailText = detail?.trim() || null;
   const commandText = recoveryCommand?.trim() || null;
-  if (!summary && !progress) {
-    return null;
-  }
 
   const tone = summary
     ? {
@@ -123,6 +120,10 @@ export default function ParakeetSupportPanel({
     ? Math.max(0, Math.min(100, progress.percent))
     : null;
   const progressDetail = progress?.detail?.trim() || null;
+
+  if (!summary && !progress) {
+    return null;
+  }
 
   return (
     <>
