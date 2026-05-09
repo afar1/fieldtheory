@@ -212,12 +212,13 @@ describe('shouldPastePortableCommand', () => {
 });
 
 describe('balanceLauncherNormalModeMatches', () => {
-  const item = (id: string, type: string, lastOpenedAt?: number) => ({
+  const item = (id: string, type: string, lastOpenedAt?: number, lastUpdated?: number) => ({
     id,
     type,
     name: id,
     displayName: id,
     lastOpenedAt,
+    lastUpdated,
   });
 
   it('orders search results by commands, recent markdown, actions, library, then bookmarks', () => {
@@ -278,6 +279,15 @@ describe('balanceLauncherNormalModeMatches', () => {
     );
   });
 
+  it('orders single-section command matches by newest file first', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('older-command', 'command', undefined, 100), score: 1000 },
+      { item: item('newer-command', 'command', undefined, 200), score: 900 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual(['newer-command', 'older-command']);
+  });
+
   it('caps recent-only searches while keeping latest-opened order', () => {
     const results = balanceLauncherNormalModeMatches(
       Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS + 5 }, (_, index) => ({
@@ -321,10 +331,10 @@ describe('flattenLibraryRootsForLauncher', () => {
       },
     ]);
 
-    expect(items.map((item) => item.type)).toEqual(['wiki-page', 'markdown-file']);
-    expect(items[0]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
-    expect(items[1]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
-    expect(items[1].keywords).toContain('docs');
+    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'wiki-page']);
+    expect(items[0]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
+    expect(items[1]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
+    expect(items[0].keywords).toContain('docs');
   });
 
   it('indexes a readable form of slugged wiki filenames', () => {
@@ -621,8 +631,8 @@ describe('filterLauncherNamespaceItems', () => {
   ];
 
   it('returns all items for blank searches', () => {
-    expect(filterLauncherNamespaceItems(items, '')).toBe(items);
-    expect(filterLauncherNamespaceItems(items, '   ')).toBe(items);
+    expect(filterLauncherNamespaceItems(items, '')).toEqual(items);
+    expect(filterLauncherNamespaceItems(items, '   ')).toEqual(items);
   });
 
   it('matches name, display name, and keywords case-insensitively', () => {
@@ -754,6 +764,27 @@ describe('buildBookmarkAuthorLauncherItems', () => {
     ]);
     expect(items[0].keywords).toEqual(expect.arrayContaining(['CJHandmer', '@CJHandmer', 'CJ Handmer', 'person']));
   });
+
+  it('sorts bookmark author rows by latest post date', () => {
+    const items = buildBookmarkAuthorLauncherItems([
+      {
+        handle: 'older',
+        name: 'Older',
+        count: 1,
+        firstPostedAt: '2026-01-01T00:00:00Z',
+        lastPostedAt: '2026-01-02T00:00:00Z',
+      },
+      {
+        handle: 'newer',
+        name: 'Newer',
+        count: 1,
+        firstPostedAt: '2026-01-01T00:00:00Z',
+        lastPostedAt: '2026-01-03T00:00:00Z',
+      },
+    ]);
+
+    expect(items.map(item => item.authorHandle)).toEqual(['newer', 'older']);
+  });
 });
 
 describe('buildBookmarkPostLauncherItems', () => {
@@ -822,6 +853,29 @@ describe('buildBookmarkPostLauncherItems', () => {
       'A useful article about durable notes.',
       'https://example.com/readable',
     ]));
+  });
+
+  it('sorts bookmark post rows by newest post first', () => {
+    const items = buildBookmarkPostLauncherItems([
+      {
+        id: 'older',
+        text: 'Older bookmark',
+        url: '',
+        authorHandle: 'alice',
+        authorName: 'Alice',
+        postedAt: '2026-01-01T00:00:00Z',
+      },
+      {
+        id: 'newer',
+        text: 'Newer bookmark',
+        url: '',
+        authorHandle: 'alice',
+        authorName: 'Alice',
+        postedAt: '2026-01-02T00:00:00Z',
+      },
+    ]);
+
+    expect(items.map(item => item.bookmarkId)).toEqual(['newer', 'older']);
   });
 });
 

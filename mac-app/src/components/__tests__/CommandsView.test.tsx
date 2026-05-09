@@ -61,6 +61,7 @@ describe('CommandsView command naming', () => {
       name: 'existing',
       displayName: 'existing',
       filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
     };
 
     Object.defineProperty(window, 'commandsAPI', {
@@ -169,11 +170,13 @@ describe('CommandsView command naming', () => {
         name: 'assess',
         displayName: 'assess',
         filePath: '/tmp/commands/assess.md',
+        lastModified: 0,
       },
       {
         name: 'refactor',
         displayName: 'refactor',
         filePath: '/tmp/commands/refactor.md',
+        lastModified: 0,
       },
     ];
     window.commandsAPI!.getCommands = vi.fn(async () => commands);
@@ -290,11 +293,13 @@ describe('CommandsView command naming', () => {
       name: 'existing',
       displayName: 'existing',
       filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
     };
     const reviewCommand = {
       name: 'review',
       displayName: 'review',
       filePath: '/tmp/commands/review.md',
+      lastModified: 0,
     };
     window.commandsAPI!.getCommands = vi.fn(async () => [existingCommand, reviewCommand]);
     window.commandsAPI!.getCommandByPath = vi.fn(async (filePath: string) => ({
@@ -324,11 +329,13 @@ describe('CommandsView command naming', () => {
       name: 'existing',
       displayName: 'existing',
       filePath: '/tmp/commands/existing.md',
+      lastModified: 0,
     };
     const reviewCommand = {
       name: 'review',
       displayName: 'review',
       filePath: '/tmp/commands/review.md',
+      lastModified: 0,
     };
     const getCommandByPath = vi.fn(async (filePath: string) => ({
       ...(filePath.endsWith('review.md') ? reviewCommand : existingCommand),
