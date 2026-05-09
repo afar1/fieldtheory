@@ -107,18 +107,14 @@ import {
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
-  getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
-  getWikiLinkTargetKey,
-  refreshMarkdownLinkRelationDocumentHits,
   isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   upsertMarkdownLinkRelationDocument,
   type WikiIndex,
   type LinkAction,
-  type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
@@ -1793,24 +1789,6 @@ function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode |
   return { checkbox, content };
 }
 
-const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: '→',
-  inbound: '←',
-  bidirectional: '↔',
-};
-
-const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: 'This document links out',
-  inbound: 'Links back to this document',
-  bidirectional: 'Linked both ways',
-};
-
-const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
-  wiki: 'Wiki',
-  artifact: 'Artifact',
-  command: 'Command',
-};
-
 function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
@@ -3424,28 +3402,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       cancelled = true;
     };
   }, [active, commandIndexPages, readings, wikiIndex, wikiIndexPages]);
-
-  const activeLinkTarget = useMemo<WikiLinkTarget | null>(() => {
-    if (selectedItemType === 'wiki' && wikiSelectedRelPath) return { kind: 'wiki', relPath: wikiSelectedRelPath };
-    if (selectedItemType === 'artifact' && selectedPath) return { kind: 'artifact', path: selectedPath };
-    return null;
-  }, [selectedItemType, selectedPath, wikiSelectedRelPath]);
-
-  const indexedMarkdownLinkRelationDocuments = useMemo(
-    () => refreshMarkdownLinkRelationDocumentHits(markdownLinkRelationDocuments, wikiIndex),
-    [markdownLinkRelationDocuments, wikiIndex],
-  );
-
-  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
-    if (!activeReading) return [];
-    const sourceContent = contentMode === 'markdown' ? editContent : activeReadingContent ?? activeReading.content;
-    return getMarkdownLinkedDocuments(
-      activeLinkTarget,
-      sourceContent,
-      indexedMarkdownLinkRelationDocuments,
-      wikiIndex,
-    );
-  }, [activeLinkTarget, activeReading, activeReadingContent, contentMode, editContent, indexedMarkdownLinkRelationDocuments, wikiIndex]);
 
   useEffect(() => {
     if (!activeReading) {
@@ -7616,58 +7572,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             ) : (
               /* View mode - markdown renderer */
               <>
-            {/* Field Theory icon - only in immersive mode */}
-            {isFullScreen && (
-              <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
-                <img
-                  src={theme.isDark ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
-                  alt="Field Theory"
-                  style={{ height: '32px', width: 'auto', opacity: 0.6 }}
-                />
-              </div>
-            )}
-            {/* Divider - only in immersive mode */}
-            {isFullScreen && (
-              <hr style={{ border: 'none', height: '1px', backgroundColor: theme.border, margin: '0 0 20px 0' }} />
-            )}
-            {/* Metadata tags — small pill badges above content. Task state stays in the sidebar filename row. */}
-            {markdownDisplay && (markdownDisplay.meta.tags || markdownDisplay.meta.source_type) && (
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginBottom: '12px' }}>
-                {(markdownDisplay.meta.tags ?? '')
-                  .replace(/^\[|\]$/g, '')
-                  .split(',')
-                  .map((t) => t.trim().toLowerCase())
-                  .filter(Boolean)
-                  .map((tag) => (
-                    <span
-                      key={tag}
-                      style={{
-                        fontSize: '10px',
-                        padding: '1px 6px',
-                        borderRadius: '8px',
-                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-                        color: theme.textSecondary,
-                        fontFamily: 'system-ui, sans-serif',
-                      }}
-                    >
-                      {tag}
-                    </span>
-                  ))}
-                {markdownDisplay.meta.source_type && (
-                  <span style={{
-                    fontSize: '10px',
-                    padding: '1px 6px',
-                    borderRadius: '8px',
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                    color: theme.textSecondary,
-                    fontFamily: 'system-ui, sans-serif',
-                    opacity: 0.7,
-                  }}>
-                    {markdownDisplay.meta.source_type}
-                  </span>
-                )}
-              </div>
-            )}
             {/* Rendered document content. The surface itself is the editing host. */}
             <div
               ref={renderedContentRef}
@@ -8033,94 +7937,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               >
                 {displayContent}
               </FieldTheoryProse>
-              {linkedDocuments.length > 0 && (
-                <section
-                  aria-label="Linked"
-                  contentEditable={false}
-                  style={{
-                    marginTop: '32px',
-                    paddingTop: '16px',
-                    borderTop: `1px solid ${theme.border}`,
-                  }}
-                >
-                  <div
-                    style={{
-                      marginBottom: '8px',
-                      fontSize: '12px',
-                      fontWeight: 650,
-                      color: theme.textSecondary,
-                      letterSpacing: 0,
-                    }}
-                  >
-                    Linked
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {linkedDocuments.map((link) => (
-                      <button
-                        key={getWikiLinkTargetKey(link.target)}
-                        type="button"
-                        title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          openMarkdownLinkTarget(link.target);
-                        }}
-                        style={{
-                          display: 'grid',
-                          gridTemplateColumns: '18px minmax(0, 1fr)',
-                          columnGap: '8px',
-                          alignItems: 'start',
-                          padding: '6px 0',
-                          border: 'none',
-                          backgroundColor: 'transparent',
-                          color: theme.text,
-                          cursor: 'pointer',
-                          textAlign: 'left',
-                          font: 'inherit',
-                        }}
-                      >
-                        <span
-                          aria-hidden="true"
-                          style={{
-                            marginTop: '1px',
-                            color: theme.textSecondary,
-                            fontSize: '13px',
-                            lineHeight: 1.2,
-                            textAlign: 'center',
-                          }}
-                        >
-                          {WIKI_LINK_DIRECTION_MARKER[link.direction]}
-                        </span>
-                        <span style={{ minWidth: 0 }}>
-                          <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
-                            {link.title}
-                            <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
-                              {WIKI_LINK_TARGET_LABEL[link.target.kind]}
-                            </span>
-                          </span>
-                          {link.excerpt && (
-                            <span
-                              style={{
-                                display: 'block',
-                                marginTop: '2px',
-                                color: theme.textSecondary,
-                                fontSize: '12px',
-                                lineHeight: 1.35,
-                                overflow: 'hidden',
-                                textOverflow: 'ellipsis',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {link.excerpt}
-                            </span>
-                          )}
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                </section>
-              )}
               {contentBottomScrollSpace > 0 && (
                 <div
                   aria-hidden="true"
