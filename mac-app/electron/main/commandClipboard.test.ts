@@ -6,6 +6,7 @@ vi.mock('electron', () => ({
 
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+  CommandClipboardRestoreCoordinator,
   captureClipboardSnapshot,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
@@ -91,6 +92,52 @@ describe('restoreClipboardSnapshot', () => {
     expect(target.clear).toHaveBeenCalledOnce();
     expect(target.writeText).toHaveBeenCalledWith('previous text');
     expect(target.writeImage).toHaveBeenCalledWith(image);
+  });
+});
+
+describe('CommandClipboardRestoreCoordinator', () => {
+  it('keeps the original snapshot across overlapping command pastes', () => {
+    const coordinator = new CommandClipboardRestoreCoordinator();
+    const original = {
+      formats: [],
+      text: 'original clipboard',
+      image: fakeImage(true),
+    };
+    const commandPayload = {
+      formats: [],
+      text: '[commit.md]',
+      image: fakeImage(true),
+    };
+
+    const first = coordinator.begin(original);
+    const second = coordinator.begin(commandPayload);
+
+    expect(first.snapshot).toBe(original);
+    expect(second.snapshot).toBe(original);
+    expect(coordinator.canRestore(first.generation)).toBe(false);
+    expect(coordinator.canRestore(second.generation)).toBe(true);
+  });
+
+  it('clears the pending snapshot after the newest paste restores', () => {
+    const coordinator = new CommandClipboardRestoreCoordinator();
+    const original = {
+      formats: [],
+      text: 'original clipboard',
+      image: fakeImage(true),
+    };
+    const nextOriginal = {
+      formats: [],
+      text: 'next original clipboard',
+      image: fakeImage(true),
+    };
+
+    const first = coordinator.begin(original);
+    coordinator.finish(first.generation);
+    expect(coordinator.canRestore(first.generation)).toBe(false);
+
+    const second = coordinator.begin(nextOriginal);
+
+    expect(second.snapshot).toBe(nextOriginal);
   });
 });
 
