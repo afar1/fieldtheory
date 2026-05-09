@@ -1769,12 +1769,6 @@ function CommandLauncher() {
       prepareLauncherForNextOpen();
       commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
     };
-    const closeBeforeExternalCommandPaste = () => {
-      commandsAPI.launcherClose({ skipActivation: true, generation: invocationGeneration });
-      window.requestAnimationFrame(() => {
-        prepareLauncherForNextOpen();
-      });
-    };
     if (item.type !== 'local-instruction') {
       noteItemUsage(item.id);
     }
@@ -1805,7 +1799,6 @@ function CommandLauncher() {
         commandName: item.name,
         fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
       });
-      closeBeforeExternalCommandPaste();
       const result = await commandsAPI.invokeCommand(item.name).catch((error) => ({
         success: false,
         error: error instanceof Error ? error.message : 'Command paste failed',
@@ -1814,6 +1807,7 @@ function CommandLauncher() {
         showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
         return;
       }
+      prepareLauncherForNextOpen();
       return;
     }
     if (item.type === 'local-command' || item.type === 'local-instruction') {
