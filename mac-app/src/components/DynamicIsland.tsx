@@ -176,6 +176,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
   const [standardAudioLevel, setStandardAudioLevel] = useState(0);
   const [filterMeterRawLevel, setFilterMeterRawLevel] = useState(0);
   const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
+  const stackAnimationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
   const waveformSettled = state === 'completing';
   const waveformActive = hotMicActive || state === 'recording' || waveformSettled;
@@ -211,7 +212,11 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
           return count;
         }
         if (count > prev) {
-          setTimeout(() => {
+          if (stackAnimationTimeoutRef.current) {
+            clearTimeout(stackAnimationTimeoutRef.current);
+          }
+          stackAnimationTimeoutRef.current = setTimeout(() => {
+            stackAnimationTimeoutRef.current = null;
             setAnimatedPipes((animPrev) => {
               const next = new Set(animPrev);
               for (let i = prev; i < count; i++) {
@@ -226,6 +231,10 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
     });
 
     return () => {
+      if (stackAnimationTimeoutRef.current) {
+        clearTimeout(stackAnimationTimeoutRef.current);
+        stackAnimationTimeoutRef.current = null;
+      }
       api.removeAllListeners('dynamic-island-state');
       api.removeAllListeners('dynamic-island-hotmic');
       api.removeAllListeners('dynamic-island-standard-audio-level');
@@ -1755,6 +1764,14 @@ function FloatingPill() {
         setFadingOut(false);
       }
     });
+    return () => {
+      api?.removeAllListeners('dynamic-island-resize');
+      api?.removeAllListeners('dynamic-island-state');
+      if (completeTimerRef.current) {
+        clearTimeout(completeTimerRef.current);
+        completeTimerRef.current = null;
+      }
+    };
   }, []);
 
   useEffect(() => {

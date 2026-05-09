@@ -140,6 +140,20 @@ function setCachedData<T>(key: string, data: T): void {
   }
 }
 
+function SkeletonItem({ width = '100%', height = '12px', isDark }: { width?: string; height?: string; isDark: boolean }) {
+  return (
+    <div
+      style={{
+        width,
+        height,
+        backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+        borderRadius: '4px',
+        animation: 'pulse 1.5s ease-in-out infinite',
+      }}
+    />
+  );
+}
+
 export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClipboard }: DMsViewProps) {
   const { theme } = useTheme();
 
@@ -783,19 +797,6 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
   // Render
   // ==========================================================================
 
-  // Loading skeleton component
-  const SkeletonItem = ({ width = '100%', height = '12px' }: { width?: string; height?: string }) => (
-    <div
-      style={{
-        width,
-        height,
-        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-        borderRadius: '4px',
-        animation: 'pulse 1.5s ease-in-out infinite',
-      }}
-    />
-  );
-
   if (loading) {
     return (
       <div style={{
@@ -807,8 +808,8 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
       }}>
         {/* Skeleton tabs */}
         <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-          <SkeletonItem width="100px" height="28px" />
-          <SkeletonItem width="100px" height="28px" />
+          <SkeletonItem width="100px" height="28px" isDark={theme.isDark} />
+          <SkeletonItem width="100px" height="28px" isDark={theme.isDark} />
         </div>
 
         <div style={{ flex: 1, display: 'flex', gap: '12px', overflow: 'hidden' }}>
@@ -817,9 +818,9 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
             {[1, 2, 3, 4].map((i) => (
               <div key={i} style={{ padding: '8px', marginBottom: '4px' }}>
                 <div style={{ display: 'flex', alignItems: 'center', marginBottom: '6px' }}>
-                  <SkeletonItem width="120px" height="14px" />
+                  <SkeletonItem width="120px" height="14px" isDark={theme.isDark} />
                 </div>
-                <SkeletonItem width="160px" height="10px" />
+                <SkeletonItem width="160px" height="10px" isDark={theme.isDark} />
               </div>
             ))}
           </div>
@@ -827,7 +828,7 @@ export default function DMsView({ onSendDM, feedbackOnly = false, onSwitchToClip
           {/* Skeleton content area */}
           <div style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
             <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <SkeletonItem width="200px" height="16px" />
+              <SkeletonItem width="200px" height="16px" isDark={theme.isDark} />
             </div>
           </div>
         </div>
