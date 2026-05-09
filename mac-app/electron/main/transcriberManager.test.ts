@@ -1368,6 +1368,60 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.pasteStack).toHaveBeenCalledWith(false);
   });
 
+  it('keeps the full recording file when no live transcript exists yet', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'full recording text');
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn(),
+      overlay: { showTranscribing: vi.fn() },
+      standardLiveTranscript: '',
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: null,
+      detectedCommands: [],
+      screenshotMetadata: [],
+      lastTranscription: '',
+      pasteStack: vi.fn(async () => {}),
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback,
+      preferences: { getPreference: vi.fn(() => 'whisper') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(manager.nativeHelper.snapshotRecording).not.toHaveBeenCalled();
+    expect(manager.nativeHelper.stopRecording).toHaveBeenCalled();
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/full.wav', 'whisper');
+    expect(manager.emit).toHaveBeenCalledWith('result', 'full recording text');
+  });
+
   it('does not wait for priority mic usage tracking before pasting', async () => {
     let resolveUsage: () => void = () => {};
     const usagePromise = new Promise<void>((resolve) => {
