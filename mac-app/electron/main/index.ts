@@ -126,6 +126,7 @@ import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromPr
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+  CommandClipboardRestoreCoordinator,
   captureClipboardSnapshot,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
@@ -211,6 +212,7 @@ type BookmarkBackgroundSyncResult =
 
 let bookmarkBackgroundSyncInFlight: Promise<BookmarkBackgroundSyncResult> | null = null;
 const COMMAND_LAUNCHER_PASTE_TRACE_VERSION = 3;
+const commandClipboardRestoreCoordinator = new CommandClipboardRestoreCoordinator();
 const MAIN_PROCESS_STARTED_AT = new Date().toISOString();
 let bookmarkBackgroundSyncLastAttemptAt = 0;
 
@@ -7745,7 +7747,7 @@ function setupClipboardIPCHandlers(): void {
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
-      const clipboardSnapshot = captureClipboardSnapshot();
+      const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
       try {
         let terminalCommandReferenceText: string | null = null;
         if (isTerminal || isIDE) {
@@ -7807,14 +7809,29 @@ function setupClipboardIPCHandlers(): void {
           commandName,
           commandPath: command.filePath,
           delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+          generation: clipboardRestore.generation,
         });
         await waitForCommandClipboardPasteRead();
-        restoreClipboardSnapshot(clipboardSnapshot);
-        clipboardManager?.syncClipboardHash();
-        appendCommandLauncherTrace('invoke-command-clipboard-restored', {
-          commandName,
-          commandPath: command.filePath,
-        });
+        if (commandClipboardRestoreCoordinator.canRestore(clipboardRestore.generation)) {
+          try {
+            restoreClipboardSnapshot(clipboardRestore.snapshot);
+            clipboardManager?.syncClipboardHash();
+            appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+              commandName,
+              commandPath: command.filePath,
+              generation: clipboardRestore.generation,
+            });
+          } finally {
+            commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+          }
+        } else {
+          appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+            commandName,
+            commandPath: command.filePath,
+            generation: clipboardRestore.generation,
+            reason: 'newer-command-invocation',
+          });
+        }
       }
       appendCommandLauncherTrace('invoke-command-success', {
         commandName,

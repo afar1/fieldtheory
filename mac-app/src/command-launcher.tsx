@@ -872,10 +872,7 @@ function CommandLauncher() {
 
     // Listen for reset events (when window is shown).
     // Reload commands and handoffs each time to pick up newly added ones without restart.
-    const handleReset = async (payload?: LauncherResetPayload) => {
-      flushSync(() => {
-        setLauncherSessionReady(false);
-      });
+    const handleReset = (payload?: LauncherResetPayload) => {
       if (typeof payload?.isDarkMode === 'boolean') {
         applyTheme(payload.isDarkMode);
       }
@@ -884,17 +881,17 @@ function CommandLauncher() {
       }
       flushSync(() => {
         clearLauncherSessionState();
+        setLauncherSessionReady(true);
       });
-      void loadLauncherData();
-      // Refresh theme state
-      const dark = await themeAPI.getTheme().catch(() => payload?.isDarkMode ?? themeAPI.initialTheme ?? false);
-      applyTheme(dark ?? payload?.isDarkMode ?? false);
-      // Reset height to input-only
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
-      setLauncherSessionReady(true);
+      inputRef.current?.focus();
       window.requestAnimationFrame(() => {
         inputRef.current?.focus();
       });
+      void loadLauncherData();
+      void themeAPI.getTheme()
+        .then(dark => applyTheme(dark ?? payload?.isDarkMode ?? false))
+        .catch(() => applyTheme(payload?.isDarkMode ?? themeAPI.initialTheme ?? false));
     };
 
     const unsubscribe = commandsAPI.onLauncherReset(handleReset);
