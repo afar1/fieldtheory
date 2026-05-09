@@ -24,6 +24,25 @@ export type CommandClipboard = {
   writeImage: (image: NativeImage) => void;
 };
 
+export class CommandClipboardRestoreCoordinator {
+  private generation = 0;
+  private snapshot: ClipboardSnapshot | null = null;
+
+  begin(snapshot: ClipboardSnapshot): { generation: number; snapshot: ClipboardSnapshot } {
+    if (!this.snapshot) this.snapshot = snapshot;
+    this.generation += 1;
+    return { generation: this.generation, snapshot: this.snapshot };
+  }
+
+  canRestore(generation: number): boolean {
+    return this.snapshot !== null && generation === this.generation;
+  }
+
+  finish(generation: number): void {
+    if (this.canRestore(generation)) this.snapshot = null;
+  }
+}
+
 export function captureClipboardSnapshot(source: CommandClipboard = clipboard): ClipboardSnapshot {
   const formats: ClipboardFormatSnapshot[] = [];
   for (const format of source.availableFormats()) {
