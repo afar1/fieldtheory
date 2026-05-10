@@ -5,9 +5,10 @@
  * value/onChange contract plus an imperative ref so callers can focus the editor
  * and read/write selection state without owning the CM instance.
  *
- * Scope is intentionally limited: this is the source-mode editor, not a
- * WYSIWYG/live-preview surface. Advanced behaviors such as wiki completion,
- * paste handling, and undo stack persistence are owned by LibrarianView.
+ * Scope is intentionally limited: advanced behaviors such as wiki completion,
+ * paste handling, and undo stack persistence are owned by LibrarianView. The
+ * optional rendered presentation keeps CodeMirror as the input owner while
+ * decorating common Markdown as styled prose.
  */
 import {
   forwardRef,
@@ -17,12 +18,13 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { EditorState, Compartment, RangeSetBuilder, Transaction } from '@codemirror/state';
+import { EditorState, Compartment, RangeSetBuilder, Transaction, type Range } from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
   EditorView,
   ViewPlugin,
+  WidgetType,
   keymap,
   highlightActiveLine,
 } from '@codemirror/view';
@@ -42,6 +44,13 @@ import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
+export const RENDERED_MARKDOWN_EDITOR_HEADING_CLASS = 'cm-rendered-markdown-heading';
+export const RENDERED_MARKDOWN_EDITOR_LINK_CLASS = 'cm-rendered-markdown-link';
+export const RENDERED_MARKDOWN_EDITOR_STRONG_CLASS = 'cm-rendered-markdown-strong';
+export const RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS = 'cm-rendered-markdown-emphasis';
+export const RENDERED_MARKDOWN_EDITOR_CODE_CLASS = 'cm-rendered-markdown-code';
+export const RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS = 'cm-rendered-markdown-task-marker';
+export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-task-done';
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
@@ -90,10 +99,18 @@ export interface MarkdownCodeEditorSelectionSnapshot {
 interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
+  presentation?: 'source' | 'rendered';
   fontFamily: string;
   fontSize: number | string;
   lineHeight: number | string;
   color: string;
+  headingFontFamily?: string;
+  h1Size?: string;
+  h2Size?: string;
+  h3Size?: string;
+  linkColor?: string;
+  mutedColor?: string;
+  paragraphSpacing?: string;
   background?: string;
   caretColor?: string;
   selectionBackground?: string;
@@ -166,6 +183,183 @@ export const checkedMarkdownTaskLineExtension = ViewPlugin.fromClass(
     update(update: { docChanged: boolean; state: EditorState }) {
       if (update.docChanged) {
         this.decorations = buildCheckedMarkdownTaskLineDecorations(update.state);
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
+class RenderedMarkdownTaskMarkerWidget extends WidgetType {
+  constructor(private readonly checked: boolean) {
+    super();
+  }
+
+  eq(other: RenderedMarkdownTaskMarkerWidget): boolean {
+    return other.checked === this.checked;
+  }
+
+  toDOM(): HTMLElement {
+    const marker = document.createElement('span');
+    marker.className = RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS;
+    marker.textContent = this.checked ? '[x]' : '[ ]';
+    marker.setAttribute('aria-hidden', 'true');
+    return marker;
+  }
+}
+
+type RenderedMarkdownDecoration = Range<Decoration>;
+
+function rangesIntersect(
+  first: { from: number; to: number },
+  second: { from: number; to: number },
+): boolean {
+  return first.from < second.to && second.from < first.to;
+}
+
+function pushRenderedSyntaxReplacement(
+  decorations: RenderedMarkdownDecoration[],
+  from: number,
+  to: number,
+): void {
+  if (to > from) {
+    decorations.push(Decoration.replace({}).range(from, to));
+  }
+}
+
+function pushRenderedInlineMark(
+  decorations: RenderedMarkdownDecoration[],
+  from: number,
+  to: number,
+  className: string,
+): void {
+  if (to > from && className) {
+    decorations.push(Decoration.mark({ class: className }).range(from, to));
+  }
+}
+
+function pushRenderedInlineDecorations(
+  decorations: RenderedMarkdownDecoration[],
+  lineFrom: number,
+  text: string,
+): void {
+  const protectedRanges: Array<{ from: number; to: number }> = [];
+  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
+  const isProtected = (from: number, to: number) => protectedRanges.some((range) => rangesIntersect(range, { from, to }));
+
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    const contentFrom = from + 1;
+    const contentTo = to - 1;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(decorations, contentFrom, contentTo, RENDERED_MARKDOWN_EDITOR_CODE_CLASS);
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+
+  for (const match of text.matchAll(/\[([^\]\n]+)\]\(([^)\n]*)\)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    const labelFrom = from + 1;
+    const labelTo = labelFrom + match[1].length;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, labelFrom);
+    pushRenderedInlineMark(decorations, labelFrom, labelTo, RENDERED_MARKDOWN_EDITOR_LINK_CLASS);
+    pushRenderedSyntaxReplacement(decorations, labelTo, to);
+  }
+
+  for (const match of text.matchAll(/\*\*([^*\n]+)\*\*/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 2;
+    const contentTo = to - 2;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(decorations, contentFrom, contentTo, RENDERED_MARKDOWN_EDITOR_STRONG_CLASS);
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+
+  for (const match of text.matchAll(/(?<!\*)\*([^*\n]+)\*(?!\*)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 1;
+    const contentTo = to - 1;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(decorations, contentFrom, contentTo, RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS);
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+}
+
+export function buildRenderedMarkdownEditorDecorations(state: EditorState): DecorationSet {
+  const decorations: RenderedMarkdownDecoration[] = [];
+
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber);
+    const text = line.text;
+    const headingMatch = /^(#{1,3})\s+/.exec(text);
+    const taskMatch = /^(\s*)(?:-\s+)?\[( |x|X)\]\s+/.exec(text);
+    let inlineStart = 0;
+
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const contentFrom = line.from + headingMatch[0].length;
+      inlineStart = headingMatch[0].length;
+      pushRenderedSyntaxReplacement(decorations, line.from, contentFrom);
+      pushRenderedInlineMark(
+        decorations,
+        contentFrom,
+        line.to,
+        `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS} ${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-${level}`,
+      );
+    } else if (taskMatch) {
+      const markerFrom = line.from + taskMatch[1].length;
+      const markerTo = line.from + taskMatch[0].length;
+      const checked = taskMatch[2].toLowerCase() === 'x';
+      inlineStart = taskMatch[0].length;
+      decorations.push(
+        Decoration.replace({
+          widget: new RenderedMarkdownTaskMarkerWidget(checked),
+        }).range(markerFrom, markerTo),
+      );
+      pushRenderedInlineMark(
+        decorations,
+        markerTo,
+        line.to,
+        checked ? RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS : '',
+      );
+    }
+
+    pushRenderedInlineDecorations(decorations, line.from + inlineStart, text.slice(inlineStart));
+  }
+
+  return Decoration.set(
+    decorations
+      .filter((entry) => entry.from <= entry.to)
+      .sort((a, b) => a.from - b.from || a.to - b.to),
+    true,
+  );
+}
+
+export const renderedMarkdownEditorPresentationExtension = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildRenderedMarkdownEditorDecorations(view.state);
+    }
+
+    update(update: { docChanged: boolean; viewportChanged: boolean; state: EditorState }) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = buildRenderedMarkdownEditorDecorations(update.state);
       }
     }
   },
@@ -331,10 +525,18 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const {
       value,
       onChange,
+      presentation = 'source',
       fontFamily,
       fontSize,
       lineHeight,
       color,
+      headingFontFamily,
+      h1Size,
+      h2Size,
+      h3Size,
+      linkColor,
+      mutedColor,
+      paragraphSpacing,
       background,
       caretColor,
       selectionBackground,
@@ -405,10 +607,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const editorTheme = useMemo(() => {
       const fontSizePx = typeof fontSize === 'number' ? `${fontSize}px` : String(fontSize);
       const lineHeightCss = typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
+      const isRenderedPresentation = presentation === 'rendered';
       return EditorView.theme(
         {
           '&': {
-            height: '100%',
+            height: isRenderedPresentation ? 'auto' : '100%',
             color,
             backgroundColor: background ?? 'transparent',
             fontFamily,
@@ -417,13 +620,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-scroller': {
             fontFamily,
             lineHeight: lineHeightCss,
-            overflow: 'auto',
+            overflow: isRenderedPresentation ? 'visible' : 'auto',
             cursor: 'text',
           },
           '.cm-content': {
             caretColor: caretColor ?? color,
             padding: '0',
             cursor: 'text',
+            ...(isRenderedPresentation ? { minHeight: '160px' } : {}),
           },
           '.cm-content::after': {
             content: '""',
@@ -433,6 +637,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-line': {
             padding: '0',
             cursor: 'text',
+            ...(isRenderedPresentation ? { paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.12)` } : {}),
           },
           [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
             opacity: 0.68,
@@ -455,6 +660,54 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-gutters': {
             display: 'none',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}`]: {
+            color,
+            fontFamily: headingFontFamily ?? fontFamily,
+            fontWeight: 620,
+            letterSpacing: 0,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-1`]: {
+            fontSize: h1Size ?? '1.55em',
+            lineHeight: 1.2,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-2`]: {
+            fontSize: h2Size ?? '1.18em',
+            lineHeight: 1.28,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-3`]: {
+            fontSize: h3Size ?? '1em',
+            lineHeight: 1.35,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`]: {
+            color,
+            fontWeight: 630,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS}`]: {
+            fontStyle: 'italic',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`]: {
+            color: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
+            textDecoration: 'underline',
+            textUnderlineOffset: '2px',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_CODE_CLASS}`]: {
+            borderRadius: '4px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.055)',
+            padding: '0.08em 0.28em',
+            fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+            fontSize: '0.88em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
+            display: 'inline-block',
+            minWidth: '2.4em',
+            marginRight: '0.6em',
+            color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.56)' : 'rgba(17,17,17,0.56)'),
+            fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+            fontSize: '0.9em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS}`]: {
+            opacity: 0.68,
+          },
         },
         { dark: theme.isDark },
       );
@@ -466,7 +719,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       bottomRoomPx,
       fontFamily,
       fontSize,
+      h1Size,
+      h2Size,
+      h3Size,
+      headingFontFamily,
+      linkColor,
       lineHeight,
+      mutedColor,
+      paragraphSpacing,
+      presentation,
       selectionBackground,
       theme.isDark,
     ]);
@@ -480,6 +741,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           historyCompartment.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           markdown(),
+          ...(presentation === 'rendered' ? [renderedMarkdownEditorPresentationExtension] : []),
           syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
