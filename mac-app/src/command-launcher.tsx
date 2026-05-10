@@ -47,6 +47,7 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldIncludeLauncherRecentFile,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   type LauncherFieldTheoryMarkdownTarget,
@@ -977,6 +978,11 @@ function CommandLauncher() {
       lastUpdated: cmd.lastModified,
     })), [commands]);
 
+  const commandFilePaths = useMemo(
+    () => new Set(commandItems.map(item => item.filePath).filter((filePath): filePath is string => Boolean(filePath))),
+    [commandItems],
+  );
+
   const recentFileItems = useMemo((): LauncherItem[] => {
     return recentEntries.flatMap((entry) => {
       const libraryItem = entry.kind === 'wiki'
@@ -988,6 +994,7 @@ function CommandLauncher() {
       const filePath = libraryItem?.filePath ?? entry.path;
       const relPath = entry.kind === 'wiki' ? entry.path : libraryItem?.relPath;
       const name = libraryItem?.name ?? entry.title;
+      if (!shouldIncludeLauncherRecentFile({ filePath, commandFilePaths })) return [];
 
       return [{
         id: `recent-${entry.kind}-${entry.path}`,
@@ -1002,7 +1009,7 @@ function CommandLauncher() {
         hotkeyDisplay: formatTimeAgo(entry.lastOpenedAt),
       }];
     });
-  }, [libraryMarkdownItems, recentEntries]);
+  }, [commandFilePaths, libraryMarkdownItems, recentEntries]);
 
   // Build all items (commands + actions + handoffs).
   const allItems = useMemo(() => {

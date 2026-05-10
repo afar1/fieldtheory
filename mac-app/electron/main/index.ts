@@ -416,9 +416,9 @@ async function typeTextFromCommandLauncher(
   tracePrefix: 'invoke-command' | 'invoke-handoff',
 ): Promise<boolean> {
   commandLauncherWindow?.suppressActivationForExternalInvocation();
+  commandLauncherWindow?.hide(true);
 
   if (!nativeHelper) {
-    commandLauncherWindow?.hide(true);
     appendCommandLauncherTrace(`${tracePrefix}-native-type-unavailable`, {
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
       targetBundleId: targetApp.bundleId,
@@ -429,10 +429,10 @@ async function typeTextFromCommandLauncher(
   }
 
   const activated = await activateCommandLauncherTargetApp(targetApp, `${tracePrefix}-native-type`);
-  commandLauncherWindow?.hide(true);
   if (!activated) {
     return false;
   }
+  commandLauncherWindow?.hide(true);
   await new Promise(resolve => setTimeout(resolve, 40));
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {

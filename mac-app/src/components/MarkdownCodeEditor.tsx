@@ -5,9 +5,10 @@
  * value/onChange contract plus an imperative ref so callers can focus the editor
  * and read/write selection state without owning the CM instance.
  *
- * Scope is intentionally limited: this is the source-mode editor, not a
- * WYSIWYG/live-preview surface. Advanced behaviors such as wiki completion,
- * paste handling, and undo stack persistence are owned by LibrarianView.
+ * Scope is intentionally limited: advanced behaviors such as wiki completion,
+ * paste handling, and undo stack persistence are owned by LibrarianView. The
+ * optional rendered presentation keeps CodeMirror as the input owner while
+ * decorating common Markdown as styled prose.
  */
 import {
   forwardRef,
@@ -17,12 +18,13 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { EditorState, Compartment, RangeSetBuilder, Transaction } from '@codemirror/state';
+import { EditorState, Compartment, RangeSetBuilder, Transaction, type Range } from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
   EditorView,
   ViewPlugin,
+  WidgetType,
   keymap,
   highlightActiveLine,
 } from '@codemirror/view';
@@ -42,6 +44,27 @@ import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
+export const RENDERED_MARKDOWN_EDITOR_HEADING_CLASS = 'cm-rendered-markdown-heading';
+export const RENDERED_MARKDOWN_EDITOR_LINK_CLASS = 'cm-rendered-markdown-link';
+export const RENDERED_MARKDOWN_EDITOR_STRONG_CLASS = 'cm-rendered-markdown-strong';
+export const RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS = 'cm-rendered-markdown-emphasis';
+export const RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS = 'cm-rendered-markdown-underline';
+export const RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS = 'cm-rendered-markdown-strike';
+export const RENDERED_MARKDOWN_EDITOR_CODE_CLASS = 'cm-rendered-markdown-code';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS = 'cm-rendered-markdown-image';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS = 'cm-rendered-markdown-image-caption';
+export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS = 'cm-rendered-markdown-code-block';
+export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS = 'cm-rendered-markdown-code-fence';
+export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS = 'cm-rendered-markdown-code-fence-marker';
+export const RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS = 'cm-rendered-markdown-list-line';
+export const RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS = 'cm-rendered-markdown-list-marker';
+export const RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS = 'cm-rendered-markdown-heading-marker';
+export const RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS = 'cm-rendered-markdown-quote-line';
+export const RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS = 'cm-rendered-markdown-quote-marker';
+export const RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS = 'cm-rendered-markdown-task-marker';
+export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-task-done';
+export const RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR = 'data-ft-source-from';
+export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
@@ -90,10 +113,18 @@ export interface MarkdownCodeEditorSelectionSnapshot {
 interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
+  presentation?: 'source' | 'rendered';
   fontFamily: string;
   fontSize: number | string;
   lineHeight: number | string;
   color: string;
+  headingFontFamily?: string;
+  h1Size?: string;
+  h2Size?: string;
+  h3Size?: string;
+  linkColor?: string;
+  mutedColor?: string;
+  paragraphSpacing?: string;
   background?: string;
   caretColor?: string;
   selectionBackground?: string;
@@ -166,6 +197,460 @@ export const checkedMarkdownTaskLineExtension = ViewPlugin.fromClass(
     update(update: { docChanged: boolean; state: EditorState }) {
       if (update.docChanged) {
         this.decorations = buildCheckedMarkdownTaskLineDecorations(update.state);
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
+function renderedMarkdownSourceAttributes(from: number, to: number): Record<string, string> {
+  return {
+    [RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR]: String(from),
+    [RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR]: String(to),
+  };
+}
+
+function applyRenderedMarkdownSourceAttributes(element: HTMLElement, from: number, to: number): void {
+  element.setAttribute('aria-hidden', 'true');
+  element.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(from));
+  element.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(to));
+}
+
+class RenderedMarkdownMarkerWidget extends WidgetType {
+  constructor(
+    private readonly className: string,
+    private readonly textContent: string,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
+  ) {
+    super();
+  }
+
+  eq(other: RenderedMarkdownMarkerWidget): boolean {
+    return other.className === this.className
+      && other.textContent === this.textContent
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo;
+  }
+
+  toDOM(): HTMLElement {
+    const marker = document.createElement('span');
+    marker.className = this.className;
+    marker.textContent = this.textContent;
+    applyRenderedMarkdownSourceAttributes(marker, this.sourceFrom, this.sourceTo);
+    return marker;
+  }
+}
+
+function normalizeRenderedMarkdownImageSource(destination: string): string | null {
+  const raw = destination.trim().replace(/^<(.+)>$/, '$1');
+  if (/^file:/i.test(raw)) return raw.replace(/^file:/i, 'ftlocalfile:');
+  if (/^(https?|ftlocalfile|ftmedia):/i.test(raw)) return raw;
+  if (/^data:image\//i.test(raw)) return raw;
+  return null;
+}
+
+class RenderedMarkdownImageWidget extends WidgetType {
+  constructor(
+    private readonly alt: string,
+    private readonly destination: string,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
+  ) {
+    super();
+  }
+
+  eq(other: RenderedMarkdownImageWidget): boolean {
+    return other.alt === this.alt
+      && other.destination === this.destination
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo;
+  }
+
+  toDOM(): HTMLElement {
+    const image = document.createElement('span');
+    image.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS;
+    image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
+    image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
+
+    const src = normalizeRenderedMarkdownImageSource(this.destination);
+    if (src) {
+      const preview = document.createElement('img');
+      preview.src = src;
+      preview.alt = this.alt || 'Image';
+      image.appendChild(preview);
+    }
+
+    const caption = document.createElement('span');
+    caption.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS;
+    caption.textContent = this.alt || 'Image';
+    image.appendChild(caption);
+
+    return image;
+  }
+}
+
+class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
+  constructor(
+    private readonly checked: boolean,
+    private readonly sourceFrom: number,
+    private readonly sourceTo: number,
+    private readonly checkFrom: number,
+    private readonly checkTo: number,
+  ) {
+    super();
+  }
+
+  eq(other: RenderedMarkdownTaskCheckboxWidget): boolean {
+    return other.checked === this.checked
+      && other.sourceFrom === this.sourceFrom
+      && other.sourceTo === this.sourceTo
+      && other.checkFrom === this.checkFrom
+      && other.checkTo === this.checkTo;
+  }
+
+  toDOM(view: EditorView): HTMLElement {
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = this.checked;
+    checkbox.tabIndex = -1;
+    checkbox.className = RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS;
+    checkbox.setAttribute('aria-label', this.checked ? 'Mark task incomplete' : 'Mark task complete');
+    checkbox.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
+    checkbox.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
+    checkbox.addEventListener('mousedown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
+    checkbox.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      view.dispatch({
+        changes: {
+          from: this.checkFrom,
+          to: this.checkTo,
+          insert: this.checked ? ' ' : 'x',
+        },
+        selection: { anchor: this.checkTo },
+      });
+      window.setTimeout(() => view.focus(), 0);
+    });
+    return checkbox;
+  }
+
+  ignoreEvent(): boolean {
+    return false;
+  }
+}
+
+type RenderedMarkdownDecoration = Range<Decoration>;
+
+function rangesIntersect(
+  first: { from: number; to: number },
+  second: { from: number; to: number },
+): boolean {
+  return first.from < second.to && second.from < first.to;
+}
+
+function pushRenderedSyntaxReplacement(
+  decorations: RenderedMarkdownDecoration[],
+  from: number,
+  to: number,
+  widget?: WidgetType,
+): void {
+  if (to > from) {
+    decorations.push(Decoration.replace(widget ? { widget } : {}).range(from, to));
+  }
+}
+
+function pushRenderedInlineMark(
+  decorations: RenderedMarkdownDecoration[],
+  from: number,
+  to: number,
+  className: string,
+  attributes?: Record<string, string>,
+): void {
+  if (to > from && className) {
+    decorations.push(Decoration.mark({ class: className, attributes }).range(from, to));
+  }
+}
+
+function pushRenderedInlineDecorations(
+  decorations: RenderedMarkdownDecoration[],
+  lineFrom: number,
+  text: string,
+): void {
+  const protectedRanges: Array<{ from: number; to: number }> = [];
+  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
+  const isProtected = (from: number, to: number) => protectedRanges.some((range) => rangesIntersect(range, { from, to }));
+
+  for (const match of text.matchAll(/!\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]*)\)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(
+      decorations,
+      from,
+      to,
+      new RenderedMarkdownImageWidget(match[1], match[2], from, to),
+    );
+  }
+
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 1;
+    const contentTo = to - 1;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(
+      decorations,
+      contentFrom,
+      contentTo,
+      RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+
+  for (const match of text.matchAll(/\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const targetFrom = from + 2;
+    const targetTo = targetFrom + match[1].length;
+    const aliasFrom = match[2] === undefined ? targetFrom : targetTo + 1;
+    const aliasTo = match[2] === undefined ? targetTo : aliasFrom + match[2].length;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, aliasFrom);
+    pushRenderedInlineMark(
+      decorations,
+      aliasFrom,
+      aliasTo,
+      RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, aliasTo, to);
+  }
+
+  for (const match of text.matchAll(/\[([^\]\n]+)\]\(([^)\n]*)\)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const labelFrom = from + 1;
+    const labelTo = labelFrom + match[1].length;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, labelFrom);
+    pushRenderedInlineMark(
+      decorations,
+      labelFrom,
+      labelTo,
+      RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, labelTo, to);
+  }
+
+  for (const match of text.matchAll(/<u>([^<\n]+)<\/u>/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 3;
+    const contentTo = to - 4;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(
+      decorations,
+      contentFrom,
+      contentTo,
+      RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+
+  for (const match of text.matchAll(/~~([^~\n]+)~~/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 2;
+    const contentTo = to - 2;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(
+      decorations,
+      contentFrom,
+      contentTo,
+      RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+
+  for (const match of text.matchAll(/\*\*([^*\n]+)\*\*/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 2;
+    const contentTo = to - 2;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(
+      decorations,
+      contentFrom,
+      contentTo,
+      RENDERED_MARKDOWN_EDITOR_STRONG_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+
+  for (const match of text.matchAll(/(?<!\*)\*([^*\n]+)\*(?!\*)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    const to = from + match[0].length;
+    if (isProtected(from, to)) continue;
+    const contentFrom = from + 1;
+    const contentTo = to - 1;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentFrom);
+    pushRenderedInlineMark(
+      decorations,
+      contentFrom,
+      contentTo,
+      RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS,
+      renderedMarkdownSourceAttributes(from, to),
+    );
+    pushRenderedSyntaxReplacement(decorations, contentTo, to);
+  }
+}
+
+export function buildRenderedMarkdownEditorDecorations(state: EditorState): DecorationSet {
+  const decorations: RenderedMarkdownDecoration[] = [];
+  let codeFenceMarker: string | null = null;
+
+  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
+    const line = state.doc.line(lineNumber);
+    const text = line.text;
+    const codeFenceMatch = /^(`{3,}|~{3,})/.exec(text);
+    const headingMatch = /^(#{1,3})\s+/.exec(text);
+    const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s+)/.exec(text);
+    const listMatch = /^(\s*)((?:[-*+])|(?:\d+[.)]))\s+/.exec(text);
+    const quoteMatch = /^(\s*)>\s?/.exec(text);
+    let inlineStart = 0;
+
+    if (codeFenceMatch && (codeFenceMarker === null || codeFenceMatch[1][0] === codeFenceMarker)) {
+      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS }).range(line.from));
+      pushRenderedSyntaxReplacement(
+        decorations,
+        line.from,
+        line.to,
+        new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS, '', line.from, line.to),
+      );
+      codeFenceMarker = codeFenceMarker === null ? codeFenceMatch[1][0] : null;
+      continue;
+    }
+
+    if (codeFenceMarker !== null) {
+      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS }).range(line.from));
+      continue;
+    }
+
+    if (headingMatch) {
+      const level = headingMatch[1].length;
+      const contentFrom = line.from + headingMatch[0].length;
+      inlineStart = headingMatch[0].length;
+      decorations.push(Decoration.line({ class: `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-line` }).range(line.from));
+      pushRenderedSyntaxReplacement(
+        decorations,
+        line.from,
+        contentFrom,
+        new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS, '', line.from, contentFrom),
+      );
+      pushRenderedInlineMark(
+        decorations,
+        contentFrom,
+        line.to,
+        `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS} ${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-${level}`,
+      );
+    } else if (taskMatch) {
+      const markerFrom = line.from + taskMatch[1].length;
+      const markerTo = line.from + taskMatch[0].length;
+      const checkFrom = markerFrom + taskMatch[2].length + 1;
+      const checked = taskMatch[3].toLowerCase() === 'x';
+      inlineStart = taskMatch[0].length;
+      decorations.push(
+        Decoration.replace({
+          widget: new RenderedMarkdownTaskCheckboxWidget(
+            checked,
+            markerFrom,
+            markerTo,
+            checkFrom,
+            checkFrom + taskMatch[3].length,
+          ),
+        }).range(markerFrom, markerTo),
+      );
+      pushRenderedInlineMark(
+        decorations,
+        markerTo,
+        line.to,
+        checked ? RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS : '',
+      );
+    } else if (quoteMatch) {
+      const markerFrom = line.from + quoteMatch[1].length;
+      const markerTo = line.from + quoteMatch[0].length;
+      inlineStart = quoteMatch[0].length;
+      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS }).range(line.from));
+      decorations.push(
+        Decoration.replace({
+          widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS, '', markerFrom, markerTo),
+        }).range(markerFrom, markerTo),
+      );
+    } else if (listMatch) {
+      const markerFrom = line.from + listMatch[1].length;
+      const markerTo = line.from + listMatch[0].length;
+      const markerText = /^\d/.test(listMatch[2]) ? listMatch[2].replace(/\)$/, '.') : '•';
+      inlineStart = listMatch[0].length;
+      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS }).range(line.from));
+      decorations.push(
+        Decoration.replace({
+          widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS, markerText, markerFrom, markerTo),
+        }).range(markerFrom, markerTo),
+      );
+    }
+
+    pushRenderedInlineDecorations(decorations, line.from + inlineStart, text.slice(inlineStart));
+  }
+
+  return Decoration.set(
+    decorations
+      .filter((entry) => entry.from <= entry.to)
+      .sort((a, b) => a.from - b.from || a.to - b.to),
+    true,
+  );
+}
+
+export const renderedMarkdownEditorPresentationExtension = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildRenderedMarkdownEditorDecorations(view.state);
+    }
+
+    update(update: { docChanged: boolean; viewportChanged: boolean; state: EditorState }) {
+      if (update.docChanged || update.viewportChanged) {
+        this.decorations = buildRenderedMarkdownEditorDecorations(update.state);
       }
     }
   },
@@ -331,10 +816,18 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const {
       value,
       onChange,
+      presentation = 'source',
       fontFamily,
       fontSize,
       lineHeight,
       color,
+      headingFontFamily,
+      h1Size,
+      h2Size,
+      h3Size,
+      linkColor,
+      mutedColor,
+      paragraphSpacing,
       background,
       caretColor,
       selectionBackground,
@@ -405,10 +898,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const editorTheme = useMemo(() => {
       const fontSizePx = typeof fontSize === 'number' ? `${fontSize}px` : String(fontSize);
       const lineHeightCss = typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
+      const isRenderedPresentation = presentation === 'rendered';
       return EditorView.theme(
         {
           '&': {
-            height: '100%',
+            height: isRenderedPresentation ? 'auto' : '100%',
             color,
             backgroundColor: background ?? 'transparent',
             fontFamily,
@@ -417,13 +911,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-scroller': {
             fontFamily,
             lineHeight: lineHeightCss,
-            overflow: 'auto',
+            overflow: isRenderedPresentation ? 'visible' : 'auto',
             cursor: 'text',
           },
           '.cm-content': {
             caretColor: caretColor ?? color,
             padding: '0',
             cursor: 'text',
+            ...(isRenderedPresentation ? { minHeight: '160px' } : {}),
           },
           '.cm-content::after': {
             content: '""',
@@ -433,6 +928,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-line': {
             padding: '0',
             cursor: 'text',
+            ...(isRenderedPresentation ? { paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.12)` } : {}),
           },
           [`.${MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS}`]: {
             opacity: 0.68,
@@ -455,6 +951,120 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-gutters': {
             display: 'none',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}`]: {
+            color,
+            fontFamily: headingFontFamily ?? fontFamily,
+            fontWeight: 620,
+            letterSpacing: 0,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-1`]: {
+            fontSize: h1Size ?? '1.55em',
+            lineHeight: 1.2,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-2`]: {
+            fontSize: h2Size ?? '1.18em',
+            lineHeight: 1.28,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-3`]: {
+            fontSize: h3Size ?? '1em',
+            lineHeight: 1.35,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS}, .${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS}`]: {
+            display: 'inline-block',
+            width: '0',
+            overflow: 'hidden',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
+            paddingLeft: '0.1em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
+            display: 'inline-block',
+            width: '1.55em',
+            color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.58)' : 'rgba(17,17,17,0.58)'),
+            fontVariantNumeric: 'tabular-nums',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS}`]: {
+            borderLeft: `3px solid ${theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.16)'}`,
+            paddingLeft: '0.9em',
+            color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.72)' : 'rgba(17,17,17,0.68)'),
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS}`]: {
+            display: 'inline-block',
+            width: '0',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS}`]: {
+            borderRadius: '4px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.065)' : 'rgba(0,0,0,0.045)',
+            padding: '0.24em 0.65em',
+            fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+            fontSize: '0.9em',
+            lineHeight: 1.55,
+            whiteSpace: 'pre-wrap',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS}`]: {
+            height: '0',
+            lineHeight: '0',
+            overflow: 'hidden',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`]: {
+            color,
+            fontWeight: 630,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS}`]: {
+            fontStyle: 'italic',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS}`]: {
+            textDecoration: 'underline',
+            textUnderlineOffset: '2px',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS}`]: {
+            textDecoration: 'line-through',
+            opacity: 0.72,
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`]: {
+            color: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
+            textDecoration: 'underline',
+            textUnderlineOffset: '2px',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_CODE_CLASS}`]: {
+            borderRadius: '4px',
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.055)',
+            padding: '0.08em 0.28em',
+            fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+            fontSize: '0.88em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`]: {
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5em',
+            maxWidth: '100%',
+            margin: '0.18em 0',
+            verticalAlign: 'middle',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`]: {
+            display: 'block',
+            maxWidth: 'min(100%, 420px)',
+            maxHeight: '220px',
+            borderRadius: '4px',
+            objectFit: 'contain',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS}`]: {
+            color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.62)' : 'rgba(17,17,17,0.62)'),
+            fontSize: '0.88em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
+            display: 'inline-block',
+            width: '1.05em',
+            height: '1.05em',
+            minWidth: '1.05em',
+            marginRight: '0.6em',
+            verticalAlign: '-0.14em',
+            accentColor: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
+            cursor: 'pointer',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS}`]: {
+            opacity: 0.68,
+          },
         },
         { dark: theme.isDark },
       );
@@ -466,7 +1076,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       bottomRoomPx,
       fontFamily,
       fontSize,
+      h1Size,
+      h2Size,
+      h3Size,
+      headingFontFamily,
+      linkColor,
       lineHeight,
+      mutedColor,
+      paragraphSpacing,
+      presentation,
       selectionBackground,
       theme.isDark,
     ]);
@@ -480,6 +1098,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           historyCompartment.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           markdown(),
+          ...(presentation === 'rendered' ? [renderedMarkdownEditorPresentationExtension] : []),
           syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
