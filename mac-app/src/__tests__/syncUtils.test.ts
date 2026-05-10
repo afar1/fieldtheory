@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { mergeByLastWriteWins, withUpdatedAt } from '../../../services/syncUtils';
+import {
+  deletedRemoteRecordTimestamp,
+  filterPendingDeletesByCollection,
+  filterRecordsDeletedRemotely,
+  mergeByLastWriteWins,
+  withUpdatedAt,
+} from '../../../services/syncUtils';
 
 type TestRecord = {
   id: string;
@@ -233,5 +239,66 @@ describe('mergeByLastWriteWins', () => {
       const result = mergeByLastWriteWins(local, []);
       expect((result[0] as ExtendedRecord).extra).toBe('data');
     });
+  });
+});
+
+describe('mobile sync delete helpers', () => {
+  it('filters local records when the remote delete is newer', () => {
+    const records: TestRecord[] = [
+      { id: '1', text: 'stale local', createdAt: 1000, updatedAt: 2000 },
+      { id: '2', text: 'keep me', createdAt: 1000, updatedAt: 2000 },
+    ];
+
+    const result = filterRecordsDeletedRemotely(records, [
+      {
+        client_id: '1',
+        client_updated_at_ms: 3000,
+        deleted_at: new Date(3000).toISOString(),
+      },
+    ]);
+
+    expect(result.map((record) => record.id)).toEqual(['2']);
+  });
+
+  it('keeps local records when the local edit is newer than the remote delete', () => {
+    const records: TestRecord[] = [
+      { id: '1', text: 'newer local', createdAt: 1000, updatedAt: 4000 },
+    ];
+
+    const result = filterRecordsDeletedRemotely(records, [
+      {
+        client_id: '1',
+        client_updated_at_ms: 3000,
+        deleted_at: new Date(3000).toISOString(),
+      },
+    ]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].text).toBe('newer local');
+  });
+
+  it('does not let a late server write time make an older delete win', () => {
+    const row = {
+      client_id: '1',
+      client_updated_at_ms: 2000,
+      deleted_at: new Date(2000).toISOString(),
+      updated_at: new Date(9000).toISOString(),
+    };
+
+    expect(deletedRemoteRecordTimestamp(row)).toBe(2000);
+  });
+
+  it('filters pending deletes only for the requested collection', () => {
+    const records: TestRecord[] = [
+      { id: '1', text: 'todo delete', createdAt: 1000, updatedAt: 1000 },
+      { id: '2', text: 'keep', createdAt: 1000, updatedAt: 1000 },
+    ];
+
+    const result = filterPendingDeletesByCollection(records, [
+      { collection: 'todos', id: '1', deletedAt: 3000 },
+      { collection: 'transcripts', id: '2', deletedAt: 3000 },
+    ], 'todos');
+
+    expect(result.map((record) => record.id)).toEqual(['2']);
   });
 });

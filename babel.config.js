@@ -3,9 +3,6 @@ module.exports = function(api) {
   return {
     presets: ['babel-preset-expo'],
     plugins: [
-      ['inline-dotenv', {
-        path: '.env.local',
-      }],
       // Reanimated plugin must be listed last.
       'react-native-reanimated/plugin',
     ],
