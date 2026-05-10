@@ -423,7 +423,7 @@ describe('CommandLauncherWindow.hide()', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
     const blurHandler = mockWindow.on.mock.calls.find(([event]) => event === 'blur')?.[1];
 
-    launcher.suppressActivationForExternalInvocation();
+    launcher.beginExternalInvocationSuppression();
     blurHandler?.();
 
     expect(mockWindow.hide).toHaveBeenCalled();
@@ -442,7 +442,7 @@ describe('CommandLauncherWindow.hide()', () => {
     const activatePreviousApp = vi.spyOn(targetActivationLauncher as any, 'activatePreviousApp').mockResolvedValue(undefined);
     const blurHandler = mockWindow.on.mock.calls.find(([event]) => event === 'blur')?.[1];
 
-    targetActivationLauncher.suppressActivationForExternalInvocation();
+    targetActivationLauncher.beginExternalInvocationSuppression();
     blurHandler?.();
 
     expect(mockWindow.hide).toHaveBeenCalled();
@@ -450,53 +450,50 @@ describe('CommandLauncherWindow.hide()', () => {
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
-  it('keeps external invocation suppression through a blur close after direct hide', () => {
+  it('keeps external invocation suppression active until the token ends', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
-    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1000);
 
-    try {
-      launcher.suppressActivationForExternalInvocation();
-      expect(launcher.isExternalInvocationActivationSuppressed(1000)).toBe(true);
-      launcher.hide(true);
-      expect(activatePreviousApp).not.toHaveBeenCalled();
-      expect(launcher.isExternalInvocationActivationSuppressed(1500)).toBe(true);
+    const token = launcher.beginExternalInvocationSuppression();
+    expect(launcher.isExternalInvocationActivationSuppressed()).toBe(true);
+    launcher.hide(true);
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(launcher.isExternalInvocationActivationSuppressed()).toBe(true);
 
-      mockWindow.hide.mockClear();
-      mockWindow.isVisible.mockReturnValue(true);
-      dateNow.mockReturnValue(1500);
-      launcher.hide();
+    mockWindow.hide.mockClear();
+    mockWindow.isVisible.mockReturnValue(true);
+    launcher.hide();
 
-      expect(mockWindow.hide).toHaveBeenCalled();
-      expect(activatePreviousApp).not.toHaveBeenCalled();
-      expect(mockApp.hide).not.toHaveBeenCalled();
-    } finally {
-      dateNow.mockRestore();
-    }
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+
+    launcher.endExternalInvocationSuppression(token);
+    expect(launcher.isExternalInvocationActivationSuppressed()).toBe(false);
   });
 
-  it('lets external invocation suppression expire after the handoff window', () => {
+  it('keeps overlapping external invocation suppression until every token ends', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
-    const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1000);
 
-    try {
-      launcher.suppressActivationForExternalInvocation();
-      launcher.hide();
-      expect(activatePreviousApp).not.toHaveBeenCalled();
-      expect(launcher.isExternalInvocationActivationSuppressed(4101)).toBe(false);
+    const firstToken = launcher.beginExternalInvocationSuppression();
+    const secondToken = launcher.beginExternalInvocationSuppression();
+    launcher.endExternalInvocationSuppression(firstToken);
+    expect(launcher.isExternalInvocationActivationSuppressed()).toBe(true);
 
-      mockWindow.hide.mockClear();
-      mockWindow.isVisible.mockReturnValue(true);
-      dateNow.mockReturnValue(4101);
-      launcher.hide();
+    launcher.hide();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
 
-      expect(mockWindow.hide).toHaveBeenCalled();
-      expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
-    } finally {
-      dateNow.mockRestore();
-    }
+    mockWindow.hide.mockClear();
+    mockWindow.isVisible.mockReturnValue(true);
+    launcher.endExternalInvocationSuppression(secondToken);
+    expect(launcher.isExternalInvocationActivationSuppressed()).toBe(false);
+
+    launcher.hide();
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).toHaveBeenCalledWith('com.apple.Safari');
   });
 
-  it('clears stale external invocation suppression before a fresh show', async () => {
+  it('does not keep ended external invocation suppression before a fresh show', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({ bundleId: 'com.apple.Safari', name: 'Safari' })),
       getFrontmostWindowBounds: vi.fn(() => ({ x: 0, y: 0, width: 1920, height: 1080 })),
@@ -505,7 +502,8 @@ describe('CommandLauncherWindow.hide()', () => {
     (freshLauncher as any).window = mockWindow;
     const activatePreviousApp = vi.spyOn(freshLauncher as any, 'activatePreviousApp').mockResolvedValue(undefined);
 
-    freshLauncher.suppressActivationForExternalInvocation();
+    const token = freshLauncher.beginExternalInvocationSuppression();
+    freshLauncher.endExternalInvocationSuppression(token);
     await freshLauncher.show({
       anchorBounds: { x: 100, y: 200, width: 900, height: 700 },
     });
