@@ -1,39 +1,11 @@
 {
   "expo": {
-    "name": "littleai",
+    "name": "Field Theory",
     "slug": "littleai",
     "version": "1.0.1",
-    "orientation": "portrait",
-    "icon": "./assets/icon.png",
-    "userInterfaceStyle": "automatic",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
-    },
     "assetBundlePatterns": [
       "**/*"
     ],
-    "plugins": [
-      "expo-font"
-    ],
-    "ios": {
-      "supportsTablet": true,
-      "infoPlist": {
-        "NSMicrophoneUsageDescription": "This app needs access to your microphone to transcribe speech.",
-        "UIBackgroundModes": [
-          "audio"
-        ]
-      },
-      "bundleIdentifier": "com.afar1.littleai"
-    },
-    "android": {
-      "package": "com.afar1.littleai",
-      "permissions": [
-        "android.permission.RECORD_AUDIO"
-      ],
-      "versionCode": 1
-    },
     "web": {
       "favicon": "./assets/favicon.png"
     },

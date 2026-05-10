@@ -1,5 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, LibraryDocument, LibraryTombstone } from '../types';
+import {
+  Todo,
+  Observation,
+  Settings,
+  TranscriptEntry,
+  TranscriptSegment,
+  LibraryDocument,
+  LibraryTombstone,
+  SyncTombstone,
+} from '../types';
 
 // Normalize saved records so new fields are always present.
 const normalizeTodo = (raw: Todo): Todo => ({
@@ -39,6 +48,11 @@ const normalizeLibraryTombstone = (raw: LibraryTombstone): LibraryTombstone => (
   deletedAt: raw.deletedAt ?? raw.createdAt,
 });
 
+const normalizeSyncTombstone = (raw: SyncTombstone): SyncTombstone => ({
+  ...raw,
+  deletedAt: raw.deletedAt ?? Date.now(),
+});
+
 // Storage keys
 const TODOS_KEY = '@littleai/todos';
 const OBSERVATIONS_KEY = '@littleai/observations';
@@ -46,18 +60,81 @@ const SETTINGS_KEY = '@littleai/settings';
 const TRANSCRIPTS_KEY = '@littleai/transcripts';
 const LIBRARY_DOCUMENTS_KEY = '@littleai/library-documents';
 const LIBRARY_TOMBSTONES_KEY = '@littleai/library-tombstones';
+const SYNC_TOMBSTONES_KEY = '@littleai/sync-tombstones';
+const LOCAL_SCOPE_ID = 'local';
+const SCOPED_DATA_KEYS = [
+  TODOS_KEY,
+  OBSERVATIONS_KEY,
+  SETTINGS_KEY,
+  TRANSCRIPTS_KEY,
+  LIBRARY_DOCUMENTS_KEY,
+  LIBRARY_TOMBSTONES_KEY,
+  SYNC_TOMBSTONES_KEY,
+];
 
 /**
  * Storage service for persisting todos, observations, and settings.
  * Uses AsyncStorage for local persistence.
  */
 export class StorageService {
+  private static userScopeId: string | null = null;
+
+  static setUserScope(userId: string | null): void {
+    StorageService.userScopeId = userId ?? LOCAL_SCOPE_ID;
+  }
+
+  private static scopedKey(baseKey: string): string {
+    return StorageService.userScopeId ? `${baseKey}:${StorageService.userScopeId}` : baseKey;
+  }
+
+  private static scopedKeyForUser(baseKey: string, userId: string): string {
+    return `${baseKey}:${userId}`;
+  }
+
+  static async migrateLegacyDataToUserScope(userId: string): Promise<void> {
+    const backupStamp = Date.now();
+
+    for (const baseKey of SCOPED_DATA_KEYS) {
+      const legacyValue = await AsyncStorage.getItem(baseKey);
+      if (!legacyValue) continue;
+
+      const scopedKey = StorageService.scopedKeyForUser(baseKey, userId);
+      const scopedValue = await AsyncStorage.getItem(scopedKey);
+      const backupKey = `${baseKey}:legacy-backup:${userId}:${backupStamp}`;
+
+      await AsyncStorage.setItem(backupKey, legacyValue);
+      if (!scopedValue) {
+        await AsyncStorage.setItem(scopedKey, legacyValue);
+      }
+      await AsyncStorage.removeItem(baseKey);
+    }
+  }
+
+  static async migrateLegacyDataToLocalScope(): Promise<void> {
+    const backupStamp = Date.now();
+
+    for (const baseKey of SCOPED_DATA_KEYS) {
+      const legacyValue = await AsyncStorage.getItem(baseKey);
+      if (!legacyValue) continue;
+
+      const localKey = StorageService.scopedKeyForUser(baseKey, LOCAL_SCOPE_ID);
+      const localValue = await AsyncStorage.getItem(localKey);
+      const backupKey = `${baseKey}:legacy-local-backup:${backupStamp}`;
+
+      await AsyncStorage.setItem(backupKey, legacyValue);
+      if (!localValue) {
+        await AsyncStorage.setItem(localKey, legacyValue);
+      }
+      await AsyncStorage.removeItem(baseKey);
+    }
+  }
+
   /**
    * Load all todos from storage.
    */
   static async getTodos(): Promise<Todo[]> {
     try {
-      const data = await AsyncStorage.getItem(TODOS_KEY);
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(TODOS_KEY));
       return data ? JSON.parse(data).map(normalizeTodo) : [];
     } catch (error) {
       console.error('Failed to load todos:', error);
@@ -70,7 +147,7 @@ export class StorageService {
    */
   static async saveTodos(todos: Todo[]): Promise<void> {
     try {
-      await AsyncStorage.setItem(TODOS_KEY, JSON.stringify(todos));
+      await AsyncStorage.setItem(StorageService.scopedKey(TODOS_KEY), JSON.stringify(todos));
     } catch (error) {
       console.error('Failed to save todos:', error);
       throw error;
@@ -82,7 +159,7 @@ export class StorageService {
    */
   static async getObservations(): Promise<Observation[]> {
     try {
-      const data = await AsyncStorage.getItem(OBSERVATIONS_KEY);
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(OBSERVATIONS_KEY));
       return data ? JSON.parse(data).map(normalizeObservation) : [];
     } catch (error) {
       console.error('Failed to load observations:', error);
@@ -95,7 +172,7 @@ export class StorageService {
    */
   static async saveObservations(observations: Observation[]): Promise<void> {
     try {
-      await AsyncStorage.setItem(OBSERVATIONS_KEY, JSON.stringify(observations));
+      await AsyncStorage.setItem(StorageService.scopedKey(OBSERVATIONS_KEY), JSON.stringify(observations));
     } catch (error) {
       console.error('Failed to save observations:', error);
       throw error;
@@ -112,11 +189,11 @@ export class StorageService {
       autoStart: false,
       showTodos: true,
       showLibrary: true,
-      autoSeparate: true,
+      autoSeparate: false,
     };
     
     try {
-      const data = await AsyncStorage.getItem(SETTINGS_KEY);
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(SETTINGS_KEY));
       if (data) {
         const stored = JSON.parse(data);
         // Merge stored settings with defaults so new fields get their default values
@@ -134,7 +211,7 @@ export class StorageService {
    */
   static async saveSettings(settings: Settings): Promise<void> {
     try {
-      await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+      await AsyncStorage.setItem(StorageService.scopedKey(SETTINGS_KEY), JSON.stringify(settings));
     } catch (error) {
       console.error('Failed to save settings:', error);
       throw error;
@@ -146,7 +223,7 @@ export class StorageService {
    */
   static async getTranscripts(): Promise<TranscriptEntry[]> {
     try {
-      const data = await AsyncStorage.getItem(TRANSCRIPTS_KEY);
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(TRANSCRIPTS_KEY));
       return data ? JSON.parse(data).map(normalizeTranscript) : [];
     } catch (error) {
       console.error('Failed to load transcripts:', error);
@@ -159,7 +236,7 @@ export class StorageService {
    */
   static async saveTranscripts(transcripts: TranscriptEntry[]): Promise<void> {
     try {
-      await AsyncStorage.setItem(TRANSCRIPTS_KEY, JSON.stringify(transcripts));
+      await AsyncStorage.setItem(StorageService.scopedKey(TRANSCRIPTS_KEY), JSON.stringify(transcripts));
     } catch (error) {
       console.error('Failed to save transcripts:', error);
       throw error;
@@ -171,7 +248,7 @@ export class StorageService {
    */
   static async getLibraryDocuments(): Promise<LibraryDocument[]> {
     try {
-      const data = await AsyncStorage.getItem(LIBRARY_DOCUMENTS_KEY);
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(LIBRARY_DOCUMENTS_KEY));
       return data ? JSON.parse(data).map(normalizeLibraryDocument) : [];
     } catch (error) {
       console.error('Failed to load library documents:', error);
@@ -184,7 +261,7 @@ export class StorageService {
    */
   static async saveLibraryDocuments(documents: LibraryDocument[]): Promise<void> {
     try {
-      await AsyncStorage.setItem(LIBRARY_DOCUMENTS_KEY, JSON.stringify(documents));
+      await AsyncStorage.setItem(StorageService.scopedKey(LIBRARY_DOCUMENTS_KEY), JSON.stringify(documents));
     } catch (error) {
       console.error('Failed to save library documents:', error);
       throw error;
@@ -196,7 +273,7 @@ export class StorageService {
    */
   static async getLibraryTombstones(): Promise<LibraryTombstone[]> {
     try {
-      const data = await AsyncStorage.getItem(LIBRARY_TOMBSTONES_KEY);
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(LIBRARY_TOMBSTONES_KEY));
       return data ? JSON.parse(data).map(normalizeLibraryTombstone) : [];
     } catch (error) {
       console.error('Failed to load library tombstones:', error);
@@ -209,7 +286,7 @@ export class StorageService {
    */
   static async saveLibraryTombstones(tombstones: LibraryTombstone[]): Promise<void> {
     try {
-      await AsyncStorage.setItem(LIBRARY_TOMBSTONES_KEY, JSON.stringify(tombstones));
+      await AsyncStorage.setItem(StorageService.scopedKey(LIBRARY_TOMBSTONES_KEY), JSON.stringify(tombstones));
     } catch (error) {
       console.error('Failed to save library tombstones:', error);
       throw error;
@@ -232,5 +309,49 @@ export class StorageService {
     }
 
     await StorageService.saveLibraryTombstones(Array.from(byId.values()));
+  }
+
+  /**
+   * Load pending row tombstones that still need to be synced.
+   */
+  static async getSyncTombstones(): Promise<SyncTombstone[]> {
+    try {
+      const data = await AsyncStorage.getItem(StorageService.scopedKey(SYNC_TOMBSTONES_KEY));
+      return data ? JSON.parse(data).map(normalizeSyncTombstone) : [];
+    } catch (error) {
+      console.error('Failed to load sync tombstones:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Save pending row tombstones.
+   */
+  static async saveSyncTombstones(tombstones: SyncTombstone[]): Promise<void> {
+    try {
+      await AsyncStorage.setItem(StorageService.scopedKey(SYNC_TOMBSTONES_KEY), JSON.stringify(tombstones));
+    } catch (error) {
+      console.error('Failed to save sync tombstones:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Add pending row tombstones, keeping the newest delete per collection/id.
+   */
+  static async addSyncTombstones(tombstones: SyncTombstone[]): Promise<void> {
+    if (tombstones.length === 0) return;
+    const existing = await StorageService.getSyncTombstones();
+    const byKey = new Map(existing.map((tombstone) => [`${tombstone.collection}:${tombstone.id}`, tombstone]));
+
+    for (const tombstone of tombstones) {
+      const key = `${tombstone.collection}:${tombstone.id}`;
+      const current = byKey.get(key);
+      if (!current || tombstone.deletedAt >= current.deletedAt) {
+        byKey.set(key, tombstone);
+      }
+    }
+
+    await StorageService.saveSyncTombstones(Array.from(byKey.values()));
   }
 }

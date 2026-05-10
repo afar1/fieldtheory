@@ -35,7 +35,7 @@ interface TodoListProps {
   // Called when user creates a new task via pull-to-create.
   onCreateTask?: (text: string) => Promise<boolean> | boolean;
   // Called when create mode changes - parent uses this for dynamic bottom bar.
-  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
+  onCreateModeChange?: (isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => void;
   // Opacity 0..1 applied to the search header so it fades during a page swipe.
   searchOpacity?: number;
 }
@@ -463,5 +463,4 @@ const searchStyles = StyleSheet.create({
     padding: 0,
   },
 });
-
 

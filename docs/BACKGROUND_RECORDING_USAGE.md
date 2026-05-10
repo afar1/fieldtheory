@@ -15,8 +15,7 @@ This branch enables **background recording** and **instant tab switching**. Reco
 │ iOS Configuration Changes:                              │
 ├─────────────────────────────────────────────────────────┤
 │ • Info.plist: Added UIBackgroundModes = ["audio"]       │
-│ • app.json: Added UIBackgroundModes = ["audio"]         │
-│ • Audio session: staysActiveInBackground = true         │
+│ • Audio session: shouldPlayInBackground = true          │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -84,8 +83,8 @@ This branch enables **background recording** and **instant tab switching**. Reco
 │         ▼                                               │
 │  ┌─────────────────────────────────────┐               │
 │  │ Audio Session Configured            │               │
-│  │ • staysActiveInBackground = true    │               │
-│  │ • allowsRecordingIOS = true         │               │
+│  │ • shouldPlayInBackground = true     │               │
+│  │ • allowsRecording = true            │               │
 │  └─────────────────────────────────────┘               │
 │         │                                               │
 │         ▼                                               │
@@ -162,16 +161,10 @@ This branch enables **background recording** and **instant tab switching**. Reco
 │     • Added overdrag={false} to PagerView              │
 │                                                         │
 │  2. hooks/useWhisperRecording.ts                        │
-│     • Added staysActiveInBackground: true              │
+│     • Added shouldPlayInBackground: true               │
 │     • Audio session configured for background          │
 │                                                         │
-│  3. hooks/useHeadsetControls.ts                        │
-│     • Added staysActiveInBackground: true              │
-│                                                         │
-│  4. app.json                                            │
-│     • Added UIBackgroundModes: ["audio"]               │
-│                                                         │
-│  5. ios/littleai/Info.plist                            │
+│  3. ios/littleai/Info.plist                            │
 │     • Added UIBackgroundModes array with "audio"       │
 │                                                         │
 └─────────────────────────────────────────────────────────┘
@@ -185,11 +178,9 @@ This branch enables **background recording** and **instant tab switching**. Reco
 │  Audio Session Settings:                                │
 │                                                         │
 │  {                                                       │
-│    allowsRecordingIOS: true,                            │
-│    playsInSilentModeIOS: true,                          │
-│    staysActiveInBackground: true,  ← KEY CHANGE         │
-│    shouldDuckAndroid: true,                             │
-│    playThroughEarpieceAndroid: false                    │
+│    allowsRecording: true,                               │
+│    playsInSilentMode: true,                             │
+│    shouldPlayInBackground: true  ← KEY CHANGE           │
 │  }                                                       │
 │                                                         │
 │  This allows:                                            │

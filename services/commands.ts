@@ -14,8 +14,11 @@ import { supabase } from './supabase';
 import { getSession } from './auth';
 import { Command, CommandDetectionResult } from '../types';
 
-// Storage key for cached commands
-const COMMANDS_KEY = '@littleai/commands';
+// Storage key for cached commands.
+// The legacy key is removed on auth changes so synced commands do not leak
+// across users on a shared device.
+const LEGACY_COMMANDS_KEY = '@littleai/commands';
+const COMMANDS_KEY_PREFIX = '@littleai/commands';
 
 /**
  * Row from Supabase user_commands table.
@@ -55,6 +58,10 @@ const normalizeCommand = (raw: Command): Command => ({
  * Commands service for fetching, caching, and detecting portable commands.
  */
 export class CommandsService {
+  private static cacheKeyForUser(userId: string): string {
+    return `${COMMANDS_KEY_PREFIX}/${userId}`;
+  }
+
   /**
    * Fetch commands from Supabase and cache locally.
    * Returns the fetched commands.
@@ -62,8 +69,7 @@ export class CommandsService {
   static async fetchCommands(): Promise<Command[]> {
     const session = await getSession();
     if (!session) {
-      console.log('CommandsService: No session, returning cached commands');
-      return this.getCachedCommands();
+      return [];
     }
 
     try {
@@ -80,9 +86,8 @@ export class CommandsService {
       const commands = (data ?? []).map(toLocalCommand);
 
       // Cache for offline use
-      await this.cacheCommands(commands);
+      await this.cacheCommands(commands, session.user.id);
 
-      console.log(`CommandsService: Fetched ${commands.length} commands`);
       return commands;
     } catch (error) {
       console.error('CommandsService: Network error:', error);
@@ -95,7 +100,10 @@ export class CommandsService {
    */
   static async getCachedCommands(): Promise<Command[]> {
     try {
-      const data = await AsyncStorage.getItem(COMMANDS_KEY);
+      const session = await getSession();
+      if (!session) return [];
+
+      const data = await AsyncStorage.getItem(this.cacheKeyForUser(session.user.id));
       return data ? JSON.parse(data).map(normalizeCommand) : [];
     } catch (error) {
       console.error('CommandsService: Cache read error:', error);
@@ -106,9 +114,13 @@ export class CommandsService {
   /**
    * Cache commands to local storage.
    */
-  static async cacheCommands(commands: Command[]): Promise<void> {
+  static async cacheCommands(commands: Command[], userId?: string): Promise<void> {
     try {
-      await AsyncStorage.setItem(COMMANDS_KEY, JSON.stringify(commands));
+      const session = userId ? null : await getSession();
+      const cacheUserId = userId ?? session?.user.id;
+      if (!cacheUserId) return;
+
+      await AsyncStorage.setItem(this.cacheKeyForUser(cacheUserId), JSON.stringify(commands));
     } catch (error) {
       console.error('CommandsService: Cache write error:', error);
     }
@@ -333,7 +345,7 @@ ${commandsSection}
 
       const cmd = toLocalCommand(data as CommandRow);
       const cached = await this.getCachedCommands();
-      await this.cacheCommands([...cached, cmd]);
+      await this.cacheCommands([...cached, cmd], session.user.id);
       return cmd;
     } catch (err) {
       console.error('CommandsService.createCommand: network error', err);
@@ -344,9 +356,14 @@ ${commandsSection}
   /**
    * Clear cached commands (for sign out).
    */
-  static async clearCache(): Promise<void> {
+  static async clearCache(userId?: string): Promise<void> {
     try {
-      await AsyncStorage.removeItem(COMMANDS_KEY);
+      const session = userId ? null : await getSession().catch(() => null);
+      const cacheUserId = userId ?? session?.user.id;
+      await AsyncStorage.removeItem(LEGACY_COMMANDS_KEY);
+      if (cacheUserId) {
+        await AsyncStorage.removeItem(this.cacheKeyForUser(cacheUserId));
+      }
     } catch (error) {
       console.error('CommandsService: Clear cache error:', error);
     }

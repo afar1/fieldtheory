@@ -38,7 +38,7 @@ interface PullToCreateProps {
   style?: any;
   
   // Called when create mode changes - parent can use this to show/hide bottom bar.
-  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
+  onCreateModeChange?: (isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => void;
 }
 
 /**
@@ -69,6 +69,8 @@ export function PullToCreate({
   
   // Whether we're in the process of saving.
   const [isSaving, setIsSaving] = useState(false);
+  const newItemTextRef = useRef('');
+  const isSavingRef = useRef(false);
   
   // Animated value for card height when in create mode.
   const cardHeight = useRef(new Animated.Value(0)).current;
@@ -90,6 +92,14 @@ export function PullToCreate({
   
   // Track if we already triggered the create in this gesture.
   const hasTriggeredCreate = useRef(false);
+
+  useEffect(() => {
+    newItemTextRef.current = newItemText;
+  }, [newItemText]);
+
+  useEffect(() => {
+    isSavingRef.current = isSaving;
+  }, [isSaving]);
 
   // Get placeholder text based on item type.
   const getPlaceholder = () => {
@@ -123,39 +133,13 @@ export function PullToCreate({
     }
   };
 
-  // Handle saving the new item.
-  const handleSave = useCallback(async () => {
-    const trimmedText = newItemText.trim();
-    if (!trimmedText || isSaving) return;
-    
-    setIsSaving(true);
-    justSubmitted.current = true;
-    Keyboard.dismiss();
-    
-    try {
-      const success = await onCreateItem(trimmedText);
-      if (success) {
-        // Success - close the card with animation.
-        Vibration.vibrate(10);
-        handleCancel();
-      }
-    } catch (error) {
-      console.error('Failed to create item:', error);
-    } finally {
-      setIsSaving(false);
-      // Reset flag after a short delay to allow blur to check it
-      setTimeout(() => {
-        justSubmitted.current = false;
-      }, 100);
-    }
-  }, [newItemText, isSaving, onCreateItem]);
-
   // Handle canceling the create action.
   // Use a short timing instead of a long spring so the bottom-bar swap back
   // to nav tabs happens in ~120ms instead of waiting for the spring to settle.
   const handleCancel = useCallback(() => {
     Keyboard.dismiss();
     justSubmitted.current = false;
+    newItemTextRef.current = '';
 
     Animated.timing(cardHeight, {
       toValue: 0,
@@ -167,13 +151,43 @@ export function PullToCreate({
     });
   }, [cardHeight]);
 
+  // Handle saving the new item.
+  const handleSave = useCallback(async () => {
+    const trimmedText = newItemTextRef.current.trim();
+    if (!trimmedText || isSavingRef.current) return;
+
+    isSavingRef.current = true;
+    setIsSaving(true);
+    justSubmitted.current = true;
+    Keyboard.dismiss();
+
+    try {
+      const success = await onCreateItem(trimmedText);
+      if (success) {
+        // Success - close the card with animation.
+        Vibration.vibrate(10);
+        handleCancel();
+      }
+    } catch (error) {
+      console.error('Failed to create item:', error);
+    } finally {
+      isSavingRef.current = false;
+      setIsSaving(false);
+      // Reset flag after a short delay to allow blur to check it
+      setTimeout(() => {
+        justSubmitted.current = false;
+      }, 100);
+    }
+  }, [handleCancel, onCreateItem]);
+
+  const canSave = newItemText.trim().length > 0 && !isSaving;
+
   // Notify parent when create mode changes so it can update the bottom bar.
-  // Include handleSave and handleCancel in dependencies so parent always has current function references.
   useEffect(() => {
     if (onCreateModeChange) {
-      onCreateModeChange(isCreating, newItemText, handleSave, handleCancel);
+      onCreateModeChange(isCreating, canSave, handleSave, handleCancel);
     }
-  }, [isCreating, newItemText, onCreateModeChange, handleSave, handleCancel]);
+  }, [isCreating, canSave, onCreateModeChange, handleSave, handleCancel]);
 
   // Open the create card (called when user pulls past threshold and releases).
   const openCreateCard = useCallback(() => {
@@ -309,7 +323,7 @@ export function PullToCreate({
         const original = (child as React.ReactElement<any>).props?.onScrollEndDrag;
         if (original) original(event);
       },
-      scrollEventThrottle: 16,
+      scrollEventThrottle: 32,
       // Ensure bounces is enabled on iOS for overscroll detection.
       bounces: true,
     });
