@@ -456,8 +456,10 @@ describe('CommandLauncherWindow.hide()', () => {
 
     try {
       launcher.suppressActivationForExternalInvocation();
+      expect(launcher.isExternalInvocationActivationSuppressed(1000)).toBe(true);
       launcher.hide(true);
       expect(activatePreviousApp).not.toHaveBeenCalled();
+      expect(launcher.isExternalInvocationActivationSuppressed(1500)).toBe(true);
 
       mockWindow.hide.mockClear();
       mockWindow.isVisible.mockReturnValue(true);
@@ -480,6 +482,7 @@ describe('CommandLauncherWindow.hide()', () => {
       launcher.suppressActivationForExternalInvocation();
       launcher.hide();
       expect(activatePreviousApp).not.toHaveBeenCalled();
+      expect(launcher.isExternalInvocationActivationSuppressed(4101)).toBe(false);
 
       mockWindow.hide.mockClear();
       mockWindow.isVisible.mockReturnValue(true);

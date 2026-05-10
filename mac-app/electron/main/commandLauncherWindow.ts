@@ -340,7 +340,7 @@ export class CommandLauncherWindow {
   hide(skipActivation = false): void {
     this._isShowing = false;
     const now = Date.now();
-    const suppressActivationForThisHide = this.suppressActivationUntilHidden || now < this.suppressActivationUntilMs;
+    const suppressActivationForThisHide = this.isExternalInvocationActivationSuppressed(now);
     const shouldSkipActivation = skipActivation || suppressActivationForThisHide;
 
     // Already hidden — prevents blur re-entry after hide(true).
@@ -447,6 +447,10 @@ export class CommandLauncherWindow {
       isShowing: this._isShowing,
       durationMs: this.SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS,
     });
+  }
+
+  isExternalInvocationActivationSuppressed(now = Date.now()): boolean {
+    return this.suppressActivationUntilHidden || now < this.suppressActivationUntilMs;
   }
 
   /**
