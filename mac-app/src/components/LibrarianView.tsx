@@ -11,6 +11,7 @@ import ContentToolbar from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
   dispatchLocalWikiAdded,
@@ -353,17 +354,6 @@ export function isLibrarianDocumentFocusChromeActive(input: {
     && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
 }
 
-export function shouldRevealCollapsedSidebarFromPointer(input: {
-  previousClientX: number | null;
-  currentClientX: number;
-  hoverStripWidth: number;
-}): boolean {
-  return input.previousClientX !== null
-    && input.previousClientX > input.hoverStripWidth
-    && input.currentClientX <= input.hoverStripWidth
-    && input.currentClientX < input.previousClientX;
-}
-
 export function isBookmarksCanvasChromeActive(input: {
   active: boolean;
   selectedItemType: LibrarianSelectedItemType;
@@ -399,7 +389,6 @@ const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
 const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
-const COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH = 30;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
@@ -1804,11 +1793,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const fileFindInputRef = useRef<HTMLInputElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
-  const lastSidebarHoverPointerXRef = useRef<number | null>(null);
   const sidebarKeyboardActiveRef = useRef(false);
   const [sidebarKeyboardActive, setSidebarKeyboardActive] = useState(false);
   const [sidebarTodoStateOverrides, setSidebarTodoStateOverrides] = useState<Record<string, MarkdownTodoState | null>>({});
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
+  const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
@@ -5612,13 +5601,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     <div
       ref={containerRef}
       tabIndex={0}
-      onMouseMove={(event) => {
-        lastSidebarHoverPointerXRef.current = event.clientX;
-      }}
-      onMouseLeave={() => {
-        lastSidebarHoverPointerXRef.current = null;
-        setSidebarHoverExpanded(false);
-      }}
+      onMouseMove={collapsedSidebarHoverReveal.handleSurfaceMouseMove}
+      onMouseLeave={collapsedSidebarHoverReveal.handleSurfaceMouseLeave}
       style={{
         display: 'flex',
         flex: 1,
@@ -5632,27 +5616,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       {sidebarCollapsed && !isFullScreen && !sidebarTemporarilyExpanded && (
         <div
           aria-hidden="true"
-          onMouseOver={(event) => {
-            const enteredFromWithinLibrarianSurface =
-              event.relatedTarget instanceof Node
-              && containerRef.current?.contains(event.relatedTarget) === true;
-            if (enteredFromWithinLibrarianSurface && shouldRevealCollapsedSidebarFromPointer({
-              previousClientX: lastSidebarHoverPointerXRef.current,
-              currentClientX: event.clientX,
-              hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
-            })) {
-              setSidebarHoverExpanded(true);
-            }
-            lastSidebarHoverPointerXRef.current = event.clientX;
-          }}
+          data-fieldtheory-collapsed-sidebar-hover-strip="true"
+          onMouseOver={collapsedSidebarHoverReveal.handleHoverStripMouseOver}
+          onClick={collapsedSidebarHoverReveal.handleHoverStripClick}
           style={{
             position: 'absolute',
             top: 0,
             bottom: 0,
             left: 0,
-            width: `${COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH}px`,
+            width: `${collapsedSidebarHoverReveal.hoverStripWidth}px`,
             zIndex: 25,
-            cursor: 'default',
+            cursor: 'pointer',
+            opacity: collapsedSidebarHoverReveal.affordanceOpacity,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+            boxShadow: theme.isDark ? 'inset 1px 0 rgba(255,255,255,0.16)' : 'inset 1px 0 rgba(0,0,0,0.14)',
+            transition: 'opacity 120ms ease',
           }}
         />
       )}

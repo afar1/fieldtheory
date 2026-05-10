@@ -26,6 +26,7 @@ import {
   ModelSize,
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
 import { AuthManager } from './authManager';
@@ -2520,29 +2521,23 @@ function showClipboardHistoryOnActivate(): void {
   const prefs = preferencesManager?.get();
   const commandLauncherExternalInvocationSuppressed =
     commandLauncherWindow?.isExternalInvocationActivationSuppressed() ?? false;
+  const commandLauncherShowingOrVisible = commandLauncherWindow?.isShowingOrVisible() ?? false;
   appendVisibilityTrace('app-activate.show-clipboard.request', {
     mode: preferencesManager ? getFieldTheoryWindowMode() : null,
     initialViewMode: 'library',
     onboardingComplete: prefs?.onboardingComplete ?? null,
     clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
     clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
-    commandLauncherShowingOrVisible: commandLauncherWindow?.isShowingOrVisible() ?? null,
+    commandLauncherShowingOrVisible,
     commandLauncherExternalInvocationSuppressed,
   });
-  if (!prefs?.onboardingComplete) {
-    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'onboarding-incomplete' });
-    return;
-  }
-
-  if (commandLauncherExternalInvocationSuppressed) {
-    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'command-launcher-external-invocation' });
-    return;
-  }
-
-  // Don't show clipboard history if the command launcher is visible OR showing.
-  // Using isShowingOrVisible() closes the TOCTTOU race window during async show().
-  if (commandLauncherWindow?.isShowingOrVisible()) {
-    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'command-launcher-visible' });
+  const preflightSkipReason = getClipboardHistoryActivationPreflightSkipReason({
+    onboardingComplete: prefs?.onboardingComplete === true,
+    commandLauncherExternalInvocationSuppressed,
+    commandLauncherShowingOrVisible,
+  });
+  if (preflightSkipReason) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: preflightSkipReason });
     return;
   }
 

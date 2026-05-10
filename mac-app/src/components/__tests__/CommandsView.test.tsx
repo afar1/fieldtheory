@@ -120,6 +120,7 @@ describe('CommandsView command naming', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -584,27 +585,57 @@ describe('CommandsView command naming', () => {
     expect(onFocusChromeEnabledChange).toHaveBeenCalledWith(false);
   });
 
-  it('temporarily reveals the collapsed sidebar from the left edge', async () => {
+  it('temporarily reveals the collapsed sidebar from click or quiet edge linger', async () => {
     const { container } = render(<CommandsView onSwitchToClipboard={vi.fn()} sidebarCollapsed />);
 
     await screen.findByText('Rendered selection text');
+    vi.useFakeTimers();
 
-    const hoverStrip = container.querySelector('div[aria-hidden="true"]') as HTMLDivElement | null;
-    expect(hoverStrip).toBeTruthy();
-    expect(hoverStrip?.style.width).toBe('30px');
-    const sidebarPane = hoverStrip?.nextElementSibling as HTMLDivElement | null;
+    const root = container.firstElementChild as HTMLElement;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLDivElement | null;
+    expect(getHoverStrip()).toBeTruthy();
+    expect(getHoverStrip()?.style.width).toBe('30px');
+    const sidebarPane = getHoverStrip()?.nextElementSibling as HTMLDivElement | null;
     expect(sidebarPane?.style.width).toBe('0px');
 
-    fireEvent.mouseEnter(hoverStrip!);
+    fireEvent.mouseMove(root, { clientX: 80 });
+    expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
 
-    await waitFor(() => {
-      expect(sidebarPane?.style.width).toBe('180px');
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseMove(root, { clientX: 80 });
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 20, relatedTarget: root });
+    fireEvent.mouseLeave(root);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.click(getHoverStrip()!);
+    expect(sidebarPane?.style.width).toBe('180px');
+
+    fireEvent.mouseLeave(root);
+    expect(sidebarPane?.style.width).toBe('0px');
+
+    fireEvent.mouseMove(root, { clientX: 20 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    fireEvent.mouseMove(root, { clientX: 22 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
+    });
+    expect(sidebarPane?.style.width).toBe('0px');
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
     });
 
-    fireEvent.mouseLeave(container.firstElementChild!);
-
-    await waitFor(() => {
-      expect(sidebarPane?.style.width).toBe('0px');
-    });
+    expect(sidebarPane?.style.width).toBe('180px');
   });
 });
