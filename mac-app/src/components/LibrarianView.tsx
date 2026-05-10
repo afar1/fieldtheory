@@ -353,6 +353,17 @@ export function isLibrarianDocumentFocusChromeActive(input: {
     && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
 }
 
+export function shouldRevealCollapsedSidebarFromPointer(input: {
+  previousClientX: number | null;
+  currentClientX: number;
+  hoverStripWidth: number;
+}): boolean {
+  return input.previousClientX !== null
+    && input.previousClientX > input.hoverStripWidth
+    && input.currentClientX <= input.hoverStripWidth
+    && input.currentClientX < input.previousClientX;
+}
+
 export function isBookmarksCanvasChromeActive(input: {
   active: boolean;
   selectedItemType: LibrarianSelectedItemType;
@@ -388,6 +399,7 @@ const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
 const LIBRARIAN_CONTENT_BOTTOM_SCROLL_SPACE_PX = 59.2;
+const COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH = 30;
 const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
@@ -1792,6 +1804,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const fileFindInputRef = useRef<HTMLInputElement | null>(null);
   const titleInputRef = useRef<HTMLInputElement | null>(null);
+  const lastSidebarHoverPointerXRef = useRef<number | null>(null);
   const sidebarKeyboardActiveRef = useRef(false);
   const [sidebarKeyboardActive, setSidebarKeyboardActive] = useState(false);
   const [sidebarTodoStateOverrides, setSidebarTodoStateOverrides] = useState<Record<string, MarkdownTodoState | null>>({});
@@ -5599,7 +5612,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     <div
       ref={containerRef}
       tabIndex={0}
-      onMouseLeave={() => setSidebarHoverExpanded(false)}
+      onMouseMove={(event) => {
+        lastSidebarHoverPointerXRef.current = event.clientX;
+      }}
+      onMouseLeave={() => {
+        lastSidebarHoverPointerXRef.current = null;
+        setSidebarHoverExpanded(false);
+      }}
       style={{
         display: 'flex',
         flex: 1,
@@ -5613,13 +5632,25 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       {sidebarCollapsed && !isFullScreen && !sidebarTemporarilyExpanded && (
         <div
           aria-hidden="true"
-          onMouseEnter={() => setSidebarHoverExpanded(true)}
+          onMouseOver={(event) => {
+            const enteredFromWithinLibrarianSurface =
+              event.relatedTarget instanceof Node
+              && containerRef.current?.contains(event.relatedTarget) === true;
+            if (enteredFromWithinLibrarianSurface && shouldRevealCollapsedSidebarFromPointer({
+              previousClientX: lastSidebarHoverPointerXRef.current,
+              currentClientX: event.clientX,
+              hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+            })) {
+              setSidebarHoverExpanded(true);
+            }
+            lastSidebarHoverPointerXRef.current = event.clientX;
+          }}
           style={{
             position: 'absolute',
             top: 0,
             bottom: 0,
             left: 0,
-            width: '30px',
+            width: `${COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH}px`,
             zIndex: 25,
             cursor: 'default',
           }}

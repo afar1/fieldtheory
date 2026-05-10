@@ -2511,6 +2511,8 @@ function showSettingsInClipboardWindow(): void {
 function showClipboardHistoryOnActivate(): void {
   // Don't show clipboard history if onboarding is not complete.
   const prefs = preferencesManager?.get();
+  const commandLauncherExternalInvocationSuppressed =
+    commandLauncherWindow?.isExternalInvocationActivationSuppressed() ?? false;
   appendVisibilityTrace('app-activate.show-clipboard.request', {
     mode: preferencesManager ? getFieldTheoryWindowMode() : null,
     initialViewMode: 'library',
@@ -2518,9 +2520,15 @@ function showClipboardHistoryOnActivate(): void {
     clipboardVisible: clipboardHistoryWindow?.isVisible() ?? null,
     clipboardShowing: clipboardHistoryWindow?.isShowing() ?? null,
     commandLauncherShowingOrVisible: commandLauncherWindow?.isShowingOrVisible() ?? null,
+    commandLauncherExternalInvocationSuppressed,
   });
   if (!prefs?.onboardingComplete) {
     appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'onboarding-incomplete' });
+    return;
+  }
+
+  if (commandLauncherExternalInvocationSuppressed) {
+    appendVisibilityTrace('app-activate.show-clipboard.skipped', { reason: 'command-launcher-external-invocation' });
     return;
   }
 
