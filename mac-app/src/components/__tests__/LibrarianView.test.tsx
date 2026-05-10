@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LibrarianView from '../LibrarianView';
 
@@ -117,6 +117,7 @@ describe('LibrarianView render', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     cleanup();
     vi.restoreAllMocks();
   });
@@ -482,7 +483,7 @@ describe('LibrarianView render', () => {
     }, { timeout: 1200 });
   });
 
-  it('collapses the temporary sidebar reveal when the pointer leaves the surface', async () => {
+  it('reveals the collapsed sidebar only after a quiet edge linger', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
       path: '/tmp/library/example.md',
       title: 'example.md',
@@ -498,40 +499,40 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
+    vi.useFakeTimers();
 
     const root = container.firstElementChild as HTMLElement;
-    const getHoverStrip = () => Array.from(root.querySelectorAll('div[aria-hidden="true"]'))
-      .find((element) => {
-        const style = (element as HTMLElement).style;
-        return style.width === '30px' && style.left === '0px';
-      }) as HTMLElement | undefined;
+    const getHoverStrip = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLElement | null;
 
     expect(getHoverStrip()).toBeTruthy();
 
-    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
-
-    await waitFor(() => {
-      expect(getHoverStrip()).toBeTruthy();
-    });
-
     fireEvent.mouseMove(root, { clientX: 80 });
-    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
 
-    await waitFor(() => {
-      expect(getHoverStrip()).toBeTruthy();
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(120);
     });
+    expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseMove(root, { clientX: 80 });
     fireEvent.mouseOver(getHoverStrip()!, { clientX: 20, relatedTarget: root });
-
-    await waitFor(() => {
-      expect(getHoverStrip()).toBeUndefined();
+    fireEvent.mouseLeave(root);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
     });
+    expect(getHoverStrip()).toBeTruthy();
+
+    fireEvent.mouseMove(root, { clientX: 20 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(220);
+    });
+    expect(getHoverStrip()).toBeNull();
 
     fireEvent.mouseLeave(root);
 
-    await waitFor(() => {
-      expect(getHoverStrip()).toBeTruthy();
-    });
+    expect(getHoverStrip()).toBeTruthy();
   });
 });

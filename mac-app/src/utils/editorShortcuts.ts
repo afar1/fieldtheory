@@ -91,6 +91,32 @@ export function shouldRevealFooterChrome(
   return cursorClientY <= viewportHeight && cursorClientY >= viewportHeight - Math.max(0, revealDistancePx);
 }
 
+export const COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH = 30;
+export const COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH = 96;
+export const COLLAPSED_SIDEBAR_HOVER_DWELL_MS = 220;
+
+export function getCollapsedSidebarAffordanceOpacity(input: {
+  currentClientX: number;
+  hoverStripWidth: number;
+  proximityWidth: number;
+}): number {
+  const stripWidth = Math.max(0, input.hoverStripWidth);
+  const proximityWidth = Math.max(stripWidth, input.proximityWidth);
+  if (!Number.isFinite(input.currentClientX) || proximityWidth <= 0) return 0;
+  if (input.currentClientX < 0 || input.currentClientX > proximityWidth) return 0;
+  if (input.currentClientX <= stripWidth) return 1;
+  if (proximityWidth === stripWidth) return 1;
+  return 1 - ((input.currentClientX - stripWidth) / (proximityWidth - stripWidth));
+}
+
+export function isPointerInsideCollapsedSidebarHoverStrip(input: {
+  currentClientX: number;
+  hoverStripWidth: number;
+}): boolean {
+  if (!Number.isFinite(input.currentClientX)) return false;
+  return input.currentClientX >= 0 && input.currentClientX <= Math.max(0, input.hoverStripWidth);
+}
+
 export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }> = [
   { keys: '/', label: 'Focus library search' },
   { keys: 'Esc', label: 'Exit edit, focus, fullscreen, or close' },

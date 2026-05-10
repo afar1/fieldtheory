@@ -1,16 +1,20 @@
 import { afterEach, describe, it, expect } from 'vitest';
 import {
+  COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+  COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
   RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
   TEXT_CURSOR_BLINK_STORAGE_KEY,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
   getMarkdownFormattingShortcut,
+  getCollapsedSidebarAffordanceOpacity,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
   isMarkdownModeToggleShortcut,
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isNavSidebarToggleEnabled,
+  isPointerInsideCollapsedSidebarHoverStrip,
   isSearchFocusShortcut,
   isSidebarToggleShortcut,
   isThemeToggleShortcut,
@@ -237,6 +241,40 @@ describe('footer chrome proximity', () => {
 
   it('rejects invalid viewport geometry', () => {
     expect(shouldRevealFooterChrome(10, 0, 96)).toBe(false);
+  });
+});
+
+describe('collapsed sidebar reveal', () => {
+  it('fades the edge affordance in as the cursor approaches the strip', () => {
+    expect(getCollapsedSidebarAffordanceOpacity({
+      currentClientX: 120,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+    })).toBe(0);
+
+    expect(getCollapsedSidebarAffordanceOpacity({
+      currentClientX: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+    })).toBe(1);
+
+    expect(getCollapsedSidebarAffordanceOpacity({
+      currentClientX: 63,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+      proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
+    })).toBeCloseTo(0.5);
+  });
+
+  it('treats only the shared edge strip as an open target', () => {
+    expect(isPointerInsideCollapsedSidebarHoverStrip({
+      currentClientX: 24,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+    })).toBe(true);
+
+    expect(isPointerInsideCollapsedSidebarHoverStrip({
+      currentClientX: 44,
+      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+    })).toBe(false);
   });
 });
 
