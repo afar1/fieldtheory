@@ -1,7 +1,6 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LibrarianView from '../LibrarianView';
-import { setRenderedMarkdownSelectionAtOffset } from '../../utils/renderedMarkdownEditor';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -32,6 +31,14 @@ vi.mock('../AgentKickoffModal', () => ({
 }));
 
 describe('LibrarianView render', () => {
+  function pasteText(target: HTMLElement, text: string): void {
+    fireEvent.paste(target, {
+      clipboardData: {
+        getData: (type: string) => (type === 'text/plain' || type === 'text' ? text : ''),
+      },
+    });
+  }
+
   beforeEach(() => {
     Object.defineProperty(window, 'localStorage', {
       configurable: true,
@@ -163,7 +170,7 @@ describe('LibrarianView render', () => {
     }, { timeout: 2000 });
   });
 
-  it('keeps the rendered surface editable while preserving the markdown/rendered toggle', async () => {
+  it('uses an editor-owned rendered input instead of a contentEditable markdown tree', async () => {
     const relPath = 'scratchpad/rendered-toggle-test';
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
     const page: WikiPage = {
@@ -187,10 +194,26 @@ describe('LibrarianView render', () => {
 
     await waitFor(() => {
       const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(renderedRoot?.getAttribute('contenteditable')).toBe('true');
-      expect(renderedRoot?.getAttribute('role')).toBe('textbox');
+      expect(renderedRoot?.getAttribute('contenteditable')).toBeNull();
+      expect(renderedRoot?.getAttribute('role')).toBeNull();
       expect(renderedRoot?.textContent).toContain('First rendered line');
+      expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBeNull();
     });
+
+    const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+    fireEvent.click(renderedRoot);
+
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.tagName).toBe('DIV');
+      expect(input?.closest('.cm-editor')).toBeTruthy();
+      expect(input?.textContent).toContain('First rendered line');
+      expect(input?.textContent).toContain('Second rendered line');
+      return input;
+    });
+    expect(renderedInput?.closest('[data-ft-rendered-editor-root="true"]')).toBe(renderedRoot);
+    expect(container.querySelector('textarea[data-ft-rendered-editor-input="true"]')).toBeNull();
 
     fireEvent.click(screen.getByLabelText('Markdown source'));
 
@@ -202,24 +225,23 @@ describe('LibrarianView render', () => {
     fireEvent.click(screen.getByLabelText('Rendered'));
 
     await waitFor(() => {
-      const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(renderedRoot?.getAttribute('contenteditable')).toBe('true');
-      expect(renderedRoot?.textContent).toContain('Second rendered line');
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.getAttribute('contenteditable')).toBeNull();
+      expect(root?.textContent).toContain('Second rendered line');
     });
   });
 
-  it('types at the trusted rendered caret when the browser selection falls back to a block boundary', async () => {
-    const relPath = 'scratchpad/rendered-caret-test';
-    const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
-    const content = 'hello world\n\nsecond line';
+  it('renders task list markers as editable text instead of checkbox controls', async () => {
+    const relPath = 'scratchpad/rendered-task-text-test';
+    const content = '- [ ] open task\n- [x] done task';
     const page: WikiPage = {
       relPath,
-      absPath,
-      name: 'rendered-caret-test',
-      title: 'rendered-caret-test',
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-task-text-test',
+      title: 'rendered-task-text-test',
       lastUpdated: 1,
       content,
-      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'caret-version' },
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'task-text-version' },
     };
 
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
@@ -228,103 +250,23 @@ describe('LibrarianView render', () => {
         : null
     ));
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
-      ok: true,
-      version: { mtimeMs: 2, size: content.length + 1, sha256: 'caret-saved-version' },
-    });
 
     const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const renderedRoot = await waitFor(() => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(root?.textContent).toContain('hello world');
+      expect(root?.textContent).toContain('open task');
+      expect(root?.textContent).toContain('done task');
       return root;
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');
 
-    const firstLine = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((paragraph) => paragraph.textContent === 'hello world');
-    const firstLineText = firstLine?.firstChild;
-    if (!firstLineText || firstLineText.nodeType !== Node.TEXT_NODE) {
-      throw new Error('Rendered first line text node missing');
-    }
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-
-    const originalGetBoundingClientRect = Range.prototype.getBoundingClientRect;
-    Range.prototype.getBoundingClientRect = () => ({
-      x: 0,
-      y: 0,
-      left: 0,
-      top: 0,
-      right: 0,
-      bottom: 16,
-      width: 0,
-      height: 16,
-      toJSON: () => ({}),
-    } as DOMRect);
-
-    const trustedCaret = renderedRoot.ownerDocument.createRange();
-    try {
-      trustedCaret.setStart(firstLineText, 5);
-      trustedCaret.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(trustedCaret);
-      fireEvent.focus(renderedRoot);
-
-      const badBoundaryCaret = renderedRoot.ownerDocument.createRange();
-      badBoundaryCaret.setStart(renderedRoot, 0);
-      badBoundaryCaret.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(badBoundaryCaret);
-
-      fireEvent.keyDown(renderedRoot, { key: 'ArrowLeft', code: 'ArrowLeft' });
-      expect(selection.rangeCount).toBe(1);
-      expect(selection.getRangeAt(0).startContainer.textContent).toBe(firstLineText.textContent);
-      expect(selection.getRangeAt(0).startOffset).toBe(5);
-
-      selection.removeAllRanges();
-      selection.addRange(badBoundaryCaret);
-
-      fireEvent.keyDown(renderedRoot, { key: 'x', code: 'KeyX' });
-      const beforeInput = new InputEvent('beforeinput', {
-        bubbles: true,
-        cancelable: true,
-        inputType: 'insertText',
-        data: 'x',
-      });
-      expect(fireEvent(renderedRoot, beforeInput)).toBe(true);
-      expect(beforeInput.defaultPrevented).toBe(false);
-      const nativeInsertionRange = selection.getRangeAt(0);
-      const nativeInsertionText = nativeInsertionRange.startContainer;
-      if (nativeInsertionText.nodeType !== Node.TEXT_NODE) {
-        throw new Error('Native insertion text node missing');
-      }
-      (nativeInsertionText as Text).insertData(nativeInsertionRange.startOffset, 'x');
-      const nativeCaret = renderedRoot.ownerDocument.createRange();
-      nativeCaret.setStart(nativeInsertionText, nativeInsertionRange.startOffset + 1);
-      nativeCaret.collapse(true);
-      selection.removeAllRanges();
-      selection.addRange(nativeCaret);
-      fireEvent.input(renderedRoot);
-
-      await waitFor(() => {
-        expect(window.wikiAPI!.save).toHaveBeenCalledWith(
-          relPath,
-          'hellox world\n\nsecond line',
-          page.documentVersion,
-        );
-        expect(renderedRoot.textContent).toContain('hellox world');
-      }, { timeout: 1200 });
-      expect(renderedRoot.textContent?.match(/hellox world/g)).toHaveLength(1);
-      expect(renderedRoot.textContent).not.toContain('xhello world');
-    } finally {
-      Range.prototype.getBoundingClientRect = originalGetBoundingClientRect;
-    }
+    expect(renderedRoot.querySelector('input[type="checkbox"]')).toBeNull();
+    expect(renderedRoot.textContent).toContain('[ ]');
+    expect(renderedRoot.textContent).toContain('[x]');
   });
 
-  it('lets plain rendered typing use native text insertion while updating the saved source', async () => {
+  it('saves rendered editor edits without replacing the active input', async () => {
     const relPath = 'scratchpad/rendered-native-typing-test';
     const content = 'hello world';
     const page: WikiPage = {
@@ -357,50 +299,37 @@ describe('LibrarianView render', () => {
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');
 
-    fireEvent.focus(renderedRoot);
-
-    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'hello world');
-    const text = paragraph?.firstChild;
-    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered text node missing');
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-    const range = renderedRoot.ownerDocument.createRange();
-    range.setStart(text, 5);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    const beforeInput = new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: 'x',
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello world');
+      return input;
     });
-    expect(fireEvent(renderedRoot, beforeInput)).toBe(true);
-    expect(beforeInput.defaultPrevented).toBe(false);
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
 
     await waitFor(() => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
-        'hellox world',
+        'hello world!',
         page.documentVersion,
       );
     }, { timeout: 1200 });
+    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
+    expect(renderedInput.textContent).toContain('hello world!');
   });
 
-  it('applies rendered formatting shortcuts and undo/redo in the visible editor', async () => {
-    const relPath = 'scratchpad/rendered-format-history-test';
-    const content = 'hello world';
+  it('preserves frontmatter while editing the rendered editor body', async () => {
+    const relPath = 'scratchpad/rendered-frontmatter-test';
+    const content = '---\ntodo: true\ntodo_state: open\n---\n\nhello';
     const page: WikiPage = {
       relPath,
       absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
-      name: 'rendered-format-history-test',
-      title: 'rendered-format-history-test',
+      name: 'rendered-frontmatter-test',
+      title: 'rendered-frontmatter-test',
       lastUpdated: 1,
       content,
-      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'format-version' },
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'frontmatter-version' },
     };
 
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
@@ -411,213 +340,7 @@ describe('LibrarianView render', () => {
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
     vi.mocked(window.wikiAPI!.save).mockResolvedValue({
       ok: true,
-      version: { mtimeMs: 2, size: content.length + 4, sha256: 'format-saved-version' },
-    });
-
-    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
-
-    const renderedRoot = await waitFor(() => {
-      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(root?.textContent).toContain('hello world');
-      return root;
-    });
-    if (!renderedRoot) throw new Error('Rendered editor root missing');
-
-    fireEvent.focus(renderedRoot);
-
-    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'hello world');
-    const text = paragraph?.firstChild;
-    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered text node missing');
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-    const range = renderedRoot.ownerDocument.createRange();
-    range.setStart(text, 6);
-    range.setEnd(text, 11);
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    fireEvent.keyDown(renderedRoot, { key: 'b', code: 'KeyB', metaKey: true });
-
-    await waitFor(() => {
-      expect(renderedRoot.querySelector('strong')?.textContent).toBe('world');
-    });
-
-    fireEvent.keyDown(renderedRoot, { key: 'z', code: 'KeyZ', metaKey: true });
-
-    await waitFor(() => {
-      expect(renderedRoot.querySelector('strong')).toBeNull();
-      expect(renderedRoot.textContent).toContain('hello world');
-    });
-
-    fireEvent.keyDown(renderedRoot, { key: 'Z', code: 'KeyZ', metaKey: true, shiftKey: true });
-
-    await waitFor(() => {
-      expect(renderedRoot.querySelector('strong')?.textContent).toBe('world');
-    });
-  });
-
-  it('auto-closes rendered wiki links while keeping the source saved once', async () => {
-    const relPath = 'scratchpad/rendered-wikilink-test';
-    const content = 'See [';
-    const page: WikiPage = {
-      relPath,
-      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
-      name: 'rendered-wikilink-test',
-      title: 'rendered-wikilink-test',
-      lastUpdated: 1,
-      content,
-      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'wikilink-version' },
-    };
-
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
-    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
-      ok: true,
-      version: { mtimeMs: 2, size: content.length + 3, sha256: 'wikilink-saved-version' },
-    });
-
-    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
-
-    const renderedRoot = await waitFor(() => {
-      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(root?.textContent).toContain('See [');
-      return root;
-    });
-    if (!renderedRoot) throw new Error('Rendered editor root missing');
-
-    fireEvent.focus(renderedRoot);
-
-    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'See [');
-    const text = paragraph?.firstChild;
-    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered wiki text node missing');
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-    const range = renderedRoot.ownerDocument.createRange();
-    range.setStart(text, 5);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    fireEvent.keyDown(renderedRoot, { key: '[', code: 'BracketLeft' });
-    const beforeInput = new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: '[',
-    });
-    expect(fireEvent(renderedRoot, beforeInput)).toBe(false);
-    expect(beforeInput.defaultPrevented).toBe(true);
-
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toContain('See [[]]');
-    });
-    await waitFor(() => {
-      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
-        relPath,
-        'See [[]]',
-        page.documentVersion,
-      );
-    }, { timeout: 1200 });
-  });
-
-  it('keeps rendered word deletion moving across a trailing-space caret', async () => {
-    const relPath = 'scratchpad/rendered-word-delete-test';
-    const content = 'hello brave world';
-    const page: WikiPage = {
-      relPath,
-      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
-      name: 'rendered-word-delete-test',
-      title: 'rendered-word-delete-test',
-      lastUpdated: 1,
-      content,
-      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'word-delete-version' },
-    };
-
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
-    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
-      ok: true,
-      version: { mtimeMs: 2, size: 5, sha256: 'word-delete-saved-version' },
-    });
-
-    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
-
-    const renderedRoot = await waitFor(() => {
-      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(root?.textContent).toContain('hello brave world');
-      return root;
-    });
-    if (!renderedRoot) throw new Error('Rendered editor root missing');
-
-    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'hello brave world');
-    const text = paragraph?.firstChild;
-    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered word-delete text node missing');
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-    const range = renderedRoot.ownerDocument.createRange();
-    range.setStart(text, 17);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    fireEvent.focus(renderedRoot);
-    fireEvent.keyDown(renderedRoot, { key: 'Backspace', code: 'Backspace', altKey: true });
-
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toContain('hello brave\u00A0');
-      expect(renderedRoot.textContent).not.toContain('world');
-    });
-
-    fireEvent.keyDown(renderedRoot, { key: 'Backspace', code: 'Backspace', altKey: true });
-
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toBe('hello');
-    });
-    await waitFor(() => {
-      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
-        relPath,
-        'hello',
-        page.documentVersion,
-      );
-    }, { timeout: 1200 });
-  });
-
-  it('joins rendered lines when Backspace starts a text line', async () => {
-    const relPath = 'scratchpad/rendered-line-join-test';
-    const content = 'hello\nworld';
-    const page: WikiPage = {
-      relPath,
-      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
-      name: 'rendered-line-join-test',
-      title: 'rendered-line-join-test',
-      lastUpdated: 1,
-      content,
-      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'line-join-version' },
-    };
-
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
-    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
-      ok: true,
-      version: { mtimeMs: 2, size: content.length - 1, sha256: 'line-join-saved-version' },
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'frontmatter-saved-version' },
     });
 
     const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
@@ -625,103 +348,30 @@ describe('LibrarianView render', () => {
     const renderedRoot = await waitFor(() => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
       expect(root?.textContent).toContain('hello');
-      expect(root?.textContent).toContain('world');
       return root;
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');
 
-    fireEvent.focus(renderedRoot);
-    expect(setRenderedMarkdownSelectionAtOffset(renderedRoot, content, 6)).toMatchObject({
-      sourceOffset: 6,
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello');
+      return input;
     });
-    fireEvent.keyDown(renderedRoot, { key: 'Backspace', code: 'Backspace' });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    pasteText(renderedInput, '!');
 
     await waitFor(() => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
-        'helloworld',
+        '---\ntodo: true\ntodo_state: open\n---\n\nhello!',
         page.documentVersion,
       );
-      expect(renderedRoot.textContent).toContain('helloworld');
     }, { timeout: 1200 });
   });
 
-  it('applies rendered paste and cut as source transactions', async () => {
-    const relPath = 'scratchpad/rendered-paste-cut-test';
-    const content = 'hello brave world';
-    const page: WikiPage = {
-      relPath,
-      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
-      name: 'rendered-paste-cut-test',
-      title: 'rendered-paste-cut-test',
-      lastUpdated: 1,
-      content,
-      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'paste-cut-version' },
-    };
-
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
-    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
-    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
-      ok: true,
-      version: { mtimeMs: 2, size: content.length, sha256: 'paste-cut-saved-version' },
-    });
-
-    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
-
-    const renderedRoot = await waitFor(() => {
-      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(root?.textContent).toContain('hello brave world');
-      return root;
-    });
-    if (!renderedRoot) throw new Error('Rendered editor root missing');
-
-    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'hello brave world');
-    const text = paragraph?.firstChild;
-    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered paste/cut text node missing');
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-    const pasteRange = renderedRoot.ownerDocument.createRange();
-    pasteRange.setStart(text, 5);
-    pasteRange.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(pasteRange);
-
-    const pasteData = { getData: vi.fn(() => ' there') };
-    fireEvent.paste(renderedRoot, { clipboardData: pasteData });
-
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toContain('hello there brave world');
-    });
-
-    const updatedParagraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'hello there brave world');
-    const updatedText = updatedParagraph?.firstChild;
-    if (!updatedText || updatedText.nodeType !== Node.TEXT_NODE) {
-      throw new Error('Updated rendered paste/cut text node missing');
-    }
-
-    const cutRange = renderedRoot.ownerDocument.createRange();
-    cutRange.setStart(updatedText, 6);
-    cutRange.setEnd(updatedText, 12);
-    selection.removeAllRanges();
-    selection.addRange(cutRange);
-
-    const cutData = { setData: vi.fn() };
-    fireEvent.cut(renderedRoot, { clipboardData: cutData });
-
-    expect(cutData.setData).toHaveBeenCalledWith('text/plain', 'there ');
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toContain('hello brave world');
-    });
-  });
-
-  it('keeps rendered Enter on an editable blank line that accepts typing', async () => {
+  it('lets rendered editor input create the next rendered body line', async () => {
     const relPath = 'scratchpad/rendered-enter-blank-line-test';
     const content = 'hello';
     const page: WikiPage = {
@@ -754,41 +404,16 @@ describe('LibrarianView render', () => {
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');
 
-    const paragraph = Array.from(renderedRoot.querySelectorAll('p'))
-      .find((node) => node.textContent === 'hello');
-    const text = paragraph?.firstChild;
-    if (!text || text.nodeType !== Node.TEXT_NODE) throw new Error('Rendered enter text node missing');
-
-    const selection = renderedRoot.ownerDocument.getSelection();
-    if (!selection) throw new Error('Selection API unavailable');
-    const range = renderedRoot.ownerDocument.createRange();
-    range.setStart(text, 5);
-    range.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(range);
-
-    fireEvent.focus(renderedRoot);
-    fireEvent.keyDown(renderedRoot, { key: 'Enter', code: 'Enter' });
-
-    const blankLine = await waitFor(() => {
-      const blank = renderedRoot.querySelector('[data-ft-rendered-blank-line="true"]');
-      expect(blank?.textContent).toBe('\u00A0');
-      expect(blank?.getAttribute('contenteditable')).toBeNull();
-      return blank;
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello');
+      return input;
     });
-    expect(selection.focusNode).toBe(blankLine?.firstChild);
-
-    const beforeInput = new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: 'x',
-    });
-    expect(fireEvent(renderedRoot, beforeInput)).toBe(false);
-    expect(beforeInput.defaultPrevented).toBe(true);
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '\nx');
 
     await waitFor(() => {
-      expect(renderedRoot.textContent).not.toContain('\u00A0x');
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'hello\nx',
@@ -797,7 +422,7 @@ describe('LibrarianView render', () => {
     }, { timeout: 1200 });
   });
 
-  it('keeps leading spaces editable on a blank rendered page', async () => {
+  it('keeps leading spaces in the rendered editor', async () => {
     const relPath = 'scratchpad/rendered-leading-space-test';
     const content = '';
     const page: WikiPage = {
@@ -830,38 +455,14 @@ describe('LibrarianView render', () => {
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');
 
-    fireEvent.focus(renderedRoot);
-    expect(setRenderedMarkdownSelectionAtOffset(renderedRoot, content, 0)).toMatchObject({
-      sourceOffset: 0,
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input).toBeTruthy();
+      return input;
     });
-
-    const firstSpace = new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: ' ',
-    });
-    expect(fireEvent(renderedRoot, firstSpace)).toBe(false);
-    expect(firstSpace.defaultPrevented).toBe(true);
-
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toBe('\u00A0');
-      expect(renderedRoot.ownerDocument.getSelection()?.focusOffset).toBe(1);
-    });
-
-    const secondSpace = new InputEvent('beforeinput', {
-      bubbles: true,
-      cancelable: true,
-      inputType: 'insertText',
-      data: ' ',
-    });
-    expect(fireEvent(renderedRoot, secondSpace)).toBe(false);
-    expect(secondSpace.defaultPrevented).toBe(true);
-
-    await waitFor(() => {
-      expect(renderedRoot.textContent).toBe('\u00A0\u00A0');
-      expect(renderedRoot.ownerDocument.getSelection()?.focusOffset).toBe(2);
-    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '  ');
     await waitFor(() => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
