@@ -33,6 +33,7 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldIncludeLauncherRecentFile,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   SQUARES_ACTION_DEFS,
@@ -241,6 +242,20 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
   });
 
+  it('keeps command matches ahead of newer recent files', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('recent-command-twin', 'recent-file', 300), score: 1000 },
+      { item: item('older-command', 'command', undefined, 100), score: 800 },
+      { item: item('wiki-page', 'wiki-page', undefined, 200), score: 900 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'older-command',
+      'recent-command-twin',
+      'wiki-page',
+    ]);
+  });
+
   it('uses score when matching rows do not have recency', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('wiki-clipboard', 'wiki-page'), score: 1000 },
@@ -300,6 +315,22 @@ describe('balanceLauncherNormalModeMatches', () => {
     expect(results.map(result => result.id)).toEqual(
       Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS }, (_, index) => `recent-${LAUNCHER_NORMAL_MODE_MAX_RESULTS + 4 - index}`),
     );
+  });
+});
+
+describe('shouldIncludeLauncherRecentFile', () => {
+  it('removes recent rows for portable command files', () => {
+    expect(shouldIncludeLauncherRecentFile({
+      filePath: '/Users/afar/.fieldtheory/library/Commands/write-goal.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+    })).toBe(false);
+  });
+
+  it('keeps recent rows for non-command files', () => {
+    expect(shouldIncludeLauncherRecentFile({
+      filePath: '/Users/afar/.fieldtheory/library/Notes/today.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+    })).toBe(true);
   });
 });
 
