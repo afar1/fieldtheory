@@ -9,6 +9,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
+import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import ContentToolbar from './ContentToolbar';
 import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
@@ -320,6 +321,7 @@ export default function CommandsView({
   const editTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const commandContentRef = useRef<HTMLDivElement | null>(null);
   const wikiIndexRef = useRef<WikiIndex | null>(null);
+  const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
 
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
@@ -1582,7 +1584,8 @@ export default function CommandsView({
     <div
       ref={containerRef}
       tabIndex={0}
-      onMouseLeave={() => setSidebarHoverExpanded(false)}
+      onMouseMove={collapsedSidebarHoverReveal.handleSurfaceMouseMove}
+      onMouseLeave={collapsedSidebarHoverReveal.handleSurfaceMouseLeave}
       style={{
         display: 'flex',
         flex: 1,
@@ -1595,15 +1598,21 @@ export default function CommandsView({
       {sidebarCollapsed && !sidebarTemporarilyExpanded && (
         <div
           aria-hidden="true"
-          onMouseEnter={() => setSidebarHoverExpanded(true)}
+          data-fieldtheory-collapsed-sidebar-hover-strip="true"
+          onMouseOver={collapsedSidebarHoverReveal.handleHoverStripMouseOver}
+          onClick={collapsedSidebarHoverReveal.handleHoverStripClick}
           style={{
             position: 'absolute',
             top: 0,
             bottom: 0,
             left: 0,
-            width: '30px',
+            width: `${collapsedSidebarHoverReveal.hoverStripWidth}px`,
             zIndex: 25,
-            cursor: 'default',
+            cursor: 'pointer',
+            opacity: collapsedSidebarHoverReveal.affordanceOpacity,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+            boxShadow: theme.isDark ? 'inset 1px 0 rgba(255,255,255,0.16)' : 'inset 1px 0 rgba(0,0,0,0.14)',
+            transition: 'opacity 120ms ease',
           }}
         />
       )}
