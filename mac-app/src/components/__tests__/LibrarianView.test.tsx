@@ -192,26 +192,22 @@ describe('LibrarianView render', () => {
 
     const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
-    await waitFor(() => {
+    const renderedInput = await waitFor(() => {
       const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
       expect(renderedRoot?.getAttribute('contenteditable')).toBeNull();
       expect(renderedRoot?.getAttribute('role')).toBeNull();
       expect(renderedRoot?.textContent).toContain('First rendered line');
-      expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBeNull();
-    });
-
-    const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-    if (!renderedRoot) throw new Error('Rendered editor root missing');
-    fireEvent.click(renderedRoot);
-
-    const renderedInput = await waitFor(() => {
-      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
       expect(input?.tagName).toBe('DIV');
       expect(input?.closest('.cm-editor')).toBeTruthy();
       expect(input?.textContent).toContain('First rendered line');
       expect(input?.textContent).toContain('Second rendered line');
       return input;
     });
+
+    const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+    fireEvent.click(renderedRoot);
     expect(renderedInput?.closest('[data-ft-rendered-editor-root="true"]')).toBe(renderedRoot);
     expect(container.querySelector('textarea[data-ft-rendered-editor-input="true"]')).toBeNull();
 
@@ -226,12 +222,14 @@ describe('LibrarianView render', () => {
 
     await waitFor(() => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
       expect(root?.getAttribute('contenteditable')).toBeNull();
       expect(root?.textContent).toContain('Second rendered line');
+      expect(input?.closest('.cm-editor')).toBeTruthy();
     });
   });
 
-  it('renders task list markers as editable text instead of checkbox controls', async () => {
+  it('renders task list markers as native checkbox controls in rendered editing', async () => {
     const relPath = 'scratchpad/rendered-task-text-test';
     const content = '- [ ] open task\n- [x] done task';
     const page: WikiPage = {
@@ -261,9 +259,19 @@ describe('LibrarianView render', () => {
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');
 
-    expect(renderedRoot.querySelector('input[type="checkbox"]')).toBeNull();
-    expect(renderedRoot.textContent).toContain('[ ]');
-    expect(renderedRoot.textContent).toContain('[x]');
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.closest('.cm-editor')).toBeTruthy();
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor input missing');
+
+    const checkboxes = renderedInput.querySelectorAll<HTMLInputElement>('input[type="checkbox"]');
+    expect(checkboxes).toHaveLength(2);
+    expect(checkboxes[0].checked).toBe(false);
+    expect(checkboxes[1].checked).toBe(true);
+    expect(renderedInput.textContent).not.toContain('[ ]');
+    expect(renderedInput.textContent).not.toContain('[x]');
   });
 
   it('saves rendered editor edits without replacing the active input', async () => {
@@ -450,7 +458,9 @@ describe('LibrarianView render', () => {
 
     const renderedRoot = await waitFor(() => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
-      expect(root?.textContent).toBe('\u00A0');
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(root).toBeTruthy();
+      expect(input?.closest('.cm-editor')).toBeTruthy();
       return root;
     });
     if (!renderedRoot) throw new Error('Rendered editor root missing');

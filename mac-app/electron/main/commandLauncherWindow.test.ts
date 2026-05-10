@@ -431,6 +431,25 @@ describe('CommandLauncherWindow.hide()', () => {
     expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
+  it('does not bring the previous app forward when target activation blurs the launcher first', () => {
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' })),
+    };
+    const targetActivationLauncher = new CommandLauncherWindow(nativeHelper as any);
+    (targetActivationLauncher as any).window = null;
+    targetActivationLauncher.preload();
+    (targetActivationLauncher as any).previousApp = { bundleId: 'com.apple.Safari', name: 'Safari' };
+    const activatePreviousApp = vi.spyOn(targetActivationLauncher as any, 'activatePreviousApp').mockResolvedValue(undefined);
+    const blurHandler = mockWindow.on.mock.calls.find(([event]) => event === 'blur')?.[1];
+
+    targetActivationLauncher.suppressActivationForExternalInvocation();
+    blurHandler?.();
+
+    expect(mockWindow.hide).toHaveBeenCalled();
+    expect(activatePreviousApp).not.toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
+  });
+
   it('keeps external invocation suppression through a blur close after direct hide', () => {
     const activatePreviousApp = vi.spyOn(launcher as any, 'activatePreviousApp').mockResolvedValue(undefined);
     const dateNow = vi.spyOn(Date, 'now').mockReturnValue(1000);
