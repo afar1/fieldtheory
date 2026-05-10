@@ -9,6 +9,19 @@ export type SyncRecord = {
   updatedAt?: number;
 };
 
+export type RemoteDeletedSyncRecord = {
+  client_id: string;
+  client_updated_at_ms?: number | null;
+  deleted_at?: string | null;
+  updated_at?: string;
+};
+
+export type SyncDeleteTombstone = {
+  collection: string;
+  id: string;
+  deletedAt: number;
+};
+
 /**
  * Ensures a record has an updatedAt timestamp.
  * Uses createdAt as fallback if updatedAt is missing.
@@ -17,6 +30,15 @@ export const withUpdatedAt = <T extends SyncRecord>(record: T): T => ({
   ...record,
   updatedAt: record.updatedAt ?? record.createdAt,
 });
+
+export const timestampFromIso = (value: string | null | undefined) => {
+  if (!value) return -Infinity;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : -Infinity;
+};
+
+export const deletedRemoteRecordTimestamp = (row: RemoteDeletedSyncRecord) =>
+  Math.max(row.client_updated_at_ms ?? -Infinity, timestampFromIso(row.deleted_at));
 
 /**
  * Merges local and remote records using last-write-wins strategy.
@@ -50,4 +72,39 @@ export const mergeByLastWriteWins = <T extends SyncRecord>(
   });
 
   return Array.from(merged.values());
+};
+
+export const filterPendingDeletesByCollection = <T extends { id: string }>(
+  records: T[],
+  tombstones: SyncDeleteTombstone[],
+  collection: string,
+) => {
+  const deletedIds = new Set(
+    tombstones
+      .filter((tombstone) => tombstone.collection === collection)
+      .map((tombstone) => tombstone.id),
+  );
+
+  return records.filter((record) => !deletedIds.has(record.id));
+};
+
+export const filterRecordsDeletedRemotely = <T extends SyncRecord>(
+  records: T[],
+  deletedRows: RemoteDeletedSyncRecord[],
+) => {
+  const deletedAtById = new Map<string, number>();
+
+  deletedRows.forEach((row) => {
+    const deletedAt = deletedRemoteRecordTimestamp(row);
+    const current = deletedAtById.get(row.client_id) ?? -Infinity;
+    if (deletedAt > current) {
+      deletedAtById.set(row.client_id, deletedAt);
+    }
+  });
+
+  return records.filter((record) => {
+    const deletedAt = deletedAtById.get(record.id);
+    if (deletedAt === undefined) return true;
+    return (record.updatedAt ?? record.createdAt) > deletedAt;
+  });
 };

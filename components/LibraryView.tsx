@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Animated,
+  ActivityIndicator,
   Dimensions,
   FlatList,
   Keyboard,
@@ -26,9 +27,12 @@ import { ThemeColors, useIsDark, useThemeColors, useThemeMode } from '../service
 interface LibraryViewProps {
   documents: LibraryDocument[];
   onChange: (docs: LibraryDocument[]) => void;
+  onDocumentChange?: (doc: LibraryDocument) => void;
+  onDocumentDelete?: (doc: LibraryDocument) => void;
   callsign?: string | null;
   lastSyncedAt?: number | null;
   isSyncing?: boolean;
+  isHydrating?: boolean;
   onSyncPress?: () => void;
 }
 
@@ -96,6 +100,37 @@ const compareDocs = (a: LibraryDocument, b: LibraryDocument) => {
   return b.updatedAt - a.updatedAt;
 };
 
+const withContentUpdate = (doc: LibraryDocument, content: string): LibraryDocument => {
+  const nextTitle = titleFromContent(content, doc.title);
+  return {
+    ...doc,
+    content,
+    title: nextTitle,
+    fileName: doc.fileName ?? fileNameForTitle(nextTitle),
+    folderPath: doc.folderPath ?? folderFor(doc),
+    tags: extractTags(content),
+    updatedAt: Date.now(),
+  };
+};
+
+const applyContentUpdate = (documents: LibraryDocument[], docId: string, content: string) => {
+  let didPatch = false;
+  let patchedDocument: LibraryDocument | null = null;
+  const nextDocuments = documents.map((doc) => {
+    if (doc.id !== docId) return doc;
+    if (doc.content === content) return doc;
+    didPatch = true;
+    patchedDocument = withContentUpdate(doc, content);
+    return patchedDocument;
+  });
+
+  return {
+    didPatch,
+    document: patchedDocument,
+    documents: didPatch ? [...nextDocuments].sort(compareDocs) : documents,
+  };
+};
+
 const getDisplayTitle = (doc: LibraryDocument) => doc.title.trim() || 'Untitled';
 
 const formatSyncTime = (timestamp?: number | null) => {
@@ -105,7 +140,17 @@ const formatSyncTime = (timestamp?: number | null) => {
   return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(new Date(timestamp));
 };
 
-export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyncing, onSyncPress }: LibraryViewProps) {
+export function LibraryView({
+  documents,
+  onChange,
+  onDocumentChange,
+  onDocumentDelete,
+  callsign,
+  lastSyncedAt,
+  isSyncing,
+  isHydrating,
+  onSyncPress,
+}: LibraryViewProps) {
   const colors = useThemeColors();
   const isDark = useIsDark();
   const [themeMode, setThemeMode] = useThemeMode();
@@ -113,10 +158,16 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
   const editorRef = useRef<TextInput>(null);
   const drawerProgress = useRef(new Animated.Value(0)).current;
   const flushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingDocumentsRef = useRef<LibraryDocument[] | null>(null);
+  const pendingDraftRef = useRef<{ docId: string; content: string } | null>(null);
   const dirtyDocumentsRef = useRef(false);
   const onChangeRef = useRef(onChange);
+  const onDocumentChangeRef = useRef(onDocumentChange);
+  const onDocumentDeleteRef = useRef(onDocumentDelete);
   const [localDocuments, setLocalDocuments] = useState(documents);
+  const localDocumentsRef = useRef(documents);
+  const [editorDraft, setEditorDraft] = useState<{ docId: string; content: string } | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(documents[0]?.id ?? null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerContentVisible, setDrawerContentVisible] = useState(false);
@@ -134,26 +185,57 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
   }, [onChange]);
 
   useEffect(() => {
-    if (!dirtyDocumentsRef.current) {
+    onDocumentChangeRef.current = onDocumentChange;
+  }, [onDocumentChange]);
+
+  useEffect(() => {
+    onDocumentDeleteRef.current = onDocumentDelete;
+  }, [onDocumentDelete]);
+
+  useEffect(() => {
+    if (!dirtyDocumentsRef.current && !pendingDraftRef.current) {
+      localDocumentsRef.current = documents;
       setLocalDocuments(documents);
     }
   }, [documents]);
 
   useEffect(() => {
     return () => {
+      if (draftFlushTimerRef.current) {
+        clearTimeout(draftFlushTimerRef.current);
+      }
       if (flushTimerRef.current) {
         clearTimeout(flushTimerRef.current);
       }
-      if (pendingDocumentsRef.current) {
-        onChangeRef.current(pendingDocumentsRef.current);
+      let documentsToFlush = pendingDocumentsRef.current;
+      if (pendingDraftRef.current) {
+        const { docId, content } = pendingDraftRef.current;
+        const result = applyContentUpdate(localDocumentsRef.current, docId, content);
+        if (result.didPatch && result.document && onDocumentChangeRef.current) {
+          onDocumentChangeRef.current(result.document);
+          documentsToFlush = null;
+        } else if (result.didPatch) {
+          documentsToFlush = result.documents;
+        }
+      }
+      if (documentsToFlush) {
+        onChangeRef.current(documentsToFlush);
       }
     };
   }, []);
 
-  const selectedDoc = useMemo(
+  const selectedStoredDoc = useMemo(
     () => localDocuments.find((doc) => doc.id === selectedId) ?? null,
     [localDocuments, selectedId],
   );
+
+  const selectedDoc = useMemo(() => {
+    if (!selectedStoredDoc) return null;
+    if (editorDraft?.docId === selectedStoredDoc.id) {
+      return { ...selectedStoredDoc, content: editorDraft.content };
+    }
+    return selectedStoredDoc;
+  }, [editorDraft, selectedStoredDoc]);
 
   const sortedDocs = useMemo(() => [...localDocuments].sort(compareDocs), [localDocuments]);
 
@@ -295,14 +377,103 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
     }, 500);
   };
 
-  const persist = (next: LibraryDocument[], nextSelectedId = selectedId) => {
+  const flushDocumentsNow = (next: LibraryDocument[]) => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    pendingDocumentsRef.current = null;
+    dirtyDocumentsRef.current = false;
+    onChangeRef.current(next);
+  };
+
+  const clearPendingDocumentsFlush = () => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+      flushTimerRef.current = null;
+    }
+    pendingDocumentsRef.current = null;
+    dirtyDocumentsRef.current = false;
+  };
+
+  const emitDocumentChange = (doc: LibraryDocument, fallbackDocuments: LibraryDocument[]) => {
+    if (onDocumentChangeRef.current) {
+      clearPendingDocumentsFlush();
+      onDocumentChangeRef.current(doc);
+      return;
+    }
+    flushDocumentsNow(fallbackDocuments);
+  };
+
+  const emitDocumentDelete = (doc: LibraryDocument, fallbackDocuments: LibraryDocument[]) => {
+    if (onDocumentDeleteRef.current) {
+      clearPendingDocumentsFlush();
+      onDocumentDeleteRef.current(doc);
+      return;
+    }
+    flushDocumentsSoon(fallbackDocuments);
+  };
+
+  const clearEditorDraft = (docId: string) => {
+    if (pendingDraftRef.current?.docId === docId && draftFlushTimerRef.current) {
+      clearTimeout(draftFlushTimerRef.current);
+      draftFlushTimerRef.current = null;
+    }
+    if (pendingDraftRef.current?.docId === docId) {
+      pendingDraftRef.current = null;
+    }
+    setEditorDraft((draft) => (draft?.docId === docId ? null : draft));
+  };
+
+  const flushEditorDraft = () => {
+    const pendingDraft = pendingDraftRef.current;
+    if (!pendingDraft) return;
+
+    if (draftFlushTimerRef.current) {
+      clearTimeout(draftFlushTimerRef.current);
+      draftFlushTimerRef.current = null;
+    }
+    pendingDraftRef.current = null;
+
+    const result = applyContentUpdate(localDocumentsRef.current, pendingDraft.docId, pendingDraft.content);
+    setEditorDraft((draft) => (draft?.docId === pendingDraft.docId ? null : draft));
+    if (!result.didPatch) {
+      if (!pendingDocumentsRef.current) {
+        dirtyDocumentsRef.current = false;
+      }
+      return;
+    }
+
+    localDocumentsRef.current = result.documents;
+    setLocalDocuments(result.documents);
+    if (result.document) {
+      emitDocumentChange(result.document, result.documents);
+    } else {
+      flushDocumentsNow(result.documents);
+    }
+  };
+
+  const persist = (
+    next: LibraryDocument[],
+    nextSelectedId = selectedId,
+    changedDocument?: LibraryDocument,
+    deletedDocument?: LibraryDocument,
+  ) => {
     const sorted = [...next].sort(compareDocs);
+    localDocumentsRef.current = sorted;
     setLocalDocuments(sorted);
-    flushDocumentsSoon(sorted);
+    if (deletedDocument) {
+      emitDocumentDelete(deletedDocument, sorted);
+    } else if (changedDocument) {
+      emitDocumentChange(changedDocument, sorted);
+    } else {
+      flushDocumentsSoon(sorted);
+    }
     setSelectedId(nextSelectedId);
   };
 
   const createDocument = (title = 'Untitled', folderPath = DEFAULT_FOLDER) => {
+    flushEditorDraft();
     const now = Date.now();
     const cleanTitle = title.trim() || 'Untitled';
     const doc: LibraryDocument = {
@@ -317,7 +488,7 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
       createdAt: now,
       updatedAt: now,
     };
-    persist([doc, ...localDocuments], doc.id);
+    persist([doc, ...localDocumentsRef.current], doc.id, doc);
     setSwitcherOpen(false);
     setDrawerOpen(false);
     setTimeout(() => editorRef.current?.focus(), 100);
@@ -331,18 +502,21 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
 
   const updateDoc = (patch: Partial<LibraryDocument>) => {
     if (!selectedDoc) return;
-    const mergedContent = patch.content ?? selectedDoc.content;
-    const nextTitle = patch.title ?? titleFromContent(mergedContent, selectedDoc.title);
+    const pendingDraft = pendingDraftRef.current?.docId === selectedDoc.id ? pendingDraftRef.current : null;
+    const baseDoc = pendingDraft ? { ...selectedDoc, content: pendingDraft.content } : selectedDoc;
+    clearEditorDraft(selectedDoc.id);
+    const mergedContent = patch.content ?? baseDoc.content;
+    const nextTitle = patch.title ?? titleFromContent(mergedContent, baseDoc.title);
     const updated: LibraryDocument = {
-      ...selectedDoc,
+      ...baseDoc,
       ...patch,
       title: nextTitle,
-      fileName: patch.fileName ?? selectedDoc.fileName ?? fileNameForTitle(nextTitle),
-      folderPath: patch.folderPath ?? folderFor(selectedDoc),
+      fileName: patch.fileName ?? baseDoc.fileName ?? fileNameForTitle(nextTitle),
+      folderPath: patch.folderPath ?? folderFor(baseDoc),
       tags: patch.tags ?? extractTags(mergedContent),
       updatedAt: Date.now(),
     };
-    persist(localDocuments.map((doc) => (doc.id === selectedDoc.id ? updated : doc)), selectedDoc.id);
+    persist(localDocumentsRef.current.map((doc) => (doc.id === selectedDoc.id ? updated : doc)), selectedDoc.id, updated);
   };
 
   const moveSelectedToFolder = (folderPath: string) => {
@@ -374,8 +548,9 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
         text: 'Delete',
         style: 'destructive',
         onPress: () => {
-          const next = localDocuments.filter((doc) => doc.id !== selectedDoc.id);
-          persist(next, next[0]?.id ?? null);
+          clearEditorDraft(selectedDoc.id);
+          const next = localDocumentsRef.current.filter((doc) => doc.id !== selectedDoc.id);
+          persist(next, next[0]?.id ?? null, undefined, selectedDoc);
           setActionsOpen(false);
         },
       },
@@ -383,10 +558,26 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
   };
 
   const openDoc = useCallback((doc: LibraryDocument) => {
+    flushEditorDraft();
     setSelectedId(doc.id);
     setDrawerOpen(false);
     setSwitcherOpen(false);
   }, []);
+
+  const handleEditorTextChange = (content: string) => {
+    if (!selectedStoredDoc) return;
+    dirtyDocumentsRef.current = true;
+    const draft = { docId: selectedStoredDoc.id, content };
+    pendingDraftRef.current = draft;
+    setEditorDraft(draft);
+    if (draftFlushTimerRef.current) {
+      clearTimeout(draftFlushTimerRef.current);
+    }
+    draftFlushTimerRef.current = setTimeout(() => {
+      draftFlushTimerRef.current = null;
+      flushEditorDraft();
+    }, 500);
+  };
 
   const insertText = (text: string, cursorOffset = text.length) => {
     if (!selectedDoc) return;
@@ -600,7 +791,12 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
           </TouchableOpacity>
         </View>
 
-        {editorEmpty ? (
+        {editorEmpty && isHydrating ? (
+          <View style={styles.emptyState}>
+            <ActivityIndicator size="small" color={colors.accent} />
+            <Text style={[styles.emptyActionText, { color: colors.textSecondary }]}>Loading Library...</Text>
+          </View>
+        ) : editorEmpty ? (
           <View style={styles.emptyState}>
             <TouchableOpacity style={[styles.emptyAction, { backgroundColor: colors.bgSurface }]} onPress={() => createDocument('Untitled')}>
               <Text style={[styles.emptyActionText, { color: colors.accent }]}>Create new note</Text>
@@ -624,10 +820,13 @@ export function LibraryView({ documents, onChange, callsign, lastSyncedAt, isSyn
             <TextInput
               ref={editorRef}
               value={selectedDoc.content}
-              onChangeText={(content) => updateDoc({ content })}
+              onChangeText={handleEditorTextChange}
               onSelectionChange={(event) => setSelection(event.nativeEvent.selection)}
               onFocus={() => setEditorFocused(true)}
-              onBlur={() => setEditorFocused(false)}
+              onBlur={() => {
+                setEditorFocused(false);
+                flushEditorDraft();
+              }}
               style={[styles.editor, { color: colors.textPrimary }]}
               multiline
               textAlignVertical="top"
