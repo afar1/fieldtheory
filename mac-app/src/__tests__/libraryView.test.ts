@@ -492,6 +492,22 @@ describe('markdown list editor helpers', () => {
     });
   });
 
+  it('continues an ordered list on Enter', () => {
+    expect(getMarkdownListEnterEdit('2) second', 9, 9)).toEqual({
+      nextValue: '2) second\n3) ',
+      selectionStart: 13,
+      selectionEnd: 13,
+    });
+  });
+
+  it('continues a quote on Enter', () => {
+    expect(getMarkdownListEnterEdit('> quoted', 8, 8)).toEqual({
+      nextValue: '> quoted\n> ',
+      selectionStart: 11,
+      selectionEnd: 11,
+    });
+  });
+
   it('continues a task list on Enter with a fresh unchecked task', () => {
     expect(getMarkdownListEnterEdit('- [x] first', 11, 11)).toEqual({
       nextValue: '- [x] first\n- [ ] ',
@@ -535,6 +551,20 @@ describe('markdown list editor helpers', () => {
   it('exits an empty bare task item on Enter', () => {
     expect(getMarkdownListEnterEdit('[] first\n[] ', 12, 12)).toEqual({
       nextValue: '[] first\n',
+      selectionStart: 9,
+      selectionEnd: 9,
+    });
+  });
+
+  it('exits empty ordered and quote lines on Enter', () => {
+    expect(getMarkdownListEnterEdit('1. first\n2. ', 12, 12)).toEqual({
+      nextValue: '1. first\n',
+      selectionStart: 9,
+      selectionEnd: 9,
+    });
+
+    expect(getMarkdownListEnterEdit('> quoted\n> ', 11, 11)).toEqual({
+      nextValue: '> quoted\n',
       selectionStart: 9,
       selectionEnd: 9,
     });

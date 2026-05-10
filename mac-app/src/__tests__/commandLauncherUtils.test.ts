@@ -33,6 +33,7 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldIncludeLauncherRecentFile,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   SQUARES_ACTION_DEFS,
@@ -221,27 +222,41 @@ describe('balanceLauncherNormalModeMatches', () => {
     lastUpdated,
   });
 
-  it('orders search results by commands, recent markdown, actions, library, then bookmarks', () => {
+  it('orders search results by most recent item across types', () => {
     const results = balanceLauncherNormalModeMatches([
-      { item: item('bookmark-author', 'bookmark-author'), score: 990 },
-      { item: item('bookmark-post', 'bookmark'), score: 980 },
-      { item: item('library-page', 'wiki-page'), score: 970 },
-      { item: item('recent-page', 'recent-file'), score: 960 },
+      { item: item('bookmark-author', 'bookmark-author', undefined, 20), score: 990 },
+      { item: item('bookmark-post', 'bookmark', undefined, 30), score: 980 },
+      { item: item('library-page', 'wiki-page', undefined, 40), score: 970 },
+      { item: item('recent-page', 'recent-file', 50), score: 960 },
       { item: item('action', 'action'), score: 950 },
-      { item: item('command', 'command'), score: 940 },
+      { item: item('command', 'command', undefined, 60), score: 940 },
     ]);
 
     expect(results.map(result => result.id)).toEqual([
       'command',
       'recent-page',
-      'action',
       'library-page',
-      'bookmark-author',
       'bookmark-post',
+      'bookmark-author',
+      'action',
     ]);
   });
 
-  it('keeps launcher actions above matching wiki and artifact rows', () => {
+  it('keeps command matches ahead of newer recent files', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('recent-command-twin', 'recent-file', 300), score: 1000 },
+      { item: item('older-command', 'command', undefined, 100), score: 800 },
+      { item: item('wiki-page', 'wiki-page', undefined, 200), score: 900 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'older-command',
+      'recent-command-twin',
+      'wiki-page',
+    ]);
+  });
+
+  it('uses score when matching rows do not have recency', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('wiki-clipboard', 'wiki-page'), score: 1000 },
       { item: item('artifact-clipboard', 'artifact'), score: 990 },
@@ -249,9 +264,9 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
 
     expect(results.map(result => result.id)).toEqual([
-      'open-clipboard-history',
       'wiki-clipboard',
       'artifact-clipboard',
+      'open-clipboard-history',
     ]);
   });
 
@@ -300,6 +315,22 @@ describe('balanceLauncherNormalModeMatches', () => {
     expect(results.map(result => result.id)).toEqual(
       Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS }, (_, index) => `recent-${LAUNCHER_NORMAL_MODE_MAX_RESULTS + 4 - index}`),
     );
+  });
+});
+
+describe('shouldIncludeLauncherRecentFile', () => {
+  it('removes recent rows for portable command files', () => {
+    expect(shouldIncludeLauncherRecentFile({
+      filePath: '/Users/afar/.fieldtheory/library/Commands/write-goal.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+    })).toBe(false);
+  });
+
+  it('keeps recent rows for non-command files', () => {
+    expect(shouldIncludeLauncherRecentFile({
+      filePath: '/Users/afar/.fieldtheory/library/Notes/today.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+    })).toBe(true);
   });
 });
 
