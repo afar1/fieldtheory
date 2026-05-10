@@ -6,7 +6,14 @@ import {
   MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS,
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
+  RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
+  RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS,
+  RENDERED_MARKDOWN_EDITOR_HEADING_CLASS,
+  RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_STRONG_CLASS,
+  RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS,
   checkedMarkdownTaskLineExtension,
+  renderedMarkdownEditorPresentationExtension,
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
@@ -187,6 +194,36 @@ describe('MarkdownCodeEditor checked task decorations', () => {
     expect(lines[1].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
     expect(lines[2].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(true);
     expect(lines[3].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
+
+    view.destroy();
+    parent.remove();
+  });
+});
+
+describe('MarkdownCodeEditor rendered presentation', () => {
+  it('hides common markdown syntax behind styled editable text', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '# Title\n\nHello **bold** *em* `code` [Link](wiki://target)\n- [x] done',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const content = parent.querySelector('.cm-content');
+    expect(content?.textContent).toContain('Title');
+    expect(content?.textContent).toContain('Hello bold em code Link');
+    expect(content?.textContent).not.toContain('#');
+    expect(content?.textContent).not.toContain('**');
+    expect(content?.textContent).not.toContain('wiki://target');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-1`)?.textContent).toBe('Title');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`)?.textContent).toBe('bold');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS}`)?.textContent).toBe('em');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_CODE_CLASS}`)?.textContent).toBe('code');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`)?.textContent).toBe('Link');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`)?.textContent).toBe('[x]');
 
     view.destroy();
     parent.remove();
