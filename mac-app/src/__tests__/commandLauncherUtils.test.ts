@@ -221,27 +221,27 @@ describe('balanceLauncherNormalModeMatches', () => {
     lastUpdated,
   });
 
-  it('orders search results by commands, recent markdown, actions, library, then bookmarks', () => {
+  it('orders search results by most recent item across types', () => {
     const results = balanceLauncherNormalModeMatches([
-      { item: item('bookmark-author', 'bookmark-author'), score: 990 },
-      { item: item('bookmark-post', 'bookmark'), score: 980 },
-      { item: item('library-page', 'wiki-page'), score: 970 },
-      { item: item('recent-page', 'recent-file'), score: 960 },
+      { item: item('bookmark-author', 'bookmark-author', undefined, 20), score: 990 },
+      { item: item('bookmark-post', 'bookmark', undefined, 30), score: 980 },
+      { item: item('library-page', 'wiki-page', undefined, 40), score: 970 },
+      { item: item('recent-page', 'recent-file', 50), score: 960 },
       { item: item('action', 'action'), score: 950 },
-      { item: item('command', 'command'), score: 940 },
+      { item: item('command', 'command', undefined, 60), score: 940 },
     ]);
 
     expect(results.map(result => result.id)).toEqual([
       'command',
       'recent-page',
-      'action',
       'library-page',
-      'bookmark-author',
       'bookmark-post',
+      'bookmark-author',
+      'action',
     ]);
   });
 
-  it('keeps launcher actions above matching wiki and artifact rows', () => {
+  it('uses score when matching rows do not have recency', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('wiki-clipboard', 'wiki-page'), score: 1000 },
       { item: item('artifact-clipboard', 'artifact'), score: 990 },
@@ -249,9 +249,9 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
 
     expect(results.map(result => result.id)).toEqual([
-      'open-clipboard-history',
       'wiki-clipboard',
       'artifact-clipboard',
+      'open-clipboard-history',
     ]);
   });
 

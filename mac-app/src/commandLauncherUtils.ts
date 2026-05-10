@@ -289,8 +289,6 @@ export interface LauncherUsageScoreItem {
   name: string;
 }
 
-export type LauncherNormalModeSectionId = 'commands' | 'recent' | 'files' | 'actions' | 'bookmarks';
-
 export interface LauncherNormalModeItem {
   type?: string;
   lastOpenedAt?: number;
@@ -309,43 +307,7 @@ export interface LauncherDirectoryNamespace {
   directoryRelPath?: string;
 }
 
-const NORMAL_MODE_SECTION_ORDER: Array<{ id: LauncherNormalModeSectionId; predicate: (item: LauncherNormalModeItem) => boolean }> = [
-  { id: 'commands', predicate: (item) => item.type === 'command' },
-  { id: 'recent', predicate: (item) => item.type === 'recent-file' },
-  { id: 'actions', predicate: (item) => item.type === 'action' },
-  { id: 'files', predicate: (item) => item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact' || item.type === 'directory' },
-  { id: 'bookmarks', predicate: (item) => item.type === 'bookmark' || item.type === 'bookmark-author' || item.type === 'bookmark-facet' },
-];
-
-const NORMAL_MODE_SECTION_LIMITS: Record<LauncherNormalModeSectionId, number> = {
-  commands: 4,
-  recent: 3,
-  files: 6,
-  actions: 3,
-  bookmarks: 4,
-};
-
-export const LAUNCHER_NORMAL_MODE_MAX_RESULTS = Object.values(NORMAL_MODE_SECTION_LIMITS)
-  .reduce((total, limit) => total + limit, 0);
-
-function getNormalModeSectionId(item: LauncherNormalModeItem): LauncherNormalModeSectionId | null {
-  return NORMAL_MODE_SECTION_ORDER.find(section => section.predicate(item))?.id ?? null;
-}
-
-function insertByScore<T extends LauncherNormalModeItem>(
-  matches: ScoredLauncherNormalModeItem<T>[],
-  match: ScoredLauncherNormalModeItem<T>,
-  limit: number,
-): void {
-  const insertAt = matches.findIndex(existing => compareScoredLauncherMatches(match, existing) < 0);
-  if (insertAt === -1) {
-    if (matches.length < limit) matches.push(match);
-    return;
-  }
-
-  matches.splice(insertAt, 0, match);
-  if (matches.length > limit) matches.pop();
-}
+export const LAUNCHER_NORMAL_MODE_MAX_RESULTS = 20;
 
 function parseLauncherTimestamp(value: string | undefined): number {
   if (!value) return 0;
@@ -373,29 +335,11 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
 export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
   matches: ScoredLauncherNormalModeItem<T>[],
 ): T[] {
-  const groups = new Map<LauncherNormalModeSectionId, ScoredLauncherNormalModeItem<T>[]>();
-
-  for (const match of matches) {
-    if (match.score <= 0) continue;
-    const sectionId = getNormalModeSectionId(match.item);
-    if (!sectionId) continue;
-    const group = groups.get(sectionId) ?? [];
-    insertByScore(group, match, LAUNCHER_NORMAL_MODE_MAX_RESULTS);
-    groups.set(sectionId, group);
-  }
-
-  const activeSectionCount = NORMAL_MODE_SECTION_ORDER.filter(section => (groups.get(section.id)?.length ?? 0) > 0).length;
-  if (activeSectionCount <= 1) {
-    const onlySection = NORMAL_MODE_SECTION_ORDER.find(section => (groups.get(section.id)?.length ?? 0) > 0);
-    return (onlySection ? groups.get(onlySection.id) ?? [] : []).map(({ item }) => item);
-  }
-
-  const balanced: T[] = [];
-  for (const { id } of NORMAL_MODE_SECTION_ORDER) {
-    const sectionMatches = groups.get(id) ?? [];
-    balanced.push(...sectionMatches.slice(0, NORMAL_MODE_SECTION_LIMITS[id]).map(({ item }) => item));
-  }
-  return balanced;
+  return matches
+    .filter(match => match.score > 0)
+    .sort(compareScoredLauncherMatches)
+    .slice(0, LAUNCHER_NORMAL_MODE_MAX_RESULTS)
+    .map(({ item }) => item);
 }
 
 export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
