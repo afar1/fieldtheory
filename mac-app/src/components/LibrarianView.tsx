@@ -3,12 +3,11 @@
 // Named after the AI assistant in Snow Crash that provides contextual intel.
 // =============================================================================
 
-import { Children, cloneElement, isValidElement, useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo, type ReactElement, type ReactNode } from 'react';
+import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fragment, memo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import ContentToolbar from './ContentToolbar';
-import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -40,10 +39,8 @@ import {
   restoreTextCursorBlink,
 } from '../utils/editorShortcuts';
 import {
-  RENDERED_BLANK_LINE_ATTR,
   RENDERED_EDITOR_DEBUG_ENTRY_LIMIT,
   RENDERED_EDITOR_DEBUG_STORAGE_KEY,
-  RENDERED_TRAILING_SPACE_ATTR,
   getElementDebugSummary,
   getRectDebugSummary,
   getRenderedSelectionDebug,
@@ -91,13 +88,11 @@ import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import '../utils/scrollDiagnostics.bootstrap';
 import {
   buildWikiIndex,
-  classifyLinkHref,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
-  isUnresolvedWikiHref,
   normalizeWikiRelPath,
   transformWikiLinks,
   upsertMarkdownLinkRelationDocument,
@@ -387,7 +382,6 @@ export function isTextEntryInputType(type: string | null | undefined): boolean {
 }
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
-const PRESERVED_BLANK_MARKDOWN_LINE_PATTERN = /^\u00A0+$/;
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
 const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
 const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
@@ -645,6 +639,37 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
       };
     }
     const insertion = `\n${task[1]}- [ ] `;
+    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + insertion.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  }
+
+  const ordered = line.match(/^(\s*)(\d+)([.)])\s+(.*)$/);
+  if (ordered) {
+    if (ordered[4].trim().length === 0) {
+      return {
+        nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+        selectionStart: lineStart,
+        selectionEnd: lineStart,
+      };
+    }
+    const nextNumber = Number.parseInt(ordered[2], 10) + 1;
+    const insertion = `\n${ordered[1]}${nextNumber}${ordered[3]} `;
+    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + insertion.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  }
+
+  const quote = line.match(/^(\s*)>\s?(.*)$/);
+  if (quote) {
+    if (quote[2].trim().length === 0) {
+      return {
+        nextValue: `${value.slice(0, lineStart)}${value.slice(lineEnd)}`,
+        selectionStart: lineStart,
+        selectionEnd: lineStart,
+      };
+    }
+    const insertion = `\n${quote[1]}> `;
     const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
     const nextSelection = selectionStart + insertion.length;
     return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
@@ -1588,10 +1613,6 @@ interface LibrarianViewProps {
   sidebarCollapsed: boolean;
 }
 
-function isArtifactModelSignatureText(text: string): boolean {
-  return /^(Model|Signed by):\s+.+$/i.test(text.trim());
-}
-
 type MarkdownRenderNode = {
   type?: string;
   tagName?: unknown;
@@ -1644,30 +1665,6 @@ function isRenderedSelectionElementBoundary(selection: Record<string, unknown>):
     || selection.caretRect === null;
 }
 
-function getMarkdownNodeTrailingWhitespace(node: unknown, source: string): string {
-  const position = (node as MarkdownRenderNode | null)?.position;
-  const startOffset = position?.start?.offset;
-  const endOffset = position?.end?.offset;
-  if (
-    typeof startOffset !== 'number'
-    || typeof endOffset !== 'number'
-    || startOffset < 0
-    || endOffset < startOffset
-  ) {
-    return '';
-  }
-  const sourceSlice = source.slice(startOffset, Math.min(endOffset, source.length));
-  return sourceSlice.match(/[ \t]+$/)?.[0] ?? '';
-}
-
-function extractMarkdownText(node: unknown): string {
-  if (!node || typeof node !== 'object') return '';
-  const renderNode = node as MarkdownRenderNode;
-  if (renderNode.type === 'text' && typeof renderNode.value === 'string') return renderNode.value;
-  if (Array.isArray(renderNode.children)) return renderNode.children.map(extractMarkdownText).join('');
-  return '';
-}
-
 export function getRenderedMarkdownNodeStartLine(node: unknown): number | null {
   if (!node || typeof node !== 'object') return null;
   const line = (node as MarkdownRenderNode).position?.start?.line;
@@ -1693,47 +1690,6 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   if (Array.isArray(className)) return className.includes('task-list-item');
   if (className === 'task-list-item') return true;
   return getRenderedTaskListItemChecked(node) !== null;
-}
-
-function stripLeadingCarrotListSentinel(children: ReactNode): ReactNode {
-  let stripped = false;
-
-  const stripNode = (node: ReactNode): ReactNode => {
-    if (stripped) return node;
-    if (typeof node === 'string') {
-      if (!node.startsWith(CARROT_LIST_SENTINEL)) return node;
-      stripped = true;
-      return node.slice(CARROT_LIST_SENTINEL.length);
-    }
-    if (Array.isArray(node)) {
-      return Children.map(node, stripNode);
-    }
-    if (isValidElement<{ children?: ReactNode }>(node)) {
-      const childProps = node.props as { children?: ReactNode };
-      if (childProps.children === undefined) return node;
-      return cloneElement(
-        node as ReactElement<{ children?: ReactNode }>,
-        undefined,
-        stripNode(childProps.children),
-      );
-    }
-    return node;
-  };
-
-  return Children.map(children, stripNode);
-}
-
-function splitTaskListItemChildren(children: ReactNode): { checkbox: ReactNode | null; content: ReactNode[] } {
-  const nodes = Children.toArray(children);
-  const checkboxIndex = nodes.findIndex((child) => {
-    if (!isValidElement<{ type?: unknown }>(child)) return false;
-    if (typeof child.type === 'string' && child.type === 'input') return true;
-    return child.props.type === 'checkbox';
-  });
-  if (checkboxIndex < 0) return { checkbox: null, content: nodes };
-  const checkbox = nodes[checkboxIndex];
-  const content = nodes.filter((_, index) => index !== checkboxIndex);
-  return { checkbox, content };
 }
 
 function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
@@ -1845,7 +1801,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
   const renderedMarkdownEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
-  const renderedLinkMouseDownHandledRef = useRef(false);
   const activeReadingPathRef = useRef<string | null>(null);
   const activeReadingContentRef = useRef<string | null>(null);
   const renderedEditorDebugEntriesRef = useRef<RenderedEditorDebugEntry[]>([]);
@@ -1926,7 +1881,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       : 'rendered'
   ));
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
-  const [renderedDocumentRenderRevision, setRenderedDocumentRenderRevision] = useState(0);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
   ));
@@ -2251,7 +2205,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     renderedDisplayContentRef.current = null;
     renderedEditingActiveRef.current = false;
     setRenderedEditingActive(false);
-    setRenderedDocumentRenderRevision((revision) => revision + 1);
     activeRenderedCaretOffsetRef.current = null;
   }, [recordRenderedEditorDebug]);
 
@@ -3231,11 +3184,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
-  const displayContent = useMemo(() => {
-    return getRenderedMarkdownDisplayContent(displaySourceBody, wikiIndex);
-  }, [displaySourceBody, wikiIndex]);
-  const renderedDocumentPathKey = `${activeReading?.path ?? 'empty'}:${renderedDocumentRenderRevision}`;
-
   useEffect(() => {
     if (!active) {
       setMarkdownLinkRelationDocuments([]);
@@ -3540,6 +3488,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
   }, []);
 
+  const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
+    if (!shouldOpenMarkdownLinkFromMouseDown(event)) return false;
+    const action = getMarkdownEditorLinkActionAtOffset(displaySourceBody, offset, wikiIndex);
+    if (action.kind === 'noop') return false;
+    event.preventDefault();
+    event.stopPropagation();
+    openLinkAction(action);
+    return true;
+  }, [displaySourceBody, openLinkAction, wikiIndex]);
+
   useEffect(() => {
     clearRenderedEditingState('path-or-mode-changed');
   }, [activeReading?.path, clearRenderedEditingState, contentMode]);
@@ -3686,7 +3644,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     highlightFileFindMatches(root, fileFindQuery);
     return () => clearFileFindMarks(root);
-  }, [contentMode, displayContent, fileFindOpen, fileFindQuery]);
+  }, [contentMode, displaySourceBody, fileFindOpen, fileFindQuery]);
 
   const captureContentScrollRatio = useCallback(() => {
     const scrollEl = contentMode === 'markdown' ? markdownCodeEditorRef.current : contentScrollRef.current;
@@ -4194,7 +4152,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     const frame = requestAnimationFrame(() => updateRenderedDocumentTopFade(contentScrollRef.current));
     return () => cancelAnimationFrame(frame);
-  }, [contentMode, displayContent, lineHeightId, textSize, typographyPresetId, updateRenderedDocumentTopFade]);
+  }, [contentMode, displaySourceBody, lineHeightId, textSize, typographyPresetId, updateRenderedDocumentTopFade]);
 
   useEffect(() => {
     if (contentMode !== 'markdown') return;
@@ -6429,9 +6387,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 )}
               </div>
             ) : (
-              /* View mode - markdown renderer */
+              /* Rendered mode - editor-owned markdown presentation */
               <>
-            {/* Rendered document content. Preview is rendered markdown; active editing is a real text input. */}
             <div
               ref={renderedContentRef}
               className="librarian-content"
@@ -6447,10 +6404,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               }}
               onClick={(e) => {
                 if (!activeReading) return;
-                if (renderedEditingActive) return;
+                if (renderedEditingActiveRef.current) return;
                 const target = e.target instanceof Element ? e.target : null;
-                if (target?.closest('a')) {
-                  recordRenderedEditorDebug('click-ignored', { reason: 'link-target', tagName: target.tagName });
+                if (target?.closest('.cm-editor, .cm-content')) {
+                  recordRenderedEditorDebug('click-ignored', { reason: 'code-editor-target', tagName: target.tagName });
                   return;
                 }
                 recordRenderedEditorDebug('click', {
@@ -6464,7 +6421,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 activateRenderedTextEditing();
               }}
               onKeyDown={(event) => {
-                if (renderedEditingActive || !activeReading) return;
+                if (renderedEditingActiveRef.current || !activeReading) return;
                 if (event.key !== 'Enter') return;
                 event.preventDefault();
                 activateRenderedTextEditing();
@@ -6479,263 +6436,50 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 caretColor: theme.accent,
               }}
             >
-              {renderedEditingActive ? (
-                <MarkdownCodeEditor
-                  ref={renderedMarkdownEditorRef}
-                  presentation="rendered"
-                  value={displaySourceBody}
-                  onChange={handleRenderedEditorChange}
-                  onKeyDown={handleRenderedEditorKeyDown}
-                  onFocus={() => {
-                    deactivateSidebarKeyboard();
-                    commitTitleEditIfActive();
-                    activateRenderedEditing();
-                    recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
-                  }}
-                  onBlur={() => clearRenderedEditingState('blur')}
-                  onSelectionChange={handleRenderedEditorSelectionChange}
-                  fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
-                  fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
-                  lineHeight={(documentTextStyle.lineHeight as string | number) ?? 1.6}
-                  color={(documentTextStyle.color as string) ?? theme.text}
-                  headingFontFamily={typographyPreset.headingFontFamily}
-                  h1Size={textSizes[textSize].h1}
-                  h2Size={textSizes[textSize].h2}
-                  h3Size={textSizes[textSize].h3}
-                  linkColor={theme.accent}
-                  mutedColor={theme.textSecondary}
-                  paragraphSpacing={documentParagraphSpacing}
-                  background="transparent"
-                  caretColor={theme.accent}
-                  blinkCursor={blinkTextCursor}
-                  placeholder="Rendered text editor"
-                  dataAttributes={{
-                    'data-ft-rendered-editor-input': 'true',
-                    'data-ft-agent-context': 'markdown',
-                    'data-ft-agent-file-path': activeReading.path,
-                    'data-ft-agent-title': activeReading.title,
-                  }}
-                  spellCheck
-                  bottomRoomPx={0}
-                  style={{
-                    width: '100%',
-                    minHeight: '160px',
-                    height: 'auto',
-                  }}
-                />
-              ) : (
-              <FieldTheoryProse
-                key={renderedDocumentPathKey}
-                className={todoMarker === 'square' ? 'ft-prose-todo-square' : undefined}
-                color={documentTextStyle.color}
-                fontFamily={typographyPreset.fontFamily}
-                fontSize={textSizes[textSize].base}
+              <MarkdownCodeEditor
+                ref={renderedMarkdownEditorRef}
+                presentation="rendered"
+                value={displaySourceBody}
+                onChange={handleRenderedEditorChange}
+                onKeyDown={handleRenderedEditorKeyDown}
+                onMouseDown={handleRenderedEditorMouseDown}
+                onFocus={() => {
+                  deactivateSidebarKeyboard();
+                  commitTitleEditIfActive();
+                  activateRenderedEditing();
+                  recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
+                }}
+                onBlur={() => clearRenderedEditingState('blur')}
+                onSelectionChange={handleRenderedEditorSelectionChange}
+                fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
+                fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
+                lineHeight={(documentTextStyle.lineHeight as string | number) ?? 1.6}
+                color={(documentTextStyle.color as string) ?? theme.text}
+                headingFontFamily={typographyPreset.headingFontFamily}
                 h1Size={textSizes[textSize].h1}
                 h2Size={textSizes[textSize].h2}
                 h3Size={textSizes[textSize].h3}
-                headingFontFamily={typographyPreset.headingFontFamily}
-                lineHeight={documentTextStyle.lineHeight}
                 linkColor={theme.accent}
                 mutedColor={theme.textSecondary}
                 paragraphSpacing={documentParagraphSpacing}
-                remarkLineBreaks
-                surface={theme.isDark ? 'dark' : 'light'}
-                components={{
-                  p: ({ children, node }) => {
-                    const textContent = extractMarkdownText(node);
-                    const normalizedText = textContent.trim();
-                    const hasBraille = /[\u2800-\u28FF]/.test(textContent);
-                    const isModelSignatureLine = isArtifactModelSignatureText(normalizedText);
-                    const isPreservedBlankLine = PRESERVED_BLANK_MARKDOWN_LINE_PATTERN.test(textContent);
-                    const trailingWhitespace = getMarkdownNodeTrailingWhitespace(node, displayContent);
-                    const trailingSpacePlaceholder = trailingWhitespace
-                      ? (
-                          <span
-                            {...{ [RENDERED_TRAILING_SPACE_ATTR]: 'true' }}
-                          >
-                            {'\u00A0'.repeat(trailingWhitespace.length)}
-                          </span>
-                        )
-                      : null;
-
-                    if (hasBraille) {
-                      return (
-                        <p
-                          style={{
-                            marginBottom: '16px',
-                            marginTop: '8px',
-                            textAlign: 'center',
-                            fontFamily: fonts.mono,
-                            fontSize: '14px',
-                            lineHeight: 1.15,
-                            whiteSpace: 'pre',
-                            letterSpacing: 0,
-                          }}
-                        >
-                          {children}
-                        </p>
-                      );
-                    }
-
-                    if (isModelSignatureLine) {
-                      return null;
-                    }
-
-                    if (isPreservedBlankLine) {
-                      return (
-                        <p
-                          {...{ [RENDERED_BLANK_LINE_ATTR]: 'true' }}
-                          style={{
-                            margin: 0,
-                            minHeight: '1lh',
-                            lineHeight: 1,
-                            overflow: 'hidden',
-                          }}
-                        >
-                          {textContent}
-                        </p>
-                      );
-                    }
-
-                    return (
-                      <p>{children}{trailingSpacePlaceholder}</p>
-                    );
-                  },
-                  input: ({ node: _node, type, ...props }) => {
-                    if (type !== 'checkbox') {
-                      return <input type={type} {...props} />;
-                    }
-
-                    return null;
-                  },
-                  li: ({ children, node }) => {
-                    const textContent = extractMarkdownText(node).trim();
-                    const isCarrotListItem = textContent.startsWith(CARROT_LIST_SENTINEL);
-                    const isTaskListItem = isRenderedTaskListItem(node);
-                    if (isTaskListItem) {
-                      const renderedChecked = getRenderedTaskListItemChecked(node);
-                      const checked = renderedChecked ?? false;
-                      const { content } = splitTaskListItemChildren(children);
-                      return (
-                        <li
-                          className={[
-                            'ft-rendered-task-list-item',
-                            checked ? 'ft-rendered-task-list-item-done' : 'ft-rendered-task-list-item-open',
-                          ].filter(Boolean).join(' ')}
-                          style={{
-                            margin: 'calc(var(--ft-prose-list-item-spacing) * 0.55) 0',
-                            listStyle: 'none',
-                            display: 'grid',
-                            gridTemplateColumns: '2.4em minmax(0, 1fr)',
-                            columnGap: '0.6em',
-                            alignItems: 'baseline',
-                          }}
-                        >
-                          <span
-                            style={{
-                              color: theme.textSecondary,
-                              fontFamily: fonts.mono,
-                              fontSize: '0.9em',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {checked ? '[x]' : '[ ]'}
-                          </span>
-                          <span style={{ minWidth: 0 }}>
-                            {content}
-                          </span>
-                        </li>
-                      );
-                    }
-
-                    if (isCarrotListItem) {
-                      return (
-                        <li
-                          style={{
-                            marginBottom: '2px',
-                            listStyle: 'none',
-                            display: 'grid',
-                            gridTemplateColumns: 'auto minmax(0, 1fr)',
-                            columnGap: '8px',
-                            alignItems: 'baseline',
-                          }}
-                        >
-                          <span
-                            aria-hidden="true"
-                            style={{
-                              color: theme.text,
-                              fontWeight: 700,
-                              lineHeight: 'inherit',
-                            }}
-                          >
-                            {CARROT_LIST_MARKER}
-                          </span>
-                          <div style={{ minWidth: 0 }}>
-                            {stripLeadingCarrotListSentinel(children)}
-                          </div>
-                        </li>
-                      );
-                    }
-
-                    return (
-                      <li
-                        style={{
-                          marginBottom: '0.25em',
-                        }}
-                      >
-                        {children}
-                      </li>
-                    );
-                  },
-                  a: ({ href, children }) => {
-                    const unresolved = isUnresolvedWikiHref(href);
-                    const openAnchorLink = (target: HTMLAnchorElement) => {
-                      // Markdown like `[categories/tool]()` renders an
-                      // <a> with an empty href — fall back to the link
-                      // text so these still resolve through the index.
-                      const effectiveHref = href && href.trim()
-                        ? href
-                        : (target.textContent?.trim() ?? '');
-                      const action = classifyLinkHref(effectiveHref, wikiIndex);
-                      openLinkAction(action);
-                    };
-                    return (
-                      <a
-                        href={href}
-                        style={{
-                          color: unresolved ? '#ef4444' : theme.accent,
-                          textDecoration: 'underline',
-                          textDecorationColor: unresolved ? '#ef4444' : `${theme.accent}66`,
-                          textUnderlineOffset: '2px',
-                          cursor: 'pointer',
-                        }}
-                        onMouseDown={(e) => {
-                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          renderedLinkMouseDownHandledRef.current = true;
-                          openAnchorLink(e.currentTarget);
-                        }}
-                        onClick={(e) => {
-                          if (!shouldOpenMarkdownLinkFromMouseDown(e)) return;
-                          e.preventDefault();
-                          e.stopPropagation();
-                          if (renderedLinkMouseDownHandledRef.current) {
-                            renderedLinkMouseDownHandledRef.current = false;
-                            return;
-                          }
-                          openAnchorLink(e.currentTarget);
-                        }}
-                      >
-                        {children}
-                      </a>
-                    );
-                  },
+                background="transparent"
+                caretColor={theme.accent}
+                blinkCursor={blinkTextCursor}
+                placeholder="Rendered text editor"
+                dataAttributes={{
+                  'data-ft-rendered-editor-input': 'true',
+                  'data-ft-agent-context': 'markdown',
+                  'data-ft-agent-file-path': activeReading.path,
+                  'data-ft-agent-title': activeReading.title,
                 }}
-              >
-                {displayContent}
-              </FieldTheoryProse>
-              )}
+                spellCheck
+                bottomRoomPx={0}
+                style={{
+                  width: '100%',
+                  minHeight: '160px',
+                  height: 'auto',
+                }}
+              />
               {contentBottomScrollSpace > 0 && (
                 <div
                   aria-hidden="true"

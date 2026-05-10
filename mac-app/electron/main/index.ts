@@ -398,7 +398,6 @@ function activateAndPasteFromCommandLauncher(
   options: { clipboardTrace?: () => Record<string, unknown> } = {},
 ): Promise<boolean> {
   commandLauncherWindow?.suppressActivationForExternalInvocation();
-  commandLauncherWindow?.hide(true);
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     strategy: 'applescript',
@@ -406,6 +405,7 @@ function activateAndPasteFromCommandLauncher(
     targetName: targetApp.name,
   });
   return activateAndPaste(targetApp, {
+    beforePaste: () => commandLauncherWindow?.hide(true),
     clipboardTrace: options.clipboardTrace,
   });
 }
@@ -432,6 +432,7 @@ async function typeTextFromCommandLauncher(
   if (!activated) {
     return false;
   }
+  commandLauncherWindow?.hide(true);
   await new Promise(resolve => setTimeout(resolve, 40));
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
