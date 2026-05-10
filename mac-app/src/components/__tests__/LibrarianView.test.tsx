@@ -508,7 +508,21 @@ describe('LibrarianView render', () => {
 
     expect(getHoverStrip()).toBeTruthy();
 
-    fireEvent.mouseEnter(getHoverStrip()!);
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+
+    await waitFor(() => {
+      expect(getHoverStrip()).toBeTruthy();
+    });
+
+    fireEvent.mouseMove(root, { clientX: 80 });
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
+
+    await waitFor(() => {
+      expect(getHoverStrip()).toBeTruthy();
+    });
+
+    fireEvent.mouseMove(root, { clientX: 80 });
+    fireEvent.mouseOver(getHoverStrip()!, { clientX: 20, relatedTarget: root });
 
     await waitFor(() => {
       expect(getHoverStrip()).toBeUndefined();
