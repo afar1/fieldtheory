@@ -325,6 +325,10 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   a: ScoredLauncherNormalModeItem<T>,
   b: ScoredLauncherNormalModeItem<T>,
 ): number {
+  const aTypePriority = a.item.type === 'command' ? 1 : 0;
+  const bTypePriority = b.item.type === 'command' ? 1 : 0;
+  if (aTypePriority !== bTypePriority) return bTypePriority - aTypePriority;
+
   const aRecency = getLauncherItemRecency(a.item);
   const bRecency = getLauncherItemRecency(b.item);
   if ((aRecency || bRecency) && aRecency !== bRecency) return bRecency - aRecency;
@@ -340,6 +344,13 @@ export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeIte
     .sort(compareScoredLauncherMatches)
     .slice(0, LAUNCHER_NORMAL_MODE_MAX_RESULTS)
     .map(({ item }) => item);
+}
+
+export function shouldIncludeLauncherRecentFile(input: {
+  filePath?: string | null;
+  commandFilePaths: ReadonlySet<string>;
+}): boolean {
+  return !input.filePath || !input.commandFilePaths.has(input.filePath);
 }
 
 export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
