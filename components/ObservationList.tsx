@@ -29,7 +29,7 @@ interface ObservationListProps {
   // Called when user creates a new observation via pull-to-create.
   onCreateObservation?: (text: string) => Promise<boolean> | boolean;
   // Called when create mode changes - parent uses this for dynamic bottom bar.
-  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
+  onCreateModeChange?: (isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => void;
 }
 
 /**
@@ -325,5 +325,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
-
 

@@ -22,19 +22,16 @@ import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-cont
 import { Feather } from '@expo/vector-icons';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { useWhisperRecording } from './hooks/useWhisperRecording';
-import { useHeadsetControls } from './hooks/useHeadsetControls';
+import { useScopedAppData } from './hooks/useScopedAppData';
+import { useSyncCoordinator } from './hooks/useSyncCoordinator';
 import { useState, useEffect, useCallback, useMemo, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import PagerView from 'react-native-pager-view';
 import { TodoList } from './components/TodoList';
 import { PullToCreate } from './components/PullToCreate';
 import { TranscriptItem } from './components/TranscriptItem';
-import { SketchCanvas } from './components/SketchCanvas';
-import { SketchList } from './components/SketchList';
 import { CommandsList } from './components/CommandsList';
 import { LibraryView } from './components/LibraryView';
 import { StorageService } from './services/storage';
-import { SketchStorageService } from './services/sketchStorage';
-import { syncAllPendingSketches } from './services/sketchSync';
 import {
   pauseReadback,
   resumeReadback,
@@ -44,13 +41,24 @@ import {
   subscribeToSpeechPlaybackState,
 } from './services/speech';
 import { processTranscription } from './services/llm';
-import { Todo, Observation, Settings, TranscriptEntry, TranscriptSegment, SketchEntry, LibraryDocument } from './types';
+import {
+  Todo,
+  Observation,
+  Settings,
+  TranscriptEntry,
+  TranscriptSegment,
+  LibraryDocument,
+} from './types';
 import { requestOtp, verifyOtp, getSession, signOut as supabaseSignOut } from './services/auth';
-import { syncAll, seedRemoteFromLocal, syncLibraryDocuments, sourcePathForLibraryDocument } from './services/sync';
-import { supabase } from './services/supabase';
+import { sourcePathForLibraryDocument } from './services/sync';
+import { deleteLibraryDocument, mergeLibraryDocument } from './services/libraryState';
 import { CommandsService } from './services/commands';
+import {
+  CapturedTranscript,
+  createCapturedTranscriptEntry,
+  patchTranscriptEntryText,
+} from './services/transcriptCapture';
 import { useIsDark, useThemeColors } from './services/theme';
-import type { Session } from '@supabase/supabase-js';
 
 // Error boundary component to catch and display errors
 class ErrorBoundary extends Component<
@@ -98,14 +106,7 @@ const TOP_FADE_OPACITIES = [1, 0.85, 0.65, 0.45, 0.25, 0.1];
 
 const TAB_INACTIVE = '#9CA3AF';
 const TAB_ACTIVE = '#007AFF';
-const PAGE_COUNT = 5;
-
-const getPagerWindow = (idx: number) => {
-  const pages = new Set<number>([idx]);
-  if (idx > 0) pages.add(idx - 1);
-  if (idx < PAGE_COUNT - 1) pages.add(idx + 1);
-  return pages;
-};
+const ITEMS_PAGE_INDEX = 1;
 
 // Linear color interpolation between two #rrggbb hex strings.
 function lerpHex(from: string, to: string, t: number): string {
@@ -208,6 +209,7 @@ function AppContent() {
     isProcessing,
     transcription,
     error,
+    modelDownloadProgress,
     startRecording,
     stopRecording,
     isReady,
@@ -217,31 +219,42 @@ function AppContent() {
   const colors = useThemeColors();
   const isDark = useIsDark();
 
-  const [todos, setTodos] = useState<Todo[]>([]);
-  const [observations, setObservations] = useState<Observation[]>([]);
-  
-  // Sketch state - one-shot drawings that sync to Mac clipboard history.
-  const [sketches, setSketches] = useState<SketchEntry[]>([]);
-  const [showSketchCanvas, setShowSketchCanvas] = useState(false);
-  // Default settings with all features enabled
-  const [settings, setSettings] = useState<Settings>({
-    autoStart: false,
-    showTodos: true,
-    showLibrary: true,
-    autoSeparate: true,
-  });
+  const {
+    todos,
+    setTodos,
+    observations,
+    setObservations,
+    settings,
+    setSettings,
+    transcripts,
+    setTranscripts,
+    libraryDocuments,
+    setLibraryDocuments,
+    isInitialized,
+    isLibraryHydrated,
+    session,
+    syncedAt,
+    setSyncedAt,
+    librarySyncedAt,
+    setLibrarySyncedAt,
+    callsign,
+    authNotice,
+    setAuthNotice,
+    syncNotice,
+    setSyncNotice,
+    queueSyncDeletes,
+    activateSession,
+  } = useScopedAppData();
   const [isProcessingLLM, setIsProcessingLLM] = useState(false);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [mountedPageIndexes, setMountedPageIndexes] = useState<Set<number>>(() => getPagerWindow(0));
+  const [pageIndex, setPageIndex] = useState(ITEMS_PAGE_INDEX);
   
   // Transcript history state
-  const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([]);
-  const [libraryDocuments, setLibraryDocuments] = useState<LibraryDocument[]>([]);
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [todosSortOrder, setTodosSortOrder] = useState<'newest' | 'oldest'>('newest');
   const [expandedMap, setExpandedMap] = useState<Record<string, boolean>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const copyTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const librarySaveQueueRef = useRef(Promise.resolve());
   
   // Selection mode state for multi-select stacking and deleting
   const [selectionMode, setSelectionMode] = useState(false);
@@ -259,10 +272,10 @@ function AppContent() {
   const [createMode, setCreateMode] = useState<{
     isCreating: boolean;
     itemType: 'stack' | 'task' | null;
-    text: string;
+    canSave: boolean;
     save: (() => void) | null;
     cancel: (() => void) | null;
-  }>({ isCreating: false, itemType: null, text: '', save: null, cancel: null });
+  }>({ isCreating: false, itemType: null, canSave: false, save: null, cancel: null });
   
   // Track keyboard height to position bottom bar above suggestions
   const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -276,77 +289,37 @@ function AppContent() {
 
   type PagerRef = React.ComponentRef<typeof PagerView>;
   const pagerRef = useRef<PagerRef>(null);
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [session, setSession] = useState<Session | null>(null);
   const [authEmail, setAuthEmail] = useState('');
   const [otpCode, setOtpCode] = useState('');
   const [isRequestingOtp, setIsRequestingOtp] = useState(false);
   const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
-  const [isSyncingData, setIsSyncingData] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
-  const [syncedAt, setSyncedAt] = useState<number | null>(null);
-  const [librarySyncedAt, setLibrarySyncedAt] = useState<number | null>(null);
-  const [isLibrarySyncing, setIsLibrarySyncing] = useState(false);
-  const [callsign, setCallsign] = useState<string | null>(null);
-  const [authNotice, setAuthNotice] = useState<string | null>(null);
-  const [syncNotice, setSyncNotice] = useState<string | null>(null);
+  const {
+    isSyncingData,
+    isSeeding,
+    isLibrarySyncing,
+    handleLibrarySyncQuiet,
+    handleSyncNow,
+    handleSeedNow,
+  } = useSyncCoordinator({
+    session,
+    setTodos,
+    setObservations,
+    setTranscripts,
+    setLibraryDocuments,
+    setSyncedAt,
+    setLibrarySyncedAt,
+    setSyncNotice,
+  });
   
   // Track last processed transcription to prevent loops/duplicate processing
   const lastProcessedText = useRef<string | null>(null);
+  const lastCapturedTranscriptRef = useRef<CapturedTranscript | null>(null);
   // Track if we've auto-started recording on this app session (only once per launch)
   const hasAutoStartedRef = useRef<boolean>(false);
   // Track previous app state to detect foreground transitions
   const appStateRef = useRef<string>(AppState.currentState);
   // Track if user manually stopped recording (prevents auto-start until they manually start again)
   const manuallyStoppedRef = useRef<boolean>(false);
-  const librarySyncInFlightRef = useRef(false);
-
-  // Load data from storage on mount
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadData() {
-      try {
-        const [loadedTodos, loadedObservations, loadedSettings, loadedTranscripts] = await Promise.all([
-          StorageService.getTodos(),
-          StorageService.getObservations(),
-          StorageService.getSettings(),
-          StorageService.getTranscripts(),
-        ]);
-        if (cancelled) return;
-        setTodos(loadedTodos);
-        setObservations(loadedObservations);
-        setSettings(loadedSettings);
-        setTranscripts(loadedTranscripts);
-      } catch (err) {
-        console.error('Failed to load data from storage:', err);
-        // Continue with empty state if storage fails
-      } finally {
-        if (!cancelled) setIsInitialized(true);
-      }
-    }
-
-    async function loadSecondaryData() {
-      try {
-        const [loadedSketches, loadedLibraryDocuments] = await Promise.all([
-          SketchStorageService.getSketches(),
-          StorageService.getLibraryDocuments(),
-        ]);
-        if (cancelled) return;
-        setSketches(loadedSketches);
-        setLibraryDocuments(loadedLibraryDocuments);
-      } catch (err) {
-        console.error('Failed to load secondary data from storage:', err);
-      }
-    }
-
-    loadData();
-    loadSecondaryData();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   // Track keyboard height to position bottom bar above suggestions
   useEffect(() => {
@@ -369,78 +342,6 @@ function AppContent() {
     };
   }, []);
 
-  useEffect(() => {
-    let isMounted = true;
-
-    getSession()
-      .then((currentSession) => {
-        if (isMounted) {
-          setSession(currentSession);
-        }
-      })
-      .catch((err) => console.error('Failed to fetch Supabase session:', err));
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession);
-      if (!newSession) {
-        setSyncedAt(null);
-        setLibrarySyncedAt(null);
-        setCallsign(null);
-      }
-    });
-
-    return () => {
-      isMounted = false;
-      subscription.subscription.unsubscribe();
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!session) return;
-
-    const metadata = session.user.user_metadata as { callsign?: string } | undefined;
-    setCallsign(metadata?.callsign ?? null);
-
-    supabase
-      .from('profiles')
-      .select('callsign')
-      .eq('id', session.user.id)
-      .maybeSingle()
-      .then(({ data, error }) => {
-        if (error) {
-          console.error('Failed to fetch callsign:', error);
-          return;
-        }
-        setCallsign(data?.callsign ?? metadata?.callsign ?? null);
-      });
-  }, [session]);
-
-  const handleLibrarySyncQuiet = useCallback(async () => {
-    if (!session || librarySyncInFlightRef.current) return;
-
-    librarySyncInFlightRef.current = true;
-    setIsLibrarySyncing(true);
-    try {
-      const result = await syncLibraryDocuments();
-      const nextLibraryDocuments = await StorageService.getLibraryDocuments();
-      setLibraryDocuments(nextLibraryDocuments);
-      setLibrarySyncedAt(result.syncedAt);
-    } catch (error) {
-      console.error('Library background sync failed:', error);
-    } finally {
-      librarySyncInFlightRef.current = false;
-      setIsLibrarySyncing(false);
-    }
-  }, [session]);
-
-  useEffect(() => {
-    if (!session) return;
-
-    handleLibrarySyncQuiet();
-    const interval = setInterval(handleLibrarySyncQuiet, 90_000);
-    return () => clearInterval(interval);
-  }, [handleLibrarySyncQuiet, session]);
-
   // Keep copying feedback timers tidy.
   useEffect(() => {
     return () => {
@@ -454,17 +355,6 @@ function AppContent() {
   useEffect(() => {
     pagerRef.current?.setPage(pageIndex);
   }, [pageIndex]);
-
-  useEffect(() => {
-    setMountedPageIndexes((prev) => {
-      const next = new Set(prev);
-      getPagerWindow(pageIndex).forEach((idx) => next.add(idx));
-      return next.size === prev.size ? prev : next;
-    });
-  }, [pageIndex]);
-
-  // Configure audio session for headset controls
-  useHeadsetControls();
 
   useEffect(() => {
     const subscription = subscribeToSpeechPlaybackState((state) => {
@@ -512,12 +402,6 @@ function AppContent() {
         session
       ) {
         handleLibrarySyncQuiet();
-
-        // Also sync any pending sketches.
-        syncAllPendingSketches().catch((error) => {
-          console.error('Background sketch sync failed:', error);
-        });
-
       }
       
       appStateRef.current = nextAppState;
@@ -529,50 +413,50 @@ function AppContent() {
   }, [settings.autoStart, isReady, isRecording, isProcessing, startRecording, session, handleLibrarySyncQuiet]);
 
   // Capture every finished transcription so we can build the timeline.
-  // Detects and expands portable commands (e.g., "use the review command").
+  // Saves raw text immediately, then patches in expanded portable commands.
   useEffect(() => {
     if (transcription === null) {
       return;
     }
 
-    const cleanedText =
-      transcription.trim().length > 0
-        ? transcription.trim()
-        : 'No speech detected in this recording.';
+    const { entry: newEntry, capture } = createCapturedTranscriptEntry(transcription);
+    lastCapturedTranscriptRef.current = capture;
+    const { sourceText: cleanedText, entryId } = capture;
 
-    // Process transcription to detect and expand commands
-    const processAndSave = async () => {
-      // Check for command invocations and expand them inline
-      const { processedText, detectedCommands } = await CommandsService.processTranscription(cleanedText);
+    setTranscripts((prev) => {
+      const updated = [newEntry, ...prev];
+      StorageService.saveTranscripts(updated).catch(console.error);
+      Clipboard.setStringAsync(cleanedText).catch(console.error);
+      return updated;
+    });
 
-      if (detectedCommands.length > 0) {
-        console.log(`[App] Detected ${detectedCommands.length} command(s):`, detectedCommands.map(c => c.name));
+    const expandAndSave = async () => {
+      const { processedText } = await CommandsService.processTranscription(cleanedText);
+
+      if (processedText === cleanedText) {
+        return;
       }
 
-      // Use processedText so expanded commands are visible in the transcript
-      const newEntry: TranscriptEntry = {
-        id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        text: processedText,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-      };
-
       setTranscripts((prev) => {
-        const updated = [newEntry, ...prev];
-        // Save to storage whenever transcripts change
+        const { transcripts: updated, didPatch } = patchTranscriptEntryText(prev, entryId, processedText);
+        if (!didPatch) return prev;
         StorageService.saveTranscripts(updated).catch(console.error);
-        // Auto-copy processed text (with expanded commands) to clipboard
         Clipboard.setStringAsync(processedText).catch(console.error);
         return updated;
       });
     };
 
-    processAndSave().catch(console.error);
+    expandAndSave().catch(console.error);
   }, [transcription]);
 
   const handleProcessTranscription = useCallback(async (text: string) => {
+    if (!session) {
+      setAuthNotice('Sign in to create tasks and observations.');
+      return false;
+    }
+
     // Prevent re-processing the same text (breaks dependency loop)
-    if (text === lastProcessedText.current) return;
+    if (text === lastProcessedText.current) return false;
     lastProcessedText.current = text;
 
     setIsProcessingLLM(true);
@@ -613,6 +497,7 @@ function AppContent() {
       }
 
       // Delete todos
+      const deletedTodoIds = diff.todos.delete.filter((id) => newTodos.some((todo) => todo.id === id));
       newTodos = newTodos.filter((t) => !diff.todos.delete.includes(t.id));
 
       // Create new observations
@@ -632,24 +517,32 @@ function AppContent() {
       await Promise.all([
         StorageService.saveTodos(newTodos),
         StorageService.saveObservations(newObservations),
+        queueSyncDeletes('todos', deletedTodoIds),
       ]);
+      return true;
     } catch (err) {
       console.error('Failed to process transcription:', err);
+      if (lastProcessedText.current === text) {
+        lastProcessedText.current = '';
+      }
+      return false;
     } finally {
       setIsProcessingLLM(false);
     }
-  }, [todos, observations]);
+  }, [session, todos, observations, queueSyncDeletes]);
 
   // Process transcription with LLM when it becomes available (only if auto-separate is enabled)
   // Also marks the transcript as separated when done and flashes the Tasks tab
   useEffect(() => {
     if (transcription && transcription.trim().length > 0 && settings.autoSeparate) {
-      // Find the transcript that matches this text (most recent one)
-      const matchingEntry = transcripts.find(t => t.text === transcription.trim() || t.text === 'No speech detected in this recording.');
+      const capturedEntry = lastCapturedTranscriptRef.current;
+      const matchingEntryId = capturedEntry?.sourceText === transcription.trim()
+        ? capturedEntry.entryId
+        : transcripts.find(t => t.text === transcription.trim())?.id;
       
-      handleProcessTranscription(transcription).then(() => {
-        if (matchingEntry) {
-          setSeparatedIds((prev) => new Set(prev).add(matchingEntry.id));
+      handleProcessTranscription(transcription).then((didProcess) => {
+        if (didProcess && matchingEntryId) {
+          setSeparatedIds((prev) => new Set(prev).add(matchingEntryId));
           setTasksTabFlash(true);
           setTimeout(() => setTasksTabFlash(false), 1500);
         }
@@ -753,7 +646,7 @@ function AppContent() {
     try {
       await verifyOtp(email.toLowerCase(), token);
       const currentSession = await getSession();
-      setSession(currentSession);
+      await activateSession(currentSession);
       setAuthNotice('Signed in. You can sync now.');
       setOtpCode('');
     } catch (err) {
@@ -762,72 +655,21 @@ function AppContent() {
     } finally {
       setIsVerifyingOtp(false);
     }
-  }, [authEmail, otpCode]);
+  }, [activateSession, authEmail, otpCode]);
 
   const handleSignOutPress = useCallback(async () => {
     try {
+      const currentUserId = session?.user.id;
+      await CommandsService.clearCache(currentUserId);
       await supabaseSignOut();
-      setSession(null);
+      await activateSession(null);
       setSyncNotice(null);
-      setLibrarySyncedAt(null);
-      setCallsign(null);
       setAuthNotice('Signed out.');
     } catch (err) {
       console.error('Failed to sign out:', err);
       Alert.alert('Sign out failed', err instanceof Error ? err.message : 'Unable to sign out.');
     }
-  }, []);
-
-  const handleSyncNow = useCallback(async () => {
-    setIsSyncingData(true);
-    setSyncNotice(null);
-
-    try {
-      const result = await syncAll();
-      const [nextTodos, nextObservations, nextTranscripts, nextLibraryDocuments] = await Promise.all([
-        StorageService.getTodos(),
-        StorageService.getObservations(),
-        StorageService.getTranscripts(),
-        StorageService.getLibraryDocuments(),
-      ]);
-
-      setTodos(nextTodos);
-      setObservations(nextObservations);
-      setTranscripts(nextTranscripts);
-      setLibraryDocuments(nextLibraryDocuments);
-      setSyncedAt(result.syncedAt);
-      setLibrarySyncedAt(result.syncedAt);
-      setSyncNotice('Synced with Supabase.');
-    } catch (err: unknown) {
-      console.error('Sync failed:', err);
-      // Handle both Error instances and Supabase error objects.
-      const message = err instanceof Error 
-        ? err.message 
-        : (err as { message?: string })?.message || 'Unable to sync right now.';
-      Alert.alert('Sync failed', message);
-    } finally {
-      setIsSyncingData(false);
-    }
-  }, []);
-
-  const handleSeedNow = useCallback(async () => {
-    setIsSeeding(true);
-    setSyncNotice(null);
-
-    try {
-      await seedRemoteFromLocal();
-      setSyncNotice('Seeded current device data to Supabase.');
-    } catch (err: unknown) {
-      console.error('Seed failed:', err);
-      // Handle both Error instances and Supabase error objects.
-      const message = err instanceof Error 
-        ? err.message 
-        : (err as { message?: string })?.message || 'Unable to seed right now.';
-      Alert.alert('Seed failed', message);
-    } finally {
-      setIsSeeding(false);
-    }
-  }, []);
+  }, [activateSession, session?.user.id]);
 
   const handleToggleComplete = useCallback((id: string) => {
     setTodos((prev) => {
@@ -850,10 +692,11 @@ function AppContent() {
   const handleDeleteTodo = useCallback((id: string) => {
     setTodos((prev) => {
       const next = prev.filter((todo) => todo.id !== id);
+      queueSyncDeletes('todos', [id]).catch(console.error);
       StorageService.saveTodos(next).catch(console.error);
       return next;
     });
-  }, []);
+  }, [queueSyncDeletes]);
 
   // Create a new task via pull-to-create.
   const handleCreateTask = useCallback((text: string): boolean => {
@@ -870,43 +713,6 @@ function AppContent() {
       return next;
     });
     return true;
-  }, []);
-
-  // Handle sketch completion - save the PNG and sync to cloud.
-  const handleSketchComplete = useCallback(async (data: { uri: string; width: number; height: number }) => {
-    try {
-      // Save the sketch locally.
-      const newSketch = await SketchStorageService.saveSketch(
-        data.uri,
-        data.width,
-        data.height
-      );
-      
-      // Add to state immediately.
-      setSketches((prev) => [newSketch, ...prev]);
-      
-      // Close the canvas.
-      setShowSketchCanvas(false);
-      
-      // Trigger haptic feedback.
-      Vibration.vibrate();
-      
-      // Sync in background if authenticated.
-      if (session) {
-        syncAllPendingSketches().catch((err) => {
-          console.error('Background sketch sync failed:', err);
-        });
-      }
-    } catch (error) {
-      console.error('Failed to save sketch:', error);
-      Alert.alert('Error', 'Failed to save sketch. Please try again.');
-    }
-  }, [session]);
-
-  // Refresh sketches list from storage.
-  const handleRefreshSketches = useCallback(async () => {
-    const loadedSketches = await SketchStorageService.getSketches();
-    setSketches(loadedSketches);
   }, []);
 
   // Create a new transcript via pull-to-create.
@@ -926,16 +732,16 @@ function AppContent() {
   }, []);
 
   // Handle create mode changes from PullToCreate - used to show dynamic bottom bar.
-  const handleStackCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
-    setCreateMode({ isCreating, itemType: 'stack', text, save, cancel });
+  const handleStackCreateModeChange = useCallback((isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'stack', canSave, save, cancel });
   }, []);
 
-  const handleTaskCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
-    setCreateMode({ isCreating, itemType: 'task', text, save, cancel });
+  const handleTaskCreateModeChange = useCallback((isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'task', canSave, save, cancel });
   }, []);
 
-  const handleCommandCreateModeChange = useCallback((isCreating: boolean, text: string, save: () => void, cancel: () => void) => {
-    setCreateMode({ isCreating, itemType: 'task', text, save, cancel });
+  const handleCommandCreateModeChange = useCallback((isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => {
+    setCreateMode({ isCreating, itemType: 'task', canSave, save, cancel });
   }, []);
 
   const handleToggleAutoStart = useCallback((value: boolean) => {
@@ -954,6 +760,13 @@ function AppContent() {
     });
   }, []);
 
+  const queueLibraryDocumentsSave = useCallback((documents: LibraryDocument[]) => {
+    librarySaveQueueRef.current = librarySaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => StorageService.saveLibraryDocuments(documents));
+    librarySaveQueueRef.current.catch(console.error);
+  }, []);
+
   const handleLibraryDocumentsChange = useCallback((documents: LibraryDocument[]) => {
     setLibraryDocuments((previous) => {
       const nextIds = new Set(documents.map((doc) => doc.id));
@@ -969,8 +782,30 @@ function AppContent() {
       }
       return documents;
     });
-    StorageService.saveLibraryDocuments(documents).catch(console.error);
-  }, []);
+    queueLibraryDocumentsSave(documents);
+  }, [queueLibraryDocumentsSave]);
+
+  const handleLibraryDocumentChange = useCallback((document: LibraryDocument) => {
+    setLibraryDocuments((previous) => {
+      const next = mergeLibraryDocument(previous, document);
+      queueLibraryDocumentsSave(next);
+      return next;
+    });
+  }, [queueLibraryDocumentsSave]);
+
+  const handleLibraryDocumentDelete = useCallback((document: LibraryDocument) => {
+    setLibraryDocuments((previous) => {
+      const next = deleteLibraryDocument(previous, document.id);
+      StorageService.addLibraryTombstones([{
+        id: document.id,
+        sourcePath: sourcePathForLibraryDocument(document),
+        createdAt: document.createdAt,
+        deletedAt: Date.now(),
+      }]).catch(console.error);
+      queueLibraryDocumentsSave(next);
+      return next;
+    });
+  }, [queueLibraryDocumentsSave]);
 
   const handleCopyTranscript = useCallback(async (entry: TranscriptEntry) => {
     await Clipboard.setStringAsync(entry.text);
@@ -994,6 +829,7 @@ function AppContent() {
     setTranscripts((prev) => {
       const updated = prev.filter((entry) => entry.id !== id);
       // Save to storage when deleting
+      queueSyncDeletes('transcripts', [id]).catch(console.error);
       StorageService.saveTranscripts(updated).catch(console.error);
       return updated;
     });
@@ -1002,7 +838,7 @@ function AppContent() {
       delete next[id];
       return next;
     });
-  }, []);
+  }, [queueSyncDeletes]);
 
   // Transcript editing state
   const [editingTranscriptId, setEditingTranscriptId] = useState<string | null>(null);
@@ -1068,8 +904,9 @@ function AppContent() {
     
     Vibration.vibrate();
     setProcessingItemId(itemId);
-    await handleProcessTranscription(text);
+    const didProcess = await handleProcessTranscription(text);
     setProcessingItemId(null);
+    if (!didProcess) return;
     
     // Mark this item as separated and flash the Tasks tab
     setSeparatedIds((prev) => new Set(prev).add(itemId));
@@ -1110,6 +947,7 @@ function AppContent() {
         .filter((entry) => entry.id !== sourceId)
         .map((entry) => (entry.id === targetId ? updatedTarget : entry));
 
+      queueSyncDeletes('transcripts', [sourceId]).catch(console.error);
       StorageService.saveTranscripts(updatedList).catch(console.error);
 
       setExpandedMap((prevExpanded) => {
@@ -1124,7 +962,7 @@ function AppContent() {
 
       return updatedList;
     });
-  }, [setExpandedMap, setCopiedId]);
+  }, [queueSyncDeletes, setExpandedMap, setCopiedId]);
 
   // Restore every segment back into standalone transcripts if the user made a mistake.
   const handleUnstackTranscript = useCallback((id: string) => {
@@ -1144,6 +982,7 @@ function AppContent() {
       const withoutParent = prev.filter((item) => item.id !== id);
       const updatedList = [...withoutParent, ...restoredEntries];
 
+      queueSyncDeletes('transcripts', [id]).catch(console.error);
       StorageService.saveTranscripts(updatedList).catch(console.error);
 
       setExpandedMap((prevExpanded) => {
@@ -1154,7 +993,7 @@ function AppContent() {
 
       return updatedList;
     });
-  }, [setExpandedMap]);
+  }, [queueSyncDeletes, setExpandedMap]);
 
   // Enter selection mode when long-pressing a card.
   const enterSelectionMode = useCallback((id: string) => {
@@ -1196,6 +1035,7 @@ function AppContent() {
           onPress: () => {
             setTranscripts((prev) => {
               const updated = prev.filter((entry) => !selectedIds.has(entry.id));
+              queueSyncDeletes('transcripts', Array.from(selectedIds)).catch(console.error);
               StorageService.saveTranscripts(updated).catch(console.error);
               return updated;
             });
@@ -1210,7 +1050,7 @@ function AppContent() {
         },
       ]
     );
-  }, [selectedIds]);
+  }, [queueSyncDeletes, selectedIds]);
 
   // Stack all selected transcripts. Uses the first selected as the target, merges others into it.
   const handleStackSelected = useCallback(() => {
@@ -1248,6 +1088,7 @@ function AppContent() {
         .filter((entry) => !sourceIds.has(entry.id))
         .map((entry) => (entry.id === targetEntry.id ? updatedTarget : entry));
 
+      queueSyncDeletes('transcripts', Array.from(sourceIds)).catch(console.error);
       StorageService.saveTranscripts(updatedList).catch(console.error);
 
       // Keep stacked items collapsed by default for easier navigation.
@@ -1262,7 +1103,7 @@ function AppContent() {
     });
 
     exitSelectionMode();
-  }, [selectedIds, sortedTranscripts, exitSelectionMode]);
+  }, [queueSyncDeletes, selectedIds, sortedTranscripts, exitSelectionMode]);
 
   // Check if any selected item is stacked (for enabling Unstack button)
   const hasSelectedStacked = useMemo(() => {
@@ -1346,8 +1187,9 @@ function AppContent() {
   // Per-page proximity (1 = active page, 0 = other page).
   // Defined before any early-return so all hooks below stay in stable order.
   const proximityToPage = (idx: number) => (pageIndex === idx ? 1 : 0);
-  const shouldRenderPage = (idx: number) =>
-    mountedPageIndexes.has(idx) || Math.abs(pageIndex - idx) <= 1;
+  // Keep Items mounted; PagerView can show a blank newly-mounted page until
+  // the next state change forces layout on device.
+  const shouldRenderPage = (idx: number) => idx === ITEMS_PAGE_INDEX || Math.abs(pageIndex - idx) <= 1;
 
   // Tab tap navigation. The pager owns the native transition; React only tracks
   // the selected page instead of re-rendering the whole tree during scroll.
@@ -1359,7 +1201,7 @@ function AppContent() {
   // with the list (not sticky) and only takes up the height it needs.
   // Memoized so its identity stays stable across unrelated re-renders;
   // otherwise FlatList would treat each render as a new header and churn.
-  const itemsSearchOpacity = proximityToPage(0);
+  const itemsSearchOpacity = proximityToPage(ITEMS_PAGE_INDEX);
   const itemsSearchHeader = useMemo(
     () => (
       <View style={[styles.searchHeader, { opacity: itemsSearchOpacity, backgroundColor: colors.bgPage }]}>
@@ -1438,6 +1280,15 @@ function AppContent() {
         </View>
       )}
 
+      {!isReady && modelDownloadProgress !== null && !error && (
+        <View style={styles.processingContainer}>
+          <ActivityIndicator size="small" color="#007AFF" />
+          <Text style={styles.processingText}>
+            Downloading speech model {Math.round(modelDownloadProgress * 100)}%
+          </Text>
+        </View>
+      )}
+
       {/* Processing indicator - only for transcription */}
       {isProcessing && (
         <View style={styles.processingContainer}>
@@ -1450,6 +1301,7 @@ function AppContent() {
       <PagerView
         ref={pagerRef}
         style={styles.pager}
+        initialPage={ITEMS_PAGE_INDEX}
         scrollEnabled={true}
         overdrag={false}
         overScrollMode="never"
@@ -1466,9 +1318,12 @@ function AppContent() {
             <LibraryView
               documents={libraryDocuments}
               onChange={handleLibraryDocumentsChange}
+              onDocumentChange={handleLibraryDocumentChange}
+              onDocumentDelete={handleLibraryDocumentDelete}
               callsign={callsign}
               lastSyncedAt={librarySyncedAt}
               isSyncing={isLibrarySyncing}
+              isHydrating={!isLibraryHydrated}
               onSyncPress={handleLibrarySyncQuiet}
             />
           ) : null}
@@ -1531,6 +1386,7 @@ function AppContent() {
         <View key="commands" style={[styles.pageContainer, { backgroundColor: colors.bgPage }]}>
           {shouldRenderPage(2) ? (
             <CommandsList
+              userId={session?.user.id ?? null}
               searchOpacity={proximityToPage(2)}
               isActive={pageIndex === 2}
               onCreateModeChange={handleCommandCreateModeChange}
@@ -1736,15 +1592,15 @@ function AppContent() {
               
               <TouchableOpacity
                 onPress={() => createMode.save?.()}
-                style={[styles.saveTabButton, !createMode.text.trim() && styles.saveTabButtonDisabled]}
-                disabled={!createMode.text.trim()}
+                style={[styles.saveTabButton, !createMode.canSave && styles.saveTabButtonDisabled]}
+                disabled={!createMode.canSave}
               >
                 <Feather 
                   name="check" 
                   size={22} 
-                  color={createMode.text.trim() ? '#fff' : '#9CA3AF'} 
+                  color={createMode.canSave ? '#fff' : '#9CA3AF'}
                 />
-                <Text style={[styles.saveTabButtonText, !createMode.text.trim() && styles.saveTabButtonTextDisabled]}>
+                <Text style={[styles.saveTabButtonText, !createMode.canSave && styles.saveTabButtonTextDisabled]}>
                   Save Item
                 </Text>
               </TouchableOpacity>
