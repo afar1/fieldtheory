@@ -55,6 +55,7 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   shouldRevealGroupedFocusChrome,
+  shouldRevealCollapsedSidebarFromPointer,
   shouldHandleMarkdownTodoTabShortcut,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
@@ -2663,5 +2664,33 @@ describe('formatBreadcrumb', () => {
 
   it('external: falls back to External when the path is just a filename', () => {
     expect(formatBreadcrumb('external', { path: 'loose.md', title: 'Loose' })).toBe('External');
+  });
+});
+
+describe('collapsed sidebar reveal', () => {
+  it('requires a leftward approach from inside the document surface', () => {
+    expect(shouldRevealCollapsedSidebarFromPointer({
+      previousClientX: 80,
+      currentClientX: 24,
+      hoverStripWidth: 30,
+    })).toBe(true);
+
+    expect(shouldRevealCollapsedSidebarFromPointer({
+      previousClientX: null,
+      currentClientX: 24,
+      hoverStripWidth: 30,
+    })).toBe(false);
+
+    expect(shouldRevealCollapsedSidebarFromPointer({
+      previousClientX: 12,
+      currentClientX: 24,
+      hoverStripWidth: 30,
+    })).toBe(false);
+
+    expect(shouldRevealCollapsedSidebarFromPointer({
+      previousClientX: 80,
+      currentClientX: 44,
+      hoverStripWidth: 30,
+    })).toBe(false);
   });
 });
