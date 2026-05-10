@@ -84,10 +84,9 @@ export class CommandLauncherWindow {
   // Track when show() is in progress (before window.show() is called).
   // This closes the race window where isVisible() returns false during async setup.
   private _isShowing: boolean = false;
-  private suppressActivationUntilHidden = false;
-  private suppressActivationUntilMs = 0;
+  private externalInvocationSuppressionTokens = new Set<number>();
+  private nextExternalInvocationSuppressionToken = 1;
   private showGeneration = 0;
-  private readonly SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS = 3000;
 
   // Window dimensions - starts small, expands for results.
   private readonly WINDOW_WIDTH = 520;
@@ -211,8 +210,6 @@ export class CommandLauncherWindow {
     // This allows other code to check isShowingOrVisible() during the await.
     this._isShowing = true;
     this.showGeneration += 1;
-    this.suppressActivationUntilHidden = false;
-    this.suppressActivationUntilMs = 0;
     appendCommandLauncherTrace('show-start', {
       hasWindow: Boolean(this.window),
       windowVisible: this.isVisible(),
@@ -339,20 +336,16 @@ export class CommandLauncherWindow {
    */
   hide(skipActivation = false): void {
     this._isShowing = false;
-    const now = Date.now();
-    const suppressActivationForThisHide = this.isExternalInvocationActivationSuppressed(now);
+    const suppressActivationForThisHide = this.isExternalInvocationActivationSuppressed();
     const shouldSkipActivation = skipActivation || suppressActivationForThisHide;
 
     // Already hidden — prevents blur re-entry after hide(true).
     const isVisible = this.window && !this.window.isDestroyed() && this.window.isVisible();
     if (!isVisible) {
-      if (this.suppressActivationUntilHidden) {
-        this.suppressActivationUntilHidden = false;
-      }
       appendCommandLauncherTrace('hide-noop', {
         skipActivation,
         suppressActivationForThisHide,
-        suppressActivationRemainingMs: Math.max(0, this.suppressActivationUntilMs - now),
+        externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
         hasWindow: Boolean(this.window),
       });
       return;
@@ -361,12 +354,11 @@ export class CommandLauncherWindow {
     appendCommandLauncherTrace('hide', {
       skipActivation,
       suppressActivationForThisHide,
-      suppressActivationRemainingMs: Math.max(0, this.suppressActivationUntilMs - now),
+      externalInvocationSuppressionCount: this.externalInvocationSuppressionTokens.size,
       previousAppBundleId: this.previousApp?.bundleId ?? null,
     });
     this.window!.hide();
     this.hidePreview();
-    this.suppressActivationUntilHidden = false;
 
     if (shouldSkipActivation || this.fieldTheoryActiveOnShow) {
       appendCommandLauncherTrace('hide-skip-activation');
@@ -439,18 +431,33 @@ export class CommandLauncherWindow {
     return this._isShowing || this.isVisible();
   }
 
-  suppressActivationForExternalInvocation(): void {
-    this.suppressActivationUntilHidden = true;
-    this.suppressActivationUntilMs = Date.now() + this.SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS;
-    appendCommandLauncherTrace('suppress-activation-for-external-invocation', {
+  beginExternalInvocationSuppression(): number {
+    const token = this.nextExternalInvocationSuppressionToken;
+    this.nextExternalInvocationSuppressionToken += 1;
+    this.externalInvocationSuppressionTokens.add(token);
+    appendCommandLauncherTrace('external-invocation-suppression-begin', {
+      token,
+      activeCount: this.externalInvocationSuppressionTokens.size,
       visible: this.isVisible(),
       isShowing: this._isShowing,
-      durationMs: this.SUPPRESS_ACTIVATION_AFTER_EXTERNAL_INVOCATION_MS,
+    });
+    return token;
+  }
+
+  endExternalInvocationSuppression(token: number | null | undefined): void {
+    if (typeof token !== 'number') return;
+    const removed = this.externalInvocationSuppressionTokens.delete(token);
+    appendCommandLauncherTrace('external-invocation-suppression-end', {
+      token,
+      removed,
+      activeCount: this.externalInvocationSuppressionTokens.size,
+      visible: this.isVisible(),
+      isShowing: this._isShowing,
     });
   }
 
-  isExternalInvocationActivationSuppressed(now = Date.now()): boolean {
-    return this.suppressActivationUntilHidden || now < this.suppressActivationUntilMs;
+  isExternalInvocationActivationSuppressed(): boolean {
+    return this.externalInvocationSuppressionTokens.size > 0;
   }
 
   /**

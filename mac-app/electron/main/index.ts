@@ -397,7 +397,6 @@ function activateAndPasteFromCommandLauncher(
   targetApp: { bundleId: string; name: string },
   options: { clipboardTrace?: () => Record<string, unknown> } = {},
 ): Promise<boolean> {
-  commandLauncherWindow?.suppressActivationForExternalInvocation();
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
     strategy: 'applescript',
@@ -415,7 +414,6 @@ async function typeTextFromCommandLauncher(
   text: string,
   tracePrefix: 'invoke-command' | 'invoke-handoff',
 ): Promise<boolean> {
-  commandLauncherWindow?.suppressActivationForExternalInvocation();
   commandLauncherWindow?.hide(true);
 
   if (!nativeHelper) {
@@ -475,6 +473,15 @@ async function typeTextFromCommandLauncher(
       error,
     });
     return false;
+  }
+}
+
+async function runWithCommandLauncherExternalInvocation<T>(operation: () => Promise<T>): Promise<T> {
+  const token = commandLauncherWindow?.beginExternalInvocationSuppression() ?? null;
+  try {
+    return await operation();
+  } finally {
+    commandLauncherWindow?.endExternalInvocationSuppression(token);
   }
 }
 
@@ -3243,9 +3250,11 @@ function setupLibrarianIPCHandlers(): void {
         return { success: false, error: 'No external target app available' };
       }
 
-      clipboard.writeText(text);
-      clipboardManager?.syncClipboardHash();
-      await activateAndPasteFromCommandLauncher(targetApp);
+      await runWithCommandLauncherExternalInvocation(async () => {
+        clipboard.writeText(text);
+        clipboardManager?.syncClipboardHash();
+        await activateAndPasteFromCommandLauncher(targetApp);
+      });
 
       appendCommandLauncherTrace(`${tracePrefix}-success`, {
         ...tracePayload,
@@ -7654,66 +7663,69 @@ function setupClipboardIPCHandlers(): void {
         appendCommandLauncherTrace('invoke-handoff-no-target', { filePath });
         return { success: false, error: 'No external target app available' };
       }
-      const isTerminal = isTerminalApp(targetApp.bundleId);
-      const isIDE = isIDEWithTerminal(targetApp.bundleId);
-      const fileName = path.basename(filePath);
-      let handoffText: string | null = null;
 
-      if (isTerminal || isIDE) {
-        handoffText = `${fileName}\n${filePath} `;
-        clipboard.writeText(handoffText);
-        clipboardManager?.syncClipboardHash();
-        appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
-          format: 'text',
-          targetBundleId: targetApp.bundleId,
-          targetName: targetApp.name,
-          filePath,
-          ...commandPayloadTrace(handoffText),
-          textLength: handoffText.length,
-          clipboard: readCommandPasteClipboardTrace(),
-        });
-      } else {
-        const plistData = plist.build([filePath]);
-        clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
-        clipboardManager?.syncClipboardHash();
-        appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
-          format: 'file-list',
-          targetBundleId: targetApp.bundleId,
-          targetName: targetApp.name,
-          filePath,
-          availableFormats: clipboard.availableFormats(),
-        });
-      }
+      return await runWithCommandLauncherExternalInvocation(async () => {
+        const isTerminal = isTerminalApp(targetApp.bundleId);
+        const isIDE = isIDEWithTerminal(targetApp.bundleId);
+        const fileName = path.basename(filePath);
+        let handoffText: string | null = null;
 
-      let pasted = false;
-      if (handoffText) {
-        pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
-        if (!pasted) {
-          appendCommandLauncherTrace('invoke-handoff-native-type-fallback', {
-            filePath,
+        if (isTerminal || isIDE) {
+          handoffText = `${fileName}\n${filePath} `;
+          clipboard.writeText(handoffText);
+          clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
+            format: 'text',
             targetBundleId: targetApp.bundleId,
             targetName: targetApp.name,
+            filePath,
+            ...commandPayloadTrace(handoffText),
+            textLength: handoffText.length,
+            clipboard: readCommandPasteClipboardTrace(),
+          });
+        } else {
+          const plistData = plist.build([filePath]);
+          clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+          clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace('invoke-handoff-clipboard-written', {
+            format: 'file-list',
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            filePath,
+            availableFormats: clipboard.availableFormats(),
           });
         }
-      }
-      if (!pasted) {
-        pasted = await activateAndPasteFromCommandLauncher(targetApp, {
-          clipboardTrace: readCommandPasteClipboardTrace,
-        });
-      }
-      if (!pasted) {
-        cursorStatusManager?.showNoTargetError('Portable command paste failed');
-        return { success: false, error: 'Could not paste into target app' };
-      }
 
-      appendCommandLauncherTrace('invoke-handoff-success', {
-        filePath,
-        targetBundleId: targetApp.bundleId,
-        targetName: targetApp.name,
-        terminal: isTerminal,
-        IDE: isIDE,
+        let pasted = false;
+        if (handoffText) {
+          pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+          if (!pasted) {
+            appendCommandLauncherTrace('invoke-handoff-native-type-fallback', {
+              filePath,
+              targetBundleId: targetApp.bundleId,
+              targetName: targetApp.name,
+            });
+          }
+        }
+        if (!pasted) {
+          pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+            clipboardTrace: readCommandPasteClipboardTrace,
+          });
+        }
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Portable command paste failed');
+          return { success: false, error: 'Could not paste into target app' };
+        }
+
+        appendCommandLauncherTrace('invoke-handoff-success', {
+          filePath,
+          targetBundleId: targetApp.bundleId,
+          targetName: targetApp.name,
+          terminal: isTerminal,
+          IDE: isIDE,
+        });
+        return { success: true };
       });
-      return { success: true };
     } catch (error) {
       log.error('Error invoking handoff:', error);
       appendCommandLauncherTrace('invoke-handoff-error', { filePath, error });
@@ -7757,92 +7769,96 @@ function setupClipboardIPCHandlers(): void {
 
       log.info(`Invoking command "${commandName}" → ${command.filePath} (target: ${targetApp?.name ?? 'unknown'} [${targetApp?.bundleId ?? '?'}], terminal: ${isTerminal}, IDE: ${isIDE})`);
 
-      const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
-      try {
-        let terminalCommandReferenceText: string | null = null;
-        if (isTerminal || isIDE) {
-          const commandReferenceText = `[${command.name}.md]\n${command.filePath} `;
-          terminalCommandReferenceText = commandReferenceText;
-          clipboard.writeText(commandReferenceText);
-          clipboardManager?.syncClipboardHash();
-          appendCommandLauncherTrace('invoke-command-clipboard-written', {
-            commandName,
-            format: 'text',
-            targetBundleId: targetApp.bundleId,
-            targetName: targetApp.name,
-            ...commandPayloadTrace(commandReferenceText),
-            textLength: commandReferenceText.length,
-            clipboard: readCommandPasteClipboardTrace(),
-          });
-        } else {
-          const fileUrl = pathToFileURL(command.filePath).toString();
-          const plistData = plist.build([command.filePath]);
-          clipboard.writeText(command.filePath);
-          clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
-          clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf-8'));
-          clipboard.writeBuffer('NSURLPboardType', Buffer.from(fileUrl, 'utf-8'));
-          clipboardManager?.syncClipboardHash();
-          appendCommandLauncherTrace('invoke-command-clipboard-written', {
-            commandName,
-            format: 'file-list+file-url+text',
-            targetBundleId: targetApp.bundleId,
-            targetName: targetApp.name,
-            ...commandPayloadTrace(command.filePath),
-            filePath: command.filePath,
-            fileUrl,
-            clipboard: readCommandPasteClipboardTrace(),
-          });
-        }
-
-        let pasted = false;
-        if (terminalCommandReferenceText) {
-          pasted = await typeTextFromCommandLauncher(targetApp, terminalCommandReferenceText, 'invoke-command');
-          if (!pasted) {
-            appendCommandLauncherTrace('invoke-command-native-type-fallback', {
+      const invocationFailure = await runWithCommandLauncherExternalInvocation(async (): Promise<{ success: false; error: string } | null> => {
+        const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+        try {
+          let terminalCommandReferenceText: string | null = null;
+          if (isTerminal || isIDE) {
+            const commandReferenceText = `[${command.name}.md]\n${command.filePath} `;
+            terminalCommandReferenceText = commandReferenceText;
+            clipboard.writeText(commandReferenceText);
+            clipboardManager?.syncClipboardHash();
+            appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
+              format: 'text',
               targetBundleId: targetApp.bundleId,
               targetName: targetApp.name,
+              ...commandPayloadTrace(commandReferenceText),
+              textLength: commandReferenceText.length,
+              clipboard: readCommandPasteClipboardTrace(),
+            });
+          } else {
+            const fileUrl = pathToFileURL(command.filePath).toString();
+            const plistData = plist.build([command.filePath]);
+            clipboard.writeText(command.filePath);
+            clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plistData));
+            clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf-8'));
+            clipboard.writeBuffer('NSURLPboardType', Buffer.from(fileUrl, 'utf-8'));
+            clipboardManager?.syncClipboardHash();
+            appendCommandLauncherTrace('invoke-command-clipboard-written', {
+              commandName,
+              format: 'file-list+file-url+text',
+              targetBundleId: targetApp.bundleId,
+              targetName: targetApp.name,
+              ...commandPayloadTrace(command.filePath),
+              filePath: command.filePath,
+              fileUrl,
+              clipboard: readCommandPasteClipboardTrace(),
             });
           }
-        }
-        if (!pasted) {
-          pasted = await activateAndPasteFromCommandLauncher(targetApp, {
-            clipboardTrace: readCommandPasteClipboardTrace,
+
+          let pasted = false;
+          if (terminalCommandReferenceText) {
+            pasted = await typeTextFromCommandLauncher(targetApp, terminalCommandReferenceText, 'invoke-command');
+            if (!pasted) {
+              appendCommandLauncherTrace('invoke-command-native-type-fallback', {
+                commandName,
+                targetBundleId: targetApp.bundleId,
+                targetName: targetApp.name,
+              });
+            }
+          }
+          if (!pasted) {
+            pasted = await activateAndPasteFromCommandLauncher(targetApp, {
+              clipboardTrace: readCommandPasteClipboardTrace,
+            });
+          }
+          if (!pasted) {
+            cursorStatusManager?.showNoTargetError('Portable command paste failed');
+            return { success: false, error: 'Could not paste into target app' };
+          }
+        } finally {
+          appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
+            commandName,
+            commandPath: command.filePath,
+            delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+            generation: clipboardRestore.generation,
           });
-        }
-        if (!pasted) {
-          cursorStatusManager?.showNoTargetError('Portable command paste failed');
-          return { success: false, error: 'Could not paste into target app' };
-        }
-      } finally {
-        appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
-          commandName,
-          commandPath: command.filePath,
-          delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
-          generation: clipboardRestore.generation,
-        });
-        await waitForCommandClipboardPasteRead();
-        if (commandClipboardRestoreCoordinator.canRestore(clipboardRestore.generation)) {
-          try {
-            restoreClipboardSnapshot(clipboardRestore.snapshot);
-            clipboardManager?.syncClipboardHash();
-            appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+          await waitForCommandClipboardPasteRead();
+          if (commandClipboardRestoreCoordinator.canRestore(clipboardRestore.generation)) {
+            try {
+              restoreClipboardSnapshot(clipboardRestore.snapshot);
+              clipboardManager?.syncClipboardHash();
+              appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+                commandName,
+                commandPath: command.filePath,
+                generation: clipboardRestore.generation,
+              });
+            } finally {
+              commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
+            }
+          } else {
+            appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
               commandName,
               commandPath: command.filePath,
               generation: clipboardRestore.generation,
+              reason: 'newer-command-invocation',
             });
-          } finally {
-            commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
           }
-        } else {
-          appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
-            commandName,
-            commandPath: command.filePath,
-            generation: clipboardRestore.generation,
-            reason: 'newer-command-invocation',
-          });
         }
-      }
+        return null;
+      });
+      if (invocationFailure) return invocationFailure;
       appendCommandLauncherTrace('invoke-command-success', {
         commandName,
         commandPath: command.filePath,
