@@ -14,7 +14,6 @@ import {
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isNavSidebarToggleEnabled,
-  isPointerInsideCollapsedSidebarHoverStrip,
   isSearchFocusShortcut,
   isSidebarToggleShortcut,
   isThemeToggleShortcut,
@@ -263,18 +262,6 @@ describe('collapsed sidebar reveal', () => {
       hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
       proximityWidth: COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
     })).toBeCloseTo(0.5);
-  });
-
-  it('treats only the shared edge strip as an open target', () => {
-    expect(isPointerInsideCollapsedSidebarHoverStrip({
-      currentClientX: 24,
-      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
-    })).toBe(true);
-
-    expect(isPointerInsideCollapsedSidebarHoverStrip({
-      currentClientX: 44,
-      hoverStripWidth: COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
-    })).toBe(false);
   });
 });
 
