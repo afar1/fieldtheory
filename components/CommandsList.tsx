@@ -29,9 +29,12 @@ import { CommandsService } from '../services/commands';
 import { useThemeColors } from '../services/theme';
 import { PullToCreate } from './PullToCreate';
 
-const FAVORITES_KEY = '@littleai/commandFavorites';
+const LEGACY_FAVORITES_KEY = '@littleai/commandFavorites';
+const FAVORITES_KEY_PREFIX = '@littleai/commandFavorites';
 
 interface CommandsListProps {
+  /** Current signed-in user. Null clears user-owned command state from the mounted page. */
+  userId?: string | null;
   /** Called when user wants to use a command (copy formatted text) */
   onUseCommand?: (text: string) => void;
   /** Opacity 0..1 applied to the search header so it fades during a page swipe. */
@@ -39,10 +42,10 @@ interface CommandsListProps {
   /** True when the Commands page is selected, not merely mounted as a pager neighbor. */
   isActive?: boolean;
   /** Notifies parent of pull-to-create state so the bottom bar can swap to Cancel/Save. */
-  onCreateModeChange?: (isCreating: boolean, text: string, save: () => void, cancel: () => void) => void;
+  onCreateModeChange?: (isCreating: boolean, canSave: boolean, save: () => void, cancel: () => void) => void;
 }
 
-export function CommandsList({ onUseCommand, searchOpacity = 1, isActive = false, onCreateModeChange }: CommandsListProps) {
+export function CommandsList({ userId = null, onUseCommand, searchOpacity = 1, isActive = false, onCreateModeChange }: CommandsListProps) {
   const colors = useThemeColors();
   const hasFetchedRef = useRef(false);
   const [commands, setCommands] = useState<Command[]>([]);
@@ -52,8 +55,48 @@ export function CommandsList({ onUseCommand, searchOpacity = 1, isActive = false
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set());
   const [searchVisible, setSearchVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const favoritesKey = useMemo(() => userId ? `${FAVORITES_KEY_PREFIX}/${userId}` : null, [userId]);
+
+  const loadFavorites = useCallback(async () => {
+    try {
+      if (!favoritesKey) {
+        setFavoriteIds(new Set());
+        return;
+      }
+
+      let data = await AsyncStorage.getItem(favoritesKey);
+      const legacyData = await AsyncStorage.getItem(LEGACY_FAVORITES_KEY);
+      if (!data && legacyData) {
+        data = legacyData;
+        await AsyncStorage.setItem(favoritesKey, legacyData);
+      }
+      if (legacyData) {
+        await AsyncStorage.removeItem(LEGACY_FAVORITES_KEY);
+      }
+
+      setFavoriteIds(data ? new Set(JSON.parse(data) as string[]) : new Set());
+    } catch (error) {
+      console.error('Failed to load command favorites:', error);
+    }
+  }, [favoritesKey]);
+
+  const persistFavorites = useCallback(async (ids: Set<string>) => {
+    if (!favoritesKey) return;
+
+    try {
+      await AsyncStorage.setItem(favoritesKey, JSON.stringify(Array.from(ids)));
+      await AsyncStorage.removeItem(LEGACY_FAVORITES_KEY);
+    } catch (error) {
+      console.error('Failed to save command favorites:', error);
+    }
+  }, [favoritesKey]);
 
   const loadCommands = useCallback(async () => {
+    if (!userId) {
+      setCommands([]);
+      return;
+    }
+
     try {
       setIsLoading(true);
       const fetched = await CommandsService.fetchCommands();
@@ -63,10 +106,24 @@ export function CommandsList({ onUseCommand, searchOpacity = 1, isActive = false
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
     let mounted = true;
+    hasFetchedRef.current = false;
+    setCommands([]);
+    setCopiedId(null);
+    setExpandedId(null);
+    setSearchQuery('');
+    setSearchVisible(false);
+
+    if (!userId) {
+      setFavoriteIds(new Set());
+      return () => {
+        mounted = false;
+      };
+    }
+
     CommandsService.getCachedCommands()
       .then((cached) => {
         if (mounted) {
@@ -80,33 +137,13 @@ export function CommandsList({ onUseCommand, searchOpacity = 1, isActive = false
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [loadFavorites, userId]);
 
   useEffect(() => {
     if (!isActive || hasFetchedRef.current) return;
     hasFetchedRef.current = true;
     loadCommands();
   }, [isActive, loadCommands]);
-
-  const loadFavorites = async () => {
-    try {
-      const data = await AsyncStorage.getItem(FAVORITES_KEY);
-      if (data) {
-        const ids: string[] = JSON.parse(data);
-        setFavoriteIds(new Set(ids));
-      }
-    } catch (error) {
-      console.error('Failed to load command favorites:', error);
-    }
-  };
-
-  const persistFavorites = async (ids: Set<string>) => {
-    try {
-      await AsyncStorage.setItem(FAVORITES_KEY, JSON.stringify(Array.from(ids)));
-    } catch (error) {
-      console.error('Failed to save command favorites:', error);
-    }
-  };
 
   // Pull-to-create handler. Inserts via Supabase, then re-fetches so the new
   // command shows up at the right sort position (and we pick up server defaults).
@@ -156,7 +193,7 @@ ${command.content}
       return next;
     });
     Vibration.vibrate(10);
-  }, []);
+  }, [persistFavorites]);
 
   const toggleExpand = useCallback((id: string) => {
     setExpandedId(prev => prev === id ? null : id);
@@ -334,7 +371,7 @@ ${command.content}
       <PullToCreate
         itemType="command"
         onCreateItem={handleCreateCommand}
-        enabled={true}
+        enabled={!!userId}
         style={{ flex: 1 }}
         onCreateModeChange={onCreateModeChange}
       >
