@@ -93,7 +93,6 @@ export function shouldRevealFooterChrome(
 
 export const COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH = 30;
 export const COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH = 96;
-export const COLLAPSED_SIDEBAR_HOVER_DWELL_MS = 220;
 
 export function getCollapsedSidebarAffordanceOpacity(input: {
   currentClientX: number;
@@ -107,14 +106,6 @@ export function getCollapsedSidebarAffordanceOpacity(input: {
   if (input.currentClientX <= stripWidth) return 1;
   if (proximityWidth === stripWidth) return 1;
   return 1 - ((input.currentClientX - stripWidth) / (proximityWidth - stripWidth));
-}
-
-export function isPointerInsideCollapsedSidebarHoverStrip(input: {
-  currentClientX: number;
-  hoverStripWidth: number;
-}): boolean {
-  if (!Number.isFinite(input.currentClientX)) return false;
-  return input.currentClientX >= 0 && input.currentClientX <= Math.max(0, input.hoverStripWidth);
 }
 
 export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }> = [

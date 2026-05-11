@@ -15,6 +15,7 @@ import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
 import MaxwellHistoryPopover from './MaxwellHistoryPopover';
+import { ImagePreviewFrame } from './ImagePreviewOverlay';
 import type { SketchViewHandle } from './SketchView';
 import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { rendererSoundManager } from '../utils/rendererSoundManager';
@@ -7973,40 +7974,15 @@ export default function ClipboardHistory() {
           }}
         >
           {preview.type === 'image' ? (
-            <div
-              onClick={(e) => e.stopPropagation()}
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: '16px',
-                cursor: 'default',
+            <ImagePreviewFrame
+              src={`data:image/png;base64,${preview.data}`}
+              alt="Preview"
+              label={preview.figureLabel ? `figure ${preview.figureLabel}` : null}
+              labelStyle={{
+                color: theme.text,
+                backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
               }}
             >
-              {preview.figureLabel && (
-                <div style={{
-                  fontSize: '14px',
-                  fontWeight: 500,
-                  color: theme.text,
-                  opacity: 0.7,
-                  padding: '4px 12px',
-                  borderRadius: '4px',
-                  backgroundColor: theme.isDark ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
-                }}>
-                  figure {preview.figureLabel}
-                </div>
-              )}
-              <img
-                src={`data:image/png;base64,${preview.data}`}
-                alt="Preview"
-                style={{
-                  maxWidth: '90vw',
-                  maxHeight: 'calc(90vh - 60px)',
-                  objectFit: 'contain',
-                  borderRadius: '8px',
-                  boxShadow: '0 8px 32px rgba(0, 0, 0, 0.3)',
-                }}
-              />
               {/* Action bar - compact buttons with no background */}
               <div style={{
                 display: 'flex',
@@ -8113,7 +8089,7 @@ export default function ClipboardHistory() {
                   </button>
                 ))}
               </div>
-            </div>
+            </ImagePreviewFrame>
           ) : (
             <div
               onClick={(e) => e.stopPropagation()}
