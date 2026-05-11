@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LibrarianView from '../LibrarianView';
 
@@ -35,6 +35,18 @@ describe('LibrarianView render', () => {
     fireEvent.paste(target, {
       clipboardData: {
         getData: (type: string) => (type === 'text/plain' || type === 'text' ? text : ''),
+        files: [],
+        items: [],
+      },
+    });
+  }
+
+  function pasteImage(target: HTMLElement): void {
+    fireEvent.paste(target, {
+      clipboardData: {
+        getData: () => '',
+        files: [],
+        items: [{ kind: 'file', type: 'image/png' }],
       },
     });
   }
@@ -113,6 +125,10 @@ describe('LibrarianView render', () => {
       value: {
         setRepresentedFilename: vi.fn(),
       },
+    });
+    Object.defineProperty(window, 'clipboardAPI', {
+      configurable: true,
+      value: undefined,
     });
   });
 
@@ -328,6 +344,105 @@ describe('LibrarianView render', () => {
     expect(renderedInput.textContent).toContain('hello world!');
   });
 
+  it('pastes clipboard images into the rendered editor without switching to source mode', async () => {
+    const relPath = 'scratchpad/rendered-image-paste-test';
+    const content = 'hello image';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-image-paste-test',
+      title: 'rendered-image-paste-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'image-paste-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: 67, sha256: 'image-paste-saved-version' },
+    });
+    Object.defineProperty(window, 'clipboardAPI', {
+      configurable: true,
+      value: {
+        getClipboardImagePath: vi.fn(async () => '/Users/afar/Pictures/Test Image.png'),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('hello image');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello image');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    pasteImage(renderedInput);
+
+    await waitFor(() => {
+      expect(window.clipboardAPI!.getClipboardImagePath).toHaveBeenCalled();
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'hello image![Image](<file:///Users/afar/Pictures/Test%20Image.png>)',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
+    expect(container.querySelector('textarea[data-ft-rendered-editor-input="true"]')).toBeNull();
+  });
+
+  it('opens a Quick Look style preview when a rendered editor image is clicked', async () => {
+    const relPath = 'scratchpad/rendered-image-preview-test';
+    const content = '![Diagram](<file:///tmp/Figure%201.png>)';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-image-preview-test',
+      title: 'rendered-image-preview-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'image-preview-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedImage = await waitFor(() => {
+      const image = container.querySelector('.cm-rendered-markdown-image img') as HTMLImageElement | null;
+      expect(image?.getAttribute('src')).toBe('ftlocalfile:///tmp/Figure%201.png');
+      return image;
+    });
+    if (!renderedImage) throw new Error('Rendered image missing');
+
+    fireEvent.click(renderedImage);
+
+    await waitFor(() => {
+      const previewImage = container.querySelector('[data-ft-image-preview-img="true"]') as HTMLImageElement | null;
+      expect(previewImage?.getAttribute('src')).toBe('ftlocalfile:///tmp/Figure%201.png');
+      expect(previewImage?.getAttribute('alt')).toBe('Diagram');
+    });
+  });
+
   it('preserves frontmatter while editing the rendered editor body', async () => {
     const relPath = 'scratchpad/rendered-frontmatter-test';
     const content = '---\ntodo: true\ntodo_state: open\n---\n\nhello';
@@ -483,7 +598,7 @@ describe('LibrarianView render', () => {
     }, { timeout: 1200 });
   });
 
-  it('reveals the collapsed sidebar only after a quiet edge linger', async () => {
+  it('reveals the collapsed sidebar only when the edge strip is clicked', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => [{
       path: '/tmp/library/example.md',
       title: 'example.md',
@@ -499,11 +614,12 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
-    vi.useFakeTimers();
-
     const root = container.firstElementChild as HTMLElement;
     const getHoverStrip = () => root.querySelector(
       '[data-fieldtheory-collapsed-sidebar-hover-strip="true"]'
+    ) as HTMLElement | null;
+    const getSidebarPane = () => root.querySelector(
+      '[data-fieldtheory-collapsed-sidebar-pane="true"]'
     ) as HTMLElement | null;
 
     expect(getHoverStrip()).toBeTruthy();
@@ -512,27 +628,24 @@ describe('LibrarianView render', () => {
     expect(Number(getHoverStrip()?.style.opacity)).toBeCloseTo(0.24);
 
     fireEvent.mouseOver(getHoverStrip()!, { clientX: 12 });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(120);
-    });
-    expect(getHoverStrip()).toBeTruthy();
-
-    fireEvent.mouseMove(root, { clientX: 80 });
-    fireEvent.mouseOver(getHoverStrip()!, { clientX: 20, relatedTarget: root });
-    fireEvent.mouseLeave(root);
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseMove(root, { clientX: 20 });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(220);
-    });
+    expect(getHoverStrip()).toBeTruthy();
+
+    fireEvent.click(getHoverStrip()!);
+    expect(getHoverStrip()).toBeNull();
+
+    fireEvent.mouseLeave(getSidebarPane()!);
     expect(getHoverStrip()).toBeNull();
 
     fireEvent.mouseLeave(root);
+    expect(getHoverStrip()).toBeNull();
 
+    fireEvent.mouseDown(getSidebarPane()!);
+    expect(getHoverStrip()).toBeNull();
+
+    fireEvent.mouseDown(root);
     expect(getHoverStrip()).toBeTruthy();
   });
 });

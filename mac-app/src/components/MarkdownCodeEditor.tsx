@@ -53,6 +53,8 @@ export const RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS = 'cm-rendered-markdown-strik
 export const RENDERED_MARKDOWN_EDITOR_CODE_CLASS = 'cm-rendered-markdown-code';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS = 'cm-rendered-markdown-image';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS = 'cm-rendered-markdown-image-caption';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR = 'data-cm-rendered-markdown-image-src';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR = 'data-cm-rendered-markdown-image-alt';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS = 'cm-rendered-markdown-code-block';
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS = 'cm-rendered-markdown-code-fence';
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS = 'cm-rendered-markdown-code-fence-marker';
@@ -110,6 +112,13 @@ export interface MarkdownCodeEditorSelectionSnapshot {
   inputData?: string | null;
 }
 
+export interface MarkdownCodeEditorImagePreview {
+  src: string;
+  alt: string;
+  sourceFrom: number | null;
+  sourceTo: number | null;
+}
+
 interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
@@ -137,6 +146,7 @@ interface MarkdownCodeEditorProps {
   onKeyDown?: (event: KeyboardEvent) => boolean | void;
   onMouseDown?: (event: MouseEvent, offset: number) => boolean | void;
   onPaste?: (event: ClipboardEvent) => boolean | void;
+  onImagePreview?: (preview: MarkdownCodeEditorImagePreview) => void;
   onFocus?: () => void;
   onBlur?: () => void;
   onSelectionChange?: (snapshot: MarkdownCodeEditorSelectionSnapshot) => void;
@@ -252,6 +262,26 @@ function normalizeRenderedMarkdownImageSource(destination: string): string | nul
   return null;
 }
 
+function parseNullableMarkdownSourceOffset(value: string | null): number | null {
+  if (value === null) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+export function getRenderedMarkdownImagePreviewFromEventTarget(target: EventTarget | null): MarkdownCodeEditorImagePreview | null {
+  if (!(target instanceof Element)) return null;
+  const image = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
+  if (!(image instanceof HTMLElement)) return null;
+  const src = image.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR);
+  if (!src) return null;
+  return {
+    src,
+    alt: image.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR) || 'Image',
+    sourceFrom: parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)),
+    sourceTo: parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)),
+  };
+}
+
 class RenderedMarkdownImageWidget extends WidgetType {
   constructor(
     private readonly alt: string,
@@ -269,6 +299,10 @@ class RenderedMarkdownImageWidget extends WidgetType {
       && other.sourceTo === this.sourceTo;
   }
 
+  ignoreEvent(event: Event): boolean {
+    return event.type !== 'click';
+  }
+
   toDOM(): HTMLElement {
     const image = document.createElement('span');
     image.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS;
@@ -276,16 +310,21 @@ class RenderedMarkdownImageWidget extends WidgetType {
     image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
 
     const src = normalizeRenderedMarkdownImageSource(this.destination);
+    const alt = this.alt || 'Image';
     if (src) {
+      image.setAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR, src);
+      image.setAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR, alt);
+      image.setAttribute('role', 'button');
+      image.setAttribute('aria-label', `Preview ${alt}`);
       const preview = document.createElement('img');
       preview.src = src;
-      preview.alt = this.alt || 'Image';
+      preview.alt = alt;
       image.appendChild(preview);
     }
 
     const caption = document.createElement('span');
     caption.className = RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS;
-    caption.textContent = this.alt || 'Image';
+    caption.textContent = alt;
     image.appendChild(caption);
 
     return image;
@@ -850,6 +889,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const onKeyDownRef = useRef(props.onKeyDown);
     const onMouseDownRef = useRef(props.onMouseDown);
     const onPasteRef = useRef(props.onPaste);
+    const onImagePreviewRef = useRef(props.onImagePreview);
     const onFocusRef = useRef(props.onFocus);
     const onBlurRef = useRef(props.onBlur);
     const onSelectionChangeRef = useRef(props.onSelectionChange);
@@ -878,6 +918,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       onPasteRef.current = props.onPaste;
     }, [props.onPaste]);
+
+    useEffect(() => {
+      onImagePreviewRef.current = props.onImagePreview;
+    }, [props.onImagePreview]);
 
     useEffect(() => {
       onFocusRef.current = props.onFocus;
@@ -1034,23 +1078,30 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             fontSize: '0.88em',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`]: {
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.5em',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'stretch',
+            gap: '0.45em',
+            width: '100%',
             maxWidth: '100%',
-            margin: '0.18em 0',
-            verticalAlign: 'middle',
+            margin: '0.8em 0 1em',
+            verticalAlign: 'top',
+            cursor: 'zoom-in',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`]: {
             display: 'block',
-            maxWidth: 'min(100%, 420px)',
-            maxHeight: '220px',
-            borderRadius: '4px',
+            width: '100%',
+            maxWidth: '100%',
+            height: 'auto',
+            borderRadius: '8px',
             objectFit: 'contain',
+            boxShadow: theme.isDark ? '0 8px 28px rgba(0, 0, 0, 0.26)' : '0 8px 28px rgba(15, 23, 42, 0.12)',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS}`]: {
+            display: 'block',
             color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.62)' : 'rgba(17,17,17,0.62)'),
             fontSize: '0.88em',
+            lineHeight: 1.35,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
             display: 'inline-block',
@@ -1146,6 +1197,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
               if (pos === null) return false;
               return onMouseDownRef.current?.(event, pos) === true;
+            },
+            click: (event) => {
+              const preview = getRenderedMarkdownImagePreviewFromEventTarget(event.target);
+              if (!preview || !onImagePreviewRef.current) return false;
+              event.preventDefault();
+              event.stopPropagation();
+              onImagePreviewRef.current(preview);
+              return true;
             },
             paste: (event) => onPasteRef.current?.(event as ClipboardEvent) === true,
             focus: () => {

@@ -11,9 +11,12 @@ import {
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR,
   RENDERED_MARKDOWN_EDITOR_HEADING_CLASS,
   RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS,
@@ -33,6 +36,7 @@ import {
   getMarkdownCodeEditorCursorScrollMargin,
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
+  getRenderedMarkdownImagePreviewFromEventTarget,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   shouldMoveCaretToDocumentEndFromClick,
@@ -249,7 +253,21 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(links[1].getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)).toBe(String(wikiLinkStart + '[[Wiki Page|wiki link]]'.length));
     expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS}`)?.textContent).toBe('under');
     expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS}`)?.textContent).toBe('gone');
-    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`)?.getAttribute('src')).toBe('ftlocalfile:///tmp/Figure%201.png');
+    const renderedImage = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`) as HTMLElement | null;
+    const renderedImageImg = renderedImage?.querySelector('img') ?? null;
+    const renderedImageCaption = renderedImage?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS}`) ?? null;
+    expect(renderedImage?.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR)).toBe('ftlocalfile:///tmp/Figure%201.png');
+    expect(renderedImage?.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR)).toBe('Figure');
+    expect(renderedImage?.getAttribute('role')).toBe('button');
+    expect(renderedImageImg?.getAttribute('src')).toBe('ftlocalfile:///tmp/Figure%201.png');
+    expect(renderedImageCaption?.textContent).toBe('Figure');
+    expect(renderedImageImg?.nextElementSibling).toBe(renderedImageCaption);
+    expect(getRenderedMarkdownImagePreviewFromEventTarget(renderedImageImg)).toMatchObject({
+      src: 'ftlocalfile:///tmp/Figure%201.png',
+      alt: 'Figure',
+      sourceFrom: doc.indexOf('![Figure]'),
+      sourceTo: doc.indexOf('![Figure]') + '![Figure](<file:///tmp/Figure%201.png>)'.length,
+    });
     expect((parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`) as HTMLInputElement | null)?.checked).toBe(true);
 
     view.destroy();
