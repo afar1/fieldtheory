@@ -9,6 +9,7 @@ import {
   CommandClipboardRestoreCoordinator,
   captureClipboardSnapshot,
   restoreClipboardSnapshot,
+  shouldPasteCommandFileContentsAsText,
   waitForCommandClipboardPasteRead,
   type CommandClipboard,
 } from './commandClipboard';
@@ -154,5 +155,16 @@ describe('waitForCommandClipboardPasteRead', () => {
     await vi.advanceTimersByTimeAsync(1);
     await promise;
     expect(settled).toHaveBeenCalledOnce();
+  });
+});
+
+describe('shouldPasteCommandFileContentsAsText', () => {
+  it('uses plain command file contents for WhatsApp because it rejects local file pasteboard payloads', () => {
+    expect(shouldPasteCommandFileContentsAsText('net.whatsapp.WhatsApp')).toBe(true);
+  });
+
+  it('keeps the default file payload behavior for other non-terminal apps', () => {
+    expect(shouldPasteCommandFileContentsAsText('com.apple.TextEdit')).toBe(false);
+    expect(shouldPasteCommandFileContentsAsText(null)).toBe(false);
   });
 });
