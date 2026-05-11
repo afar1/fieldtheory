@@ -2890,6 +2890,7 @@ type LocalCommandRunRequest = {
     end?: number;
     text?: string;
   } | null;
+  useMemory?: boolean;
 };
 type LocalCommandRunResult = {
   success: boolean;
@@ -2947,6 +2948,9 @@ const CommandsIPCChannels = {
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
+  GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
+  SAVE_MAXWELL_MEMORY: 'commands:saveMaxwellMemory',
+  CANCEL_MAXWELL_RUN: 'commands:cancelMaxwellRun',
   UNDO_MAXWELL_RUN: 'commands:undoMaxwellRun',
   REDO_MAXWELL_RUN: 'commands:redoMaxwellRun',
   COMMANDS_CHANGED: 'commands:commandsChanged',
@@ -3048,6 +3052,7 @@ interface MaxwellRunSummary {
   errorMessage: string | null;
   model: string | null;
   harness: string | null;
+  memoryUsed: boolean;
   canUndo: boolean;
   canRedo: boolean;
 }
@@ -3071,6 +3076,31 @@ type MaxwellUndoResult =
 type MaxwellRedoResult =
   | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
   | { success: false; reason: MaxwellRedoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellCancelResult = {
+  success: boolean;
+  error?: string;
+  run?: MaxwellRunSummary;
+};
+
+type MaxwellMemoryState = {
+  enabled: boolean;
+  content: string;
+  path: string;
+  updatedAt: number | null;
+  maxChars: number;
+};
+
+type MaxwellMemorySaveRequest = {
+  enabled: boolean;
+  content: string;
+};
+
+type MaxwellMemorySaveResult = {
+  success: boolean;
+  error?: string;
+  memory?: MaxwellMemoryState;
+};
 
 type HandoffInfo = {
   name: string;
@@ -3240,6 +3270,18 @@ const commandsAPI = {
 
   listMaxwellRuns: async (limit?: number): Promise<MaxwellRunSummary[]> => {
     return ipcRenderer.invoke(CommandsIPCChannels.LIST_MAXWELL_RUNS, limit);
+  },
+
+  getMaxwellMemory: async (): Promise<MaxwellMemoryState> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_MAXWELL_MEMORY);
+  },
+
+  saveMaxwellMemory: async (request: MaxwellMemorySaveRequest): Promise<MaxwellMemorySaveResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SAVE_MAXWELL_MEMORY, request);
+  },
+
+  cancelMaxwellRun: async (runId: string): Promise<MaxwellCancelResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.CANCEL_MAXWELL_RUN, runId);
   },
 
   undoMaxwellRun: async (runId: string): Promise<MaxwellUndoResult> => {

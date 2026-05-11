@@ -21,6 +21,9 @@ export const CommandsIPCChannels = {
   INVOKE_COMMAND: 'commands:invoke',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
+  GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
+  SAVE_MAXWELL_MEMORY: 'commands:saveMaxwellMemory',
+  CANCEL_MAXWELL_RUN: 'commands:cancelMaxwellRun',
   UNDO_MAXWELL_RUN: 'commands:undoMaxwellRun',
   REDO_MAXWELL_RUN: 'commands:redoMaxwellRun',
 
@@ -78,6 +81,7 @@ export interface LocalCommandRunRequest {
   customInstruction?: string;
   mode?: LocalCommandRunMode;
   selection?: LocalCommandSelectionInput | null;
+  useMemory?: boolean;
 }
 
 export interface LocalCommandRunResult {
@@ -87,6 +91,31 @@ export interface LocalCommandRunResult {
   commandName?: string;
   mode?: LocalCommandRunMode;
   runId?: string;
+}
+
+export interface MaxwellCancelResult {
+  success: boolean;
+  error?: string;
+  run?: MaxwellRunSummary;
+}
+
+export interface MaxwellMemoryState {
+  enabled: boolean;
+  content: string;
+  path: string;
+  updatedAt: number | null;
+  maxChars: number;
+}
+
+export interface MaxwellMemorySaveRequest {
+  enabled: boolean;
+  content: string;
+}
+
+export interface MaxwellMemorySaveResult {
+  success: boolean;
+  error?: string;
+  memory?: MaxwellMemoryState;
 }
 
 export interface LocalCommandStatus {
@@ -133,6 +162,7 @@ export interface MaxwellRunSummary {
   errorMessage: string | null;
   model: string | null;
   harness: string | null;
+  memoryUsed: boolean;
   canUndo: boolean;
   canRedo: boolean;
 }

@@ -1180,6 +1180,7 @@ interface LocalCommandRunRequest {
     end?: number;
     text?: string;
   } | null;
+  useMemory?: boolean;
 }
 
 interface LocalCommandRunResult {
@@ -1235,6 +1236,7 @@ interface MaxwellRunSummary {
   errorMessage: string | null;
   model: string | null;
   harness: string | null;
+  memoryUsed: boolean;
   canUndo: boolean;
   canRedo: boolean;
 }
@@ -1258,6 +1260,31 @@ type MaxwellUndoResult =
 type MaxwellRedoResult =
   | { success: true; run: MaxwellRunSummary; filePath: string; commandName: string }
   | { success: false; reason: MaxwellRedoFailureReason; error: string; run?: MaxwellRunSummary };
+
+type MaxwellCancelResult = {
+  success: boolean;
+  error?: string;
+  run?: MaxwellRunSummary;
+};
+
+type MaxwellMemoryState = {
+  enabled: boolean;
+  content: string;
+  path: string;
+  updatedAt: number | null;
+  maxChars: number;
+};
+
+type MaxwellMemorySaveRequest = {
+  enabled: boolean;
+  content: string;
+};
+
+type MaxwellMemorySaveResult = {
+  success: boolean;
+  error?: string;
+  memory?: MaxwellMemoryState;
+};
 
 /**
  * Diagnostics API for system diagnostics.
@@ -1414,6 +1441,9 @@ interface CommandsAPI {
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
   runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
   listMaxwellRuns?: (limit?: number) => Promise<MaxwellRunSummary[]>;
+  getMaxwellMemory?: () => Promise<MaxwellMemoryState>;
+  saveMaxwellMemory?: (request: MaxwellMemorySaveRequest) => Promise<MaxwellMemorySaveResult>;
+  cancelMaxwellRun?: (runId: string) => Promise<MaxwellCancelResult>;
   undoMaxwellRun?: (runId: string) => Promise<MaxwellUndoResult>;
   redoMaxwellRun?: (runId: string) => Promise<MaxwellRedoResult>;
   onLocalCommandStatus?: (callback: (status: LocalCommandStatus) => void) => () => void;

@@ -212,6 +212,9 @@ interface Preferences {
   // Can point to Claude skills, Cursor rules, or any directory with .md files.
   commandsDirectory?: string;
 
+  // Maxwell local command memory. Content lives in maxwell/memory.md.
+  maxwellMemoryEnabled?: boolean;
+
   // Dark mode preference - synced across all windows.
   darkMode?: boolean;
 
@@ -363,6 +366,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Word substitutions - empty by default.
   wordSubstitutions: [],
+
+  // Maxwell memory is explicit, visible, and opt-out.
+  maxwellMemoryEnabled: true,
 
   // Data retention - never delete by default.
   dataRetentionDays: -1,
