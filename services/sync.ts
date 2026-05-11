@@ -1,8 +1,21 @@
 import { supabase } from './supabase';
 import { StorageService } from './storage';
 import { getSession } from './auth';
-import { LibraryDocument, Observation, Todo, TranscriptEntry, TranscriptSegment } from '../types';
-import { mergeByLastWriteWins } from './syncUtils';
+import {
+  LibraryDocument,
+  Observation,
+  SyncTombstone,
+  SyncTombstoneCollection,
+  Todo,
+  TranscriptEntry,
+  TranscriptSegment,
+} from '../types';
+import {
+  filterPendingDeletesByCollection,
+  filterRecordsDeletedRemotely,
+  mergeByLastWriteWins,
+  timestampFromIso,
+} from './syncUtils';
 
 // Remote table column adapters -------------------------------------------------
 type TodoRow = {
@@ -12,6 +25,8 @@ type TodoRow = {
   completed: boolean;
   client_id: string;
   client_created_at_ms: number;
+  client_updated_at_ms: number | null;
+  deleted_at: string | null;
   updated_at: string;
 };
 
@@ -21,6 +36,8 @@ type ObservationRow = {
   text: string;
   client_id: string;
   client_created_at_ms: number;
+  client_updated_at_ms: number | null;
+  deleted_at: string | null;
   updated_at: string;
 };
 
@@ -30,6 +47,8 @@ type TranscriptRow = {
   text: string;
   client_id: string;
   client_created_at_ms: number;
+  client_updated_at_ms: number | null;
+  deleted_at: string | null;
   updated_at: string;
   metadata: {
     stackSegments?: TranscriptSegment[];
@@ -51,26 +70,48 @@ type LibraryDocumentRow = {
   updated_at: string;
 };
 
+type RowSyncTable = 'todos' | 'observations' | 'transcripts';
+
+type RemoteClockRow = {
+  client_id: string;
+  client_updated_at_ms: number | null;
+  deleted_at: string | null;
+  updated_at: string;
+};
+
+type ActiveRowPayload = {
+  client_id: string;
+  client_updated_at_ms: number;
+  deleted_at: null;
+  [key: string]: unknown;
+};
+
+const rowEditTimestamp = (row: { client_updated_at_ms?: number | null; updated_at: string }) =>
+  row.client_updated_at_ms ?? timestampFromIso(row.updated_at);
+
+const remoteClockTimestamp = (row: RemoteClockRow) =>
+  Math.max(rowEditTimestamp(row), timestampFromIso(row.deleted_at));
+
 const toLocalTodo = (row: TodoRow): Todo => ({
   id: row.client_id,
   text: row.text,
   completed: row.completed,
   createdAt: row.client_created_at_ms,
-  updatedAt: new Date(row.updated_at).getTime(),
+  updatedAt: rowEditTimestamp(row),
 });
 
 const toLocalObservation = (row: ObservationRow): Observation => ({
   id: row.client_id,
   text: row.text,
   createdAt: row.client_created_at_ms,
-  updatedAt: new Date(row.updated_at).getTime(),
+  updatedAt: rowEditTimestamp(row),
 });
 
 const toLocalTranscript = (row: TranscriptRow): TranscriptEntry => ({
   id: row.client_id,
   text: row.text,
   createdAt: row.client_created_at_ms,
-  updatedAt: new Date(row.updated_at).getTime(),
+  updatedAt: rowEditTimestamp(row),
   stackSegments: row.metadata?.stackSegments,
 });
 
@@ -132,6 +173,92 @@ const upsertRows = async (table: string, rows: object[]) => {
   if (error) {
     throw error;
   }
+};
+
+const filterActiveRowsNewerThanRemote = async <T extends ActiveRowPayload>(
+  table: RowSyncTable,
+  userId: string,
+  rows: T[],
+) => {
+  if (rows.length === 0) return rows;
+
+  const { data, error } = await supabase
+    .from(table)
+    .select('client_id, client_updated_at_ms, deleted_at, updated_at')
+    .eq('user_id', userId)
+    .in('client_id', rows.map((row) => row.client_id));
+
+  if (error) throw error;
+
+  const remoteRows = new Map(
+    ((data ?? []) as RemoteClockRow[]).map((row) => [row.client_id, row]),
+  );
+
+  return rows.filter((row) => {
+    const remoteRow = remoteRows.get(row.client_id);
+    if (!remoteRow) return true;
+
+    const remoteDeletedAt = timestampFromIso(remoteRow.deleted_at);
+    if (remoteDeletedAt >= row.client_updated_at_ms) return false;
+
+    return row.client_updated_at_ms >= remoteClockTimestamp(remoteRow);
+  });
+};
+
+const upsertActiveRows = async <T extends ActiveRowPayload>(
+  table: RowSyncTable,
+  userId: string,
+  rows: T[],
+) => {
+  const freshRows = await filterActiveRowsNewerThanRemote(table, userId, rows);
+  await upsertRows(table, freshRows);
+};
+
+const tableForSyncTombstoneCollection: Record<SyncTombstoneCollection, RowSyncTable> = {
+  todos: 'todos',
+  observations: 'observations',
+  transcripts: 'transcripts',
+};
+
+const filterPendingRowDeletes = (
+  todos: Todo[],
+  observations: Observation[],
+  transcripts: TranscriptEntry[],
+  tombstones: SyncTombstone[],
+) => {
+  return {
+    todos: filterPendingDeletesByCollection(todos, tombstones, 'todos'),
+    observations: filterPendingDeletesByCollection(observations, tombstones, 'observations'),
+    transcripts: filterPendingDeletesByCollection(transcripts, tombstones, 'transcripts'),
+  };
+};
+
+const syncRowTombstonesUpForUser = async (userId: string, pendingTombstones?: SyncTombstone[]) => {
+  const tombstones = pendingTombstones ?? await StorageService.getSyncTombstones();
+  if (tombstones.length === 0) return;
+
+  for (const collection of Object.keys(tableForSyncTombstoneCollection) as SyncTombstoneCollection[]) {
+    const table = tableForSyncTombstoneCollection[collection];
+    const collectionTombstones = tombstones.filter((tombstone) => tombstone.collection === collection);
+
+    for (const tombstone of collectionTombstones) {
+      const { error } = await supabase
+        .from(table)
+        .update({
+          client_updated_at_ms: tombstone.deletedAt,
+          deleted_at: new Date(tombstone.deletedAt).toISOString(),
+        })
+        .eq('user_id', userId)
+        .eq('client_id', tombstone.id)
+        .or(`client_updated_at_ms.is.null,client_updated_at_ms.lte.${tombstone.deletedAt}`);
+
+      if (error) {
+        throw error;
+      }
+    }
+  }
+
+  await StorageService.saveSyncTombstones([]);
 };
 
 const syncLibraryTombstonesUpForUser = async (userId: string) => {
@@ -205,44 +332,64 @@ const syncLibraryRemoteFirstForUser = async (userId: string) => {
 export async function syncUp() {
   const session = await requireSession();
   const userId = session.user.id;
-  const [todos, observations, transcripts] = await Promise.all([
+  const [storedTodos, storedObservations, storedTranscripts, tombstones] = await Promise.all([
     StorageService.getTodos(),
     StorageService.getObservations(),
     StorageService.getTranscripts(),
+    StorageService.getSyncTombstones(),
   ]);
+  const { todos, observations, transcripts } = filterPendingRowDeletes(
+    storedTodos,
+    storedObservations,
+    storedTranscripts,
+    tombstones,
+  );
+
+  await syncRowTombstonesUpForUser(userId, tombstones);
 
   await Promise.all([
-    upsertRows('todos', todos.map((todo) => ({
+    upsertActiveRows('todos', userId, todos.map((todo) => ({
       user_id: userId,
       text: todo.text,
       completed: todo.completed,
       client_id: todo.id,
       client_created_at_ms: todo.createdAt,
+      client_updated_at_ms: todo.updatedAt ?? todo.createdAt,
+      deleted_at: null,
     }))),
-    upsertRows('observations', observations.map((observation) => ({
+    upsertActiveRows('observations', userId, observations.map((observation) => ({
       user_id: userId,
       text: observation.text,
       client_id: observation.id,
       client_created_at_ms: observation.createdAt,
+      client_updated_at_ms: observation.updatedAt ?? observation.createdAt,
+      deleted_at: null,
     }))),
-    upsertRows('transcripts', transcripts.map((transcript) => ({
+    upsertActiveRows('transcripts', userId, transcripts.map((transcript) => ({
       user_id: userId,
       text: transcript.text,
       client_id: transcript.id,
       client_created_at_ms: transcript.createdAt,
+      client_updated_at_ms: transcript.updatedAt ?? transcript.createdAt,
+      deleted_at: null,
       metadata: transcript.stackSegments ? { stackSegments: transcript.stackSegments } : {},
     }))),
     syncLibraryRemoteFirstForUser(userId),
   ]);
 }
 
-export async function syncDown() {
+export async function syncDown(pendingTombstones: SyncTombstone[] = []) {
   const session = await requireSession();
-  const [localTodos, localObservations, localTranscripts] = await Promise.all([
+  const [storedTodos, storedObservations, storedTranscripts] = await Promise.all([
     StorageService.getTodos(),
     StorageService.getObservations(),
     StorageService.getTranscripts(),
   ]);
+  const {
+    todos: localTodos,
+    observations: localObservations,
+    transcripts: localTranscripts,
+  } = filterPendingRowDeletes(storedTodos, storedObservations, storedTranscripts, pendingTombstones);
 
   const [
     { data: todosData, error: todosError },
@@ -261,9 +408,20 @@ export async function syncDown() {
   if (obsError) throw obsError;
   if (transcriptsError) throw transcriptsError;
 
-  const mergedTodos = mergeByLastWriteWins(localTodos, (todosData ?? []).map(toLocalTodo));
-  const mergedObservations = mergeByLastWriteWins(localObservations, (obsData ?? []).map(toLocalObservation));
-  const mergedTranscripts = mergeByLastWriteWins(localTranscripts, (transcriptsData ?? []).map(toLocalTranscript));
+  const activeTodoRows = ((todosData ?? []) as TodoRow[]).filter((row) => !row.deleted_at);
+  const activeObservationRows = ((obsData ?? []) as ObservationRow[]).filter((row) => !row.deleted_at);
+  const activeTranscriptRows = ((transcriptsData ?? []) as TranscriptRow[]).filter((row) => !row.deleted_at);
+  const deletedTodoRows = ((todosData ?? []) as TodoRow[]).filter((row) => row.deleted_at);
+  const deletedObservationRows = ((obsData ?? []) as ObservationRow[]).filter((row) => row.deleted_at);
+  const deletedTranscriptRows = ((transcriptsData ?? []) as TranscriptRow[]).filter((row) => row.deleted_at);
+
+  let mergedTodos = mergeByLastWriteWins(localTodos, activeTodoRows.map(toLocalTodo));
+  let mergedObservations = mergeByLastWriteWins(localObservations, activeObservationRows.map(toLocalObservation));
+  let mergedTranscripts = mergeByLastWriteWins(localTranscripts, activeTranscriptRows.map(toLocalTranscript));
+
+  mergedTodos = filterRecordsDeletedRemotely(mergedTodos, deletedTodoRows);
+  mergedObservations = filterRecordsDeletedRemotely(mergedObservations, deletedObservationRows);
+  mergedTranscripts = filterRecordsDeletedRemotely(mergedTranscripts, deletedTranscriptRows);
 
   await Promise.all([
     StorageService.saveTodos(mergedTodos),
@@ -281,8 +439,18 @@ export async function syncDown() {
 }
 
 export async function syncAll() {
+  const session = await requireSession();
+  const userId = session.user.id;
+  const rowTombstones = await StorageService.getSyncTombstones();
+
+  await Promise.all([
+    syncRowTombstonesUpForUser(userId, rowTombstones),
+    syncLibraryTombstonesUpForUser(userId),
+  ]);
+
+  const result = await syncDown(rowTombstones);
   await syncUp();
-  return syncDown();
+  return result;
 }
 
 export async function syncLibraryDocuments() {

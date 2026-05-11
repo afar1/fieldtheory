@@ -3,7 +3,14 @@
   "compilerOptions": {
     "strict": true
   },
-  "exclude": ["mac-app", "examples"]
+  "include": [
+    "App.tsx",
+    "components/**/*.ts",
+    "components/**/*.tsx",
+    "hooks/**/*.ts",
+    "services/**/*.ts",
+    "types/**/*.ts"
+  ],
+  "exclude": ["build-whisper", "ios/build", "ios/Pods", "mac-app", "md", "examples", ".claude"]
 }
-
 

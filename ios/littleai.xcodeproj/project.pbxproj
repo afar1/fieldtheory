@@ -13,7 +13,6 @@
 		13B07FC11A68108700A75B9A /* main.m in Sources */ = {isa = PBXBuildFile; fileRef = 13B07FB71A68108700A75B9A /* main.m */; };
 		171903F28A19BF9E17B194CC /* Models in Resources */ = {isa = PBXBuildFile; fileRef = 53D90F72EC89B123456DD1A0 /* Models */; };
 		3E461D99554A48A4959DE609 /* SplashScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */; };
-		767FC306B4C676882B1D28E2 /* LittleAIKeyboard.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = CF0F23D70F89A2A8EE31330A /* LittleAIKeyboard.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		7BC7A06E52657C02EF05B0B4 /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 53ED50DFB3EEEBC79E71B1D6 /* PrivacyInfo.xcprivacy */; };
 		96905EF65AED1B983A6B3ABC /* libPods-littleai.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 58EEBF8E8E6FB1BC6CAF49B5 /* libPods-littleai.a */; };
 		B18059E884C0ABDD17F3DC3D /* ExpoModulesProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAC715A2D49A985799AEE119 /* ExpoModulesProvider.swift */; };
@@ -22,30 +21,6 @@
 		D9DD8DCA127AD57EBCB3E565 /* KeyboardViewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E86CE085F335C322A5B5488 /* KeyboardViewController.swift */; };
 		F7E3D67126D1372EF1D4AB2A /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DB39CB824C564CAD5DCDC197 /* Foundation.framework */; };
 /* End PBXBuildFile section */
-
-/* Begin PBXContainerItemProxy section */
-		0BE87FB5BD7B6F4AF8E068F0 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 83CBB9F71A601CBA00E9B192 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 8E7B8069E22806C5FDB6403E;
-			remoteInfo = LittleAIKeyboard;
-		};
-/* End PBXContainerItemProxy section */
-
-/* Begin PBXCopyFilesBuildPhase section */
-		E6364BE45091AECC61B91E7A /* Embed App Extensions */ = {
-			isa = PBXCopyFilesBuildPhase;
-			buildActionMask = 2147483647;
-			dstPath = "";
-			dstSubfolderSpec = 13;
-			files = (
-				767FC306B4C676882B1D28E2 /* LittleAIKeyboard.appex in Embed App Extensions */,
-			);
-			name = "Embed App Extensions";
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
 		0626FF846405461CB8858CC7 /* noop-file.swift */ = {isa = PBXFileReference; explicitFileType = undefined; fileEncoding = 4; includeInIndex = 0; lastKnownFileType = sourcecode.swift; name = "noop-file.swift"; path = "littleai/noop-file.swift"; sourceTree = "<group>"; };
@@ -221,12 +196,10 @@
 				00DD1BFF1BD5951E006B06BC /* Bundle React Native code and images */,
 				800E24972A6A228C8D4807E9 /* [CP] Copy Pods Resources */,
 				04405ED7EC917E1C27457A93 /* [CP] Embed Pods Frameworks */,
-				E6364BE45091AECC61B91E7A /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
-				E7B46C2E6FD12B0BEDAF191B /* PBXTargetDependency */,
 			);
 			name = littleai;
 			productName = littleai;
@@ -451,15 +424,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
-
-/* Begin PBXTargetDependency section */
-		E7B46C2E6FD12B0BEDAF191B /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			name = LittleAIKeyboard;
-			target = 8E7B8069E22806C5FDB6403E /* LittleAIKeyboard */;
-			targetProxy = 0BE87FB5BD7B6F4AF8E068F0 /* PBXContainerItemProxy */;
-		};
-/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		13B07F941A680F5B00A75B9A /* Debug */ = {
