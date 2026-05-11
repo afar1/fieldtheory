@@ -1579,11 +1579,18 @@ export default function CommandsView({
 
   const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded;
   const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
+  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!sidebarTemporarilyExpanded) return;
+    const target = event.target;
+    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
+    setSidebarHoverExpanded(false);
+  }, [sidebarTemporarilyExpanded]);
 
   return (
     <div
       ref={containerRef}
       tabIndex={0}
+      onMouseDownCapture={handleCollapsedSidebarSurfaceMouseDownCapture}
       onMouseMove={collapsedSidebarHoverReveal.handleSurfaceMouseMove}
       onMouseLeave={collapsedSidebarHoverReveal.handleSurfaceMouseLeave}
       style={{
@@ -1619,9 +1626,7 @@ export default function CommandsView({
       {/* Sidebar - kept in DOM when collapsed for instant transition */}
       <div
         ref={sidebarPaneRef}
-        onMouseLeave={() => {
-          if (sidebarCollapsed) setSidebarHoverExpanded(false);
-        }}
+        data-fieldtheory-collapsed-sidebar-pane="true"
         style={{
           width: sidebarVisible ? `${sidebarWidth}px` : '0px',
           minWidth: sidebarVisible ? `${sidebarWidth}px` : '0px',
