@@ -5,6 +5,9 @@ import { StdioJsonServer, type ServerEvent, type ServerSendOptions } from './std
 import { createLogger } from './logger';
 
 const log = createLogger('LocalLLM');
+const DEFAULT_CONTEXT_TOKENS = 32768;
+const PROMPT_TOKEN_HEADROOM = 512;
+const APPROX_CHARS_PER_TOKEN = 4;
 
 export type LocalLlmModelId = 'gemma-4-E4B-it-Q4_K_M';
 export type LocalLlmHarness = 'codex' | 'direct';
@@ -41,6 +44,7 @@ export interface LocalCommandPromptInput {
   targetTitle: string;
   targetPath: string;
   targetContent: string;
+  memorySnapshot?: string | null;
 }
 
 export interface LocalCommandSelectionPromptInput extends LocalCommandPromptInput {
@@ -101,12 +105,30 @@ export function resolveLocalLlmHarness(value: unknown): LocalLlmHarness {
   return value === 'codex' ? 'codex' : 'direct';
 }
 
+function parseBoundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number.parseInt(typeof value === 'string' ? value : '', 10);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+export function getLocalLlmPromptLimitChars(env: NodeJS.ProcessEnv, maxOutputTokens: number): number {
+  const contextTokens = parseBoundedInteger(env.FT_GEMMA_CONTEXT_SIZE, DEFAULT_CONTEXT_TOKENS, 4096, 131072);
+  const availablePromptTokens = Math.max(PROMPT_TOKEN_HEADROOM, contextTokens - maxOutputTokens - PROMPT_TOKEN_HEADROOM);
+  return availablePromptTokens * APPROX_CHARS_PER_TOKEN;
+}
+
+export function assertLocalLlmPromptFits(prompt: string, env: NodeJS.ProcessEnv, maxOutputTokens: number): void {
+  const limit = getLocalLlmPromptLimitChars(env, maxOutputTokens);
+  if (prompt.length <= limit) return;
+  throw new Error(`Local command prompt is too large for Gemma (${prompt.length} characters, limit ${limit}). Select a smaller section or use a shorter command.`);
+}
+
 export function stripWholeMarkdownFence(text: string): string {
   const withoutThought = text
     .replace(/^<think>[\s\S]*?<\/think>/i, '')
     .replace(/^<\|channel\|>analysis[\s\S]*?<\|channel\|>final/i, '')
     .replace(/^<\|channel\|>thought[\s\S]*?<\|channel\|>final/i, '')
-    .replace(/^<\|channel\>final\n/i, '')
+    .replace(/^<\|channel\|>final\n/i, '')
     .replace(/<\|end\|>|<eos>|<\/s>/gi, '');
   const trimmed = withoutThought.trim();
   const match = trimmed.match(/^```(?:markdown|md|json)?\s*\n([\s\S]*?)\n```$/i);
@@ -123,12 +145,14 @@ export function buildLocalCommandPrompt(input: LocalCommandPromptInput, outputMo
         '- Do not add explanations before or after the JSON.',
         '- Do not wrap the JSON in a code fence.',
         '- Do not include private reasoning, thinking tags, or status text.',
+        '- Do not emit tool calls, apply_patch blocks, diffs, shell commands, or file operation text.',
       ]
     : [
         '- Return only the complete replacement Markdown document.',
         '- Do not add explanations before or after the Markdown.',
         '- Do not wrap the answer in a code fence.',
         '- Do not include private reasoning, thinking tags, JSON metadata, or status text.',
+        '- Do not emit tool calls, apply_patch blocks, diffs, shell commands, or file operation text.',
       ];
   return [
     'You are running a local Field Theory command against a markdown document.',
@@ -138,6 +162,12 @@ export function buildLocalCommandPrompt(input: LocalCommandPromptInput, outputMo
     ...outputRules,
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- If the source is incomplete, keep it as a clarification task instead of inventing missing intent.',
+    ...(input.memorySnapshot
+      ? [
+          '- Use the Maxwell memory snapshot only when it is directly relevant to the command.',
+          '- Do not mention the memory snapshot unless the command asks for provenance.',
+        ]
+      : []),
     ...(outputMode === 'json'
       ? [
           '',
@@ -147,6 +177,15 @@ export function buildLocalCommandPrompt(input: LocalCommandPromptInput, outputMo
       : []),
     '',
     `Command name: ${input.commandName}`,
+    ...(input.memorySnapshot
+      ? [
+          '',
+          'Maxwell memory snapshot:',
+          '```markdown',
+          input.memorySnapshot,
+          '```',
+        ]
+      : []),
     '',
     'Command markdown:',
     '```markdown',
@@ -160,6 +199,11 @@ export function buildLocalCommandPrompt(input: LocalCommandPromptInput, outputMo
     '```markdown',
     input.targetContent,
     '```',
+    '',
+    'Final output contract:',
+    outputMode === 'json'
+      ? 'Return only the JSON object. Field Theory will apply it. Do not call tools or describe saving.'
+      : 'Return only the replacement Markdown. Field Theory will apply it. Do not call tools or describe saving.',
   ].join('\n');
 }
 
@@ -172,6 +216,7 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
         '- Do not add explanations before or after the JSON.',
         '- Do not wrap the JSON in a code fence.',
         '- Do not include private reasoning, thinking tags, or status text.',
+        '- Do not emit tool calls, apply_patch blocks, diffs, shell commands, or file operation text.',
       ]
     : [
         '- Return only the replacement text for the selected markdown.',
@@ -179,6 +224,7 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
         '- Do not add explanations before or after the replacement.',
         '- Do not wrap the answer in a code fence.',
         '- Do not include private reasoning, thinking tags, JSON metadata, or status text.',
+        '- Do not emit tool calls, apply_patch blocks, diffs, shell commands, or file operation text.',
       ];
   return [
     'You are running a local Field Theory command against selected markdown text.',
@@ -188,6 +234,12 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
     ...outputRules,
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- Preserve surrounding markdown style unless the command explicitly asks to change it.',
+    ...(input.memorySnapshot
+      ? [
+          '- Use the Maxwell memory snapshot only when it is directly relevant to the command.',
+          '- Do not mention the memory snapshot unless the command asks for provenance.',
+        ]
+      : []),
     ...(outputMode === 'json'
       ? [
           '',
@@ -197,6 +249,15 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
       : []),
     '',
     `Command name: ${input.commandName}`,
+    ...(input.memorySnapshot
+      ? [
+          '',
+          'Maxwell memory snapshot:',
+          '```markdown',
+          input.memorySnapshot,
+          '```',
+        ]
+      : []),
     '',
     'Command markdown:',
     '```markdown',
@@ -215,11 +276,19 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
     '```markdown',
     input.targetContent,
     '```',
+    '',
+    'Final output contract:',
+    outputMode === 'json'
+      ? 'Return only the JSON object. Field Theory will apply it. Do not call tools or describe saving.'
+      : 'Return only the replacement text. Field Theory will apply it. Do not call tools or describe saving.',
   ].join('\n');
 }
 
 export function parseLocalCommandReplacement(raw: string, replacementField: 'replacementMarkdown' | 'replacementText'): string {
   const cleaned = stripWholeMarkdownFence(raw);
+  if (looksLikeToolCallOutput(cleaned)) {
+    throw new Error(`Local command returned tool-call output instead of ${replacementField}. No changes were saved.`);
+  }
   const parsed = parseJsonObject(cleaned) ?? parseJsonObject(extractJsonObject(cleaned));
   const replacement = parsed?.[replacementField];
   if (typeof replacement === 'string') {
@@ -230,6 +299,9 @@ export function parseLocalCommandReplacement(raw: string, replacementField: 'rep
 
 export function parseSimpleLocalCommandReplacement(raw: string): string {
   const cleaned = stripWholeMarkdownFence(raw);
+  if (looksLikeToolCallOutput(cleaned)) {
+    throw new Error('Local command returned tool-call output instead of replacement markdown. No changes were saved.');
+  }
   if (/^\s*\{/.test(cleaned) || /"replacement(?:Markdown|Text)"\s*:/.test(cleaned)) {
     throw new Error('Local command returned structured output in simple mode. No changes were saved.');
   }
@@ -374,7 +446,9 @@ export class LocalLlmManager {
   async runReplacementCommand(input: LocalCommandPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {
     const harness = this.getHarness();
     const prompt = buildLocalCommandPrompt(input, harness === 'codex' ? 'json' : 'markdown');
-    const raw = await this.generate(prompt, { maxTokens: 4096, temperature: 0.1, onProgress: options.onProgress });
+    const maxTokens = 4096;
+    assertLocalLlmPromptFits(prompt, this.getEffectiveEnv(), maxTokens);
+    const raw = await this.generate(prompt, { maxTokens, temperature: 0.1, onProgress: options.onProgress });
     return harness === 'codex'
       ? parseLocalCommandReplacement(raw, 'replacementMarkdown')
       : parseSimpleLocalCommandReplacement(raw);
@@ -383,7 +457,9 @@ export class LocalLlmManager {
   async runSelectionCommand(input: LocalCommandSelectionPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {
     const harness = this.getHarness();
     const prompt = buildLocalSelectionCommandPrompt(input, harness === 'codex' ? 'json' : 'markdown');
-    const raw = await this.generate(prompt, { maxTokens: 2048, temperature: 0.1, onProgress: options.onProgress });
+    const maxTokens = 2048;
+    assertLocalLlmPromptFits(prompt, this.getEffectiveEnv(), maxTokens);
+    const raw = await this.generate(prompt, { maxTokens, temperature: 0.1, onProgress: options.onProgress });
     return harness === 'codex'
       ? parseLocalCommandReplacement(raw, 'replacementText')
       : parseSimpleLocalCommandReplacement(raw);
@@ -476,6 +552,10 @@ export class LocalLlmManager {
   private getCwd(): string {
     return this.options.cwd ?? process.cwd();
   }
+
+  private getEffectiveEnv(): NodeJS.ProcessEnv {
+    return { ...process.env, ...this.options.env };
+  }
 }
 
 function isLocalLlmProgressKind(value: unknown): value is LocalLlmProgressKind {
@@ -502,4 +582,8 @@ function extractJsonObject(text: string): string | null {
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   return start >= 0 && end > start ? text.slice(start, end + 1) : null;
+}
+
+function looksLikeToolCallOutput(text: string): boolean {
+  return /<\|tool_call\|>|<tool_call\|>|call:apply_patch|\*\*\* Begin Patch|\n@@\s/.test(text);
 }

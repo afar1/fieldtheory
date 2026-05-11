@@ -266,6 +266,7 @@ interface LauncherCommandsAPI {
     customInstruction?: string;
     mode?: 'document' | 'selection';
     selection?: { start?: number; end?: number; text?: string } | null;
+    useMemory?: boolean;
   }) => Promise<{ success: boolean; error?: string; filePath?: string; commandName?: string; mode?: 'document' | 'selection' }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
