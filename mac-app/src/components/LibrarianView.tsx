@@ -81,9 +81,11 @@ import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import MarkdownCodeEditor, {
+  type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
   type MarkdownCodeEditorSelectionSnapshot,
 } from './MarkdownCodeEditor';
+import ImagePreviewOverlay from './ImagePreviewOverlay';
 import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import '../utils/scrollDiagnostics.bootstrap';
@@ -1774,6 +1776,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [markdownUrlPasteChoice, setMarkdownUrlPasteChoice] = useState<MarkdownUrlPasteEdit | null>(null);
   const [markdownWikiLinkCompletion, setMarkdownWikiLinkCompletion] = useState<MarkdownWikiLinkCompletionState | null>(null);
   const [markdownWikiLinkSuggestionIndex, setMarkdownWikiLinkSuggestionIndex] = useState(0);
+  const [renderedImagePreview, setRenderedImagePreview] = useState<MarkdownCodeEditorImagePreview | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem('librarian-sidebar-width');
     return saved ? parseInt(saved, 10) : 180;
@@ -3500,9 +3503,54 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [displaySourceBody, openLinkAction, wikiIndex]);
 
+  const applyRenderedTextInsertion = useCallback((text: string) => {
+    if (!text || !activeReading || contentMode !== 'rendered') return;
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const selectionStart = selection?.start ?? currentValue.length;
+    const selectionEnd = selection?.end ?? selectionStart;
+    const insertedText = formatPastedLocalImageMarkdown(text) ?? text;
+    const nextValue = `${currentValue.slice(0, selectionStart)}${insertedText}${currentValue.slice(selectionEnd)}`;
+    const nextSelection = selectionStart + insertedText.length;
+    applyRenderedEditorBody(nextValue, {
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    });
+    pendingRenderedEditorSelectionRef.current = {
+      start: nextSelection,
+      end: nextSelection,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [activeReading, applyRenderedEditorBody, contentMode, displaySourceBody, focusRenderedEditor]);
+
+  const insertCurrentClipboardImagePathInRenderedEditor = useCallback(async () => {
+    const imagePath = await window.clipboardAPI?.getClipboardImagePath?.();
+    if (imagePath) applyRenderedTextInsertion(formatLocalImageMarkdown(imagePath));
+  }, [applyRenderedTextInsertion]);
+
+  const handleRenderedEditorPaste = useCallback((event: ClipboardEvent): boolean => {
+    const clipboardData = event.clipboardData;
+    const pastedText = clipboardData?.getData('text/plain') ?? '';
+    if (clipboardData && shouldInsertClipboardImagePathForPaste({ pastedText, hasImage: clipboardDataHasImage(clipboardData) })) {
+      void insertCurrentClipboardImagePathInRenderedEditor();
+      return true;
+    }
+    if (!pastedText) return false;
+
+    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
+    if (!localImageMarkdown) return false;
+    applyRenderedTextInsertion(localImageMarkdown);
+    return true;
+  }, [applyRenderedTextInsertion, insertCurrentClipboardImagePathInRenderedEditor]);
+
   useEffect(() => {
     clearRenderedEditingState('path-or-mode-changed');
   }, [activeReading?.path, clearRenderedEditingState, contentMode]);
+
+  useEffect(() => {
+    setRenderedImagePreview(null);
+  }, [activeReading?.path]);
 
   useEffect(() => {
     return () => {
@@ -5596,11 +5644,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen;
   const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
+  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!sidebarTemporarilyExpanded) return;
+    const target = event.target;
+    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
+    setSidebarHoverExpanded(false);
+  }, [sidebarTemporarilyExpanded]);
 
   return (
     <div
       ref={containerRef}
       tabIndex={0}
+      onMouseDownCapture={handleCollapsedSidebarSurfaceMouseDownCapture}
       onMouseMove={collapsedSidebarHoverReveal.handleSurfaceMouseMove}
       onMouseLeave={collapsedSidebarHoverReveal.handleSurfaceMouseLeave}
       style={{
@@ -5645,9 +5700,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       {/* Sidebar - hidden in full-screen mode but kept in DOM for instant collapse */}
       <div
         ref={sidebarPaneRef}
-        onMouseLeave={() => {
-          if (sidebarCollapsed) setSidebarHoverExpanded(false);
-        }}
+        data-fieldtheory-collapsed-sidebar-pane="true"
         style={{
           width: sidebarVisible ? `${sidebarWidth}px` : '0px',
           minWidth: sidebarVisible ? `${sidebarWidth}px` : '0px',
@@ -6452,6 +6505,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 onChange={handleRenderedEditorChange}
                 onKeyDown={handleRenderedEditorKeyDown}
                 onMouseDown={handleRenderedEditorMouseDown}
+                onPaste={handleRenderedEditorPaste}
+                onImagePreview={setRenderedImagePreview}
                 onFocus={() => {
                   deactivateSidebarKeyboard();
                   commitTitleEditIfActive();
@@ -6755,6 +6810,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       )}
 
       {deleteConfirmationDialog}
+
+      {renderedImagePreview && (
+        <ImagePreviewOverlay
+          src={renderedImagePreview.src}
+          alt={renderedImagePreview.alt}
+          label={renderedImagePreview.alt && renderedImagePreview.alt !== 'Image' ? renderedImagePreview.alt : null}
+          maxImageHeight="90vh"
+          onDismiss={() => setRenderedImagePreview(null)}
+        />
+      )}
 
       <AgentKickoffModal
         isOpen={agentKickoffOpen}
