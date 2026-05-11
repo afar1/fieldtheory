@@ -95,6 +95,9 @@ import {
   type LocalCommandRunResult,
   type LocalCommandSelectionInput,
   type LocalCommandStatus,
+  type MaxwellCancelResult,
+  type MaxwellMemorySaveResult,
+  type MaxwellMemoryState,
   type MaxwellRedoFailureReason,
   type MaxwellRedoResult,
   type MaxwellRunSummary,
@@ -671,6 +674,7 @@ let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let localLlmManager: LocalLlmManager | null = null;
 let maxwellRunManager: MaxwellRunManager | null = null;
+let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let librarySyncService: LibrarySyncService | null = null;
@@ -741,6 +745,7 @@ function normalizeLocalCommandRequest(raw: unknown): LocalCommandRunRequest | nu
     customInstruction,
     mode,
     selection,
+    useMemory: request.useMemory !== false,
   };
 }
 
@@ -868,6 +873,50 @@ function getMaxwellRunManager(): MaxwellRunManager {
   return maxwellRunManager;
 }
 
+const MAXWELL_MEMORY_MAX_CHARS = 12_000;
+
+function getMaxwellMemoryPath(): string {
+  return userDataManager?.isLoggedIn()
+    ? userDataManager.getUserDataPath(path.join('maxwell', 'memory.md'))
+    : path.join(app.getPath('userData'), 'maxwell', 'memory.md');
+}
+
+function isMaxwellMemoryEnabled(): boolean {
+  return preferencesManager?.getPreference('maxwellMemoryEnabled') !== false;
+}
+
+function getMaxwellMemoryState(): MaxwellMemoryState {
+  const memoryPath = getMaxwellMemoryPath();
+  try {
+    const stat = fs.existsSync(memoryPath) ? fs.statSync(memoryPath) : null;
+    const content = stat ? fs.readFileSync(memoryPath, 'utf8') : '';
+    return {
+      enabled: isMaxwellMemoryEnabled(),
+      content,
+      path: memoryPath,
+      updatedAt: stat?.mtimeMs ?? null,
+      maxChars: MAXWELL_MEMORY_MAX_CHARS,
+    };
+  } catch (error) {
+    log.warn('Could not read Maxwell memory:', error);
+    return {
+      enabled: isMaxwellMemoryEnabled(),
+      content: '',
+      path: memoryPath,
+      updatedAt: null,
+      maxChars: MAXWELL_MEMORY_MAX_CHARS,
+    };
+  }
+}
+
+function readMaxwellMemorySnapshot(useMemory = true): string | null {
+  if (!useMemory || !isMaxwellMemoryEnabled()) return null;
+  const memory = getMaxwellMemoryState().content.trim();
+  if (!memory) return null;
+  if (memory.length <= MAXWELL_MEMORY_MAX_CHARS) return memory;
+  return `${memory.slice(0, MAXWELL_MEMORY_MAX_CHARS).trimEnd()}\n\n[Maxwell memory truncated to ${MAXWELL_MEMORY_MAX_CHARS} characters for this run.]`;
+}
+
 function summarizeMaxwellRun(run: MaxwellRunRecord): MaxwellRunSummary {
   return {
     runId: run.runId,
@@ -883,6 +932,7 @@ function summarizeMaxwellRun(run: MaxwellRunRecord): MaxwellRunSummary {
     errorMessage: run.errorMessage,
     model: run.model,
     harness: run.harness,
+    memoryUsed: !!run.memorySnapshot,
     canUndo: run.status === 'success' && !!run.postVersion && run.postContent !== null,
     canRedo: run.status === 'reverted' && !!run.revertVersion && run.postContent !== null,
   };
@@ -930,6 +980,18 @@ function emitMaxwellRedoFailure(
     error,
     run: run ? summarizeMaxwellRun(run) : undefined,
   };
+}
+
+function emitMaxwellCancelFailure(error: string, run?: MaxwellRunRecord | null): MaxwellCancelResult {
+  return {
+    success: false,
+    error,
+    run: run ? summarizeMaxwellRun(run) : undefined,
+  };
+}
+
+function isActiveMaxwellRunCancelled(runId: string | undefined): boolean {
+  return !!runId && activeMaxwellLocalRun?.runId === runId && activeMaxwellLocalRun.cancelled;
 }
 
 function getLocalLlmSetupScriptPath(): string | null {
@@ -7238,6 +7300,7 @@ function setupClipboardIPCHandlers(): void {
 
       const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
       const targetContent = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
+      const memorySnapshot = readMaxwellMemorySnapshot(request.useMemory !== false);
       let resolvedSelection: { start: number; end: number; text: string } | null = null;
       if (mode === 'selection') {
         const selection = resolveLocalCommandSelection(request.selection, targetContent);
@@ -7271,8 +7334,10 @@ function setupClipboardIPCHandlers(): void {
           preVersion: expectedVersion,
           model: localManager.getSelectedModel(),
           harness: localManager.getHarness(),
+          memorySnapshot,
         });
         maxwellRunId = run.runId;
+        activeMaxwellLocalRun = { runId: run.runId, cancelled: false };
       } catch (error) {
         log.warn('Could not create Maxwell run row:', error);
       }
@@ -7282,6 +7347,7 @@ function setupClipboardIPCHandlers(): void {
         targetType: activeLibraryFileContext.type,
         targetPath: activeLibraryFileContext.filePath,
         mode,
+        memoryUsed: !!memorySnapshot,
         maxwellRunId: maxwellRunId ?? null,
       });
       const targetFilePath = activeLibraryFileContext.filePath;
@@ -7324,6 +7390,7 @@ function setupClipboardIPCHandlers(): void {
           targetPath: activeLibraryFileContext.filePath,
           targetContent,
           selectedText: selection.text,
+          memorySnapshot,
         }, {
           onProgress: emitHarnessProgress,
         });
@@ -7335,9 +7402,22 @@ function setupClipboardIPCHandlers(): void {
           targetTitle: activeLibraryFileContext.title,
           targetPath: activeLibraryFileContext.filePath,
           targetContent,
+          memorySnapshot,
         }, {
           onProgress: emitHarnessProgress,
         });
+      }
+      if (isActiveMaxwellRunCancelled(maxwellRunId)) {
+        emitLocalCommandStatus({
+          status: 'notice',
+          message: 'Maxwell run cancelled',
+          commandName: loaded.name,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          runId: maxwellRunId,
+          phase: 'cancelled',
+        });
+        return { success: false, error: 'Maxwell run cancelled', commandName: loaded.name, mode, runId: maxwellRunId };
       }
       updateMaxwellRun('mark Maxwell run generated', (manager, runId) => {
         manager.markGenerated(runId, replacement, {
@@ -7433,6 +7513,18 @@ function setupClipboardIPCHandlers(): void {
     } catch (error) {
       log.error('Error running local command:', error);
       const message = error instanceof Error ? error.message : 'Local command failed';
+      if (isActiveMaxwellRunCancelled(maxwellRunId)) {
+        emitLocalCommandStatus({
+          status: 'notice',
+          message: 'Maxwell run cancelled',
+          commandName: statusCommandName,
+          filePath: activeLibraryFileContext.filePath,
+          mode,
+          runId: maxwellRunId,
+          phase: 'cancelled',
+        });
+        return { success: false, error: 'Maxwell run cancelled', commandName: statusCommandName, mode, runId: maxwellRunId };
+      }
       updateMaxwellRun('mark Maxwell generation failure', (manager, runId) => {
         manager.markError(runId, 'generation_error', message);
       });
@@ -7447,6 +7539,10 @@ function setupClipboardIPCHandlers(): void {
         error: message,
       });
       return { success: false, error: message, commandName: statusCommandName, mode, runId: maxwellRunId };
+    } finally {
+      if (maxwellRunId && activeMaxwellLocalRun?.runId === maxwellRunId) {
+        activeMaxwellLocalRun = null;
+      }
     }
   });
 
@@ -7458,6 +7554,68 @@ function setupClipboardIPCHandlers(): void {
       log.warn('Could not list Maxwell runs:', error);
       return [];
     }
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_MAXWELL_MEMORY, (): MaxwellMemoryState => {
+    return getMaxwellMemoryState();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SAVE_MAXWELL_MEMORY, async (_event, rawRequest: unknown): Promise<MaxwellMemorySaveResult> => {
+    if (!rawRequest || typeof rawRequest !== 'object') {
+      return { success: false, error: 'Invalid Maxwell memory request' };
+    }
+    const request = rawRequest as { enabled?: unknown; content?: unknown };
+    const content = typeof request.content === 'string' ? request.content : '';
+    const enabled = request.enabled !== false;
+    if (content.length > MAXWELL_MEMORY_MAX_CHARS) {
+      return {
+        success: false,
+        error: `Maxwell memory is too large (${content.length} characters, limit ${MAXWELL_MEMORY_MAX_CHARS}).`,
+        memory: getMaxwellMemoryState(),
+      };
+    }
+    try {
+      const memoryPath = getMaxwellMemoryPath();
+      fs.mkdirSync(path.dirname(memoryPath), { recursive: true });
+      fs.writeFileSync(memoryPath, content, 'utf8');
+      await preferencesManager?.save({ maxwellMemoryEnabled: enabled });
+      return { success: true, memory: getMaxwellMemoryState() };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not save Maxwell memory';
+      log.warn('Could not save Maxwell memory:', error);
+      return { success: false, error: message, memory: getMaxwellMemoryState() };
+    }
+  });
+
+  ipcMain.handle(CommandsIPCChannels.CANCEL_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellCancelResult => {
+    if (typeof rawRunId !== 'string' || !rawRunId.trim()) {
+      return emitMaxwellCancelFailure('Invalid Maxwell run id');
+    }
+    const runId = rawRunId.trim();
+    const manager = getMaxwellRunManager();
+    const run = manager.getRun(runId);
+    if (!run) {
+      return emitMaxwellCancelFailure('Maxwell run not found');
+    }
+    if (activeMaxwellLocalRun?.runId !== runId) {
+      return emitMaxwellCancelFailure('Maxwell run is not active', run);
+    }
+    activeMaxwellLocalRun.cancelled = true;
+    getLocalLlmManager().stop();
+    const cancelled = manager.markError(runId, 'cancelled', 'Maxwell run cancelled') ?? run;
+    emitLocalCommandStatus({
+      status: 'notice',
+      message: 'Maxwell run cancelled',
+      commandName: run.commandName,
+      filePath: run.targetPath,
+      mode: run.mode,
+      runId,
+      phase: 'cancelled',
+    });
+    return {
+      success: true,
+      run: summarizeMaxwellRun(cancelled),
+    };
   });
 
   ipcMain.handle(CommandsIPCChannels.UNDO_MAXWELL_RUN, (_event, rawRunId: unknown): MaxwellUndoResult => {

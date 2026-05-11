@@ -23,6 +23,7 @@ import {
   buildLocalCommandPrompt,
   buildLocalSelectionCommandPrompt,
   DEFAULT_LOCAL_LLM_MODEL,
+  getLocalLlmPromptLimitChars,
   LocalLlmManager,
   parseLocalLlmProgressEvent,
   parseLocalCommandReplacement,
@@ -33,6 +34,7 @@ import {
 
 describe('LocalLlmManager', () => {
   let tempDir: string;
+  const dogfoodIt = process.env.FT_RUN_LOCAL_LLM_DOGFOOD === '1' ? it : it.skip;
 
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fieldtheory-local-llm-'));
@@ -70,6 +72,11 @@ describe('LocalLlmManager', () => {
     expect(codexManager.getHarness()).toBe('codex');
   });
 
+  it('derives a conservative prompt limit from the local context size', () => {
+    expect(getLocalLlmPromptLimitChars({ FT_GEMMA_CONTEXT_SIZE: '4096' }, 2048)).toBe(6144);
+    expect(getLocalLlmPromptLimitChars({ FT_GEMMA_CONTEXT_SIZE: 'not-a-number' }, 4096)).toBe(112640);
+  });
+
   it('builds a simple replacement prompt from command markdown and target markdown', () => {
     const prompt = buildLocalCommandPrompt({
       commandName: 'tidy',
@@ -88,6 +95,21 @@ describe('LocalLlmManager', () => {
     expect(prompt).toContain('- [ ] rough note');
   });
 
+  it('includes Maxwell memory only when a run has a memory snapshot', () => {
+    const prompt = buildLocalCommandPrompt({
+      commandName: 'tidy',
+      commandContent: '# Tidy\nGroup related tasks.',
+      targetTitle: 'Scratchpad',
+      targetPath: '/tmp/Scratchpad.md',
+      targetContent: '- [ ] rough note',
+      memorySnapshot: 'Prefer terse task groups.',
+    });
+
+    expect(prompt).toContain('Use the Maxwell memory snapshot only when it is directly relevant to the command.');
+    expect(prompt).toContain('Maxwell memory snapshot:');
+    expect(prompt).toContain('Prefer terse task groups.');
+  });
+
   it('can build a structured replacement prompt for the Codex harness', () => {
     const prompt = buildLocalCommandPrompt({
       commandName: 'tidy',
@@ -99,6 +121,8 @@ describe('LocalLlmManager', () => {
 
     expect(prompt).toContain('Return exactly one JSON object.');
     expect(prompt).toContain('replacementMarkdown');
+    expect(prompt).toContain('Do not emit tool calls');
+    expect(prompt).toContain('Field Theory will apply it');
   });
 
   it('builds a simple selected-text prompt that asks for only the replacement text', () => {
@@ -120,6 +144,22 @@ describe('LocalLlmManager', () => {
     expect(prompt).toContain('Full document context:');
   });
 
+  it('includes Maxwell memory in selected-text prompts', () => {
+    const prompt = buildLocalSelectionCommandPrompt({
+      commandName: 'improve',
+      commandContent: 'Make this clearer.',
+      targetTitle: 'Draft',
+      targetPath: '/tmp/Draft.md',
+      targetContent: 'Before\nrough sentence\nAfter',
+      selectedText: 'rough sentence',
+      memorySnapshot: 'Prefer direct wording.',
+    });
+
+    expect(prompt).toContain('Maxwell memory snapshot:');
+    expect(prompt).toContain('Prefer direct wording.');
+    expect(prompt).toContain('Selected markdown:');
+  });
+
   it('can build a structured selected-text prompt for the Codex harness', () => {
     const prompt = buildLocalSelectionCommandPrompt({
       commandName: 'improve',
@@ -138,6 +178,7 @@ describe('LocalLlmManager', () => {
     expect(stripWholeMarkdownFence('```markdown\n# Clean\n```')).toBe('# Clean');
     expect(stripWholeMarkdownFence('```json\n{"replacementText":"clean"}\n```')).toBe('{"replacementText":"clean"}');
     expect(stripWholeMarkdownFence('<think>hidden</think>\n```md\n# Clean\n```<eos>')).toBe('# Clean');
+    expect(stripWholeMarkdownFence('<|channel|>final\n# Clean<|end|>')).toBe('# Clean');
   });
 
   it('extracts structured replacement fields from local harness output', () => {
@@ -159,6 +200,9 @@ describe('LocalLlmManager', () => {
     expect(() => parseSimpleLocalCommandReplacement(
       JSON.stringify({ replacementMarkdown: '# Clean' }),
     )).toThrow('structured output');
+    expect(() => parseSimpleLocalCommandReplacement(
+      '*** Begin Patch\n*** Update File: /tmp/Note.md\n@@\n- mess\n+ clean',
+    )).toThrow('tool-call output');
   });
 
   it('normalizes local runner progress events', () => {
@@ -186,6 +230,10 @@ describe('LocalLlmManager', () => {
       '```markdown\n# Clean\n```',
       'replacementMarkdown',
     )).toThrow('expected JSON with replacementMarkdown');
+    expect(() => parseLocalCommandReplacement(
+      'I will edit the file.\n<|tool_call|>call:apply_patch{command:["apply_patch","*** Begin Patch"]}<tool_call|>',
+      'replacementMarkdown',
+    )).toThrow('tool-call output');
   });
 
   it('resolves model paths from explicit env before bundled paths', () => {
@@ -286,6 +334,35 @@ describe('LocalLlmManager', () => {
       expect.objectContaining({ onEvent: expect.any(Function) }),
     );
     expect(capturedArgs).toEqual(expect.arrayContaining(['--model', modelPath, '--codex-model', DEFAULT_LOCAL_LLM_MODEL]));
+  });
+
+  it('refuses oversized prompts before starting the local model server', async () => {
+    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    fs.closeSync(fs.openSync(modelPath, 'w'));
+    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+
+    const serverFactory = vi.fn(() => ({
+      start: vi.fn(async () => {}),
+      send: vi.fn(async () => ({ ok: true, text: '# Clean' })),
+      stop: vi.fn(),
+    }));
+    const manager = new LocalLlmManager({
+      userDataPath: tempDir,
+      resourcesPath: tempDir,
+      appPath: tempDir,
+      cwd: process.cwd(),
+      env: { FT_LOCAL_LLM_MODEL_PATH: modelPath, FT_GEMMA_CONTEXT_SIZE: '4096' },
+      serverFactory,
+    });
+
+    await expect(manager.runReplacementCommand({
+      commandName: 'tidy',
+      commandContent: 'Clean this up.',
+      targetTitle: 'Huge Note',
+      targetPath: '/tmp/Huge.md',
+      targetContent: 'x'.repeat(8_000),
+    })).rejects.toThrow('Local command prompt is too large for Gemma');
+    expect(serverFactory).not.toHaveBeenCalled();
   });
 
   it('runs replacement commands through the Codex harness when enabled', async () => {
@@ -439,4 +516,30 @@ describe('LocalLlmManager', () => {
       expect.objectContaining({ onEvent: expect.any(Function) }),
     );
   });
+
+  dogfoodIt('dogfoods the real Codex harness against the local Gemma runner', async () => {
+    const manager = new LocalLlmManager({
+      userDataPath: tempDir,
+      resourcesPath: path.join(process.cwd(), 'resources'),
+      appPath: process.cwd(),
+      cwd: process.cwd(),
+      env: {
+        FT_LOCAL_LLM_HARNESS: 'codex',
+        FT_LOCAL_LLM_ALLOW_DIRECT_FALLBACK: '0',
+        FT_CODEX_LOCAL_TIMEOUT_MS: '180000',
+      },
+    });
+
+    try {
+      await expect(manager.runReplacementCommand({
+        commandName: 'dogfood',
+        commandContent: 'Return the same markdown with the checkbox marked done. Return no extra prose.',
+        targetTitle: 'Maxwell Dogfood',
+        targetPath: '/tmp/maxwell-dogfood.md',
+        targetContent: '- [ ] verify Maxwell dogfood',
+      })).resolves.toEqual(expect.stringContaining('[x] verify Maxwell dogfood'));
+    } finally {
+      manager.stop();
+    }
+  }, 240_000);
 });

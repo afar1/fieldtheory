@@ -167,6 +167,21 @@ describe('StdioJsonServer', () => {
     expect(server.isReady).toBe(false);
   });
 
+  it('stop() resolves an in-flight command as stopped', async () => {
+    const server = createServer();
+
+    const startPromise = server.start();
+    proc.stdout.emit('data', Buffer.from('{"ready":true}\n'));
+    await startPromise;
+
+    const sendPromise = server.send({ cmd: 'generate' });
+    await flushMicrotasks();
+
+    server.stop();
+
+    await expect(sendPromise).resolves.toEqual({ ok: false, error: 'Test server stopped' });
+  });
+
   it('stop() is safe to call when not running', () => {
     const server = createServer();
     expect(() => server.stop()).not.toThrow();

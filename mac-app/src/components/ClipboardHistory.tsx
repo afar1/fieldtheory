@@ -3790,6 +3790,33 @@ export default function ClipboardHistory() {
     setThemeToggleProximityVisible(false);
   }, []);
 
+  const cancelLocalCommandRun = useCallback(async () => {
+    const status = localCommandStatus;
+    const runId = status?.runId;
+    if (!runId || !window.commandsAPI?.cancelMaxwellRun) return;
+    const showCancelError = (message: string) => {
+      setLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: status.commandName,
+        filePath: status.filePath,
+        mode: status.mode,
+        runId,
+        error: message,
+        updatedAt: Date.now(),
+      });
+    };
+    try {
+      const result = await window.commandsAPI.cancelMaxwellRun(runId);
+      if (!result.success) {
+        showCancelError(result.error ?? 'Could not cancel Maxwell run');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Could not cancel Maxwell run';
+      showCancelError(message);
+    }
+  }, [localCommandStatus]);
+
   if (!isVisible) {
     return null;
   }
@@ -3907,6 +3934,33 @@ export default function ClipboardHistory() {
         <path d="M3 12a9 9 0 1 0 3-6.7" />
         <path d="M3 3v6h6" />
         <path d="M12 7v5l3 2" />
+      </svg>
+    </button>
+  );
+
+  const renderMaxwellCancelButton = () => (
+    <button
+      onClick={() => void cancelLocalCommandRun()}
+      title="Cancel Maxwell run"
+      aria-label="Cancel Maxwell run"
+      style={{
+        width: '18px',
+        height: '18px',
+        padding: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'transparent',
+        border: `1px solid ${theme.border}`,
+        borderRadius: '4px',
+        color: theme.textSecondary,
+        cursor: 'pointer',
+        flexShrink: 0,
+      }}
+    >
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <path d="M18 6 6 18" />
+        <path d="m6 6 12 12" />
       </svg>
     </button>
   );
@@ -7034,6 +7088,7 @@ export default function ClipboardHistory() {
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, maxWidth: 'min(620px, 54vw)' }}>
               {localCommandStatus ? renderMaxwellHistoryButton() : null}
+              {localCommandStatus?.status === 'running' && localCommandStatus.runId ? renderMaxwellCancelButton() : null}
               <span
                 style={{
                   fontSize: '9px',

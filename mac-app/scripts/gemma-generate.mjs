@@ -14,11 +14,13 @@ const DIRECT_SYSTEM_PROMPT = [
   'You run local Field Theory commands.',
   'Return only the final answer requested by the command.',
   'Do not show private reasoning or status text.',
+  'You cannot use tools, call apply_patch, emit diffs, or edit files yourself.',
 ].join(' ');
 const CODEX_COMPAT_SYSTEM_PROMPT = [
   'You are the local model behind Codex for Field Theory commands.',
   'Return only the final answer requested by the user.',
   'Do not use tools, private reasoning, or status text.',
+  'Never emit <|tool_call>, apply_patch, shell commands, or diff patches.',
 ].join(' ');
 const DEFAULT_CODEX_TIMEOUT_MS = 240_000;
 const MAX_CHILD_OUTPUT_BYTES = 512 * 1024;
