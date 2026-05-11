@@ -2,7 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   getMarkdownTodoState,
   parseMarkdownFrontmatter,
+  parseMarkdownArchivedState,
   parseMarkdownTodoState,
+  setMarkdownArchivedState,
   setMarkdownTodoState,
 } from './markdownFrontmatter';
 
@@ -41,5 +43,13 @@ describe('markdownFrontmatter', () => {
   it('does not add frontmatter when removing a missing todo state', () => {
     expect(setMarkdownTodoState('# Note\n', null)).toBe('# Note\n');
     expect(setMarkdownTodoState('---\n---\n\n# Note\n', null)).toBe('---\n---\n\n# Note\n');
+  });
+
+  it('reads, sets, and removes archived state', () => {
+    expect(parseMarkdownArchivedState('---\narchived: true\n---\n# Note')).toBe(true);
+    expect(parseMarkdownArchivedState('---\narchived: false\n---\n# Note')).toBe(false);
+
+    expect(setMarkdownArchivedState('# Note\n', true)).toBe('---\narchived: true\n---\n\n# Note\n');
+    expect(setMarkdownArchivedState('---\ntags: [work]\narchived: true\n---\n# Note\n', false)).toBe('---\ntags: [work]\n---\n\n# Note\n');
   });
 });

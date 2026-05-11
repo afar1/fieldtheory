@@ -1254,7 +1254,7 @@ describe('SQUARES_ACTION_DEFS', () => {
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
-      'undo-library-move', 'toggle-theme'];
+      'archive-current-library-file', 'undo-library-move', 'toggle-theme'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -1327,12 +1327,18 @@ describe('buildBuiltInLauncherActions', () => {
     expect(actions.find((action) => action.actionId === 'open-commands')).toBeUndefined();
   });
 
-  it('includes move and undo move actions', () => {
+  it('includes move, archive, and undo move actions', () => {
     const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
 
     expect(actions.find((action) => action.actionId === 'move-current-library-file')).toEqual(expect.objectContaining({
       name: 'move file',
       displayName: 'Move Current File',
+    }));
+    expect(actions.find((action) => action.actionId === 'archive-current-library-file')).toEqual(expect.objectContaining({
+      name: 'archive',
+      displayName: 'Archive Current File',
+      keywords: expect.arrayContaining(['archive', 'e']),
+      hotkeyDisplay: 'E',
     }));
     expect(actions.find((action) => action.actionId === 'undo-library-move')).toEqual(expect.objectContaining({
       name: 'undo move',
