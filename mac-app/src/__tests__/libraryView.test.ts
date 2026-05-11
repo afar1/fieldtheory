@@ -97,6 +97,7 @@ import {
   renameLibraryRootRelPath,
   shouldCapScratchpadSidebarNode,
   shouldShowPinnedSidebarDividerBefore,
+  splitArchivedSidebarNodes,
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
@@ -1743,6 +1744,12 @@ describe('recursive sidebar tree helpers', () => {
       timestamp,
     },
   });
+  const archivedFile = (title: string, timestamp: number): LibrarySidebarNode => {
+    const node = file(title, timestamp);
+    return node.kind === 'file'
+      ? { ...node, item: { ...node.item, archived: true } }
+      : node;
+  };
   const bookmarksAction = (): LibrarySidebarNode => ({
     kind: 'file',
     id: 'bookmarks:root',
@@ -1795,6 +1802,22 @@ describe('recursive sidebar tree helpers', () => {
       false,
       true,
       false,
+    ]);
+  });
+
+  it('splits archived files from normal siblings for the collapsed archive section', () => {
+    const result = splitArchivedSidebarNodes([
+      archivedFile('Archived', 30),
+      file('Normal', 10),
+      dir('Nested'),
+    ]);
+
+    expect(result.normalNodes.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Normal',
+      'Nested',
+    ]);
+    expect(result.archivedNodes.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Archived',
     ]);
   });
 

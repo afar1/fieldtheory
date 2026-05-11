@@ -1429,6 +1429,7 @@ interface CommandsAPI {
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
+  archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
@@ -1812,6 +1813,7 @@ declare global {
     title: string;       // filename without extension
     lastUpdated: number; // mtime
     todoState?: MarkdownTodoState;
+    archived?: boolean;
   }
 
   interface WikiPage extends WikiPageMeta {
@@ -1825,7 +1827,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {

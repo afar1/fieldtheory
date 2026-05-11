@@ -1100,6 +1100,16 @@ export function buildBuiltInLauncherActions(
       actionId: 'move-current-library-file',
     },
     {
+      id: 'action-archive-current-library-file',
+      type: 'action',
+      name: 'archive',
+      displayName: 'Archive Current File',
+      keywords: ['archive', 'archive file', 'archive current file', 'library archive', 'e'],
+      hotkey: 'E',
+      hotkeyDisplay: 'E',
+      actionId: 'archive-current-library-file',
+    },
+    {
       id: 'action-undo-library-move',
       type: 'action',
       name: 'undo move',
