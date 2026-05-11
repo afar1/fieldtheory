@@ -280,22 +280,22 @@ describe('recursive wiki tree scan', () => {
     expect(entries.children.map((node) => node.name)).toEqual(['README', 'alpha', 'zeta']);
   });
 
-  it('adds todo state metadata to markdown file nodes', () => {
+  it('adds todo and archive metadata to markdown file nodes', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
     fs.writeFileSync(path.join(root, 'scratchpad', 'open.md'), '---\ntodo: true\ntodo_state: open\n---\n# Open Task\n');
     fs.writeFileSync(path.join(root, 'scratchpad', 'done.md'), '---\ntask: done\n---\n# Done Task\n');
-    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '# Note\n');
+    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '---\narchived: true\n---\n# Note\n');
 
     const tree = scan(root);
     const scratchpad = tree.find((node) => node.kind === 'dir' && node.name === 'scratchpad');
     expect(scratchpad?.kind).toBe('dir');
     if (scratchpad?.kind !== 'dir') return;
     const files = scratchpad.children.filter((node): node is Extract<WikiNode, { kind: 'file' }> => node.kind === 'file');
-    expect(files.map((file) => [file.name, file.todoState])).toEqual([
-      ['done', 'done'],
-      ['note', undefined],
-      ['open', 'open'],
+    expect(files.map((file) => [file.name, file.todoState, file.archived])).toEqual([
+      ['done', 'done', undefined],
+      ['note', undefined, true],
+      ['open', 'open', undefined],
     ]);
   });
 

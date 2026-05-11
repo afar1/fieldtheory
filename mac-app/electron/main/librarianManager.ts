@@ -18,6 +18,7 @@ import {
   stripMarkdownFileExtension,
 } from './pathSafety';
 import {
+  parseMarkdownArchivedState,
   parseMarkdownTodoState,
   type MarkdownTodoState,
 } from '../shared/markdownFrontmatter';
@@ -1618,6 +1619,7 @@ export interface WikiPageMeta {
   title: string;    // filename without extension
   lastUpdated: number;
   todoState?: MarkdownTodoState;
+  archived?: boolean;
 }
 
 export interface WikiPage extends WikiPageMeta {
@@ -1631,7 +1633,7 @@ export interface WikiFolder {
 }
 
 export type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
 export interface LibraryRoot {
@@ -2599,14 +2601,15 @@ export class LibrarianManager extends EventEmitter {
   private wikiWatcher: chokidar.FSWatcher | null = null;
   private wikiWatcherPending = false;
 
-  private parseWikiMetadata(content: string, filePath: string): { title: string; todoState?: MarkdownTodoState } {
+  private parseWikiMetadata(content: string, filePath: string): { title: string; todoState?: MarkdownTodoState; archived?: boolean } {
     return {
       title: stripMarkdownFileExtension(path.basename(filePath)),
       todoState: parseMarkdownTodoState(content) ?? undefined,
+      archived: parseMarkdownArchivedState(content) || undefined,
     };
   }
 
-  private parseWikiFileMetadata(filePath: string): { title: string; todoState?: MarkdownTodoState } {
+  private parseWikiFileMetadata(filePath: string): { title: string; todoState?: MarkdownTodoState; archived?: boolean } {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       return this.parseWikiMetadata(content, filePath);
@@ -2883,6 +2886,7 @@ export class LibrarianManager extends EventEmitter {
         title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
         todoState: metadata.todoState,
+        archived: metadata.archived,
       });
     }
 
@@ -2903,6 +2907,7 @@ export class LibrarianManager extends EventEmitter {
           title: node.title,
           lastUpdated: node.lastUpdated,
           todoState: node.todoState,
+          archived: node.archived,
         }];
       }
       return this.flattenWikiFiles(node.children);
@@ -2933,6 +2938,7 @@ export class LibrarianManager extends EventEmitter {
         title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
         todoState: metadata.todoState,
+        archived: metadata.archived,
       };
     } catch {
       return null;
@@ -3231,6 +3237,7 @@ export class LibrarianManager extends EventEmitter {
         title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
         todoState: metadata.todoState,
+        archived: metadata.archived,
         content,
         documentVersion: readDocumentVersion(absPath),
       };

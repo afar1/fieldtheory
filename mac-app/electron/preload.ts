@@ -3374,6 +3374,10 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:setActiveLibraryFileContext', context);
   },
 
+  archiveActiveLibraryFile: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:archiveActiveLibraryFile');
+  },
+
   openFieldTheoryMarkdown: async (target: FieldTheoryMarkdownTarget): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:openFieldTheoryMarkdown', target);
   },
@@ -3983,6 +3987,7 @@ interface WikiPageMeta {
   title: string;
   lastUpdated: number;
   todoState?: MarkdownTodoState;
+  archived?: boolean;
 }
 interface WikiPage extends WikiPageMeta {
   content: string;
@@ -3993,7 +3998,7 @@ interface WikiFolder {
   files: WikiPageMeta[];
 }
 type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 interface LibraryRoot {
   path: string;

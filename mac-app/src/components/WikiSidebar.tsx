@@ -12,6 +12,7 @@ import {
   SidebarMarkdownIcon,
   SidebarRecentIcon,
 } from './SidebarIcons';
+import { setMarkdownArchivedState } from '../../electron/shared/markdownFrontmatter';
 
 type SortMode = 'alpha' | 'time';
 type SidebarTodoState = 'open' | 'done';
@@ -26,6 +27,7 @@ interface UnifiedItem {
   rootPath?: string;
   timestamp: number;
   todoState?: SidebarTodoState;
+  archived?: boolean;
   taggedDocId?: string;
   hasUnread?: boolean;
 }
@@ -415,6 +417,7 @@ function wikiFileNodeFromPage(page: WikiPageMeta): WikiNode {
     title: page.title,
     lastUpdated: page.lastUpdated,
     todoState: page.todoState,
+    archived: page.archived,
   };
 }
 
@@ -506,6 +509,7 @@ export function addWikiPageToTree(tree: WikiFolder[], page: WikiPageMeta): WikiF
     title: page.title,
     lastUpdated: page.lastUpdated,
     todoState: page.todoState,
+    archived: page.archived,
   };
   let changed = false;
   const next = tree.map((folder) => {
@@ -616,6 +620,15 @@ export function sortSidebarNodes(
     const right = b.kind === 'dir' ? b.label : b.item.title;
     return left.localeCompare(right, undefined, { sensitivity: 'base' });
   });
+}
+
+export function splitArchivedSidebarNodes(nodes: SidebarNode[]): { normalNodes: SidebarNode[]; archivedNodes: SidebarNode[] } {
+  const archivedNodes = nodes.filter((node) => node.kind === 'file' && node.item.archived);
+  if (archivedNodes.length === 0) return { normalNodes: nodes, archivedNodes };
+  return {
+    normalNodes: nodes.filter((node) => node.kind !== 'file' || !node.item.archived),
+    archivedNodes,
+  };
 }
 
 export function orderTopLevelSidebarNodes(
@@ -918,6 +931,7 @@ function wikiNodeToSidebarNode(
         rootPath: root.path,
         timestamp: node.lastUpdated,
         todoState: node.todoState,
+        archived: node.archived,
         taggedDocId: taggedDoc?.ulid,
         hasUnread: taggedDoc?.unread ?? false,
       },
@@ -1731,6 +1745,8 @@ function WikiSidebar({
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact' || contextFile?.type === 'external';
   const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
   const canRenameContextFile = contextFile?.type === 'wiki' && !!contextFile.relPath;
+  const canArchiveContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'external';
+  const archiveContextFileLabel = canArchiveContextFile ? (contextFile?.archived ? 'Unarchive' : 'Archive') : null;
   const contextFileFinderPath = contextFile?.type !== 'bookmarks' ? contextFile?.absPath : undefined;
   const contextPinTargetId = contextDir?.id ?? (contextFile?.type !== 'bookmarks' ? contextFile?.id : null);
   const contextPinLabel = contextPinTargetId
@@ -1858,6 +1874,55 @@ function WikiSidebar({
       },
     });
   }, [closeContextMenu, confirmDelete, contextFile, loadArtifacts, onDeletedItem]);
+
+  const toggleContextFileArchived = useCallback(async () => {
+    const target = contextFile;
+    closeContextMenu();
+    if (!target || (target.type !== 'wiki' && target.type !== 'external')) return;
+    const nextArchived = !target.archived;
+
+    try {
+      if (target.type === 'wiki') {
+        if (!target.relPath) return;
+        const page = await window.wikiAPI?.getPage(target.relPath);
+        if (!page) {
+          setMoveError('Could not load file.');
+          return;
+        }
+        const result = await window.wikiAPI?.save(
+          target.relPath,
+          setMarkdownArchivedState(page.content, nextArchived),
+          page.documentVersion,
+        );
+        if (!result?.ok) {
+          setMoveError(`${nextArchived ? 'Archive' : 'Unarchive'} failed.`);
+          return;
+        }
+        setMoveError(null);
+        await loadTree('wiki-file-archived');
+        return;
+      }
+
+      const file = await window.externalAPI?.open(target.absPath);
+      if (!file) {
+        setMoveError('Could not load file.');
+        return;
+      }
+      const result = await window.externalAPI?.save(
+        target.absPath,
+        setMarkdownArchivedState(file.content, nextArchived),
+        file.documentVersion,
+      );
+      if (!result?.ok) {
+        setMoveError(`${nextArchived ? 'Archive' : 'Unarchive'} failed.`);
+        return;
+      }
+      setMoveError(null);
+      await loadTree('external-file-archived');
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : `${nextArchived ? 'Archive' : 'Unarchive'} failed.`);
+    }
+  }, [closeContextMenu, contextFile, loadTree]);
 
   const deleteContextDir = useCallback(() => {
     const target = contextDir;
@@ -2115,6 +2180,7 @@ function WikiSidebar({
           canRemoveRoot={!!contextDir?.canRemoveRoot}
           canShowFolderInFinder={!!contextFolderFinderPath}
           canRenameFile={canRenameContextFile}
+          archiveFileLabel={archiveContextFileLabel}
           canCopyFilePath={!!contextFile}
           canShowFileInFinder={!!contextFileFinderPath}
           canDeleteFile={canDeleteContextFile}
@@ -2135,6 +2201,7 @@ function WikiSidebar({
           onAddFolder={addFolderFromPath}
           onShowFolderInFinder={showContextFolderInFinder}
           onRenameFile={renameContextFile}
+          onToggleArchiveFile={toggleContextFileArchived}
           onCopyFilePath={copyContextFilePath}
           onShowFileInFinder={showContextFileInFinder}
           onTogglePin={toggleContextPinned}
@@ -2366,6 +2433,7 @@ function TreeNode({
   showPinnedDividerBefore?: boolean;
 }) {
   const [scratchpadExpanded, setScratchpadExpanded] = useState(false);
+  const [archiveExpanded, setArchiveExpanded] = useState(false);
   const pinnedDivider = showPinnedDividerBefore ? <SidebarDivider theme={theme} /> : null;
 
   if (node.kind === 'file') {
@@ -2392,13 +2460,15 @@ function TreeNode({
   }
 
   const isExpanded = isSearching || expandedFolders.has(node.id);
+  const { normalNodes, archivedNodes } = splitArchivedSidebarNodes(node.children);
   const itemCount = countSidebarItems(node.children);
   const nodeCreateLocation = getSidebarNodeCreateLocation(node);
   const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
   const isDropTarget = dropTargetId === node.id;
-  const shouldCapScratchpad = shouldCapScratchpadSidebarNode(node, isSearching, scratchpadExpanded);
-  const visibleChildren = shouldCapScratchpad ? node.children.slice(0, SCRATCHPAD_COLLAPSED_ITEM_LIMIT) : node.children;
-  const hiddenScratchpadCount = node.children.length - visibleChildren.length;
+  const normalNode = normalNodes === node.children ? node : { ...node, children: normalNodes };
+  const shouldCapScratchpad = shouldCapScratchpadSidebarNode(normalNode, isSearching, scratchpadExpanded);
+  const visibleChildren = shouldCapScratchpad ? normalNodes.slice(0, SCRATCHPAD_COLLAPSED_ITEM_LIMIT) : normalNodes;
+  const hiddenScratchpadCount = normalNodes.length - visibleChildren.length;
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
@@ -2621,6 +2691,58 @@ function TreeNode({
           Show more ({hiddenScratchpadCount})
         </div>
       )}
+      {isExpanded && archivedNodes.length > 0 && (
+        <div
+          onClick={(event) => {
+            event.stopPropagation();
+            setArchiveExpanded((expanded) => !expanded);
+          }}
+          style={{
+            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${24 + depth * 12}px`,
+            fontSize: '10px',
+            lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+            color: theme.textSecondary,
+            cursor: 'pointer',
+            opacity: 0.68,
+          }}
+          onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+          onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
+        >
+          {archiveExpanded ? 'Hide archive' : `Archive (${archivedNodes.length})`}
+        </div>
+      )}
+      {isExpanded && archiveExpanded && archivedNodes.map((child, index) => (
+        <TreeNode
+          key={child.id}
+          node={child}
+          depth={depth + 1}
+          isSearching={isSearching}
+          expandedFolders={expandedFolders}
+          toggleFolder={toggleFolder}
+          creating={creating}
+          newName={newName}
+          setNewName={setNewName}
+          createInputRef={createInputRef}
+          submitCreate={submitCreate}
+          cancelCreate={cancelCreate}
+          beginCreateFile={beginCreateFile}
+          selectedId={selectedId}
+          selectedKeyboardActive={selectedKeyboardActive}
+          selectedItemRef={selectedItemRef}
+          dropTargetId={dropTargetId}
+          setDropTargetId={setDropTargetId}
+          onMoveLibraryItem={onMoveLibraryItem}
+          theme={theme}
+          onSelectItem={onSelectItem}
+          selectedFileIds={selectedFileIds}
+          renameRequestId={renameRequestId}
+          onRenameRequestConsumed={onRenameRequestConsumed}
+          onContextMenu={onContextMenu}
+          onKeyboardScopeActive={onKeyboardScopeActive}
+          pinnedItemIds={pinnedItemIds}
+          showPinnedDividerBefore={!isSearching && shouldShowPinnedSidebarDividerBefore(archivedNodes, index, pinnedItemIds)}
+        />
+      ))}
       </div>
     </>
   );
@@ -2724,6 +2846,7 @@ function LibraryContextMenu({
   canRemoveRoot,
   canShowFolderInFinder,
   canRenameFile,
+  archiveFileLabel,
   canCopyFilePath,
   canShowFileInFinder,
   canDeleteFile,
@@ -2736,6 +2859,7 @@ function LibraryContextMenu({
   onAddFolder,
   onShowFolderInFinder,
   onRenameFile,
+  onToggleArchiveFile,
   onCopyFilePath,
   onShowFileInFinder,
   onTogglePin,
@@ -2751,6 +2875,7 @@ function LibraryContextMenu({
   canRemoveRoot: boolean;
   canShowFolderInFinder: boolean;
   canRenameFile: boolean;
+  archiveFileLabel: string | null;
   canCopyFilePath: boolean;
   canShowFileInFinder: boolean;
   canDeleteFile: boolean;
@@ -2763,6 +2888,7 @@ function LibraryContextMenu({
   onAddFolder: () => void;
   onShowFolderInFinder: () => void;
   onRenameFile: () => void;
+  onToggleArchiveFile: () => void;
   onCopyFilePath: () => void;
   onShowFileInFinder: () => void;
   onTogglePin: () => void;
@@ -2848,6 +2974,9 @@ function LibraryContextMenu({
       )}
       {canRenameFile && (
         <button style={itemStyle} onClick={onRenameFile} onMouseEnter={setHover} onMouseLeave={clearHover}>Rename</button>
+      )}
+      {archiveFileLabel && (
+        <button style={itemStyle} onClick={onToggleArchiveFile} onMouseEnter={setHover} onMouseLeave={clearHover}>{archiveFileLabel}</button>
       )}
       {canCopyFilePath && (
         <button style={itemStyle} onClick={onCopyFilePath} onMouseEnter={setHover} onMouseLeave={clearHover}>Copy file path</button>
