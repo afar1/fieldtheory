@@ -270,6 +270,7 @@ interface LauncherCommandsAPI {
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
+  archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
@@ -2022,6 +2023,24 @@ function CommandLauncher() {
           selectIndex(0);
           return;
         }
+        case 'archive-current-library-file': {
+          if (!latestContext?.fieldTheoryActive) {
+            showLauncherMessage('Open Field Theory to archive the current file');
+            return;
+          }
+          if (!commandsAPI.archiveActiveLibraryFile) {
+            showLauncherMessage('Archive is unavailable');
+            return;
+          }
+          const result = await commandsAPI.archiveActiveLibraryFile();
+          if (!result.success) {
+            showLauncherMessage(result.error ?? 'Archive failed');
+            return;
+          }
+          await loadLibraryMarkdown();
+          closeForInvocation({ skipActivation: true });
+          return;
+        }
         case 'undo-library-move': {
           await undoLastLibraryMove();
           return;
@@ -2035,7 +2054,7 @@ function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   if (isDarkMode === null) {
     return <div style={{ width: '100vw', height: '100vh', background: 'transparent' }} />;

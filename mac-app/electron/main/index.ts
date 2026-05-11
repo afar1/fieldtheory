@@ -113,6 +113,7 @@ import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasMa
 import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import { setMarkdownArchivedState } from '../shared/markdownFrontmatter';
 import {
   FIELD_THEORY_URL_SCHEME,
   fieldTheoryProtocolClientArgs,
@@ -7120,6 +7121,41 @@ function setupClipboardIPCHandlers(): void {
       title: context.title,
     };
     return true;
+  });
+
+  ipcMain.handle('commands:archiveActiveLibraryFile', (): { success: boolean; error?: string } => {
+    if (!librarianManager) return { success: false, error: 'Library is not ready' };
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { success: false, error: 'Field Theory is read-only' };
+    }
+    if (!activeLibraryFileContext) return { success: false, error: 'No current Library file to archive' };
+    if (!fs.existsSync(activeLibraryFileContext.filePath)) {
+      return { success: false, error: 'Current Library file no longer exists' };
+    }
+
+    try {
+      const expectedVersion = readDocumentVersion(activeLibraryFileContext.filePath);
+      const content = fs.readFileSync(activeLibraryFileContext.filePath, 'utf-8');
+      const nextContent = setMarkdownArchivedState(content, true);
+      const result = activeLibraryFileContext.type === 'wiki'
+        ? librarianManager.saveWikiPage(activeLibraryFileContext.relPath, nextContent, expectedVersion)
+        : writeTextFileWithConflictGuard(activeLibraryFileContext.filePath, nextContent, expectedVersion);
+      if (!result.ok) return { success: false, error: `Archive failed: ${result.reason}` };
+      if (activeLibraryFileContext.type === 'external') {
+        librarianManager.emit('library:changed', activeLibraryFileContext.rootPath);
+      }
+      appendCommandLauncherTrace('archive-active-library-file-success', {
+        type: activeLibraryFileContext.type,
+        relPath: activeLibraryFileContext.relPath,
+        filePath: activeLibraryFileContext.filePath,
+      });
+      return { success: true };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Archive failed';
+      appendCommandLauncherTrace('archive-active-library-file-error', { error: message });
+      return { success: false, error: message };
+    }
   });
 
   ipcMain.handle(CommandsIPCChannels.RUN_LOCAL_COMMAND, async (_event, rawRequest: unknown): Promise<LocalCommandRunResult> => {

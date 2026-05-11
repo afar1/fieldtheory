@@ -64,6 +64,14 @@ export function parseMarkdownTodoState(content: string): MarkdownTodoState | nul
   return getMarkdownTodoState(parseMarkdownFrontmatter(content).meta);
 }
 
+export function getMarkdownArchivedState(meta: Record<string, string>): boolean {
+  return isTruthyYamlScalar(meta.archived);
+}
+
+export function parseMarkdownArchivedState(content: string): boolean {
+  return getMarkdownArchivedState(parseMarkdownFrontmatter(content).meta);
+}
+
 export function setMarkdownTodoState(content: string, nextState: MarkdownTodoState | null): string {
   const parsed = parseMarkdownFrontmatter(content);
   const body = parsed.raw === null ? content : parsed.body;
@@ -82,6 +90,27 @@ export function setMarkdownTodoState(content: string, nextState: MarkdownTodoSta
     ...(frontmatterLines.length > 0 ? [''] : []),
     'todo: true',
     `todo_state: ${nextState}`,
+  ];
+  return `---\n${nextLines.join('\n')}\n---\n\n${body}`;
+}
+
+export function setMarkdownArchivedState(content: string, archived: boolean): string {
+  const parsed = parseMarkdownFrontmatter(content);
+  const body = parsed.raw === null ? content : parsed.body;
+  const frontmatterLines = parsed.raw?.trim()
+    ? parsed.lines.filter((line) => !/^\s*archived\s*:/i.test(line))
+    : [];
+  const retainedLines = frontmatterLines.filter((line) => line.trim().length > 0);
+
+  if (!archived) {
+    if (retainedLines.length === 0) return body;
+    return `---\n${frontmatterLines.join('\n')}\n---\n\n${body}`;
+  }
+
+  const nextLines = [
+    ...frontmatterLines,
+    ...(frontmatterLines.length > 0 ? [''] : []),
+    'archived: true',
   ];
   return `---\n${nextLines.join('\n')}\n---\n\n${body}`;
 }
