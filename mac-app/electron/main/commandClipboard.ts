@@ -2,6 +2,10 @@ import { clipboard, type NativeImage } from 'electron';
 
 export const COMMAND_CLIPBOARD_RESTORE_DELAY_MS = 1500;
 
+const COMMAND_FILE_TEXT_CONTENT_TARGET_BUNDLE_IDS = new Set([
+  'net.whatsapp.whatsapp',
+]);
+
 export type ClipboardFormatSnapshot = {
   format: string;
   buffer: Buffer;
@@ -79,4 +83,9 @@ export function restoreClipboardSnapshot(snapshot: ClipboardSnapshot, target: Co
 
 export function waitForCommandClipboardPasteRead(delayMs = COMMAND_CLIPBOARD_RESTORE_DELAY_MS): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
+export function shouldPasteCommandFileContentsAsText(bundleId: string | null | undefined): boolean {
+  if (!bundleId) return false;
+  return COMMAND_FILE_TEXT_CONTENT_TARGET_BUNDLE_IDS.has(bundleId.toLowerCase());
 }
