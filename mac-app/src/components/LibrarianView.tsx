@@ -17,6 +17,7 @@ import WikiSidebar, {
   dispatchLocalWikiAdded,
   dispatchLocalWikiDeleted,
   dispatchLocalWikiRenamed,
+  type WikiArchiveController,
   type LibraryCreateLocation,
   type UnifiedItem,
   type WikiCreationController,
@@ -1183,6 +1184,33 @@ function clipboardDataHasImage(data: DataTransfer): boolean {
   return Array.from(data.items).some((item) => item.kind === 'file' && item.type.startsWith('image/'));
 }
 
+function getClipboardImageFile(data: DataTransfer): File | null {
+  const fileFromFiles = Array.from(data.files).find((file) => file.type.startsWith('image/'));
+  if (fileFromFiles) return fileFromFiles;
+
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue;
+    const file = item.getAsFile?.();
+    if (file) return file;
+  }
+
+  return null;
+}
+
+async function getPastedClipboardImagePath(data: DataTransfer): Promise<string | null> {
+  const file = getClipboardImageFile(data);
+  if (!file) {
+    return window.clipboardAPI?.getClipboardImagePath?.() ?? null;
+  }
+
+  const buffer = await file.arrayBuffer();
+  return window.clipboardAPI?.savePastedImageFile?.({
+    name: file.name || null,
+    type: file.type || null,
+    data: new Uint8Array(buffer),
+  }) ?? null;
+}
+
 export function shouldInsertClipboardImagePathForPaste(input: { pastedText: string; hasImage: boolean }): boolean {
   return input.hasImage;
 }
@@ -1385,6 +1413,13 @@ export function formatBreadcrumb(
   }
   const parts = reading.path.replace(/\\/g, '/').split('/').filter(Boolean);
   return parts.length > 1 ? parts[parts.length - 2] : 'External';
+}
+
+export function getLibrarianTitleFontSize(title: string, contentMode: 'rendered' | 'markdown'): number {
+  const base = contentMode === 'markdown' ? 26 : 30;
+  const length = title.trim().length;
+  if (length <= 48) return base;
+  return Math.max(18, Math.round((base - (length - 48) * 0.25) * 10) / 10);
 }
 
 function clampScrollRatio(ratio: number): number {
@@ -1745,6 +1780,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
     return BOOKMARKS_ITEM_ID;
   });
+  const selectedItemIdRef = useRef<string | null>(selectedItemId);
   const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
   const selectedItemUsesLegacyImmersive = selectedItemType === 'bookmarks';
   const [isFullScreen, setIsFullScreen] = useState(() => (
@@ -1769,6 +1805,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     setFocusImmersive((prev) => !prev);
   }, [focusImmersive, onFocusChromeShortcut, selectedItemUsesLegacyImmersive, setFocusImmersive]);
+  useLayoutEffect(() => {
+    selectedItemIdRef.current = selectedItemId;
+  }, [selectedItemId]);
   const [writingChromeHidden, setWritingChromeHidden] = useState(false);
   const markdownEditorEdgeFadesRef = useRef({ top: false, bottom: false });
   const [markdownDocumentTopFade, setMarkdownDocumentTopFade] = useState(false);
@@ -1802,6 +1841,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
+  const wikiArchiveRef = useRef<WikiArchiveController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
   const renderedContentRef = useRef<HTMLDivElement | null>(null);
@@ -2959,6 +2999,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   }, [rememberSavedDocumentContent, wikiSelectedRelPath]);
 
+  const handleSidebarItemContentChanged = useCallback((item: UnifiedItem, content: string, version: DocumentVersion | null) => {
+    if (item.type !== 'wiki' && item.type !== 'external') return;
+    if (activeReadingPathRef.current !== item.absPath) return;
+
+    applySavedDocumentState(item.type, item.absPath, content, version, item.title);
+    setEditContent(contentModeRef.current === 'markdown'
+      ? removeEmptyMarkdownCommentPlaceholders(content)
+      : content);
+  }, [applySavedDocumentState]);
+
   const resolveSaveConflict = useCallback(async (
     result: DocumentSaveResult,
     targetType: LibrarianSelectedItemType,
@@ -3421,6 +3471,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusRenderedEditor(targetSelection);
   }, [activateRenderedEditing, activeReading, displaySourceBody.length, focusRenderedEditor]);
 
+  const focusActiveFileBodyAtEnd = useCallback(() => {
+    if (!activeReading) return;
+    deactivateSidebarKeyboard();
+    if (contentMode === 'markdown') {
+      requestAnimationFrame(() => {
+        const editor = markdownCodeEditorRef.current;
+        if (!editor) return;
+        const length = editor.getValue().length;
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(length, length);
+      });
+      return;
+    }
+    activateRenderedTextEditing({ start: displaySourceBody.length, end: displaySourceBody.length });
+  }, [activateRenderedTextEditing, activeReading, contentMode, deactivateSidebarKeyboard, displaySourceBody.length]);
+
   const applyRenderedEditorBody = useCallback((
     nextBody: string,
     options: { selectionStart?: number | null; selectionEnd?: number | null } = {},
@@ -3524,8 +3590,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
   }, [activeReading, applyRenderedEditorBody, contentMode, displaySourceBody, focusRenderedEditor]);
 
-  const insertCurrentClipboardImagePathInRenderedEditor = useCallback(async () => {
-    const imagePath = await window.clipboardAPI?.getClipboardImagePath?.();
+  const insertPastedClipboardImagePathInRenderedEditor = useCallback(async (clipboardData: DataTransfer) => {
+    const imagePath = await getPastedClipboardImagePath(clipboardData);
     if (imagePath) applyRenderedTextInsertion(formatLocalImageMarkdown(imagePath));
   }, [applyRenderedTextInsertion]);
 
@@ -3533,7 +3599,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const clipboardData = event.clipboardData;
     const pastedText = clipboardData?.getData('text/plain') ?? '';
     if (clipboardData && shouldInsertClipboardImagePathForPaste({ pastedText, hasImage: clipboardDataHasImage(clipboardData) })) {
-      void insertCurrentClipboardImagePathInRenderedEditor();
+      void insertPastedClipboardImagePathInRenderedEditor(clipboardData);
       return true;
     }
     if (!pastedText) return false;
@@ -3542,7 +3608,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!localImageMarkdown) return false;
     applyRenderedTextInsertion(localImageMarkdown);
     return true;
-  }, [applyRenderedTextInsertion, insertCurrentClipboardImagePathInRenderedEditor]);
+  }, [applyRenderedTextInsertion, insertPastedClipboardImagePathInRenderedEditor]);
 
   useEffect(() => {
     clearRenderedEditingState('path-or-mode-changed');
@@ -3895,8 +3961,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyMarkdownTextInsertion(text);
   }, [applyMarkdownTextInsertion, contentMode]);
 
-  const insertCurrentClipboardImagePath = useCallback(async () => {
-    const imagePath = await window.clipboardAPI?.getClipboardImagePath?.();
+  const insertPastedClipboardImagePath = useCallback(async (clipboardData: DataTransfer) => {
+    const imagePath = await getPastedClipboardImagePath(clipboardData);
     if (imagePath) insertMarkdownText(formatLocalImageMarkdown(imagePath));
   }, [insertMarkdownText]);
 
@@ -3919,7 +3985,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const clipboardData = event.clipboardData;
     const pastedText = clipboardData?.getData('text/plain') ?? '';
     if (clipboardData && shouldInsertClipboardImagePathForPaste({ pastedText, hasImage: clipboardDataHasImage(clipboardData) })) {
-      void insertCurrentClipboardImagePath();
+      void insertPastedClipboardImagePath(clipboardData);
       return true;
     }
     if (!pastedText) return false;
@@ -3946,7 +4012,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     applyMarkdownUrlPasteEdit(pasteEdit);
     return true;
-  }, [applyMarkdownUrlPasteEdit, insertCurrentClipboardImagePath, insertMarkdownText]);
+  }, [applyMarkdownUrlPasteEdit, insertMarkdownText, insertPastedClipboardImagePath]);
 
   const applyMarkdownUrlPasteKind = useCallback((kind: MarkdownUrlPasteKind) => {
     if (!markdownUrlPasteChoice) return;
@@ -4469,6 +4535,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedPath === autoPopArtifactPath;
 
   const handleSelectItem = useCallback(async (item: UnifiedItem) => {
+    selectedItemIdRef.current = item.id;
     // Flush any pending auto-save against the current file before we
     // redirect editContent to the new one.
     await flushCurrentEdit();
@@ -5296,13 +5363,74 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external')
       ) {
         e.preventDefault();
+        if (wikiArchiveRef.current?.hasExplicitSelection() && wikiArchiveRef.current.deleteSelectedItems()) {
+          return;
+        }
         handleDelete();
         return;
       }
 
       if (shouldHandleMarkdownTodoTabShortcut({ key: e.key, shiftKey: e.shiftKey, metaKey: e.metaKey, ctrlKey: e.ctrlKey, altKey: e.altKey, selectedItemType })) {
         e.preventDefault();
+        if (wikiArchiveRef.current?.hasExplicitSelection()) {
+          void wikiArchiveRef.current.cycleSelectedTodoState(e.shiftKey ? 'backward' : 'forward');
+          return;
+        }
         void cycleSelectedMarkdownTodoState(e.shiftKey ? 'backward' : 'forward');
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key.toLowerCase() === 'z'
+        && e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.hasArchiveUndo()
+      ) {
+        e.preventDefault();
+        void wikiArchiveRef.current.undoArchive();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key.toLowerCase() === 'e'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.canArchiveSelected()
+      ) {
+        e.preventDefault();
+        void wikiArchiveRef.current.toggleSelectedArchive();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key.toLowerCase() === 'x'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.toggleFocusedSelection(selectedItemIdRef.current)
+      ) {
+        e.preventDefault();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key === 'Enter'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+      ) {
+        e.preventDefault();
+        focusActiveFileBodyAtEnd();
         return;
       }
 
@@ -5312,15 +5440,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       // Arrow key / j/k navigation through the current sidebar folder.
       const items = flatItemsRef.current;
       if (items.length > 0) {
-        const currentIdx = items.findIndex((i) => i.id === selectedItemId);
+        const currentIdx = items.findIndex((i) => i.id === selectedItemIdRef.current);
         if (currentIdx < 0) return;
         if (e.key === 'ArrowUp' || e.key === 'k') {
           e.preventDefault();
           const newIdx = Math.max(0, currentIdx - 1);
+          if (newIdx === currentIdx) return;
+          selectedItemIdRef.current = items[newIdx].id;
           handleSelectItem(items[newIdx]);
         } else if (e.key === 'ArrowDown' || e.key === 'j') {
           e.preventDefault();
           const newIdx = Math.min(items.length - 1, currentIdx + 1);
+          if (newIdx === currentIdx) return;
+          selectedItemIdRef.current = items[newIdx].id;
           handleSelectItem(items[newIdx]);
         }
       }
@@ -5328,7 +5460,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -5739,6 +5871,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             onSearchQueryChange={setSearchQuery}
             searchInputRef={searchInputRef}
             creationControllerRef={wikiCreationRef}
+            archiveControllerRef={wikiArchiveRef}
+            onSidebarItemContentChanged={handleSidebarItemContentChanged}
             onDeletedItem={handleDeletedLibraryItem}
             onKeyboardScopeActive={activateSidebarKeyboard}
           />
@@ -6243,6 +6377,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 aria-label="File title"
                 style={{
                   width: '100%',
+                  minWidth: 0,
                   flex: '0 0 auto',
                   margin: contentMode === 'markdown' ? '0 0 18px 0' : '0 0 22px 0',
                   padding: 0,
@@ -6250,7 +6385,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   outline: 'none',
                   backgroundColor: 'transparent',
                   color: theme.text,
-                  fontSize: contentMode === 'markdown' ? '26px' : '30px',
+                  fontSize: `${getLibrarianTitleFontSize(
+                    editingTitlePath === activeTitlePath ? titleDraft : activeReading.title,
+                    contentMode,
+                  )}px`,
                   lineHeight: 1.18,
                   fontWeight: 650,
                   fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',

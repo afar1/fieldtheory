@@ -110,6 +110,7 @@ const ClipboardIPCChannels = {
   CLEAR_ALL: 'clipboard:clearAll',
   CAPTURE_SCREENSHOT: 'clipboard:captureScreenshot',
   GET_CLIPBOARD_IMAGE_PATH: 'clipboard:getClipboardImagePath',
+  SAVE_PASTED_IMAGE_FILE: 'clipboard:savePastedImageFile',
   EXPORT_ITEM_IMAGE_PATH: 'clipboard:exportItemImagePath',
   SAVE_SKETCH: 'clipboard:saveSketch',
   GET_HOTKEYS: 'clipboard:getHotkeys',
@@ -818,6 +819,7 @@ export interface ClipboardAPI {
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getClipboardImagePath: () => Promise<string | null>;
+  savePastedImageFile: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath: (id: number) => Promise<string | null>;
   saveSketch: (imageData: string, width: number, height: number) => Promise<number>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
@@ -1471,6 +1473,10 @@ const clipboardAPI: ClipboardAPI = {
 
   getClipboardImagePath: async (): Promise<string | null> => {
     return ipcRenderer.invoke(ClipboardIPCChannels.GET_CLIPBOARD_IMAGE_PATH);
+  },
+
+  savePastedImageFile: async (file: { name?: string | null; type?: string | null; data: Uint8Array }): Promise<string | null> => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_PASTED_IMAGE_FILE, file);
   },
 
   exportItemImagePath: async (id: number): Promise<string | null> => {

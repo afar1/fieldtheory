@@ -283,6 +283,9 @@ const DEFAULT_CONFIG: ClipboardConfig = {
   historyHotkey: 'Alt+Space',
 };
 
+const MAX_CLIPBOARD_IMAGE_PIXELS_FOR_PNG = 16_000_000;
+const MAX_CLIPBOARD_IMAGE_PNG_BYTES = 10 * 1024 * 1024;
+
 /**
  * Continuous Context mode state.
  * Allows continuous screenshotting where each screenshot re-activates the capture tool.
@@ -726,7 +729,29 @@ export class ClipboardManager extends EventEmitter {
       // can share the same clipboard format strings (e.g. two screenshots).
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
+        const size = image.getSize();
+        if (this.shouldSkipLargeClipboardImage(size)) {
+          const skipHash = this.hashContent(`large-image:${size.width}x${size.height}:${clipboard.availableFormats().join('|')}`);
+          if (skipHash !== this.lastContentHash) {
+            this.lastContentHash = skipHash;
+            log.info('Skipping oversized clipboard image in automatic history capture:', size);
+          }
+          return;
+        }
+
         const imageBuffer = image.toPNG();
+        if (imageBuffer.length > MAX_CLIPBOARD_IMAGE_PNG_BYTES) {
+          const skipHash = this.hashContent(imageBuffer);
+          if (skipHash !== this.lastContentHash) {
+            this.lastContentHash = skipHash;
+            log.info('Skipping oversized clipboard image in automatic history capture:', {
+              ...size,
+              bytes: imageBuffer.length,
+            });
+          }
+          return;
+        }
+
         await this.processClipboardChange(
           this.hashContent(imageBuffer),
           () => this.storeImage(image, imageBuffer)
@@ -2006,6 +2031,10 @@ export class ClipboardManager extends EventEmitter {
     }
   }
 
+  private shouldSkipLargeClipboardImage(size: { width: number; height: number }): boolean {
+    return size.width > 0 && size.height > 0 && size.width * size.height > MAX_CLIPBOARD_IMAGE_PIXELS_FOR_PNG;
+  }
+
   syncClipboardHash(): void {
     try {
       const text = clipboard.readText();
@@ -2148,6 +2177,60 @@ export class ClipboardManager extends EventEmitter {
   }
 
   /**
+   * Save an image file supplied by the paste event into the figures cache.
+   * This avoids re-reading the global pasteboard and re-encoding large images.
+   */
+  async savePastedImageFileToCache(file: { name?: string | null; type?: string | null; data: Uint8Array | Buffer }): Promise<string | null> {
+    try {
+      const data = file.data;
+      const imageBuffer = Buffer.isBuffer(data) ? data : Buffer.from(data);
+      if (imageBuffer.length === 0) return null;
+
+      const cacheDir = this.getFiguresPath();
+      if (!fs.existsSync(cacheDir)) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+      }
+
+      const extension = this.getPastedImageExtension(file.name, file.type);
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const filename = `Pasted Image ${timestamp}-${crypto.randomBytes(3).toString('hex')}${extension}`;
+      const filePath = path.join(cacheDir, filename);
+
+      await fs.promises.writeFile(filePath, imageBuffer);
+      return filePath;
+    } catch (error) {
+      log.warn('Failed to save pasted image file:', error);
+      return null;
+    }
+  }
+
+  private getPastedImageExtension(name?: string | null, type?: string | null): string {
+    const extension = name ? path.extname(name).toLowerCase() : '';
+    if (['.png', '.jpg', '.jpeg', '.gif', '.webp', '.tif', '.tiff', '.heic', '.heif'].includes(extension)) {
+      return extension;
+    }
+
+    switch ((type || '').toLowerCase()) {
+      case 'image/jpeg':
+      case 'image/jpg':
+        return '.jpg';
+      case 'image/gif':
+        return '.gif';
+      case 'image/webp':
+        return '.webp';
+      case 'image/tiff':
+        return '.tiff';
+      case 'image/heic':
+        return '.heic';
+      case 'image/heif':
+        return '.heif';
+      case 'image/png':
+      default:
+        return '.png';
+    }
+  }
+
+  /**
    * Export the current clipboard image to the figures cache and return its path.
    * This is used by markdown editors, where pasting an image should insert a
    * stable local file reference instead of an opaque image object.
@@ -2157,7 +2240,21 @@ export class ClipboardManager extends EventEmitter {
       const image = clipboard.readImage();
       if (image.isEmpty()) return null;
 
+      const size = image.getSize();
+      if (this.shouldSkipLargeClipboardImage(size)) {
+        log.info('Skipping oversized clipboard image export from global pasteboard:', size);
+        return null;
+      }
+
       const imageBuffer = image.toPNG();
+      if (imageBuffer.length > MAX_CLIPBOARD_IMAGE_PNG_BYTES) {
+        log.info('Skipping oversized clipboard image export from global pasteboard:', {
+          ...size,
+          bytes: imageBuffer.length,
+        });
+        return null;
+      }
+
       const hash = this.hashContent(imageBuffer);
       this.lastContentHash = hash;
 

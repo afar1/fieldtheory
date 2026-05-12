@@ -251,6 +251,47 @@ describe('ClipboardManager.checkClipboard', () => {
     expect(manager.storeImage).toHaveBeenCalledTimes(1);
   });
 
+  it('skips oversized automatic image capture before PNG encoding', async () => {
+    testState.readText.mockReturnValue('');
+    const toPNG = vi.fn(() => Buffer.from([1, 2, 3]));
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG,
+      getSize: () => ({ width: 5712, height: 4284 }),
+    });
+
+    await manager.checkClipboard();
+
+    expect(toPNG).not.toHaveBeenCalled();
+    expect(manager.storeImage).not.toHaveBeenCalled();
+  });
+
+  it('skips automatic image capture when the encoded PNG is too large', async () => {
+    testState.readText.mockReturnValue('');
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG: () => Buffer.alloc(10 * 1024 * 1024 + 1),
+      getSize: () => ({ width: 1000, height: 1000 }),
+    });
+
+    await manager.checkClipboard();
+
+    expect(manager.storeImage).not.toHaveBeenCalled();
+  });
+
+  it('does not export oversized current clipboard images through the global pasteboard fallback', async () => {
+    const toPNG = vi.fn(() => Buffer.from([1, 2, 3]));
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG,
+      getSize: () => ({ width: 5712, height: 4284 }),
+    });
+
+    await expect(manager.exportCurrentClipboardImageToCache()).resolves.toBeNull();
+    expect(toPNG).not.toHaveBeenCalled();
+    expect(manager.storeImage).not.toHaveBeenCalled();
+  });
+
   it('captures different images even when clipboard formats are identical', async () => {
     // This is the bug we fixed — previously, same formats would short-circuit
     testState.readText.mockReturnValue('');
