@@ -24,6 +24,7 @@ import {
   formatBreadcrumb,
   getMarkdownEditorEdgeFades,
   getGroupedFocusChromeProximityOpacity,
+  getLibrarianTitleFontSize,
   getMarkdownTaskLines,
   getMarkdownRenderedBodyStartLineIndex,
   getRenderedCaretEnsureSourceOffset,
@@ -1509,6 +1510,14 @@ describe('librarian content top padding', () => {
       contentMode: 'markdown',
       focusChromeActive: true,
     })).toBe(0);
+  });
+});
+
+describe('getLibrarianTitleFontSize', () => {
+  it('shrinks very long markdown titles while keeping normal titles at full size', () => {
+    expect(getLibrarianTitleFontSize('Short note', 'rendered')).toBe(30);
+    expect(getLibrarianTitleFontSize('A very long markdown title that needs to fit inside the available document width', 'rendered')).toBeLessThan(30);
+    expect(getLibrarianTitleFontSize('A very long markdown title that needs to fit inside the available document width', 'markdown')).toBeLessThan(26);
   });
 });
 
