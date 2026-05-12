@@ -12,7 +12,7 @@ import {
   SidebarMarkdownIcon,
   SidebarRecentIcon,
 } from './SidebarIcons';
-import { setMarkdownArchivedState } from '../../electron/shared/markdownFrontmatter';
+import { setMarkdownArchivedState, setMarkdownTodoState } from '../../electron/shared/markdownFrontmatter';
 
 type SortMode = 'alpha' | 'time';
 type SidebarTodoState = 'open' | 'done';
@@ -69,6 +69,13 @@ const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): Re
   whiteSpace: 'nowrap',
   WebkitMaskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
   maskImage: `linear-gradient(to right, #000 calc(100% - ${fadeWidth}px), transparent)`,
+});
+
+const getLibrarySidebarFileHoverBg = (isDark: boolean) => (
+  isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.022)'
+);
+const waitForSidebarCollapseAnimation = () => new Promise<void>((resolve) => {
+  window.setTimeout(resolve, 140);
 });
 
 export function getSidebarFolderHeaderPositionStyle(depth: number): React.CSSProperties {
@@ -237,6 +244,17 @@ export interface WikiCreationController {
   beginCreateDir: (target?: LibraryCreateTarget) => void;
 }
 
+export interface WikiArchiveController {
+  hasExplicitSelection: () => boolean;
+  canArchiveSelected: () => boolean;
+  hasArchiveUndo: () => boolean;
+  toggleFocusedSelection: (itemId?: string | null) => boolean;
+  toggleSelectedArchive: () => Promise<boolean>;
+  undoArchive: () => Promise<boolean>;
+  cycleSelectedTodoState: (direction: 'forward' | 'backward') => Promise<boolean>;
+  deleteSelectedItems: () => boolean;
+}
+
 interface WikiSidebarProps {
   active?: boolean;
   onSelectItem: (item: UnifiedItem) => void;
@@ -251,11 +269,38 @@ interface WikiSidebarProps {
   onSearchQueryChange: (query: string) => void;
   searchInputRef?: MutableRefObject<HTMLInputElement | null>;
   creationControllerRef?: MutableRefObject<WikiCreationController | null>;
+  archiveControllerRef?: MutableRefObject<WikiArchiveController | null>;
+  onSidebarItemContentChanged?: (item: UnifiedItem, content: string, version: DocumentVersion | null) => void;
   onDeletedItem?: (item: UnifiedItem) => void;
   onKeyboardScopeActive?: () => void;
 }
 
 export type { UnifiedItem, UnifiedFolder, SortMode };
+
+type ArchivableSidebarItem = UnifiedItem & { type: 'wiki' | 'external' };
+type SidebarArchiveUndo = {
+  entries: Array<{
+    item: ArchivableSidebarItem;
+    previousArchived: boolean;
+  }>;
+};
+
+function isArchivableSidebarItem(item: UnifiedItem | null | undefined): item is ArchivableSidebarItem {
+  return item?.type === 'wiki' || item?.type === 'external';
+}
+
+function getNextSelectedTodoState(items: ArchivableSidebarItem[], direction: 'forward' | 'backward'): SidebarTodoState | null {
+  const states = items.map((item) => item.todoState ?? null);
+  if (direction === 'backward') {
+    if (states.some((state) => state === null)) return 'done';
+    if (states.some((state) => state === 'done')) return 'open';
+    return null;
+  }
+
+  if (states.some((state) => state === null)) return 'open';
+  if (states.some((state) => state === 'open')) return 'done';
+  return null;
+}
 
 export function applyTodoStateOverrideToItem(
   item: UnifiedItem,
@@ -816,10 +861,10 @@ function countSidebarItems(nodes: SidebarNode[]): number {
   }, 0);
 }
 
-function collectSidebarItems(nodes: SidebarNode[]): UnifiedItem[] {
+function collectSidebarItems(nodes: SidebarNode[], includeArchived = true): UnifiedItem[] {
   return nodes.flatMap((node) => {
-    if (node.kind === 'file') return [node.item];
-    return collectSidebarItems(node.children);
+    if (node.kind === 'file') return includeArchived || !node.item.archived ? [node.item] : [];
+    return collectSidebarItems(node.children, includeArchived);
   });
 }
 
@@ -835,15 +880,21 @@ export function shouldCapScratchpadSidebarNode(
     && node.children.length > SCRATCHPAD_COLLAPSED_ITEM_LIMIT;
 }
 
-export function collectSidebarSiblingItems(nodes: SidebarNode[], selectedId: string | null): UnifiedItem[] {
+export function collectSidebarSiblingItems(
+  nodes: SidebarNode[],
+  selectedId: string | null,
+  includeArchived = true,
+): UnifiedItem[] {
   if (!selectedId) return [];
 
-  const directItems = nodes.flatMap((node) => node.kind === 'file' ? [node.item] : []);
+  const directItems = nodes.flatMap((node) => (
+    node.kind === 'file' && (includeArchived || !node.item.archived) ? [node.item] : []
+  ));
   if (directItems.some((item) => item.id === selectedId)) return directItems;
 
   for (const node of nodes) {
     if (node.kind === 'dir') {
-      const match = collectSidebarSiblingItems(node.children, selectedId);
+      const match = collectSidebarSiblingItems(node.children, selectedId, includeArchived);
       if (match.length > 0) return match;
     }
   }
@@ -1070,6 +1121,8 @@ function WikiSidebar({
   onSearchQueryChange,
   searchInputRef,
   creationControllerRef,
+  archiveControllerRef,
+  onSidebarItemContentChanged,
   onDeletedItem,
   onKeyboardScopeActive,
 }: WikiSidebarProps) {
@@ -1118,6 +1171,7 @@ function WikiSidebar({
     }
   });
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
+  const archiveUndoRef = useRef<SidebarArchiveUndo | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -1126,13 +1180,22 @@ function WikiSidebar({
   const [folderConfirmation, setFolderConfirmation] = useState<LibraryFolderConfirmationRequest | null>(null);
   const [renameRequestId, setRenameRequestId] = useState<string | null>(null);
   const [selectedFileIds, setSelectedFileIds] = useState<Set<string>>(() => new Set());
+  const selectedFileIdsRef = useRef<Set<string>>(selectedFileIds);
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
+  const [collapsingFileIds, setCollapsingFileIds] = useState<Set<string>>(() => new Set());
   const autoExpandedSelectedWikiKeyRef = useRef<string | null>(null);
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollJumpElementRef = useRef<HTMLElement | null>(null);
   const [scrollJumpTarget, setScrollJumpTarget] = useState<'top' | 'bottom' | null>(null);
   const [sidebarTopFadeVisible, setSidebarTopFadeVisible] = useState(false);
+  const updateSelectedFileIds = useCallback((nextOrUpdater: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+    setSelectedFileIds((prev) => {
+      const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
+      selectedFileIdsRef.current = next;
+      return next;
+    });
+  }, []);
 
   // Auto-expand the parent folder of the selected wiki item so programmatic
   // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
@@ -1578,9 +1641,10 @@ function WikiSidebar({
     [filteredSidebarRoots]
   );
 
-  const flatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots), [filteredSidebarRoots]);
+  const allFlatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots), [filteredSidebarRoots]);
+  const flatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots, false), [filteredSidebarRoots]);
   const navigationItems = useMemo(() => {
-    const siblingItems = collectSidebarSiblingItems(filteredSidebarRoots, selectedId);
+    const siblingItems = collectSidebarSiblingItems(filteredSidebarRoots, selectedId, false);
     return siblingItems.length > 0 ? siblingItems : flatItems;
   }, [filteredSidebarRoots, flatItems, selectedId]);
   if (flatItemsRef) flatItemsRef.current = navigationItems;
@@ -1593,14 +1657,14 @@ function WikiSidebar({
       const itemIndex = flatItems.findIndex((entry) => entry.id === item.id);
       if (anchorIndex >= 0 && itemIndex >= 0) {
         const [start, end] = anchorIndex < itemIndex ? [anchorIndex, itemIndex] : [itemIndex, anchorIndex];
-        setSelectedFileIds(new Set(flatItems.slice(start, end + 1).map((entry) => entry.id)));
+        updateSelectedFileIds(new Set(flatItems.slice(start, end + 1).map((entry) => entry.id)));
         onSelectItem(item);
         return;
       }
     }
 
     if (toggleSelection) {
-      setSelectedFileIds((prev) => {
+      updateSelectedFileIds((prev) => {
         const next = new Set(prev);
         if (next.has(item.id)) next.delete(item.id);
         else next.add(item.id);
@@ -1611,10 +1675,46 @@ function WikiSidebar({
       return;
     }
 
-    setSelectedFileIds(new Set());
+    updateSelectedFileIds(new Set());
     setSelectionAnchorId(item.id);
     onSelectItem(item);
-  }, [flatItems, onKeyboardScopeActive, onSelectItem, selectedFileIds, selectionAnchorId]);
+  }, [flatItems, onKeyboardScopeActive, onSelectItem, selectedFileIds, selectionAnchorId, updateSelectedFileIds]);
+
+  const getNextVisibleItemAfterMove = useCallback((targetIds: ReadonlySet<string>): UnifiedItem | null => {
+    const findFallback = (sourceItems: UnifiedItem[]): UnifiedItem | null => {
+      if (sourceItems.length === 0) return null;
+      const targetIndexes = sourceItems
+        .map((item, index) => targetIds.has(item.id) ? index : -1)
+        .filter((index) => index >= 0);
+      const selectedIndex = sourceItems.findIndex((item) => item.id === selectedId);
+      const startIndex = targetIndexes.length > 0
+        ? Math.min(...targetIndexes)
+        : selectedIndex >= 0
+          ? selectedIndex
+          : 0;
+
+      for (let index = startIndex; index < sourceItems.length; index += 1) {
+        if (!targetIds.has(sourceItems[index].id)) return sourceItems[index];
+      }
+      for (let index = startIndex - 1; index >= 0; index -= 1) {
+        if (!targetIds.has(sourceItems[index].id)) return sourceItems[index];
+      }
+      return null;
+    };
+
+    return findFallback(navigationItems) ?? findFallback(flatItems);
+  }, [flatItems, navigationItems, selectedId]);
+
+  const toggleSidebarItemSelection = useCallback((item: UnifiedItem) => {
+    if (item.type === 'bookmarks') return;
+    onKeyboardScopeActive?.();
+    const next = new Set(selectedFileIdsRef.current);
+    if (next.has(item.id)) next.delete(item.id);
+    else next.add(item.id);
+    selectedFileIdsRef.current = next;
+    updateSelectedFileIds(next);
+    setSelectionAnchorId(item.id);
+  }, [onKeyboardScopeActive, updateSelectedFileIds]);
 
   const updateScrollJumpTarget = useCallback((clientY?: number, eventTarget?: EventTarget | null) => {
     const scroller = sidebarScrollRef.current;
@@ -1710,6 +1810,7 @@ function WikiSidebar({
   const isSearching = searchQuery.trim().length > 0;
 
   const emptyWiki = visibleSidebarRoots.length === 0 && !bookmarksActionItem;
+  const contextActiveNodeId = contextMenu?.node?.id ?? null;
 
   const closeContextMenu = useCallback(() => setContextMenu(null), []);
 
@@ -1747,12 +1848,253 @@ function WikiSidebar({
   const canRenameContextFile = contextFile?.type === 'wiki' && !!contextFile.relPath;
   const canArchiveContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'external';
   const archiveContextFileLabel = canArchiveContextFile ? (contextFile?.archived ? 'Unarchive' : 'Archive') : null;
+  const multiContextItems = contextFile && selectedFileIds.has(contextFile.id) && selectedFileIds.size > 1
+    ? allFlatItems.filter((item) => selectedFileIds.has(item.id))
+    : [];
+  const multiContextArchivableItems = multiContextItems.filter(isArchivableSidebarItem);
+  const multiContextArchiveLabel = multiContextArchivableItems.length > 0
+    ? (multiContextArchivableItems.every((item) => item.archived) ? 'Unarchive selected' : 'Archive selected')
+    : null;
   const contextFileFinderPath = contextFile?.type !== 'bookmarks' ? contextFile?.absPath : undefined;
   const contextPinTargetId = contextDir?.id ?? (contextFile?.type !== 'bookmarks' ? contextFile?.id : null);
   const contextPinLabel = contextPinTargetId
     ? `${pinnedItemIds.has(contextPinTargetId) ? 'Unpin' : 'Pin'} ${contextDir ? 'folder' : 'doc'}`
     : null;
   const rootCreateLocation = getBuiltinCreateLocation('');
+  const getExplicitSelectedItems = useCallback((): UnifiedItem[] => {
+    const selectedIds = selectedFileIdsRef.current;
+    if (selectedIds.size === 0) return [];
+    return allFlatItems.filter((item) => selectedIds.has(item.id));
+  }, [allFlatItems]);
+
+  const getActionItems = useCallback((): UnifiedItem[] => {
+    const explicitItems = getExplicitSelectedItems();
+    if (explicitItems.length > 0) return explicitItems;
+    const current = allFlatItems.find((item) => item.id === selectedId);
+    return current ? [current] : [];
+  }, [allFlatItems, getExplicitSelectedItems, selectedId]);
+
+  const saveMarkdownItem = useCallback(async (
+    target: ArchivableSidebarItem,
+    transform: (content: string) => string,
+    failureLabel: string,
+  ): Promise<boolean> => {
+    try {
+      if (target.type === 'wiki') {
+        if (!target.relPath) return false;
+        const page = await window.wikiAPI?.getPage(target.relPath);
+        if (!page) {
+          setMoveError('Could not load file.');
+          return false;
+        }
+        const nextContent = transform(page.content);
+        const result = await window.wikiAPI?.save(
+          target.relPath,
+          nextContent,
+          page.documentVersion,
+        );
+        if (!result?.ok) {
+          setMoveError(`${failureLabel} failed.`);
+          return false;
+        }
+        setMoveError(null);
+        onSidebarItemContentChanged?.(target, nextContent, result.version);
+        return true;
+      }
+
+      const file = await window.externalAPI?.open(target.absPath);
+      if (!file) {
+        setMoveError('Could not load file.');
+        return false;
+      }
+      const nextContent = transform(file.content);
+      const result = await window.externalAPI?.save(
+        target.absPath,
+        nextContent,
+        file.documentVersion,
+      );
+      if (!result?.ok) {
+        setMoveError(`${failureLabel} failed.`);
+        return false;
+      }
+      setMoveError(null);
+      onSidebarItemContentChanged?.(target, nextContent, result.version);
+      return true;
+    } catch (error) {
+      setMoveError(error instanceof Error ? error.message : `${failureLabel} failed.`);
+      return false;
+    }
+  }, [onSidebarItemContentChanged]);
+
+  const toggleArchivedItems = useCallback(async (targets: ArchivableSidebarItem[]): Promise<boolean> => {
+    if (targets.length === 0) return false;
+    const nextArchived = targets.some((item) => !item.archived);
+    const undoEntries: SidebarArchiveUndo['entries'] = [];
+
+    for (const target of targets) {
+      const previousArchived = !!target.archived;
+      const success = await saveMarkdownItem(
+        target,
+        (content) => setMarkdownArchivedState(content, nextArchived),
+        nextArchived ? 'Archive' : 'Unarchive',
+      );
+      if (success) undoEntries.push({ item: { ...target }, previousArchived });
+    }
+
+    if (undoEntries.length === 0) return false;
+    const movedIds = new Set(undoEntries.map((entry) => entry.item.id));
+    const fallbackItem = selectedId && movedIds.has(selectedId)
+      ? getNextVisibleItemAfterMove(movedIds)
+      : null;
+    archiveUndoRef.current = { entries: undoEntries };
+    updateSelectedFileIds(new Set());
+    setSelectionAnchorId(null);
+    setCollapsingFileIds(movedIds);
+    await waitForSidebarCollapseAnimation();
+    if (fallbackItem) onSelectItem(fallbackItem);
+    try {
+      await loadTree('selected-files-archived');
+    } finally {
+      setCollapsingFileIds(new Set());
+    }
+    return true;
+  }, [getNextVisibleItemAfterMove, loadTree, onSelectItem, saveMarkdownItem, selectedId, updateSelectedFileIds]);
+
+  const toggleSelectedArchive = useCallback(async (): Promise<boolean> => {
+    const targets = getActionItems().filter(isArchivableSidebarItem);
+    return toggleArchivedItems(targets);
+  }, [getActionItems, toggleArchivedItems]);
+
+  const undoArchive = useCallback(async (): Promise<boolean> => {
+    const undo = archiveUndoRef.current;
+    if (!undo) return false;
+    let changed = false;
+    for (const entry of undo.entries) {
+      const success = await saveMarkdownItem(
+        entry.item,
+        (content) => setMarkdownArchivedState(content, entry.previousArchived),
+        entry.previousArchived ? 'Archive' : 'Unarchive',
+      );
+      changed = changed || success;
+    }
+    if (!changed) return false;
+    archiveUndoRef.current = null;
+    await loadTree('selected-files-archive-undone');
+    return true;
+  }, [loadTree, saveMarkdownItem]);
+
+  const cycleSelectedTodoState = useCallback(async (direction: 'forward' | 'backward'): Promise<boolean> => {
+    const targets = getExplicitSelectedItems().filter(isArchivableSidebarItem);
+    if (targets.length === 0) return false;
+    const nextState = getNextSelectedTodoState(targets, direction);
+    let changed = false;
+    for (const target of targets) {
+      const success = await saveMarkdownItem(
+        target,
+        (content) => setMarkdownTodoState(content, nextState),
+        'Update task state',
+      );
+      changed = changed || success;
+    }
+    if (changed) await loadTree('selected-files-todo-state');
+    return changed;
+  }, [getExplicitSelectedItems, loadTree, saveMarkdownItem]);
+
+  const setSelectedTodoState = useCallback(async (nextState: SidebarTodoState | null): Promise<boolean> => {
+    const targets = getExplicitSelectedItems().filter(isArchivableSidebarItem);
+    if (targets.length === 0) return false;
+    let changed = false;
+    for (const target of targets) {
+      const success = await saveMarkdownItem(
+        target,
+        (content) => setMarkdownTodoState(content, nextState),
+        'Update task state',
+      );
+      changed = changed || success;
+    }
+    if (changed) await loadTree('selected-files-todo-state');
+    return changed;
+  }, [getExplicitSelectedItems, loadTree, saveMarkdownItem]);
+
+  const deleteItems = useCallback(async (targets: UnifiedItem[]): Promise<void> => {
+    let deletedExternal = false;
+    let deletedArtifact = false;
+    const deletedWikiRelPaths: string[] = [];
+
+    for (const target of targets) {
+      if (target.type === 'wiki') {
+        if (!target.relPath) continue;
+        const success = await window.wikiAPI?.deletePage(target.relPath);
+        if (!success) continue;
+        deletedWikiRelPaths.push(target.relPath);
+        onDeletedItem?.(target);
+      } else if (target.type === 'external') {
+        const success = await window.externalAPI?.delete(target.absPath);
+        if (!success) continue;
+        deletedExternal = true;
+        onDeletedItem?.(target);
+      } else if (target.type === 'artifact') {
+        const shareStatus = await window.librarianAPI?.getShareStatus(target.absPath);
+        if (shareStatus?.shared) {
+          await window.librarianAPI?.unshareReading(target.absPath);
+        }
+        const success = await window.librarianAPI?.deleteReading(target.absPath);
+        if (!success) continue;
+        deletedArtifact = true;
+        onDeletedItem?.(target);
+      }
+    }
+
+    if (deletedWikiRelPaths.length > 0) dispatchLocalWikiDeleted(deletedWikiRelPaths);
+    if (deletedExternal) await loadTree('selected-files-deleted');
+    if (deletedArtifact) await loadArtifacts();
+    updateSelectedFileIds(new Set());
+    setSelectionAnchorId(null);
+  }, [loadArtifacts, loadTree, onDeletedItem, updateSelectedFileIds]);
+
+  const deleteSelectedItems = useCallback((): boolean => {
+    const targets = getExplicitSelectedItems().filter((item) => item.type === 'wiki' || item.type === 'external' || item.type === 'artifact');
+    if (targets.length === 0) return false;
+    confirmDelete({
+      title: targets.length === 1 ? 'Delete selected item?' : `Delete ${targets.length} selected items?`,
+      message: targets.length === 1
+        ? `Move "${targets[0].title}" to Trash?`
+        : `Move ${targets.length} selected items to Trash?`,
+      confirmLabel: 'Move to Trash',
+      force: targets.length > 1,
+      onConfirm: () => deleteItems(targets),
+    });
+    return true;
+  }, [confirmDelete, deleteItems, getExplicitSelectedItems]);
+
+  const toggleFocusedSelection = useCallback((itemId?: string | null): boolean => {
+    const targetId = itemId ?? selectedId;
+    const target = allFlatItems.find((item) => item.id === targetId);
+    if (!target || target.type === 'bookmarks') return false;
+    onKeyboardScopeActive?.();
+    const next = new Set(selectedFileIdsRef.current);
+    if (next.has(target.id)) next.delete(target.id);
+    else next.add(target.id);
+    selectedFileIdsRef.current = next;
+    updateSelectedFileIds(next);
+    setSelectionAnchorId(target.id);
+    return true;
+  }, [allFlatItems, onKeyboardScopeActive, selectedId, updateSelectedFileIds]);
+
+  useEffect(() => {
+    if (!archiveControllerRef) return;
+    archiveControllerRef.current = {
+      hasExplicitSelection: () => selectedFileIdsRef.current.size > 0,
+      canArchiveSelected: () => getActionItems().some(isArchivableSidebarItem),
+      hasArchiveUndo: () => archiveUndoRef.current !== null,
+      toggleFocusedSelection,
+      toggleSelectedArchive,
+      undoArchive,
+      cycleSelectedTodoState,
+      deleteSelectedItems,
+    };
+    return () => { archiveControllerRef.current = null; };
+  }, [archiveControllerRef, cycleSelectedTodoState, deleteSelectedItems, getActionItems, toggleFocusedSelection, toggleSelectedArchive, undoArchive]);
 
   const addFolderFromPath = useCallback(async () => {
     closeContextMenu();
@@ -1878,51 +2220,9 @@ function WikiSidebar({
   const toggleContextFileArchived = useCallback(async () => {
     const target = contextFile;
     closeContextMenu();
-    if (!target || (target.type !== 'wiki' && target.type !== 'external')) return;
-    const nextArchived = !target.archived;
-
-    try {
-      if (target.type === 'wiki') {
-        if (!target.relPath) return;
-        const page = await window.wikiAPI?.getPage(target.relPath);
-        if (!page) {
-          setMoveError('Could not load file.');
-          return;
-        }
-        const result = await window.wikiAPI?.save(
-          target.relPath,
-          setMarkdownArchivedState(page.content, nextArchived),
-          page.documentVersion,
-        );
-        if (!result?.ok) {
-          setMoveError(`${nextArchived ? 'Archive' : 'Unarchive'} failed.`);
-          return;
-        }
-        setMoveError(null);
-        await loadTree('wiki-file-archived');
-        return;
-      }
-
-      const file = await window.externalAPI?.open(target.absPath);
-      if (!file) {
-        setMoveError('Could not load file.');
-        return;
-      }
-      const result = await window.externalAPI?.save(
-        target.absPath,
-        setMarkdownArchivedState(file.content, nextArchived),
-        file.documentVersion,
-      );
-      if (!result?.ok) {
-        setMoveError(`${nextArchived ? 'Archive' : 'Unarchive'} failed.`);
-        return;
-      }
-      setMoveError(null);
-      await loadTree('external-file-archived');
-    } catch (error) {
-      setMoveError(error instanceof Error ? error.message : `${nextArchived ? 'Archive' : 'Unarchive'} failed.`);
-    }
-  }, [closeContextMenu, contextFile, loadTree]);
+    if (!isArchivableSidebarItem(target)) return;
+    void toggleArchivedItems([target]);
+  }, [closeContextMenu, contextFile, toggleArchivedItems]);
 
   const deleteContextDir = useCallback(() => {
     const target = contextDir;
@@ -2006,10 +2306,12 @@ function WikiSidebar({
         <style>{`
           .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
           .bm-new-file-btn:hover { opacity: 1 !important; }
-          .bm-file-row:not(.bm-file-row-selected):hover {
-            background-color: ${theme.isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.022)'};
+          .bm-file-row:not(.bm-file-row-selected):hover,
+          .bm-file-row-context:not(.bm-file-row-selected) {
+            background-color: ${getLibrarySidebarFileHoverBg(theme.isDark)};
           }
-          .bm-file-row:hover .bm-show-finder-btn {
+          .bm-file-row:hover .bm-show-finder-btn,
+          .bm-file-row-context .bm-show-finder-btn {
             opacity: 0.7;
             pointer-events: auto;
           }
@@ -2161,7 +2463,10 @@ function WikiSidebar({
           onMoveLibraryItem={moveLibraryItem}
           theme={theme}
           onSelectItem={selectSidebarFileItem}
+          onToggleItemSelection={toggleSidebarItemSelection}
           selectedFileIds={selectedFileIds}
+          collapsingFileIds={collapsingFileIds}
+          contextActiveNodeId={contextActiveNodeId}
           renameRequestId={renameRequestId}
           onRenameRequestConsumed={() => setRenameRequestId(null)}
           onContextMenu={openContextMenu}
@@ -2176,6 +2481,9 @@ function WikiSidebar({
           x={contextMenu.x}
           y={contextMenu.y}
           theme={theme}
+          multiSelectionCount={multiContextItems.length}
+          multiArchiveLabel={multiContextArchiveLabel}
+          canMarkSelectedTodo={multiContextArchivableItems.length > 0}
           canCreate={canCreateInContext}
           canRemoveRoot={!!contextDir?.canRemoveRoot}
           canShowFolderInFinder={!!contextFolderFinderPath}
@@ -2202,12 +2510,24 @@ function WikiSidebar({
           onShowFolderInFinder={showContextFolderInFinder}
           onRenameFile={renameContextFile}
           onToggleArchiveFile={toggleContextFileArchived}
+          onToggleMultiArchive={() => {
+            closeContextMenu();
+            void toggleSelectedArchive();
+          }}
+          onMarkSelectedTodo={(state) => {
+            closeContextMenu();
+            void setSelectedTodoState(state);
+          }}
           onCopyFilePath={copyContextFilePath}
           onShowFileInFinder={showContextFileInFinder}
           onTogglePin={toggleContextPinned}
           onRemoveRoot={removeContextRoot}
           onHideDir={hideContextDir}
           onDeleteFile={deleteContextFile}
+          onDeleteSelectedItems={() => {
+            closeContextMenu();
+            deleteSelectedItems();
+          }}
           onDeleteDir={deleteContextDir}
         />
       )}
@@ -2396,7 +2716,10 @@ function TreeNode({
   onMoveLibraryItem,
   theme,
   onSelectItem,
+  onToggleItemSelection,
   selectedFileIds,
+  collapsingFileIds,
+  contextActiveNodeId,
   renameRequestId,
   onRenameRequestConsumed,
   onContextMenu,
@@ -2424,7 +2747,10 @@ function TreeNode({
   onMoveLibraryItem: (item: LibraryDragItem, target: LibraryCreateLocation) => void | Promise<void>;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelectItem: (item: UnifiedItem, event: React.MouseEvent) => void;
+  onToggleItemSelection: (item: UnifiedItem) => void;
   selectedFileIds: Set<string>;
+  collapsingFileIds: ReadonlySet<string>;
+  contextActiveNodeId: string | null;
   renameRequestId: string | null;
   onRenameRequestConsumed: () => void;
   onContextMenu: (event: React.MouseEvent, node: SidebarNode | null) => void;
@@ -2438,16 +2764,22 @@ function TreeNode({
 
   if (node.kind === 'file') {
     const isSel = node.item.id === selectedId;
+    const explicitlySelected = selectedFileIds.has(node.item.id);
     return (
       <>
         {pinnedDivider}
         <FileItem
           item={node.item}
           depth={depth}
-          isSelected={isSel || selectedFileIds.has(node.item.id)}
+          isSelected={isSel || explicitlySelected}
+          explicitlySelected={explicitlySelected}
+          showSelectionMarker={selectedFileIds.size > 0 && node.item.type !== 'bookmarks'}
+          isCollapsing={collapsingFileIds.has(node.item.id)}
+          isContextActive={contextActiveNodeId === node.id}
           selectedKeyboardActive={selectedKeyboardActive}
           theme={theme}
           onSelect={(event) => onSelectItem(node.item, event)}
+          onToggleSelection={() => onToggleItemSelection(node.item)}
           onContextMenu={(event) => onContextMenu(event, node)}
           onKeyboardScopeActive={onKeyboardScopeActive}
           requestRename={renameRequestId === node.item.id}
@@ -2472,6 +2804,8 @@ function TreeNode({
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+  const folderContextActive = contextActiveNodeId === node.id;
+  const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : theme.bg;
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -2482,7 +2816,7 @@ function TreeNode({
       {pinnedDivider}
       <div data-library-dir-node="true" data-library-dir-id={node.id}>
         <div
-          className="bm-folder-header"
+          className={`bm-folder-header${folderContextActive ? ' bm-folder-header-context' : ''}`}
           draggable={canDragDir}
           onDragStart={(event) => {
             if (!canDragDir) {
@@ -2527,7 +2861,7 @@ function TreeNode({
           onClick={() => toggleFolder(node.id)}
           onContextMenu={(event) => onContextMenu(event, node)}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.bg)}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : theme.bg)}
           style={{
             ...getSidebarFolderHeaderPositionStyle(depth),
             display: 'flex',
@@ -2540,7 +2874,7 @@ function TreeNode({
             lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             color: sidebarTextColor,
             userSelect: 'none',
-            backgroundColor: isDropTarget ? dropBg : theme.bg,
+            backgroundColor: folderBackgroundColor,
           }}
         >
         <SidebarFolderIcon color={sidebarIconColor} />
@@ -2662,7 +2996,10 @@ function TreeNode({
           onMoveLibraryItem={onMoveLibraryItem}
           theme={theme}
           onSelectItem={onSelectItem}
+          onToggleItemSelection={onToggleItemSelection}
           selectedFileIds={selectedFileIds}
+          collapsingFileIds={collapsingFileIds}
+          contextActiveNodeId={contextActiveNodeId}
           renameRequestId={renameRequestId}
           onRenameRequestConsumed={onRenameRequestConsumed}
           onContextMenu={onContextMenu}
@@ -2734,7 +3071,10 @@ function TreeNode({
           onMoveLibraryItem={onMoveLibraryItem}
           theme={theme}
           onSelectItem={onSelectItem}
+          onToggleItemSelection={onToggleItemSelection}
           selectedFileIds={selectedFileIds}
+          collapsingFileIds={collapsingFileIds}
+          contextActiveNodeId={contextActiveNodeId}
           renameRequestId={renameRequestId}
           onRenameRequestConsumed={onRenameRequestConsumed}
           onContextMenu={onContextMenu}
@@ -2842,6 +3182,9 @@ function LibraryContextMenu({
   x,
   y,
   theme,
+  multiSelectionCount = 0,
+  multiArchiveLabel,
+  canMarkSelectedTodo,
   canCreate,
   canRemoveRoot,
   canShowFolderInFinder,
@@ -2860,17 +3203,23 @@ function LibraryContextMenu({
   onShowFolderInFinder,
   onRenameFile,
   onToggleArchiveFile,
+  onToggleMultiArchive,
+  onMarkSelectedTodo,
   onCopyFilePath,
   onShowFileInFinder,
   onTogglePin,
   onRemoveRoot,
   onHideDir,
   onDeleteFile,
+  onDeleteSelectedItems,
   onDeleteDir,
 }: {
   x: number;
   y: number;
   theme: ReturnType<typeof useTheme>['theme'];
+  multiSelectionCount?: number;
+  multiArchiveLabel?: string | null;
+  canMarkSelectedTodo: boolean;
   canCreate: boolean;
   canRemoveRoot: boolean;
   canShowFolderInFinder: boolean;
@@ -2889,12 +3238,15 @@ function LibraryContextMenu({
   onShowFolderInFinder: () => void;
   onRenameFile: () => void;
   onToggleArchiveFile: () => void;
+  onToggleMultiArchive: () => void;
+  onMarkSelectedTodo: (state: SidebarTodoState | null) => void;
   onCopyFilePath: () => void;
   onShowFileInFinder: () => void;
   onTogglePin: () => void;
   onRemoveRoot: () => void;
   onHideDir: () => void;
   onDeleteFile: () => void;
+  onDeleteSelectedItems: () => void;
   onDeleteDir: () => void;
 }) {
   const itemStyle: React.CSSProperties = {
@@ -2929,6 +3281,47 @@ function LibraryContextMenu({
   };
   const hasBottomFolderAction = canRemoveRoot || !!hideDirLabel;
   const hasBottomAction = hasBottomFolderAction || canDeleteDir || canDeleteFile;
+
+  if (multiSelectionCount > 1) {
+    return (
+      <div
+        onClick={(event) => event.stopPropagation()}
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left: x,
+          top: y,
+          zIndex: 1000,
+          minWidth: '180px',
+          padding: '4px',
+          backgroundColor: theme.surface2,
+          border: `1px solid ${theme.border}`,
+          borderRadius: '6px',
+          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.45)' : '0 8px 24px rgba(0,0,0,0.15)',
+        }}
+      >
+        {multiArchiveLabel && (
+          <button style={itemStyle} onClick={onToggleMultiArchive} onMouseEnter={setHover} onMouseLeave={clearHover}>{multiArchiveLabel}</button>
+        )}
+        {canMarkSelectedTodo && (
+          <>
+            <button style={itemStyle} onClick={() => onMarkSelectedTodo('open')} onMouseEnter={setHover} onMouseLeave={clearHover}>Mark selected to do</button>
+            <button style={itemStyle} onClick={() => onMarkSelectedTodo('done')} onMouseEnter={setHover} onMouseLeave={clearHover}>Mark selected done</button>
+            <button style={itemStyle} onClick={() => onMarkSelectedTodo(null)} onMouseEnter={setHover} onMouseLeave={clearHover}>Clear task state</button>
+          </>
+        )}
+        {(multiArchiveLabel || canMarkSelectedTodo) && <div style={dividerStyle} />}
+        <button
+          style={{ ...itemStyle, color: '#dc2626' }}
+          onClick={onDeleteSelectedItems}
+          onMouseEnter={(event) => setHover(event, true)}
+          onMouseLeave={clearHover}
+        >
+          Delete selected
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -3019,13 +3412,36 @@ function LibraryContextMenu({
   );
 }
 
-function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, theme, onSelect, onContextMenu, onKeyboardScopeActive, requestRename, onRenameRequestConsumed, draggable, refProp }: {
+function FileItem({
+  item,
+  depth = 0,
+  isSelected,
+  explicitlySelected,
+  showSelectionMarker,
+  isCollapsing,
+  isContextActive,
+  selectedKeyboardActive,
+  theme,
+  onSelect,
+  onToggleSelection,
+  onContextMenu,
+  onKeyboardScopeActive,
+  requestRename,
+  onRenameRequestConsumed,
+  draggable,
+  refProp,
+}: {
   item: UnifiedItem;
   depth?: number;
   isSelected: boolean;
+  explicitlySelected: boolean;
+  showSelectionMarker: boolean;
+  isCollapsing: boolean;
+  isContextActive: boolean;
   selectedKeyboardActive: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onSelect: (event: React.MouseEvent) => void;
+  onToggleSelection: () => void;
   onContextMenu?: (event: React.MouseEvent) => void;
   onKeyboardScopeActive?: () => void;
   requestRename?: boolean;
@@ -3073,10 +3489,26 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, theme, 
   const selectedInDocument = isSelected && !selectedKeyboardActive;
   const documentSelectionColor = theme.isDark ? '#38bdf8' : '#0284c7';
   const rowSelected = selectedInSidebar || selectedInDocument;
+  const fileHoverBg = getLibrarySidebarFileHoverBg(theme.isDark);
+  const selectedSidebarBg = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+  const selectedDocumentBg = theme.isDark ? 'rgba(56,189,248,0.08)' : 'rgba(2,132,199,0.08)';
+  const contextSelectedBg = theme.isDark ? 'rgba(255,255,255,0.11)' : 'rgba(0,0,0,0.065)';
+  const fileBackgroundColor = isContextActive
+    ? (rowSelected ? contextSelectedBg : fileHoverBg)
+    : selectedInSidebar
+      ? selectedSidebarBg
+      : selectedInDocument
+        ? selectedDocumentBg
+        : undefined;
+  const horizontalPadding = canShowInFinder ? 28 : 12;
+  const leftPadding = 12 + depth * 12;
+  const rowPadding = isCollapsing
+    ? `0 ${horizontalPadding}px 0 ${leftPadding}px`
+    : `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${horizontalPadding}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${leftPadding}px`;
 
   return (
     <div
-      className={`bm-file-row${rowSelected ? ' bm-file-row-selected' : ''}`}
+      className={`bm-file-row${rowSelected ? ' bm-file-row-selected' : ''}${isContextActive ? ' bm-file-row-context' : ''}`}
       ref={refProp}
       tabIndex={-1}
       draggable={draggable}
@@ -3109,21 +3541,22 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, theme, 
       }}
       style={{
         position: 'relative',
-        minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+        minHeight: isCollapsing ? 0 : LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+        maxHeight: isCollapsing ? 0 : '40px',
         boxSizing: 'border-box',
-        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${canShowInFinder ? 28 : 12}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
+        padding: rowPadding,
         cursor: 'pointer',
-        backgroundColor: selectedInSidebar
-          ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)')
-          : selectedInDocument
-            ? (theme.isDark ? 'rgba(56,189,248,0.08)' : 'rgba(2,132,199,0.08)')
-          : undefined,
+        backgroundColor: fileBackgroundColor,
         borderLeft: selectedInSidebar
           ? `2px solid ${theme.accent}`
           : selectedInDocument
             ? `2px solid ${documentSelectionColor}`
             : '2px solid transparent',
-        transition: 'background-color 0.1s ease',
+        opacity: isCollapsing ? 0 : 1,
+        transform: isCollapsing ? 'translateX(4px)' : 'translateX(0)',
+        overflow: 'hidden',
+        pointerEvents: isCollapsing ? 'none' : undefined,
+        transition: 'background-color 0.1s ease, max-height 0.14s ease, min-height 0.14s ease, padding 0.14s ease, opacity 0.1s ease, transform 0.14s ease',
         outline: 'none',
       }}
     >
@@ -3160,7 +3593,54 @@ function FileItem({ item, depth = 0, isSelected, selectedKeyboardActive, theme, 
           />
         ) : (
           <>
-            <SidebarMarkdownIcon color={sidebarIconColor} />
+            {showSelectionMarker ? (
+              <button
+                type="button"
+                aria-label={`${explicitlySelected ? 'Deselect' : 'Select'} ${item.title}`}
+                aria-pressed={explicitlySelected}
+                onMouseDown={(event) => {
+                  event.stopPropagation();
+                  onKeyboardScopeActive?.();
+                }}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onToggleSelection();
+                }}
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  padding: 0,
+                  margin: 0,
+                  flex: '0 0 14px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  color: explicitlySelected ? theme.accent : sidebarIconColor,
+                  backgroundColor: explicitlySelected
+                    ? (theme.isDark ? 'rgba(20,184,166,0.14)' : 'rgba(15,118,110,0.10)')
+                    : 'transparent',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                }}
+              >
+                {explicitlySelected ? (
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path
+                      d="M3.25 8.2 6.6 11.35 12.9 4.65"
+                      stroke="currentColor"
+                      strokeWidth="1.9"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                ) : (
+                  <SidebarMarkdownIcon color={sidebarIconColor} />
+                )}
+              </button>
+            ) : (
+              <SidebarMarkdownIcon color={sidebarIconColor} />
+            )}
             <div style={{
               fontSize: '12px',
               fontWeight: 400,

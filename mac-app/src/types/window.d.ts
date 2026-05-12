@@ -478,6 +478,7 @@ interface ClipboardAPI {
   clearAll: () => Promise<void>;
   captureScreenshot: (region?: boolean) => Promise<number>;
   getClipboardImagePath?: () => Promise<string | null>;
+  savePastedImageFile?: (file: { name?: string | null; type?: string | null; data: Uint8Array }) => Promise<string | null>;
   exportItemImagePath?: (id: number) => Promise<string | null>;
   getHotkeys: () => Promise<ClipboardHotkeys>;
   setHotkeys: (hotkeys: ClipboardHotkeys) => Promise<boolean>;
