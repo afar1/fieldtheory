@@ -1208,6 +1208,7 @@ describe('getLauncherAreaActionIdForQuery', () => {
     expect(getLauncherAreaActionIdForQuery('clipboard')).toBe('open-history');
     expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-library');
+    expect(getLauncherAreaActionIdForQuery('archive')).toBe('archive-current-library-file');
   });
 
   it('does not route partial area words', () => {

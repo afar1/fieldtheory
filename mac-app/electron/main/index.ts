@@ -5019,6 +5019,13 @@ function setupClipboardIPCHandlers(): void {
     return clipboardManager.exportCurrentClipboardImageToCache();
   });
 
+  ipcMain.handle(ClipboardIPCChannels.SAVE_PASTED_IMAGE_FILE, async (_event, file: { name?: string | null; type?: string | null; data: Uint8Array }): Promise<string | null> => {
+    if (!clipboardManager) {
+      return null;
+    }
+    return clipboardManager.savePastedImageFileToCache(file);
+  });
+
   ipcMain.handle(ClipboardIPCChannels.EXPORT_ITEM_IMAGE_PATH, async (_event, id: number): Promise<string | null> => {
     if (!clipboardManager) {
       return null;
