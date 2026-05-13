@@ -27,7 +27,15 @@ vi.mock('./logger', () => ({
   }),
 }));
 
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, resolveFieldTheoryWindowMode, type ClipboardHistoryBounds } from './preferences';
+import {
+  DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+  PreferencesManager,
+  normalizeClipboardHistorySizeKey,
+  normalizeLauncherRootSearchEnabledKinds,
+  pickSavedBoundsByKey,
+  resolveFieldTheoryWindowMode,
+  type ClipboardHistoryBounds,
+} from './preferences';
 
 const sampleBounds = (w: number): ClipboardHistoryBounds => ({
   width: w,
@@ -72,6 +80,18 @@ describe('pickSavedBoundsByKey', () => {
     expect(pickSavedBoundsByKey(null, 'library')).toBeUndefined();
     expect(pickSavedBoundsByKey({}, 'canvas')).toBeUndefined();
     expect(pickSavedBoundsByKey(undefined, 'fields')).toBeUndefined();
+  });
+});
+
+describe('normalizeLauncherRootSearchEnabledKinds', () => {
+  it('keeps launcher root search settings explicit and defaulted', () => {
+    expect(normalizeLauncherRootSearchEnabledKinds(undefined)).toEqual(DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS);
+    expect(normalizeLauncherRootSearchEnabledKinds({ app: false, file: true, contact: true })).toEqual({
+      ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+      app: false,
+      file: true,
+      contact: true,
+    });
   });
 });
 

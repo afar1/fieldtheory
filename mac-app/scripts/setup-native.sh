@@ -6,11 +6,11 @@
 
 set -e
 
-SCRIPT_DIR="$(dirname "$0")"
-NATIVE_DIR="$SCRIPT_DIR/../electron/native"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+NATIVE_DIR="$(cd "$SCRIPT_DIR/../electron/native" && pwd)"
 BUILD_DIR="$NATIVE_DIR/build"
 
-echo "🔨 Building FieldTheoryHelper..."
+echo "🔨 Building FieldTheory native tools..."
 
 # Check if we're on macOS.
 if [[ "$OSTYPE" != "darwin"* ]]; then
@@ -20,6 +20,9 @@ if [[ "$OSTYPE" != "darwin"* ]]; then
     echo "#!/bin/bash" > "$BUILD_DIR/FieldTheoryHelper"
     echo "echo '{\"type\":\"error\",\"message\":\"Native helper not available on this platform\"}'" >> "$BUILD_DIR/FieldTheoryHelper"
     chmod +x "$BUILD_DIR/FieldTheoryHelper"
+    echo "#!/bin/bash" > "$BUILD_DIR/FieldTheoryLauncher"
+    echo "echo 'Native launcher not available on this platform'" >> "$BUILD_DIR/FieldTheoryLauncher"
+    chmod +x "$BUILD_DIR/FieldTheoryLauncher"
     exit 0
 fi
 
@@ -39,15 +42,22 @@ swift build -c release
 # Create build output directory.
 mkdir -p "$BUILD_DIR"
 
-# Copy the built binary.
+# Copy the built binaries.
 cp ".build/release/FieldTheoryHelper" "$BUILD_DIR/"
+cp ".build/release/FieldTheoryLauncher" "$BUILD_DIR/"
+
+codesign --force --deep --sign - "$BUILD_DIR/FieldTheoryHelper"
+codesign --force --deep --sign - "$BUILD_DIR/FieldTheoryLauncher"
 
 echo "✅ Built FieldTheoryHelper at $BUILD_DIR/FieldTheoryHelper"
+echo "✅ Built FieldTheoryLauncher at $BUILD_DIR/FieldTheoryLauncher"
 
-# Verify the binary.
-if [[ -x "$BUILD_DIR/FieldTheoryHelper" ]]; then
-    echo "   Binary is executable ✓"
-else
-    echo "❌ Binary is not executable"
-    exit 1
-fi
+# Verify the binaries.
+for binary in FieldTheoryHelper FieldTheoryLauncher; do
+    if [[ -x "$BUILD_DIR/$binary" ]]; then
+        echo "   $binary is executable ✓"
+    else
+        echo "❌ $binary is not executable"
+        exit 1
+    fi
+done

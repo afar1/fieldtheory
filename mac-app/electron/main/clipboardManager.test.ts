@@ -176,6 +176,21 @@ describe('ClipboardManager.checkClipboard', () => {
     expect(manager.storeText).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps portable command launcher transport text out of clipboard history', async () => {
+    const transportText = '[mail.md]\n/Users/afar/.fieldtheory/library/Commands/mail.md ';
+    testState.readText.mockReturnValue(transportText);
+
+    manager.syncClipboardHash();
+    await manager.checkClipboard();
+
+    expect(manager.storeText).not.toHaveBeenCalled();
+
+    testState.readText.mockReturnValue('real user copy');
+    await manager.checkClipboard();
+
+    expect(manager.storeText).toHaveBeenCalledTimes(1);
+  });
+
   it('notifies callback for duplicate text already in DB', async () => {
     testState.readText.mockReturnValue('existing text');
     testState.dbPrepare.mockReturnValue({

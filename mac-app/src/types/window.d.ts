@@ -1396,6 +1396,38 @@ interface ActiveLibraryFileContext {
   title: string;
 }
 
+interface LauncherAppInfo {
+  name: string;
+  displayName: string;
+  appPath: string;
+  bundleId?: string;
+  lastModified: number;
+}
+
+interface LauncherFileInfo {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+}
+
+interface LauncherFileSearchResult {
+  files: LauncherFileInfo[];
+  indexing: boolean;
+  indexedAt: number | null;
+}
+
+interface LauncherFileIconResult {
+  success: boolean;
+  iconDataUrl?: string;
+  error?: string;
+}
+
+interface LauncherSettings {
+  rootSearchEnabledKinds: Record<string, boolean>;
+}
+
 interface MarkdownPreview {
   title: string;
   filePath: string;
@@ -1440,6 +1472,14 @@ interface CommandsAPI {
 
   // Command launcher (Cmd+Shift+K)
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
+  listLauncherApps?: () => Promise<LauncherAppInfo[]>;
+  launchApp?: (appPath: string) => Promise<{ success: boolean; error?: string }>;
+  getLauncherFileIcon?: (filePath: string) => Promise<LauncherFileIconResult>;
+  searchLauncherFiles?: (query: string) => Promise<LauncherFileSearchResult>;
+  openLauncherFile?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  warmLauncherFileIndex?: () => Promise<{ started: boolean }>;
+  getLauncherSettings?: () => Promise<LauncherSettings>;
+  setLauncherSettings?: (settings: LauncherSettings) => Promise<LauncherSettings>;
   runLocalCommand?: (request: string | LocalCommandRunRequest) => Promise<LocalCommandRunResult>;
   listMaxwellRuns?: (limit?: number) => Promise<MaxwellRunSummary[]>;
   getMaxwellMemory?: () => Promise<MaxwellMemoryState>;

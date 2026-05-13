@@ -85,6 +85,7 @@ describe('CommandLauncherWindow.show()', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockIpcMainHandlers.clear();
+    vi.useRealTimers();
     mockWindow.isVisible.mockReturnValue(false);
     mockWindow.isDestroyed.mockReturnValue(false);
   });
@@ -154,6 +155,35 @@ describe('CommandLauncherWindow.show()', () => {
       width: LAUNCHER_WIDTH,
       height: LAUNCHER_COLLAPSED_HEIGHT,
     });
+  });
+
+  it('keeps fresh bounds lookup inside the open latency budget', async () => {
+    vi.useFakeTimers();
+    const nativeHelper = {
+      getFrontmostApp: vi.fn(() => ({
+        bundleId: 'com.apple.Safari',
+        name: 'Safari',
+        windowBounds: { x: 50, y: 100, width: 1000, height: 800 },
+      })),
+      getFrontmostWindowBounds: vi.fn((timeoutMs: number) => new Promise(resolve => {
+        setTimeout(() => resolve(null), timeoutMs);
+      })),
+    };
+    const launcher = new CommandLauncherWindow(nativeHelper as any);
+    (launcher as any).window = mockWindow;
+
+    const showPromise = launcher.show();
+    await Promise.resolve();
+
+    const boundsTimeoutMs = nativeHelper.getFrontmostWindowBounds.mock.calls[0]?.[0];
+    expect(boundsTimeoutMs).toBeLessThan(50);
+    expect(mockWindow.show).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(boundsTimeoutMs);
+    await showPromise;
+
+    expect(mockWindow.show).toHaveBeenCalled();
+    expect(mockWindow.focus).toHaveBeenCalled();
   });
 
   it('resets renderer state before showing and focusing the window', async () => {

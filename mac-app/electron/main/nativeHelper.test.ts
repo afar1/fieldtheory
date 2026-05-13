@@ -145,4 +145,22 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(stdin.write).not.toHaveBeenCalled();
   });
+
+  it('honors the requested frontmost window bounds timeout', async () => {
+    vi.useFakeTimers();
+    const { helper, sentCommands } = createHelperHarness();
+    const settled = vi.fn();
+
+    const boundsPromise = helper.getFrontmostWindowBounds(35).then(settled);
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{ type: 'getFrontmostWindowBounds' }]);
+    await vi.advanceTimersByTimeAsync(34);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    await boundsPromise;
+
+    expect(settled).toHaveBeenCalledWith(null);
+  });
 });

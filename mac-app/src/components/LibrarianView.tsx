@@ -29,6 +29,7 @@ import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
   getMarkdownFormattingShortcut,
+  getMarkdownListShortcutKind,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
   isImmersiveToggleShortcut,
@@ -803,6 +804,123 @@ export function getMarkdownListToggleEdit(
     nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
     selectionStart: lineStart,
     selectionEnd: lineStart + nextBlock.length,
+  };
+}
+
+export function getRenderedMarkdownShortcutEdit(input: {
+  event: KeyboardEvent;
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+  unorderedListMarker?: LibrarianUnorderedListMarker;
+}): MarkdownTextEdit | null {
+  const formattingKind = getMarkdownFormattingShortcut(input.event);
+  if (formattingKind) {
+    return getMarkdownFormattingEdit(
+      input.value,
+      input.selectionStart,
+      input.selectionEnd,
+      formattingKind,
+    );
+  }
+
+  if (!input.event.metaKey || !input.event.shiftKey || input.event.altKey || input.event.ctrlKey) return null;
+  if (isMarkdownTaskShortcut(input.event)) {
+    return getMarkdownTaskShortcutEdit(input.value, input.selectionStart, input.selectionEnd);
+  }
+
+  const listShortcutKind = getMarkdownListShortcutKind(input.event);
+  if (!listShortcutKind) return null;
+  return getMarkdownListToggleEdit(
+    input.value,
+    input.selectionStart,
+    input.selectionEnd,
+    listShortcutKind,
+    input.unorderedListMarker ?? 'dash',
+  );
+}
+
+function expandRenderedMarkdownImageDeleteRange(value: string, start: number, end: number): { start: number; end: number } {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', end);
+  const lineEnd = lineEndIndex >= 0 ? lineEndIndex : value.length;
+  const before = value.slice(lineStart, start);
+  const after = value.slice(end, lineEnd);
+  if (before.trim() !== '' || after.trim() !== '') return { start, end };
+  if (lineEndIndex >= 0) return { start: lineStart, end: lineEnd + 1 };
+  if (lineStart > 0) return { start: lineStart - 1, end: lineEnd };
+  return { start: lineStart, end: lineEnd };
+}
+
+function getAdjacentRenderedMarkdownImageDeleteRange(
+  value: string,
+  offset: number,
+  direction: 'backward' | 'forward',
+): { start: number; end: number } | null {
+  for (const match of value.matchAll(/!\[[^\]\n]*\]\((?:<[^>\n]+>|[^)\n]*)\)/g)) {
+    if (match.index === undefined) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (
+      (direction === 'backward' && end === offset)
+      || (direction === 'forward' && start === offset)
+    ) {
+      return expandRenderedMarkdownImageDeleteRange(value, start, end);
+    }
+  }
+  return null;
+}
+
+export function getRenderedMarkdownDeleteShortcutEdit(input: {
+  event: KeyboardEvent;
+  value: string;
+  selectionStart: number;
+  selectionEnd: number;
+}): MarkdownTextEdit | null {
+  const key = input.event.key;
+  if (key !== 'Backspace' && key !== 'Delete') return null;
+  if (input.event.ctrlKey || input.event.altKey || input.event.shiftKey) return null;
+
+  const selectionStart = Math.max(0, Math.min(input.selectionStart, input.value.length));
+  const selectionEnd = Math.max(selectionStart, Math.min(input.selectionEnd, input.value.length));
+  if (selectionStart !== selectionEnd) {
+    return {
+      nextValue: `${input.value.slice(0, selectionStart)}${input.value.slice(selectionEnd)}`,
+      selectionStart,
+      selectionEnd: selectionStart,
+    };
+  }
+
+  const imageRange = getAdjacentRenderedMarkdownImageDeleteRange(
+    input.value,
+    selectionStart,
+    key === 'Backspace' ? 'backward' : 'forward',
+  );
+  if (imageRange) {
+    return {
+      nextValue: `${input.value.slice(0, imageRange.start)}${input.value.slice(imageRange.end)}`,
+      selectionStart: imageRange.start,
+      selectionEnd: imageRange.start,
+    };
+  }
+
+  if (!input.event.metaKey) return null;
+
+  let deleteStart = selectionStart;
+  let deleteEnd = selectionEnd;
+  if (key === 'Backspace') {
+    deleteStart = input.value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+    if (deleteStart === deleteEnd && deleteStart > 0) deleteStart -= 1;
+  } else {
+    const lineEnd = input.value.indexOf('\n', selectionEnd);
+    deleteEnd = lineEnd >= 0 ? lineEnd : input.value.length;
+    if (deleteStart === deleteEnd && deleteEnd < input.value.length) deleteEnd += 1;
+  }
+  if (deleteStart === deleteEnd) return null;
+  return {
+    nextValue: `${input.value.slice(0, deleteStart)}${input.value.slice(deleteEnd)}`,
+    selectionStart: deleteStart,
+    selectionEnd: deleteStart,
   };
 }
 
@@ -1850,6 +1968,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContentRef = useRef<string | null>(null);
   const renderedEditorDebugEntriesRef = useRef<RenderedEditorDebugEntry[]>([]);
   const markdownCodeEditorRef = useRef<MarkdownCodeEditorHandle | null>(null);
+  const pendingMarkdownInsertionSelectionRef = useRef<{ value: string; start: number; end: number } | null>(null);
   const renderedSaveTimerRef = useRef<number | null>(null);
   const pendingRenderedSaveRef = useRef<(() => void) | null>(null);
   const renderedSaveInFlightRef = useRef(0);
@@ -3522,37 +3641,52 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       event.preventDefault();
       event.stopPropagation();
       clearRenderedEditingState('escape');
-      return;
+      return true;
     }
 
-    const formattingKind = getMarkdownFormattingShortcut(event);
-    if (!formattingKind || !activeReading) return;
+    if (!activeReading) return false;
 
     const editor = renderedMarkdownEditorRef.current;
-    if (!editor) return;
+    if (!editor) return false;
     const selection = editor.getSelectionRange();
-    const edit = getMarkdownFormattingEdit(
-      editor.getValue(),
-      selection.start,
-      selection.end,
-      formattingKind,
-    );
-    event.preventDefault();
-    event.stopPropagation();
-    applyRenderedEditorBody(edit.nextValue, {
-      selectionStart: edit.selectionStart,
-      selectionEnd: edit.selectionEnd,
-    });
-    pendingRenderedEditorSelectionRef.current = {
-      start: edit.selectionStart,
-      end: edit.selectionEnd,
+    const applyRenderedShortcutEdit = (edit: MarkdownTextEdit): true => {
+      event.preventDefault();
+      event.stopPropagation();
+      applyRenderedEditorBody(edit.nextValue, {
+        selectionStart: edit.selectionStart,
+        selectionEnd: edit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: edit.selectionStart,
+        end: edit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      return true;
     };
-    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+
+    const value = editor.getValue();
+    const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
+      event,
+      value,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+    });
+    if (deleteEdit) return applyRenderedShortcutEdit(deleteEdit);
+
+    const edit = getRenderedMarkdownShortcutEdit({
+      event,
+      value,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+      unorderedListMarker,
+    });
+    return edit ? applyRenderedShortcutEdit(edit) : false;
   }, [
     activeReading,
     applyRenderedEditorBody,
     clearRenderedEditingState,
     focusRenderedEditor,
+    unorderedListMarker,
   ]);
 
   const handleRenderedEditorSelectionChange = useCallback((snapshot: MarkdownCodeEditorSelectionSnapshot) => {
@@ -3940,6 +4074,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const insertedText = formatPastedLocalImageMarkdown(text) ?? text;
     const nextValue = `${currentValue.slice(0, selectionStart)}${insertedText}${currentValue.slice(selectionEnd)}`;
     const nextSelection = selectionStart + insertedText.length;
+    pendingMarkdownInsertionSelectionRef.current = {
+      value: nextValue,
+      start: nextSelection,
+      end: nextSelection,
+    };
 
     setEditContent(nextValue);
     scheduleEditorSessionPersist();
@@ -3947,6 +4086,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     requestAnimationFrame(() => {
       const nextEditor = markdownCodeEditorRef.current;
       if (!nextEditor || nextEditor.getValue() !== nextValue) return;
+      pendingMarkdownInsertionSelectionRef.current = null;
       nextEditor.focus({ preventScroll: true });
       nextEditor.setSelectionRange(nextSelection, nextSelection);
     });
@@ -3960,6 +4100,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     applyMarkdownTextInsertion(text);
   }, [applyMarkdownTextInsertion, contentMode]);
+
+  useLayoutEffect(() => {
+    if (contentMode !== 'markdown') return;
+    const frame = requestAnimationFrame(() => {
+      const pending = pendingMarkdownInsertionSelectionRef.current;
+      const editor = markdownCodeEditorRef.current;
+      if (!pending || !editor || editor.getValue() !== pending.value) return;
+      pendingMarkdownInsertionSelectionRef.current = null;
+      editor.focus({ preventScroll: true });
+      editor.setSelectionRange(pending.start, pending.end);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [contentMode, editContent]);
 
   const insertPastedClipboardImagePath = useCallback(async (clipboardData: DataTransfer) => {
     const imagePath = await getPastedClipboardImagePath(clipboardData);
@@ -4113,12 +4266,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return true;
       }
 
-      if (event.code === 'Digit7' || event.code === 'Digit8') {
+      const listShortcutKind = getMarkdownListShortcutKind(event);
+      if (listShortcutKind) {
         const edit = getMarkdownListToggleEdit(
           value,
           selection.start,
           selection.end,
-          event.code === 'Digit7' ? 'ordered' : 'unordered',
+          listShortcutKind,
           unorderedListMarker,
         );
         if (!edit) return false;

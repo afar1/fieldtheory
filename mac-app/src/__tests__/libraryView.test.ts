@@ -11,6 +11,8 @@ import {
   getMarkdownBodySelectionRange,
   getMarkdownListToggleEdit,
   getRenderedMarkdownNodeStartLine,
+  getRenderedMarkdownDeleteShortcutEdit,
+  getRenderedMarkdownShortcutEdit,
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
   getRenderedMarkdownSelectionFormatEdit,
@@ -112,6 +114,10 @@ afterEach(() => {
   clearLibraryDragData();
   window.getSelection()?.removeAllRanges();
 });
+
+function mkKey(overrides: Partial<KeyboardEvent>): KeyboardEvent {
+  return new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...overrides });
+}
 
 describe('rankMarkdownWikiLinkSuggestions', () => {
   it('keeps username-like matches searchable but ranks local content first', () => {
@@ -953,6 +959,94 @@ describe('highlightFileFindMatches', () => {
 });
 
 describe('rendered markdown edit helpers', () => {
+  it('deletes adjacent rendered image markdown as a single block', () => {
+    const value = 'before\n![Image](<file:///tmp/Figure.png>)\nafter';
+    const imageStart = value.indexOf('![');
+    const imageEnd = value.indexOf('\nafter');
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value,
+      selectionStart: imageEnd,
+      selectionEnd: imageEnd,
+    })).toEqual({
+      nextValue: 'before\nafter',
+      selectionStart: imageStart,
+      selectionEnd: imageStart,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Delete' }),
+      value,
+      selectionStart: imageStart,
+      selectionEnd: imageStart,
+    })).toEqual({
+      nextValue: 'before\nafter',
+      selectionStart: imageStart,
+      selectionEnd: imageStart,
+    });
+  });
+
+  it('handles macOS rendered line delete chords from the source offset', () => {
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace', metaKey: true }),
+      value: 'alpha beta\ngamma',
+      selectionStart: 5,
+      selectionEnd: 5,
+    })).toEqual({
+      nextValue: ' beta\ngamma',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Delete', metaKey: true }),
+      value: 'alpha beta\ngamma',
+      selectionStart: 5,
+      selectionEnd: 5,
+    })).toEqual({
+      nextValue: 'alpha\ngamma',
+      selectionStart: 5,
+      selectionEnd: 5,
+    });
+  });
+
+  it('applies task and list shortcuts from rendered edit mode', () => {
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: ')', code: 'Digit0', metaKey: true, shiftKey: true }),
+      value: 'alpha\nbeta',
+      selectionStart: 0,
+      selectionEnd: 10,
+    })).toEqual({
+      nextValue: '- [ ] alpha\n- [ ] beta',
+      selectionStart: 0,
+      selectionEnd: 22,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
+      value: 'first\nsecond',
+      selectionStart: 0,
+      selectionEnd: 12,
+    })).toEqual({
+      nextValue: '1. first\n2. second',
+      selectionStart: 0,
+      selectionEnd: 18,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }),
+      value: 'first\nsecond',
+      selectionStart: 0,
+      selectionEnd: 12,
+      unorderedListMarker: 'carrot',
+    })).toEqual({
+      nextValue: '› first\n› second',
+      selectionStart: 0,
+      selectionEnd: 16,
+    });
+  });
+
   it('wraps selected text with inline formatting markers', () => {
     expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'bold')).toEqual({
       nextValue: 'hello **world**',
