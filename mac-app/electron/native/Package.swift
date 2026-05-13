@@ -11,7 +11,8 @@ let package = Package(
         .macOS(.v13)
     ],
     products: [
-        .executable(name: "FieldTheoryHelper", targets: ["FieldTheoryHelper"])
+        .executable(name: "FieldTheoryHelper", targets: ["FieldTheoryHelper"]),
+        .executable(name: "FieldTheoryLauncher", targets: ["FieldTheoryLauncher"])
     ],
     dependencies: [],
     targets: [
@@ -35,6 +36,13 @@ let package = Package(
                 .linkedFramework("AudioToolbox"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("ScreenCaptureKit")
+            ]
+        ),
+        .executableTarget(
+            name: "FieldTheoryLauncher",
+            path: "Sources/FieldTheoryLauncher",
+            linkerSettings: [
+                .linkedFramework("AppKit")
             ]
         )
     ]

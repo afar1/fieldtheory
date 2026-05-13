@@ -28,6 +28,8 @@ import {
   RENDERED_MARKDOWN_EDITOR_STRONG_CLASS,
   RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS,
+  buildRenderedMarkdownEditorDecorations,
+  buildRenderedMarkdownEditorDecorationsForRanges,
   checkedMarkdownTaskLineExtension,
   renderedMarkdownEditorPresentationExtension,
   dispatchMarkdownCodeEditorFileSwap,
@@ -279,25 +281,25 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     document.body.appendChild(parent);
     const view = new EditorView({
       state: EditorState.create({
-        doc: '- [ ] open\n- [x] done\n[] bare',
+        doc: '- [ ]\n- [ ] open\n- [x] done\n[] bare',
         extensions: [renderedMarkdownEditorPresentationExtension],
       }),
       parent,
     });
 
     const checkboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
-    expect(checkboxes).toHaveLength(3);
+    expect(checkboxes).toHaveLength(4);
 
     checkboxes[0].click();
-    expect(view.state.doc.toString()).toBe('- [x] open\n- [x] done\n[] bare');
+    expect(view.state.doc.toString()).toBe('- [x]\n- [ ] open\n- [x] done\n[] bare');
 
     const nextCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     nextCheckboxes[1].click();
-    expect(view.state.doc.toString()).toBe('- [x] open\n- [ ] done\n[] bare');
+    expect(view.state.doc.toString()).toBe('- [x]\n- [x] open\n- [x] done\n[] bare');
 
     const finalCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
-    finalCheckboxes[2].click();
-    expect(view.state.doc.toString()).toBe('- [x] open\n- [ ] done\n[x] bare');
+    finalCheckboxes[3].click();
+    expect(view.state.doc.toString()).toBe('- [x]\n- [x] open\n- [x] done\n[x] bare');
 
     view.destroy();
     parent.remove();
@@ -451,6 +453,77 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  it('keeps rendered decoration rebuilds inside the typing latency budget', () => {
+    const doc = Array.from({ length: 300 }, (_, index) => {
+      if (index % 10 === 0) return `## Section ${index}`;
+      if (index % 5 === 0) return `- [ ] follow up ${index}`;
+      if (index % 3 === 0) return `> quoted **line ${index}**`;
+      return `Paragraph ${index} with **bold** text, [link](wiki://page-${index}), and \`code\`.`;
+    }).join('\n');
+    const state = EditorState.create({ doc });
+    const typedState = state.update({
+      changes: { from: state.doc.length, insert: '!' },
+      annotations: Transaction.userEvent.of('input.type'),
+    }).state;
+
+    buildRenderedMarkdownEditorDecorations(state);
+    const startedAt = performance.now();
+    const decorations = buildRenderedMarkdownEditorDecorations(typedState);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(decorations.size).toBeGreaterThan(0);
+    expect(elapsedMs).toBeLessThan(50);
+  });
+
+  it('keeps visible rendered decoration rebuilds inside a single-frame typing budget', () => {
+    const doc = Array.from({ length: 5000 }, (_, index) => {
+      if (index % 20 === 0) return `## Section ${index}`;
+      if (index % 7 === 0) return `- [ ] follow up ${index}`;
+      if (index % 5 === 0) return `> quoted **line ${index}**`;
+      return `Paragraph ${index} with **bold** text, [link](wiki://page-${index}), and \`code\`.`;
+    }).join('\n');
+    const state = EditorState.create({ doc });
+    const typedState = state.update({
+      changes: { from: state.doc.length, insert: '!' },
+      annotations: Transaction.userEvent.of('input.type'),
+    }).state;
+    const visibleStart = typedState.doc.line(4940).from;
+    const visibleRange = [{ from: visibleStart, to: typedState.doc.length }];
+
+    buildRenderedMarkdownEditorDecorationsForRanges(typedState, visibleRange);
+    const startedAt = performance.now();
+    const decorations = buildRenderedMarkdownEditorDecorationsForRanges(typedState, visibleRange);
+    const elapsedMs = performance.now() - startedAt;
+
+    expect(decorations.size).toBeGreaterThan(0);
+    expect(decorations.size).toBeLessThan(500);
+    expect(elapsedMs).toBeLessThan(16);
+  });
+
+  it('keeps code block styling when a visible range starts inside a fenced block', () => {
+    const doc = [
+      'before',
+      '```ts',
+      'const first = 1;',
+      'const second = 2;',
+      '```',
+      'after',
+    ].join('\n');
+    const state = EditorState.create({ doc });
+    const visibleLine = state.doc.line(4);
+    const decorations = buildRenderedMarkdownEditorDecorationsForRanges(state, [{
+      from: visibleLine.from,
+      to: visibleLine.to,
+    }]);
+    const classes: string[] = [];
+
+    decorations.between(0, state.doc.length, (_from, _to, value) => {
+      if (typeof value.spec.class === 'string') classes.push(value.spec.class);
+    });
+
+    expect(classes).toContain(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS);
   });
 });
 

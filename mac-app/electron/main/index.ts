@@ -1,6 +1,5 @@
 import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol } from 'electron';
 import { pathToFileURL } from 'url';
-import { autoUpdater } from 'electron-updater';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -17,8 +16,16 @@ import {
 } from './fieldTheoryWindowModePolicy';
 import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
-import { TranscriberManager } from './transcriberManager';
-import { PreferencesManager, normalizeClipboardHistorySizeKey, pickSavedBoundsByKey, resolveFieldTheoryWindowMode, type ClipboardHistorySizeKey, type FieldTheoryWindowMode } from './preferences';
+import type { TranscriberManager } from './transcriberManager';
+import {
+  PreferencesManager,
+  normalizeClipboardHistorySizeKey,
+  normalizeLauncherRootSearchEnabledKinds,
+  pickSavedBoundsByKey,
+  resolveFieldTheoryWindowMode,
+  type ClipboardHistorySizeKey,
+  type FieldTheoryWindowMode,
+} from './preferences';
 import { ClipboardManager } from './clipboardManager';
 import {
   DEFAULT_MODEL_SIZE,
@@ -29,7 +36,7 @@ import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
 import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
-import { AuthManager } from './authManager';
+import type { AuthManager } from './authManager';
 import { createUserDataManager, UserDataManager } from './userDataManager';
 import { SocialIPCChannels } from './types/social';
 import {
@@ -79,7 +86,7 @@ import {
 } from './agentKickoffManager';
 import { AgentHookInstaller, type InstallTargets } from './agentHookInstaller';
 import { launchAgentImproveInTerminal, type AgentImproveLaunchRequest } from './agentImproveLauncher';
-import { QuotaManager } from './quotaManager';
+import type { QuotaManager } from './quotaManager';
 import { AccountStatusManager } from './accountStatusManager';
 import { DiagnosticsCollector } from './diagnosticsCollector';
 import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } from './commandsManager';
@@ -90,6 +97,10 @@ import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
   CommandsIPCChannels,
+  type LauncherAppInfo,
+  type LauncherFileIconResult,
+  type LauncherFileSearchResult,
+  type LauncherSettings,
   type LocalCommandRunMode,
   type LocalCommandRunRequest,
   type LocalCommandRunResult,
@@ -110,7 +121,7 @@ import { waitForTargetAppFrontmost } from './commandLauncherActivation';
 import { isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
-import { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, type LibraryRenameEvent, type ReadingRenameEvent, type WikiNode } from './librarianManager';
+import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
@@ -124,10 +135,7 @@ import {
   shouldRegisterFieldTheoryProtocol,
 } from './urlProtocolRegistration';
 import { RecentManager, type RecentEntry } from './recentManager';
-import { BookmarksManager, BookmarksSnapshot, mediaDir as bookmarkMediaDir } from './bookmarksManager';
-import { buildBookmarkAgentCopyText } from './bookmarkAgentCopy';
-import { bookmarksForTaxonomyFiles, searchBookmarks } from './bookmarkCollections';
-import { bookmarkById, bookmarksForAuthor, buildBookmarkAuthorSummaries, formatBookmarkAuthorTimeline, formatBookmarkPost } from './bookmarkAuthorTimeline';
+import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
@@ -165,6 +173,54 @@ import {
 const log = createLogger('Main');
 const renderedEditorDebugLogPath = path.join(process.cwd(), '.logs', 'rendered-editor-debug.jsonl');
 const LIBRARY_RENAME_TRACE_ENABLED = process.env.LIBRARY_RENAME_TRACE === 'true';
+const STARTUP_PROFILE_ENABLED = ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_STARTUP_PROFILE ?? '').toLowerCase());
+const STARTUP_LAUNCHED_AT_MS = Number.parseFloat(process.env.FIELD_THEORY_STARTUP_LAUNCHED_AT_MS ?? '');
+const STARTUP_BENCH_EXIT_AFTER = process.env.FIELD_THEORY_STARTUP_BENCH_EXIT_AFTER?.trim() ?? '';
+const STARTUP_PROFILE_PATH = process.env.FIELD_THEORY_STARTUP_PROFILE_PATH?.trim() ?? '';
+const startupMarks: Array<{ stage: string; moduleMs: number; launchedMs: number | null }> = [];
+
+function writeStartupProfileLine(line: string): void {
+  process.stderr.write(`${line}\n`);
+  if (!STARTUP_PROFILE_PATH) return;
+  try {
+    fs.appendFileSync(STARTUP_PROFILE_PATH, `${line}\n`);
+  } catch {
+    // Profiling must never block app startup.
+  }
+}
+
+function startupMark(stage: string): void {
+  if (!STARTUP_PROFILE_ENABLED) return;
+  const now = Date.now();
+  const mark = {
+    stage,
+    moduleMs: now - BOOT_MARK,
+    launchedMs: Number.isFinite(STARTUP_LAUNCHED_AT_MS) ? now - STARTUP_LAUNCHED_AT_MS : null,
+  };
+  startupMarks.push(mark);
+  writeStartupProfileLine(`[StartupProfile] ${stage} moduleMs=${mark.moduleMs} launchedMs=${mark.launchedMs ?? 'n/a'}`);
+}
+
+function maybeExitStartupBenchmark(stage: string): void {
+  if (!STARTUP_PROFILE_ENABLED || STARTUP_BENCH_EXIT_AFTER !== stage) return;
+  writeStartupProfileLine(`[StartupProfile] summary ${JSON.stringify(startupMarks)}`);
+  setTimeout(() => {
+    app.quit();
+  }, 25);
+}
+
+function markStartupSurfaceShown(window: BrowserWindow | null, stage: string): void {
+  if (!window || window.isDestroyed()) return;
+  const markShown = () => {
+    startupMark(stage);
+    maybeExitStartupBenchmark(stage);
+  };
+  if (window.isVisible()) {
+    markShown();
+    return;
+  }
+  window.once('show', markShown);
+}
 
 function writeRenderedEditorDebugLog(entry: unknown): { ok: boolean; path: string; error?: string } {
   try {
@@ -204,6 +260,7 @@ function traceLibraryRename(stage: string, payload: Record<string, unknown>): vo
 }
 
 const BOOT_MARK = Date.now();
+startupMark('module-loaded');
 const VISION_BUILD_ENABLED = false;
 const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
 const BOOKMARK_BACKGROUND_SYNC_STALE_MS = 15 * 60 * 1000;
@@ -656,24 +713,34 @@ const fieldTheoryBuildChannel = resolveFieldTheoryBuildChannel({
 const isExperimentalBuild = fieldTheoryBuildChannel === 'experimental';
 const autoUpdaterReleaseRepo = autoUpdaterReleaseRepoForBuildChannel(fieldTheoryBuildChannel);
 const isAutoUpdaterEnabled = autoUpdaterReleaseRepo !== null;
+let autoUpdaterInstance: import('electron-updater').AppUpdater | null = null;
+
+function getAutoUpdater(): import('electron-updater').AppUpdater {
+  if (!autoUpdaterInstance) {
+    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater');
+    autoUpdater.autoDownload = false;
+    autoUpdater.allowPrerelease = false;
+    if (autoUpdaterReleaseRepo) {
+      autoUpdater.setFeedURL({
+        provider: 'github',
+        owner: 'afar1',
+        repo: autoUpdaterReleaseRepo,
+      });
+    }
+    autoUpdaterInstance = autoUpdater;
+  }
+  return autoUpdaterInstance;
+}
 
 // Pin userData paths explicitly so auth/session storage is shared across release channels.
 // This must happen before app.whenReady() and before any code calls app.getPath('userData').
-const productionUserData = path.join(app.getPath('appData'), 'fieldtheory-mac');
+const startupBenchmarkUserData = process.env.FIELD_THEORY_STARTUP_BENCH_USER_DATA_DIR?.trim();
+const productionUserData = startupBenchmarkUserData
+  ? path.resolve(startupBenchmarkUserData)
+  : path.join(app.getPath('appData'), 'fieldtheory-mac');
 app.setPath('userData', productionUserData);
 if (isExperimentalBuild) {
   app.setName('Field Theory Experimental');
-}
-
-// Configure autoUpdater for the production manual update flow.
-if (isAutoUpdaterEnabled) {
-  autoUpdater.autoDownload = false;
-  autoUpdater.allowPrerelease = false;
-  autoUpdater.setFeedURL({
-    provider: 'github',
-    owner: 'afar1',
-    repo: autoUpdaterReleaseRepo,
-  });
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -722,6 +789,60 @@ let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
 let lastScratchpadOpenAt = 0;
+let appMetadataIPCHandlersInstalled = false;
+let onboardingIPCHandlersInstalled = false;
+let transcribeIPCHandlersInstalled = false;
+
+async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
+  if (!userDataManager) {
+    userDataManager = createUserDataManager();
+    await userDataManager.restoreCurrentUser();
+    startupMark('user-data-restored');
+  }
+  return userDataManager;
+}
+
+const LAUNCHER_FILE_ICON_CACHE_LIMIT = 512;
+const launcherFileIconCache = new Map<string, string | null>();
+
+function rememberLauncherFileIcon(filePath: string, iconDataUrl: string | null): void {
+  if (launcherFileIconCache.size >= LAUNCHER_FILE_ICON_CACHE_LIMIT) {
+    const oldestKey = launcherFileIconCache.keys().next().value;
+    if (oldestKey) launcherFileIconCache.delete(oldestKey);
+  }
+  launcherFileIconCache.set(filePath, iconDataUrl);
+}
+
+async function getLauncherFileIcon(filePath: string): Promise<LauncherFileIconResult> {
+  if (typeof filePath !== 'string' || !filePath.trim()) {
+    return { success: false, error: 'File path missing' };
+  }
+
+  const normalizedPath = path.normalize(filePath);
+  if (launcherFileIconCache.has(normalizedPath)) {
+    const iconDataUrl = launcherFileIconCache.get(normalizedPath);
+    return iconDataUrl ? { success: true, iconDataUrl } : { success: false, error: 'Icon unavailable' };
+  }
+
+  if (!fs.existsSync(normalizedPath)) {
+    rememberLauncherFileIcon(normalizedPath, null);
+    return { success: false, error: 'Icon target not found' };
+  }
+
+  try {
+    const icon = await app.getFileIcon(normalizedPath, { size: 'small' });
+    if (icon.isEmpty()) {
+      rememberLauncherFileIcon(normalizedPath, null);
+      return { success: false, error: 'Icon unavailable' };
+    }
+    const iconDataUrl = icon.toDataURL();
+    rememberLauncherFileIcon(normalizedPath, iconDataUrl);
+    return { success: true, iconDataUrl };
+  } catch (error) {
+    rememberLauncherFileIcon(normalizedPath, null);
+    return { success: false, error: error instanceof Error ? error.message : 'Icon unavailable' };
+  }
+}
 
 function emitLocalCommandStatus(status: Omit<LocalCommandStatus, 'updatedAt'>): LocalCommandStatus {
   const payload = { ...status, updatedAt: Date.now() };
@@ -1634,6 +1755,9 @@ async function collectProcessPerformanceSnapshot(): Promise<ProcessPerformanceSn
  * Runs once and creates a marker file to prevent re-running.
  */
 function migrateFromLegacyPaths(): void {
+  if (startupBenchmarkUserData) {
+    return;
+  }
   const newUserData = app.getPath('userData');
   const migrationMarker = path.join(newUserData, '.migration-v1-complete');
 
@@ -2114,6 +2238,63 @@ function createOnboardingWindow(): OnboardingWindow {
     window.setPreferencesManager(preferencesManager);
   }
   return window;
+}
+
+function setupOnboardingIPCHandlersOnce(): void {
+  if (onboardingIPCHandlersInstalled) return;
+  setupOnboardingIPCHandlers();
+  onboardingIPCHandlersInstalled = true;
+}
+
+function setupTranscribeIPCHandlersOnce(): void {
+  if (transcribeIPCHandlersInstalled) return;
+  setupTranscribeIPCHandlers();
+  transcribeIPCHandlersInstalled = true;
+}
+
+function setupAppMetadataIPCHandlersOnce(): void {
+  if (appMetadataIPCHandlersInstalled) return;
+  ipcMain.on('app:getVersion', (event) => {
+    event.returnValue = app.getVersion();
+  });
+  ipcMain.on('updater:isEnabled', (event) => {
+    event.returnValue = isAutoUpdaterEnabled;
+  });
+  ipcMain.handle('updater:getStatus', () => {
+    return pendingUpdateInfo;
+  });
+  appMetadataIPCHandlersInstalled = true;
+}
+
+function showEarlyOnboardingIfNeeded(): boolean {
+  const prefs = preferencesManager?.get();
+  if (prefs?.onboardingComplete) return false;
+  setupOnboardingIPCHandlersOnce();
+  setupTranscribeIPCHandlersOnce();
+  onboardingWindow = onboardingWindow ?? createOnboardingWindow();
+  onboardingWindow.show(prefs?.onboardingStep ?? OnboardingStep.PERMISSIONS);
+  markStartupSurfaceShown(onboardingWindow.getWindow(), 'early-onboarding-window-shown');
+  startupMark('early-onboarding-show-called');
+  maybeExitStartupBenchmark('early-onboarding-show-called');
+  return true;
+}
+
+function showEarlyClipboardWindowIfNeeded(): boolean {
+  const prefs = preferencesManager?.get();
+  const openedAsLoginItem = wasOpenedAsLoginItem();
+  if (!shouldShowClipboardWindowOnStartup(prefs?.onboardingComplete, openedAsLoginItem)) {
+    return false;
+  }
+  if (!clipboardHistoryWindow) {
+    clipboardHistoryWindow = initClipboardHistoryWindow();
+  }
+  const boundsToUse = restoreClipboardHistoryBounds('library');
+  suspendDynamicIslandFocusForClipboardHistory('early-startup-show');
+  clipboardHistoryWindow.showLibrary(boundsToUse);
+  markStartupSurfaceShown(clipboardHistoryWindow.getWindow(), 'early-clipboard-window-shown');
+  startupMark('early-clipboard-show-called');
+  maybeExitStartupBenchmark('early-clipboard-show-called');
+  return true;
 }
 
 /**
@@ -3314,6 +3495,7 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('bookmarks:getAuthors', () => {
     if (!bookmarksManager) return [];
+    const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
     return buildBookmarkAuthorSummaries(bookmarksManager.getSnapshot().bookmarks);
   });
 
@@ -3357,17 +3539,20 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle('bookmarks:getAuthorBookmarks', (_event, handle: string) => {
     if (!bookmarksManager) return [];
+    const { bookmarksForAuthor } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
     return bookmarksForAuthor(handle, bookmarksManager.getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:getTaxonomyBookmarks', (_event, filePaths: string[]) => {
     if (!bookmarksManager) return [];
     if (!Array.isArray(filePaths)) return [];
+    const { bookmarksForTaxonomyFiles } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
     return bookmarksForTaxonomyFiles(filePaths, bookmarksManager.getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:search', (_event, query: string) => {
     if (!bookmarksManager || typeof query !== 'string') return [];
+    const { searchBookmarks } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
     return searchBookmarks(query, bookmarksManager.getSnapshot().bookmarks);
   });
 
@@ -3473,6 +3658,7 @@ function setupLibrarianIPCHandlers(): void {
       return { success: false, error: 'Bookmarks not initialized' };
     }
 
+    const { bookmarkById, formatBookmarkPost } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
     const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
     if (!bookmark) {
       return { success: false, error: 'Bookmark not found' };
@@ -3486,6 +3672,9 @@ function setupLibrarianIPCHandlers(): void {
       return { success: false, error: 'Bookmarks not initialized' };
     }
 
+    const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
+    const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
+    const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
     const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
     if (!bookmark) {
       return { success: false, error: 'Bookmark not found' };
@@ -3506,6 +3695,7 @@ function setupLibrarianIPCHandlers(): void {
       return { success: false, error: 'Bookmarks not initialized' };
     }
 
+    const { formatBookmarkAuthorTimeline } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
     const timeline = formatBookmarkAuthorTimeline(handle, bookmarksManager.getSnapshot().bookmarks);
     if (!timeline) {
       return { success: false, error: 'No bookmarks found for author' };
@@ -4660,7 +4850,7 @@ function setupTranscribeIPCHandlers(): void {
 
   ipcMain.handle(TranscribeIPCChannels.GET_MODEL_DOWNLOAD_STATUS, async () => {
     if (!transcriberManager) {
-      throw new Error('TranscriberManager not initialized');
+      return {};
     }
     const modelManager = transcriberManager.getModelManager();
     return modelManager.getDownloadStatus();
@@ -6935,6 +7125,57 @@ function setupClipboardIPCHandlers(): void {
     }));
   });
 
+  ipcMain.handle(CommandsIPCChannels.LIST_LAUNCHER_APPS, async (): Promise<LauncherAppInfo[]> => {
+    const { listLauncherApps } = require('./launcherApps') as typeof import('./launcherApps');
+    return listLauncherApps();
+  });
+
+  ipcMain.handle(CommandsIPCChannels.LAUNCH_APP, async (_event, appPath: string): Promise<{ success: boolean; error?: string }> => {
+    const { launchLauncherApp } = require('./launcherApps') as typeof import('./launcherApps');
+    return launchLauncherApp(appPath, {
+      beforeLaunch: () => commandLauncherWindow?.hide(true),
+      openPath: (resolvedPath) => shell.openPath(resolvedPath),
+    });
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_LAUNCHER_FILE_ICON, async (_event, filePath: string): Promise<LauncherFileIconResult> => {
+    return getLauncherFileIcon(filePath);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SEARCH_LAUNCHER_FILES, async (_event, query: string): Promise<LauncherFileSearchResult> => {
+    const { searchLauncherFiles } = require('./launcherFiles') as typeof import('./launcherFiles');
+    return searchLauncherFiles(query);
+  });
+
+  ipcMain.handle(CommandsIPCChannels.OPEN_LAUNCHER_FILE, async (_event, filePath: string): Promise<{ success: boolean; error?: string }> => {
+    const { openLauncherFile } = require('./launcherFiles') as typeof import('./launcherFiles');
+    return openLauncherFile(filePath, {
+      openPath: (resolvedPath) => shell.openPath(resolvedPath),
+    });
+  });
+
+  ipcMain.handle(CommandsIPCChannels.WARM_LAUNCHER_FILE_INDEX, async (): Promise<{ started: boolean }> => {
+    const { warmLauncherFileIndex } = require('./launcherFiles') as typeof import('./launcherFiles');
+    void warmLauncherFileIndex();
+    return { started: true };
+  });
+
+  ipcMain.handle(CommandsIPCChannels.GET_LAUNCHER_SETTINGS, async (): Promise<LauncherSettings> => {
+    return {
+      rootSearchEnabledKinds: normalizeLauncherRootSearchEnabledKinds(
+        preferencesManager?.getPreference('launcherRootSearchEnabledKinds'),
+      ),
+    };
+  });
+
+  ipcMain.handle(CommandsIPCChannels.SET_LAUNCHER_SETTINGS, async (_event, settings: LauncherSettings): Promise<LauncherSettings> => {
+    const rootSearchEnabledKinds = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds);
+    if (preferencesManager) {
+      await preferencesManager.save({ launcherRootSearchEnabledKinds: rootSearchEnabledKinds });
+    }
+    return { rootSearchEnabledKinds };
+  });
+
   ipcMain.handle(CommandsIPCChannels.GET_COMMAND_CONTENT, async (_event, commandName: string) => {
     if (!commandsManager) {
       return null;
@@ -9169,14 +9410,17 @@ async function initTranscriberSystem(): Promise<void> {
   // Hotkeys will be registered after checking onboarding status (see below in app.whenReady).
 
   // Initialize quota manager (will be configured after auth is ready).
+  const { QuotaManager } = require('./quotaManager') as typeof import('./quotaManager');
   quotaManager = new QuotaManager();
   accountStatusManager = new AccountStatusManager();
 
   // Initialize librarian manager for watching markdown reading files.
+  const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
   librarianManager = new LibrarianManager();
   recentManager = new RecentManager();
 
   // Initialize bookmarks manager for reading synced X bookmarks.
+  const { BookmarksManager } = require('./bookmarksManager') as typeof import('./bookmarksManager');
   bookmarksManager = new BookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
@@ -9423,12 +9667,14 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Now create transcriberManager with cursorStatusManager.
   log.info('[audio-startup] before transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
+  const { TranscriberManager } = require('./transcriberManager') as typeof import('./transcriberManager');
   transcriberManager = new TranscriberManager(nativeHelper, preferencesManager, clipboardManager, quotaManager, audioManager ?? undefined, cursorStatusManager);
   transcriberManager.setFieldTheoryMarkdownInsertionTarget({
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
   });
   await transcriberManager.init();
+  startupMark('transcriber-manager-init-complete');
   log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
   broadcastTranscribeEvents();
 
@@ -9686,6 +9932,7 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize multi-directory watching from settings file.
   await commandsManager.initialize();
+  startupMark('commands-manager-initialize-complete');
 
   // Migrate legacy single-directory setting to multi-directory system.
   // If user has a commandsDirectory set but watchedDirs is empty, add it to watchedDirs.
@@ -9736,6 +9983,7 @@ async function initTranscriberSystem(): Promise<void> {
     payloadTraceEnabled: isCommandPayloadTraceEnabled(),
   });
   commandLauncherWindow.preload();
+  startupMark('command-launcher-preload-called');
 
   // Skip auto-paste only when draw canvas is actively visible
   transcriberManager.setSketchModeChecker(() => {
@@ -9749,8 +9997,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Create UserDataManager for per-user data isolation.
   // Restore last known user from current-user.json so per-user paths work
   // immediately — no need to wait for auth to resolve.
-  userDataManager = createUserDataManager();
-  await userDataManager.restoreCurrentUser();
+  userDataManager = await ensureUserDataManagerRestored();
 
   // Set UserDataManager on managers BEFORE authManager.init().
   // authManager.init() may emit 'userChanged' during session restoration,
@@ -9769,6 +10016,7 @@ async function initTranscriberSystem(): Promise<void> {
       await librarianManager.reinitializeForUser();
     }
   }
+  startupMark('librarian-user-data-ready');
   if (commandsManager) {
     commandsManager.setUserDataManager(userDataManager);
     // Reload per-user commands immediately if user was restored from disk.
@@ -9776,9 +10024,11 @@ async function initTranscriberSystem(): Promise<void> {
       await commandsManager.reinitializeForUser();
     }
   }
+  startupMark('commands-user-data-ready');
   if (recentManager) {
     recentManager.setUserDataManager(userDataManager);
   }
+  const { AuthManager } = require('./authManager') as typeof import('./authManager');
   authManager = new AuthManager();
   authManager.setUserDataManager(userDataManager);
 
@@ -9812,6 +10062,7 @@ async function initTranscriberSystem(): Promise<void> {
     metricsManager.setUserDataManager(userDataManager);
   }
   await metricsManager.init();
+  startupMark('metrics-manager-init-complete');
 
   // Register event handlers BEFORE authManager.init().
   // init() restores session and may emit 'userChanged' synchronously.
@@ -9940,8 +10191,14 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  // Now safe to init AuthManager - handlers are registered
-  await authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey);
+  // Now safe to init AuthManager - handlers are registered. Keep this off the
+  // cold-start critical path; returning users can open local surfaces while the
+  // SDK restores or refreshes the server session.
+  void authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey)
+    .then(() => startupMark('auth-manager-init-complete'))
+    .catch((error) => {
+      log.warn('Auth initialization failed during background startup:', error);
+    });
 
   // Handle system wake from sleep - check if token needs refresh.
   // Timers may not have fired while sleeping, so we check on wake.
@@ -10245,6 +10502,12 @@ if (!gotTheLock) {
       return;
     }
 
+    const markdownPath = argv.find(arg => /\.(?:md|markdown|mdx)$/i.test(arg) && !arg.startsWith('-'));
+    if (markdownPath) {
+      routeOpenMarkdown(markdownPath);
+      return;
+    }
+
     // If onboarding is not complete, focus the onboarding window instead.
     const prefs = preferencesManager?.get();
     if (!prefs?.onboardingComplete && onboardingWindow?.isVisible()) {
@@ -10258,12 +10521,14 @@ if (!gotTheLock) {
   installAppVisibilityTrace();
 
   app.whenReady().then(async () => {
+    startupMark('app-when-ready');
     log.info('App ready');
 
     // ftmedia://media/<filename> → the bookmark media folder.
     // basename() strips any path traversal attempts from the URL.
     protocol.handle('ftmedia', (req) => {
       const filename = path.basename(decodeURIComponent(new URL(req.url).pathname));
+      const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
       return net.fetch(pathToFileURL(path.join(bookmarkMediaDir(), filename)).toString());
     });
 
@@ -10288,6 +10553,16 @@ if (!gotTheLock) {
 
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();
+    const restoredUserDataManager = await ensureUserDataManagerRestored();
+
+    if (!preferencesManager) {
+      preferencesManager = new PreferencesManager();
+    }
+    preferencesManager.setUserDataManager(restoredUserDataManager);
+    await preferencesManager.load();
+    startupMark('startup-preferences-loaded');
+    setupAppMetadataIPCHandlersOnce();
+    showEarlyOnboardingIfNeeded();
 
     setupIPCHandlers();
     setupThemeIPCHandlers();
@@ -10295,10 +10570,12 @@ if (!gotTheLock) {
     setupTaggedDocsIPCHandlers();
     setupSquaresIPCHandlers();
     setupGazeIPCHandlers();
-    setupTranscribeIPCHandlers();
+    setupTranscribeIPCHandlersOnce();
     setupClipboardIPCHandlers();
-    setupOnboardingIPCHandlers();
+    setupOnboardingIPCHandlersOnce();
     setupDisplayListeners();
+    startupMark('ipc-and-display-handlers-ready');
+    showEarlyClipboardWindowIfNeeded();
 
     // Hot Mic IPC handlers
     ipcMain.handle('hotmic:getStatus', () => {
@@ -10965,21 +11242,31 @@ if (!gotTheLock) {
 
     const checkForUpdatesManual = isAutoUpdaterEnabled
       ? () => {
-        autoUpdater.checkForUpdates().catch((err) => {
+        getAutoUpdater().checkForUpdates().catch((err) => {
           log.error('Update check failed:', err);
         });
       }
       : undefined;
 
+    startupMark('init-audio-start');
     await initAudioSystem(checkForUpdatesManual);
+    startupMark('init-audio-complete');
+    startupMark('init-transcriber-start');
     await initTranscriberSystem();
+    startupMark('init-transcriber-complete');
+    startupMark('init-clipboard-callbacks-start');
     await initClipboardCallbacks();
+    startupMark('init-clipboard-callbacks-complete');
 
     // Preload clipboard history window for instant first open.
     // Always preload - even before onboarding completes, user may trigger hotkey.
-    clipboardHistoryWindow = initClipboardHistoryWindow();
-    const boundsToUse = restoreClipboardHistoryBounds();
-    clipboardHistoryWindow.preload(boundsToUse);
+    if (!clipboardHistoryWindow) {
+      clipboardHistoryWindow = initClipboardHistoryWindow();
+      const boundsToUse = restoreClipboardHistoryBounds();
+      clipboardHistoryWindow.preload(boundsToUse);
+    }
+    startupMark('clipboard-window-preload-called');
+    maybeExitStartupBenchmark('clipboard-window-preload-called');
 
     // If the app cold-started via `open-file`, the pending path was queued
     // before the window existed. Flush it once the renderer finishes loading
@@ -11028,6 +11315,7 @@ if (!gotTheLock) {
     }
 
     if (isAutoUpdaterEnabled) {
+      const autoUpdater = getAutoUpdater();
       // Initial check after 5s delay to not block UI.
       setTimeout(() => {
         autoUpdater.checkForUpdates();
@@ -11091,20 +11379,13 @@ if (!gotTheLock) {
       });
     }
 
-    // App version (sync for immediate access).
-    ipcMain.on('app:getVersion', (event) => {
-      event.returnValue = app.getVersion();
-    });
-
-    ipcMain.on('updater:isEnabled', (event) => {
-      event.returnValue = isAutoUpdaterEnabled;
-    });
+    setupAppMetadataIPCHandlersOnce();
 
     // Updater IPC handlers.
     ipcMain.handle('updater:checkForUpdates', () => {
       if (!isAutoUpdaterEnabled) return;
       if (app.isPackaged) {
-        autoUpdater.checkForUpdates();
+        getAutoUpdater().checkForUpdates();
       } else {
         // In dev mode, simulate "up to date" response.
         sendUpdateNotAvailable();
@@ -11113,12 +11394,12 @@ if (!gotTheLock) {
 
     ipcMain.handle('updater:downloadUpdate', () => {
       if (!isAutoUpdaterEnabled) return;
-      autoUpdater.downloadUpdate();
+      getAutoUpdater().downloadUpdate();
     });
 
     ipcMain.handle('updater:installUpdate', () => {
       if (!isAutoUpdaterEnabled) return;
-      autoUpdater.quitAndInstall();
+      getAutoUpdater().quitAndInstall();
     });
 
     ipcMain.handle('updater:dismissUpdate', () => {
@@ -11126,13 +11407,9 @@ if (!gotTheLock) {
       pendingUpdateInfo = null;
     });
 
-    ipcMain.handle('updater:getStatus', () => {
-      // Return current update state so windows can query it on open.
-      return pendingUpdateInfo;
-    });
-
     // Check permissions on startup and notify main window
     const permissions = await checkPermissions();
+    startupMark('permissions-checked');
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.once('did-finish-load', () => {
         mainWindow?.webContents.send('permissions-status', permissions);
@@ -11148,11 +11425,15 @@ if (!gotTheLock) {
 
     // Check if the configured transcription engine is ready
     const modelDownloaded = await isTranscriptionEngineReady();
+    startupMark('transcription-engine-ready-checked');
 
     // Check if user is authenticated. A returning user with a stored local
     // session can use offline/local features while token refresh catches up.
     const isAuthenticated = authManager?.isAuthenticated() ?? false;
-    const canUseLocalAccount = isAuthenticated || (authManager?.hasEverBeenAuthenticated() ?? false);
+    const canUseLocalAccount =
+      isAuthenticated ||
+      (authManager?.hasEverBeenAuthenticated() ?? false) ||
+      (userDataManager?.isLoggedIn() ?? false);
 
     // All three permissions, model download, and a known local account are
     // required for full local app functionality.
@@ -11170,6 +11451,8 @@ if (!gotTheLock) {
       }
       registerHotkeysAfterOnboarding();
       showClipboardHistoryOnStartup();
+      startupMark('startup-decision-complete');
+      maybeExitStartupBenchmark('startup-decision-complete');
     } else {
       // Missing requirements - force onboarding flow
 
@@ -11207,6 +11490,8 @@ if (!gotTheLock) {
       }
 
       onboardingWindow.show(startStep);
+      startupMark('startup-decision-complete');
+      maybeExitStartupBenchmark('startup-decision-complete');
       // Hotkeys will be registered when onboarding completes (see onboarding:complete handler)
     }
 

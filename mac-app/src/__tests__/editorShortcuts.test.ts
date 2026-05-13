@@ -7,6 +7,7 @@ import {
   isCommandDeleteShortcut,
   isCommandFindShortcut,
   getMarkdownFormattingShortcut,
+  getMarkdownListShortcutKind,
   getCollapsedSidebarAffordanceOpacity,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
@@ -155,6 +156,19 @@ describe('isMarkdownTaskToggleShortcut', () => {
     expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, shiftKey: true }))).toBe(false);
     expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, altKey: true }))).toBe(false);
     expect(isMarkdownTaskToggleShortcut(mkKey({ key: 'Enter', code: 'Enter', metaKey: true, ctrlKey: true }))).toBe(false);
+  });
+});
+
+describe('getMarkdownListShortcutKind', () => {
+  it('maps Shift+Cmd+7 and Shift+Cmd+8 to ordered and unordered list actions', () => {
+    expect(getMarkdownListShortcutKind(mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }))).toBe('ordered');
+    expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }))).toBe('unordered');
+  });
+
+  it('rejects unshifted or unrelated modified list chords', () => {
+    expect(getMarkdownListShortcutKind(mkKey({ key: '7', code: 'Digit7', metaKey: true }))).toBeNull();
+    expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true, altKey: true }))).toBeNull();
+    expect(getMarkdownListShortcutKind(mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true, ctrlKey: true }))).toBeNull();
   });
 });
 

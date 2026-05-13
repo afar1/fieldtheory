@@ -283,6 +283,10 @@ export class OnboardingWindow {
     return this.window !== null && !this.window.isDestroyed();
   }
 
+  getWindow(): BrowserWindow | null {
+    return this.window;
+  }
+
   /**
    * Send a message to the onboarding renderer.
    */
