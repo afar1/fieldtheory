@@ -105,6 +105,143 @@ export interface LauncherLibraryMarkdownItem {
   todoState?: 'open' | 'done';
 }
 
+export type LauncherRootSearchKind =
+  | 'app'
+  | 'system-setting'
+  | 'contact'
+  | 'file'
+  | 'recent-document'
+  | 'url'
+  | 'web-search'
+  | 'calculator'
+  | 'unit'
+  | 'currency'
+  | 'time-zone'
+  | 'dictionary'
+  | 'calendar'
+  | 'system-command'
+  | 'terminal-command';
+
+export const LAUNCHER_ROOT_SEARCH_KIND_LABELS: Record<LauncherRootSearchKind, string> = {
+  app: 'App',
+  'system-setting': 'Setting',
+  contact: 'Contact',
+  file: 'File',
+  'recent-document': 'Recent',
+  url: 'URL',
+  'web-search': 'Search',
+  calculator: 'Calculator',
+  unit: 'Unit',
+  currency: 'Currency',
+  'time-zone': 'Time Zone',
+  dictionary: 'Dictionary',
+  calendar: 'Calendar',
+  'system-command': 'System',
+  'terminal-command': 'Terminal',
+};
+
+export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSearchKind, boolean> = {
+  app: true,
+  'system-setting': false,
+  contact: false,
+  file: true,
+  'recent-document': false,
+  url: false,
+  'web-search': false,
+  calculator: false,
+  unit: false,
+  currency: false,
+  'time-zone': false,
+  dictionary: false,
+  calendar: false,
+  'system-command': false,
+  'terminal-command': false,
+};
+
+export const LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT = 4;
+
+export type LauncherRootSearchEnabledKinds = Partial<Record<LauncherRootSearchKind, boolean>>;
+
+export function normalizeLauncherRootSearchEnabledKinds(
+  value: LauncherRootSearchEnabledKinds | null | undefined,
+): Record<LauncherRootSearchKind, boolean> {
+  const normalized = { ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS };
+  if (!value || typeof value !== 'object') return normalized;
+  for (const kind of Object.keys(LAUNCHER_ROOT_SEARCH_KIND_LABELS) as LauncherRootSearchKind[]) {
+    if (typeof value[kind] === 'boolean') normalized[kind] = value[kind];
+  }
+  return normalized;
+}
+
+export function isLauncherRootSearchKindEnabled(
+  settings: LauncherRootSearchEnabledKinds | null | undefined,
+  kind: LauncherRootSearchKind,
+): boolean {
+  return normalizeLauncherRootSearchEnabledKinds(settings)[kind];
+}
+
+export function areLauncherRootSearchEnabledKindsEqual(
+  a: LauncherRootSearchEnabledKinds | null | undefined,
+  b: LauncherRootSearchEnabledKinds | null | undefined,
+): boolean {
+  const left = normalizeLauncherRootSearchEnabledKinds(a);
+  const right = normalizeLauncherRootSearchEnabledKinds(b);
+  return (Object.keys(LAUNCHER_ROOT_SEARCH_KIND_LABELS) as LauncherRootSearchKind[])
+    .every(kind => left[kind] === right[kind]);
+}
+
+export interface LauncherAppSource {
+  name: string;
+  displayName: string;
+  appPath: string;
+  bundleId?: string;
+  lastModified: number;
+}
+
+export interface LauncherAppItem extends LauncherSearchableItem, LauncherNormalModeItem {
+  id: string;
+  type: 'app';
+  rootSearchKind: 'app';
+  rootSearchLabel: string;
+  appPath: string;
+  bundleId?: string;
+  lastUpdated?: number;
+  hotkeyDisplay: string;
+}
+
+export interface LauncherAppVisibilityItem {
+  type?: string;
+  name: string;
+  displayName: string;
+  appPath?: string;
+  bundleId?: string;
+}
+
+export interface LauncherNativeIconPathCandidate {
+  appPath?: string;
+  filePath?: string;
+  directoryPath?: string;
+}
+
+export interface LauncherFileSource {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+}
+
+export interface LauncherFileItem extends LauncherSearchableItem, LauncherNormalModeItem {
+  id: string;
+  type: 'file';
+  rootSearchKind: 'file';
+  rootSearchLabel: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastUpdated?: number;
+  hotkeyDisplay: string;
+}
+
 export interface LauncherDirectoryItem extends LauncherSearchableItem {
   id: string;
   type: 'directory';
@@ -301,6 +438,11 @@ export interface ScoredLauncherNormalModeItem<T extends LauncherNormalModeItem> 
   score: number;
 }
 
+export interface LauncherNormalModeBalanceOptions {
+  maxResults?: number;
+  maxAppResults?: number;
+}
+
 export interface LauncherDirectoryNamespace {
   label: string;
   directoryPath: string;
@@ -325,8 +467,8 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   a: ScoredLauncherNormalModeItem<T>,
   b: ScoredLauncherNormalModeItem<T>,
 ): number {
-  const aTypePriority = a.item.type === 'command' ? 1 : 0;
-  const bTypePriority = b.item.type === 'command' ? 1 : 0;
+  const aTypePriority = a.item.type === 'command' || a.item.type === 'app' ? 1 : 0;
+  const bTypePriority = b.item.type === 'command' || b.item.type === 'app' ? 1 : 0;
   if (aTypePriority !== bTypePriority) return bTypePriority - aTypePriority;
 
   const aRecency = getLauncherItemRecency(a.item);
@@ -338,12 +480,25 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
 
 export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
   matches: ScoredLauncherNormalModeItem<T>[],
+  options: LauncherNormalModeBalanceOptions = {},
 ): T[] {
-  return matches
+  const maxResults = options.maxResults ?? LAUNCHER_NORMAL_MODE_MAX_RESULTS;
+  const maxAppResults = options.maxAppResults ?? maxResults;
+  const results: T[] = [];
+  let appResultCount = 0;
+
+  for (const { item } of matches
     .filter(match => match.score > 0)
-    .sort(compareScoredLauncherMatches)
-    .slice(0, LAUNCHER_NORMAL_MODE_MAX_RESULTS)
-    .map(({ item }) => item);
+    .sort(compareScoredLauncherMatches)) {
+    if (item.type === 'app') {
+      if (appResultCount >= maxAppResults) continue;
+      appResultCount += 1;
+    }
+    results.push(item);
+    if (results.length >= maxResults) break;
+  }
+
+  return results;
 }
 
 export function shouldIncludeLauncherRecentFile(input: {
@@ -369,13 +524,20 @@ export function nextLauncherArrowIndex(
   currentIndex: number,
   itemCount: number,
   direction: 'down' | 'up',
-  hasExplicitSelection: boolean,
 ): number {
   if (itemCount <= 0) return 0;
-  if (!hasExplicitSelection) return Math.max(0, Math.min(currentIndex, itemCount - 1));
+  const clampedIndex = Math.max(0, Math.min(currentIndex, itemCount - 1));
   return direction === 'down'
-    ? Math.min(currentIndex + 1, itemCount - 1)
-    : Math.max(currentIndex - 1, 0);
+    ? Math.min(clampedIndex + 1, itemCount - 1)
+    : Math.max(clampedIndex - 1, 0);
+}
+
+export function shouldReturnLauncherSelectionToInput(
+  currentIndex: number,
+  itemCount: number,
+  hasExplicitSelection: boolean,
+): boolean {
+  return itemCount > 0 && hasExplicitSelection && currentIndex <= 0;
 }
 
 export function resolveHighlightedLauncherIndex(currentIndex: number, itemCount: number): number {
@@ -592,6 +754,149 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
   }
 
   return items.sort(compareLauncherItemsByRecency);
+}
+
+export function buildLauncherAppItems(apps: LauncherAppSource[]): LauncherAppItem[] {
+  return apps.map((appInfo): LauncherAppItem => {
+    const pathParts = appInfo.appPath.split(/[\\/]/).filter(Boolean);
+    const appNameParts = appInfo.name.split(/[\s._-]+/).filter(Boolean);
+    return {
+      id: `app-${appInfo.appPath}`,
+      type: 'app',
+      rootSearchKind: 'app',
+      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.app,
+      name: appInfo.name,
+      displayName: appInfo.displayName,
+      keywords: [
+        appInfo.name,
+        appInfo.displayName,
+        appInfo.bundleId ?? '',
+        appInfo.appPath,
+        ...appNameParts,
+        ...pathParts,
+      ].filter(Boolean),
+      appPath: appInfo.appPath,
+      bundleId: appInfo.bundleId,
+      lastUpdated: Number.isFinite(appInfo.lastModified) ? appInfo.lastModified : undefined,
+      hotkeyDisplay: 'app',
+    };
+  });
+}
+
+export function getLauncherAppSearchQuery(query: string): string | null {
+  const match = query.match(/^apps?(?::|\s+)(.*)$/i);
+  return match ? match[1].trim() : null;
+}
+
+function normalizeLauncherAppText(value: string | undefined): string {
+  return (value ?? '').trim().toLowerCase();
+}
+
+function getLauncherAppTextParts(app: LauncherAppVisibilityItem): string[] {
+  return [
+    ...normalizeLauncherAppText(app.name).split(/[\s._-]+/),
+    ...normalizeLauncherAppText(app.displayName).split(/[\s._-]+/),
+  ].filter(Boolean);
+}
+
+function getLauncherAppMatchKind(
+  app: LauncherAppVisibilityItem,
+  query: string,
+): 'none' | 'fuzzy' | 'contains' | 'token-prefix' | 'prefix' | 'exact' {
+  const q = normalizeLauncherAppText(query);
+  if (!q) return 'none';
+  const names = [
+    normalizeLauncherAppText(app.name),
+    normalizeLauncherAppText(app.displayName),
+  ].filter(Boolean);
+  if (names.some(name => name === q)) return 'exact';
+  if (names.some(name => name.startsWith(q))) return 'prefix';
+  if (getLauncherAppTextParts(app).some(part => part.startsWith(q))) return 'token-prefix';
+  if (names.some(name => name.includes(q))) return 'contains';
+  if (q.length >= 2 && names.some((name) => {
+    let queryIndex = 0;
+    for (const character of name) {
+      if (character !== q[queryIndex]) continue;
+      queryIndex += 1;
+      if (queryIndex === q.length) return true;
+    }
+    return false;
+  })) return 'fuzzy';
+  return 'none';
+}
+
+function isLauncherHighValueAppLocation(appPath: string | undefined): boolean {
+  const normalizedPath = appPath?.replace(/\\/g, '/') ?? '';
+  return /^\/Applications\/[^/]+\.app$/i.test(normalizedPath)
+    || /^\/Users\/[^/]+\/Applications\/[^/]+\.app$/i.test(normalizedPath)
+    || /^\/System\/Applications\/[^/]+\.app$/i.test(normalizedPath);
+}
+
+function isLauncherLowValueAppLocation(appPath: string | undefined): boolean {
+  const normalizedPath = appPath?.replace(/\\/g, '/') ?? '';
+  return /\/Utilities\/[^/]+\.app$/i.test(normalizedPath)
+    || /\.app\/.+\.app$/i.test(normalizedPath)
+    || !isLauncherHighValueAppLocation(normalizedPath);
+}
+
+export function shouldIncludeLauncherAppInNormalSearch(input: {
+  app: LauncherAppVisibilityItem;
+  query: string;
+  usage?: { count: number; lastUsedAt: number };
+}): boolean {
+  const q = normalizeLauncherAppText(input.query);
+  const matchKind = getLauncherAppMatchKind(input.app, q);
+  if (matchKind === 'none') return false;
+  if (input.usage && input.usage.count > 0) return true;
+  if (matchKind === 'exact') return true;
+
+  const lowValueLocation = isLauncherLowValueAppLocation(input.app.appPath);
+  if (matchKind === 'prefix') return q.length >= (lowValueLocation ? 3 : 2);
+  if (matchKind === 'token-prefix') return q.length >= (lowValueLocation ? 4 : 2);
+  if (matchKind === 'contains') return q.length >= 4 && !lowValueLocation;
+  if (matchKind === 'fuzzy') return false;
+  return false;
+}
+
+export function getLauncherNativeIconPathForItem(item: LauncherNativeIconPathCandidate | undefined | null): string | null {
+  return item?.appPath || item?.filePath || item?.directoryPath || null;
+}
+
+function launcherParentPathLabel(filePath: string): string {
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 1) return 'file';
+  return parts[parts.length - 2] || 'file';
+}
+
+export function buildLauncherFileItems(files: LauncherFileSource[]): LauncherFileItem[] {
+  return files.map((fileInfo): LauncherFileItem => {
+    const pathParts = fileInfo.filePath.split(/[\\/]/).filter(Boolean);
+    const nameParts = fileInfo.name.split(/[\s._-]+/).filter(Boolean);
+    return {
+      id: `file-${fileInfo.filePath}`,
+      type: 'file',
+      rootSearchKind: 'file',
+      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.file,
+      name: fileInfo.name,
+      displayName: fileInfo.displayName,
+      keywords: [
+        fileInfo.name,
+        fileInfo.displayName,
+        fileInfo.filePath,
+        ...nameParts,
+        ...pathParts,
+      ].filter(Boolean),
+      filePath: fileInfo.filePath,
+      isDirectory: fileInfo.isDirectory,
+      lastUpdated: Number.isFinite(fileInfo.lastModified) ? fileInfo.lastModified : undefined,
+      hotkeyDisplay: fileInfo.isDirectory ? 'folder' : launcherParentPathLabel(fileInfo.filePath),
+    };
+  });
+}
+
+export function getLauncherFileSearchQuery(query: string): string | null {
+  if (!query.startsWith("'")) return null;
+  return query.slice(1).trim();
 }
 
 function isDescendantPath(path: string | undefined, directoryPath: string): boolean {

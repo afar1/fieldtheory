@@ -81,7 +81,7 @@ export class NativeHelper extends EventEmitter {
    * This is a fast call (~1-5ms) that fetches fresh bounds,
    * useful when switching between windows of the same app.
    */
-  async getFrontmostWindowBounds(): Promise<{ x: number; y: number; width: number; height: number } | null> {
+  async getFrontmostWindowBounds(timeoutMs = 1000): Promise<{ x: number; y: number; width: number; height: number } | null> {
     return new Promise(async (resolve) => {
       if (!this.child || !this.child.stdin.writable) {
         resolve(null);
@@ -93,7 +93,7 @@ export class NativeHelper extends EventEmitter {
       const timeout = setTimeout(() => {
         cleanup();
         resolve(null);
-      }, 1000);
+      }, timeoutMs);
 
       const onMessage = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'frontmostWindowBounds') {

@@ -50,6 +50,46 @@ export interface ClipboardHistoryBounds {
  */
 export type ClipboardHistorySizeKey = 'fields' | 'library' | 'canvas' | 'draw';
 export type FieldTheoryWindowMode = 'panel' | 'app';
+export const LAUNCHER_ROOT_SEARCH_KINDS = [
+  'app',
+  'system-setting',
+  'contact',
+  'file',
+  'recent-document',
+  'url',
+  'web-search',
+  'calculator',
+  'dictionary',
+  'calendar',
+  'system-command',
+] as const;
+export type LauncherRootSearchKind = typeof LAUNCHER_ROOT_SEARCH_KINDS[number];
+export type LauncherRootSearchEnabledKinds = Partial<Record<LauncherRootSearchKind, boolean>>;
+export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSearchKind, boolean> = {
+  app: true,
+  'system-setting': false,
+  contact: false,
+  file: true,
+  'recent-document': false,
+  url: false,
+  'web-search': false,
+  calculator: false,
+  dictionary: false,
+  calendar: false,
+  'system-command': false,
+};
+
+export function normalizeLauncherRootSearchEnabledKinds(
+  value: LauncherRootSearchEnabledKinds | undefined,
+): Record<LauncherRootSearchKind, boolean> {
+  const normalized = { ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS };
+  if (!value || typeof value !== 'object') return normalized;
+  for (const kind of LAUNCHER_ROOT_SEARCH_KINDS) {
+    if (typeof value[kind] === 'boolean') normalized[kind] = value[kind];
+  }
+  return normalized;
+}
+
 export interface FieldTheoryWindowModePreferenceSnapshot {
   fieldTheoryWindowMode?: FieldTheoryWindowMode;
   showInDock?: boolean;
@@ -215,6 +255,9 @@ interface Preferences {
   // Maxwell local command memory. Content lives in maxwell/memory.md.
   maxwellMemoryEnabled?: boolean;
 
+  // Launcher root search categories. Apps and file search are the first active slices.
+  launcherRootSearchEnabledKinds?: LauncherRootSearchEnabledKinds;
+
   // Dark mode preference - synced across all windows.
   darkMode?: boolean;
 
@@ -369,6 +412,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Maxwell memory is explicit, visible, and opt-out.
   maxwellMemoryEnabled: true,
+
+  // Launcher root search starts with apps and Spotlight-backed file search.
+  launcherRootSearchEnabledKinds: DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
 
   // Data retention - never delete by default.
   dataRetentionDays: -1,

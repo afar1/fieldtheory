@@ -12,6 +12,7 @@ import HotMicSettings from './HotMicSettings';
 import RectangleSettings from './RectangleSettings';
 import DiagnosticsModal from './DiagnosticsModal';
 import CommandsSettings from './CommandsSettings';
+import LauncherSettings from './LauncherSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
 import LocalModelSettings from './LocalModelSettings';
@@ -36,6 +37,7 @@ type SettingsSection =
   | 'appearance'
   | 'audio'
   | 'keyboard'
+  | 'launcher'
   | 'librarian'
   | 'local-model'
   | 'commands'
@@ -70,6 +72,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'appearance': 'Appearance & System',
   'audio': 'Audio & Transcription',
   'keyboard': 'Keyboard Shortcuts',
+  'launcher': 'Launcher',
   'librarian': 'Librarian',
   'local-model': 'Local model',
   'commands': 'Portable Commands',
@@ -88,6 +91,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'audio',
   'hot-mic', // Hot Mic
   'keyboard',
+  'launcher',
   'librarian',
   'local-model',
   'commands', // Portable Commands
@@ -2092,6 +2096,13 @@ export default function SettingsPanel({
       </div>
 
       </>
+      )}
+
+      {/* Launcher Section */}
+      {selectedSection === 'launcher' && (
+      <div style={styles.section}>
+        <LauncherSettings />
+      </div>
       )}
 
       {/* Librarian Section */}
