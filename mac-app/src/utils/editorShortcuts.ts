@@ -39,6 +39,13 @@ export function isMarkdownTaskToggleShortcut(e: KeyboardEvent | React.KeyboardEv
   return e.key === 'Enter' && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export function getMarkdownListShortcutKind(e: KeyboardEvent | React.KeyboardEvent): 'ordered' | 'unordered' | null {
+  if (!e.metaKey || !e.shiftKey || e.ctrlKey || e.altKey) return null;
+  if (e.code === 'Digit7') return 'ordered';
+  if (e.code === 'Digit8') return 'unordered';
+  return null;
+}
+
 export function getMarkdownFormattingShortcut(e: KeyboardEvent | React.KeyboardEvent): MarkdownFormattingKind | null {
   if (!e.metaKey || e.shiftKey || e.ctrlKey || e.altKey) return null;
   switch (e.key.toLowerCase()) {

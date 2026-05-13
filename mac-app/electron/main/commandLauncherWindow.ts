@@ -26,6 +26,7 @@ import { appendVisibilityTrace, captureVisibilityCaller } from './visibilityTrac
 const log = createLogger('CommandLauncher');
 
 const execFileAsync = promisify(execFile);
+const COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS = 35;
 
 /**
  * Represents a running application with its bundle ID and display name.
@@ -263,7 +264,7 @@ export class CommandLauncherWindow {
       let freshWindowBounds: AnchorBounds | null = null;
       if (!options.anchorBounds && this.nativeHelper) {
         try {
-          freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds();
+          freshWindowBounds = await this.nativeHelper.getFrontmostWindowBounds(COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS);
         } catch (error) {
           appendCommandLauncherTrace('show-frontmost-window-bounds-error', { error });
         }

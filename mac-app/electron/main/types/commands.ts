@@ -19,6 +19,14 @@ export const CommandsIPCChannels = {
 
   // Direct invocation (from command launcher)
   INVOKE_COMMAND: 'commands:invoke',
+  LIST_LAUNCHER_APPS: 'commands:listLauncherApps',
+  LAUNCH_APP: 'commands:launchApp',
+  GET_LAUNCHER_FILE_ICON: 'commands:getLauncherFileIcon',
+  SEARCH_LAUNCHER_FILES: 'commands:searchLauncherFiles',
+  OPEN_LAUNCHER_FILE: 'commands:openLauncherFile',
+  WARM_LAUNCHER_FILE_INDEX: 'commands:warmLauncherFileIndex',
+  GET_LAUNCHER_SETTINGS: 'commands:getLauncherSettings',
+  SET_LAUNCHER_SETTINGS: 'commands:setLauncherSettings',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
   GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
@@ -66,6 +74,40 @@ export interface PortableCommandInfo {
   displayName: string;    // Human-readable name
   filePath: string;       // Full path to the markdown file
   lastModified: number;   // File modification time
+}
+
+export interface LauncherAppInfo {
+  name: string;
+  displayName: string;
+  appPath: string;
+  bundleId?: string;
+  lastModified: number;
+}
+
+export interface LauncherFileInfo {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+}
+
+export interface LauncherFileSearchResult {
+  files: LauncherFileInfo[];
+  indexing: boolean;
+  indexedAt: number | null;
+}
+
+export interface LauncherFileIconResult {
+  success: boolean;
+  iconDataUrl?: string;
+  error?: string;
+}
+
+export type LauncherRootSearchEnabledKinds = Record<string, boolean>;
+
+export interface LauncherSettings {
+  rootSearchEnabledKinds: LauncherRootSearchEnabledKinds;
 }
 
 export type LocalCommandRunMode = 'document' | 'selection';

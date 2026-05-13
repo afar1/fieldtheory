@@ -2952,6 +2952,14 @@ const CommandsIPCChannels = {
   GET_COMMANDS: 'commands:getCommands',
   REFRESH_COMMANDS: 'commands:refreshCommands',
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
+  LIST_LAUNCHER_APPS: 'commands:listLauncherApps',
+  LAUNCH_APP: 'commands:launchApp',
+  GET_LAUNCHER_FILE_ICON: 'commands:getLauncherFileIcon',
+  SEARCH_LAUNCHER_FILES: 'commands:searchLauncherFiles',
+  OPEN_LAUNCHER_FILE: 'commands:openLauncherFile',
+  WARM_LAUNCHER_FILE_INDEX: 'commands:warmLauncherFileIndex',
+  GET_LAUNCHER_SETTINGS: 'commands:getLauncherSettings',
+  SET_LAUNCHER_SETTINGS: 'commands:setLauncherSettings',
   RUN_LOCAL_COMMAND: 'commands:runLocalCommand',
   LIST_MAXWELL_RUNS: 'commands:listMaxwellRuns',
   GET_MAXWELL_MEMORY: 'commands:getMaxwellMemory',
@@ -2990,6 +2998,38 @@ type PortableCommandInfo = {
   name: string;
   displayName: string;
   filePath: string;
+};
+
+type LauncherAppInfo = {
+  name: string;
+  displayName: string;
+  appPath: string;
+  bundleId?: string;
+  lastModified: number;
+};
+
+type LauncherFileInfo = {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+};
+
+type LauncherFileSearchResult = {
+  files: LauncherFileInfo[];
+  indexing: boolean;
+  indexedAt: number | null;
+};
+
+type LauncherFileIconResult = {
+  success: boolean;
+  iconDataUrl?: string;
+  error?: string;
+};
+
+type LauncherSettings = {
+  rootSearchEnabledKinds: Record<string, boolean>;
 };
 
 type CommandsWatchedDir = {
@@ -3268,6 +3308,38 @@ const commandsAPI = {
   // Invoke a command by name (paste file or reference to target app).
   invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:invoke', commandName);
+  },
+
+  listLauncherApps: async (): Promise<LauncherAppInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.LIST_LAUNCHER_APPS);
+  },
+
+  launchApp: async (appPath: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.LAUNCH_APP, appPath);
+  },
+
+  getLauncherFileIcon: async (filePath: string): Promise<LauncherFileIconResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_LAUNCHER_FILE_ICON, filePath);
+  },
+
+  searchLauncherFiles: async (query: string): Promise<LauncherFileSearchResult> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SEARCH_LAUNCHER_FILES, query);
+  },
+
+  openLauncherFile: async (filePath: string): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.OPEN_LAUNCHER_FILE, filePath);
+  },
+
+  warmLauncherFileIndex: async (): Promise<{ started: boolean }> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.WARM_LAUNCHER_FILE_INDEX);
+  },
+
+  getLauncherSettings: async (): Promise<LauncherSettings> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_LAUNCHER_SETTINGS);
+  },
+
+  setLauncherSettings: async (settings: LauncherSettings): Promise<LauncherSettings> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.SET_LAUNCHER_SETTINGS, settings);
   },
 
   runLocalCommand: async (request: string | LocalCommandRunRequest): Promise<LocalCommandRunResult> => {

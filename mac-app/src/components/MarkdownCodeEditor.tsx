@@ -24,6 +24,7 @@ import {
   type DecorationSet,
   EditorView,
   ViewPlugin,
+  type ViewUpdate,
   WidgetType,
   keymap,
   highlightActiveLine,
@@ -385,6 +386,8 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
 }
 
 type RenderedMarkdownDecoration = Range<Decoration>;
+type RenderedMarkdownEditorRange = { from: number; to: number };
+type RenderedMarkdownEditorLineRange = { fromLine: number; toLine: number };
 
 function rangesIntersect(
   first: { from: number; to: number },
@@ -574,101 +577,155 @@ function pushRenderedInlineDecorations(
   }
 }
 
-export function buildRenderedMarkdownEditorDecorations(state: EditorState): DecorationSet {
-  const decorations: RenderedMarkdownDecoration[] = [];
+function getRenderedMarkdownCodeFenceMarkerBeforeLine(state: EditorState, lineNumber: number): string | null {
   let codeFenceMarker: string | null = null;
-
-  for (let lineNumber = 1; lineNumber <= state.doc.lines; lineNumber += 1) {
-    const line = state.doc.line(lineNumber);
-    const text = line.text;
+  for (let currentLineNumber = 1; currentLineNumber < lineNumber; currentLineNumber += 1) {
+    const text = state.doc.line(currentLineNumber).text;
     const codeFenceMatch = /^(`{3,}|~{3,})/.exec(text);
-    const headingMatch = /^(#{1,3})\s+/.exec(text);
-    const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s+)/.exec(text);
-    const listMatch = /^(\s*)((?:[-*+])|(?:\d+[.)]))\s+/.exec(text);
-    const quoteMatch = /^(\s*)>\s?/.exec(text);
-    let inlineStart = 0;
-
     if (codeFenceMatch && (codeFenceMarker === null || codeFenceMatch[1][0] === codeFenceMarker)) {
-      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS }).range(line.from));
-      pushRenderedSyntaxReplacement(
-        decorations,
-        line.from,
-        line.to,
-        new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS, '', line.from, line.to),
-      );
       codeFenceMarker = codeFenceMarker === null ? codeFenceMatch[1][0] : null;
-      continue;
     }
+  }
+  return codeFenceMarker;
+}
 
-    if (codeFenceMarker !== null) {
-      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS }).range(line.from));
-      continue;
+function normalizeRenderedMarkdownEditorLineRanges(
+  state: EditorState,
+  ranges: readonly RenderedMarkdownEditorRange[],
+): RenderedMarkdownEditorLineRange[] {
+  const lineRanges = ranges
+    .map((range) => {
+      const from = Math.max(0, Math.min(range.from, state.doc.length));
+      const to = Math.max(from, Math.min(range.to, state.doc.length));
+      return {
+        fromLine: state.doc.lineAt(from).number,
+        toLine: state.doc.lineAt(to).number,
+      };
+    })
+    .sort((a, b) => a.fromLine - b.fromLine || a.toLine - b.toLine);
+
+  const merged: RenderedMarkdownEditorLineRange[] = [];
+  for (const range of lineRanges) {
+    const previous = merged[merged.length - 1];
+    if (previous && range.fromLine <= previous.toLine + 1) {
+      previous.toLine = Math.max(previous.toLine, range.toLine);
+    } else {
+      merged.push({ ...range });
     }
+  }
+  return merged;
+}
 
-    if (headingMatch) {
-      const level = headingMatch[1].length;
-      const contentFrom = line.from + headingMatch[0].length;
-      inlineStart = headingMatch[0].length;
-      decorations.push(Decoration.line({ class: `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-line` }).range(line.from));
-      pushRenderedSyntaxReplacement(
-        decorations,
-        line.from,
-        contentFrom,
-        new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS, '', line.from, contentFrom),
-      );
-      pushRenderedInlineMark(
-        decorations,
-        contentFrom,
-        line.to,
-        `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS} ${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-${level}`,
-      );
-    } else if (taskMatch) {
-      const markerFrom = line.from + taskMatch[1].length;
-      const markerTo = line.from + taskMatch[0].length;
-      const checkFrom = markerFrom + taskMatch[2].length + 1;
-      const checked = taskMatch[3].toLowerCase() === 'x';
-      inlineStart = taskMatch[0].length;
-      decorations.push(
-        Decoration.replace({
-          widget: new RenderedMarkdownTaskCheckboxWidget(
-            checked,
-            markerFrom,
-            markerTo,
-            checkFrom,
-            checkFrom + taskMatch[3].length,
-          ),
-        }).range(markerFrom, markerTo),
-      );
-      pushRenderedInlineMark(
-        decorations,
-        markerTo,
-        line.to,
-        checked ? RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS : '',
-      );
-    } else if (quoteMatch) {
-      const markerFrom = line.from + quoteMatch[1].length;
-      const markerTo = line.from + quoteMatch[0].length;
-      inlineStart = quoteMatch[0].length;
-      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS }).range(line.from));
-      decorations.push(
-        Decoration.replace({
-          widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS, '', markerFrom, markerTo),
-        }).range(markerFrom, markerTo),
-      );
-    } else if (listMatch) {
-      const markerFrom = line.from + listMatch[1].length;
-      const markerTo = line.from + listMatch[0].length;
-      const markerText = /^\d/.test(listMatch[2]) ? listMatch[2].replace(/\)$/, '.') : '•';
-      inlineStart = listMatch[0].length;
-      decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS }).range(line.from));
-      decorations.push(
-        Decoration.replace({
-          widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS, markerText, markerFrom, markerTo),
-        }).range(markerFrom, markerTo),
-      );
+function pushRenderedMarkdownEditorLineDecorations(
+  state: EditorState,
+  decorations: RenderedMarkdownDecoration[],
+  lineNumber: number,
+  codeFenceMarker: string | null,
+): string | null {
+  const line = state.doc.line(lineNumber);
+  const text = line.text;
+  const codeFenceMatch = /^(`{3,}|~{3,})/.exec(text);
+  const headingMatch = /^(#{1,3})\s+/.exec(text);
+  const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)/.exec(text);
+  const listMatch = /^(\s*)((?:[-*+])|(?:\d+[.)]))\s+/.exec(text);
+  const quoteMatch = /^(\s*)>\s?/.exec(text);
+  let inlineStart = 0;
+
+  if (codeFenceMatch && (codeFenceMarker === null || codeFenceMatch[1][0] === codeFenceMarker)) {
+    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS }).range(line.from));
+    pushRenderedSyntaxReplacement(
+      decorations,
+      line.from,
+      line.to,
+      new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS, '', line.from, line.to),
+    );
+    return codeFenceMarker === null ? codeFenceMatch[1][0] : null;
+  }
+
+  if (codeFenceMarker !== null) {
+    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS }).range(line.from));
+    return codeFenceMarker;
+  }
+
+  if (headingMatch) {
+    const level = headingMatch[1].length;
+    const contentFrom = line.from + headingMatch[0].length;
+    inlineStart = headingMatch[0].length;
+    decorations.push(Decoration.line({ class: `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-line` }).range(line.from));
+    pushRenderedSyntaxReplacement(
+      decorations,
+      line.from,
+      contentFrom,
+      new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS, '', line.from, contentFrom),
+    );
+    pushRenderedInlineMark(
+      decorations,
+      contentFrom,
+      line.to,
+      `${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS} ${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}-${level}`,
+    );
+  } else if (taskMatch) {
+    const markerFrom = line.from + taskMatch[1].length;
+    const markerTo = line.from + taskMatch[0].length;
+    const checkFrom = markerFrom + taskMatch[2].length + 1;
+    const checked = taskMatch[3].toLowerCase() === 'x';
+    inlineStart = taskMatch[0].length;
+    decorations.push(
+      Decoration.replace({
+        widget: new RenderedMarkdownTaskCheckboxWidget(
+          checked,
+          markerFrom,
+          markerTo,
+          checkFrom,
+          checkFrom + taskMatch[3].length,
+        ),
+      }).range(markerFrom, markerTo),
+    );
+    pushRenderedInlineMark(
+      decorations,
+      markerTo,
+      line.to,
+      checked ? RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS : '',
+    );
+  } else if (quoteMatch) {
+    const markerFrom = line.from + quoteMatch[1].length;
+    const markerTo = line.from + quoteMatch[0].length;
+    inlineStart = quoteMatch[0].length;
+    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS }).range(line.from));
+    decorations.push(
+      Decoration.replace({
+        widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS, '', markerFrom, markerTo),
+      }).range(markerFrom, markerTo),
+    );
+  } else if (listMatch) {
+    const markerFrom = line.from + listMatch[1].length;
+    const markerTo = line.from + listMatch[0].length;
+    const markerText = /^\d/.test(listMatch[2]) ? listMatch[2].replace(/\)$/, '.') : '•';
+    inlineStart = listMatch[0].length;
+    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS }).range(line.from));
+    decorations.push(
+      Decoration.replace({
+        widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS, markerText, markerFrom, markerTo),
+      }).range(markerFrom, markerTo),
+    );
+  }
+
+  pushRenderedInlineDecorations(decorations, line.from + inlineStart, text.slice(inlineStart));
+  return codeFenceMarker;
+}
+
+export function buildRenderedMarkdownEditorDecorationsForRanges(
+  state: EditorState,
+  ranges: readonly RenderedMarkdownEditorRange[],
+): DecorationSet {
+  const decorations: RenderedMarkdownDecoration[] = [];
+  const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, ranges);
+
+  for (const range of lineRanges) {
+    let codeFenceMarker = getRenderedMarkdownCodeFenceMarkerBeforeLine(state, range.fromLine);
+    for (let lineNumber = range.fromLine; lineNumber <= range.toLine; lineNumber += 1) {
+      codeFenceMarker = pushRenderedMarkdownEditorLineDecorations(state, decorations, lineNumber, codeFenceMarker);
     }
-
-    pushRenderedInlineDecorations(decorations, line.from + inlineStart, text.slice(inlineStart));
   }
 
   return Decoration.set(
@@ -679,17 +736,21 @@ export function buildRenderedMarkdownEditorDecorations(state: EditorState): Deco
   );
 }
 
+export function buildRenderedMarkdownEditorDecorations(state: EditorState): DecorationSet {
+  return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }]);
+}
+
 export const renderedMarkdownEditorPresentationExtension = ViewPlugin.fromClass(
   class {
     decorations: DecorationSet;
 
     constructor(view: EditorView) {
-      this.decorations = buildRenderedMarkdownEditorDecorations(view.state);
+      this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(view.state, view.visibleRanges);
     }
 
-    update(update: { docChanged: boolean; viewportChanged: boolean; state: EditorState }) {
+    update(update: ViewUpdate) {
       if (update.docChanged || update.viewportChanged) {
-        this.decorations = buildRenderedMarkdownEditorDecorations(update.state);
+        this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(update.state, update.view.visibleRanges);
       }
     }
   },

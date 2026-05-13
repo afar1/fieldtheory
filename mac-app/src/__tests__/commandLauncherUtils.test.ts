@@ -14,14 +14,24 @@ import {
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
+  buildLauncherAppItems,
+  buildLauncherFileItems,
+  DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+  getLauncherAppSearchQuery,
+  getLauncherFileSearchQuery,
+  isLauncherRootSearchKindEnabled,
+  LAUNCHER_ROOT_SEARCH_KIND_LABELS,
+  normalizeLauncherRootSearchEnabledKinds,
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
   getLauncherAreaActionIdForQuery,
+  getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
   getLauncherUsageScore,
   getLauncherStatusText,
+  areLauncherRootSearchEnabledKindsEqual,
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
   isGeneratedBookmarkTaxonomyPath,
@@ -33,9 +43,11 @@ import {
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
+  shouldReturnLauncherSelectionToInput,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -256,6 +268,37 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
   });
 
+  it('keeps app matches ahead of newer recent files', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('recent-safari-note', 'recent-file', 300), score: 1000 },
+      { item: item('safari-app', 'app', undefined, 100), score: 800 },
+      { item: item('wiki-safari-page', 'wiki-page', undefined, 200), score: 900 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'safari-app',
+      'recent-safari-note',
+      'wiki-safari-page',
+    ]);
+  });
+
+  it('caps app matches when an app result budget is supplied', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('safari-app', 'app', undefined, 500), score: 1000 },
+      { item: item('slack-app', 'app', undefined, 400), score: 990 },
+      { item: item('settings-app', 'app', undefined, 300), score: 980 },
+      { item: item('search-command', 'command', undefined, 200), score: 700 },
+      { item: item('scratchpad-note', 'wiki-page', undefined, 100), score: 690 },
+    ], { maxAppResults: 2 });
+
+    expect(results.map(result => result.id)).toEqual([
+      'safari-app',
+      'slack-app',
+      'search-command',
+      'scratchpad-note',
+    ]);
+  });
+
   it('uses score when matching rows do not have recency', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('wiki-clipboard', 'wiki-page'), score: 1000 },
@@ -435,6 +478,183 @@ describe('flattenLibraryRootsForLauncher', () => {
 
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ relPath: 'entries/commerce', displayName: 'Commerce' });
+  });
+});
+
+describe('buildLauncherAppItems', () => {
+  it('builds app rows as root-search items with path and bundle keywords', () => {
+    const [item] = buildLauncherAppItems([
+      {
+        name: 'Safari',
+        displayName: 'Safari',
+        appPath: '/Applications/Safari.app',
+        bundleId: 'com.apple.Safari',
+        lastModified: 123,
+      },
+    ]);
+
+    expect(item).toEqual(expect.objectContaining({
+      id: 'app-/Applications/Safari.app',
+      type: 'app',
+      rootSearchKind: 'app',
+      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.app,
+      appPath: '/Applications/Safari.app',
+      bundleId: 'com.apple.Safari',
+      hotkeyDisplay: 'app',
+      lastUpdated: 123,
+    }));
+    expect(item.keywords).toEqual(expect.arrayContaining(['Safari', 'com.apple.Safari', '/Applications/Safari.app', 'Applications']));
+  });
+
+  it('detects explicit app searches without taking over normal app-name queries', () => {
+    expect(getLauncherAppSearchQuery('app safari')).toBe('safari');
+    expect(getLauncherAppSearchQuery('apps: terminal')).toBe('terminal');
+    expect(getLauncherAppSearchQuery('app')).toBeNull();
+    expect(getLauncherAppSearchQuery('app store')).toBe('store');
+  });
+
+  it('keeps normal app search focused on used apps and strong matches', () => {
+    const [safari, consoleApp, obscureUtility] = buildLauncherAppItems([
+      {
+        name: 'Safari',
+        displayName: 'Safari',
+        appPath: '/Applications/Safari.app',
+        bundleId: 'com.apple.Safari',
+        lastModified: 123,
+      },
+      {
+        name: 'Console',
+        displayName: 'Console',
+        appPath: '/System/Applications/Utilities/Console.app',
+        bundleId: 'com.apple.Console',
+        lastModified: 123,
+      },
+      {
+        name: 'Obscure Helper',
+        displayName: 'Obscure Helper',
+        appPath: '/Applications/Utilities/Obscure Helper.app',
+        bundleId: 'com.example.obscure-helper',
+        lastModified: 123,
+      },
+    ]);
+
+    expect(shouldIncludeLauncherAppInNormalSearch({ app: safari, query: 'sa' })).toBe(true);
+    expect(shouldIncludeLauncherAppInNormalSearch({ app: consoleApp, query: 'co' })).toBe(false);
+    expect(shouldIncludeLauncherAppInNormalSearch({ app: consoleApp, query: 'con' })).toBe(true);
+    expect(shouldIncludeLauncherAppInNormalSearch({
+      app: obscureUtility,
+      query: 'ob',
+      usage: { count: 2, lastUsedAt: 123 },
+    })).toBe(true);
+    expect(shouldIncludeLauncherAppInNormalSearch({
+      app: obscureUtility,
+      query: 'oh',
+      usage: { count: 2, lastUsedAt: 123 },
+    })).toBe(true);
+    expect(shouldIncludeLauncherAppInNormalSearch({ app: obscureUtility, query: 'oh' })).toBe(false);
+    expect(shouldIncludeLauncherAppInNormalSearch({
+      app: obscureUtility,
+      query: 'zz',
+      usage: { count: 2, lastUsedAt: 123 },
+    })).toBe(false);
+  });
+
+  it('names the future root-search categories explicitly', () => {
+    expect(Object.keys(LAUNCHER_ROOT_SEARCH_KIND_LABELS).sort()).toEqual([
+      'app',
+      'calculator',
+      'calendar',
+      'contact',
+      'currency',
+      'dictionary',
+      'file',
+      'recent-document',
+      'system-command',
+      'system-setting',
+      'terminal-command',
+      'time-zone',
+      'unit',
+      'url',
+      'web-search',
+    ].sort());
+  });
+});
+
+describe('getLauncherNativeIconPathForItem', () => {
+  it('prefers app paths, then file paths, then directory paths for native launcher icons', () => {
+    expect(getLauncherNativeIconPathForItem({
+      appPath: '/Applications/Safari.app',
+      filePath: '/Users/tester/Notes.md',
+      directoryPath: '/Users/tester',
+    })).toBe('/Applications/Safari.app');
+    expect(getLauncherNativeIconPathForItem({
+      filePath: '/Users/tester/Notes.md',
+      directoryPath: '/Users/tester',
+    })).toBe('/Users/tester/Notes.md');
+    expect(getLauncherNativeIconPathForItem({
+      directoryPath: '/Users/tester',
+    })).toBe('/Users/tester');
+    expect(getLauncherNativeIconPathForItem({})).toBeNull();
+  });
+});
+
+describe('launcher root search settings', () => {
+  it('normalizes missing and partial root-search kind settings', () => {
+    expect(normalizeLauncherRootSearchEnabledKinds(null)).toEqual(DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS);
+    expect(normalizeLauncherRootSearchEnabledKinds({ app: false, file: true, contact: true })).toEqual({
+      ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+      app: false,
+      file: true,
+      contact: true,
+    });
+    expect(isLauncherRootSearchKindEnabled({ app: false }, 'app')).toBe(false);
+    expect(isLauncherRootSearchKindEnabled({ app: false }, 'file')).toBe(true);
+  });
+
+  it('compares normalized root-search settings so reloads can avoid render loops', () => {
+    expect(areLauncherRootSearchEnabledKindsEqual(
+      DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+      normalizeLauncherRootSearchEnabledKinds(null),
+    )).toBe(true);
+    expect(areLauncherRootSearchEnabledKindsEqual(
+      { app: true },
+      { app: true, file: true },
+    )).toBe(true);
+    expect(areLauncherRootSearchEnabledKindsEqual(
+      { app: true },
+      { app: false },
+    )).toBe(false);
+  });
+});
+
+describe('launcher file search helpers', () => {
+  it('parses apostrophe-prefixed file searches only', () => {
+    expect(getLauncherFileSearchQuery("'draft")).toBe('draft');
+    expect(getLauncherFileSearchQuery("'  budget")).toBe('budget');
+    expect(getLauncherFileSearchQuery('draft')).toBeNull();
+  });
+
+  it('builds file rows as root-search items with path keywords', () => {
+    const [item] = buildLauncherFileItems([
+      {
+        name: 'Draft Notes.md',
+        displayName: 'Draft Notes.md',
+        filePath: '/Users/tester/Documents/Draft Notes.md',
+        isDirectory: false,
+        lastModified: 456,
+      },
+    ]);
+
+    expect(item).toEqual(expect.objectContaining({
+      id: 'file-/Users/tester/Documents/Draft Notes.md',
+      type: 'file',
+      rootSearchKind: 'file',
+      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.file,
+      filePath: '/Users/tester/Documents/Draft Notes.md',
+      hotkeyDisplay: 'Documents',
+      lastUpdated: 456,
+    }));
+    expect(item.keywords).toEqual(expect.arrayContaining(['Draft Notes.md', '/Users/tester/Documents/Draft Notes.md', 'Documents']));
   });
 });
 
@@ -971,17 +1191,27 @@ describe('shouldHandleLauncherPreviewShortcut', () => {
 });
 
 describe('nextLauncherArrowIndex', () => {
-  it('keeps the implicit first row selected on the first ArrowDown', () => {
-    expect(nextLauncherArrowIndex(0, 3, 'down', false)).toBe(0);
+  it('moves to the second row on the first ArrowDown because the first row is already soft-selected', () => {
+    expect(nextLauncherArrowIndex(0, 3, 'down')).toBe(1);
   });
 
   it('moves down after a row has been explicitly selected', () => {
-    expect(nextLauncherArrowIndex(0, 3, 'down', true)).toBe(1);
+    expect(nextLauncherArrowIndex(0, 3, 'down')).toBe(1);
   });
 
   it('clamps arrow movement to available rows', () => {
-    expect(nextLauncherArrowIndex(2, 3, 'down', true)).toBe(2);
-    expect(nextLauncherArrowIndex(0, 3, 'up', true)).toBe(0);
+    expect(nextLauncherArrowIndex(2, 3, 'down')).toBe(2);
+    expect(nextLauncherArrowIndex(0, 3, 'up')).toBe(0);
+  });
+});
+
+describe('shouldReturnLauncherSelectionToInput', () => {
+  it('returns to input when ArrowUp is pressed from the first explicit row', () => {
+    expect(shouldReturnLauncherSelectionToInput(0, 3, true)).toBe(true);
+  });
+
+  it('does not return to input when there is no explicit row selection', () => {
+    expect(shouldReturnLauncherSelectionToInput(0, 3, false)).toBe(false);
   });
 });
 

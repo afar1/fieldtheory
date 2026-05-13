@@ -28,10 +28,18 @@ import {
   filterLauncherNamespaceItems,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
+  buildLauncherAppItems,
+  buildLauncherFileItems,
+  LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
+  LAUNCHER_NORMAL_MODE_MAX_RESULTS,
+  DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   balanceLauncherNormalModeMatches,
   compareLauncherItemsByRecency,
   dedupeLauncherPersonItems,
+  getLauncherAppSearchQuery,
+  getLauncherFileSearchQuery,
   getLauncherFieldTheoryMarkdownTarget,
+  getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
   getLauncherMoveUndoTargetDirRelPath,
@@ -39,23 +47,30 @@ import {
   getLauncherItemRecency,
   getLauncherUsageScore,
   getLauncherStatusText,
+  areLauncherRootSearchEnabledKindsEqual,
   isGeneratedBookmarkTaxonomyPath,
+  isLauncherRootSearchKindEnabled,
   nextLauncherArrowIndex,
+  normalizeLauncherRootSearchEnabledKinds,
   resolveHighlightedLauncherIndex,
   resolveLauncherAuthorNamespaceHandle,
   resolveLauncherBookmarkFacetNamespace,
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
   shouldHandleLauncherPreviewShortcut,
+  shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
+  shouldReturnLauncherSelectionToInput,
   type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
   type LauncherLibraryMoveSource,
   type LauncherMoveDirectoryTarget,
   type LauncherLibraryRoot,
+  type LauncherRootSearchKind,
+  type LauncherRootSearchEnabledKinds,
   type LauncherUsageMap,
 } from './commandLauncherUtils';
 import { normalizeSquaresConfig } from './utils/squaresConfig';
@@ -71,6 +86,38 @@ interface PortableCommandInfo {
   lastModified: number;
 }
 
+interface LauncherAppInfo {
+  name: string;
+  displayName: string;
+  appPath: string;
+  bundleId?: string;
+  lastModified: number;
+}
+
+interface LauncherFileInfo {
+  name: string;
+  displayName: string;
+  filePath: string;
+  isDirectory: boolean;
+  lastModified: number;
+}
+
+interface LauncherFileSearchResult {
+  files: LauncherFileInfo[];
+  indexing: boolean;
+  indexedAt: number | null;
+}
+
+interface LauncherFileIconResult {
+  success: boolean;
+  iconDataUrl?: string;
+  error?: string;
+}
+
+interface LauncherSettings {
+  rootSearchEnabledKinds: Record<string, boolean>;
+}
+
 interface HandoffInfo {
   name: string;
   displayName: string;
@@ -78,7 +125,7 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory';
+type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file';
 
 interface LauncherRecentEntry {
   kind: 'wiki' | 'external';
@@ -145,6 +192,12 @@ interface LauncherItem {
   lastOpenedAt?: number;
   // For actions
   actionId?: string;
+  // For root search rows
+  rootSearchKind?: LauncherRootSearchKind;
+  rootSearchLabel?: string;
+  appPath?: string;
+  bundleId?: string;
+  isDirectory?: boolean;
   // For local model command runs
   localCommandName?: string;
   localInstruction?: string;
@@ -206,6 +259,8 @@ function scoreLauncherItem(item: LauncherItem, query: string): number {
   let typeScore = 0;
   if (item.type === 'directory') typeScore += 35;
   if (item.type === 'command') typeScore += 20;
+  if (item.type === 'app') typeScore += 18;
+  if (item.type === 'file') typeScore += 16;
   if (item.type === 'bookmark-author') typeScore += 15;
   if (item.type === 'bookmark-facet') typeScore += 15;
   if (item.type === 'recent-file') typeScore += 12;
@@ -261,6 +316,14 @@ interface LauncherCommandsAPI {
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
+  listLauncherApps: () => Promise<LauncherAppInfo[]>;
+  launchApp: (appPath: string) => Promise<{ success: boolean; error?: string }>;
+  getLauncherFileIcon: (filePath: string) => Promise<LauncherFileIconResult>;
+  searchLauncherFiles: (query: string) => Promise<LauncherFileSearchResult>;
+  openLauncherFile: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  warmLauncherFileIndex: () => Promise<{ started: boolean }>;
+  getLauncherSettings: () => Promise<LauncherSettings>;
+  setLauncherSettings: (settings: LauncherSettings) => Promise<LauncherSettings>;
   runLocalCommand: (request: string | {
     commandName?: string;
     customInstruction?: string;
@@ -365,6 +428,8 @@ function launcherItemTypeLabel(item: LauncherItem): string {
     case 'command': return 'Command';
     case 'local-command': return 'Local';
     case 'local-instruction': return 'Local';
+    case 'app': return item.rootSearchLabel ?? 'App';
+    case 'file': return item.rootSearchLabel ?? 'File';
     case 'action': return 'Action';
     case 'recent-file': return 'Recent';
     case 'handoff': return 'Handoff';
@@ -426,12 +491,26 @@ const getStyles = (isDark: boolean) => ({
     height: 'auto',
     flexShrink: 0,
   },
+  iconButton: {
+    width: '16px',
+    height: '16px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
+    margin: 0,
+    border: 'none',
+    background: 'transparent',
+    cursor: 'pointer',
+    flexShrink: 0,
+  },
   input: {
     flex: 1,
     background: 'transparent',
     border: 'none',
     outline: 'none',
-    fontSize: '14px',
+    fontSize: '12px',
+    lineHeight: '16px',
     color: isDark ? '#fff' : '#171717',
     fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
   },
@@ -480,6 +559,20 @@ const getStyles = (isDark: boolean) => ({
     overflow: 'hidden',
     textOverflow: 'ellipsis',
     whiteSpace: 'nowrap' as const,
+  },
+  itemIconSlot: {
+    width: '16px',
+    height: '16px',
+    flexShrink: 0,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemIcon: {
+    width: '16px',
+    height: '16px',
+    objectFit: 'contain' as const,
+    display: 'block',
   },
   itemHotkey: {
     fontSize: '11px',
@@ -538,6 +631,12 @@ function CommandLauncher() {
   const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
+  const [launcherApps, setLauncherApps] = useState<LauncherAppInfo[]>([]);
+  const [launcherFiles, setLauncherFiles] = useState<LauncherFileInfo[]>([]);
+  const [launcherFileSearchLoading, setLauncherFileSearchLoading] = useState(false);
+  const [launcherRootSearchEnabledKinds, setLauncherRootSearchEnabledKinds] = useState<Record<LauncherRootSearchKind, boolean>>(
+    DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+  );
   const [recentEntries, setRecentEntries] = useState<LauncherRecentEntry[]>([]);
   const [hotkeys, setHotkeys] = useState<LauncherHotkeyMap>(DEFAULT_HOTKEYS);
   const [squaresHotkeys, setSquaresHotkeys] = useState<Record<string, string>>(DEFAULT_SQUARES_HOTKEYS);
@@ -564,6 +663,7 @@ function CommandLauncher() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewPayload, setPreviewPayload] = useState<LauncherPreviewPayload | null>(null);
   const [filtered, setFiltered] = useState<LauncherItem[]>([]);
+  const [launcherIconDataByPath, setLauncherIconDataByPath] = useState<Record<string, string | null>>({});
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
   const [usageByItemId, setUsageByItemId] = useState<LauncherUsageMap>(() => readLauncherUsageMap());
@@ -577,10 +677,12 @@ function CommandLauncher() {
   const activeWebPageRequestRef = useRef(0);
   const previewWindowWasOpenRef = useRef(false);
   const previewRequestRef = useRef(0);
+  const launcherIconPendingPathsRef = useRef(new Set<string>());
   const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
   const launcherDataRequestRef = useRef(0);
+  const launcherFileSearchRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
@@ -650,6 +752,42 @@ function CommandLauncher() {
       console.error('[CommandLauncher] Failed to load commands:', err);
     }
   }, []);
+
+  const loadLauncherApps = useCallback(async () => {
+    try {
+      const apps = await commandsAPI.listLauncherApps();
+      setLauncherApps(apps || []);
+    } catch (err) {
+      console.error('[CommandLauncher] Failed to load apps:', err);
+      setLauncherApps([]);
+    }
+  }, []);
+
+  const loadLauncherSettings = useCallback(async () => {
+    try {
+      const settings = await commandsAPI.getLauncherSettings();
+      const normalized = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds as LauncherRootSearchEnabledKinds);
+      setLauncherRootSearchEnabledKinds(prev => (
+        areLauncherRootSearchEnabledKindsEqual(prev, normalized) ? prev : normalized
+      ));
+    } catch (err) {
+      console.error('[CommandLauncher] Failed to load launcher settings:', err);
+      setLauncherRootSearchEnabledKinds(prev => (
+        areLauncherRootSearchEnabledKindsEqual(prev, DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS)
+          ? prev
+          : DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS
+      ));
+    }
+  }, []);
+
+  const warmLauncherFileIndex = useCallback(async () => {
+    if (!isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file')) return;
+    try {
+      await commandsAPI.warmLauncherFileIndex();
+    } catch (err) {
+      console.error('[CommandLauncher] Failed to warm file index:', err);
+    }
+  }, [launcherRootSearchEnabledKinds]);
 
   const loadLibraryMarkdown = useCallback(async () => {
     try {
@@ -815,6 +953,9 @@ function CommandLauncher() {
     setLauncherDataLoading(true);
     await Promise.allSettled([
       loadCommands(),
+      loadLauncherApps(),
+      loadLauncherSettings(),
+      warmLauncherFileIndex(),
       loadHandoffs(),
       loadHotkeys(),
       loadLibraryMarkdown(),
@@ -828,7 +969,7 @@ function CommandLauncher() {
     if (requestId === launcherDataRequestRef.current) {
       setLauncherDataLoading(false);
     }
-  }, [loadCommands, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, refreshLauncherContext]);
+  }, [loadCommands, loadLauncherApps, loadLauncherSettings, warmLauncherFileIndex, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, refreshLauncherContext]);
 
   const clearLauncherSessionState = useCallback(() => {
     authorNamespaceRef.current = null;
@@ -980,6 +1121,13 @@ function CommandLauncher() {
       lastUpdated: cmd.lastModified,
     })), [commands]);
 
+  const appItems = useMemo((): LauncherItem[] => {
+    if (!isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'app')) return [];
+    return buildLauncherAppItems(launcherApps);
+  }, [launcherApps, launcherRootSearchEnabledKinds]);
+
+  const fileItems = useMemo((): LauncherItem[] => buildLauncherFileItems(launcherFiles), [launcherFiles]);
+
   const commandFilePaths = useMemo(
     () => new Set(commandItems.map(item => item.filePath).filter((filePath): filePath is string => Boolean(filePath))),
     [commandItems],
@@ -1048,8 +1196,8 @@ function CommandLauncher() {
       if (item.type === 'markdown-file') return !recentKeys.has(`external:${item.filePath}`);
       return true;
     });
-    return [...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...recentFileItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
+    return [...appItems, ...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...recentFileItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [appItems, commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
   const namespaceLabel = moveSource
     ? `move: ${moveSource.title}`
@@ -1189,6 +1337,85 @@ function CommandLauncher() {
     return buildLocalInstructionFallbackItem(instruction);
   }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
 
+  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
+  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
+  const fileSearchEnabled = isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file');
+  const visibleLauncherIconPaths = useMemo(() => {
+    const paths = new Set<string>();
+    for (const item of filtered) {
+      const iconPath = getLauncherNativeIconPathForItem(item);
+      if (iconPath) paths.add(iconPath);
+    }
+    return Array.from(paths).slice(0, LAUNCHER_NORMAL_MODE_MAX_RESULTS);
+  }, [filtered]);
+
+  useEffect(() => {
+    const isScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
+    const requestId = ++launcherFileSearchRequestRef.current;
+    if (fileSearchQuery === null || isScopedMode || !fileSearchEnabled) {
+      setLauncherFiles([]);
+      setLauncherFileSearchLoading(false);
+      return;
+    }
+    if (!fileSearchQuery) {
+      setLauncherFiles([]);
+      setLauncherFileSearchLoading(false);
+      return;
+    }
+
+    setLauncherFileSearchLoading(true);
+    let cancelled = false;
+    let pollTimeoutId: number | null = null;
+    const runSearch = () => {
+      void commandsAPI.searchLauncherFiles(fileSearchQuery)
+        .then((result) => {
+          if (cancelled || requestId !== launcherFileSearchRequestRef.current) return;
+          setLauncherFiles(result.files || []);
+          setLauncherFileSearchLoading(result.indexing);
+          if (result.indexing) {
+            pollTimeoutId = window.setTimeout(runSearch, 250);
+          }
+        })
+        .catch((error) => {
+          console.error('[CommandLauncher] Failed to search files:', error);
+          if (cancelled || requestId !== launcherFileSearchRequestRef.current) return;
+          setLauncherFiles([]);
+          setLauncherFileSearchLoading(false);
+        });
+    };
+    const timeoutId = window.setTimeout(runSearch, 80);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+      if (pollTimeoutId !== null) window.clearTimeout(pollTimeoutId);
+    };
+  }, [authorNamespace, bookmarkNamespace, directoryNamespace, fileSearchEnabled, fileSearchQuery, moveSource, namespacePrefix]);
+
+  useEffect(() => {
+    for (const filePath of visibleLauncherIconPaths) {
+      if (Object.prototype.hasOwnProperty.call(launcherIconDataByPath, filePath)) continue;
+      if (launcherIconPendingPathsRef.current.has(filePath)) continue;
+      launcherIconPendingPathsRef.current.add(filePath);
+      void commandsAPI.getLauncherFileIcon(filePath)
+        .then((result) => {
+          setLauncherIconDataByPath(prev => {
+            if (Object.prototype.hasOwnProperty.call(prev, filePath)) return prev;
+            return { ...prev, [filePath]: result.success ? (result.iconDataUrl ?? null) : null };
+          });
+        })
+        .catch(() => {
+          setLauncherIconDataByPath(prev => {
+            if (Object.prototype.hasOwnProperty.call(prev, filePath)) return prev;
+            return { ...prev, [filePath]: null };
+          });
+        })
+        .finally(() => {
+          launcherIconPendingPathsRef.current.delete(filePath);
+        });
+    }
+  }, [launcherIconDataByPath, visibleLauncherIconPaths]);
+
   // Filter items when query changes.
   useEffect(() => {
     const filterStartedAt = performance.now();
@@ -1253,6 +1480,26 @@ function CommandLauncher() {
     }
 
     const q = query.toLowerCase();
+
+    if (fileSearchQuery !== null) {
+      const results = fileSearchEnabled ? fileItems : [];
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, fileSearchQuery.length > 0 || launcherFileSearchLoading);
+      return;
+    }
+
+    if (appSearchQuery !== null) {
+      const appQuery = appSearchQuery.toLowerCase();
+      const results = balanceLauncherNormalModeMatches(appItems.map(item => {
+        const baseScore = scoreLauncherItem(item, appQuery);
+        return { item, score: baseScore + getLauncherUsageScore(item, appQuery, usageByItemId, baseScore) };
+      }).filter(({ score }) => score > 0));
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, appSearchQuery.length > 0);
+      return;
+    }
 
     const localMatch = query.trim().match(/^local(?:\s+([\s\S]*))?$/i);
     if (localMatch) {
@@ -1386,8 +1633,17 @@ function CommandLauncher() {
     const scoredMatches = allItems.map(item => {
       const baseScore = scoreLauncherItem(item, q);
       return { item, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
-    }).filter(s => s.score > 0);
-    const balancedMatches = dedupeLauncherPersonItems(balanceLauncherNormalModeMatches(scoredMatches));
+    }).filter(s => s.score > 0)
+      .filter(({ item }) => (
+        item.type !== 'app' || shouldIncludeLauncherAppInNormalSearch({
+          app: item,
+          query: q,
+          usage: usageByItemId[item.id],
+        })
+      ));
+    const balancedMatches = dedupeLauncherPersonItems(balanceLauncherNormalModeMatches(scoredMatches, {
+      maxAppResults: LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
+    }));
     const fallback = localInstructionFallbackForQuery(query, balancedMatches.length);
     const results = fallback ? [fallback] : balancedMatches;
 
@@ -1409,7 +1665,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId, launcherDataLoading]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId, launcherDataLoading]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -1578,7 +1834,7 @@ function CommandLauncher() {
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
       manualPreviewRef.current = false;
-      const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'down', hasExplicitSelectionRef.current);
+      const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'down');
       hasExplicitSelectionRef.current = true;
       setHasExplicitSelection(true);
       selectIndex(nextIndex);
@@ -1594,7 +1850,14 @@ function CommandLauncher() {
       if (filtered.length === 0) return;
       hasNavigatedRef.current = true;
       manualPreviewRef.current = false;
-      const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'up', hasExplicitSelectionRef.current);
+      if (shouldReturnLauncherSelectionToInput(selectedIndexRef.current, filtered.length, hasExplicitSelectionRef.current)) {
+        hasExplicitSelectionRef.current = false;
+        setHasExplicitSelection(false);
+        selectIndex(0);
+        return;
+      }
+      if (!hasExplicitSelectionRef.current) return;
+      const nextIndex = nextLauncherArrowIndex(selectedIndexRef.current, filtered.length, 'up');
       hasExplicitSelectionRef.current = true;
       setHasExplicitSelection(true);
       selectIndex(nextIndex);
@@ -1612,6 +1875,7 @@ function CommandLauncher() {
       const currentIndex = selectedIndexRef.current;
 
       if (moveSource) return;
+      if (fileSearchQuery !== null) return;
 
       const commandTarget = resolveLauncherCommandOpenTarget(
         filtered,
@@ -1907,6 +2171,34 @@ function CommandLauncher() {
         await commandsAPI.invokeHandoff(item.filePath);
       }
       closeForInvocation({ skipActivation: true });
+    } else if (item.type === 'app') {
+      if (!item.appPath) {
+        showInvocationError('launch-app-missing-path', 'App path missing', 'Launch failed');
+        return;
+      }
+      const result = await commandsAPI.launchApp(item.appPath).catch((error) => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Launch failed',
+      }));
+      if (!result.success) {
+        showInvocationError('launch-app-error', result.error, 'Launch failed');
+        return;
+      }
+      closeForInvocation({ skipActivation: true });
+    } else if (item.type === 'file') {
+      if (!item.filePath) {
+        showInvocationError('open-file-missing-path', 'File path missing', 'Open failed');
+        return;
+      }
+      const result = await commandsAPI.openLauncherFile(item.filePath).catch((error) => ({
+        success: false,
+        error: error instanceof Error ? error.message : 'Open failed',
+      }));
+      if (!result.success) {
+        showInvocationError('open-file-error', result.error, 'Open failed');
+        return;
+      }
+      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'wiki-page' || item.type === 'markdown-file' || item.type === 'artifact') {
       if (item.filePath) {
         await commandsAPI.invokeHandoff(item.filePath);
@@ -2057,6 +2349,20 @@ function CommandLauncher() {
     }
   }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
+  const openMainFieldTheoryWindow = useCallback(async () => {
+    dismissPreview();
+    traceLauncher('open-field-theory-icon-click');
+    const result = await commandsAPI.openFieldTheoryMarkdown({ kind: 'library', path: 'library' }).catch((error) => ({
+      success: false,
+      error: error instanceof Error ? error.message : 'Open Field Theory failed',
+    }));
+    if (!result.success) {
+      const message = result.error ?? 'Open Field Theory failed';
+      traceLauncher('open-field-theory-icon-error', { error: message });
+      showLauncherMessage(message);
+    }
+  }, [dismissPreview, showLauncherMessage]);
+
   if (isDarkMode === null) {
     return <div style={{ width: '100vw', height: '100vh', background: 'transparent' }} />;
   }
@@ -2070,9 +2376,18 @@ function CommandLauncher() {
     hasQuery: query.trim() !== '',
     namespaceLabel,
     resultCount: filtered.length,
-    loading: launcherDataLoading,
-    hasLoadedItems: allItems.length > 0,
+    loading: launcherDataLoading || launcherFileSearchLoading,
+    hasLoadedItems: fileSearchQuery !== null ? !launcherFileSearchLoading : allItems.length > 0,
   });
+  const renderItemIcon = (item: LauncherItem) => {
+    const iconPath = getLauncherNativeIconPathForItem(item);
+    const iconDataUrl = iconPath ? launcherIconDataByPath[iconPath] : null;
+    return (
+      <span style={styles.itemIconSlot} aria-hidden="true">
+        {iconDataUrl ? <img src={iconDataUrl} alt="" style={styles.itemIcon} /> : null}
+      </span>
+    );
+  };
 
   return (
     <div style={{
@@ -2083,17 +2398,26 @@ function CommandLauncher() {
         {`
           .command-launcher-input::placeholder {
             color: currentColor;
-            font-size: 10px;
+            font-size: inherit;
             opacity: 0.55;
           }
         `}
       </style>
       <div style={styles.inputRow}>
-        <img
-          src={isDarkMode ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
-          alt=""
-          style={styles.icon}
-        />
+        <button
+          type="button"
+          aria-label="Open Field Theory"
+          title="Open Field Theory"
+          style={styles.iconButton}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => { void openMainFieldTheoryWindow(); }}
+        >
+          <img
+            src={isDarkMode ? 'fieldtheory-icon.png' : 'field-theory-icon-black.png'}
+            alt=""
+            style={styles.icon}
+          />
+        </button>
         {namespaceLabel && (
           <span style={styles.namespaceTag}>{namespaceLabel}</span>
         )}
@@ -2102,7 +2426,7 @@ function CommandLauncher() {
           className="command-launcher-input"
           type="text"
           name="field-theory-command-launcher-query"
-          placeholder="Search your markdown, commands, or bookmarks"
+          placeholder="Search apps, markdown, commands, bookmarks, or ' files"
           aria-label={namespaceLabel ? `${namespaceLabel} search` : 'Command search'}
           autoComplete="off"
           autoCorrect="off"
@@ -2145,6 +2469,7 @@ function CommandLauncher() {
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
+                      {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.hotkeyDisplay && (
                         <span style={styles.itemHotkey}>{item.hotkeyDisplay}</span>
@@ -2170,6 +2495,7 @@ function CommandLauncher() {
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
+                      {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName}</span>
                       {item.timeAgo && (
                         <span style={styles.itemHotkey}>{item.timeAgo}</span>
@@ -2195,6 +2521,7 @@ function CommandLauncher() {
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
+                      {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.name}</span>
                     </li>
                   );
@@ -2215,6 +2542,7 @@ function CommandLauncher() {
                   onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                   onMouseMove={(event) => handleListItemMouseMove(event, i)}
                 >
+                  {renderItemIcon(item)}
                   <span style={styles.itemName}>
                     {item.type === 'command' ? item.name : item.displayName}
                   </span>
