@@ -8,6 +8,7 @@ import {
   launchLauncherApp,
   listLauncherApps,
   resolveLauncherAppPath,
+  resolveLauncherAppIconPath,
 } from './launcherApps';
 
 function makeTempRoot(): string {
@@ -87,6 +88,27 @@ describe('launcher app indexing', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
       fs.rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('resolves the bundle icon file for app row icons', () => {
+    const root = makeTempRoot();
+    try {
+      const appPath = makeApp(root, 'Iconic.app', `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0">
+<dict>
+  <key>CFBundleIconFile</key>
+  <string>app</string>
+</dict>
+</plist>
+`);
+      const iconPath = path.join(appPath, 'Contents', 'Resources', 'app.icns');
+      fs.mkdirSync(path.dirname(iconPath), { recursive: true });
+      fs.writeFileSync(iconPath, 'icon');
+
+      expect(resolveLauncherAppIconPath(appPath)).toBe(iconPath);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
     }
   });
 

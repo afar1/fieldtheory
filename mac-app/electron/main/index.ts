@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage } from 'electron';
 import { pathToFileURL } from 'url';
 import path from 'path';
 import os from 'os';
@@ -830,6 +830,19 @@ async function getLauncherFileIcon(filePath: string): Promise<LauncherFileIconRe
   }
 
   try {
+    if (/\.app$/i.test(normalizedPath)) {
+      const { resolveLauncherAppIconPath } = require('./launcherApps') as typeof import('./launcherApps');
+      const appIconPath = resolveLauncherAppIconPath(normalizedPath);
+      if (appIconPath) {
+        const appIcon = nativeImage.createFromPath(appIconPath);
+        if (!appIcon.isEmpty()) {
+          const iconDataUrl = appIcon.resize({ width: 32, height: 32, quality: 'best' }).toDataURL();
+          rememberLauncherFileIcon(normalizedPath, iconDataUrl);
+          return { success: true, iconDataUrl };
+        }
+      }
+    }
+
     const icon = await app.getFileIcon(normalizedPath, { size: 'small' });
     if (icon.isEmpty()) {
       rememberLauncherFileIcon(normalizedPath, null);
