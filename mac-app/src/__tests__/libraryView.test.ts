@@ -9,9 +9,11 @@ import {
   getCarrotListTabEdit,
   getMarkdownListEnterEdit,
   getMarkdownBodySelectionRange,
+  getMarkdownListIndentEdit,
   getMarkdownListToggleEdit,
   getRenderedMarkdownNodeStartLine,
   getRenderedMarkdownDeleteShortcutEdit,
+  getRenderedMarkdownEnterEdit,
   getRenderedMarkdownShortcutEdit,
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
@@ -43,6 +45,7 @@ import {
   persistLibrarianTodoMarker,
   persistLibrarianUnorderedListMarker,
   persistLibrarianEditorSession,
+  persistLibrarianContentMode,
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
@@ -52,6 +55,7 @@ import {
   replaceLibrarianNavigationEntry,
   resolveMarkdownSelectionRangeFromRenderedText,
   restoreLibrarianEditorSession,
+  restoreLibrarianContentMode,
   restoreLibrarianTodoMarker,
   restoreLibrarianUnorderedListMarker,
   resolveWikiCreateFolder,
@@ -59,6 +63,7 @@ import {
   shouldRevealFocusChrome,
   shouldRevealGroupedFocusChrome,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
   shouldInsertClipboardImagePathForPaste,
@@ -99,6 +104,7 @@ import {
   renamePinnedSidebarIds,
   renameLibraryRootRelPath,
   shouldCapScratchpadSidebarNode,
+  shouldShowSidebarTodoStateBadge,
   shouldShowPinnedSidebarDividerBefore,
   splitArchivedSidebarNodes,
   splitRecent,
@@ -302,27 +308,48 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
 });
 
 describe('shouldOpenMarkdownLinkFromMouseDown', () => {
-  it('opens rendered links on an ordinary primary click', () => {
+  it('opens rendered links on an ordinary primary click before editing starts', () => {
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
+      metaKey: false,
       altKey: false,
       ctrlKey: false,
+    })).toBe(true);
+  });
+
+  it('requires Command-click for rendered links while editing is active', () => {
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+      renderedEditingActive: true,
+    })).toBe(false);
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      metaKey: true,
+      altKey: false,
+      ctrlKey: false,
+      renderedEditingActive: true,
     })).toBe(true);
   });
 
   it('keeps modified and non-primary clicks available for browser/editor behavior', () => {
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
+      metaKey: false,
       altKey: true,
       ctrlKey: false,
     })).toBe(false);
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
+      metaKey: false,
       altKey: false,
       ctrlKey: true,
     })).toBe(false);
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 1,
+      metaKey: false,
       altKey: false,
       ctrlKey: false,
     })).toBe(false);
@@ -601,6 +628,44 @@ describe('markdown list editor helpers', () => {
       selectionEnd: 12,
     });
   });
+
+  it('starts a list on an empty line and leaves the caret ready for typing', () => {
+    expect(getMarkdownListToggleEdit('', 0, 0, 'ordered')).toEqual({
+      nextValue: '1. ',
+      selectionStart: 3,
+      selectionEnd: 3,
+    });
+
+    expect(getMarkdownListToggleEdit('  ', 2, 2, 'unordered')).toEqual({
+      nextValue: '  - ',
+      selectionStart: 4,
+      selectionEnd: 4,
+    });
+  });
+
+  it('indents and outdents markdown lists while preserving the caret', () => {
+    expect(getMarkdownListIndentEdit('- first', 7, 7, 'in')).toEqual({
+      nextValue: '  - first',
+      selectionStart: 9,
+      selectionEnd: 9,
+    });
+
+    expect(getMarkdownListIndentEdit('  - first', 9, 9, 'out')).toEqual({
+      nextValue: '- first',
+      selectionStart: 7,
+      selectionEnd: 7,
+    });
+
+    expect(getMarkdownListIndentEdit('1. first\n- [ ] task', 0, 19, 'in')).toEqual({
+      nextValue: '  1. first\n  - [ ] task',
+      selectionStart: 0,
+      selectionEnd: 23,
+    });
+  });
+
+  it('does not indent normal prose as a list', () => {
+    expect(getMarkdownListIndentEdit('first', 5, 5, 'in')).toBeNull();
+  });
 });
 
 describe('markdown body selection', () => {
@@ -638,6 +703,20 @@ describe('librarian todo marker preference', () => {
     expect(restoreLibrarianTodoMarker(storage)).toBe('circle');
     persistLibrarianTodoMarker(storage, 'square');
     expect(restoreLibrarianTodoMarker(storage)).toBe('square');
+  });
+});
+
+describe('librarian content mode preference', () => {
+  it('round-trips the last rendered or markdown mode', () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+
+    expect(restoreLibrarianContentMode(storage, 'markdown')).toBe('markdown');
+    persistLibrarianContentMode(storage, 'rendered');
+    expect(restoreLibrarianContentMode(storage, 'markdown')).toBe('rendered');
   });
 });
 
@@ -959,6 +1038,56 @@ describe('highlightFileFindMatches', () => {
 });
 
 describe('rendered markdown edit helpers', () => {
+  it('inserts rendered Enter after hidden inline markdown wrappers', () => {
+    expect(getRenderedMarkdownEnterEdit('**Done**', 6, 6)).toEqual({
+      nextValue: '**Done**\n',
+      selectionStart: 9,
+      selectionEnd: 9,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('[[Target Page|Alias]]', 19, 19)).toEqual({
+      nextValue: '[[Target Page|Alias]]\n',
+      selectionStart: 22,
+      selectionEnd: 22,
+    });
+  });
+
+  it('does not skip visible literal punctuation when inserting rendered Enter', () => {
+    expect(getRenderedMarkdownEnterEdit('Use * literally', 4, 4)).toEqual({
+      nextValue: 'Use \n* literally',
+      selectionStart: 5,
+      selectionEnd: 5,
+    });
+  });
+
+  it('continues markdown list structures from rendered Enter', () => {
+    expect(getRenderedMarkdownEnterEdit('- first', 7, 7)).toEqual({
+      nextValue: '- first\n- ',
+      selectionStart: 10,
+      selectionEnd: 10,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('1. first', 8, 8)).toEqual({
+      nextValue: '1. first\n2. ',
+      selectionStart: 12,
+      selectionEnd: 12,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('- [x] first', 11, 11)).toEqual({
+      nextValue: '- [x] first\n- [ ] ',
+      selectionStart: 18,
+      selectionEnd: 18,
+    });
+  });
+
+  it('exits empty markdown list structures from rendered Enter', () => {
+    expect(getRenderedMarkdownEnterEdit('- first\n- ', 10, 10)).toEqual({
+      nextValue: '- first\n',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+  });
+
   it('deletes adjacent rendered image markdown as a single block', () => {
     const value = 'before\n![Image](<file:///tmp/Figure.png>)\nafter';
     const imageStart = value.indexOf('![');
@@ -985,6 +1114,21 @@ describe('rendered markdown edit helpers', () => {
       selectionStart: imageStart,
       selectionEnd: imageStart,
     });
+  });
+
+  it('suppresses plain deletes that would expose hidden rendered markdown syntax', () => {
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('**Done**', 2, 2, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('**Done**', 6, 6, 'Delete')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('[Guide](wiki://guide)', 1, 1, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('[Guide](wiki://guide)', 6, 6, 'Delete')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('- first', 2, 2, 'Backspace')).toBe(true);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('- [ ] first', 6, 6, 'Backspace')).toBe(true);
+  });
+
+  it('allows plain deletes of visible rendered text', () => {
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('**Done**', 6, 6, 'Backspace')).toBe(false);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('**Done**', 2, 2, 'Delete')).toBe(false);
+    expect(shouldSuppressRenderedMarkdownBoundaryDelete('Use * literally', 4, 4, 'Delete')).toBe(false);
   });
 
   it('handles macOS rendered line delete chords from the source offset', () => {
@@ -1047,8 +1191,66 @@ describe('rendered markdown edit helpers', () => {
     });
   });
 
-  it('wraps selected text with inline formatting markers', () => {
-    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'bold')).toEqual({
+	  it('applies list shortcuts to an empty rendered line and leaves the caret after the marker', () => {
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: '&', code: 'Digit7', metaKey: true, shiftKey: true }),
+	      value: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+    })).toEqual({
+      nextValue: '1. ',
+      selectionStart: 3,
+      selectionEnd: 3,
+    });
+
+    expect(getRenderedMarkdownShortcutEdit({
+      event: mkKey({ key: '*', code: 'Digit8', metaKey: true, shiftKey: true }),
+      value: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+      unorderedListMarker: 'carrot',
+    })).toEqual({
+      nextValue: '› ',
+      selectionStart: 2,
+	      selectionEnd: 2,
+	    });
+	  });
+
+	  it('creates inline formatting placeholders from rendered shortcuts with no selection', () => {
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'b', metaKey: true }),
+	      value: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    })).toEqual({
+	      nextValue: 'hello ****',
+	      selectionStart: 8,
+	      selectionEnd: 8,
+	    });
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'i', metaKey: true }),
+	      value: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    })).toEqual({
+	      nextValue: 'hello **',
+	      selectionStart: 7,
+	      selectionEnd: 7,
+	    });
+	    expect(getRenderedMarkdownShortcutEdit({
+	      event: mkKey({ key: 'u', metaKey: true }),
+	      value: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    })).toEqual({
+	      nextValue: 'hello <u></u>',
+	      selectionStart: 9,
+	      selectionEnd: 9,
+	    });
+	  });
+
+	  it('wraps selected text with inline formatting markers', () => {
+	    expect(getRenderedMarkdownSelectionFormatEdit('hello world', 6, 11, 'bold')).toEqual({
       nextValue: 'hello **world**',
       selectionStart: 8,
       selectionEnd: 13,
@@ -1818,6 +2020,17 @@ describe('applyTodoStateOverrideToItem', () => {
 
   it('removes the sidebar todo state when the override is null', () => {
     expect(applyTodoStateOverrideToItem(item, { [item.id]: null }).todoState).toBeUndefined();
+  });
+});
+
+describe('shouldShowSidebarTodoStateBadge', () => {
+  it('hides the task badge while an archived file row collapses', () => {
+    expect(shouldShowSidebarTodoStateBadge({ todoState: 'done' }, false)).toBe(true);
+    expect(shouldShowSidebarTodoStateBadge({ todoState: 'done' }, true)).toBe(false);
+  });
+
+  it('does not show a badge for files without a task state', () => {
+    expect(shouldShowSidebarTodoStateBadge({}, false)).toBe(false);
   });
 });
 

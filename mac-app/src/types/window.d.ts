@@ -1386,6 +1386,9 @@ interface FieldTheoryMarkdownTarget {
   contentMode?: 'rendered' | 'markdown';
   selectionStart?: number;
   selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 }
 
 interface ActiveLibraryFileContext {
@@ -1497,7 +1500,7 @@ interface CommandsAPI {
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void) => () => void;
-  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
+  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
@@ -1883,6 +1886,7 @@ declare global {
     name: string;        // filename slug without date/ext
     title: string;       // filename without extension
     lastUpdated: number; // mtime
+    documentKind?: 'markdown' | 'html' | 'css';
     todoState?: MarkdownTodoState;
     archived?: boolean;
   }
@@ -1898,7 +1902,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {

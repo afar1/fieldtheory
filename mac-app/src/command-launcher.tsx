@@ -37,6 +37,7 @@ import {
   compareLauncherItemsByRecency,
   dedupeLauncherPersonItems,
   getLauncherAppSearchQuery,
+  getLauncherClipboardSearchInputState,
   getLauncherFileSearchQuery,
   getLauncherFieldTheoryMarkdownTarget,
   getLauncherNativeIconPathForItem,
@@ -60,6 +61,7 @@ import {
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
+  shouldExitLauncherClipboardSearch,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
@@ -74,6 +76,18 @@ import {
   type LauncherUsageMap,
 } from './commandLauncherUtils';
 import { normalizeSquaresConfig } from './utils/squaresConfig';
+import {
+  buildClipboardListRows,
+  getStackHydrationIds,
+  getStackItemsSignature,
+} from './utils/clipboardStacks';
+import type {
+  ClipboardItem,
+  ClipboardQueryOptions,
+  ListRow,
+  RunningApp as ClipboardRunningApp,
+  StackInfo,
+} from './types/clipboard';
 
 // =============================================================================
 // Types
@@ -125,7 +139,7 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file';
+type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file' | 'clipboard-item' | 'clipboard-stack';
 
 interface LauncherRecentEntry {
   kind: 'wiki' | 'external';
@@ -215,6 +229,11 @@ interface LauncherItem {
   // For bookmark posts
   bookmarkId?: string;
   postedAt?: string;
+  // For clipboard list rows
+  clipboardRow?: ListRow;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 }
 
 function fuzzySubsequenceScore(text: string, query: string): number {
@@ -332,7 +351,7 @@ interface LauncherCommandsAPI {
     useMemory?: boolean;
   }) => Promise<{ success: boolean; error?: string; filePath?: string; commandName?: string; mode?: 'document' | 'selection' }>;
   invokeHandoff: (filePath: string) => Promise<{ success: boolean; error?: string }>;
-  getLauncherContext: () => Promise<{ fieldTheoryActive: boolean }>;
+  getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; targetApp?: ClipboardRunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
@@ -346,6 +365,11 @@ interface LauncherCommandsAPI {
 }
 
 interface LauncherClipboardAPI {
+  queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
+  pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
+  pasteStack?: (ids: number[], targetBundleId?: string) => Promise<void>;
+  queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
+  getUniqueStacks?: () => Promise<StackInfo[]>;
   getHotkeys: () => Promise<{
     screenshot?: string;
     fullScreen?: string;
@@ -420,6 +444,8 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
     authorHandle: item.authorHandle ?? null,
     bookmarkId: item.bookmarkId ?? null,
     directoryPath: item.directoryPath ?? null,
+    clipboardItemId: item.clipboardItemId ?? null,
+    clipboardStackId: item.clipboardStackId ?? null,
   };
 }
 
@@ -440,6 +466,8 @@ function launcherItemTypeLabel(item: LauncherItem): string {
     case 'bookmark-author': return 'Author';
     case 'bookmark-facet': return 'Topic';
     case 'directory': return 'Folder';
+    case 'clipboard-item': return 'Clipboard';
+    case 'clipboard-stack': return 'Stack';
     default: return 'Item';
   }
 }
@@ -452,6 +480,27 @@ function compactLauncherUrl(rawUrl: string): string {
   } catch {}
   if (label.length <= 72) return label;
   return `${label.slice(0, 36)}...${label.slice(-30)}`;
+}
+
+function compactClipboardLauncherText(rawText: string | null | undefined, fallback: string): string {
+  const compact = rawText?.replace(/\s+/g, ' ').trim();
+  if (!compact) return fallback;
+  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
+}
+
+function getClipboardItemLauncherText(item: ClipboardItem): string {
+  const text = (item.useImprovedVersion && item.improvedContent) ? item.improvedContent : item.content;
+  if (text?.trim()) return compactClipboardLauncherText(text, 'Clipboard item');
+  if (item.type === 'screenshot') return 'Screenshot';
+  if (item.type === 'image') return 'Image';
+  if (item.type === 'transcript') return 'Transcript';
+  return 'Clipboard item';
+}
+
+function getClipboardStackLauncherText(row: Extract<ListRow, { type: 'stack' }>): string {
+  const fallback = `${row.stack.itemCount} clipboard items`;
+  const itemText = row.items.map(getClipboardItemLauncherText).find(text => text !== 'Clipboard item' && text !== 'Image' && text !== 'Screenshot');
+  return compactClipboardLauncherText(row.stack.firstTextPreview ?? itemText, fallback);
 }
 
 // =============================================================================
@@ -628,12 +677,17 @@ function CommandLauncher() {
   const [authorNamespace, setAuthorNamespace] = useState<string | null>(null);
   const [bookmarkNamespace, setBookmarkNamespace] = useState<BookmarkNamespace | null>(null);
   const [moveSource, setMoveSource] = useState<LauncherLibraryMoveSource | null>(null);
+  const [clipboardSearchActive, setClipboardSearchActive] = useState(false);
   const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [launcherApps, setLauncherApps] = useState<LauncherAppInfo[]>([]);
   const [launcherFiles, setLauncherFiles] = useState<LauncherFileInfo[]>([]);
   const [launcherFileSearchLoading, setLauncherFileSearchLoading] = useState(false);
+  const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([]);
+  const [clipboardStacks, setClipboardStacks] = useState<StackInfo[]>([]);
+  const [clipboardHydratedStackItemsById, setClipboardHydratedStackItemsById] = useState<Record<string, ClipboardItem[]>>({});
+  const [clipboardSearchLoading, setClipboardSearchLoading] = useState(false);
   const [launcherRootSearchEnabledKinds, setLauncherRootSearchEnabledKinds] = useState<Record<LauncherRootSearchKind, boolean>>(
     DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   );
@@ -683,6 +737,8 @@ function CommandLauncher() {
   const hasExplicitSelectionRef = useRef(false);
   const launcherDataRequestRef = useRef(0);
   const launcherFileSearchRequestRef = useRef(0);
+  const clipboardSearchRequestRef = useRef(0);
+  const clipboardStackHydrationRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
@@ -730,10 +786,20 @@ function CommandLauncher() {
   }, [selectIndex]);
 
   const showLauncherMessage = useCallback((message: string) => {
+    setClipboardSearchActive(false);
     setQuery(message);
     setFiltered([]);
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
   }, [resizeLauncher]);
+
+  const handleQueryChange = useCallback((nextQuery: string) => {
+    const next = getLauncherClipboardSearchInputState({
+      active: clipboardSearchActive,
+      query: nextQuery,
+    });
+    setClipboardSearchActive(next.active);
+    setQuery(next.query);
+  }, [clipboardSearchActive]);
 
   const handleListItemMouseMove = useCallback((event: React.MouseEvent, index: number) => {
     const last = lastMousePositionRef.current;
@@ -948,6 +1014,32 @@ function CommandLauncher() {
     }
   }, []);
 
+  const fetchClipboardStackItemsById = useCallback(async (stackIds: string[]): Promise<Record<string, ClipboardItem[]>> => {
+    const queryItemsByStackId = clipboardAPI.queryItemsByStackId;
+    if (!queryItemsByStackId || stackIds.length === 0) return {};
+
+    const entries = await Promise.all(
+      stackIds.map(async (stackId) => [stackId, await queryItemsByStackId(stackId)] as const)
+    );
+    const fetchedStacks = Object.fromEntries(entries) as Record<string, ClipboardItem[]>;
+
+    setClipboardHydratedStackItemsById((prev) => {
+      let changed = false;
+      const next = { ...prev };
+
+      for (const [stackId, stackItems] of Object.entries(fetchedStacks)) {
+        if (getStackItemsSignature(prev[stackId] ?? []) !== getStackItemsSignature(stackItems)) {
+          next[stackId] = stackItems;
+          changed = true;
+        }
+      }
+
+      return changed ? next : prev;
+    });
+
+    return fetchedStacks;
+  }, []);
+
   const loadLauncherData = useCallback(async () => {
     const requestId = ++launcherDataRequestRef.current;
     setLauncherDataLoading(true);
@@ -980,10 +1072,11 @@ function CommandLauncher() {
     previewRequestRef.current += 1;
     manualPreviewRef.current = false;
     hasNavigatedRef.current = false;
-    hasExplicitSelectionRef.current = false;
-    lastMousePositionRef.current = null;
-    setQuery('');
-    setNamespacePrefix(null);
+	    hasExplicitSelectionRef.current = false;
+	    lastMousePositionRef.current = null;
+	    setQuery('');
+	    setClipboardSearchActive(false);
+	    setNamespacePrefix(null);
     setDirectoryNamespace(null);
     setAuthorNamespace(null);
     setBookmarkNamespace(null);
@@ -1199,9 +1292,53 @@ function CommandLauncher() {
     return [...appItems, ...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...recentFileItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
   }, [appItems, commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
+	  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
+	  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
+  const clipboardSearchQuery = clipboardSearchActive ? query : null;
+  const fileSearchEnabled = isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file');
+
   const namespaceLabel = moveSource
     ? `move: ${moveSource.title}`
-    : directoryNamespace?.label ?? (authorNamespace ? `@${authorNamespace}` : bookmarkNamespace?.label ?? namespacePrefix);
+    : clipboardSearchQuery !== null
+      ? 'clipboard'
+      : directoryNamespace?.label ?? (authorNamespace ? `@${authorNamespace}` : bookmarkNamespace?.label ?? namespacePrefix);
+
+  const clipboardListRows = useMemo((): ListRow[] => (
+    buildClipboardListRows(clipboardItems, clipboardStacks, new Set<string>(), clipboardHydratedStackItemsById)
+  ), [clipboardHydratedStackItemsById, clipboardItems, clipboardStacks]);
+
+  const clipboardLauncherItems = useMemo((): LauncherItem[] => clipboardListRows.map((row) => {
+    if (row.type === 'stack') {
+      const displayName = getClipboardStackLauncherText(row);
+      return {
+        id: `clipboard-stack-${row.stack.stackId}`,
+        type: 'clipboard-stack' as const,
+        name: displayName,
+        displayName,
+        keywords: ['clipboard', 'stack', displayName, row.stack.firstTextPreview ?? ''].filter(Boolean),
+        hotkeyDisplay: `${row.stack.itemCount} items`,
+        lastUpdated: row.stack.createdAt,
+        clipboardRow: row,
+        clipboardStackId: row.stack.stackId,
+        clipboardSearch: clipboardSearchQuery ?? '',
+      };
+    }
+
+    const displayName = getClipboardItemLauncherText(row.item);
+    return {
+      id: `clipboard-item-${row.item.id}`,
+      type: 'clipboard-item' as const,
+      name: displayName,
+      displayName,
+      keywords: ['clipboard', row.item.type, displayName, row.item.sourceAppName ?? '', row.item.content ?? ''].filter(Boolean),
+      hotkeyDisplay: row.item.sourceAppName || formatTimeAgo(row.item.createdAt),
+      lastUpdated: row.item.createdAt,
+      clipboardRow: row,
+      clipboardItemId: row.item.id,
+      clipboardSearch: clipboardSearchQuery ?? '',
+    };
+  }), [clipboardListRows, clipboardSearchQuery]);
+
   const bookmarkForItem = useCallback((item: LauncherItem | undefined): Bookmark | null => {
     if (item?.type !== 'bookmark' || !item.bookmarkId) return null;
     const bookmarks = authorNamespace ? authorBookmarks : bookmarkNamespaceBookmarks;
@@ -1337,9 +1474,6 @@ function CommandLauncher() {
     return buildLocalInstructionFallbackItem(instruction);
   }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
 
-  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
-  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
-  const fileSearchEnabled = isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file');
   const visibleLauncherIconPaths = useMemo(() => {
     const paths = new Set<string>();
     for (const item of filtered) {
@@ -1350,7 +1484,64 @@ function CommandLauncher() {
   }, [filtered]);
 
   useEffect(() => {
-    const isScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
+    const requestId = ++clipboardSearchRequestRef.current;
+    if (clipboardSearchQuery === null) {
+      setClipboardItems([]);
+      setClipboardStacks([]);
+      setClipboardHydratedStackItemsById({});
+      setClipboardSearchLoading(false);
+      return;
+    }
+
+    setClipboardSearchLoading(true);
+    const options: ClipboardQueryOptions = {
+      limit: 50,
+      offset: 0,
+    };
+    if (clipboardSearchQuery.trim()) {
+      options.search = clipboardSearchQuery.trim();
+    }
+
+    let cancelled = false;
+    void Promise.all([
+      clipboardAPI.queryItems(options),
+      clipboardAPI.getUniqueStacks?.() ?? Promise.resolve([]),
+    ]).then(([items, stacks]) => {
+      if (cancelled || requestId !== clipboardSearchRequestRef.current) return;
+      setClipboardHydratedStackItemsById({});
+      setClipboardItems(items ?? []);
+      setClipboardStacks(stacks ?? []);
+    }).catch((error) => {
+      if (cancelled || requestId !== clipboardSearchRequestRef.current) return;
+      console.error('[CommandLauncher] Failed to load clipboard results:', error);
+      setClipboardItems([]);
+      setClipboardStacks([]);
+      setClipboardHydratedStackItemsById({});
+    }).finally(() => {
+      if (cancelled || requestId !== clipboardSearchRequestRef.current) return;
+      setClipboardSearchLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clipboardSearchQuery]);
+
+  useEffect(() => {
+    if (clipboardSearchQuery === null) return;
+
+    const stackIdsToHydrate = getStackHydrationIds(clipboardItems, clipboardStacks, clipboardHydratedStackItemsById);
+    if (stackIdsToHydrate.length === 0) return;
+
+    const requestId = ++clipboardStackHydrationRequestRef.current;
+    void fetchClipboardStackItemsById(stackIdsToHydrate).catch((error) => {
+      if (requestId !== clipboardStackHydrationRequestRef.current) return;
+      console.error('[CommandLauncher] Failed to hydrate clipboard stack results:', error);
+    });
+  }, [clipboardHydratedStackItemsById, clipboardItems, clipboardSearchQuery, clipboardStacks, fetchClipboardStackItemsById]);
+
+  useEffect(() => {
+    const isScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource || clipboardSearchQuery !== null);
     const requestId = ++launcherFileSearchRequestRef.current;
     if (fileSearchQuery === null || isScopedMode || !fileSearchEnabled) {
       setLauncherFiles([]);
@@ -1390,7 +1581,7 @@ function CommandLauncher() {
       window.clearTimeout(timeoutId);
       if (pollTimeoutId !== null) window.clearTimeout(pollTimeoutId);
     };
-  }, [authorNamespace, bookmarkNamespace, directoryNamespace, fileSearchEnabled, fileSearchQuery, moveSource, namespacePrefix]);
+  }, [authorNamespace, bookmarkNamespace, clipboardSearchQuery, directoryNamespace, fileSearchEnabled, fileSearchQuery, moveSource, namespacePrefix]);
 
   useEffect(() => {
     for (const filePath of visibleLauncherIconPaths) {
@@ -1430,6 +1621,14 @@ function CommandLauncher() {
         : (forceEmptyState ? emptyStateHeight : 0);
       resizeLauncher(inputHeight + listHeight);
     };
+
+    if (clipboardSearchQuery !== null) {
+      const results = clipboardLauncherItems;
+      setFiltered(results);
+      selectIndex(0);
+      resizeForResults(results.length, clipboardSearchQuery.length > 0 || clipboardSearchLoading);
+      return;
+    }
 
     if (allItems.length === 0 && !namespacePrefix && !directoryNamespace && !authorNamespace && !bookmarkNamespace && !moveSource) {
       const waitingForResults = launcherDataLoading && query.trim() !== '';
@@ -1665,7 +1864,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId, launcherDataLoading]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId, launcherDataLoading]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -1814,6 +2013,30 @@ function CommandLauncher() {
     return true;
   }, [lastLibraryMove, loadLibraryMarkdown, openMovedLibraryFile, prepareLauncherForNextOpen, resizeLauncher, showLauncherMessage]);
 
+  const openClipboardLauncherItem = useCallback(async (item: LauncherItem): Promise<void> => {
+    if (item.type !== 'clipboard-item' && item.type !== 'clipboard-stack') return;
+    const result = await commandsAPI.openFieldTheoryMarkdown({
+      kind: 'clipboard',
+      path: 'clipboard',
+      clipboardItemId: item.clipboardItemId,
+      clipboardStackId: item.clipboardStackId,
+      clipboardSearch: item.clipboardSearch ?? '',
+    });
+    if (!result.success) {
+      showLauncherMessage(result.error ?? 'Open clipboard failed');
+    }
+  }, [showLauncherMessage]);
+
+  const getClipboardLauncherStackItemIds = useCallback(async (item: LauncherItem): Promise<number[]> => {
+    if (item.type !== 'clipboard-stack' || item.clipboardRow?.type !== 'stack') return [];
+    const row = item.clipboardRow;
+    if (row.stack.itemCount <= row.items.length || !item.clipboardStackId) {
+      return row.items.map(stackItem => stackItem.id);
+    }
+    const hydrated = await fetchClipboardStackItemsById([item.clipboardStackId]);
+    return (hydrated[item.clipboardStackId] ?? row.items).map(stackItem => stackItem.id);
+  }, [fetchClipboardStackItemsById]);
+
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -1829,6 +2052,12 @@ function CommandLauncher() {
       }
       prepareLauncherForNextOpen();
       commandsAPI.launcherClose();
+    } else if (shouldExitLauncherClipboardSearch({ active: clipboardSearchActive, query, key: e.key })) {
+      e.preventDefault();
+      setClipboardSearchActive(false);
+      setFiltered([]);
+      selectIndex(0);
+      resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length === 0) return;
@@ -1873,6 +2102,12 @@ function CommandLauncher() {
       const rawQuery = query.trim();
       const q = rawQuery.toLowerCase();
       const currentIndex = selectedIndexRef.current;
+
+      if (clipboardSearchQuery !== null) {
+        const selectedItem = filtered[currentIndex];
+        if (selectedItem) void openClipboardLauncherItem(selectedItem);
+        return;
+      }
 
       if (moveSource) return;
       if (fileSearchQuery !== null) return;
@@ -2073,6 +2308,24 @@ function CommandLauncher() {
       openFieldTheoryTarget: options.openFieldTheoryTarget ?? false,
       insertWikiLink: options.insertWikiLink ?? false,
     });
+    if (item.type === 'clipboard-item' || item.type === 'clipboard-stack') {
+      const targetBundleId = latestContext?.targetApp?.bundleId;
+      if (!targetBundleId) {
+        showInvocationError('paste-clipboard-launcher-no-target', 'No external target app available', 'No external target app available');
+        return;
+      }
+      closeForInvocation({ skipActivation: true });
+      if (item.type === 'clipboard-stack') {
+        const itemIds = await getClipboardLauncherStackItemIds(item);
+        if (itemIds.length > 0) {
+          await clipboardAPI.pasteStack?.(itemIds, targetBundleId);
+        }
+      } else if (typeof item.clipboardItemId === 'number') {
+        const clipboardItem = item.clipboardRow?.type === 'item' ? item.clipboardRow.item : null;
+        await clipboardAPI.pasteItem(item.clipboardItemId, targetBundleId, clipboardItem?.useImprovedVersion);
+      }
+      return;
+    }
     if (shouldPastePortableCommand({
       itemType: item.type,
       openFieldTheoryTarget: options.openFieldTheoryTarget,
@@ -2347,7 +2600,7 @@ function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, dismissPreview, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, dismissPreview, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   const openMainFieldTheoryWindow = useCallback(async () => {
     dismissPreview();
@@ -2376,8 +2629,10 @@ function CommandLauncher() {
     hasQuery: query.trim() !== '',
     namespaceLabel,
     resultCount: filtered.length,
-    loading: launcherDataLoading || launcherFileSearchLoading,
-    hasLoadedItems: fileSearchQuery !== null ? !launcherFileSearchLoading : allItems.length > 0,
+    loading: launcherDataLoading || launcherFileSearchLoading || clipboardSearchLoading,
+    hasLoadedItems: clipboardSearchQuery !== null
+      ? !clipboardSearchLoading
+      : fileSearchQuery !== null ? !launcherFileSearchLoading : allItems.length > 0,
   });
   const renderItemIcon = (item: LauncherItem) => {
     const iconPath = getLauncherNativeIconPathForItem(item);
@@ -2433,7 +2688,7 @@ function CommandLauncher() {
           autoCapitalize="none"
           spellCheck={false}
           value={query}
-          onChange={e => setQuery(e.target.value)}
+          onChange={e => handleQueryChange(e.target.value)}
           onKeyDown={handleKeyDown}
           autoFocus
           style={styles.input}

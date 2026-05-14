@@ -25,6 +25,8 @@ import {
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
   getLauncherAreaActionIdForQuery,
+  getLauncherClipboardSearchQuery,
+  getLauncherClipboardSearchInputState,
   getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
@@ -45,6 +47,7 @@ import {
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
+  shouldExitLauncherClipboardSearch,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
@@ -195,6 +198,48 @@ describe('getLauncherStatusText', () => {
       loading: true,
       hasLoadedItems: false,
     })).toBeNull();
+  });
+});
+
+describe('getLauncherClipboardSearchQuery', () => {
+  it('enters clipboard search only after dot and space', () => {
+    expect(getLauncherClipboardSearchQuery('. ')).toBe('');
+    expect(getLauncherClipboardSearchQuery('. invoice')).toBe('invoice');
+    expect(getLauncherClipboardSearchQuery('.  invoice')).toBe('invoice');
+    expect(getLauncherClipboardSearchQuery('.')).toBeNull();
+    expect(getLauncherClipboardSearchQuery('notes')).toBeNull();
+  });
+});
+
+describe('getLauncherClipboardSearchInputState', () => {
+  it('consumes the dot trigger when entering clipboard search', () => {
+    expect(getLauncherClipboardSearchInputState({ active: false, query: '. ' })).toEqual({
+      active: true,
+      query: '',
+    });
+    expect(getLauncherClipboardSearchInputState({ active: false, query: '. invoice' })).toEqual({
+      active: true,
+      query: 'invoice',
+    });
+  });
+
+  it('keeps clipboard mode query text after the trigger has been consumed', () => {
+    expect(getLauncherClipboardSearchInputState({ active: true, query: 'invoice' })).toEqual({
+      active: true,
+      query: 'invoice',
+    });
+    expect(getLauncherClipboardSearchInputState({ active: true, query: '' })).toEqual({
+      active: true,
+      query: '',
+    });
+  });
+});
+
+describe('shouldExitLauncherClipboardSearch', () => {
+  it('leaves clipboard search only when deleting from an empty clipboard query', () => {
+    expect(shouldExitLauncherClipboardSearch({ active: true, query: '', key: 'Backspace' })).toBe(true);
+    expect(shouldExitLauncherClipboardSearch({ active: true, query: 'invoice', key: 'Backspace' })).toBe(false);
+    expect(shouldExitLauncherClipboardSearch({ active: false, query: '', key: 'Backspace' })).toBe(false);
   });
 });
 
@@ -386,6 +431,7 @@ describe('flattenLibraryRootsForLauncher', () => {
         builtin: true,
         tree: [
           { kind: 'file', relPath: 'entries/note', absPath: '/wiki/entries/note.md', name: 'note', title: 'Note', lastUpdated: 1 },
+          { kind: 'file', relPath: 'reports/summary.html', absPath: '/wiki/reports/summary.html', name: 'summary.html', title: 'summary.html', lastUpdated: 3, documentKind: 'html' },
         ],
       },
       {
@@ -405,10 +451,11 @@ describe('flattenLibraryRootsForLauncher', () => {
       },
     ]);
 
-    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'wiki-page']);
-    expect(items[0]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
-    expect(items[1]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
-    expect(items[0].keywords).toContain('docs');
+    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'markdown-file', 'wiki-page']);
+    expect(items[0]).toMatchObject({ displayName: 'summary.html — Wiki', filePath: '/wiki/reports/summary.html', relPath: undefined });
+    expect(items[1]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
+    expect(items[2]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
+    expect(items[1].keywords).toContain('docs');
   });
 
   it('indexes a readable form of slugged wiki filenames', () => {

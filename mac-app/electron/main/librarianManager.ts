@@ -10,6 +10,8 @@ import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import {
   existingPathInsideRoots,
+  getLibraryTextDocumentKind,
+  isLibraryTextDocumentPath,
   isMarkdownDocumentPath,
   isPathInside,
   markdownFileNameFromUserInput,
@@ -1618,6 +1620,7 @@ export interface WikiPageMeta {
   name: string;     // filename without extension
   title: string;    // filename without extension
   lastUpdated: number;
+  documentKind?: 'markdown' | 'html' | 'css';
   todoState?: MarkdownTodoState;
   archived?: boolean;
 }
@@ -1633,7 +1636,7 @@ export interface WikiFolder {
 }
 
 export type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
 export interface LibraryRoot {
@@ -2318,6 +2321,7 @@ export class LibrarianManager extends EventEmitter {
     const watcher = chokidar.watch([
       path.join(normalizedDir, '*.md'),
       path.join(normalizedDir, '*.markdown'),
+      path.join(normalizedDir, '*.mdx'),
     ], {
       ignoreInitial: true,           // Don't fire for existing files
       awaitWriteFinish: {            // Wait for file to be fully written
@@ -2469,12 +2473,12 @@ export class LibrarianManager extends EventEmitter {
       ignorePermissionErrors: true,
     });
     watcher.on('add', (absPath: string) => {
-      if (isMarkdownDocumentPath(absPath)) this.handleLibraryRootAdd(normalizedDir, absPath);
+      if (isLibraryTextDocumentPath(absPath)) this.handleLibraryRootAdd(normalizedDir, absPath);
       else this.emit('library:changed', normalizedDir);
     });
     watcher.on('change', () => this.emit('library:changed', normalizedDir));
     watcher.on('unlink', (absPath: string) => {
-      if (isMarkdownDocumentPath(absPath)) this.scheduleLibraryRootUnlink(normalizedDir, absPath);
+      if (isLibraryTextDocumentPath(absPath)) this.scheduleLibraryRootUnlink(normalizedDir, absPath);
       else this.emit('library:changed', normalizedDir);
     });
     watcher.on('addDir', () => this.emit('library:changed', normalizedDir));
@@ -2610,6 +2614,9 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private parseWikiFileMetadata(filePath: string): { title: string; todoState?: MarkdownTodoState; archived?: boolean } {
+    if (!isMarkdownDocumentPath(filePath)) {
+      return { title: path.basename(filePath) };
+    }
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
       return this.parseWikiMetadata(content, filePath);
@@ -2828,7 +2835,12 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
-  private scanMarkdownTree(rootPath: string, currentDir = rootPath, seenRealPaths = new Set<string>()): WikiNode[] {
+  private scanMarkdownTree(
+    rootPath: string,
+    currentDir = rootPath,
+    seenRealPaths = new Set<string>(),
+    includeLibraryTextDocuments = false,
+  ): WikiNode[] {
     if (!fs.existsSync(currentDir)) return [];
 
     let currentRealPath: string;
@@ -2866,25 +2878,32 @@ export class LibrarianManager extends EventEmitter {
           kind: 'dir',
           name: entry.name,
           relPath,
-          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths),
+          children: this.scanMarkdownTree(rootPath, absPath, seenRealPaths, includeLibraryTextDocuments),
         });
         continue;
       }
 
-      if (!stats.isFile() || !isMarkdownDocumentPath(entry.name) || isWikiSkipFileName(entry.name)) {
+      const documentKind = getLibraryTextDocumentKind(entry.name);
+      const canShowFile = includeLibraryTextDocuments
+        ? documentKind !== null
+        : isMarkdownDocumentPath(entry.name);
+      if (!stats.isFile() || !canShowFile || isWikiSkipFileName(entry.name)) {
         continue;
       }
 
-      const nameWithoutExt = stripMarkdownFileExtension(entry.name);
-      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, nameWithoutExt)));
+      const name = documentKind === 'markdown'
+        ? stripMarkdownFileExtension(entry.name)
+        : entry.name;
+      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(currentDir, name)));
       const metadata = this.parseWikiFileMetadata(absPath);
       nodes.push({
         kind: 'file',
         relPath,
         absPath,
-        name: nameWithoutExt,
+        name,
         title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
+        documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
         archived: metadata.archived,
       });
@@ -2906,6 +2925,7 @@ export class LibrarianManager extends EventEmitter {
           name: node.name,
           title: node.title,
           lastUpdated: node.lastUpdated,
+          documentKind: node.documentKind,
           todoState: node.todoState,
           archived: node.archived,
         }];
@@ -2923,20 +2943,24 @@ export class LibrarianManager extends EventEmitter {
     this.libraryRootsCache = null;
   }
 
-  private fileNodeFromPath(rootPath: string, absPath: string): Extract<WikiNode, { kind: 'file' }> | null {
+  private fileNodeFromPath(rootPath: string, absPath: string, includeLibraryTextDocuments = false): Extract<WikiNode, { kind: 'file' }> | null {
     try {
       const stats = fs.statSync(absPath);
-      if (!stats.isFile() || !isMarkdownDocumentPath(absPath)) return null;
-      const nameWithoutExt = stripMarkdownFileExtension(path.basename(absPath));
-      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(path.dirname(absPath), nameWithoutExt)));
+      const documentKind = getLibraryTextDocumentKind(absPath);
+      if (!stats.isFile() || !(includeLibraryTextDocuments ? documentKind !== null : isMarkdownDocumentPath(absPath))) return null;
+      const name = documentKind === 'markdown'
+        ? stripMarkdownFileExtension(path.basename(absPath))
+        : path.basename(absPath);
+      const relPath = this.toPortableRelPath(path.relative(rootPath, path.join(path.dirname(absPath), name)));
       const metadata = this.parseWikiFileMetadata(absPath);
       return {
         kind: 'file',
         relPath,
         absPath,
-        name: nameWithoutExt,
+        name,
         title: metadata.title,
         lastUpdated: Math.floor(stats.mtimeMs),
+        documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
         archived: metadata.archived,
       };
@@ -2970,7 +2994,7 @@ export class LibrarianManager extends EventEmitter {
   }
 
   private patchCachedRename(event: LibraryRenameEvent): void {
-    const newNode = this.fileNodeFromPath(event.rootPath, event.newAbsPath);
+    const newNode = this.fileNodeFromPath(event.rootPath, event.newAbsPath, true);
     if (!newNode) {
       if (event.builtin) this.invalidateWikiTreeCache();
       else this.invalidateLibraryRootsCache();
@@ -3131,7 +3155,7 @@ export class LibrarianManager extends EventEmitter {
         label: 'Wiki',
         builtin: true,
         writable: true,
-        tree: this.getCachedWikiTree(),
+        tree: this.scanMarkdownTree(this.wikiDir, this.wikiDir, new Set<string>(), true),
       },
     ];
     const seen = new Set<string>([this.libraryRootKey(this.wikiDir)]);
@@ -3146,7 +3170,7 @@ export class LibrarianManager extends EventEmitter {
         label: path.basename(normalizedRoot) || normalizedRoot,
         builtin: false,
         writable: this.canWriteDirectory(normalizedRoot),
-        tree: this.scanMarkdownTree(normalizedRoot),
+        tree: this.scanMarkdownTree(normalizedRoot, normalizedRoot, new Set<string>(), true),
       });
     }
 
@@ -3177,7 +3201,7 @@ export class LibrarianManager extends EventEmitter {
       label: path.basename(canonicalPath) || canonicalPath,
       builtin: false,
       writable: this.canWriteDirectory(canonicalPath),
-      tree: this.scanMarkdownTree(canonicalPath),
+      tree: this.scanMarkdownTree(canonicalPath, canonicalPath, new Set<string>(), true),
     };
   }
 
@@ -3201,6 +3225,7 @@ export class LibrarianManager extends EventEmitter {
     const candidates = [
       path.resolve(this.wikiDir, `${relPath}.md`),
       path.resolve(this.wikiDir, `${relPath}.markdown`),
+      path.resolve(this.wikiDir, `${relPath}.mdx`),
     ];
 
     for (const candidate of candidates) {
@@ -3399,18 +3424,31 @@ export class LibrarianManager extends EventEmitter {
     this.wikiWatcher = chokidar.watch([
       path.join(wikiRoot, '**/*.md'),
       path.join(wikiRoot, '**/*.markdown'),
+      path.join(wikiRoot, '**/*.mdx'),
+      path.join(wikiRoot, '**/*.html'),
+      path.join(wikiRoot, '**/*.htm'),
+      path.join(wikiRoot, '**/*.css'),
     ], {
       ignoreInitial: true,
       awaitWriteFinish: { stabilityThreshold: 200, pollInterval: 50 },
       ignorePermissionErrors: true,
     });
 
-    this.wikiWatcher.on('add', (absPath: string) => this.handleWikiAdd(absPath));
-    this.wikiWatcher.on('change', () => this.emit('wiki:changed'));
+    this.wikiWatcher.on('add', (absPath: string) => {
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') this.handleWikiAdd(absPath);
+      else this.emit('library:changed', this.wikiDir);
+    });
+    this.wikiWatcher.on('change', (absPath: string) => {
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') this.emit('wiki:changed');
+      else this.emit('library:changed', this.wikiDir);
+    });
     // On unlink, also emit `wiki:deleted` with the relPath so downstream
     // consumers (RecentManager) can prune stale entries when the delete
     // happens outside the app — Finder trash, `rm`, `git checkout`, etc.
-    this.wikiWatcher.on('unlink', (absPath: string) => this.scheduleWikiUnlink(absPath));
+    this.wikiWatcher.on('unlink', (absPath: string) => {
+      if (getLibraryTextDocumentKind(absPath) === 'markdown') this.scheduleWikiUnlink(absPath);
+      else this.emit('library:changed', this.wikiDir);
+    });
     this.wikiWatcher.on('error', (err) => log.error('Wiki watcher error:', err));
   }
 
@@ -3521,7 +3559,7 @@ export class LibrarianManager extends EventEmitter {
       return false;
     }
 
-    const rootPath = this.getSafeLibraryRootPaths().find((savedRoot) => {
+    const rootPath = [this.wikiDir, ...this.getSafeLibraryRootPaths()].find((savedRoot) => {
       const normalizedRoot = this.normalizePath(this.expandPath(savedRoot));
       const rootKey = this.libraryRootKey(normalizedRoot);
       const relative = path.relative(rootKey, canonicalPath);
@@ -3539,6 +3577,17 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private resolveLibraryFilePathFromRelPath(rootPath: string, relPath: string): string {
+    const exact = path.resolve(rootPath, relPath);
+    if (isLibraryTextDocumentPath(exact)) return exact;
+    const markdownCandidates = [
+      path.resolve(rootPath, `${relPath}.md`),
+      path.resolve(rootPath, `${relPath}.markdown`),
+      path.resolve(rootPath, `${relPath}.mdx`),
+    ];
+    return markdownCandidates.find((candidate) => fs.existsSync(candidate)) ?? markdownCandidates[0];
+  }
+
   moveLibraryItem(rootPath: string, kind: LibraryMoveKind, sourceRelPath: string, targetDirRelPath: string, targetRootPath = rootPath): string | null {
     const sourceRoot = this.resolveLibraryRootForWrite(rootPath);
     const targetRoot = this.resolveLibraryRootForWrite(targetRootPath);
@@ -3551,7 +3600,9 @@ export class LibrarianManager extends EventEmitter {
     if (!targetRoot.builtin && !this.canWriteDirectory(targetRoot.rootPath)) return null;
     if (sourceRoot.builtin && kind === 'dir' && DEFAULT_LIBRARY_FOLDER_ID_SET.has(sourceRel)) return null;
 
-    const sourceAbs = path.resolve(sourceRoot.rootPath, kind === 'file' ? `${sourceRel}.md` : sourceRel);
+    const sourceAbs = kind === 'file'
+      ? this.resolveLibraryFilePathFromRelPath(sourceRoot.rootPath, sourceRel)
+      : path.resolve(sourceRoot.rootPath, sourceRel);
     const targetDirAbs = path.resolve(targetRoot.rootPath, targetDirRel);
     if (!this.isInsidePath(sourceRoot.rootPath, sourceAbs) || !this.isInsidePath(targetRoot.rootPath, targetDirAbs)) return null;
     if (!fs.existsSync(sourceAbs)) return null;
@@ -3571,7 +3622,9 @@ export class LibrarianManager extends EventEmitter {
     if (sourceAbs === targetAbs) return sourceRel;
     if (fs.existsSync(targetAbs)) return null;
 
-    const deletedWikiRelPaths = sourceRoot.builtin
+    const sourceIsMarkdownDocument = getLibraryTextDocumentKind(sourceAbs) === 'markdown';
+    const sourceIsWikiMove = sourceRoot.builtin && (kind === 'dir' || sourceIsMarkdownDocument);
+    const deletedWikiRelPaths = sourceIsWikiMove
       ? kind === 'file'
         ? [sourceRel]
         : this.flattenWikiFiles(this.scanMarkdownTree(sourceRoot.rootPath, sourceAbs)).map((page) => page.relPath)
@@ -3580,7 +3633,7 @@ export class LibrarianManager extends EventEmitter {
     try {
       this.moveLibraryPathSync(sourceAbs, targetAbs, kind);
       const newRelPath = stripMarkdownFileExtension(this.toPortableRelPath(path.relative(targetRoot.rootPath, targetAbs)));
-      if (sourceRoot.builtin) {
+      if (sourceIsWikiMove) {
         this.emit('wiki:changed');
         for (const relPath of deletedWikiRelPaths) {
           this.emit('wiki:deleted', relPath);
@@ -3590,7 +3643,8 @@ export class LibrarianManager extends EventEmitter {
       }
       if (crossRoot) {
         if (targetRoot.builtin) {
-          this.emit('wiki:changed');
+          if (sourceIsMarkdownDocument) this.emit('wiki:changed');
+          else this.emit('library:changed', targetRoot.rootPath);
         } else {
           this.emit('library:changed', targetRoot.rootPath);
         }
