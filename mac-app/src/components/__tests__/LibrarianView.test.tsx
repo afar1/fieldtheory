@@ -257,6 +257,34 @@ describe('LibrarianView render', () => {
     });
   });
 
+  it('places Show in Finder before the library breadcrumb', async () => {
+    const relPath = 'scratchpad/folder-toolbar-order';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'folder-toolbar-order',
+      title: 'folder-toolbar-order',
+      lastUpdated: 1,
+      content: 'Toolbar order',
+      documentVersion: { mtimeMs: 1, size: 13, sha256: 'toolbar-order-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const breadcrumb = await screen.findByText('scratchpad');
+    const folderButton = screen.getByLabelText('Show in Finder');
+
+    expect(screen.getAllByLabelText('Show in Finder')).toHaveLength(1);
+    expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
   it('renders task list markers as native checkbox controls in rendered editing', async () => {
     const relPath = 'scratchpad/rendered-task-text-test';
     const content = '- [ ] open task\n- [x] done task';
