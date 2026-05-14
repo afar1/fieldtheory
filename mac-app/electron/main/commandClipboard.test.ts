@@ -7,7 +7,9 @@ vi.mock('electron', () => ({
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
   CommandClipboardRestoreCoordinator,
+  captureCommandClipboardPayload,
   captureClipboardSnapshot,
+  clipboardMatchesCommandPayload,
   restoreClipboardSnapshot,
   shouldPasteCommandFileContentsAsText,
   waitForCommandClipboardPasteRead,
@@ -158,9 +160,56 @@ describe('waitForCommandClipboardPasteRead', () => {
   });
 });
 
+describe('clipboardMatchesCommandPayload', () => {
+  it('matches the launcher payload while the clipboard still contains it', () => {
+    const textBuffer = Buffer.from('command text');
+    const source = fakeClipboard({
+      availableFormats: vi.fn(() => ['text/plain']),
+      readText: vi.fn(() => 'command text'),
+      readBuffer: vi.fn(() => textBuffer),
+    });
+
+    const payload = captureCommandClipboardPayload(source);
+
+    expect(clipboardMatchesCommandPayload(payload, source)).toBe(true);
+  });
+
+  it('does not match after the user copies different text', () => {
+    const source = fakeClipboard({
+      availableFormats: vi.fn(() => ['text/plain']),
+      readText: vi.fn()
+        .mockReturnValueOnce('command text')
+        .mockReturnValue('user text'),
+      readBuffer: vi.fn(() => Buffer.from('command text')),
+    });
+
+    const payload = captureCommandClipboardPayload(source);
+
+    expect(clipboardMatchesCommandPayload(payload, source)).toBe(false);
+  });
+
+  it('does not match after the clipboard file formats change', () => {
+    const source = fakeClipboard({
+      availableFormats: vi.fn()
+        .mockReturnValueOnce(['text/plain', 'public.file-url'])
+        .mockReturnValue(['text/plain']),
+      readText: vi.fn(() => '/tmp/command.md'),
+      readBuffer: vi.fn((format: string) => Buffer.from(format)),
+    });
+
+    const payload = captureCommandClipboardPayload(source);
+
+    expect(clipboardMatchesCommandPayload(payload, source)).toBe(false);
+  });
+});
+
 describe('shouldPasteCommandFileContentsAsText', () => {
   it('uses plain command file contents for WhatsApp because it rejects local file pasteboard payloads', () => {
     expect(shouldPasteCommandFileContentsAsText('net.whatsapp.WhatsApp')).toBe(true);
+  });
+
+  it('uses plain command file contents for Slack because its composer can ignore local file pasteboard payloads', () => {
+    expect(shouldPasteCommandFileContentsAsText('com.tinyspeck.slackmacgap')).toBe(true);
   });
 
   it('keeps the default file payload behavior for other non-terminal apps', () => {
