@@ -239,6 +239,16 @@ describe('CommandsView command naming', () => {
     expect(onNavigateForward).toHaveBeenCalledTimes(2);
   });
 
+  it('places Show in Finder before the command breadcrumb', async () => {
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const breadcrumb = await screen.findByText('commands / existing.md');
+    const folderButton = screen.getByLabelText('Show in Finder');
+
+    expect(screen.getAllByLabelText('Show in Finder')).toHaveLength(1);
+    expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
   it('uses a rendered/source toggle for internal commands', async () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
