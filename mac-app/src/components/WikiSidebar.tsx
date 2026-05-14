@@ -314,6 +314,10 @@ export function applyTodoStateOverrideToItem(
   return rest;
 }
 
+export function shouldShowSidebarTodoStateBadge(item: Pick<UnifiedItem, 'todoState'>, isCollapsing: boolean): boolean {
+  return !!item.todoState && !isCollapsing;
+}
+
 function applyTodoStateOverridesToNodes(
   nodes: SidebarNode[],
   todoStateOverrides: Record<string, SidebarTodoStateOverride | undefined>,
@@ -967,8 +971,9 @@ function wikiNodeToSidebarNode(
   taggedDocByPath: Map<string, TaggedDocListItem>
 ): SidebarNode {
   if (node.kind === 'file') {
-    const type = root.builtin ? 'wiki' : 'external';
-    const id = root.builtin ? `wiki:${node.relPath}` : `external:${node.absPath}`;
+    const isWikiMarkdown = root.builtin && (node.documentKind === undefined || node.documentKind === 'markdown');
+    const type = isWikiMarkdown ? 'wiki' : 'external';
+    const id = isWikiMarkdown ? `wiki:${node.relPath}` : `external:${node.absPath}`;
     const taggedDoc = taggedDocByPath.get(normalizeTaggedPath(node.absPath));
     return {
       kind: 'file',
@@ -1500,8 +1505,11 @@ function WikiSidebar({
     if (item.kind === 'file') {
       const root = libraryRoots.find((entry) => entry.path === target.rootPath);
       setTimeout(() => {
-        const type = root?.builtin ? 'wiki' : 'external';
-        const absPath = type === 'wiki' ? '' : `${target.rootPath}/${newRelPath}.md`;
+        const isMarkdownRelPath = !/\.(html?|css)$/i.test(newRelPath);
+        const type = root?.builtin && isMarkdownRelPath ? 'wiki' : 'external';
+        const absPath = type === 'wiki'
+          ? ''
+          : `${target.rootPath.replace(/\/+$/, '')}/${isMarkdownRelPath ? `${newRelPath}.md` : newRelPath}`;
         const id = type === 'wiki' ? `wiki:${newRelPath}` : `external:${absPath}`;
         const fileName = newRelPath.split('/').pop() ?? newRelPath;
         onSelectItem({
@@ -3505,6 +3513,7 @@ function FileItem({
   const rowPadding = isCollapsing
     ? `0 ${horizontalPadding}px 0 ${leftPadding}px`
     : `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${horizontalPadding}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${leftPadding}px`;
+  const showTodoStateBadge = shouldShowSidebarTodoStateBadge(item, isCollapsing);
 
   return (
     <div
@@ -3650,7 +3659,7 @@ function FileItem({
             }}>
               {item.title}
             </div>
-            {item.todoState && (
+            {showTodoStateBadge && (
               <span
                 aria-label={item.todoState === 'done' ? 'done task note' : 'open task note'}
                 title={item.todoState === 'done' ? 'done' : 'to do'}

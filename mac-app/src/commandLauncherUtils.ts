@@ -83,7 +83,7 @@ export function shouldPastePortableCommand(input: {
 // =============================================================================
 
 export type LauncherLibraryNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: 'open' | 'done' }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: 'open' | 'done' }
   | { kind: 'dir'; name: string; relPath: string; children: LauncherLibraryNode[] };
 
 export interface LauncherLibraryRoot {
@@ -409,6 +409,9 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 export type LauncherFieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 };
 
 export interface LauncherFieldTheoryTargetCandidate extends LauncherVisibleItem {
@@ -721,7 +724,8 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     }
     if (!shouldIndexLibraryNodeForLauncher(root, node)) return;
 
-    const type = root.builtin ? 'wiki-page' : 'markdown-file';
+    const isWikiMarkdown = root.builtin && (node.documentKind === undefined || node.documentKind === 'markdown');
+    const type = isWikiMarkdown ? 'wiki-page' : 'markdown-file';
     const rootLabel = root.builtin ? 'wiki' : root.label;
     const readableName = node.name.replace(/[-_]+/g, ' ');
     const todoKeywords = node.todoState
@@ -731,7 +735,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       id: `${type}-${root.path}-${node.relPath}`,
       type,
       name: node.name,
-      displayName: root.builtin ? node.title : `${node.title} — ${root.label}`,
+      displayName: isWikiMarkdown ? node.title : `${node.title} — ${root.label}`,
       keywords: [
         node.name,
         readableName,
@@ -743,7 +747,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
         ...todoKeywords,
       ].filter(Boolean),
       filePath: node.absPath,
-      relPath: root.builtin ? node.relPath : undefined,
+      relPath: isWikiMarkdown ? node.relPath : undefined,
       lastUpdated: Number.isFinite(node.lastUpdated) ? node.lastUpdated : undefined,
       todoState: node.todoState,
     });
@@ -897,6 +901,30 @@ export function buildLauncherFileItems(files: LauncherFileSource[]): LauncherFil
 export function getLauncherFileSearchQuery(query: string): string | null {
   if (!query.startsWith("'")) return null;
   return query.slice(1).trim();
+}
+
+export function getLauncherClipboardSearchQuery(query: string): string | null {
+  if (!query.startsWith('. ')) return null;
+  return query.slice(2).trim();
+}
+
+export function getLauncherClipboardSearchInputState(input: {
+  active: boolean;
+  query: string;
+}): { active: boolean; query: string } {
+  if (input.active) return input;
+  const clipboardSearch = getLauncherClipboardSearchQuery(input.query);
+  return clipboardSearch === null
+    ? input
+    : { active: true, query: clipboardSearch };
+}
+
+export function shouldExitLauncherClipboardSearch(input: {
+  active: boolean;
+  query: string;
+  key: string;
+}): boolean {
+  return input.active && input.query.length === 0 && input.key === 'Backspace';
 }
 
 function isDescendantPath(path: string | undefined, directoryPath: string): boolean {

@@ -155,6 +155,26 @@ describe('ClipboardHistoryWindow helper methods', () => {
     await Promise.resolve();
   });
 
+  it('waits for pending previous-app capture before resolving a paste target', async () => {
+    let resolveCapture!: (app: { bundleId: string; name: string }) => void;
+    vi.spyOn(window as any, 'getFrontmostExternalApp').mockImplementation(async () => (
+      new Promise((resolve) => {
+        resolveCapture = resolve;
+      })
+    ));
+    vi.spyOn(window, 'show').mockImplementation(() => {});
+
+    window.capturePreviousAppAndShow(undefined, false, true, false, true);
+    const targetPromise = window.getTargetAppForPaste();
+
+    resolveCapture({ bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' });
+
+    await expect(targetPromise).resolves.toEqual({
+      bundleId: 'com.mitchellh.ghostty',
+      name: 'Ghostty',
+    });
+  });
+
   it('sends target app info after async previous-app capture updates', async () => {
     const send = vi.fn();
     (window as any).window = {
@@ -202,6 +222,33 @@ describe('ClipboardHistoryWindow helper methods', () => {
       previousApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
       targetApp: { bundleId: 'com.mitchellh.ghostty', name: 'Ghostty' },
       runningApps: [],
+    });
+  });
+
+  it('does not remember Dock as a paste target', () => {
+    const send = vi.fn();
+    (window as any).window = {
+      isDestroyed: vi.fn(() => false),
+      isVisible: vi.fn(() => true),
+      webContents: { send },
+    };
+
+    window.rememberExternalApp({ bundleId: 'com.apple.dock', name: 'Dock' });
+
+    expect(window.getPreviousApp()).toBeNull();
+    expect(window.getTargetApp()).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('skips Dock when falling back to the running-app list', () => {
+    (window as any).runningApps = [
+      { bundleId: 'com.apple.dock', name: 'Dock' },
+      { bundleId: 'com.apple.TextEdit', name: 'TextEdit' },
+    ];
+
+    expect(window.getTargetApp()).toEqual({
+      bundleId: 'com.apple.TextEdit',
+      name: 'TextEdit',
     });
   });
 

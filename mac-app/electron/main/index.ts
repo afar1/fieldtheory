@@ -118,7 +118,7 @@ import {
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
-import { isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
+import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
@@ -127,7 +127,7 @@ import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
 import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
-import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import { setMarkdownArchivedState } from '../shared/markdownFrontmatter';
 import {
   FIELD_THEORY_URL_SCHEME,
@@ -141,10 +141,13 @@ import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
   CommandClipboardRestoreCoordinator,
+  captureCommandClipboardPayload,
   captureClipboardSnapshot,
+  clipboardMatchesCommandPayload,
   restoreClipboardSnapshot,
   shouldPasteCommandFileContentsAsText,
   waitForCommandClipboardPasteRead,
+  type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
@@ -382,8 +385,24 @@ async function activateAndPaste(
     if (!targetFrontmost) {
       return false;
     }
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-hide', targetApp, {
+      targetFrontmost,
+    });
     await beforePaste?.();
     await new Promise(resolve => setTimeout(resolve, 40));
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-before-recheck', targetApp);
+    let targetFrontmostAfterHide = await waitForCommandLauncherTargetAppFrontmost(targetApp, 'activate-and-paste-after-hide');
+    if (!targetFrontmostAfterHide) {
+      appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-lost-target', targetApp);
+      targetFrontmostAfterHide = await activateCommandLauncherTargetApp(targetApp, 'activate-and-paste-after-hide-reactivate');
+    }
+    if (!targetFrontmostAfterHide) {
+      appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-reactivate-failed', targetApp);
+      return false;
+    }
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-keystroke', targetApp, {
+      targetFrontmostAfterHide,
+    });
     const beforeKeystroke = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-before-keystroke', {
       targetBundleId: bundleId,
@@ -445,6 +464,26 @@ function readCommandPasteClipboardTrace(): Record<string, unknown> {
 
 function isCommandPayloadTraceEnabled(): boolean {
   return ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_COMMAND_PAYLOAD_TRACE ?? '').toLowerCase());
+}
+
+function appendCommandLauncherVisibilityTrace(
+  event: string,
+  targetApp: { bundleId: string; name: string } | null,
+  data: Record<string, unknown> = {},
+): void {
+  const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+  const details = {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+    frontmostBundleId: frontmostApp?.bundleId ?? null,
+    frontmostName: frontmostApp?.name ?? null,
+    commandLauncherVisible: commandLauncherWindow?.isVisible() ?? null,
+    commandLauncherShowingOrVisible: commandLauncherWindow?.isShowingOrVisible() ?? null,
+    commandLauncherExternalInvocationSuppressed: commandLauncherWindow?.isExternalInvocationActivationSuppressed() ?? null,
+    ...data,
+  };
+  appendCommandLauncherTrace(event, details);
+  appendVisibilityTrace(event, details);
 }
 
 function commandPayloadTrace(text: string): Record<string, unknown> {
@@ -520,8 +559,12 @@ async function typeTextFromCommandLauncher(
   if (!activated) {
     return false;
   }
+  appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.before-hide`, targetApp, {
+    targetFrontmost: true,
+  });
   commandLauncherWindow?.hide(true);
   await new Promise(resolve => setTimeout(resolve, 40));
+  appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.after-hide-before-native-helper`, targetApp);
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
@@ -1257,7 +1300,7 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
 }
 
 function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
-  if (!appInfo?.bundleId || !appInfo.name || isFieldTheoryBundleId(appInfo.bundleId)) {
+  if (!appInfo?.bundleId || !appInfo.name || !isExternalCommandTargetBundleId(appInfo.bundleId)) {
     return;
   }
 
@@ -1269,7 +1312,7 @@ function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: st
 
 function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
   const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
-  if (previousApp?.bundleId && !isFieldTheoryBundleId(previousApp.bundleId)) {
+  if (previousApp?.bundleId && isExternalCommandTargetBundleId(previousApp.bundleId)) {
     appendCommandLauncherTrace('target-resolved', {
       source: 'previous-app',
       previousBundleId: previousApp.bundleId,
@@ -1287,7 +1330,9 @@ function getCommandLauncherTargetApp(): { bundleId: string; name: string } | nul
     fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
     fallbackName: lastExternalCommandTargetApp?.name ?? null,
   });
-  return lastExternalCommandTargetApp;
+  return lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
+    ? lastExternalCommandTargetApp
+    : null;
 }
 
 let visibilityAppTraceInstalled = false;
@@ -1930,9 +1975,9 @@ function registerHotkeysAfterOnboarding(): void {
 
     if (!showing) {
       clipboardHistoryWindow.playOpenSound();
-      const boundsToUse = restoreClipboardHistoryBounds('library');
+      const boundsToUse = restoreClipboardHistoryBounds();
       suspendDynamicIslandFocusForClipboardHistory('show-hotkey');
-      clipboardHistoryWindow.capturePreviousAppAndShowLibrary(boundsToUse, true);
+      clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
       // Opening clipboard history during recording can corrupt transparent
       // overlay backing on some macOS compositor paths.
       cursorStatusManager?.refreshWindowProperties();
@@ -2858,12 +2903,12 @@ function showClipboardHistoryOnActivate(): void {
   dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
 }
 
-/** Route an incoming markdown path to the library view. Called from `open-file`
+/** Route an incoming Field Theory document path to the library view. Called from `open-file`
  *  (macOS) and also deferred until the main window exists for cold starts. */
 function routeOpenMarkdown(inputPath: string): void {
   const resolved = resolveIncomingMarkdownPath(inputPath, librarianManager?.getWikiRoot() ?? null);
   if (!resolved) {
-    log.info(`open-file: ignoring non-markdown or unreadable path: ${inputPath}`);
+    log.info(`open-file: ignoring unsupported or unreadable path: ${inputPath}`);
     return;
   }
   if (!clipboardHistoryWindow) {
@@ -3254,7 +3299,7 @@ function setupLibrarianIPCHandlers(): void {
     (_event, absPath: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null => {
       try {
         const canonical = fs.realpathSync(absPath);
-        if (!isAllowedMarkdownExt(canonical)) return null;
+        if (!isLibraryTextDocumentPath(canonical)) return null;
         const content = fs.readFileSync(canonical, 'utf-8');
         const stats = fs.statSync(canonical);
         return {
@@ -3278,7 +3323,7 @@ function setupLibrarianIPCHandlers(): void {
     }
     try {
       const canonical = fs.realpathSync(absPath);
-      if (!isAllowedMarkdownExt(canonical)) return { ok: false, reason: 'not-found' };
+      if (!isLibraryTextDocumentPath(canonical)) return { ok: false, reason: 'not-found' };
       return writeTextFileWithConflictGuard(canonical, content, expectedVersion);
     } catch (error) {
       log.error(`external:save failed for ${absPath}:`, error);
@@ -3350,14 +3395,11 @@ function setupLibrarianIPCHandlers(): void {
       }
       try {
         const canonical = fs.realpathSync(absPath);
-        if (!isAllowedMarkdownExt(canonical)) return null;
+        if (!isLibraryTextDocumentPath(canonical)) return null;
         const trimmed = newName.trim();
         if (!trimmed) return null;
-        const lower = trimmed.toLowerCase();
         const extension = path.extname(canonical) || '.md';
-        const nextFileName = lower.endsWith('.md') || lower.endsWith('.markdown')
-          ? markdownFileNameFromUserInput(trimmed)
-          : markdownFileNameFromUserInput(`${trimmed}${extension}`);
+        const nextFileName = libraryTextDocumentFileNameFromUserInput(trimmed, extension);
         if (!nextFileName) return null;
         const nextPath = path.join(path.dirname(canonical), nextFileName);
         if (nextPath === canonical) {
@@ -5383,7 +5425,7 @@ function setupClipboardIPCHandlers(): void {
       // Determine the target bundle ID for terminal detection
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -5546,7 +5588,7 @@ function setupClipboardIPCHandlers(): void {
       // Use explicit target from renderer if provided, otherwise fall back to window state.
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -5716,7 +5758,7 @@ function setupClipboardIPCHandlers(): void {
       
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -7430,10 +7472,15 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.loadHandoffContent(filePath);
   });
 
-  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean }> => {
+  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean; targetApp: { bundleId: string; name: string } | null }> => {
     const fieldTheoryActive = commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false;
     const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
     const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+    const targetApp = previousApp?.bundleId && isExternalCommandTargetBundleId(previousApp.bundleId)
+      ? previousApp
+      : lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
+        ? lastExternalCommandTargetApp
+        : null;
     appendCommandLauncherTrace('launcher-context', {
       fieldTheoryActive,
       previousBundleId: previousApp?.bundleId ?? null,
@@ -7442,8 +7489,10 @@ function setupClipboardIPCHandlers(): void {
       frontmostName: frontmostApp?.name ?? null,
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
     });
-    return { fieldTheoryActive };
+    return { fieldTheoryActive, targetApp };
   });
 
   ipcMain.handle('commands:getActiveLibraryFileContext', (): ActiveLibraryFileContext | null => {
@@ -8081,7 +8130,7 @@ function setupClipboardIPCHandlers(): void {
     };
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number }) => {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
     if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
     }
@@ -8265,6 +8314,7 @@ function setupClipboardIPCHandlers(): void {
 
       const invocationFailure = await runWithCommandLauncherExternalInvocation(async (): Promise<{ success: false; error: string } | null> => {
         const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+        let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
         try {
           const pasteAsTextReference = isTerminal || isIDE;
           const pasteContentsAsText = shouldPasteCommandFileContentsAsText(targetApp.bundleId);
@@ -8273,6 +8323,7 @@ function setupClipboardIPCHandlers(): void {
             commandText = fs.readFileSync(command.filePath, 'utf-8');
             clipboard.writeText(commandText);
             clipboardManager?.syncClipboardHash();
+            launcherClipboardPayload = captureCommandClipboardPayload();
             appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
               format: 'text',
@@ -8287,6 +8338,7 @@ function setupClipboardIPCHandlers(): void {
             commandText = `[${command.name}.md]\n${command.filePath} `;
             clipboard.writeText(commandText);
             clipboardManager?.syncClipboardHash();
+            launcherClipboardPayload = captureCommandClipboardPayload();
             appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
               format: 'text',
@@ -8304,6 +8356,7 @@ function setupClipboardIPCHandlers(): void {
             clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf-8'));
             clipboard.writeBuffer('NSURLPboardType', Buffer.from(fileUrl, 'utf-8'));
             clipboardManager?.syncClipboardHash();
+            launcherClipboardPayload = captureCommandClipboardPayload();
             appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
               format: 'file-list+file-url+text',
@@ -8345,14 +8398,27 @@ function setupClipboardIPCHandlers(): void {
           });
           await waitForCommandClipboardPasteRead();
           if (commandClipboardRestoreCoordinator.canRestore(clipboardRestore.generation)) {
+            const clipboardStillHasLauncherPayload = launcherClipboardPayload
+              ? clipboardMatchesCommandPayload(launcherClipboardPayload)
+              : false;
             try {
-              restoreClipboardSnapshot(clipboardRestore.snapshot);
-              clipboardManager?.syncClipboardHash();
-              appendCommandLauncherTrace('invoke-command-clipboard-restored', {
-                commandName,
-                commandPath: command.filePath,
-                generation: clipboardRestore.generation,
-              });
+              if (clipboardStillHasLauncherPayload) {
+                restoreClipboardSnapshot(clipboardRestore.snapshot);
+                clipboardManager?.syncClipboardHash();
+                appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+                  commandName,
+                  commandPath: command.filePath,
+                  generation: clipboardRestore.generation,
+                  reason: 'clipboard-still-launcher-payload',
+                });
+              } else {
+                appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+                  commandName,
+                  commandPath: command.filePath,
+                  generation: clipboardRestore.generation,
+                  reason: launcherClipboardPayload ? 'clipboard-changed-after-launcher-paste' : 'missing-launcher-payload-snapshot',
+                });
+              }
             } finally {
               commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
             }
@@ -9026,7 +9092,7 @@ function broadcastTranscribeEvents(): void {
   
   // Confirmation state events for cursor status widget
   transcriberManager.on('confirmation-show', () => {
-    return;
+    dynamicIslandManager?.showEscapeHint();
   });
   
   transcriberManager.on('confirmation-hide', () => {

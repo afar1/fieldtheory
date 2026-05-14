@@ -3167,6 +3167,9 @@ type FieldTheoryMarkdownTarget = {
   contentMode?: 'rendered' | 'markdown';
   selectionStart?: number;
   selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 };
 
 type ActiveLibraryFileContext = {
@@ -3482,7 +3485,7 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:invokeHandoff', filePath);
   },
 
-  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean }> => {
+  getLauncherContext: async (): Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }> => {
     return ipcRenderer.invoke('commands:getLauncherContext');
   },
 
@@ -4106,6 +4109,7 @@ interface WikiPageMeta {
   name: string;
   title: string;
   lastUpdated: number;
+  documentKind?: 'markdown' | 'html' | 'css';
   todoState?: MarkdownTodoState;
   archived?: boolean;
 }
@@ -4118,7 +4122,7 @@ interface WikiFolder {
   files: WikiPageMeta[];
 }
 type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 interface LibraryRoot {
   path: string;

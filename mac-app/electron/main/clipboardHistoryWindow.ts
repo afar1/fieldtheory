@@ -9,6 +9,7 @@ import { isFinder } from './clipboardManager';
 import { isDevServerConnectionRefused, loadDevServerURLWithRetry } from './devServerLoadRetry';
 import type { NativeHelper } from './nativeHelper';
 import { appendVisibilityTrace, captureVisibilityCaller, isVisibilityTraceEnabled } from './visibilityTrace';
+import { isExternalCommandTargetBundleId } from './commandLauncherTarget';
 
 const log = createLogger('ClipboardHistory');
 
@@ -114,6 +115,10 @@ function isElectronApp(bundleId: string, appName: string): boolean {
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
   );
+}
+
+function isExternalPasteTargetApp(bundleId: string, appName: string): boolean {
+  return isExternalCommandTargetBundleId(bundleId) && !isElectronApp(bundleId, appName);
 }
 
 /**
@@ -399,7 +404,7 @@ export class ClipboardHistoryWindow {
     const bundleId = frontmost?.bundleId ?? null;
     const name = frontmost?.name ?? null;
 
-    if (!bundleId || !name || isElectronApp(bundleId, name)) {
+    if (!bundleId || !name || !isExternalPasteTargetApp(bundleId, name)) {
       return null;
     }
 
@@ -430,7 +435,7 @@ export class ClipboardHistoryWindow {
   rememberExternalApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
     const bundleId = appInfo?.bundleId ?? null;
     const name = appInfo?.name ?? null;
-    if (!bundleId || !name || isElectronApp(bundleId, name)) {
+    if (!bundleId || !name || !isExternalPasteTargetApp(bundleId, name)) {
       return;
     }
 
@@ -1707,7 +1712,7 @@ export class ClipboardHistoryWindow {
       const { stdout } = await execFileAsync('osascript', ['-e', script]);
       const [bundleId, name] = stdout.trim().split('|');
 
-      if (bundleId && name && !isElectronApp(bundleId, name)) {
+      if (bundleId && name && isExternalPasteTargetApp(bundleId, name)) {
         return { bundleId, name };
       }
     } catch (error) {
@@ -1763,34 +1768,52 @@ export class ClipboardHistoryWindow {
    * If no previous app (e.g., Electron app was frontmost), use first running app as fallback.
    */
   getTargetApp(): RunningApp | null {
-    if (this.selectedTargetApp) {
+    if (this.selectedTargetApp && isExternalPasteTargetApp(this.selectedTargetApp.bundleId, this.selectedTargetApp.name)) {
       return this.selectedTargetApp;
     }
-    if (this.previousApp) {
+    if (this.previousApp && isExternalPasteTargetApp(this.previousApp.bundleId, this.previousApp.name)) {
       return this.previousApp;
     }
-    if (this.lastExternalApp) {
+    if (this.lastExternalApp && isExternalPasteTargetApp(this.lastExternalApp.bundleId, this.lastExternalApp.name)) {
       return this.lastExternalApp;
     }
     // Fallback: use first running app if available
-    if (this.runningApps.length > 0) {
-      return this.runningApps[0];
+    return this.runningApps.find(app => isExternalPasteTargetApp(app.bundleId, app.name)) ?? null;
+  }
+
+  async getTargetAppForPaste(): Promise<RunningApp | null> {
+    let targetApp = this.getTargetApp();
+    if (targetApp?.bundleId) {
+      return targetApp;
     }
-    return null;
+
+    const pendingCapture = this.previousAppCapturePromise;
+    if (pendingCapture) {
+      await pendingCapture;
+      targetApp = this.getTargetApp();
+    }
+
+    return targetApp;
   }
 
   /**
    * Get the previous app (the app that was active before showing clipboard history).
    */
   getPreviousApp(): RunningApp | null {
-    return this.previousApp ?? this.lastExternalApp;
+    if (this.previousApp && isExternalPasteTargetApp(this.previousApp.bundleId, this.previousApp.name)) {
+      return this.previousApp;
+    }
+    if (this.lastExternalApp && isExternalPasteTargetApp(this.lastExternalApp.bundleId, this.lastExternalApp.name)) {
+      return this.lastExternalApp;
+    }
+    return null;
   }
 
   /**
    * Set the target app for pasting.
    */
   setTargetApp(app: RunningApp | null): void {
-    this.selectedTargetApp = app;
+    this.selectedTargetApp = app && isExternalPasteTargetApp(app.bundleId, app.name) ? app : null;
   }
 
   /**
@@ -1847,7 +1870,7 @@ export class ClipboardHistoryWindow {
         const [bundleId, name] = line.split('|');
         if (bundleId && name) {
           // Skip our own Electron app.
-          if (!isElectronApp(bundleId.trim(), name.trim())) {
+          if (isExternalPasteTargetApp(bundleId.trim(), name.trim())) {
             apps.push({ bundleId: bundleId.trim(), name: name.trim() });
           }
         }

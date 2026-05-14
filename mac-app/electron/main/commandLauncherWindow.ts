@@ -20,7 +20,7 @@ import { promisify } from 'util';
 import type { NativeHelper } from './nativeHelper';
 import { createLogger } from './logger';
 import { appendCommandLauncherTrace } from './commandLauncherTrace';
-import { isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
+import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
 import { appendVisibilityTrace, captureVisibilityCaller } from './visibilityTrace';
 
 const log = createLogger('CommandLauncher');
@@ -68,6 +68,10 @@ function isElectronApp(bundleId: string, appName: string): boolean {
     appNameLower === currentAppName ||
     bundleIdLower === process.execPath.toLowerCase()
   );
+}
+
+function isExternalCommandTargetApp(bundleId: string, appName: string): boolean {
+  return isExternalCommandTargetBundleId(bundleId) && !isElectronApp(bundleId, appName);
 }
 
 /**
@@ -238,7 +242,7 @@ export class CommandLauncherWindow {
 
       // Store previous app for paste-back feature.
       if (frontmostApp?.bundleId && frontmostApp?.name) {
-        if (!isElectronApp(frontmostApp.bundleId, frontmostApp.name)) {
+        if (isExternalCommandTargetApp(frontmostApp.bundleId, frontmostApp.name)) {
           this.previousApp = {
             bundleId: frontmostApp.bundleId,
             name: frontmostApp.name,
