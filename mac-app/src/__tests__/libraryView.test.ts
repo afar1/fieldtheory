@@ -551,11 +551,27 @@ describe('markdown list editor helpers', () => {
     });
   });
 
+  it('continues a task list without duplicating the marker when the caret is inside the marker prefix', () => {
+    expect(getMarkdownListEnterEdit('- [ ] first', 2, 2)).toEqual({
+      nextValue: '- [ ] \n- [ ] first',
+      selectionStart: 13,
+      selectionEnd: 13,
+    });
+  });
+
   it('continues a bare [] task on Enter without turning it into a bullet task', () => {
     expect(getMarkdownListEnterEdit('[] first', 8, 8)).toEqual({
       nextValue: '[] first\n[] ',
       selectionStart: 12,
       selectionEnd: 12,
+    });
+  });
+
+  it('continues a bare [] task without duplicating the marker when the caret is inside the marker prefix', () => {
+    expect(getMarkdownListEnterEdit('[] first', 1, 1)).toEqual({
+      nextValue: '[] \n[] first',
+      selectionStart: 7,
+      selectionEnd: 7,
     });
   });
 
