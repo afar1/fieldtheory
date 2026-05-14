@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeHintOpacity, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeHintOpacity, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianContentMode, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
@@ -88,6 +88,9 @@ type FieldTheoryMarkdownTarget = {
   contentMode?: 'rendered' | 'markdown';
   selectionStart?: number;
   selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 };
 
 type TopNavMode = 'clipboard' | 'librarian' | 'possible';
@@ -2269,6 +2272,18 @@ export default function ClipboardHistory() {
         return;
       }
       if (target.kind === 'clipboard') {
+        const clipboardSearch = target.clipboardSearch ?? '';
+        setSearchQuery(clipboardSearch);
+        setDebouncedSearchQuery(clipboardSearch);
+        setSelectedIds(new Set());
+        setIsMultiSelect(false);
+        setFilter('all');
+        setSourceFilter('all');
+        if (target.clipboardStackId) {
+          setPendingStackSelection(target.clipboardStackId);
+        } else if (typeof target.clipboardItemId === 'number') {
+          setPendingItemSelection(target.clipboardItemId);
+        }
         setViewMode('clipboard');
         return;
       }
@@ -2301,7 +2316,11 @@ export default function ClipboardHistory() {
         const page = await window.wikiAPI?.getPage(relPath);
         if (page) dispatchLocalWikiAdded(page);
       })();
-      setPendingLibraryOpenTarget({ kind: 'wiki', path: relPath, contentMode: 'markdown' });
+      setPendingLibraryOpenTarget({
+        kind: 'wiki',
+        path: relPath,
+        contentMode: restoreLibrarianContentMode(localStorage, 'markdown'),
+      });
       setLibraryKeepsCurrentSizeKey(false);
       setNavSidebarCollapsed(true);
       setViewMode('librarian');
@@ -3736,13 +3755,6 @@ export default function ClipboardHistory() {
         ? (targetAppInfo.targetApp?.bundleId ?? targetAppInfo.previousApp?.bundleId)
         : targetAppInfo.previousApp?.bundleId;
       
-      if (!pasteBundleId) {
-        window.clipboardAPI?.copyItem?.(item.id, item.useImprovedVersion);
-        window.clipboardAPI?.showNoTargetError?.('Copied to clipboard');
-        window.clipboardAPI?.closeWindow();
-        return;
-      }
-
       window.clipboardAPI?.pasteItem(item.id, pasteBundleId, item.useImprovedVersion);
     }
   };

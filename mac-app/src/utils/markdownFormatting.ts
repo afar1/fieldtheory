@@ -61,12 +61,23 @@ export function getMarkdownFormattingEdit(
   }
 
   const openStart = start - markers.open.length;
-  const hasSurroundingMarkers = openStart >= 0
-    && hasMarkerAt(value, openStart, markers.open)
-    && hasMarkerAt(value, end, markers.close);
-  if (selected && hasSurroundingMarkers) {
-    return {
-      nextValue: `${value.slice(0, openStart)}${selected}${value.slice(end + markers.close.length)}`,
+	  const hasSurroundingMarkers = openStart >= 0
+	    && hasMarkerAt(value, openStart, markers.open)
+	    && hasMarkerAt(value, end, markers.close);
+	  const hasEmptyPlaceholderMarkers = !selected
+	    && openStart >= 0
+	    && value.slice(openStart, start) === markers.open
+	    && value.slice(end, end + markers.close.length) === markers.close;
+	  if (hasEmptyPlaceholderMarkers) {
+	    return {
+	      nextValue: `${value.slice(0, openStart)}${value.slice(end + markers.close.length)}`,
+	      selectionStart: openStart,
+	      selectionEnd: openStart,
+	    };
+	  }
+	  if (selected && hasSurroundingMarkers) {
+	    return {
+	      nextValue: `${value.slice(0, openStart)}${selected}${value.slice(end + markers.close.length)}`,
       selectionStart: openStart,
       selectionEnd: openStart + selected.length,
     };

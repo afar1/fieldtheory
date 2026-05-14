@@ -313,6 +313,25 @@ describe('recursive wiki tree scan', () => {
     expect(flatten(tree)).toEqual(['entries/alpha']);
   });
 
+  it('keeps wiki scans markdown-only but includes html and css in library roots', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'reports'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'reports', 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(root, 'reports', 'summary.html'), '<h1>Summary</h1>\n');
+    fs.writeFileSync(path.join(root, 'reports', 'styles.css'), 'h1 { color: red; }\n');
+
+    const manager = Object.create(LibrarianManager.prototype) as {
+      scanMarkdownTree: (rootPath: string, currentDir?: string, seenRealPaths?: Set<string>, includeLibraryTextDocuments?: boolean) => WikiNode[];
+    };
+
+    expect(flatten(manager.scanMarkdownTree(root))).toEqual(['reports/alpha']);
+    expect(flatten(manager.scanMarkdownTree(root, root, new Set<string>(), true))).toEqual([
+      'reports/alpha',
+      'reports/styles.css',
+      'reports/summary.html',
+    ]);
+  });
+
   it('reuses the wiki tree until a wiki change invalidates it', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });
@@ -342,6 +361,8 @@ describe('recursive wiki tree scan', () => {
     fs.mkdirSync(wikiRoot, { recursive: true });
     fs.mkdirSync(externalRoot, { recursive: true });
     fs.writeFileSync(path.join(externalRoot, 'alpha.md'), '# Alpha\n');
+    fs.writeFileSync(path.join(externalRoot, 'report.html'), '<h1>Report</h1>\n');
+    fs.writeFileSync(path.join(externalRoot, 'styles.css'), 'body { color: red; }\n');
 
     const manager = Object.create(LibrarianManager.prototype) as {
       settings: { libraryRoots: string[] };
@@ -354,13 +375,13 @@ describe('recursive wiki tree scan', () => {
     manager.startWikiWatcher = vi.fn();
 
     const externalPages = () => flatten(manager.getLibraryRoots().find((root) => root.path === externalRoot)?.tree ?? []);
-    expect(externalPages()).toEqual(['alpha']);
+    expect(externalPages()).toEqual(['alpha', 'report.html', 'styles.css']);
 
     fs.writeFileSync(path.join(externalRoot, 'beta.md'), '# Beta\n');
-    expect(externalPages()).toEqual(['alpha']);
+    expect(externalPages()).toEqual(['alpha', 'report.html', 'styles.css']);
 
     manager.emit('library:changed', externalRoot);
-    expect(externalPages()).toEqual(['alpha', 'beta']);
+    expect(externalPages()).toEqual(['alpha', 'beta', 'report.html', 'styles.css']);
   });
 
   it('emits wiki:changed immediately after saving a wiki page', () => {

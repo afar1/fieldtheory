@@ -28,6 +28,8 @@ import {
   RENDERED_MARKDOWN_EDITOR_STRONG_CLASS,
   RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS,
+  RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS,
   buildRenderedMarkdownEditorDecorations,
   buildRenderedMarkdownEditorDecorationsForRanges,
   checkedMarkdownTaskLineExtension,
@@ -220,9 +222,9 @@ describe('MarkdownCodeEditor checked task decorations', () => {
 });
 
 describe('MarkdownCodeEditor rendered presentation', () => {
-  it('hides common markdown syntax behind styled editable text', () => {
-    const parent = document.createElement('div');
-    document.body.appendChild(parent);
+	  it('hides common markdown syntax behind styled editable text', () => {
+	    const parent = document.createElement('div');
+	    document.body.appendChild(parent);
     const doc = '# Title\n\nHello **bold** *em* `code` [Link](wiki://target) [[Wiki Page|wiki link]] [[Other]] <u>under</u> ~~gone~~ ![Figure](<file:///tmp/Figure%201.png>)\n- [x] done';
     const view = new EditorView({
       state: EditorState.create({
@@ -272,12 +274,62 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
     expect((parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`) as HTMLInputElement | null)?.checked).toBe(true);
 
-    view.destroy();
-    parent.remove();
-  });
+	    view.destroy();
+	    parent.remove();
+	  });
 
-  it('toggles rendered task checkboxes through the markdown source', () => {
-    const parent = document.createElement('div');
+	  it('hides empty inline formatting placeholders while keeping the typing position', () => {
+	    const render = (doc: string, cursor: number) => {
+	      const parent = document.createElement('div');
+	      document.body.appendChild(parent);
+	      const view = new EditorView({
+	        state: EditorState.create({
+	          doc,
+	          selection: EditorSelection.cursor(cursor),
+	          extensions: [renderedMarkdownEditorPresentationExtension],
+	        }),
+	        parent,
+	      });
+	      return { parent, view };
+	    };
+
+	    const bold = render('****', 2);
+	    expect(bold.parent.querySelector('.cm-content')?.textContent).not.toContain('*');
+	    bold.view.dispatch({
+	      changes: { from: 2, insert: 'typed' },
+	      selection: { anchor: 7 },
+	    });
+	    expect(bold.view.state.doc.toString()).toBe('**typed**');
+	    expect(bold.parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`)?.textContent).toBe('typed');
+	    bold.view.destroy();
+	    bold.parent.remove();
+
+	    const italic = render('**', 1);
+	    expect(italic.parent.querySelector('.cm-content')?.textContent).not.toContain('*');
+	    italic.view.dispatch({
+	      changes: { from: 1, insert: 'typed' },
+	      selection: { anchor: 6 },
+	    });
+	    expect(italic.view.state.doc.toString()).toBe('*typed*');
+	    expect(italic.parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS}`)?.textContent).toBe('typed');
+	    italic.view.destroy();
+	    italic.parent.remove();
+
+	    const underline = render('<u></u>', 3);
+	    expect(underline.parent.querySelector('.cm-content')?.textContent).not.toContain('<u>');
+	    expect(underline.parent.querySelector('.cm-content')?.textContent).not.toContain('</u>');
+	    underline.view.dispatch({
+	      changes: { from: 3, insert: 'typed' },
+	      selection: { anchor: 8 },
+	    });
+	    expect(underline.view.state.doc.toString()).toBe('<u>typed</u>');
+	    expect(underline.parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS}`)?.textContent).toBe('typed');
+	    underline.view.destroy();
+	    underline.parent.remove();
+	  });
+
+	  it('toggles rendered task checkboxes through the markdown source', () => {
+	    const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
       state: EditorState.create({
@@ -300,6 +352,24 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     const finalCheckboxes = Array.from(parent.querySelectorAll<HTMLInputElement>(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`));
     finalCheckboxes[3].click();
     expect(view.state.doc.toString()).toBe('- [x]\n- [x] open\n- [x] done\n[x] bare');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('leaves the task marker spacing visible in rendered presentation', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '[] bare\n[ ] spaced\n- [ ] bullet',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const lines = Array.from(parent.querySelectorAll('.cm-line'));
+    expect(lines.map((line) => line.textContent)).toEqual([' bare', ' spaced', ' bullet']);
 
     view.destroy();
     parent.remove();
@@ -363,6 +433,60 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(link?.textContent).toBe('Guide');
     expect(link?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe('4');
     expect(link?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)).toBe('25');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('reveals wiki link source syntax only for the active rendered wiki link', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = 'See [[First Page|first]] and [[Second Page|second]] today';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(doc.indexOf('first') + 2),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const content = parent.querySelector('.cm-content');
+    expect(content?.textContent).toContain('[[First Page|first]]');
+    expect(content?.textContent).toContain('second');
+    expect(content?.textContent).not.toContain('[[Second Page');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}`)?.textContent).toBe('first');
+    expect(Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS}`)).map((syntax) => syntax.textContent)).toEqual([
+      '[[First Page|',
+      ']]',
+    ]);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('edits rendered wiki link labels without changing the hidden target', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = 'See [[Field Theory|field theory]] today';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const insertAt = doc.indexOf('field theory') + 'field'.length;
+    view.dispatch({
+      changes: { from: insertAt, insert: ' notes' },
+      selection: EditorSelection.cursor(insertAt + ' notes'.length),
+    });
+
+    expect(view.state.doc.toString()).toBe('See [[Field Theory|field notes theory]] today');
+    const link = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`) as HTMLElement | null;
+    expect(link?.textContent).toBe('field notes theory');
+    expect(link?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe('4');
 
     view.destroy();
     parent.remove();

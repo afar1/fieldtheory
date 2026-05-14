@@ -629,6 +629,13 @@ export class DynamicIslandManager extends EventEmitter {
     }
   }
 
+  showEscapeHint(): void {
+    if (!this.enabled) return;
+    if (this.window && !this.window.isDestroyed() && this.rendererReady) {
+      this.window.webContents.send('dynamic-island-escape-hint');
+    }
+  }
+
   updateHotMicBackgroundFilterMeter(data: HotMicBackgroundFilterMeter): void {
     if (!this.enabled) return;
     if (this.window && !this.window.isDestroyed() && this.rendererReady) {

@@ -1,7 +1,10 @@
 import path from 'path';
 import { describe, expect, it } from 'vitest';
 import {
+  getLibraryTextDocumentKind,
+  isLibraryTextDocumentPath,
   isPathInside,
+  libraryTextDocumentFileNameFromUserInput,
   markdownFileNameFromUserInput,
   normalizeUserDocumentNameInput,
   normalizeUserDocumentRelPathInput,
@@ -29,6 +32,24 @@ describe('pathSafety', () => {
     expect(markdownFileNameFromUserInput('../escape')).toBeNull();
     expect(markdownFileNameFromUserInput('nested/escape')).toBeNull();
     expect(markdownFileNameFromUserInput('.hidden')).toBeNull();
+  });
+
+  it('recognizes library text documents without treating every file as viewable', () => {
+    expect(isLibraryTextDocumentPath('/x/summary.html')).toBe(true);
+    expect(isLibraryTextDocumentPath('/x/summary.HTM')).toBe(true);
+    expect(isLibraryTextDocumentPath('/x/styles.css')).toBe(true);
+    expect(isLibraryTextDocumentPath('/x/readme.md')).toBe(true);
+    expect(isLibraryTextDocumentPath('/x/image.png')).toBe(false);
+    expect(getLibraryTextDocumentKind('/x/summary.html')).toBe('html');
+    expect(getLibraryTextDocumentKind('/x/styles.css')).toBe('css');
+    expect(getLibraryTextDocumentKind('/x/readme.mdx')).toBe('markdown');
+  });
+
+  it('preserves html and css extensions when normalizing library document filenames', () => {
+    expect(libraryTextDocumentFileNameFromUserInput('Summary', '.html')).toBe('Summary.html');
+    expect(libraryTextDocumentFileNameFromUserInput('Summary.html', '.md')).toBe('Summary.html');
+    expect(libraryTextDocumentFileNameFromUserInput('styles.css', '.html')).toBe('styles.css');
+    expect(libraryTextDocumentFileNameFromUserInput('../escape.html', '.html')).toBeNull();
   });
 
   it('can reject underscore-prefixed document names for surfaces that hide them', () => {
