@@ -10,7 +10,7 @@ import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
-import ContentToolbar from './ContentToolbar';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
 import {
@@ -2105,6 +2105,9 @@ export default function CommandsView({
                   }}
                   title={fieldTheorySyncEnabled && viewMode === 'popular' ? selectedPopularCommand?.name : selectedCommand?.filePath}
                 >
+                  {viewMode === 'mine' && selectedCommand && (
+                    <ContentToolbarFolderButton onShowInFolder={() => window.shellAPI?.showItemInFolder(selectedCommand.filePath)} />
+                  )}
                   <span
                     style={{
                       fontSize: '11px',
@@ -2134,7 +2137,7 @@ export default function CommandsView({
                 showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
                 onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
-                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
+                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand && !commandToolbarContext}
                 onCopyPath={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand?.filePath ? copySelectedCommandTextOrPath : undefined}
                 copyPathCopied={copyPathCopied}
                 copyPathTitle="Copy selected text or command path (⌘C)"

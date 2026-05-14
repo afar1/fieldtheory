@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fra
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
-import ContentToolbar from './ContentToolbar';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -6179,6 +6179,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   }}
                   title={activeReading.path}
                 >
+                  <ContentToolbarFolderButton onShowInFolder={() => window.shellAPI?.showItemInFolder(activeReading.path)} />
                   <span
                     style={{
                       fontSize: '11px',
@@ -6242,8 +6243,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
-                onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
-                showFolder={focusToolbarControlsVisible}
+                onShowInFolder={focusToolbarControlsVisible && activeReading?.path ? () => window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
+                showFolder={focusToolbarControlsVisible && !(activeReading && (selectedItemType === 'wiki' || selectedItemType === 'external'))}
                 onCopy={focusToolbarControlsVisible && shareStatus?.shared ? copyShareLink : undefined}
                 showCopy={focusToolbarControlsVisible && !!shareStatus?.shared}
                 shareStatus={shareStatus}
