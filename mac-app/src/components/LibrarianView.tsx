@@ -338,6 +338,24 @@ export function shouldApplyLiveMarkdownFileUpdate(input: {
   return input.lastSavedContent !== null && input.editContent === input.lastSavedContent;
 }
 
+export function getRenderedDisplayReadingContent(input: {
+  contentMode: 'rendered' | 'markdown';
+  renderedEditingActive: boolean;
+  activeReadingPath: string | null;
+  renderedDisplayContent: { path: string; content: string } | null;
+  activeReadingContent: string | null;
+}): string | null {
+  if (
+    input.contentMode === 'rendered'
+    && input.renderedEditingActive
+    && input.activeReadingPath
+    && input.renderedDisplayContent?.path === input.activeReadingPath
+  ) {
+    return input.renderedDisplayContent.content;
+  }
+  return input.activeReadingContent;
+}
+
 export function getRenderedCaretEnsureSourceOffset(input: {
   activeSourceOffset: number | null;
   selectionRange: { start: number; end: number } | null;
@@ -3227,13 +3245,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [meetingToolbarRecording]);
   activeReadingPathRef.current = activeReadingPath;
   activeReadingContentRef.current = activeReadingContent;
-  const frozenRenderedDisplayContent = contentMode === 'rendered'
-    && renderedEditingActive
-    && activeReadingPath
-    && renderedDisplayContentRef.current?.path === activeReadingPath
-    ? renderedDisplayContentRef.current.content
-    : null;
-  const renderedDisplayReadingContent = frozenRenderedDisplayContent ?? activeReadingContent;
+  const renderedDisplayReadingContent = getRenderedDisplayReadingContent({
+    contentMode,
+    renderedEditingActive,
+    activeReadingPath,
+    renderedDisplayContent: renderedDisplayContentRef.current,
+    activeReadingContent,
+  });
   const activeTitlePath =
     activeReading && (selectedItemType === 'wiki' || selectedItemType === 'external')
       ? activeReading.path
@@ -3545,6 +3563,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return false;
     }
 
+    if (currentContentMode === 'rendered' && targetPath) {
+      renderedDisplayContentRef.current = { path: targetPath, content: reading.content };
+    }
     applySavedDocumentState(targetType, targetPath, reading.content, reading.documentVersion, reading.title);
     const nextEditContent = currentContentMode === 'markdown'
       ? removeEmptyMarkdownCommentPlaceholders(reading.content)

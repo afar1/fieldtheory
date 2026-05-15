@@ -573,10 +573,10 @@ export function isLauncherPreviewToggleKey(event: { key?: string; code?: string 
 
 export function shouldHandleLauncherPreviewShortcut(
   event: { key?: string; code?: string },
-  hasExplicitSelection: boolean,
+  hasKeyboardSelection: boolean,
   previewOpen: boolean,
 ): boolean {
-  return isLauncherPreviewToggleKey(event) && (hasExplicitSelection || previewOpen);
+  return isLauncherPreviewToggleKey(event) && (hasKeyboardSelection || previewOpen);
 }
 
 export function nextLauncherArrowIndex(
