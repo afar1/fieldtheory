@@ -3340,16 +3340,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => cancelAnimationFrame(frame);
   }, [activeTitlePath, editingTitlePath]);
 
-  const focusMarkdownBody = useCallback(() => {
+  const focusActiveDocumentBody = useCallback(() => {
     if (contentMode !== 'markdown') {
-      focusMarkdownEditorOnOpenRef.current = true;
-      setContentMode('markdown');
+      const currentContent = activeReadingContentRef.current ?? activeReading?.content ?? '';
+      const bodyEnd = removeEmptyMarkdownCommentPlaceholders(splitFrontmatter(currentContent).body).length;
+      const selection = { start: bodyEnd, end: bodyEnd };
+      pendingRenderedEditorSelectionRef.current = selection;
+      activateRenderedEditing();
+      requestAnimationFrame(() => {
+        const editor = renderedMarkdownEditorRef.current;
+        if (!editor) return;
+        const valueLength = editor.getValue().length;
+        const offset = Math.max(0, Math.min(bodyEnd, valueLength));
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(offset, offset);
+        activeRenderedCaretOffsetRef.current = offset;
+      });
       return;
     }
     requestAnimationFrame(() => {
       markdownCodeEditorRef.current?.focus({ preventScroll: true });
     });
-  }, [contentMode]);
+  }, [activeReading?.content, activateRenderedEditing, contentMode]);
 
   const beginTitleEdit = useCallback(() => {
     if (!activeReading || !activeTitlePath) return;
@@ -3363,7 +3375,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!trimmed || trimmed === activeReading.title) {
       setEditingTitlePath(null);
       setTitleDraft(activeReading.title);
-      if (options.focusBody) focusMarkdownBody();
+      if (options.focusBody) focusActiveDocumentBody();
       return;
     }
 
@@ -3434,12 +3446,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setEditingTitlePath(null);
     }
 
-    if (options.focusBody) focusMarkdownBody();
+    if (options.focusBody) focusActiveDocumentBody();
   }, [
     activateRenderedEditing,
     activeReading,
     activeTitlePath,
-    focusMarkdownBody,
+    focusActiveDocumentBody,
     flushCurrentEdit,
     selectedItemType,
     titleDraft,

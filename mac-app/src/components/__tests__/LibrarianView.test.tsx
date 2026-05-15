@@ -303,6 +303,43 @@ describe('LibrarianView render', () => {
     });
   });
 
+  it('keeps rendered mode when Enter commits the file title', async () => {
+    const relPath = 'scratchpad/title-enter-rendered-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'title-enter-rendered-test',
+      title: 'title-enter-rendered-test',
+      lastUpdated: 1,
+      content: 'Rendered body stays visible',
+      documentVersion: { mtimeMs: 1, size: 27, sha256: 'title-enter-rendered-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-ft-rendered-editor-root="true"]')?.textContent).toContain('Rendered body stays visible');
+    });
+
+    const titleInput = screen.getByLabelText('File title');
+    fireEvent.focus(titleInput);
+    fireEvent.keyDown(titleInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      const renderedInput = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(renderedRoot?.textContent).toContain('Rendered body stays visible');
+      expect(renderedInput).toBeTruthy();
+    });
+  });
+
   it('places Show in Finder before the library breadcrumb', async () => {
     const relPath = 'scratchpad/folder-toolbar-order';
     const page: WikiPage = {
