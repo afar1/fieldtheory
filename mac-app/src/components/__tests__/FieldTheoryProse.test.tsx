@@ -92,6 +92,14 @@ describe('FieldTheoryProse', () => {
     expect(preCodeRule).toContain('overflow-wrap: anywhere;');
   });
 
+  it('uses a hanging layout for rendered task-list text', () => {
+    const proseCss = readFileSync('src/prose.css', 'utf-8');
+    const taskRule = proseCss.match(/\.ft-prose li\.task-list-item\s*\{[^}]*\}/)?.[0] ?? '';
+
+    expect(taskRule).toContain('display: grid;');
+    expect(taskRule).toContain('grid-template-columns: max-content minmax(0, 1fr);');
+  });
+
   it('renders local screenshot image URLs inline', () => {
     render(
       <FieldTheoryProse>
