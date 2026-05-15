@@ -733,6 +733,7 @@ function pushRenderedMarkdownEditorLineDecorations(
     const markerTo = checkFrom + taskMatch[3].length + 1;
     const checked = taskMatch[3].toLowerCase() === 'x';
     inlineStart = markerTo - line.from;
+    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS }).range(line.from));
     decorations.push(
       Decoration.replace({
         widget: new RenderedMarkdownTaskCheckboxWidget(
@@ -956,7 +957,7 @@ export function shouldMoveCaretToDocumentEndFromClick(
 }
 
 export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean): React.CSSProperties {
-  return blinkCursor ? {} : { animation: 'none' };
+  return blinkCursor ? {} : { animation: 'none', animationName: 'none', animationDuration: '0s' };
 }
 
 export function getMarkdownCodeEditorCursorScrollMargin(bottomRoomPx = MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX): { x: number; y: number } {
@@ -1143,7 +1144,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             overflow: 'hidden',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
-            paddingLeft: '0.1em',
+            paddingLeft: '1.65em',
+            textIndent: '-1.55em',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
             display: 'inline-block',
@@ -1191,6 +1193,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`]: {
             color: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
+            cursor: 'pointer',
             textDecoration: 'underline',
             textUnderlineOffset: '2px',
           },
@@ -1221,10 +1224,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'stretch',
-            gap: '0.45em',
+            gap: '0.25em',
             width: '100%',
             maxWidth: '100%',
-            margin: '0.8em 0 1em',
+            margin: '0.12em 0',
             verticalAlign: 'top',
             cursor: 'zoom-in',
           },
@@ -1248,7 +1251,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             width: '1.05em',
             height: '1.05em',
             minWidth: '1.05em',
-            marginRight: '0.6em',
+            marginRight: '0.5em',
             verticalAlign: '-0.14em',
             accentColor: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
             cursor: 'pointer',

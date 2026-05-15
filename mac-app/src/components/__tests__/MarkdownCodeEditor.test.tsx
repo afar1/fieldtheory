@@ -52,7 +52,11 @@ describe('MarkdownCodeEditor cursor blink', () => {
   });
 
   it('removes cursor animation when blinking is disabled', () => {
-    expect(getMarkdownCodeEditorCursorAnimationStyle(false)).toEqual({ animation: 'none' });
+    expect(getMarkdownCodeEditorCursorAnimationStyle(false)).toEqual({
+      animation: 'none',
+      animationName: 'none',
+      animationDuration: '0s',
+    });
   });
 });
 
