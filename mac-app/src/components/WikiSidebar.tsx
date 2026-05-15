@@ -375,6 +375,23 @@ export function splitRecent(
   };
 }
 
+export function getRecentEntrySidebarId(entry: RecentEntry): string {
+  return `${entry.kind}:${entry.path}`;
+}
+
+export function splitPinnedRecentEntries(
+  entries: RecentEntry[],
+  pinnedItemIds: ReadonlySet<string>,
+): { pinned: RecentEntry[]; unpinned: RecentEntry[] } {
+  const pinned: RecentEntry[] = [];
+  const unpinned: RecentEntry[] = [];
+  for (const entry of entries) {
+    if (pinnedItemIds.has(getRecentEntrySidebarId(entry))) pinned.push(entry);
+    else unpinned.push(entry);
+  }
+  return { pinned, unpinned };
+}
+
 /** Drop wiki entries from the Recent list whose relPath no longer appears in
  *  the current wiki tree (file was trashed / renamed externally and we
  *  missed the FS event). External entries are left alone since they live
@@ -1644,6 +1661,12 @@ function WikiSidebar({
     const node = sidebarRootsWithTodoOverrides.find((item) => item.id === BOOKMARKS_ITEM_ID);
     return node?.kind === 'file' ? node.item : null;
   }, [sidebarRootsWithTodoOverrides]);
+  const filteredRecentEntries = useMemo(() => filterStaleRecent(recent, wikiTree), [recent, wikiTree]);
+  const { pinned: pinnedRecentEntries, unpinned: unpinnedRecentEntries } = useMemo(
+    () => splitPinnedRecentEntries(filteredRecentEntries, pinnedItemIds),
+    [filteredRecentEntries, pinnedItemIds],
+  );
+  const bookmarksPinned = !!bookmarksActionItem && pinnedItemIds.has(BOOKMARKS_ITEM_ID);
   const visibleSidebarRoots = useMemo(
     () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
     [filteredSidebarRoots]
@@ -2299,6 +2322,9 @@ function WikiSidebar({
     if (!targetId) return;
     setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
   }, [closeContextMenu, contextPinTargetId]);
+  const togglePinnedId = useCallback((targetId: string) => {
+    setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
+  }, []);
 
   return (
     <div
@@ -2563,23 +2589,56 @@ function WikiSidebar({
         </div>
       )}
 
-      {!isSearching && bookmarksActionItem && (
+      {!isSearching && (bookmarksPinned || pinnedRecentEntries.length > 0) && (
+        <PinnedShortcutBlock
+          bookmarksItem={bookmarksPinned ? bookmarksActionItem : null}
+          recent={pinnedRecentEntries}
+          selectedId={selectedId}
+          theme={theme}
+          onOpenBookmarks={() => {
+            if (bookmarksActionItem) onSelectItem(bookmarksActionItem);
+          }}
+          onOpenWiki={(relPath, title) =>
+            onSelectItem({
+              id: `wiki:${relPath}`,
+              title,
+              type: 'wiki',
+              absPath: '',
+              relPath,
+              timestamp: 0,
+            })
+          }
+          onOpenExternal={(absPath, title) =>
+            onSelectItem({
+              id: `external:${absPath}`,
+              title,
+              type: 'external',
+              absPath,
+              timestamp: 0,
+            })
+          }
+          onTogglePin={togglePinnedId}
+        />
+      )}
+
+      {!isSearching && bookmarksActionItem && !bookmarksPinned && (
         <BookmarksShortcutBlock
           item={bookmarksActionItem}
           isSelected={selectedId === bookmarksActionItem.id}
           theme={theme}
           onOpen={() => onSelectItem(bookmarksActionItem)}
+          onTogglePin={() => togglePinnedId(BOOKMARKS_ITEM_ID)}
         />
       )}
 
-      {!isSearching && recent.length > 0 && (
+      {!isSearching && unpinnedRecentEntries.length > 0 && (
         <RecentBlock
-          recent={filterStaleRecent(recent, wikiTree)}
+          recent={unpinnedRecentEntries}
           expanded={recentExpanded}
           onExpand={setRecentExpanded}
           collapsed={recentCollapsed}
           onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
-          showDivider={!bookmarksActionItem}
+          showDivider={!bookmarksActionItem || bookmarksPinned}
           selectedId={selectedId}
           theme={theme}
           onOpenWiki={(relPath, title) =>
@@ -2602,9 +2661,10 @@ function WikiSidebar({
               absPath,
               timestamp: 0,
             })
-            }
-          />
-        )}
+          }
+          onTogglePin={togglePinnedId}
+        />
+      )}
         </div>
         {scrollJumpTarget && (
           <button
@@ -3752,6 +3812,160 @@ function SidebarDivider({ theme }: {
   );
 }
 
+function sidebarPinButtonStyle(theme: ReturnType<typeof useTheme>['theme']): React.CSSProperties {
+  return {
+    width: '20px',
+    height: '20px',
+    marginLeft: 'auto',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    color: theme.textSecondary,
+    backgroundColor: 'transparent',
+    border: 'none',
+    borderRadius: '4px',
+    cursor: 'pointer',
+    flexShrink: 0,
+  };
+}
+
+function SidebarPinIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 17v5" />
+      <path d="M5 17h14" />
+      <path d="M7 9h10" />
+      <path d="M9 9V4h6v5l2 8H7l2-8Z" />
+    </svg>
+  );
+}
+
+function SidebarShortcutRow({
+  icon,
+  title,
+  titleAttr,
+  isSelected,
+  theme,
+  indent = 10,
+  onOpen,
+  onTogglePin,
+  pinLabel,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  titleAttr?: string;
+  isSelected: boolean;
+  theme: ReturnType<typeof useTheme>['theme'];
+  indent?: number;
+  onOpen: () => void;
+  onTogglePin?: () => void;
+  pinLabel?: string;
+}) {
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+  return (
+    <div
+      onClick={onOpen}
+      title={titleAttr}
+      style={{
+        boxSizing: 'border-box',
+        minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${indent}px`,
+        fontSize: '12px',
+        fontWeight: 400,
+        lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+        color: sidebarTextColor,
+        display: 'flex',
+        alignItems: 'center',
+        gap: SIDEBAR_ICON_TEXT_GAP,
+        cursor: 'pointer',
+        userSelect: 'none',
+        backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
+        borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
+      }}
+      onMouseEnter={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+      onMouseLeave={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = 'transparent'; }}
+    >
+      {icon}
+      <span style={librarySidebarFadeTextStyle()}>{title}</span>
+      {onTogglePin && (
+        <button
+          type="button"
+          aria-label={pinLabel}
+          title={pinLabel}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onTogglePin();
+          }}
+          style={sidebarPinButtonStyle(theme)}
+        >
+          <SidebarPinIcon />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function PinnedShortcutBlock({
+  bookmarksItem,
+  recent,
+  selectedId,
+  theme,
+  onOpenBookmarks,
+  onOpenWiki,
+  onOpenExternal,
+  onTogglePin,
+}: {
+  bookmarksItem: UnifiedItem | null;
+  recent: RecentEntry[];
+  selectedId: string | null;
+  theme: ReturnType<typeof useTheme>['theme'];
+  onOpenBookmarks: () => void;
+  onOpenWiki: (relPath: string, title: string) => void;
+  onOpenExternal: (absPath: string, title: string) => void;
+  onTogglePin: (id: string) => void;
+}) {
+  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const rows: React.ReactNode[] = [];
+  if (bookmarksItem) {
+    rows.push(
+      <SidebarShortcutRow
+        key={BOOKMARKS_ITEM_ID}
+        icon={<SidebarBookmarkIcon color={sidebarIconColor} />}
+        title={bookmarksItem.title}
+        isSelected={selectedId === BOOKMARKS_ITEM_ID}
+        theme={theme}
+        onOpen={onOpenBookmarks}
+        onTogglePin={() => onTogglePin(BOOKMARKS_ITEM_ID)}
+        pinLabel="Unpin bookmarks"
+      />,
+    );
+  }
+  for (const entry of recent) {
+    const id = getRecentEntrySidebarId(entry);
+    rows.push(
+      <SidebarShortcutRow
+        key={id}
+        icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
+        title={entry.title}
+        titleAttr={entry.kind === 'external' ? entry.path : entry.title}
+        isSelected={selectedId === id}
+        theme={theme}
+        onOpen={() => (entry.kind === 'wiki' ? onOpenWiki(entry.path, entry.title) : onOpenExternal(entry.path, entry.title))}
+        onTogglePin={() => onTogglePin(id)}
+        pinLabel="Unpin recent"
+      />,
+    );
+  }
+  if (rows.length === 0) return null;
+  return (
+    <div>
+      {rows}
+      <SidebarDivider theme={theme} />
+    </div>
+  );
+}
+
 interface RecentBlockProps {
   recent: RecentEntry[];
   expanded: boolean;
@@ -3763,9 +3977,10 @@ interface RecentBlockProps {
   theme: ReturnType<typeof useTheme>['theme'];
   onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
+  onTogglePin: (id: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal, onTogglePin }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
   if (visibleRecent.total === 0) return null;
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
@@ -3785,24 +4000,6 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
     cursor: 'pointer',
     userSelect: 'none',
   };
-  const itemStyle = (isSelected: boolean): React.CSSProperties => ({
-    boxSizing: 'border-box',
-    minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
-    display: 'flex',
-    alignItems: 'center',
-    gap: SIDEBAR_ICON_TEXT_GAP,
-    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} 24px`,
-    fontSize: '12px',
-    fontWeight: 400,
-    lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-    cursor: 'pointer',
-    color: sidebarTextColor,
-    overflow: 'hidden',
-    whiteSpace: 'nowrap',
-    userSelect: 'none',
-    backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
-    borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
-  });
   const showMoreStyle: React.CSSProperties = {
     padding: '3px 12px 5px 20px',
     fontSize: '10px',
@@ -3824,22 +4021,21 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
         <span>Recents</span>
       </div>
       {!collapsed && visibleRecent.entries.map((e) => {
-        const id = `${e.kind}:${e.path}`;
+        const id = getRecentEntrySidebarId(e);
         const isSel = selectedId === id;
         return (
-          <div
+          <SidebarShortcutRow
             key={id}
-            onClick={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
-            style={itemStyle(isSel)}
-            title={e.kind === 'external' ? e.path : e.title}
-            onMouseEnter={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = theme.hoverBg; }}
-            onMouseLeave={(el) => { if (!isSel) el.currentTarget.style.backgroundColor = 'transparent'; }}
-          >
-            <SidebarMarkdownIcon color={sidebarIconColor} />
-            <span style={librarySidebarFadeTextStyle()}>
-              {e.title}
-            </span>
-          </div>
+            icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
+            title={e.title}
+            titleAttr={e.kind === 'external' ? e.path : e.title}
+            isSelected={isSel}
+            theme={theme}
+            indent={24}
+            onOpen={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
+            onTogglePin={() => onTogglePin(id)}
+            pinLabel="Pin recent"
+          />
         );
       })}
       {!collapsed && visibleRecent.total > visibleRecent.entries.length && (
@@ -3852,44 +4048,27 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
   );
 }
 
-function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
+function BookmarksShortcutBlock({ item, isSelected, theme, onOpen, onTogglePin }: {
   item: UnifiedItem;
   isSelected: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onOpen: () => void;
+  onTogglePin: () => void;
 }) {
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
-  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   return (
     <div>
       <SidebarDivider theme={theme} />
-      <div
-        onClick={onOpen}
-        style={{
-          boxSizing: 'border-box',
-          minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
-          padding: '6px 12px 6px 10px',
-          fontSize: '12px',
-          fontWeight: 400,
-          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-          color: sidebarTextColor,
-          display: 'flex',
-          alignItems: 'center',
-          gap: SIDEBAR_ICON_TEXT_GAP,
-          cursor: 'pointer',
-          userSelect: 'none',
-          backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
-          borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
-        }}
-        onMouseEnter={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = theme.hoverBg; }}
-        onMouseLeave={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = 'transparent'; }}
-      >
-        <SidebarBookmarkIcon color={sidebarIconColor} />
-        <span style={librarySidebarFadeTextStyle()}>
-          {item.title}
-        </span>
-      </div>
+      <SidebarShortcutRow
+        icon={<SidebarBookmarkIcon color={sidebarIconColor} />}
+        title={item.title}
+        isSelected={isSelected}
+        theme={theme}
+        onOpen={onOpen}
+        onTogglePin={onTogglePin}
+        pinLabel="Pin bookmarks"
+      />
     </div>
   );
 }
