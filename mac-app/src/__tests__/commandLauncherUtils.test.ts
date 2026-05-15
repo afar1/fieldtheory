@@ -45,6 +45,7 @@ import {
   resolveLauncherBookmarkFacetNamespace,
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
+  resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
@@ -1426,6 +1427,69 @@ describe('resolveLauncherCommandOpenTarget', () => {
 
   it('does not open row zero for an unrelated query', () => {
     expect(resolveLauncherCommandOpenTarget([commandItems[0]], commandItems, 0, 'scratchpad', false)).toBeNull();
+  });
+});
+
+describe('resolveLauncherFieldTheoryOpenTarget', () => {
+  const fieldTheoryItems = [
+    {
+      id: 'recent-maxwell',
+      type: 'recent-file',
+      name: 'Maxwell stuff',
+      displayName: 'Maxwell stuff',
+      recentKind: 'wiki' as const,
+      relPath: 'scratchpad/Maxwell stuff',
+      keywords: ['Maxwell stuff'],
+    },
+    {
+      id: 'wiki-field-theory-fn',
+      type: 'wiki-page',
+      name: 'field theory fn',
+      displayName: 'field theory fn',
+      relPath: 'scratchpad/field theory fn',
+      filePath: '/Users/afar/.fieldtheory/library/scratchpad/field theory fn.md',
+      keywords: ['field theory fn', 'scratchpad'],
+    },
+  ];
+
+  it('uses the typed markdown file instead of stale row-zero soft selection', () => {
+    expect(resolveLauncherFieldTheoryOpenTarget(
+      [fieldTheoryItems[0]],
+      fieldTheoryItems,
+      0,
+      'field theory fn',
+      false,
+    )).toBe(fieldTheoryItems[1]);
+  });
+
+  it('uses the selected markdown row for a blank query', () => {
+    expect(resolveLauncherFieldTheoryOpenTarget(
+      fieldTheoryItems,
+      fieldTheoryItems,
+      1,
+      '',
+      false,
+    )).toBe(fieldTheoryItems[1]);
+  });
+
+  it('honors an explicit selected markdown row', () => {
+    expect(resolveLauncherFieldTheoryOpenTarget(
+      fieldTheoryItems,
+      fieldTheoryItems,
+      0,
+      'field theory fn',
+      true,
+    )).toBe(fieldTheoryItems[0]);
+  });
+
+  it('does not open row zero for an unrelated markdown query', () => {
+    expect(resolveLauncherFieldTheoryOpenTarget(
+      [fieldTheoryItems[0]],
+      fieldTheoryItems,
+      0,
+      'daily planning',
+      false,
+    )).toBeNull();
   });
 });
 

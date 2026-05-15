@@ -59,6 +59,7 @@ import {
   resolveLauncherBookmarkFacetNamespace,
   resolveLauncherCommandOpenTarget,
   resolveLauncherDirectoryNamespace,
+  resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
@@ -2084,9 +2085,15 @@ function CommandLauncher() {
         return;
       }
 
-      const selectedItem = filtered[currentIndex];
-      if (selectedItem && getFieldTheoryTarget(selectedItem)) {
-        void invokeItem(selectedItem, { openFieldTheoryTarget: true });
+      const fieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
+        filtered,
+        allItems,
+        currentIndex,
+        rawQuery,
+        hasExplicitSelectionRef.current,
+      );
+      if (fieldTheoryTarget) {
+        void invokeItem(fieldTheoryTarget, { openFieldTheoryTarget: true });
         return;
       }
 
