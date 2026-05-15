@@ -9,6 +9,7 @@ import {
   filterLauncherDirectoryNamespaceItems,
   filterLauncherMoveTargetDirectories,
   filterLauncherNamespaceItems,
+  filterLauncherNormalModeItems,
   flattenLibraryRootsForLauncher,
   balanceLauncherNormalModeMatches,
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
@@ -1486,6 +1487,7 @@ describe('getLauncherAreaActionIdForQuery', () => {
     expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('archive')).toBe('archive-current-library-file');
+    expect(getLauncherAreaActionIdForQuery('meeting')).toBe('start-meeting-here');
   });
 
   it('does not route partial area words', () => {
@@ -1532,7 +1534,8 @@ describe('SQUARES_ACTION_DEFS', () => {
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
-      'archive-current-library-file', 'undo-library-move', 'toggle-theme'];
+      'archive-current-library-file', 'undo-library-move', 'toggle-theme',
+      'new-meeting-note', 'start-meeting-here', 'stop-meeting', 'summarize-meeting'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -1622,5 +1625,43 @@ describe('buildBuiltInLauncherActions', () => {
       name: 'undo move',
       displayName: 'Undo Last Move',
     }));
+  });
+
+  it('includes meeting actions', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'new-meeting-note')).toEqual(expect.objectContaining({
+      name: 'new meeting',
+      displayName: 'New Meeting Note',
+      keywords: expect.arrayContaining(['meeting note']),
+    }));
+    expect(actions.find((action) => action.actionId === 'start-meeting-here')).toEqual(expect.objectContaining({
+      name: 'start meeting',
+      displayName: 'Start Meeting Here',
+    }));
+    expect(actions.find((action) => action.actionId === 'stop-meeting')).toEqual(expect.objectContaining({
+      name: 'stop meeting',
+      displayName: 'Stop Meeting',
+    }));
+    expect(actions.find((action) => action.actionId === 'summarize-meeting')).toEqual(expect.objectContaining({
+      name: 'summarize meeting',
+      displayName: 'Summarize Meeting',
+    }));
+  });
+
+  it('ranks the new meeting action before the local instruction fallback is allowed', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const results = filterLauncherNormalModeItems(actions, 'new meeting');
+
+    expect(results[0]).toEqual(expect.objectContaining({
+      actionId: 'new-meeting-note',
+      displayName: 'New Meeting Note',
+    }));
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'new meeting',
+      resultCount: results.length,
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: true,
+    })).toBe(false);
   });
 });

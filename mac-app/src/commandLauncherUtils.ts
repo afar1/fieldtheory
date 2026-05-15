@@ -409,6 +409,9 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 export type LauncherFieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
+  contentMode?: 'rendered' | 'markdown';
+  selectionStart?: number;
+  selectionEnd?: number;
   clipboardItemId?: number;
   clipboardStackId?: string;
   clipboardSearch?: string;
@@ -453,6 +456,59 @@ export interface LauncherDirectoryNamespace {
 }
 
 export const LAUNCHER_NORMAL_MODE_MAX_RESULTS = 20;
+
+function fuzzySubsequenceScore(text: string, query: string): number {
+  if (query.length < 2) return 0;
+  let queryIndex = 0;
+  let firstMatch = -1;
+  let lastMatch = -1;
+  let gapPenalty = 0;
+
+  for (let i = 0; i < text.length && queryIndex < query.length; i += 1) {
+    if (text[i] !== query[queryIndex]) continue;
+    if (firstMatch === -1) firstMatch = i;
+    if (lastMatch !== -1) gapPenalty += Math.max(0, i - lastMatch - 1);
+    lastMatch = i;
+    queryIndex += 1;
+  }
+
+  if (queryIndex !== query.length || firstMatch === -1) return 0;
+  return Math.max(40, 220 - firstMatch * 4 - gapPenalty * 8 - (text.length - query.length));
+}
+
+export function scoreLauncherText(rawText: string | undefined, query: string): number {
+  const text = rawText?.trim().toLowerCase();
+  if (!text || !query) return 0;
+  if (text === query) return 1000;
+  if (text.startsWith(query)) return 850 - Math.min(120, text.length - query.length);
+  if (text.split(/[\s/._-]+/).some(part => part.startsWith(query))) return 760 - Math.min(120, text.length - query.length);
+  const containsIndex = text.indexOf(query);
+  if (containsIndex >= 0) return 600 - Math.min(180, containsIndex * 5);
+  return fuzzySubsequenceScore(text, query);
+}
+
+export function scoreLauncherSearchableItem<T extends LauncherSearchableItem & LauncherNormalModeItem>(item: T, query: string): number {
+  const candidateScores = [
+    scoreLauncherText(item.name, query),
+    scoreLauncherText(item.displayName, query) - 20,
+    ...item.keywords.map(keyword => scoreLauncherText(keyword, query) - 70),
+  ];
+  const textScore = Math.max(0, ...candidateScores);
+  if (textScore <= 0) return 0;
+
+  let typeScore = 0;
+  if (item.type === 'directory') typeScore += 35;
+  if (item.type === 'command') typeScore += 20;
+  if (item.type === 'app') typeScore += 18;
+  if (item.type === 'file') typeScore += 16;
+  if (item.type === 'bookmark-author') typeScore += 15;
+  if (item.type === 'bookmark-facet') typeScore += 15;
+  if (item.type === 'recent-file') typeScore += 12;
+  if (item.type === 'action') typeScore += 10;
+  if (item.type === 'handoff') typeScore += 3;
+
+  return textScore + typeScore;
+}
 
 function parseLauncherTimestamp(value: string | undefined): number {
   if (!value) return 0;
@@ -969,6 +1025,38 @@ export function getLauncherUsageScore(
   return usageScore + recencyScore + commandPrefixBoost;
 }
 
+export interface LauncherNormalModeFilterOptions<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem> extends LauncherNormalModeBalanceOptions {
+  includeItem?: (item: T, score: number, baseScore: number) => boolean;
+}
+
+export function filterLauncherNormalModeItems<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem>(
+  items: T[],
+  query: string,
+  usageByItemId: LauncherUsageMap = {},
+  options: LauncherNormalModeFilterOptions<T> = {},
+): T[] {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+
+  const scoredMatches = items.map((item) => {
+    const baseScore = scoreLauncherSearchableItem(item, q);
+    return { item, baseScore, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
+  }).filter(({ item, score, baseScore }) => (
+    score > 0 && (options.includeItem?.(item, score, baseScore) ?? true)
+  ));
+
+  return balanceLauncherNormalModeMatches(scoredMatches, options);
+}
+
+export function resolveLauncherNormalModeQueryMatch<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem>(
+  items: T[],
+  query: string,
+  usageByItemId: LauncherUsageMap = {},
+  options: LauncherNormalModeFilterOptions<T> = {},
+): T | null {
+  return filterLauncherNormalModeItems(items, query, usageByItemId, { ...options, maxResults: 1 })[0] ?? null;
+}
+
 export function filterLauncherDirectoryNamespaceItems<T extends LauncherSearchableItem & { filePath?: string; relPath?: string; lastUpdated?: number }>(
   items: T[],
   namespace: LauncherDirectoryNamespace,
@@ -1322,6 +1410,8 @@ export function getLauncherAreaActionIdForQuery(query: string): string | null {
       return 'open-library';
     case 'archive':
       return 'archive-current-library-file';
+    case 'meeting':
+      return 'start-meeting-here';
     default:
       return null;
   }
@@ -1381,6 +1471,38 @@ export function buildBuiltInLauncherActions(
       hotkey: hotkeys.transcription,
       hotkeyDisplay: formatHotkeyDisplay(hotkeys.transcription),
       actionId: 'start-recording',
+    },
+    {
+      id: 'action-new-meeting-note',
+      type: 'action',
+      name: 'new meeting',
+      displayName: 'New Meeting Note',
+      keywords: ['meeting', 'meetings', 'new meeting', 'meeting note', 'notes'],
+      actionId: 'new-meeting-note',
+    },
+    {
+      id: 'action-start-meeting-here',
+      type: 'action',
+      name: 'start meeting',
+      displayName: 'Start Meeting Here',
+      keywords: ['meeting', 'meetings', 'start meeting', 'record meeting', 'transcribe meeting'],
+      actionId: 'start-meeting-here',
+    },
+    {
+      id: 'action-stop-meeting',
+      type: 'action',
+      name: 'stop meeting',
+      displayName: 'Stop Meeting',
+      keywords: ['meeting', 'meetings', 'stop meeting', 'finish meeting', 'meeting transcript'],
+      actionId: 'stop-meeting',
+    },
+    {
+      id: 'action-summarize-meeting',
+      type: 'action',
+      name: 'summarize meeting',
+      displayName: 'Summarize Meeting',
+      keywords: ['meeting', 'meetings', 'summarize meeting', 'meeting summary', 'meeting notes'],
+      actionId: 'summarize-meeting',
     },
     {
       id: 'action-superpaste',

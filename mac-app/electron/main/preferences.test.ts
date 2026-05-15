@@ -29,6 +29,7 @@ vi.mock('./logger', () => ({
 
 import {
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
+  DEFAULT_MEETING_SUMMARY_PROMPT,
   PreferencesManager,
   normalizeClipboardHistorySizeKey,
   normalizeLauncherRootSearchEnabledKinds,
@@ -194,6 +195,15 @@ describe('PreferencesManager', () => {
     expect(loaded.fieldTheoryWindowMode).toBe('app');
     expect(loaded.showInDock).toBe(true);
     expect(loaded.clickAwayToDismiss).toBe(false);
+  });
+
+  it('loads the default meeting summary prompt', async () => {
+    const preferences = new PreferencesManager();
+    const loaded = await preferences.load();
+
+    expect(loaded.meetingSummaryPrompt).toBe(DEFAULT_MEETING_SUMMARY_PROMPT);
+    expect(loaded.meetingSummaryPrompt).toContain('speaker labels if present');
+    expect(loaded.meetingSummaryPrompt).toContain('links, figures, and checkboxes');
   });
 
   it('resolves missing window-mode preferences to app mode while honoring legacy panel settings', () => {
