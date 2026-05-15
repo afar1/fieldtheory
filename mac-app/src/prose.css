@@ -134,6 +134,10 @@
 }
 
 .ft-prose li.task-list-item {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 0.5em;
+  align-items: baseline;
   list-style: none;
 }
 
