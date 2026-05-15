@@ -41,6 +41,7 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownListIndentStyle,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   shouldMoveCaretToDocumentEndFromClick,
@@ -417,6 +418,30 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(listMarkers.map((marker) => marker.textContent)).toEqual(['•', '2.']);
     expect(listMarkers[0].getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe('0');
     expect(listMarkers[0].getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)).toBe('2');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('adds source indentation to rendered list hanging indents', () => {
+    expect(getRenderedMarkdownListIndentStyle('  ')).toBe('--ft-rendered-list-indent: 2ch;');
+    expect(getRenderedMarkdownListIndentStyle('\t')).toBe('--ft-rendered-list-indent: 2ch;');
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- top item\n  - nested item\n  [ ] nested todo',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const lines = Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`)) as HTMLElement[];
+    expect(lines).toHaveLength(3);
+    expect(lines[0].getAttribute('style')).toContain('--ft-rendered-list-indent: 0ch;');
+    expect(lines[1].getAttribute('style')).toContain('--ft-rendered-list-indent: 2ch;');
+    expect(lines[2].getAttribute('style')).toContain('--ft-rendered-list-indent: 2ch;');
 
     view.destroy();
     parent.remove();

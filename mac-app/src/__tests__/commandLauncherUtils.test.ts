@@ -1226,8 +1226,12 @@ describe('shouldHandleLauncherPreviewShortcut', () => {
     expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, false, false)).toBe(false);
   });
 
-  it('captures space after arrow or mouse selection', () => {
+  it('captures space after keyboard result navigation', () => {
     expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, true, false)).toBe(true);
+  });
+
+  it('does not capture space for mouse-only hover selection', () => {
+    expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, false, false)).toBe(false);
   });
 
   it('captures space while preview is open so it can close', () => {

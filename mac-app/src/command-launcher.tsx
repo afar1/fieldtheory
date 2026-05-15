@@ -2235,7 +2235,7 @@ function CommandLauncher() {
         setQuery('');
         selectIndex(0);
       }
-    } else if (shouldHandleLauncherPreviewShortcut(e, hasExplicitSelectionRef.current, previewOpen)) {
+    } else if (shouldHandleLauncherPreviewShortcut(e, hasNavigatedRef.current, previewOpen)) {
       const currentIndex = selectedIndexRef.current;
       const selectedItem = filtered[currentIndex];
       traceLauncher('preview-key', {
