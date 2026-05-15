@@ -11,6 +11,7 @@ import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
+import ContentModeToggleButton from './ContentModeToggleButton';
 import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
 import LinkedDocumentsSection from './LinkedDocumentsSection';
@@ -2232,75 +2233,11 @@ export default function CommandsView({
                 </button>
               )}
               {focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '2px',
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                    borderRadius: '6px',
-                    padding: '2px',
-                    // @ts-ignore - toolbar buttons should receive clicks.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={() => {
-                      if (!isEditing) enterEditMode();
-                    }}
-                    title="Markdown source"
-                    aria-label="Markdown source"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: isEditing
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="5 4 2 8 5 12" />
-                      <polyline points="11 4 14 8 11 12" />
-                    </svg>
-                  </button>
-                  <button
-                    type="button"
-                    onMouseDown={(e) => e.preventDefault()}
-                    onClick={switchToRenderedMode}
-                    title="Rendered"
-                    aria-label="Rendered"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: !isEditing ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: !isEditing
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M2 4h12M2 8h12M2 12h8" />
-                    </svg>
-                  </button>
-                </div>
+                <ContentModeToggleButton
+                  mode={isEditing ? 'markdown' : 'rendered'}
+                  onSwitchToSource={enterEditMode}
+                  onSwitchToRendered={switchToRenderedMode}
+                />
               )}
               {fieldTheorySyncEnabled && focusToolbarControlsVisible && viewMode === 'popular' && selectedPopularCommand && (
                 <button
