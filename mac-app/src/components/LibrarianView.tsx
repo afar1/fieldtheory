@@ -14,6 +14,7 @@ import LibrarianSetupWizard from './LibrarianSetupWizard';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
+  EMBER_ITEM_ID,
   dispatchLocalWikiAdded,
   dispatchLocalWikiDeleted,
   dispatchLocalWikiRenamed,
@@ -23,6 +24,7 @@ import WikiSidebar, {
   type WikiCreationController,
 } from './WikiSidebar';
 import BookmarksPane from './BookmarksPane';
+import EmberPane from './EmberPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import {
@@ -121,7 +123,7 @@ type FieldTheoryMarkdownTarget = {
   selectionEnd?: number;
 };
 
-export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
 type LibrarianCommandsAPI = NonNullable<Window['commandsAPI']>;
 type MeetingToolbarSession = NonNullable<Awaited<ReturnType<NonNullable<LibrarianCommandsAPI['getActiveMeeting']>>>>;
 const COPY_PATH_FEEDBACK_MS = 1600;
@@ -1635,7 +1637,8 @@ export const LIBRARIAN_CONTENT_MODE_STORAGE_KEY = 'librarian-content-mode';
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
   | { type: 'artifact'; path: string }
-  | { type: 'bookmarks' };
+  | { type: 'bookmarks' }
+  | { type: 'ember' };
 
 export type LibrarianEditorSession = {
   itemType: 'wiki' | 'artifact' | 'external';
@@ -1647,7 +1650,7 @@ export type LibrarianEditorSession = {
 };
 
 export type LibrarianNavigationEntry = {
-  itemType: 'wiki' | 'artifact' | 'external';
+  itemType: 'wiki' | 'artifact' | 'external' | 'ember';
   itemPath: string;
 };
 
@@ -1735,6 +1738,9 @@ export function restoreLibrarianSelection(storage: Pick<Storage, 'getItem'>): Li
     if (parsed?.type === 'bookmarks') {
       return { type: 'bookmarks' };
     }
+    if (parsed?.type === 'ember') {
+      return { type: 'ember' };
+    }
   } catch {
     return null;
   }
@@ -1815,7 +1821,7 @@ export function editorSessionMatchesSelection(
 
 export function resolveWikiCreateFolder(
   requestedFolderName: string,
-  selectedItemType: 'wiki' | 'artifact' | 'bookmarks' | 'external' | null,
+  selectedItemType: LibrarianSelectedItemType,
   wikiSelectedRelPath: string | null
 ): string {
   if (requestedFolderName && requestedFolderName !== 'artifacts') {
@@ -2206,10 +2212,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!restoredSelection) return null;
     if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
     if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
+    if (restoredSelection.type === 'ember') return EMBER_ITEM_ID;
     return BOOKMARKS_ITEM_ID;
   });
   const selectedItemIdRef = useRef<string | null>(selectedItemId);
-  const [selectedItemType, setSelectedItemType] = useState<'wiki' | 'artifact' | 'bookmarks' | 'external' | null>(() => restoredSelection?.type ?? null);
+  const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => restoredSelection?.type ?? null);
   const selectedItemUsesLegacyImmersive = selectedItemType === 'bookmarks';
   const [isFullScreen, setIsFullScreen] = useState(() => (
     restoredSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
@@ -2762,6 +2769,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
   const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => restoredSelection?.type === 'bookmarks');
+  const [emberEverShown, setEmberEverShown] = useState<boolean>(() => restoredSelection?.type === 'ember');
   const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
   // Local agent kickoff modal — opened by the toolbar agent button. Dispatches
@@ -2884,6 +2892,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'external' && externalOpenFile?.path) {
       return { itemType: 'external', itemPath: externalOpenFile.path };
     }
+    if (selectedItemType === 'ember') {
+      return { itemType: 'ember', itemPath: EMBER_ITEM_ID };
+    }
     return null;
   }, [externalOpenFile?.path, selectedItemType, selectedPath, wikiSelectedRelPath]);
 
@@ -2897,6 +2908,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       openWikiPage(entry.itemPath);
     } else if (entry.itemType === 'artifact') {
       selectArtifactPath(entry.itemPath);
+    } else if (entry.itemType === 'ember') {
+      setSelectedItemId(EMBER_ITEM_ID);
+      setSelectedItemType('ember');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     } else {
       await selectExternalFile(entry.itemPath);
     }
@@ -2995,7 +3013,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (selectedItemType === 'bookmarks' && !bookmarksEverShown) {
       setBookmarksEverShown(true);
     }
-  }, [selectedItemType, bookmarksEverShown]);
+    if (selectedItemType === 'ember' && !emberEverShown) {
+      setEmberEverShown(true);
+    }
+  }, [selectedItemType, bookmarksEverShown, emberEverShown]);
 
   useEffect(() => {
     onSelectedItemTypeChange?.(active ? selectedItemType : null);
@@ -3012,6 +3033,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     if (selectedItemType === 'bookmarks') {
       persistLibrarianSelection(localStorage, { type: 'bookmarks' });
+      return;
+    }
+    if (selectedItemType === 'ember') {
+      persistLibrarianSelection(localStorage, { type: 'ember' });
       return;
     }
     if (selectedItemType === 'external') {
@@ -3728,7 +3753,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [activeReading?.path, selectedItemType, wikiSelectedRelPath]);
 
   const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
-    if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks') return [];
+    if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks' || selectedItemType === 'ember') return [];
     return getMarkdownLinkedDocuments(
       activeMarkdownLinkTarget,
       activeReadingContent ?? activeReading.content,
@@ -5323,6 +5348,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setWikiSelectedRelPath(null);
       setExternalOpenFile(null);
       setContentMode('rendered');
+    } else if (item.type === 'ember') {
+      setSelectedItemId(EMBER_ITEM_ID);
+      setSelectedItemType('ember');
+      setSelectedPath(null);
+      setWikiSelectedRelPath(null);
+      setExternalOpenFile(null);
+      setContentMode('rendered');
     }
     // Any navigation other than reselecting the same auto-popped artifact
     // dismisses the auto-pop exception.
@@ -5331,6 +5363,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       onAutoPopArtifactSuperseded?.();
     }
   }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+
+  const openEmberPerson = useCallback((relPath: string) => {
+    openWikiPage(relPath);
+    setContentMode('rendered');
+  }, [openWikiPage]);
 
   const handleDeletedLibraryItem = useCallback((item: UnifiedItem) => {
     const deletedSelection = deletedLibraryItemMatchesSelection(item, {
@@ -6788,7 +6825,23 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
-        {selectedItemType !== 'bookmarks' && (<Fragment>
+        {emberEverShown && (
+          <div
+            style={{
+              flex: 1,
+              display: selectedItemType === 'ember' ? 'flex' : 'none',
+              flexDirection: 'column',
+              minHeight: 0,
+            }}
+          >
+            <EmberPane
+              active={active && selectedItemType === 'ember'}
+              onOpenPerson={openEmberPerson}
+              onPersonCreated={dispatchLocalWikiAdded}
+            />
+          </div>
+        )}
+        {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (<Fragment>
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
           style={{
