@@ -176,9 +176,25 @@ interface CommandWithContent extends CommandItem {
   documentVersion: DocumentVersion;
 }
 
+type DeletedCommandUndo = {
+  command: CommandWithContent;
+  directoryPath: string;
+  restoreName: string;
+  previousSelectedPath: string | null;
+};
+
 function commandNameFromFilePath(filePath: string): string {
   const fileName = filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? filePath;
   return fileName.replace(/\.md$/i, '');
+}
+
+function commandDirectoryFromFilePath(filePath: string): string {
+  const match = filePath.match(/^(.*)[\\/][^\\/]+$/);
+  return match?.[1] ?? '';
+}
+
+function commandFileNameFromFilePath(filePath: string): string {
+  return filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? commandNameFromFilePath(filePath);
 }
 
 function commandsToWikiIndexPages(commands: Array<{ name: string; displayName: string; filePath: string }>): WikiIndexInput[] {
@@ -268,6 +284,7 @@ export default function CommandsView({
   const lastSavedContentRef = useRef<string | null>(null);
   const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
   const lastSeededPathRef = useRef<string | null>(null);
+  const deletedCommandUndoRef = useRef<DeletedCommandUndo | null>(null);
 
   // Inline new command input
   const [creatingInDir, setCreatingInDir] = useState<string | null>(null);
@@ -1196,6 +1213,37 @@ export default function CommandsView({
     }
   }, [fieldTheorySyncEnabled, selectedCommand, shareStatus, isSharing]);
 
+  const undoDeletedCommand = useCallback(async (): Promise<boolean> => {
+    const undo = deletedCommandUndoRef.current;
+    if (!undo || !undo.directoryPath || !window.commandsAPI?.createCommand) return false;
+
+    const result = await window.commandsAPI.createCommand(undo.directoryPath, undo.restoreName, undo.command.content);
+    if (!result) return false;
+
+    const restoredCommand = await window.commandsAPI.getCommandByPath(result.path);
+    const nextCommand = restoredCommand ?? {
+      ...undo.command,
+      filePath: result.path,
+      name: result.name,
+      displayName: result.name,
+    };
+    setCommands((current) => upsertCommandItem(current, {
+      name: nextCommand.name,
+      displayName: nextCommand.displayName,
+      filePath: nextCommand.filePath,
+    }));
+    setSelectedPath(undo.previousSelectedPath === undo.command.filePath ? nextCommand.filePath : undo.previousSelectedPath);
+    if (undo.previousSelectedPath === undo.command.filePath) {
+      setSelectedCommand(nextCommand);
+      setEditContent(nextCommand.content);
+      lastSavedContentRef.current = nextCommand.content;
+      lastSavedVersionRef.current = nextCommand.documentVersion;
+      lastSeededPathRef.current = nextCommand.filePath;
+    }
+    deletedCommandUndoRef.current = null;
+    return true;
+  }, []);
+
   // Keyboard navigation
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -1276,6 +1324,17 @@ export default function CommandsView({
         return;
       }
 
+      if (e.key.toLowerCase() === 'z' && e.metaKey && !e.shiftKey && !e.altKey && !e.ctrlKey) {
+        const inEditableField = activeElement instanceof HTMLInputElement
+          || activeElement instanceof HTMLTextAreaElement
+          || (activeElement instanceof HTMLElement && activeElement.isContentEditable);
+        if (!inEditableField && deletedCommandUndoRef.current) {
+          e.preventDefault();
+          void undoDeletedCommand();
+          return;
+        }
+      }
+
       // Don't handle navigation keys when typing in any input
       const isSidebarNavigationKey = e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'j' || e.key === 'k';
       const activeEl = document.activeElement;
@@ -1308,7 +1367,7 @@ export default function CommandsView({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath, canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward]);
+  }, [commands, selectedPath, searchQuery, watchedDirs, isEditing, focusImmersive, selectedCommand, viewMode, onSwitchToClipboard, enterEditMode, exitEditMode, handleSelectCommand, toggleFocusImmersive, copySelectedCommandTextOrPath, copySelectedCommandPath, undoDeletedCommand, canNavigateBack, canNavigateForward, onNavigateBack, onNavigateForward]);
 
   // Focus container on mount
   useEffect(() => {
@@ -1488,10 +1547,21 @@ export default function CommandsView({
   const handleDeleteCommand = useCallback((filePath: string) => {
     confirmDelete({
       title: 'Delete command?',
-      message: 'Delete this command? This cannot be undone.',
+      message: 'Delete this command? Press Command+Z to undo.',
       onConfirm: async () => {
+        const commandBeforeDelete = selectedCommand?.filePath === filePath
+          ? selectedCommand
+          : await window.commandsAPI?.getCommandByPath(filePath) ?? null;
         const success = await window.commandsAPI?.deleteCommand(filePath);
         if (success) {
+          if (commandBeforeDelete) {
+            deletedCommandUndoRef.current = {
+              command: commandBeforeDelete,
+              directoryPath: commandDirectoryFromFilePath(filePath),
+              restoreName: commandFileNameFromFilePath(filePath),
+              previousSelectedPath: selectedPath,
+            };
+          }
           const updatedCommands = commands.filter((command) => command.filePath !== filePath);
           setCommands(updatedCommands);
           if (selectedPath === filePath) {
@@ -1501,7 +1571,7 @@ export default function CommandsView({
         }
       },
     });
-  }, [commands, confirmDelete, selectedPath]);
+  }, [commands, confirmDelete, selectedCommand, selectedPath]);
 
   // Rename command handler — kicks off the inline input in the sidebar.
   // Actual rename happens in commitRename() when the user confirms.
