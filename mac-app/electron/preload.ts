@@ -141,6 +141,9 @@ const ClipboardIPCChannels = {
   DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
   GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
   SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
+  GET_MEETING_SUMMARY_PROMPT: 'clipboard:getMeetingSummaryPrompt',
+  SAVE_MEETING_SUMMARY_PROMPT: 'clipboard:saveMeetingSummaryPrompt',
+  RESET_MEETING_SUMMARY_PROMPT: 'clipboard:resetMeetingSummaryPrompt',
 
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',
@@ -409,6 +412,7 @@ type ModelInfo = {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 };
 
 type ClipboardItemType = 'text' | 'image' | 'transcript' | 'screenshot';
@@ -869,6 +873,9 @@ export interface ClipboardAPI {
   deleteLocalLLM: (model: string) => Promise<{ success: boolean; error?: string }>;
   getUseLocalLLM: () => Promise<boolean>;
   setUseLocalLLM: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  getMeetingSummaryPrompt: () => Promise<string>;
+  saveMeetingSummaryPrompt: (prompt: string) => Promise<{ success: boolean; prompt?: string; error?: string }>;
+  resetMeetingSummaryPrompt: () => Promise<{ success: boolean; prompt: string; error?: string }>;
   onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
   // Improved content management - store/clear improved versions of transcriptions
@@ -1735,6 +1742,18 @@ const clipboardAPI: ClipboardAPI = {
 
   setUseLocalLLM: async (useLocal: boolean) => {
     return ipcRenderer.invoke(ClipboardIPCChannels.SET_USE_LOCAL_LLM, useLocal);
+  },
+
+  getMeetingSummaryPrompt: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.GET_MEETING_SUMMARY_PROMPT);
+  },
+
+  saveMeetingSummaryPrompt: async (prompt: string) => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.SAVE_MEETING_SUMMARY_PROMPT, prompt);
+  },
+
+  resetMeetingSummaryPrompt: async () => {
+    return ipcRenderer.invoke(ClipboardIPCChannels.RESET_MEETING_SUMMARY_PROMPT);
   },
 
   onLocalLLMDownloadProgress: (callback: (data: { model: string; downloaded: number; total: number }) => void) => {
@@ -3180,6 +3199,34 @@ type ActiveLibraryFileContext = {
   title: string;
 };
 
+type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
+
+type MeetingSession = {
+  meetingId: string;
+  title: string;
+  type: 'wiki' | 'external';
+  filePath: string;
+  relPath: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: MeetingStatus;
+  audioPath: string | null;
+  transcriptPath: string | null;
+  rawTranscriptPath: string | null;
+  speakerDiarizationSupported: boolean;
+  summaryRunId?: string;
+  summaryError?: string;
+};
+
+type MeetingActionResult = {
+  success: boolean;
+  error?: string;
+  session?: MeetingSession;
+  openTarget?: FieldTheoryMarkdownTarget;
+  summaryRunId?: string;
+  summaryError?: string;
+};
+
 type LauncherPreviewPayload =
   | { kind: 'bookmark'; bookmark: Bookmark }
   | { kind: 'markdown'; title: string; filePath: string; content: string };
@@ -3499,6 +3546,36 @@ const commandsAPI = {
 
   archiveActiveLibraryFile: async (): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:archiveActiveLibraryFile');
+  },
+
+  createMeetingNote: async (title?: string): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:create', title);
+  },
+
+  startMeetingHere: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:startHere');
+  },
+
+  stopMeeting: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:stop');
+  },
+
+  cancelMeeting: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:cancel');
+  },
+
+  summarizeCurrentMeeting: async (): Promise<MeetingActionResult> => {
+    return ipcRenderer.invoke('meetings:summarizeCurrent');
+  },
+
+  getActiveMeeting: async (): Promise<MeetingSession | null> => {
+    return ipcRenderer.invoke('meetings:getActive');
+  },
+
+  onMeetingStatus: (callback: (session: MeetingSession) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, session: MeetingSession) => callback(session);
+    ipcRenderer.on('meetings:status', handler);
+    return () => ipcRenderer.removeListener('meetings:status', handler);
   },
 
   openFieldTheoryMarkdown: async (target: FieldTheoryMarkdownTarget): Promise<{ success: boolean; error?: string }> => {

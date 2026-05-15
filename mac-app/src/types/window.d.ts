@@ -526,6 +526,9 @@ interface ClipboardAPI {
   deleteLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
   getUseLocalLLM?: () => Promise<boolean>;
   setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  getMeetingSummaryPrompt?: () => Promise<string>;
+  saveMeetingSummaryPrompt?: (prompt: string) => Promise<{ success: boolean; prompt?: string; error?: string }>;
+  resetMeetingSummaryPrompt?: () => Promise<{ success: boolean; prompt: string; error?: string }>;
   onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
   // Improved content management - store/clear improved versions of transcriptions
@@ -655,6 +658,7 @@ interface ModelInfo {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 }
 
 /**
@@ -1399,6 +1403,34 @@ interface ActiveLibraryFileContext {
   title: string;
 }
 
+type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
+
+interface MeetingSession {
+  meetingId: string;
+  title: string;
+  type: 'wiki' | 'external';
+  filePath: string;
+  relPath: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: MeetingStatus;
+  audioPath: string | null;
+  transcriptPath: string | null;
+  rawTranscriptPath: string | null;
+  speakerDiarizationSupported: boolean;
+  summaryRunId?: string;
+  summaryError?: string;
+}
+
+interface MeetingActionResult {
+  success: boolean;
+  error?: string;
+  session?: MeetingSession;
+  openTarget?: FieldTheoryMarkdownTarget;
+  summaryRunId?: string;
+  summaryError?: string;
+}
+
 interface LauncherAppInfo {
   name: string;
   displayName: string;
@@ -1504,6 +1536,13 @@ interface CommandsAPI {
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
+  createMeetingNote?: (title?: string) => Promise<MeetingActionResult>;
+  startMeetingHere?: () => Promise<MeetingActionResult>;
+  stopMeeting?: () => Promise<MeetingActionResult>;
+  cancelMeeting?: () => Promise<MeetingActionResult>;
+  summarizeCurrentMeeting?: () => Promise<MeetingActionResult>;
+  getActiveMeeting?: () => Promise<MeetingSession | null>;
+  onMeetingStatus?: (callback: (session: MeetingSession) => void) => () => void;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;

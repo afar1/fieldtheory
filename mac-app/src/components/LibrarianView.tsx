@@ -121,7 +121,14 @@ type FieldTheoryMarkdownTarget = {
 };
 
 export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+type LibrarianCommandsAPI = NonNullable<Window['commandsAPI']>;
+type MeetingToolbarSession = NonNullable<Awaited<ReturnType<NonNullable<LibrarianCommandsAPI['getActiveMeeting']>>>>;
 const COPY_PATH_FEEDBACK_MS = 1600;
+const MEETING_TOOLBAR_ACTIVE_STATUSES = new Set(['starting', 'recording', 'transcribing', 'summarizing']);
+
+function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | undefined): session is MeetingToolbarSession {
+  return !!session && MEETING_TOOLBAR_ACTIVE_STATUSES.has(session.status);
+}
 
 export type LibraryDocumentViewKind = 'markdown' | 'html' | 'css';
 
@@ -2697,6 +2704,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // the user's locally-installed Claude Code or Codex CLI against the active
   // markdown file and appends a summary footer on success.
   const [agentKickoffOpen, setAgentKickoffOpen] = useState(false);
+  const [activeMeetingSession, setActiveMeetingSession] = useState<MeetingToolbarSession | null>(null);
+  const [meetingToolbarBusy, setMeetingToolbarBusy] = useState(false);
   // External markdown files opened via macOS file-association (`open-file`)
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
@@ -3131,11 +3140,45 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingToolbarHasBreadcrumb = focusToolbarControlsVisible
     && (selectedItemType === 'wiki' || selectedItemType === 'external')
     && Boolean(activeReadingPath);
+  const meetingToolbarStatus = activeMeetingSession?.status ?? 'idle';
+  const meetingToolbarRecording = meetingToolbarStatus === 'recording';
+  const meetingToolbarFinalizing = meetingToolbarStatus === 'starting'
+    || meetingToolbarStatus === 'transcribing'
+    || meetingToolbarStatus === 'summarizing';
+  const meetingToolbarVisible = focusToolbarControlsVisible
+    && activeIsMarkdownDocument
+    && Boolean(activeReadingPath)
+    && (selectedItemType === 'wiki' || selectedItemType === 'external');
+  const meetingToolbarDisabled = meetingToolbarBusy || meetingToolbarFinalizing;
+  const meetingToolbarTitle = meetingToolbarFinalizing
+    ? 'Meeting recording is finalizing'
+    : meetingToolbarRecording ? 'Stop meeting recording' : 'Start meeting recording';
   const showActiveReadingInFolder = () => {
     if (activeReadingPath) {
       window.shellAPI?.showItemInFolder(activeReadingPath);
     }
   };
+  const handleMeetingToolbarClick = useCallback(async () => {
+    setMeetingToolbarBusy(true);
+    try {
+      const result = meetingToolbarRecording
+        ? await window.commandsAPI?.stopMeeting?.()
+        : await window.commandsAPI?.startMeetingHere?.();
+      if (!result) {
+        console.warn('[Librarian] Meeting toolbar action is unavailable');
+        return;
+      }
+      if (!result.success) {
+        console.warn('[Librarian] Meeting toolbar action failed:', result.error ?? result.summaryError);
+        return;
+      }
+      setActiveMeetingSession(isMeetingToolbarActiveSession(result.session) ? result.session : null);
+    } catch (err) {
+      console.warn('[Librarian] Meeting toolbar action failed:', err);
+    } finally {
+      setMeetingToolbarBusy(false);
+    }
+  }, [meetingToolbarRecording]);
   activeReadingPathRef.current = activeReadingPath;
   activeReadingContentRef.current = activeReadingContent;
   const frozenRenderedDisplayContent = contentMode === 'rendered'
@@ -3184,6 +3227,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       title: sidebarItem.title,
     });
   }, [active, activeIsMarkdownDocument, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType]);
+
+  useEffect(() => {
+    if (!active) {
+      setActiveMeetingSession(null);
+      return;
+    }
+
+    let cancelled = false;
+    const updateActiveMeetingSession = (session: MeetingToolbarSession | null | undefined) => {
+      if (!cancelled) {
+        setActiveMeetingSession(isMeetingToolbarActiveSession(session) ? session : null);
+      }
+    };
+
+    void window.commandsAPI?.getActiveMeeting?.().then(updateActiveMeetingSession).catch((err) => {
+      console.warn('[Librarian] Failed to read active meeting session:', err);
+    });
+    const unsubscribe = window.commandsAPI?.onMeetingStatus?.(updateActiveMeetingSession);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [active]);
 
   useEffect(() => {
     if (!activeTitlePath || editingTitlePath !== activeTitlePath) {
@@ -6268,6 +6334,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   };
 
+  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen;
+  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
+  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!sidebarTemporarilyExpanded) return;
+    const target = event.target;
+    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
+    setSidebarHoverExpanded(false);
+  }, [sidebarTemporarilyExpanded]);
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -6442,15 +6517,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       </div>
     );
   }
-
-  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen;
-  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
-  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!sidebarTemporarilyExpanded) return;
-    const target = event.target;
-    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
-    setSidebarHoverExpanded(false);
-  }, [sidebarTemporarilyExpanded]);
 
   return (
     <div
@@ -6771,6 +6837,55 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 copyPathCopied={copyPathCopied}
                 copyPathTitle="Copy selected text or file path (⌘C)"
               />
+
+              {meetingToolbarVisible && (
+                <button
+                  type="button"
+                  onClick={() => void handleMeetingToolbarClick()}
+                  disabled={meetingToolbarDisabled}
+                  title={meetingToolbarTitle}
+                  aria-label={meetingToolbarTitle}
+                  style={{
+                    width: '26px',
+                    height: '24px',
+                    padding: '4px 6px',
+                    color: meetingToolbarRecording ? '#dc2626' : theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: meetingToolbarDisabled ? 'default' : 'pointer',
+                    opacity: meetingToolbarDisabled ? 0.65 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'background-color 0.15s ease, color 0.15s ease',
+                    // @ts-ignore - opt out of the drag region so the click lands.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (meetingToolbarDisabled) return;
+                    e.currentTarget.style.backgroundColor = meetingToolbarRecording
+                      ? 'rgba(220,38,38,0.08)'
+                      : theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                    e.currentTarget.style.color = meetingToolbarRecording ? '#b91c1c' : theme.text;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = meetingToolbarRecording ? '#dc2626' : theme.textSecondary;
+                  }}
+                >
+                  {meetingToolbarRecording ? (
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                      <rect x="4" y="4" width="8" height="8" rx="1.5" />
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <circle cx="8" cy="8" r="5.25" stroke="currentColor" strokeWidth="1.5" />
+                      <circle cx="8" cy="8" r="2.25" fill="currentColor" />
+                    </svg>
+                  )}
+                </button>
+              )}
 
               {/* Agent kickoff — opens a popup that dispatches the user's
                   locally-installed Claude Code / Codex CLI against this file. */}
