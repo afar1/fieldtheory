@@ -1160,8 +1160,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             overflow: 'hidden',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
-            paddingLeft: 'calc(var(--ft-rendered-list-indent, 0ch) + 1.65em)',
-            textIndent: 'calc(-1 * (var(--ft-rendered-list-indent, 0ch) + 1.55em))',
+            paddingLeft: 'calc(var(--ft-rendered-list-indent, 0ch) + 1.65em) !important',
+            textIndent: 'calc(-1 * (var(--ft-rendered-list-indent, 0ch) + 1.55em)) !important',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
             display: 'inline-block',

@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import CommandsView, { getCommandsContentBottomScrollSpace, getCommandsContentTopPadding } from '../CommandsView';
 
@@ -80,6 +80,7 @@ describe('CommandsView command naming', () => {
         })),
         saveCommand: vi.fn(async () => true),
         createCommand: vi.fn(async () => null),
+        deleteCommand: vi.fn(async () => true),
         onCommandsChanged: vi.fn(() => () => {}),
         openFieldTheoryMarkdown: vi.fn(async () => ({ success: true })),
       },
@@ -455,6 +456,39 @@ describe('CommandsView command naming', () => {
       expect(window.commandsAPI?.saveCommand).toHaveBeenCalledWith(
         '/tmp/commands/existing.md',
         '# existing\n\nChanged content\n'
+      );
+    });
+  });
+
+  it('restores the last deleted command with Command+Z', async () => {
+    window.commandsAPI!.createCommand = vi.fn(async () => ({ path: '/tmp/commands/existing.md', name: 'existing' }));
+    render(<CommandsView onSwitchToClipboard={vi.fn()} />);
+
+    const commandRows = await screen.findAllByText('existing');
+    fireEvent.contextMenu(commandRows[0], { clientX: 10, clientY: 20 });
+    fireEvent.click(await screen.findByText('Delete'));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete command?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Delete' }));
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.deleteCommand).toHaveBeenCalledWith('/tmp/commands/existing.md');
+    });
+
+    const editorLikeElement = document.createElement('div');
+    editorLikeElement.contentEditable = 'true';
+    document.body.appendChild(editorLikeElement);
+    editorLikeElement.focus();
+    fireEvent.keyDown(window, { key: 'z', metaKey: true });
+    expect(window.commandsAPI?.createCommand).not.toHaveBeenCalled();
+    editorLikeElement.remove();
+
+    fireEvent.keyDown(window, { key: 'z', metaKey: true });
+
+    await waitFor(() => {
+      expect(window.commandsAPI?.createCommand).toHaveBeenCalledWith(
+        '/tmp/commands',
+        'existing.md',
+        '# existing\n\nRendered selection text\n'
       );
     });
   });
