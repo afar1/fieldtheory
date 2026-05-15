@@ -20,6 +20,17 @@ function writeAgent(dir: string, agent: WaitingAgent): void {
   writeFileSync(join(dir, `${agent.agentId}.json`), JSON.stringify(agent));
 }
 
+async function waitFor(condition: () => boolean): Promise<void> {
+  const deadline = Date.now() + 1000;
+  while (!condition() && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 25));
+  }
+}
+
+async function settleWatcher(): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, 100));
+}
+
 describe('AgentAttentionManager', () => {
   let stateDir: string;
   let mgr: AgentAttentionManager;
@@ -116,9 +127,10 @@ describe('AgentAttentionManager', () => {
     const changes: WaitingAgent[][] = [];
     mgr.on('change', (agents: WaitingAgent[]) => changes.push(agents));
 
+    await settleWatcher();
     writeAgent(stateDir, makeAgent({ agentId: 'fresh', tool: 'claude' }));
 
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await waitFor(() => changes.length > 0);
 
     expect(changes.length).toBeGreaterThan(0);
     expect(changes[changes.length - 1][0].agentId).toBe('fresh');
@@ -135,8 +147,9 @@ describe('AgentAttentionManager', () => {
     const changes: WaitingAgent[][] = [];
     mgr.on('change', (agents: WaitingAgent[]) => changes.push(agents));
 
+    await settleWatcher();
     unlinkSync(join(stateDir, `${agent.agentId}.json`));
-    await new Promise(resolve => setTimeout(resolve, 200));
+    await waitFor(() => changes.length > 0);
 
     expect(changes.length).toBeGreaterThan(0);
     expect(changes[changes.length - 1]).toEqual([]);
