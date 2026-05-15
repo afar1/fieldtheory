@@ -670,6 +670,12 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
   const lineEndIndex = value.indexOf('\n', selectionStart);
   const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
   const line = value.slice(lineStart, lineEnd);
+  const insertAt = (minimumOffsetInLine: number, insertion: string) => {
+    const offset = Math.max(selectionStart, lineStart + minimumOffsetInLine);
+    const nextValue = `${value.slice(0, offset)}${insertion}${value.slice(offset)}`;
+    const nextSelection = offset + insertion.length;
+    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  };
 
   const bareTask = line.match(/^(\s*)(\[(?: |x|X)?\])\s*(.*)$/);
   if (bareTask) {
@@ -682,9 +688,7 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
     }
     const nextMarker = bareTask[2] === '[ ]' ? '[ ]' : '[]';
     const insertion = `\n${bareTask[1]}${nextMarker} `;
-    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-    const nextSelection = selectionStart + insertion.length;
-    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+    return insertAt(line.length - bareTask[3].length, insertion);
   }
 
   const task = line.match(/^(\s*)[-*+]\s+\[(?: |x|X)\]\s*(.*)$/);
@@ -697,9 +701,7 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
       };
     }
     const insertion = `\n${task[1]}- [ ] `;
-    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-    const nextSelection = selectionStart + insertion.length;
-    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+    return insertAt(line.length - task[2].length, insertion);
   }
 
   const ordered = line.match(/^(\s*)(\d+)([.)])\s+(.*)$/);
@@ -713,9 +715,7 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
     }
     const nextNumber = Number.parseInt(ordered[2], 10) + 1;
     const insertion = `\n${ordered[1]}${nextNumber}${ordered[3]} `;
-    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-    const nextSelection = selectionStart + insertion.length;
-    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+    return insertAt(line.length - ordered[4].length, insertion);
   }
 
   const quote = line.match(/^(\s*)>\s?(.*)$/);
@@ -728,9 +728,7 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
       };
     }
     const insertion = `\n${quote[1]}> `;
-    const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-    const nextSelection = selectionStart + insertion.length;
-    return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+    return insertAt(line.length - quote[2].length, insertion);
   }
 
   const unordered = line.match(/^(\s*)([-*+])\s+(.*)$/);
@@ -744,9 +742,7 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
   }
 
   const insertion = `\n${unordered[1]}${unordered[2]} `;
-  const nextValue = `${value.slice(0, selectionStart)}${insertion}${value.slice(selectionEnd)}`;
-  const nextSelection = selectionStart + insertion.length;
-  return { nextValue, selectionStart: nextSelection, selectionEnd: nextSelection };
+  return insertAt(line.length - unordered[3].length, insertion);
 }
 
 export function getCarrotListTabEdit(
