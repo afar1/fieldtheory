@@ -373,6 +373,7 @@ export class HotMicManager extends EventEmitter {
   private static readonly REPETITION_DOMINANT_RATIO_MIN = 0.7;
   private static readonly BOUNDARY_STITCH_MIN_WORDS = 2;
   private static readonly BOUNDARY_STITCH_MAX_WORDS = 6;
+  private static readonly ESCAPE_DISMISS_CONFIRM_MS = 1_600;
 
   // Warmup promise — awaited before first transcription to avoid racing the runtime startup
   private warmupPromise: Promise<void> | null = null;
@@ -396,6 +397,7 @@ export class HotMicManager extends EventEmitter {
 
   private escapeDismissHotkeyRegistered: boolean = false;
   private pendingEscapeDismiss: boolean = false;
+  private escapeDismissResetTimer: NodeJS.Timeout | null = null;
 
   // Local HTTP server for hook triggers
   private server: http.Server | null = null;
@@ -1358,12 +1360,14 @@ export class HotMicManager extends EventEmitter {
   private unregisterEscapeDismissHotkey(): void {
     if (!this.escapeDismissHotkeyRegistered) {
       this.pendingEscapeDismiss = false;
+      this.clearEscapeDismissResetTimer();
       return;
     }
 
     globalShortcut.unregister('Escape');
     this.escapeDismissHotkeyRegistered = false;
     this.pendingEscapeDismiss = false;
+    this.clearEscapeDismissResetTimer();
   }
 
   private handleEscapeDismiss(): void {
@@ -1373,12 +1377,26 @@ export class HotMicManager extends EventEmitter {
 
     if (!this.pendingEscapeDismiss) {
       this.pendingEscapeDismiss = true;
+      this.dynamicIslandManager?.showEscapeHint();
       this.cursorStatusManager?.showRecordingNote('Press Esc again to stop Hot Mic');
+      this.clearEscapeDismissResetTimer();
+      this.escapeDismissResetTimer = setTimeout(() => {
+        this.escapeDismissResetTimer = null;
+        this.pendingEscapeDismiss = false;
+      }, HotMicManager.ESCAPE_DISMISS_CONFIRM_MS);
       return;
     }
 
     this.pendingEscapeDismiss = false;
+    this.clearEscapeDismissResetTimer();
     this.handleLongPress();
+  }
+
+  private clearEscapeDismissResetTimer(): void {
+    if (this.escapeDismissResetTimer) {
+      clearTimeout(this.escapeDismissResetTimer);
+      this.escapeDismissResetTimer = null;
+    }
   }
 
   // ---------------------------------------------------------------------------

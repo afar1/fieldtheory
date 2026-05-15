@@ -34,7 +34,20 @@ const DEFAULT_WHISPER_MODELS: Record<string, ModelInfo> = {
     sizeBytes: 466 * 1024 * 1024,
     description: 'Small English transcription model',
   },
+  'small-tdrz': {
+    name: 'ggml-small.en-tdrz.bin',
+    url: 'https://huggingface.co/akashmjn/tinydiarize-whisper.cpp/resolve/main/ggml-small.en-tdrz.bin',
+    sizeBytes: 465 * 1024 * 1024,
+    description: 'Small English model with experimental speaker-turn labels for meetings',
+  },
 };
+
+const MEETING_DIARIZATION_MODEL_ID = 'small-tdrz';
+
+function formatModelSize(bytes: number | undefined): string {
+  if (!bytes || bytes <= 0) return '';
+  return `${Math.round(bytes / (1024 * 1024))} MB`;
+}
 
 function withDefaultWhisperModels(models: Record<string, ModelInfo>): Record<string, ModelInfo> {
   return {
@@ -637,6 +650,11 @@ export default function TranscriptionSettings() {
     return 'Ready';
   };
 
+  const meetingDiarizationModel = availableModels[MEETING_DIARIZATION_MODEL_ID];
+  const meetingDiarizationDownloaded = modelDownloadStatus[MEETING_DIARIZATION_MODEL_ID] === true;
+  const meetingDiarizationDownloading = downloadingModel === MEETING_DIARIZATION_MODEL_ID;
+  const meetingDiarizationProgress = modelDownloadProgress[MEETING_DIARIZATION_MODEL_ID];
+
   return (
     <div style={styles.container}>
       <div style={{ marginTop: '16px' }}>
@@ -906,6 +924,56 @@ export default function TranscriptionSettings() {
               <span style={{ ...styles.downloadedBadge, color: theme.textSecondary }}>Selected</span>
             )}
           </div>
+
+          {meetingDiarizationModel && (
+            <div
+              style={{
+                ...styles.modelCard,
+                marginLeft: '12px',
+                borderLeft: meetingDiarizationDownloaded
+                  ? `3px solid ${theme.success}`
+                  : `3px solid ${theme.isDark ? '#404040' : '#e5e7eb'}`,
+              }}
+            >
+              <div style={styles.modelCardContent}>
+                <div style={styles.modelCardHeader}>
+                  <span style={styles.rowValue}>Meeting speaker turns</span>
+                  <span style={styles.modelSize}>{formatModelSize(meetingDiarizationModel.sizeBytes)}</span>
+                </div>
+                <span style={styles.modelHint}>
+                  Uses whisper.cpp tinydiarize for Speaker 1 / Speaker 2 labels when meetings stop.
+                </span>
+              </div>
+              <div style={styles.rowControls}>
+                {meetingDiarizationDownloading && meetingDiarizationProgress ? (
+                  <div style={styles.progressBar}>
+                    <div
+                      style={{
+                        ...styles.progressFill,
+                        width: `${meetingDiarizationProgress.total > 0
+                          ? Math.min(100, (meetingDiarizationProgress.downloaded / meetingDiarizationProgress.total) * 100)
+                          : 0}%`,
+                      }}
+                    />
+                  </div>
+                ) : meetingDiarizationDownloaded ? (
+                  <span style={styles.downloadedBadge}>Installed</span>
+                ) : (
+                  <button
+                    onClick={() => void handleDownloadModelForSize(MEETING_DIARIZATION_MODEL_ID)}
+                    disabled={!!downloadingModel}
+                    style={{
+                      ...styles.btn,
+                      opacity: downloadingModel ? 0.6 : 1,
+                      cursor: downloadingModel ? 'default' : 'pointer',
+                    }}
+                  >
+                    Download
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
           {/* Reinstall option - shown when parakeet is installed */}
           {parakeetInstalled && (

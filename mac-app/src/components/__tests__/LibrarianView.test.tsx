@@ -1,6 +1,11 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import LibrarianView from '../LibrarianView';
+import LibrarianView, {
+  getLibraryDocumentDefaultContentMode,
+  getLibraryDocumentViewKind,
+  getHtmlPreviewSrcDoc,
+  getLocalFileUrl,
+} from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
   useTheme: () => ({
@@ -31,6 +36,20 @@ vi.mock('../AgentKickoffModal', () => ({
 }));
 
 describe('LibrarianView render', () => {
+  type TestMeetingSession = NonNullable<Awaited<ReturnType<NonNullable<NonNullable<Window['commandsAPI']>['getActiveMeeting']>>>>;
+
+  it('classifies html and css library documents for the right default view', () => {
+    expect(getLibraryDocumentViewKind('/tmp/report.html', 'external')).toBe('html');
+    expect(getLibraryDocumentViewKind('/tmp/styles.css', 'external')).toBe('css');
+    expect(getLibraryDocumentViewKind('/tmp/note.md', 'external')).toBe('markdown');
+    expect(getLibraryDocumentDefaultContentMode('html')).toBe('rendered');
+    expect(getLibraryDocumentDefaultContentMode('css')).toBe('markdown');
+    expect(getLocalFileUrl('/tmp/Field Theory/report summary.html')).toBe('file:///tmp/Field%20Theory/report%20summary.html');
+    expect(getHtmlPreviewSrcDoc('<head><title>x</title></head>', '/tmp/Field Theory/report.html')).toContain(
+      '<head><base href="file:///tmp/Field%20Theory/"><title>x</title>',
+    );
+  });
+
   function pasteText(target: HTMLElement, text: string): void {
     fireEvent.paste(target, {
       clipboardData: {
@@ -120,6 +139,10 @@ describe('LibrarianView render', () => {
         getCommandByPath: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
         setActiveLibraryFileContext: vi.fn(),
+        startMeetingHere: vi.fn(async () => ({ success: true, session: null })),
+        stopMeeting: vi.fn(async () => ({ success: true, session: null })),
+        getActiveMeeting: vi.fn(async () => null),
+        onMeetingStatus: vi.fn(() => () => {}),
       },
     });
     Object.defineProperty(window, 'libraryAPI', {
@@ -155,6 +178,14 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
+  });
+
+  it('renders the empty library state without changing hook order', async () => {
+    window.librarianAPI!.getReadings = vi.fn(async () => []);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('No artifacts yet')).toBeTruthy();
   });
 
   it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
@@ -257,6 +288,152 @@ describe('LibrarianView render', () => {
     });
   });
 
+  it('places Show in Finder before the library breadcrumb', async () => {
+    const relPath = 'scratchpad/folder-toolbar-order';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'folder-toolbar-order',
+      title: 'folder-toolbar-order',
+      lastUpdated: 1,
+      content: 'Toolbar order',
+      documentVersion: { mtimeMs: 1, size: 13, sha256: 'toolbar-order-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const breadcrumb = await screen.findByText('scratchpad');
+    const folderButton = screen.getByLabelText('Show in Finder');
+
+    expect(screen.getAllByLabelText('Show in Finder')).toHaveLength(1);
+    expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it('starts and stops a meeting recording from the active file toolbar', async () => {
+    const relPath = 'scratchpad/meeting-toolbar';
+    const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
+    const page: WikiPage = {
+      relPath,
+      absPath,
+      name: 'meeting-toolbar',
+      title: 'meeting-toolbar',
+      lastUpdated: 1,
+      content: 'Meeting toolbar',
+      documentVersion: { mtimeMs: 1, size: 15, sha256: 'meeting-toolbar-version' },
+    };
+    const recordingSession: TestMeetingSession = {
+      meetingId: 'meeting-toolbar-session',
+      title: 'meeting-toolbar',
+      type: 'wiki',
+      filePath: absPath,
+      relPath,
+      status: 'recording',
+      startedAt: '2026-05-14T20:00:00.000Z',
+      endedAt: null,
+      audioPath: null,
+      transcriptPath: null,
+      rawTranscriptPath: null,
+      speakerDiarizationSupported: false,
+    };
+    const doneSession: TestMeetingSession = {
+      ...recordingSession,
+      status: 'done',
+      endedAt: '2026-05-14T20:01:00.000Z',
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.commandsAPI!.startMeetingHere!).mockResolvedValue({
+      success: true,
+      session: recordingSession,
+    });
+    vi.mocked(window.commandsAPI!.stopMeeting!).mockResolvedValue({
+      success: true,
+      session: doneSession,
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const startButton = await screen.findByRole('button', { name: 'Start meeting recording' });
+    fireEvent.click(startButton);
+
+    await waitFor(() => {
+      expect(window.commandsAPI!.startMeetingHere).toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Stop meeting recording' })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop meeting recording' }));
+
+    await waitFor(() => {
+      expect(window.commandsAPI!.stopMeeting).toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Start meeting recording' })).toBeTruthy();
+    });
+  });
+
+  it('opens html files as previews and css files as source', async () => {
+    const htmlPath = '/Users/afar/.fieldtheory/library/reports/summary.html';
+    const cssPath = '/Users/afar/.fieldtheory/library/reports/styles.css';
+    Object.defineProperty(window, 'externalAPI', {
+      configurable: true,
+      value: {
+        open: vi.fn(async (absPath: string) => ({
+          path: absPath,
+          name: absPath.endsWith('.css') ? 'styles.css' : 'summary.html',
+          content: absPath.endsWith('.css')
+            ? 'body { color: crimson; }'
+            : '<!doctype html><link rel="stylesheet" href="./styles.css"><h1>Summary</h1>',
+          mtime: 1,
+          documentVersion: { mtimeMs: 1, size: 1, sha256: absPath.endsWith('.css') ? 'css' : 'html' },
+        })),
+        save: vi.fn(async () => ({ ok: true })),
+        findLibraryFileByDocumentVersion: vi.fn(async () => null),
+        rename: vi.fn(async () => null),
+        delete: vi.fn(async () => false),
+        onOpenExternal: vi.fn(() => () => {}),
+      },
+    });
+
+    const { container, unmount } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'external', path: htmlPath }}
+      />,
+    );
+
+    await waitFor(() => {
+      const iframe = container.querySelector('iframe[data-ft-html-preview="true"]') as HTMLIFrameElement | null;
+      expect(iframe?.getAttribute('srcdoc')).toContain('<base href="file:///Users/afar/.fieldtheory/library/reports/">');
+      expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBeNull();
+    });
+
+    unmount();
+    const cssRender = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'external', path: cssPath }}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(cssRender.container.querySelector('iframe[data-ft-html-preview="true"]')).toBeNull();
+      expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
+      expect((screen.getByLabelText('Rendered') as HTMLButtonElement).disabled).toBe(true);
+    });
+  });
+
   it('renders task list markers as native checkbox controls in rendered editing', async () => {
     const relPath = 'scratchpad/rendered-task-text-test';
     const content = '- [ ] open task\n- [x] done task';
@@ -302,9 +479,9 @@ describe('LibrarianView render', () => {
     expect(renderedInput.textContent).not.toContain('[x]');
   });
 
-  it('saves rendered editor edits without replacing the active input', async () => {
-    const relPath = 'scratchpad/rendered-native-typing-test';
-    const content = 'hello world';
+	  it('saves rendered editor edits without replacing the active input', async () => {
+	    const relPath = 'scratchpad/rendered-native-typing-test';
+	    const content = 'hello world';
     const page: WikiPage = {
       relPath,
       absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
@@ -351,12 +528,67 @@ describe('LibrarianView render', () => {
         page.documentVersion,
       );
     }, { timeout: 1200 });
-    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
-    expect(renderedInput.textContent).toContain('hello world!');
-  });
+	    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
+	    expect(renderedInput.textContent).toContain('hello world!');
+	  });
 
-  it('pastes clipboard images into the rendered editor without switching to source mode', async () => {
-    const relPath = 'scratchpad/rendered-image-paste-test';
+	  it('pastes markdown text into rendered mode as rendered document structure', async () => {
+	    const relPath = 'scratchpad/rendered-markdown-paste-test';
+	    const content = 'hello';
+	    const page: WikiPage = {
+	      relPath,
+	      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+	      name: 'rendered-markdown-paste-test',
+	      title: 'rendered-markdown-paste-test',
+	      lastUpdated: 1,
+	      content,
+	      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'markdown-paste-version' },
+	    };
+
+	    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+	      key === 'librarian-last-selection'
+	        ? JSON.stringify({ type: 'wiki', relPath })
+	        : null
+	    ));
+	    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+	    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+	      ok: true,
+	      version: { mtimeMs: 2, size: 'hello\n# Pasted Heading\n- one'.length, sha256: 'markdown-paste-saved-version' },
+	    });
+
+	    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+	    const renderedRoot = await waitFor(() => {
+	      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+	      expect(root?.textContent).toContain('hello');
+	      return root;
+	    });
+	    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+	    fireEvent.click(renderedRoot);
+	    const renderedInput = await waitFor(() => {
+	      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+	      expect(input?.textContent).toContain('hello');
+	      return input;
+	    });
+	    if (!renderedInput) throw new Error('Rendered editor missing');
+
+	    pasteText(renderedInput, '\n# Pasted Heading\n- one');
+
+	    await waitFor(() => {
+	      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+	        relPath,
+	        'hello\n# Pasted Heading\n- one',
+	        page.documentVersion,
+	      );
+	      expect(renderedInput.textContent).toContain('Pasted Heading');
+	      expect(renderedInput.textContent).toContain('one');
+	      expect(renderedInput.textContent).not.toContain('# Pasted Heading');
+	    }, { timeout: 1200 });
+	  });
+
+	  it('pastes clipboard images into the rendered editor without switching to source mode', async () => {
+	    const relPath = 'scratchpad/rendered-image-paste-test';
     const content = 'hello image';
     const page: WikiPage = {
       relPath,
@@ -687,6 +919,300 @@ describe('LibrarianView render', () => {
         page.documentVersion,
       );
     }, { timeout: 1200 });
+  });
+
+  it('continues rendered list items on Enter without showing markdown syntax', async () => {
+    const relPath = 'scratchpad/rendered-enter-list-test';
+    const content = '- first';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-enter-list-test',
+      title: 'rendered-enter-list-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-enter-list-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: '- first\n- '.length, sha256: 'rendered-enter-list-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('first');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('first');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    fireEvent.keyDown(renderedInput, { key: 'Enter' });
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        '- first\n- ',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
+	  it('starts an ordered list from an empty rendered editor with Command+Shift+7', async () => {
+	    const relPath = 'scratchpad/rendered-empty-ordered-list-test';
+	    const content = '';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-empty-ordered-list-test',
+      title: 'rendered-empty-ordered-list-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: 0, sha256: 'rendered-empty-list-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: '1. '.length, sha256: 'rendered-empty-list-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root).toBeTruthy();
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input).toBeTruthy();
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    fireEvent.keyDown(renderedInput, { key: '&', code: 'Digit7', metaKey: true, shiftKey: true });
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        '1. ',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
+  it('handles rendered editor Command+/ as focus mode without inserting a comment', async () => {
+    const relPath = 'scratchpad/rendered-focus-toggle-test';
+    const content = 'plain line';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-focus-toggle-test',
+      title: 'rendered-focus-toggle-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-focus-toggle-version' },
+    };
+    const onFocusChromeEnabledChange = vi.fn();
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        focusChromeEnabled={false}
+        onFocusChromeEnabledChange={onFocusChromeEnabledChange}
+      />,
+    );
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('plain line');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('plain line');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    const propagated = fireEvent.keyDown(renderedInput, {
+      key: '/',
+      code: 'Slash',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    expect(propagated).toBe(false);
+    expect(onFocusChromeEnabledChange).toHaveBeenCalledWith(true);
+    expect(window.wikiAPI!.save).not.toHaveBeenCalled();
+    expect(renderedInput.textContent).not.toContain('<!--');
+  });
+
+  it('lets rendered editor input complete wiki links', async () => {
+    const relPath = 'scratchpad/rendered-wiki-link-completion-test';
+    const content = 'See ';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-wiki-link-completion-test',
+      title: 'rendered-wiki-link-completion-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-wiki-link-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getTree).mockResolvedValue([{
+      name: 'scratchpad',
+      files: [{
+        relPath: 'scratchpad/consensus',
+        absPath: '/Users/afar/.fieldtheory/library/scratchpad/consensus.md',
+        name: 'consensus',
+        title: 'Consensus',
+        lastUpdated: 2,
+      }],
+    }] as any);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: 'See [[Consensus]]'.length, sha256: 'rendered-wiki-link-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('See');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('See');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    pasteText(renderedInput, '[[Con');
+
+    const listbox = await screen.findByRole('listbox', { name: 'Wiki link suggestions' });
+    fireEvent.click(within(listbox).getByRole('option', { name: /Consensus/ }));
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'See [[Consensus]]',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
+  it('shows linked documents at the bottom of rendered wiki content', async () => {
+    const relPath = 'scratchpad/rendered-linked-source';
+    const targetRelPath = 'scratchpad/target-page';
+    const content = 'See [[Target Page]].';
+    const activePage: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-linked-source',
+      title: 'Rendered Linked Source',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-linked-source-version' },
+    };
+    const targetPage: WikiPage = {
+      relPath: targetRelPath,
+      absPath: `/Users/afar/.fieldtheory/library/${targetRelPath}.md`,
+      name: 'target-page',
+      title: 'Target Page',
+      lastUpdated: 2,
+      content: 'Target body',
+      documentVersion: { mtimeMs: 2, size: 'Target body'.length, sha256: 'target-page-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getTree).mockResolvedValue([{
+      name: 'scratchpad',
+      files: [
+        {
+          relPath,
+          absPath: activePage.absPath,
+          name: activePage.name,
+          title: activePage.title,
+          lastUpdated: activePage.lastUpdated,
+        },
+        {
+          relPath: targetRelPath,
+          absPath: targetPage.absPath,
+          name: targetPage.name,
+          title: targetPage.title,
+          lastUpdated: targetPage.lastUpdated,
+        },
+      ],
+    }] as any);
+    vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (pageRelPath) => {
+      if (pageRelPath === relPath) return activePage;
+      if (pageRelPath === targetRelPath) return targetPage;
+      return null;
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      const renderedRoot = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(renderedRoot?.textContent).toContain('See');
+    });
+    const linkedSection = await screen.findByLabelText('Linked');
+    expect(within(linkedSection).getByRole('button', { name: /Target Page/ })).toBeTruthy();
+    const bottomScrollSpace = container.querySelector('[data-ft-rendered-bottom-scroll-space="library"]');
+    if (!bottomScrollSpace) throw new Error('Rendered bottom scroll space missing');
+    expect(Boolean(linkedSection.compareDocumentPosition(bottomScrollSpace) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
   it('keeps leading spaces in the rendered editor', async () => {

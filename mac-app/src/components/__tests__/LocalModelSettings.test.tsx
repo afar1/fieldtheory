@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LocalModelSettings from '../LocalModelSettings';
 
@@ -21,6 +21,7 @@ vi.mock('../../contexts/ThemeContext', () => ({
 }));
 
 const modelId = 'gemma-4-E4B-it-Q4_K_M';
+const defaultMeetingSummaryPrompt = 'Preserve Notes, Transcript, speaker labels if present, links, figures, and checkboxes.';
 
 function makeModel() {
   return {
@@ -50,6 +51,8 @@ describe('LocalModelSettings', () => {
   const setLocalLLMSelected = vi.fn(async () => ({ success: true }));
   const setUseLocalLLM = vi.fn(async () => ({ success: true }));
   const downloadLocalLLM = vi.fn(async () => ({ success: true, reusedExisting: true }));
+  const saveMeetingSummaryPrompt = vi.fn(async (prompt: string) => ({ success: true, prompt }));
+  const resetMeetingSummaryPrompt = vi.fn(async () => ({ success: true, prompt: defaultMeetingSummaryPrompt }));
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -60,6 +63,9 @@ describe('LocalModelSettings', () => {
       setLocalLLMSelected,
       setUseLocalLLM,
       downloadLocalLLM,
+      getMeetingSummaryPrompt: vi.fn(async () => defaultMeetingSummaryPrompt),
+      saveMeetingSummaryPrompt,
+      resetMeetingSummaryPrompt,
     };
   });
 
@@ -100,5 +106,33 @@ describe('LocalModelSettings', () => {
       expect(downloadLocalLLM).toHaveBeenCalledWith(modelId);
     });
     expect(await screen.findByText('Found and linked the existing local model.')).toBeTruthy();
+  });
+
+  it('saves a customized meeting notes prompt', async () => {
+    render(<LocalModelSettings />);
+
+    const textarea = await screen.findByLabelText('Meeting notes prompt') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('speaker labels');
+
+    fireEvent.change(textarea, { target: { value: 'Write brief meeting notes with strong action items.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save prompt' }));
+
+    await waitFor(() => {
+      expect(saveMeetingSummaryPrompt).toHaveBeenCalledWith('Write brief meeting notes with strong action items.');
+    });
+    expect(await screen.findByText('Meeting notes prompt saved.')).toBeTruthy();
+  });
+
+  it('resets the meeting notes prompt to the default', async () => {
+    render(<LocalModelSettings />);
+
+    const textarea = await screen.findByLabelText('Meeting notes prompt') as HTMLTextAreaElement;
+    fireEvent.change(textarea, { target: { value: 'Custom style.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Reset' }));
+
+    await waitFor(() => {
+      expect(resetMeetingSummaryPrompt).toHaveBeenCalled();
+    });
+    expect(textarea.value).toBe(defaultMeetingSummaryPrompt);
   });
 });

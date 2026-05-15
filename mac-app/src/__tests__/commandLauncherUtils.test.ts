@@ -9,6 +9,7 @@ import {
   filterLauncherDirectoryNamespaceItems,
   filterLauncherMoveTargetDirectories,
   filterLauncherNamespaceItems,
+  filterLauncherNormalModeItems,
   flattenLibraryRootsForLauncher,
   balanceLauncherNormalModeMatches,
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
@@ -25,6 +26,8 @@ import {
   dedupeLauncherPersonItems,
   getLauncherFieldTheoryMarkdownTarget,
   getLauncherAreaActionIdForQuery,
+  getLauncherClipboardSearchQuery,
+  getLauncherClipboardSearchInputState,
   getLauncherNativeIconPathForItem,
   getLauncherMoveDirectoryTarget,
   getLauncherMovedFilePath,
@@ -45,6 +48,7 @@ import {
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherRecentFile,
+  shouldExitLauncherClipboardSearch,
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
@@ -195,6 +199,48 @@ describe('getLauncherStatusText', () => {
       loading: true,
       hasLoadedItems: false,
     })).toBeNull();
+  });
+});
+
+describe('getLauncherClipboardSearchQuery', () => {
+  it('enters clipboard search only after dot and space', () => {
+    expect(getLauncherClipboardSearchQuery('. ')).toBe('');
+    expect(getLauncherClipboardSearchQuery('. invoice')).toBe('invoice');
+    expect(getLauncherClipboardSearchQuery('.  invoice')).toBe('invoice');
+    expect(getLauncherClipboardSearchQuery('.')).toBeNull();
+    expect(getLauncherClipboardSearchQuery('notes')).toBeNull();
+  });
+});
+
+describe('getLauncherClipboardSearchInputState', () => {
+  it('consumes the dot trigger when entering clipboard search', () => {
+    expect(getLauncherClipboardSearchInputState({ active: false, query: '. ' })).toEqual({
+      active: true,
+      query: '',
+    });
+    expect(getLauncherClipboardSearchInputState({ active: false, query: '. invoice' })).toEqual({
+      active: true,
+      query: 'invoice',
+    });
+  });
+
+  it('keeps clipboard mode query text after the trigger has been consumed', () => {
+    expect(getLauncherClipboardSearchInputState({ active: true, query: 'invoice' })).toEqual({
+      active: true,
+      query: 'invoice',
+    });
+    expect(getLauncherClipboardSearchInputState({ active: true, query: '' })).toEqual({
+      active: true,
+      query: '',
+    });
+  });
+});
+
+describe('shouldExitLauncherClipboardSearch', () => {
+  it('leaves clipboard search only when deleting from an empty clipboard query', () => {
+    expect(shouldExitLauncherClipboardSearch({ active: true, query: '', key: 'Backspace' })).toBe(true);
+    expect(shouldExitLauncherClipboardSearch({ active: true, query: 'invoice', key: 'Backspace' })).toBe(false);
+    expect(shouldExitLauncherClipboardSearch({ active: false, query: '', key: 'Backspace' })).toBe(false);
   });
 });
 
@@ -386,6 +432,7 @@ describe('flattenLibraryRootsForLauncher', () => {
         builtin: true,
         tree: [
           { kind: 'file', relPath: 'entries/note', absPath: '/wiki/entries/note.md', name: 'note', title: 'Note', lastUpdated: 1 },
+          { kind: 'file', relPath: 'reports/summary.html', absPath: '/wiki/reports/summary.html', name: 'summary.html', title: 'summary.html', lastUpdated: 3, documentKind: 'html' },
         ],
       },
       {
@@ -405,10 +452,11 @@ describe('flattenLibraryRootsForLauncher', () => {
       },
     ]);
 
-    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'wiki-page']);
-    expect(items[0]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
-    expect(items[1]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
-    expect(items[0].keywords).toContain('docs');
+    expect(items.map((item) => item.type)).toEqual(['markdown-file', 'markdown-file', 'wiki-page']);
+    expect(items[0]).toMatchObject({ displayName: 'summary.html — Wiki', filePath: '/wiki/reports/summary.html', relPath: undefined });
+    expect(items[1]).toMatchObject({ displayName: 'Roadmap — docs', filePath: '/projects/docs/plans/roadmap.md' });
+    expect(items[2]).toMatchObject({ displayName: 'Note', relPath: 'entries/note' });
+    expect(items[1].keywords).toContain('docs');
   });
 
   it('indexes a readable form of slugged wiki filenames', () => {
@@ -1439,6 +1487,7 @@ describe('getLauncherAreaActionIdForQuery', () => {
     expect(getLauncherAreaActionIdForQuery(' library ')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('COMMANDS')).toBe('open-library');
     expect(getLauncherAreaActionIdForQuery('archive')).toBe('archive-current-library-file');
+    expect(getLauncherAreaActionIdForQuery('meeting')).toBe('start-meeting-here');
   });
 
   it('does not route partial area words', () => {
@@ -1485,7 +1534,8 @@ describe('SQUARES_ACTION_DEFS', () => {
     const builtInActionIds = ['settings', 'take-screenshot', 'full-screen-screenshot',
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
-      'archive-current-library-file', 'undo-library-move', 'toggle-theme'];
+      'archive-current-library-file', 'undo-library-move', 'toggle-theme',
+      'new-meeting-note', 'start-meeting-here', 'stop-meeting', 'summarize-meeting'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
     }
@@ -1575,5 +1625,43 @@ describe('buildBuiltInLauncherActions', () => {
       name: 'undo move',
       displayName: 'Undo Last Move',
     }));
+  });
+
+  it('includes meeting actions', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'new-meeting-note')).toEqual(expect.objectContaining({
+      name: 'new meeting',
+      displayName: 'New Meeting Note',
+      keywords: expect.arrayContaining(['meeting note']),
+    }));
+    expect(actions.find((action) => action.actionId === 'start-meeting-here')).toEqual(expect.objectContaining({
+      name: 'start meeting',
+      displayName: 'Start Meeting Here',
+    }));
+    expect(actions.find((action) => action.actionId === 'stop-meeting')).toEqual(expect.objectContaining({
+      name: 'stop meeting',
+      displayName: 'Stop Meeting',
+    }));
+    expect(actions.find((action) => action.actionId === 'summarize-meeting')).toEqual(expect.objectContaining({
+      name: 'summarize meeting',
+      displayName: 'Summarize Meeting',
+    }));
+  });
+
+  it('ranks the new meeting action before the local instruction fallback is allowed', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const results = filterLauncherNormalModeItems(actions, 'new meeting');
+
+    expect(results[0]).toEqual(expect.objectContaining({
+      actionId: 'new-meeting-note',
+      displayName: 'New Meeting Note',
+    }));
+    expect(shouldOfferLocalInstructionFallback({
+      query: 'new meeting',
+      resultCount: results.length,
+      fieldTheoryActive: true,
+      hasActiveLibraryFileContext: true,
+    })).toBe(false);
   });
 });

@@ -47,6 +47,8 @@ export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-li
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
 export const RENDERED_MARKDOWN_EDITOR_HEADING_CLASS = 'cm-rendered-markdown-heading';
 export const RENDERED_MARKDOWN_EDITOR_LINK_CLASS = 'cm-rendered-markdown-link';
+export const RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS = 'cm-rendered-markdown-wiki-link';
+export const RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS = 'cm-rendered-markdown-wiki-syntax';
 export const RENDERED_MARKDOWN_EDITOR_STRONG_CLASS = 'cm-rendered-markdown-strong';
 export const RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS = 'cm-rendered-markdown-emphasis';
 export const RENDERED_MARKDOWN_EDITOR_UNDERLINE_CLASS = 'cm-rendered-markdown-underline';
@@ -419,17 +421,65 @@ function pushRenderedInlineMark(
   }
 }
 
+function shouldRevealRenderedMarkdownSource(state: EditorState, from: number, to: number): boolean {
+  return state.selection.ranges.some((range) => {
+    if (range.empty) return range.from >= from && range.from <= to;
+    return range.from <= to && range.to >= from;
+  });
+}
+
+function hasRenderedMarkdownCursorAt(state: EditorState, offset: number): boolean {
+  return state.selection.ranges.some((range) => range.empty && range.from === offset);
+}
+
+function pushRenderedEmptyInlineFormattingPlaceholders(
+  state: EditorState,
+  decorations: RenderedMarkdownDecoration[],
+  lineFrom: number,
+  text: string,
+  isProtected: (from: number, to: number) => boolean,
+  protect: (from: number, to: number) => void,
+): void {
+  const pushPlaceholder = (from: number, to: number, contentOffset: number): void => {
+    if (isProtected(from, to) || !hasRenderedMarkdownCursorAt(state, contentOffset)) return;
+    protect(from, to);
+    pushRenderedSyntaxReplacement(decorations, from, contentOffset);
+    pushRenderedSyntaxReplacement(decorations, contentOffset, to);
+  };
+
+  for (const match of text.matchAll(/\*\*\*\*/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    pushPlaceholder(from, from + match[0].length, from + 2);
+  }
+
+  for (const match of text.matchAll(/\*\*/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    pushPlaceholder(from, from + match[0].length, from + 1);
+  }
+
+  for (const match of text.matchAll(/<u><\/u>/g)) {
+    if (match.index === undefined) continue;
+    const from = lineFrom + match.index;
+    pushPlaceholder(from, from + match[0].length, from + 3);
+  }
+}
+
 function pushRenderedInlineDecorations(
+  state: EditorState,
   decorations: RenderedMarkdownDecoration[],
   lineFrom: number,
   text: string,
 ): void {
-  const protectedRanges: Array<{ from: number; to: number }> = [];
-  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
-  const isProtected = (from: number, to: number) => protectedRanges.some((range) => rangesIntersect(range, { from, to }));
+	  const protectedRanges: Array<{ from: number; to: number }> = [];
+	  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
+	  const isProtected = (from: number, to: number) => protectedRanges.some((range) => rangesIntersect(range, { from, to }));
 
-  for (const match of text.matchAll(/!\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]*)\)/g)) {
-    if (match.index === undefined) continue;
+	  pushRenderedEmptyInlineFormattingPlaceholders(state, decorations, lineFrom, text, isProtected, protect);
+
+	  for (const match of text.matchAll(/!\[([^\]\n]*)\]\((<[^>\n]+>|[^)\n]*)\)/g)) {
+	    if (match.index === undefined) continue;
     const from = lineFrom + match.index;
     const to = from + match[0].length;
     protect(from, to);
@@ -469,13 +519,26 @@ function pushRenderedInlineDecorations(
     const targetTo = targetFrom + match[1].length;
     const aliasFrom = match[2] === undefined ? targetFrom : targetTo + 1;
     const aliasTo = match[2] === undefined ? targetTo : aliasFrom + match[2].length;
+    const wikiLinkClass = `${RENDERED_MARKDOWN_EDITOR_LINK_CLASS} ${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}`;
     protect(from, to);
+    if (shouldRevealRenderedMarkdownSource(state, from, to)) {
+      pushRenderedInlineMark(decorations, from, aliasFrom, RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS);
+      pushRenderedInlineMark(
+        decorations,
+        aliasFrom,
+        aliasTo,
+        wikiLinkClass,
+        renderedMarkdownSourceAttributes(from, to),
+      );
+      pushRenderedInlineMark(decorations, aliasTo, to, RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS);
+      continue;
+    }
     pushRenderedSyntaxReplacement(decorations, from, aliasFrom);
     pushRenderedInlineMark(
       decorations,
       aliasFrom,
       aliasTo,
-      RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+      wikiLinkClass,
       renderedMarkdownSourceAttributes(from, to),
     );
     pushRenderedSyntaxReplacement(decorations, aliasTo, to);
@@ -666,10 +729,10 @@ function pushRenderedMarkdownEditorLineDecorations(
     );
   } else if (taskMatch) {
     const markerFrom = line.from + taskMatch[1].length;
-    const markerTo = line.from + taskMatch[0].length;
     const checkFrom = markerFrom + taskMatch[2].length + 1;
+    const markerTo = checkFrom + taskMatch[3].length + 1;
     const checked = taskMatch[3].toLowerCase() === 'x';
-    inlineStart = taskMatch[0].length;
+    inlineStart = markerTo - line.from;
     decorations.push(
       Decoration.replace({
         widget: new RenderedMarkdownTaskCheckboxWidget(
@@ -710,7 +773,7 @@ function pushRenderedMarkdownEditorLineDecorations(
     );
   }
 
-  pushRenderedInlineDecorations(decorations, line.from + inlineStart, text.slice(inlineStart));
+  pushRenderedInlineDecorations(state, decorations, line.from + inlineStart, text.slice(inlineStart));
   return codeFenceMarker;
 }
 
@@ -749,7 +812,7 @@ export const renderedMarkdownEditorPresentationExtension = ViewPlugin.fromClass(
     }
 
     update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged) {
+      if (update.docChanged || update.viewportChanged || update.selectionSet) {
         this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(update.state, update.view.visibleRanges);
       }
     }
@@ -1130,6 +1193,22 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             color: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
             textDecoration: 'underline',
             textUnderlineOffset: '2px',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}`]: {
+            borderRadius: '4px',
+            backgroundColor: theme.isDark ? 'rgba(122,167,255,0.12)' : 'rgba(29,78,216,0.08)',
+            padding: '0 0.12em',
+            color: linkColor ?? (theme.isDark ? '#8fb7ff' : '#1746a2'),
+            textDecoration: 'none',
+            borderBottom: `1px solid ${theme.isDark ? 'rgba(122,167,255,0.42)' : 'rgba(29,78,216,0.32)'}`,
+            boxDecorationBreak: 'clone',
+            WebkitBoxDecorationBreak: 'clone',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS}`]: {
+            color: mutedColor ?? theme.textSecondary,
+            opacity: 0.68,
+            fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+            fontSize: '0.92em',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_CLASS}`]: {
             borderRadius: '4px',

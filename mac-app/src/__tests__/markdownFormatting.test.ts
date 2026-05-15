@@ -10,16 +10,34 @@ describe('getMarkdownFormattingEdit', () => {
     });
   });
 
-  it('inserts paired italic markers at the caret', () => {
-    expect(getMarkdownFormattingEdit('hello', 5, 5, 'italic')).toEqual({
-      nextValue: 'hello**',
-      selectionStart: 6,
-      selectionEnd: 6,
-    });
-  });
+	  it('inserts paired italic markers at the caret', () => {
+	    expect(getMarkdownFormattingEdit('hello', 5, 5, 'italic')).toEqual({
+	      nextValue: 'hello**',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	  });
 
-  it('uses inline HTML for underline because markdown has no native underline marker', () => {
-    expect(getMarkdownFormattingEdit('mark me', 0, 4, 'underline')).toEqual({
+	  it('removes empty formatting placeholders when the same shortcut is pressed again', () => {
+	    expect(getMarkdownFormattingEdit('hello ****', 8, 8, 'bold')).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	    expect(getMarkdownFormattingEdit('hello **', 7, 7, 'italic')).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	    expect(getMarkdownFormattingEdit('hello <u></u>', 9, 9, 'underline')).toEqual({
+	      nextValue: 'hello ',
+	      selectionStart: 6,
+	      selectionEnd: 6,
+	    });
+	  });
+
+	  it('uses inline HTML for underline because markdown has no native underline marker', () => {
+	    expect(getMarkdownFormattingEdit('mark me', 0, 4, 'underline')).toEqual({
       nextValue: '<u>mark</u> me',
       selectionStart: 3,
       selectionEnd: 7,
