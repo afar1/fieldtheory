@@ -8,6 +8,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
+import ContentModeToggleButton from './ContentModeToggleButton';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -1632,7 +1633,6 @@ export function shouldInsertClipboardImagePathForPaste(input: { pastedText: stri
 export const LIBRARIAN_SELECTION_STORAGE_KEY = 'librarian-last-selection';
 export const LIBRARIAN_IMMERSIVE_STORAGE_KEY = 'librarian-immersive';
 export const LIBRARIAN_EDITOR_SESSION_STORAGE_KEY = 'librarian-editor-session';
-export const LIBRARIAN_CONTENT_MODE_STORAGE_KEY = 'librarian-content-mode';
 
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
@@ -1792,21 +1792,6 @@ export function persistLibrarianEditorSession(
   session: LibrarianEditorSession
 ): void {
   storage.setItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY, JSON.stringify(session));
-}
-
-export function restoreLibrarianContentMode(
-  storage: Pick<Storage, 'getItem'>,
-  fallback: 'rendered' | 'markdown' = 'rendered',
-): 'rendered' | 'markdown' {
-  const saved = storage.getItem(LIBRARIAN_CONTENT_MODE_STORAGE_KEY);
-  return saved === 'rendered' || saved === 'markdown' ? saved : fallback;
-}
-
-export function persistLibrarianContentMode(
-  storage: Pick<Storage, 'setItem'>,
-  contentMode: 'rendered' | 'markdown',
-): void {
-  storage.setItem(LIBRARIAN_CONTENT_MODE_STORAGE_KEY, contentMode);
 }
 
 export function editorSessionMatchesSelection(
@@ -2356,14 +2341,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [isMuting, setIsMuting] = useState(false);
 
   // Content mode: 'rendered' shows formatted prose, 'markdown' shows editable raw source
-  const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>(() => (
-    editorSessionMatchesSelection(restoredEditorSession, restoredSelection)
-      ? restoredEditorSession?.contentMode ?? 'rendered'
-      : 'rendered'
-  ));
-  useEffect(() => {
-    persistLibrarianContentMode(localStorage, contentMode);
-  }, [contentMode]);
+  const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>('rendered');
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
@@ -3362,16 +3340,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => cancelAnimationFrame(frame);
   }, [activeTitlePath, editingTitlePath]);
 
-  const focusMarkdownBody = useCallback(() => {
+  const focusActiveDocumentBody = useCallback(() => {
     if (contentMode !== 'markdown') {
-      focusMarkdownEditorOnOpenRef.current = true;
-      setContentMode('markdown');
+      const currentContent = activeReadingContentRef.current ?? activeReading?.content ?? '';
+      const bodyEnd = removeEmptyMarkdownCommentPlaceholders(splitFrontmatter(currentContent).body).length;
+      const selection = { start: bodyEnd, end: bodyEnd };
+      pendingRenderedEditorSelectionRef.current = selection;
+      activateRenderedEditing();
+      requestAnimationFrame(() => {
+        const editor = renderedMarkdownEditorRef.current;
+        if (!editor) return;
+        const valueLength = editor.getValue().length;
+        const offset = Math.max(0, Math.min(bodyEnd, valueLength));
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(offset, offset);
+        activeRenderedCaretOffsetRef.current = offset;
+      });
       return;
     }
     requestAnimationFrame(() => {
       markdownCodeEditorRef.current?.focus({ preventScroll: true });
     });
-  }, [contentMode]);
+  }, [activeReading?.content, activateRenderedEditing, contentMode]);
 
   const beginTitleEdit = useCallback(() => {
     if (!activeReading || !activeTitlePath) return;
@@ -3385,7 +3375,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!trimmed || trimmed === activeReading.title) {
       setEditingTitlePath(null);
       setTitleDraft(activeReading.title);
-      if (options.focusBody) focusMarkdownBody();
+      if (options.focusBody) focusActiveDocumentBody();
       return;
     }
 
@@ -3456,12 +3446,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setEditingTitlePath(null);
     }
 
-    if (options.focusBody) focusMarkdownBody();
+    if (options.focusBody) focusActiveDocumentBody();
   }, [
     activateRenderedEditing,
     activeReading,
     activeTitlePath,
-    focusMarkdownBody,
+    focusActiveDocumentBody,
     flushCurrentEdit,
     selectedItemType,
     titleDraft,
@@ -7203,73 +7193,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
               {/* Content mode toggle - raw markdown / rendered view */}
               {focusToolbarControlsVisible && (
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '2px',
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.04)',
-                    borderRadius: '6px',
-                    padding: '2px',
+                <ContentModeToggleButton
+                  mode={contentMode}
+                  disabled={activeIsSourceOnlyDocument}
+                  sourceLabel={activeIsMarkdownDocument ? 'Switch to Markdown source' : 'Switch to source'}
+                  onSwitchToSource={() => {
+                    if (activeReading) enterEditMode();
                   }}
-                >
-                  <button
-                    onClick={() => {
-                      if (contentMode !== 'markdown' && activeReading) enterEditMode();
-                    }}
-                    title={activeIsMarkdownDocument ? 'Markdown source' : 'Source'}
-                    aria-label={activeIsMarkdownDocument ? 'Markdown source' : 'Source'}
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: contentMode === 'markdown' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: contentMode === 'markdown'
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: 'pointer',
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="5 4 2 8 5 12" />
-                      <polyline points="11 4 14 8 11 12" />
-                    </svg>
-                  </button>
-                  <button
-                    onClick={() => {
-                      if (!activeIsSourceOnlyDocument && contentMode === 'markdown') void exitEditMode();
-                    }}
-                    disabled={activeIsSourceOnlyDocument}
-                    title="Rendered"
-                    aria-label="Rendered"
-                    style={{
-                      width: '26px',
-                      height: '22px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: 0,
-                      color: contentMode === 'rendered' ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
-                      backgroundColor: contentMode === 'rendered'
-                        ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)')
-                        : 'transparent',
-                      border: 'none',
-                      borderRadius: '4px',
-                      cursor: activeIsSourceOnlyDocument ? 'default' : 'pointer',
-                      opacity: activeIsSourceOnlyDocument ? 0.45 : 1,
-                      transition: 'all 0.15s ease',
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                      <path d="M2 4h12M2 8h12M2 12h8" />
-                    </svg>
-                  </button>
-                </div>
+                  onSwitchToRendered={() => {
+                    void exitEditMode();
+                  }}
+                />
               )}
 
               {/* Immersive/fullscreen toggle sits to the right of the mode

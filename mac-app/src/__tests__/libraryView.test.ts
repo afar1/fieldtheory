@@ -47,7 +47,6 @@ import {
   persistLibrarianTodoMarker,
   persistLibrarianUnorderedListMarker,
   persistLibrarianEditorSession,
-  persistLibrarianContentMode,
   persistLibrarianSelection,
   preserveMarkdownBlankLines,
   pushLibrarianNavigationEntry,
@@ -57,7 +56,6 @@ import {
   replaceLibrarianNavigationEntry,
   resolveMarkdownSelectionRangeFromRenderedText,
   restoreLibrarianEditorSession,
-  restoreLibrarianContentMode,
   restoreLibrarianTodoMarker,
   restoreLibrarianUnorderedListMarker,
   resolveWikiCreateFolder,
@@ -724,20 +722,6 @@ describe('librarian todo marker preference', () => {
     expect(restoreLibrarianTodoMarker(storage)).toBe('circle');
     persistLibrarianTodoMarker(storage, 'square');
     expect(restoreLibrarianTodoMarker(storage)).toBe('square');
-  });
-});
-
-describe('librarian content mode preference', () => {
-  it('round-trips the last rendered or markdown mode', () => {
-    const values = new Map<string, string>();
-    const storage = {
-      getItem: (key: string) => values.get(key) ?? null,
-      setItem: (key: string, value: string) => values.set(key, value),
-    };
-
-    expect(restoreLibrarianContentMode(storage, 'markdown')).toBe('markdown');
-    persistLibrarianContentMode(storage, 'rendered');
-    expect(restoreLibrarianContentMode(storage, 'markdown')).toBe('rendered');
   });
 });
 
