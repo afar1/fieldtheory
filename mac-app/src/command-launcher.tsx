@@ -84,6 +84,14 @@ import {
   getStackHydrationIds,
   getStackItemsSignature,
 } from './utils/clipboardStacks';
+import {
+  clipboardItemTypeIcon,
+  getClipboardItemLauncherText,
+  getClipboardRowImageItem,
+  getClipboardRowPreviewContent,
+  getClipboardStackLauncherText,
+  type LauncherClipboardPreviewContent,
+} from './utils/clipboardLauncher';
 import type {
   ClipboardItem,
   ClipboardQueryOptions,
@@ -192,7 +200,8 @@ type LauncherContextState = {
 
 type LauncherPreviewPayload =
   | { kind: 'bookmark'; bookmark: Bookmark }
-  | { kind: 'markdown'; title: string; filePath: string; content: string };
+  | { kind: 'markdown'; title: string; filePath: string; content: string }
+  | { kind: 'clipboard'; title: string; content: LauncherClipboardPreviewContent };
 
 type LauncherLibraryMoveRecord = {
   source: LauncherLibraryMoveSource;
@@ -327,6 +336,7 @@ interface LauncherCommandsAPI {
 
 interface LauncherClipboardAPI {
   queryItems: (options?: ClipboardQueryOptions) => Promise<ClipboardItem[]>;
+  getItem?: (id: number) => Promise<ClipboardItem | null>;
   pasteItem: (id: number, targetBundleId?: string, useImproved?: boolean) => Promise<void>;
   pasteStack?: (ids: number[], targetBundleId?: string) => Promise<void>;
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
@@ -443,25 +453,11 @@ function compactLauncherUrl(rawUrl: string): string {
   return `${label.slice(0, 36)}...${label.slice(-30)}`;
 }
 
-function compactClipboardLauncherText(rawText: string | null | undefined, fallback: string): string {
-  const compact = rawText?.replace(/\s+/g, ' ').trim();
-  if (!compact) return fallback;
-  return compact.length > 120 ? `${compact.slice(0, 117)}...` : compact;
-}
-
-function getClipboardItemLauncherText(item: ClipboardItem): string {
-  const text = (item.useImprovedVersion && item.improvedContent) ? item.improvedContent : item.content;
-  if (text?.trim()) return compactClipboardLauncherText(text, 'Clipboard item');
-  if (item.type === 'screenshot') return 'Screenshot';
-  if (item.type === 'image') return 'Image';
-  if (item.type === 'transcript') return 'Transcript';
-  return 'Clipboard item';
-}
-
-function getClipboardStackLauncherText(row: Extract<ListRow, { type: 'stack' }>): string {
-  const fallback = `${row.stack.itemCount} clipboard items`;
-  const itemText = row.items.map(getClipboardItemLauncherText).find(text => text !== 'Clipboard item' && text !== 'Image' && text !== 'Screenshot');
-  return compactClipboardLauncherText(row.stack.firstTextPreview ?? itemText, fallback);
+function getClipboardPreviewTitle(item: LauncherItem): string {
+  if (item.type === 'clipboard-stack' && item.clipboardRow?.type === 'stack') {
+    return `${item.clipboardRow.stack.itemCount} clipboard items`;
+  }
+  return item.displayName;
 }
 
 // =============================================================================
@@ -571,8 +567,8 @@ const getStyles = (isDark: boolean) => ({
     whiteSpace: 'nowrap' as const,
   },
   itemIconSlot: {
-    width: '16px',
-    height: '16px',
+    width: '24px',
+    height: '22px',
     flexShrink: 0,
     display: 'inline-flex',
     alignItems: 'center',
@@ -583,6 +579,40 @@ const getStyles = (isDark: boolean) => ({
     height: '16px',
     objectFit: 'contain' as const,
     display: 'block',
+  },
+  clipboardThumbnail: {
+    width: '24px',
+    height: '20px',
+    objectFit: 'cover' as const,
+    display: 'block',
+    borderRadius: '4px',
+    border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.15)' : 'rgba(0, 0, 0, 0.12)'}`,
+  },
+  clipboardTypeIcon: {
+    width: '19px',
+    height: '18px',
+    borderRadius: '4px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '7px',
+    fontWeight: 700,
+    color: isDark ? '#d6d6d6' : '#343434',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)'}`,
+    letterSpacing: 0,
+  },
+  clipboardStackIcon: {
+    width: '19px',
+    height: '18px',
+    borderRadius: '4px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '10px',
+    color: isDark ? '#d6d6d6' : '#343434',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.06)',
+    border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)'}`,
   },
   itemHotkey: {
     fontSize: '11px',
@@ -1316,6 +1346,12 @@ function CommandLauncher() {
     return null;
   }, []);
 
+  const clipboardPreviewContentForItem = useCallback((item: LauncherItem | undefined): LauncherClipboardPreviewContent | null => {
+    if (item?.type !== 'clipboard-item' && item?.type !== 'clipboard-stack') return null;
+    if (!item.clipboardRow) return null;
+    return getClipboardRowPreviewContent(item.clipboardRow);
+  }, []);
+
   const loadPreviewForItem = useCallback(async (item: LauncherItem | undefined, itemIndex: number, source: string) => {
     const requestId = ++previewRequestRef.current;
     const bookmark = bookmarkForItem(item);
@@ -1327,6 +1363,38 @@ function CommandLauncher() {
         item: describeLauncherItem(item),
         bookmarkId: bookmark.id,
       });
+      return;
+    }
+
+    const clipboardPreview = clipboardPreviewContentForItem(item);
+    if (item && clipboardPreview) {
+      setPreviewPayload({
+        kind: 'clipboard',
+        title: getClipboardPreviewTitle(item),
+        content: clipboardPreview,
+      });
+      traceLauncher('preview-load-clipboard', {
+        source,
+        selectedIndex: itemIndex,
+        item: describeLauncherItem(item),
+        previewType: clipboardPreview.type,
+      });
+
+      if (clipboardPreview.type === 'image' && clipboardPreview.needsFullImage && clipboardAPI.getItem) {
+        void clipboardAPI.getItem(clipboardPreview.itemId).then((fullItem) => {
+          if (requestId !== previewRequestRef.current || !fullItem?.imageData) return;
+          setPreviewPayload({
+            kind: 'clipboard',
+            title: getClipboardPreviewTitle(item),
+            content: {
+              ...clipboardPreview,
+              data: fullItem.imageData,
+              width: fullItem.imageWidth || clipboardPreview.width,
+              height: fullItem.imageHeight || clipboardPreview.height,
+            },
+          });
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -1366,7 +1434,7 @@ function CommandLauncher() {
       item: describeLauncherItem(item),
       filePath: preview.filePath,
     });
-  }, [bookmarkForItem, markdownPreviewPathForItem]);
+  }, [bookmarkForItem, clipboardPreviewContentForItem, markdownPreviewPathForItem]);
 
   useEffect(() => {
     if (!previewOpen) return;
@@ -2178,7 +2246,7 @@ function CommandLauncher() {
         setPreviewPayload(null);
         return;
       }
-      if (bookmarkForItem(selectedItem) || markdownPreviewPathForItem(selectedItem)) {
+      if (bookmarkForItem(selectedItem) || markdownPreviewPathForItem(selectedItem) || clipboardPreviewContentForItem(selectedItem)) {
         e.preventDefault();
         selectIndex(currentIndex);
         traceLauncher('preview-open-item', {
@@ -2641,7 +2709,7 @@ function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, dismissPreview, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, clipboardPreviewContentForItem, dismissPreview, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   const openMainFieldTheoryWindow = useCallback(async () => {
     dismissPreview();
@@ -2676,6 +2744,29 @@ function CommandLauncher() {
       : fileSearchQuery !== null ? !launcherFileSearchLoading : allItems.length > 0,
   });
   const renderItemIcon = (item: LauncherItem) => {
+    if (item.type === 'clipboard-item' || item.type === 'clipboard-stack') {
+      const imageItem = getClipboardRowImageItem(item.clipboardRow);
+      const thumbnailData = imageItem?.thumbnailData || imageItem?.imageData;
+      const iconLabel = item.type === 'clipboard-stack'
+        ? 'ST'
+        : clipboardItemTypeIcon(item.clipboardRow?.type === 'item' ? item.clipboardRow.item : imageItem ?? undefined);
+      return (
+        <span style={styles.itemIconSlot} aria-hidden="true">
+          {thumbnailData ? (
+            <img
+              src={`data:image/png;base64,${thumbnailData}`}
+              alt=""
+              style={styles.clipboardThumbnail}
+            />
+          ) : (
+            <span style={item.type === 'clipboard-stack' ? styles.clipboardStackIcon : styles.clipboardTypeIcon}>
+              {iconLabel}
+            </span>
+          )}
+        </span>
+      );
+    }
+
     const iconPath = getLauncherNativeIconPathForItem(item);
     const iconDataUrl = iconPath ? launcherIconDataByPath[iconPath] : null;
     return (
