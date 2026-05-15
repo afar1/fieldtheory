@@ -18,6 +18,7 @@ import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import type { TranscriberManager } from './transcriberManager';
 import {
+  DEFAULT_MEETING_SUMMARY_PROMPT,
   PreferencesManager,
   normalizeClipboardHistorySizeKey,
   normalizeLauncherRootSearchEnabledKinds,
@@ -93,6 +94,7 @@ import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } fro
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
+import { MeetingManager, type MeetingFileContext, type MeetingSession } from './meetingManager';
 import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
@@ -118,7 +120,7 @@ import {
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
-import { isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
+import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
@@ -127,7 +129,7 @@ import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
 import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
-import { markdownFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
+import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import { setMarkdownArchivedState } from '../shared/markdownFrontmatter';
 import {
   FIELD_THEORY_URL_SCHEME,
@@ -141,10 +143,13 @@ import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
   CommandClipboardRestoreCoordinator,
+  captureCommandClipboardPayload,
   captureClipboardSnapshot,
+  clipboardMatchesCommandPayload,
   restoreClipboardSnapshot,
   shouldPasteCommandFileContentsAsText,
   waitForCommandClipboardPasteRead,
+  type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
 import { MetricsManager, UserMetrics } from './metricsManager';
@@ -382,8 +387,24 @@ async function activateAndPaste(
     if (!targetFrontmost) {
       return false;
     }
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-hide', targetApp, {
+      targetFrontmost,
+    });
     await beforePaste?.();
     await new Promise(resolve => setTimeout(resolve, 40));
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-before-recheck', targetApp);
+    let targetFrontmostAfterHide = await waitForCommandLauncherTargetAppFrontmost(targetApp, 'activate-and-paste-after-hide');
+    if (!targetFrontmostAfterHide) {
+      appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-lost-target', targetApp);
+      targetFrontmostAfterHide = await activateCommandLauncherTargetApp(targetApp, 'activate-and-paste-after-hide-reactivate');
+    }
+    if (!targetFrontmostAfterHide) {
+      appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.after-hide-reactivate-failed', targetApp);
+      return false;
+    }
+    appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-keystroke', targetApp, {
+      targetFrontmostAfterHide,
+    });
     const beforeKeystroke = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-before-keystroke', {
       targetBundleId: bundleId,
@@ -445,6 +466,26 @@ function readCommandPasteClipboardTrace(): Record<string, unknown> {
 
 function isCommandPayloadTraceEnabled(): boolean {
   return ['1', 'true', 'yes', 'on'].includes((process.env.FIELD_THEORY_COMMAND_PAYLOAD_TRACE ?? '').toLowerCase());
+}
+
+function appendCommandLauncherVisibilityTrace(
+  event: string,
+  targetApp: { bundleId: string; name: string } | null,
+  data: Record<string, unknown> = {},
+): void {
+  const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+  const details = {
+    targetBundleId: targetApp?.bundleId ?? null,
+    targetName: targetApp?.name ?? null,
+    frontmostBundleId: frontmostApp?.bundleId ?? null,
+    frontmostName: frontmostApp?.name ?? null,
+    commandLauncherVisible: commandLauncherWindow?.isVisible() ?? null,
+    commandLauncherShowingOrVisible: commandLauncherWindow?.isShowingOrVisible() ?? null,
+    commandLauncherExternalInvocationSuppressed: commandLauncherWindow?.isExternalInvocationActivationSuppressed() ?? null,
+    ...data,
+  };
+  appendCommandLauncherTrace(event, details);
+  appendVisibilityTrace(event, details);
 }
 
 function commandPayloadTrace(text: string): Record<string, unknown> {
@@ -520,8 +561,12 @@ async function typeTextFromCommandLauncher(
   if (!activated) {
     return false;
   }
+  appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.before-hide`, targetApp, {
+    targetFrontmost: true,
+  });
   commandLauncherWindow?.hide(true);
   await new Promise(resolve => setTimeout(resolve, 40));
+  appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.after-hide-before-native-helper`, targetApp);
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
@@ -770,6 +815,7 @@ let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let localLlmManager: LocalLlmManager | null = null;
 let maxwellRunManager: MaxwellRunManager | null = null;
+let meetingManager: MeetingManager | null = null;
 let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
@@ -1036,6 +1082,52 @@ function getMaxwellRunManager(): MaxwellRunManager {
   return maxwellRunManager;
 }
 
+function broadcastMeetingStatus(status: MeetingSession): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('meetings:status', status);
+    }
+  });
+}
+
+function getMeetingManager(): MeetingManager {
+  if (meetingManager) return meetingManager;
+  if (!librarianManager || !transcriberManager) {
+    throw new Error('Field Theory meetings are not ready');
+  }
+
+  meetingManager = new MeetingManager({
+    librarian: librarianManager,
+    transcriber: transcriberManager,
+    localLlm: getLocalLlmManager(),
+    getMeetingSummaryPrompt: () => preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT,
+    getMaxwellRunManager,
+    readMemorySnapshot: () => readMaxwellMemorySnapshot(true),
+    canWrite: canWriteFieldTheoryContent,
+    onBlockedWrite: () => blockWrite(),
+  });
+  meetingManager.on('status', (status: MeetingSession) => {
+    broadcastMeetingStatus(status);
+  });
+  meetingManager.on('summary-progress', (event: LocalLlmProgressEvent & { filePath?: string; runId?: string }) => {
+    const isDone = event.phase === 'done';
+    const isError = event.kind === 'error' || event.phase === 'error';
+    emitLocalCommandStatus({
+      status: isDone ? 'success' : isError ? 'error' : 'running',
+      message: event.message,
+      detail: compactLocalCommandDetail(event.detail),
+      eventKind: event.kind,
+      commandName: 'summarize-meeting',
+      filePath: event.filePath,
+      mode: 'document',
+      runId: event.runId,
+      phase: event.phase ?? 'generating',
+      error: isError ? event.message : undefined,
+    });
+  });
+  return meetingManager;
+}
+
 const MAXWELL_MEMORY_MAX_CHARS = 12_000;
 
 function getMaxwellMemoryPath(): string {
@@ -1257,7 +1349,7 @@ function openScratchpadDefaultFromHotkey(): WikiPage | null {
 }
 
 function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: string | null } | null | undefined): void {
-  if (!appInfo?.bundleId || !appInfo.name || isFieldTheoryBundleId(appInfo.bundleId)) {
+  if (!appInfo?.bundleId || !appInfo.name || !isExternalCommandTargetBundleId(appInfo.bundleId)) {
     return;
   }
 
@@ -1269,7 +1361,7 @@ function rememberCommandTargetApp(appInfo: { bundleId?: string | null; name?: st
 
 function getCommandLauncherTargetApp(): { bundleId: string; name: string } | null {
   const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
-  if (previousApp?.bundleId && !isFieldTheoryBundleId(previousApp.bundleId)) {
+  if (previousApp?.bundleId && isExternalCommandTargetBundleId(previousApp.bundleId)) {
     appendCommandLauncherTrace('target-resolved', {
       source: 'previous-app',
       previousBundleId: previousApp.bundleId,
@@ -1287,7 +1379,9 @@ function getCommandLauncherTargetApp(): { bundleId: string; name: string } | nul
     fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
     fallbackName: lastExternalCommandTargetApp?.name ?? null,
   });
-  return lastExternalCommandTargetApp;
+  return lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
+    ? lastExternalCommandTargetApp
+    : null;
 }
 
 let visibilityAppTraceInstalled = false;
@@ -1930,9 +2024,9 @@ function registerHotkeysAfterOnboarding(): void {
 
     if (!showing) {
       clipboardHistoryWindow.playOpenSound();
-      const boundsToUse = restoreClipboardHistoryBounds('library');
+      const boundsToUse = restoreClipboardHistoryBounds();
       suspendDynamicIslandFocusForClipboardHistory('show-hotkey');
-      clipboardHistoryWindow.capturePreviousAppAndShowLibrary(boundsToUse, true);
+      clipboardHistoryWindow.capturePreviousAppAndShow(boundsToUse, false, true);
       // Opening clipboard history during recording can corrupt transparent
       // overlay backing on some macOS compositor paths.
       cursorStatusManager?.refreshWindowProperties();
@@ -2858,12 +2952,12 @@ function showClipboardHistoryOnActivate(): void {
   dynamicIslandManager?.refreshWindowProperties('clipboard-history:show-app-activate');
 }
 
-/** Route an incoming markdown path to the library view. Called from `open-file`
+/** Route an incoming Field Theory document path to the library view. Called from `open-file`
  *  (macOS) and also deferred until the main window exists for cold starts. */
 function routeOpenMarkdown(inputPath: string): void {
   const resolved = resolveIncomingMarkdownPath(inputPath, librarianManager?.getWikiRoot() ?? null);
   if (!resolved) {
-    log.info(`open-file: ignoring non-markdown or unreadable path: ${inputPath}`);
+    log.info(`open-file: ignoring unsupported or unreadable path: ${inputPath}`);
     return;
   }
   if (!clipboardHistoryWindow) {
@@ -3254,7 +3348,7 @@ function setupLibrarianIPCHandlers(): void {
     (_event, absPath: string): { path: string; name: string; content: string; mtime: number; documentVersion: DocumentVersion } | null => {
       try {
         const canonical = fs.realpathSync(absPath);
-        if (!isAllowedMarkdownExt(canonical)) return null;
+        if (!isLibraryTextDocumentPath(canonical)) return null;
         const content = fs.readFileSync(canonical, 'utf-8');
         const stats = fs.statSync(canonical);
         return {
@@ -3278,7 +3372,7 @@ function setupLibrarianIPCHandlers(): void {
     }
     try {
       const canonical = fs.realpathSync(absPath);
-      if (!isAllowedMarkdownExt(canonical)) return { ok: false, reason: 'not-found' };
+      if (!isLibraryTextDocumentPath(canonical)) return { ok: false, reason: 'not-found' };
       return writeTextFileWithConflictGuard(canonical, content, expectedVersion);
     } catch (error) {
       log.error(`external:save failed for ${absPath}:`, error);
@@ -3350,14 +3444,11 @@ function setupLibrarianIPCHandlers(): void {
       }
       try {
         const canonical = fs.realpathSync(absPath);
-        if (!isAllowedMarkdownExt(canonical)) return null;
+        if (!isLibraryTextDocumentPath(canonical)) return null;
         const trimmed = newName.trim();
         if (!trimmed) return null;
-        const lower = trimmed.toLowerCase();
         const extension = path.extname(canonical) || '.md';
-        const nextFileName = lower.endsWith('.md') || lower.endsWith('.markdown')
-          ? markdownFileNameFromUserInput(trimmed)
-          : markdownFileNameFromUserInput(`${trimmed}${extension}`);
+        const nextFileName = libraryTextDocumentFileNameFromUserInput(trimmed, extension);
         if (!nextFileName) return null;
         const nextPath = path.join(path.dirname(canonical), nextFileName);
         if (nextPath === canonical) {
@@ -5383,7 +5474,7 @@ function setupClipboardIPCHandlers(): void {
       // Determine the target bundle ID for terminal detection
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -5546,7 +5637,7 @@ function setupClipboardIPCHandlers(): void {
       // Use explicit target from renderer if provided, otherwise fall back to window state.
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -5716,7 +5807,7 @@ function setupClipboardIPCHandlers(): void {
       
       let effectiveBundleId: string | null = targetBundleId || null;
       if (!effectiveBundleId && clipboardHistoryWindow) {
-        const targetApp = clipboardHistoryWindow.getTargetApp() ?? clipboardHistoryWindow.getPreviousApp();
+        const targetApp = await clipboardHistoryWindow.getTargetAppForPaste();
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
@@ -6006,6 +6097,37 @@ function setupClipboardIPCHandlers(): void {
     return useLocal
       ? { success: true }
       : { success: false, error: 'Offline commands require the local model.' };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.GET_MEETING_SUMMARY_PROMPT, async () => {
+    return preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SAVE_MEETING_SUMMARY_PROMPT, async (_event, prompt: string) => {
+    if (!preferencesManager) {
+      return { success: false, error: 'Preferences manager not initialized.' };
+    }
+
+    if (typeof prompt !== 'string') {
+      return { success: false, error: 'Meeting notes prompt must be text.' };
+    }
+
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      return { success: false, error: 'Meeting notes prompt cannot be empty.' };
+    }
+
+    await preferencesManager.save({ meetingSummaryPrompt: prompt });
+    return { success: true, prompt };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.RESET_MEETING_SUMMARY_PROMPT, async () => {
+    if (!preferencesManager) {
+      return { success: false, prompt: DEFAULT_MEETING_SUMMARY_PROMPT, error: 'Preferences manager not initialized.' };
+    }
+
+    await preferencesManager.save({ meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT });
+    return { success: true, prompt: DEFAULT_MEETING_SUMMARY_PROMPT };
   });
 
   // =========================================================================
@@ -7430,10 +7552,15 @@ function setupClipboardIPCHandlers(): void {
     return await commandsManager.loadHandoffContent(filePath);
   });
 
-  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean }> => {
+  ipcMain.handle('commands:getLauncherContext', async (): Promise<{ fieldTheoryActive: boolean; targetApp: { bundleId: string; name: string } | null }> => {
     const fieldTheoryActive = commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false;
     const previousApp = commandLauncherWindow?.getPreviousApp() ?? null;
     const frontmostApp = nativeHelper?.getFrontmostApp() ?? null;
+    const targetApp = previousApp?.bundleId && isExternalCommandTargetBundleId(previousApp.bundleId)
+      ? previousApp
+      : lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
+        ? lastExternalCommandTargetApp
+        : null;
     appendCommandLauncherTrace('launcher-context', {
       fieldTheoryActive,
       previousBundleId: previousApp?.bundleId ?? null,
@@ -7442,8 +7569,10 @@ function setupClipboardIPCHandlers(): void {
       frontmostName: frontmostApp?.name ?? null,
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
+      targetBundleId: targetApp?.bundleId ?? null,
+      targetName: targetApp?.name ?? null,
     });
-    return { fieldTheoryActive };
+    return { fieldTheoryActive, targetApp };
   });
 
   ipcMain.handle('commands:getActiveLibraryFileContext', (): ActiveLibraryFileContext | null => {
@@ -8081,7 +8210,7 @@ function setupClipboardIPCHandlers(): void {
     };
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number }) => {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
     if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
       return { success: false, error: 'Invalid markdown target' };
     }
@@ -8265,6 +8394,7 @@ function setupClipboardIPCHandlers(): void {
 
       const invocationFailure = await runWithCommandLauncherExternalInvocation(async (): Promise<{ success: false; error: string } | null> => {
         const clipboardRestore = commandClipboardRestoreCoordinator.begin(captureClipboardSnapshot());
+        let launcherClipboardPayload: CommandClipboardPayloadSnapshot | null = null;
         try {
           const pasteAsTextReference = isTerminal || isIDE;
           const pasteContentsAsText = shouldPasteCommandFileContentsAsText(targetApp.bundleId);
@@ -8273,6 +8403,7 @@ function setupClipboardIPCHandlers(): void {
             commandText = fs.readFileSync(command.filePath, 'utf-8');
             clipboard.writeText(commandText);
             clipboardManager?.syncClipboardHash();
+            launcherClipboardPayload = captureCommandClipboardPayload();
             appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
               format: 'text',
@@ -8287,6 +8418,7 @@ function setupClipboardIPCHandlers(): void {
             commandText = `[${command.name}.md]\n${command.filePath} `;
             clipboard.writeText(commandText);
             clipboardManager?.syncClipboardHash();
+            launcherClipboardPayload = captureCommandClipboardPayload();
             appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
               format: 'text',
@@ -8304,6 +8436,7 @@ function setupClipboardIPCHandlers(): void {
             clipboard.writeBuffer('public.file-url', Buffer.from(fileUrl, 'utf-8'));
             clipboard.writeBuffer('NSURLPboardType', Buffer.from(fileUrl, 'utf-8'));
             clipboardManager?.syncClipboardHash();
+            launcherClipboardPayload = captureCommandClipboardPayload();
             appendCommandLauncherTrace('invoke-command-clipboard-written', {
               commandName,
               format: 'file-list+file-url+text',
@@ -8345,14 +8478,27 @@ function setupClipboardIPCHandlers(): void {
           });
           await waitForCommandClipboardPasteRead();
           if (commandClipboardRestoreCoordinator.canRestore(clipboardRestore.generation)) {
+            const clipboardStillHasLauncherPayload = launcherClipboardPayload
+              ? clipboardMatchesCommandPayload(launcherClipboardPayload)
+              : false;
             try {
-              restoreClipboardSnapshot(clipboardRestore.snapshot);
-              clipboardManager?.syncClipboardHash();
-              appendCommandLauncherTrace('invoke-command-clipboard-restored', {
-                commandName,
-                commandPath: command.filePath,
-                generation: clipboardRestore.generation,
-              });
+              if (clipboardStillHasLauncherPayload) {
+                restoreClipboardSnapshot(clipboardRestore.snapshot);
+                clipboardManager?.syncClipboardHash();
+                appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+                  commandName,
+                  commandPath: command.filePath,
+                  generation: clipboardRestore.generation,
+                  reason: 'clipboard-still-launcher-payload',
+                });
+              } else {
+                appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+                  commandName,
+                  commandPath: command.filePath,
+                  generation: clipboardRestore.generation,
+                  reason: launcherClipboardPayload ? 'clipboard-changed-after-launcher-paste' : 'missing-launcher-payload-snapshot',
+                });
+              }
             } finally {
               commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
             }
@@ -8598,6 +8744,50 @@ function setupClipboardIPCHandlers(): void {
     }
     return getFieldTheorySyncStatus();
   });
+}
+
+function setupMeetingsIPCHandlers(): void {
+  const runMeetingAction = async (action: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return await action();
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Meeting action failed',
+      };
+    }
+  };
+
+  ipcMain.handle('meetings:create', async (_event, rawTitle?: unknown) => runMeetingAction(async () => {
+    const title = typeof rawTitle === 'string' ? rawTitle : undefined;
+    return getMeetingManager().createMeetingNote(title);
+  }));
+
+  ipcMain.handle('meetings:startHere', async () => runMeetingAction(async () => {
+    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
+    return getMeetingManager().startHere(context);
+  }));
+
+  ipcMain.handle('meetings:stop', async () => runMeetingAction(async () => {
+    return getMeetingManager().stopActiveMeeting();
+  }));
+
+  ipcMain.handle('meetings:cancel', async () => runMeetingAction(async () => {
+    return getMeetingManager().cancelActiveMeeting();
+  }));
+
+  ipcMain.handle('meetings:getActive', () => {
+    try {
+      return getMeetingManager().getActiveSession();
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('meetings:summarizeCurrent', async () => runMeetingAction(async () => {
+    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
+    return getMeetingManager().summarizeCurrentMeeting(context);
+  }));
 }
 
 
@@ -9026,7 +9216,7 @@ function broadcastTranscribeEvents(): void {
   
   // Confirmation state events for cursor status widget
   transcriberManager.on('confirmation-show', () => {
-    return;
+    dynamicIslandManager?.showEscapeHint();
   });
   
   transcriberManager.on('confirmation-hide', () => {
@@ -9685,6 +9875,20 @@ async function initTranscriberSystem(): Promise<void> {
   transcriberManager.setFieldTheoryMarkdownInsertionTarget({
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
+  });
+  transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
+    const result = await getMeetingManager().stopActiveMeeting();
+    if (!result.success) {
+      const message = result.error ?? result.summaryError ?? 'Could not stop meeting';
+      log.warn('Could not stop meeting from transcription hotkey: %s', message);
+      emitLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: 'stop-meeting',
+        mode: 'document',
+        error: message,
+      });
+    }
   });
   await transcriberManager.init();
   startupMark('transcriber-manager-init-complete');
@@ -10585,6 +10789,7 @@ if (!gotTheLock) {
     setupGazeIPCHandlers();
     setupTranscribeIPCHandlersOnce();
     setupClipboardIPCHandlers();
+    setupMeetingsIPCHandlers();
     setupOnboardingIPCHandlersOnce();
     setupDisplayListeners();
     startupMark('ipc-and-display-handlers-ready');

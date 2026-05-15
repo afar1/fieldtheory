@@ -266,6 +266,25 @@ describe('ClipboardManager.checkClipboard', () => {
     expect(manager.storeImage).toHaveBeenCalledTimes(1);
   });
 
+  it('does not re-encode the same image on every clipboard poll', async () => {
+    testState.readText.mockReturnValue('');
+    testState.availableFormats.mockReturnValue(['image/png']);
+    const imageBuffer = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    const toPNG = vi.fn(() => imageBuffer);
+    testState.readImage.mockReturnValue({
+      isEmpty: () => false,
+      toPNG,
+      getSize: () => ({ width: 100, height: 100 }),
+      resize: vi.fn(() => ({ toPNG: () => Buffer.from([0x89]) })),
+    });
+
+    await manager.checkClipboard();
+    await manager.checkClipboard();
+
+    expect(toPNG).toHaveBeenCalledTimes(1);
+    expect(manager.storeImage).toHaveBeenCalledTimes(1);
+  });
+
   it('skips oversized automatic image capture before PNG encoding', async () => {
     testState.readText.mockReturnValue('');
     const toPNG = vi.fn(() => Buffer.from([1, 2, 3]));
@@ -329,6 +348,7 @@ describe('ClipboardManager.checkClipboard', () => {
       getSize: () => ({ width: 100, height: 100 }),
       resize: vi.fn(() => ({ toPNG: () => Buffer.from([0x89]) })),
     });
+    manager.lastImagePollCheckedAt = 0;
     await manager.checkClipboard();
 
     // Both images should be stored — this was the bug

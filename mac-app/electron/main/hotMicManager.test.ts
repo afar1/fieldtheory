@@ -1174,16 +1174,24 @@ describe('HotMicManager transcriber handoff', () => {
 
 describe('HotMicManager Escape dismissal', () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.clearAllMocks();
   });
 
   it('requires two Escape presses before dismissing Hot Mic and releasing Escape', () => {
     const { manager } = createManager();
     const cursorStatusManager = { showRecordingNote: vi.fn() };
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      showEscapeHint: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+    };
     const deactivated = vi.fn();
     const inputModeResetRequested = vi.fn();
 
     manager.setCursorStatusManager(cursorStatusManager as any);
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
     manager.on('deactivated', deactivated);
     manager.on('inputModeResetRequested', inputModeResetRequested);
     vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
@@ -1198,6 +1206,7 @@ describe('HotMicManager Escape dismissal', () => {
     expect(cursorStatusManager.showRecordingNote).toHaveBeenCalledWith(
       'Press Esc again to stop Hot Mic'
     );
+    expect(dynamicIslandManager.showEscapeHint).toHaveBeenCalledTimes(1);
     expect(deactivated).not.toHaveBeenCalled();
     expect(inputModeResetRequested).not.toHaveBeenCalled();
 
@@ -1205,6 +1214,46 @@ describe('HotMicManager Escape dismissal', () => {
     expect(deactivated).toHaveBeenCalledTimes(1);
     expect(inputModeResetRequested).toHaveBeenCalledTimes(1);
     expect(globalShortcut.unregister).toHaveBeenCalledWith('Escape');
+    manager.destroy();
+  });
+
+  it('lets the first Escape warning expire without dismissing Hot Mic', () => {
+    vi.useFakeTimers();
+    const { manager } = createManager();
+    const cursorStatusManager = { showRecordingNote: vi.fn() };
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      showEscapeHint: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+    };
+    const deactivated = vi.fn();
+    const inputModeResetRequested = vi.fn();
+
+    manager.setCursorStatusManager(cursorStatusManager as any);
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+    manager.on('deactivated', deactivated);
+    manager.on('inputModeResetRequested', inputModeResetRequested);
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+    vi.mocked(globalShortcut.unregister).mockClear();
+
+    (manager as any).setState('listening');
+    const escapeHandler = vi.mocked(globalShortcut.register).mock.calls.find(
+      ([accelerator]) => accelerator === 'Escape'
+    )?.[1] as () => void;
+
+    escapeHandler();
+    vi.advanceTimersByTime(1_700);
+    escapeHandler();
+
+    expect(cursorStatusManager.showRecordingNote).toHaveBeenCalledTimes(2);
+    expect(dynamicIslandManager.showEscapeHint).toHaveBeenCalledTimes(2);
+    expect(deactivated).not.toHaveBeenCalled();
+    expect(inputModeResetRequested).not.toHaveBeenCalled();
+
+    escapeHandler();
+    expect(deactivated).toHaveBeenCalledTimes(1);
+    expect(inputModeResetRequested).toHaveBeenCalledTimes(1);
     manager.destroy();
   });
 });

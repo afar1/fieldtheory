@@ -79,6 +79,14 @@ export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSear
   'system-command': false,
 };
 
+export const DEFAULT_MEETING_SUMMARY_PROMPT = [
+  'Given this meeting markdown, update only the Summary section.',
+  'Preserve frontmatter, Notes, Transcript, speaker labels if present, links, figures, and checkboxes.',
+  'Keep user-written notes intact. Do not delete or rewrite raw transcript text.',
+  'Use concise organized markdown with Decisions, Action Items, Open Questions, and Notable Context when present.',
+  'Return the full replacement markdown document.',
+].join('\n');
+
 export function normalizeLauncherRootSearchEnabledKinds(
   value: LauncherRootSearchEnabledKinds | undefined,
 ): Record<LauncherRootSearchKind, boolean> {
@@ -255,6 +263,9 @@ interface Preferences {
   // Maxwell local command memory. Content lives in maxwell/memory.md.
   maxwellMemoryEnabled?: boolean;
 
+  // Maxwell meeting summaries - user-customizable prompt/style contract.
+  meetingSummaryPrompt?: string;
+
   // Launcher root search categories. Apps and file search are the first active slices.
   launcherRootSearchEnabledKinds?: LauncherRootSearchEnabledKinds;
 
@@ -412,6 +423,9 @@ const DEFAULT_PREFERENCES: Preferences = {
 
   // Maxwell memory is explicit, visible, and opt-out.
   maxwellMemoryEnabled: true,
+
+  // Meeting summary prompt defaults to preserving the note as the source of truth.
+  meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT,
 
   // Launcher root search starts with apps and Spotlight-backed file search.
   launcherRootSearchEnabledKinds: DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,

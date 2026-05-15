@@ -70,6 +70,11 @@ contextBridge.exposeInMainWorld('dynamicIslandAPI', {
     ipcRenderer.on('dynamic-island-standard-audio-level', (_event, level) => callback(level));
   },
 
+  // First-Escape cue for the right-pill waveform slot.
+  onEscapeHint: (callback: () => void) => {
+    ipcRenderer.on('dynamic-island-escape-hint', () => callback());
+  },
+
   // Stack count updates (screenshots captured during standard recording).
   onStackChanged: (callback: (count: number) => void) => {
     ipcRenderer.on('dynamic-island-stack-changed', (_event, count) => callback(count));

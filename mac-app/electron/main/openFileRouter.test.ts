@@ -1,6 +1,6 @@
 import path from 'path';
 import { describe, it, expect } from 'vitest';
-import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
+import { isAllowedFieldTheoryDocumentExt, isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 
 describe('isAllowedMarkdownExt', () => {
   it('accepts .md / .markdown / .mdx regardless of case', () => {
@@ -14,6 +14,17 @@ describe('isAllowedMarkdownExt', () => {
     expect(isAllowedMarkdownExt('/x/a.txt')).toBe(false);
     expect(isAllowedMarkdownExt('/x/a')).toBe(false);
     expect(isAllowedMarkdownExt('/x/a.md.bak')).toBe(false);
+  });
+});
+
+describe('isAllowedFieldTheoryDocumentExt', () => {
+  it('accepts markdown, html, and css document files', () => {
+    expect(isAllowedFieldTheoryDocumentExt('/x/a.md')).toBe(true);
+    expect(isAllowedFieldTheoryDocumentExt('/x/a.mdx')).toBe(true);
+    expect(isAllowedFieldTheoryDocumentExt('/x/a.html')).toBe(true);
+    expect(isAllowedFieldTheoryDocumentExt('/x/a.htm')).toBe(true);
+    expect(isAllowedFieldTheoryDocumentExt('/x/a.css')).toBe(true);
+    expect(isAllowedFieldTheoryDocumentExt('/x/a.png')).toBe(false);
   });
 });
 
@@ -36,6 +47,28 @@ describe('resolveIncomingMarkdownPath', () => {
       kind: 'wiki',
       relPath: path.join('debates', 'test-entry'),
       absPath: p,
+    });
+  });
+
+  it('strips markdown-like wiki extensions before routing', () => {
+    const p = path.join(wikiRoot, 'debates', 'test-entry.mdx');
+    expect(resolveIncomingMarkdownPath(p, wikiRoot, identityRealpath)).toEqual({
+      kind: 'wiki',
+      relPath: path.join('debates', 'test-entry'),
+      absPath: p,
+    });
+  });
+
+  it('routes html and css files as external documents even inside the wiki root', () => {
+    const htmlPath = path.join(wikiRoot, 'reports', 'summary.html');
+    const cssPath = path.join(wikiRoot, 'reports', 'styles.css');
+    expect(resolveIncomingMarkdownPath(htmlPath, wikiRoot, identityRealpath)).toEqual({
+      kind: 'external',
+      absPath: htmlPath,
+    });
+    expect(resolveIncomingMarkdownPath(cssPath, wikiRoot, identityRealpath)).toEqual({
+      kind: 'external',
+      absPath: cssPath,
     });
   });
 

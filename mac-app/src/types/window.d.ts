@@ -526,6 +526,9 @@ interface ClipboardAPI {
   deleteLocalLLM?: (model: string) => Promise<{ success: boolean; error?: string }>;
   getUseLocalLLM?: () => Promise<boolean>;
   setUseLocalLLM?: (useLocal: boolean) => Promise<{ success: boolean; error?: string }>;
+  getMeetingSummaryPrompt?: () => Promise<string>;
+  saveMeetingSummaryPrompt?: (prompt: string) => Promise<{ success: boolean; prompt?: string; error?: string }>;
+  resetMeetingSummaryPrompt?: () => Promise<{ success: boolean; prompt: string; error?: string }>;
   onLocalLLMDownloadProgress?: (callback: (data: { model: string; downloaded: number; total: number }) => void) => () => void;
 
   // Improved content management - store/clear improved versions of transcriptions
@@ -655,6 +658,7 @@ interface ModelInfo {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 }
 
 /**
@@ -1386,6 +1390,9 @@ interface FieldTheoryMarkdownTarget {
   contentMode?: 'rendered' | 'markdown';
   selectionStart?: number;
   selectionEnd?: number;
+  clipboardItemId?: number;
+  clipboardStackId?: string;
+  clipboardSearch?: string;
 }
 
 interface ActiveLibraryFileContext {
@@ -1394,6 +1401,34 @@ interface ActiveLibraryFileContext {
   relPath: string;
   filePath: string;
   title: string;
+}
+
+type MeetingStatus = 'idle' | 'starting' | 'recording' | 'transcribing' | 'summarizing' | 'done' | 'cancelled' | 'error';
+
+interface MeetingSession {
+  meetingId: string;
+  title: string;
+  type: 'wiki' | 'external';
+  filePath: string;
+  relPath: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: MeetingStatus;
+  audioPath: string | null;
+  transcriptPath: string | null;
+  rawTranscriptPath: string | null;
+  speakerDiarizationSupported: boolean;
+  summaryRunId?: string;
+  summaryError?: string;
+}
+
+interface MeetingActionResult {
+  success: boolean;
+  error?: string;
+  session?: MeetingSession;
+  openTarget?: FieldTheoryMarkdownTarget;
+  summaryRunId?: string;
+  summaryError?: string;
 }
 
 interface LauncherAppInfo {
@@ -1497,10 +1532,17 @@ interface CommandsAPI {
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void) => () => void;
-  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean }>;
+  getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
+  createMeetingNote?: (title?: string) => Promise<MeetingActionResult>;
+  startMeetingHere?: () => Promise<MeetingActionResult>;
+  stopMeeting?: () => Promise<MeetingActionResult>;
+  cancelMeeting?: () => Promise<MeetingActionResult>;
+  summarizeCurrentMeeting?: () => Promise<MeetingActionResult>;
+  getActiveMeeting?: () => Promise<MeetingSession | null>;
+  onMeetingStatus?: (callback: (session: MeetingSession) => void) => () => void;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
@@ -1883,6 +1925,7 @@ declare global {
     name: string;        // filename slug without date/ext
     title: string;       // filename without extension
     lastUpdated: number; // mtime
+    documentKind?: 'markdown' | 'html' | 'css';
     todoState?: MarkdownTodoState;
     archived?: boolean;
   }
@@ -1898,7 +1941,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; todoState?: MarkdownTodoState; archived?: boolean }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {

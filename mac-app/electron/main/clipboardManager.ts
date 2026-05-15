@@ -285,6 +285,7 @@ const DEFAULT_CONFIG: ClipboardConfig = {
 
 const MAX_CLIPBOARD_IMAGE_PIXELS_FOR_PNG = 16_000_000;
 const MAX_CLIPBOARD_IMAGE_PNG_BYTES = 10 * 1024 * 1024;
+const CLIPBOARD_IMAGE_REHASH_INTERVAL_MS = 10_000;
 
 /**
  * Continuous Context mode state.
@@ -327,6 +328,8 @@ export class ClipboardManager extends EventEmitter {
   }
   private pollInterval: NodeJS.Timeout | null = null;
   private lastContentHash: string = '';
+  private lastImagePollSignature: string | null = null;
+  private lastImagePollCheckedAt: number = 0;
   private config: ClipboardConfig;
   private screenshotHotkeyRegistered: boolean = false;
   private fullScreenHotkeyRegistered: boolean = false;
@@ -410,6 +413,7 @@ export class ClipboardManager extends EventEmitter {
 
     // Reset state and restart polling
     this.lastContentHash = '';
+    this.resetClipboardImagePollSignature();
     this.startPolling();
   }
 
@@ -427,6 +431,7 @@ export class ClipboardManager extends EventEmitter {
     }
     this.dbPath = null;
     this.lastContentHash = '';
+    this.resetClipboardImagePollSignature();
   }
 
   /**
@@ -718,6 +723,7 @@ export class ClipboardManager extends EventEmitter {
       // Check for text first (cheap operation)
       const text = clipboard.readText();
       if (text) {
+        this.resetClipboardImagePollSignature();
         await this.processClipboardChange(
           this.hashContent(text),
           () => this.storeText(text)
@@ -725,13 +731,19 @@ export class ClipboardManager extends EventEmitter {
         return;
       }
 
-      // Check for image — always read and hash, because different images
-      // can share the same clipboard format strings (e.g. two screenshots).
+      // Check for image. Re-encode matching image signatures only periodically:
+      // phone-sized images can make NativeImage.toPNG() expensive enough to pin
+      // the Electron main process if we do it on every 500ms poll.
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
         const size = image.getSize();
+        const imageSignature = this.getClipboardImagePollSignature(size);
+        if (this.shouldDeferClipboardImageEncoding(imageSignature)) {
+          return;
+        }
+
         if (this.shouldSkipLargeClipboardImage(size)) {
-          const skipHash = this.hashContent(`large-image:${size.width}x${size.height}:${clipboard.availableFormats().join('|')}`);
+          const skipHash = this.hashContent(`large-image:${imageSignature}`);
           if (skipHash !== this.lastContentHash) {
             this.lastContentHash = skipHash;
             log.info('Skipping oversized clipboard image in automatic history capture:', size);
@@ -756,6 +768,8 @@ export class ClipboardManager extends EventEmitter {
           this.hashContent(imageBuffer),
           () => this.storeImage(image, imageBuffer)
         );
+      } else {
+        this.resetClipboardImagePollSignature();
       }
     } catch (error) {
       log.warn('Clipboard read failed (may be locked by another app):', error);
@@ -2035,18 +2049,72 @@ export class ClipboardManager extends EventEmitter {
     return size.width > 0 && size.height > 0 && size.width * size.height > MAX_CLIPBOARD_IMAGE_PIXELS_FOR_PNG;
   }
 
+  private getClipboardImagePollSignature(size: { width: number; height: number }): string {
+    return `${size.width}x${size.height}:${clipboard.availableFormats().join('|')}`;
+  }
+
+  private resetClipboardImagePollSignature(): void {
+    this.lastImagePollSignature = null;
+    this.lastImagePollCheckedAt = 0;
+  }
+
+  private rememberClipboardImagePollSignature(size: { width: number; height: number }): void {
+    this.lastImagePollSignature = this.getClipboardImagePollSignature(size);
+    this.lastImagePollCheckedAt = Date.now();
+  }
+
+  private shouldDeferClipboardImageEncoding(imageSignature: string): boolean {
+    const now = Date.now();
+    if (
+      this.lastImagePollSignature === imageSignature &&
+      now - this.lastImagePollCheckedAt < CLIPBOARD_IMAGE_REHASH_INTERVAL_MS
+    ) {
+      return true;
+    }
+
+    this.lastImagePollSignature = imageSignature;
+    this.lastImagePollCheckedAt = now;
+    return false;
+  }
+
+  private rememberCurrentClipboardImageForPolling(): void {
+    try {
+      const image = clipboard.readImage();
+      if (image.isEmpty()) {
+        this.resetClipboardImagePollSignature();
+        return;
+      }
+
+      this.rememberClipboardImagePollSignature(image.getSize());
+    } catch (error) {
+      log.warn('Clipboard image poll sync failed:', error);
+    }
+  }
+
   syncClipboardHash(): void {
     try {
       const text = clipboard.readText();
       if (text) {
         this.lastContentHash = this.hashContent(text);
+        this.resetClipboardImagePollSignature();
         return;
       }
 
       const image = clipboard.readImage();
       if (!image.isEmpty()) {
+        const size = image.getSize();
+        const imageSignature = this.getClipboardImagePollSignature(size);
+        this.lastImagePollSignature = imageSignature;
+        this.lastImagePollCheckedAt = Date.now();
+        if (this.shouldSkipLargeClipboardImage(size)) {
+          this.lastContentHash = this.hashContent(`large-image:${imageSignature}`);
+          return;
+        }
+
         const imageBuffer = image.toPNG();
         this.lastContentHash = this.hashContent(imageBuffer);
+      } else {
+        this.resetClipboardImagePollSignature();
       }
     } catch (error) {
       log.warn('Clipboard sync failed:', error);
@@ -2197,6 +2265,8 @@ export class ClipboardManager extends EventEmitter {
       const filePath = path.join(cacheDir, filename);
 
       await fs.promises.writeFile(filePath, imageBuffer);
+      this.setClipboardHashFromBuffer(imageBuffer);
+      this.rememberCurrentClipboardImageForPolling();
       return filePath;
     } catch (error) {
       log.warn('Failed to save pasted image file:', error);

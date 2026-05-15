@@ -106,6 +106,7 @@ const FLOATING_CANCEL_FADE_MS = 180;
 const FLOATING_COMPLETE_SETTLE_MS = 60;
 const FLOATING_CONTENT_FALLBACK_WIDTH = WAVEFORM_WIDTH;
 const FLOATING_BUTTON_EDGE_INSET_PX = 6;
+const ESCAPE_HINT_DISPLAY_MS = 1_600;
 const STATIC_WAVEFORM_LEVELS = new Array(WAVEFORM_BAR_COUNT).fill(0);
 const DRAWER_TEXT_SIZE_DEFAULT = 14;
 const DRAWER_TEXT_SIZE_MIN = 11;
@@ -177,13 +178,33 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
   const [filterMeterRawLevel, setFilterMeterRawLevel] = useState(0);
   const waveformBufferRef = useRef(new AudioLevelRingBuffer(WAVEFORM_BAR_COUNT));
   const stackAnimationTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const escapeHintTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [waveformLevels, setWaveformLevels] = useState<number[]>(new Array(WAVEFORM_BAR_COUNT).fill(0));
+  const [escapeHintVisible, setEscapeHintVisible] = useState(false);
   const waveformSettled = state === 'completing';
   const waveformActive = hotMicActive || state === 'recording' || waveformSettled;
   const resetWaveform = useCallback(() => {
     waveformBufferRef.current.reset();
     setWaveformLevels(new Array(WAVEFORM_BAR_COUNT).fill(0));
   }, []);
+  const clearEscapeHintTimer = useCallback(() => {
+    if (escapeHintTimeoutRef.current) {
+      clearTimeout(escapeHintTimeoutRef.current);
+      escapeHintTimeoutRef.current = null;
+    }
+  }, []);
+  const hideEscapeHint = useCallback(() => {
+    clearEscapeHintTimer();
+    setEscapeHintVisible(false);
+  }, [clearEscapeHintTimer]);
+  const showEscapeHint = useCallback(() => {
+    clearEscapeHintTimer();
+    setEscapeHintVisible(true);
+    escapeHintTimeoutRef.current = setTimeout(() => {
+      escapeHintTimeoutRef.current = null;
+      setEscapeHintVisible(false);
+    }, ESCAPE_HINT_DISPLAY_MS);
+  }, [clearEscapeHintTimer]);
 
   // Hot-mic waveform = orange, standard recording waveform = white.
   const waveformColor = hotMicActive && !waveformSettled
@@ -203,6 +224,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
     });
     api.onHotMicUpdate?.((data: { active: boolean }) => setHotMicActive(Boolean(data?.active)));
     api.onStandardAudioLevel?.((level: number) => setStandardAudioLevel(level));
+    api.onEscapeHint?.(showEscapeHint);
     api.onHotMicFilterMeter?.((data: { rawLevel: number }) => setFilterMeterRawLevel(data.rawLevel));
 
     api.onStackChanged?.((count: number) => {
@@ -235,13 +257,21 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
         clearTimeout(stackAnimationTimeoutRef.current);
         stackAnimationTimeoutRef.current = null;
       }
+      clearEscapeHintTimer();
       api.removeAllListeners('dynamic-island-state');
       api.removeAllListeners('dynamic-island-hotmic');
       api.removeAllListeners('dynamic-island-standard-audio-level');
+      api.removeAllListeners('dynamic-island-escape-hint');
       api.removeAllListeners('dynamic-island-hotmic-filter-meter');
       api.removeAllListeners('dynamic-island-stack-changed');
     };
-  }, [resetWaveform]);
+  }, [clearEscapeHintTimer, resetWaveform, showEscapeHint]);
+
+  useEffect(() => {
+    if (!waveformActive) {
+      hideEscapeHint();
+    }
+  }, [hideEscapeHint, waveformActive]);
 
   // Update waveform ring buffer when audio levels arrive.
   useEffect(() => {
@@ -258,6 +288,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
   const displayedWaveformLevels = waveformSettled
     ? STATIC_WAVEFORM_LEVELS
     : waveformLevels;
+  const escapeHintActive = waveformActive && escapeHintVisible;
 
   const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount });
   useEffect(() => {
@@ -280,8 +311,15 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
         marginRight={waveformSlotMargin}
         style={floating ? { justifyContent: 'center' } : undefined}
       >
-        <div aria-hidden="true" style={rightStyles.waveformContainer}>
-          <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
+        <div
+          aria-hidden="true"
+          style={escapeHintActive ? rightStyles.escapeHintContainer : rightStyles.waveformContainer}
+        >
+          {escapeHintActive ? (
+            <span style={rightStyles.escapeHintText}>esc</span>
+          ) : (
+            <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
+          )}
         </div>
       </PillSlot>
       <PillSlot visible={pipeCount > 0} width={pipeSlotWidth} marginRight={0}>
@@ -311,6 +349,22 @@ const rightStyles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: '1.5px',
     height: '14px',
+  },
+  escapeHintContainer: {
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: '100%',
+    height: '14px',
+  },
+  escapeHintText: {
+    fontSize: '10px',
+    fontWeight: 650,
+    lineHeight: 1,
+    letterSpacing: 0,
+    textTransform: 'lowercase',
+    color: 'rgba(255, 255, 255, 0.88)',
+    animation: `escapeHintFade ${ESCAPE_HINT_DISPLAY_MS}ms ease-out forwards`,
   },
   pipeGroup: {
     display: 'flex',
@@ -1586,6 +1640,10 @@ styleSheet.textContent = `
     0%, 100% { transform: scaleY(0.15); }
     50% { transform: scaleY(1); }
   }
+  @keyframes escapeHintFade {
+    0%, 72% { opacity: 1; }
+    100% { opacity: 0; }
+  }
   @keyframes slideDown {
     from { opacity: 0; transform: translateY(-8px); }
     to { opacity: 1; transform: translateY(0); }
@@ -1890,6 +1948,7 @@ declare global {
       onHotMicMute?: (cb: (muted: boolean) => void) => void;
       onHotMicFilterMeter?: (cb: (data: HotMicFilterMeter) => void) => void;
       onHotMicRuntimeStatus?: (cb: (status: HotMicRuntimeStatus) => void) => void;
+      onEscapeHint?: (cb: () => void) => void;
       onStackChanged?: (cb: (count: number) => void) => void;
       onInputMode?: (cb: (mode: 'hot-mic' | 'standard') => void) => void;
       getInputMode?: () => Promise<'hot-mic' | 'standard'>;

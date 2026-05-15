@@ -10,9 +10,10 @@ import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import { supabase } from '../supabaseClient';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
-import ContentToolbar from './ContentToolbar';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import FieldTheoryProse from './FieldTheoryProse';
 import ImmersiveToggle from './ImmersiveToggle';
+import LinkedDocumentsSection from './LinkedDocumentsSection';
 import {
   SIDEBAR_DARK_ICON_COLOR,
   SIDEBAR_DARK_TEXT_COLOR,
@@ -31,7 +32,6 @@ import {
   classifyLinkHref,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
-  getWikiLinkTargetKey,
   isUnresolvedWikiHref,
   transformWikiLinks,
   type LinkAction,
@@ -175,24 +175,6 @@ interface CommandWithContent extends CommandItem {
   content: string;
   documentVersion: DocumentVersion;
 }
-
-const WIKI_LINK_DIRECTION_MARKER: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: '→',
-  inbound: '←',
-  bidirectional: '↔',
-};
-
-const WIKI_LINK_DIRECTION_LABEL: Record<MarkdownLinkedDocument['direction'], string> = {
-  outbound: 'This document links out',
-  inbound: 'Links back to this document',
-  bidirectional: 'Linked both ways',
-};
-
-const WIKI_LINK_TARGET_LABEL: Record<WikiLinkTarget['kind'], string> = {
-  wiki: 'Wiki',
-  artifact: 'Artifact',
-  command: 'Command',
-};
 
 function commandNameFromFilePath(filePath: string): string {
   const fileName = filePath.split(/[\\/]+/).filter(Boolean).at(-1) ?? filePath;
@@ -587,6 +569,15 @@ export default function CommandsView({
     }
     return '';
   }, [fieldTheorySyncEnabled, selectedCommand, selectedPopularCommand, viewMode]);
+  const commandToolbarContextHasFolder = focusToolbarControlsVisible
+    && viewMode === 'mine'
+    && Boolean(selectedCommand)
+    && Boolean(commandToolbarContext);
+  const showSelectedCommandInFolder = () => {
+    if (selectedCommand?.filePath) {
+      window.shellAPI?.showItemInFolder(selectedCommand.filePath);
+    }
+  };
 
   const commandIndexKey = useMemo(
     () => JSON.stringify(commands.map(({ name, displayName, filePath }) => [name, displayName, filePath])),
@@ -2092,6 +2083,9 @@ export default function CommandsView({
                 gap: '8px',
               }}
             >
+              {commandToolbarContextHasFolder && (
+                <ContentToolbarFolderButton onClick={showSelectedCommandInFolder} />
+              )}
               {focusToolbarControlsVisible && commandToolbarContext && (
                 <div
                   style={{
@@ -2133,8 +2127,8 @@ export default function CommandsView({
                 onDelete={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand && selectedPath ? () => handleDeleteCommand(selectedPath) : undefined}
                 showDelete={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
                 showRename={false}
-                onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? () => window.shellAPI?.showItemInFolder(selectedCommand.filePath) : undefined}
-                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand}
+                onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? showSelectedCommandInFolder : undefined}
+                showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand && !commandToolbarContextHasFolder}
                 onCopyPath={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand?.filePath ? copySelectedCommandTextOrPath : undefined}
                 copyPathCopied={copyPathCopied}
                 copyPathTitle="Copy selected text or command path (⌘C)"
@@ -2407,92 +2401,8 @@ export default function CommandsView({
                   >
                     {displayContent}
                   </FieldTheoryProse>
-                  {viewMode === 'mine' && linkedDocuments.length > 0 && (
-                    <section
-                      aria-label="Linked"
-                      style={{
-                        marginTop: '32px',
-                        paddingTop: '16px',
-                        borderTop: `1px solid ${theme.border}`,
-                      }}
-                    >
-                      <div
-                        style={{
-                          marginBottom: '8px',
-                          fontSize: '12px',
-                          fontWeight: 650,
-                          color: theme.textSecondary,
-                          letterSpacing: 0,
-                        }}
-                      >
-                        Linked
-                      </div>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {linkedDocuments.map((link) => (
-                          <button
-                            key={getWikiLinkTargetKey(link.target)}
-                            type="button"
-                            title={WIKI_LINK_DIRECTION_LABEL[link.direction]}
-                            onMouseDown={(event) => event.stopPropagation()}
-                            onClick={(event) => {
-                              event.preventDefault();
-                              event.stopPropagation();
-                              openFieldTheoryMarkdownTarget(link.target);
-                            }}
-                            style={{
-                              display: 'grid',
-                              gridTemplateColumns: '18px minmax(0, 1fr)',
-                              columnGap: '8px',
-                              alignItems: 'start',
-                              padding: '6px 0',
-                              border: 'none',
-                              backgroundColor: 'transparent',
-                              color: theme.text,
-                              cursor: 'pointer',
-                              textAlign: 'left',
-                              font: 'inherit',
-                            }}
-                          >
-                            <span
-                              aria-hidden="true"
-                              style={{
-                                marginTop: '1px',
-                                color: theme.textSecondary,
-                                fontSize: '13px',
-                                lineHeight: 1.2,
-                                textAlign: 'center',
-                              }}
-                            >
-                              {WIKI_LINK_DIRECTION_MARKER[link.direction]}
-                            </span>
-                            <span style={{ minWidth: 0 }}>
-                              <span style={{ display: 'block', fontSize: '13px', fontWeight: 600 }}>
-                                {link.title}
-                                <span style={{ marginLeft: '6px', color: theme.textSecondary, fontSize: '11px', fontWeight: 500 }}>
-                                  {WIKI_LINK_TARGET_LABEL[link.target.kind]}
-                                </span>
-                              </span>
-                              {link.excerpt && (
-                                <span
-                                  style={{
-                                    display: 'block',
-                                    marginTop: '2px',
-                                    color: theme.textSecondary,
-                                    fontSize: '12px',
-                                    lineHeight: 1.35,
-                                    overflow: 'hidden',
-                                    textOverflow: 'ellipsis',
-                                    whiteSpace: 'nowrap',
-                                  }}
-                                >
-                                  {link.excerpt}
-                                </span>
-                              )}
-                            </span>
-                          </button>
-                        ))}
-                      </div>
-                    </section>
+                  {viewMode === 'mine' && (
+                    <LinkedDocumentsSection links={linkedDocuments} onOpen={openFieldTheoryMarkdownTarget} />
                   )}
                   {commandContentBottomScrollSpace > 0 && (
                     <div

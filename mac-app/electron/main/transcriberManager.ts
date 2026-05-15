@@ -14,6 +14,7 @@ import { NativeHelper } from './nativeHelper';
 import {
   DEFAULT_MODEL_SIZE,
   isModelSize,
+  MEETING_DIARIZATION_MODEL_SIZE,
   ModelManager,
   ModelSize,
 } from './modelManager';
@@ -61,6 +62,38 @@ const LOG_TRANSCRIPT_PAYLOADS = process.env.LOG_TRANSCRIPT_PAYLOADS === 'true';
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 const SAFE_FALLBACK_TRANSCRIPTION_HOTKEY = 'Option+Shift+Space';
+const WHISPER_TIMESTAMP_PATTERN = /\[\d{2}:\d{2}:\d{2}(?:\.\d{3})?\s*-->\s*\d{2}:\d{2}:\d{2}(?:\.\d{3})?\]/g;
+const WHISPER_METADATA_PATTERN = /\[(?:id:\s*\d+|start:|end:)[^\]]*\]/gi;
+const WHISPER_SPEAKER_TURN_PATTERN = /\[SPEAKER_TURN\]/gi;
+
+export function formatWhisperSpeakerTurnTranscript(stdout: string): string {
+  const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
+  let speakerIndex = 1;
+  const lines: string[] = [];
+
+  for (const rawLine of stdout.replace(ansiEscapeRegex, '').split(/\r?\n/)) {
+    const hasSpeakerTurn = WHISPER_SPEAKER_TURN_PATTERN.test(rawLine);
+    WHISPER_SPEAKER_TURN_PATTERN.lastIndex = 0;
+    const text = rawLine
+      .replace(WHISPER_SPEAKER_TURN_PATTERN, '')
+      .replace(WHISPER_METADATA_PATTERN, '')
+      .replace(WHISPER_TIMESTAMP_PATTERN, '')
+      .trim();
+
+    if (
+      text
+      && !text.match(/^\[.*-->\s*\]/)
+      && !text.match(/^\[\d+:\d+:\d+/)
+      && !text.match(/^(###|Transcription|END|BEGIN|Running whisper\.cpp inference)/i)
+    ) {
+      lines.push(`Speaker ${speakerIndex}: ${text}`);
+    }
+
+    if (hasSpeakerTurn) speakerIndex = speakerIndex === 1 ? 2 : 1;
+  }
+
+  return lines.join('\n').trim();
+}
 
 interface PersistedParakeetEngineState {
   verifiedAt?: string;
@@ -93,12 +126,29 @@ export type TranscriptionStatus = 'idle' | 'silentStacking' | 'recording' | 'tra
 type TranscribeWithEngineOptions = {
   allowWhisperFallback?: boolean;
   whisperModelOverride?: ModelSize;
+  enableTinyDiarize?: boolean;
 };
+
+export interface MeetingCaptureSession {
+  startedAt: string;
+  source: RecordingInputSource;
+  transcriptionEngine: TranscriptionEngine;
+  whisperModelOverride?: ModelSize | null;
+  speakerDiarizationSupported: boolean;
+}
+
+export interface MeetingCaptureResult extends MeetingCaptureSession {
+  stoppedAt: string;
+  transcriptText: string;
+  audioPath: string | null;
+}
 
 type FieldTheoryMarkdownInsertionTarget = {
   isAvailable: () => boolean;
   insertText: (text: string) => boolean;
 };
+
+type MeetingCaptureHotkeyHandler = () => Promise<void>;
 
 export type { HotMicEngineReadiness, HotMicEngineStatus };
 
@@ -202,6 +252,9 @@ export class TranscriberManager extends EventEmitter {
   private lastExternalPasteTargetBundleId: string | null = null;
   private fieldTheoryMarkdownInsertionTarget: FieldTheoryMarkdownInsertionTarget | null = null;
   private activeRecordingSource: RecordingInputSource | null = null;
+  private activeMeetingCapture: MeetingCaptureSession | null = null;
+  private meetingCaptureHotkeyHandler: MeetingCaptureHotkeyHandler | null = null;
+  private meetingCaptureHotkeyStopInFlight: boolean = false;
   private standardSessionCancelRequested: boolean = false;
   private static readonly FIELD_THEORY_BUNDLE_IDS = new Set([
     'com.fieldtheory.app',
@@ -334,6 +387,10 @@ export class TranscriberManager extends EventEmitter {
 
   setFieldTheoryMarkdownInsertionTarget(target: FieldTheoryMarkdownInsertionTarget | null): void {
     this.fieldTheoryMarkdownInsertionTarget = target;
+  }
+
+  setMeetingCaptureHotkeyHandler(handler: MeetingCaptureHotkeyHandler | null): void {
+    this.meetingCaptureHotkeyHandler = handler;
   }
 
   /**
@@ -652,6 +709,11 @@ export class TranscriberManager extends EventEmitter {
   }
 
   async cancelActiveSession(): Promise<void> {
+    if (this.activeMeetingCapture) {
+      await this.cancelMeetingCapture();
+      return;
+    }
+
     if (this.status === 'silentStacking') {
       this.cancelSilentStacking();
       return;
@@ -678,6 +740,19 @@ export class TranscriberManager extends EventEmitter {
    * @param isSecondary - True if triggered by secondary hotkey, false for primary
    */
   private async handleHotkeyPress(_isSecondary: boolean): Promise<void> {
+    if (this.activeMeetingCapture) {
+      if (!this.meetingCaptureHotkeyHandler || this.meetingCaptureHotkeyStopInFlight) {
+        return;
+      }
+      this.meetingCaptureHotkeyStopInFlight = true;
+      try {
+        await this.meetingCaptureHotkeyHandler();
+      } finally {
+        this.meetingCaptureHotkeyStopInFlight = false;
+      }
+      return;
+    }
+
     // Hot mic active — flush and paste its buffer instead of starting a new recording.
     if (this.status === 'idle' && this.hotMicDelegate?.isActive) {
       await this.hotMicDelegate.handleShortPress();
@@ -1961,10 +2036,11 @@ export class TranscriberManager extends EventEmitter {
   ): Promise<string> {
     const allowWhisperFallback = options.allowWhisperFallback ?? true;
     const whisperModelOverride = options.whisperModelOverride;
+    const enableTinyDiarize = options.enableTinyDiarize ?? false;
 
     // Whisper (whisper.cpp) — direct path, no fallback needed.
     if (engine === 'whisper') {
-      return this.transcribe(wavPath, whisperModelOverride);
+      return this.transcribe(wavPath, whisperModelOverride, { enableTinyDiarize });
     }
 
     // Parakeet (NVIDIA Parakeet TDT 0.6B v2 via onnx-asr).
@@ -2020,7 +2096,7 @@ export class TranscriberManager extends EventEmitter {
       }
     }
 
-    return this.transcribe(wavPath, whisperModelOverride);
+    return this.transcribe(wavPath, whisperModelOverride, { enableTinyDiarize });
   }
 
   // ---------------------------------------------------------------------------
@@ -3393,7 +3469,15 @@ export class TranscriberManager extends EventEmitter {
    * Prefers the persistent whisper-server for lower latency. Falls back to
    * spawning whisper-cli per-invocation if the server is unavailable.
    */
-  private async transcribe(wavPath: string, whisperModelOverride?: ModelSize): Promise<string> {
+  private async transcribe(
+    wavPath: string,
+    whisperModelOverride?: ModelSize,
+    options: { enableTinyDiarize?: boolean } = {},
+  ): Promise<string> {
+    if (options.enableTinyDiarize) {
+      return this.runWhisper(wavPath, whisperModelOverride, { enableTinyDiarize: true });
+    }
+
     // Try the persistent server first for low-latency transcription.
     if (this.isWhisperServerAvailable() && !this.whisperServerDisabledReason) {
       try {
@@ -3433,7 +3517,11 @@ export class TranscriberManager extends EventEmitter {
       message.includes('ggml_metal');
   }
 
-  private runWhisper(wavPath: string, whisperModelOverride?: ModelSize): Promise<string> {
+  private runWhisper(
+    wavPath: string,
+    whisperModelOverride?: ModelSize,
+    options: { enableTinyDiarize?: boolean } = {},
+  ): Promise<string> {
     const modelPath = whisperModelOverride
       ? this.modelManager.getModelPathForSize(whisperModelOverride)
       : this.modelManager.getModelPath();
@@ -3451,8 +3539,12 @@ export class TranscriberManager extends EventEmitter {
         '--language', 'en',
       ];
 
-      // Only skip timestamps if we don't need them for figure placement.
-      if (!needTimestamps) {
+      if (options.enableTinyDiarize) {
+        args.push('-tdrz');
+      }
+
+      // Only skip timestamps if we don't need them for figure placement or speaker turns.
+      if (!needTimestamps && !options.enableTinyDiarize) {
         args.push('--no-timestamps');
       }
 
@@ -3488,6 +3580,11 @@ export class TranscriberManager extends EventEmitter {
         const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
         let cleanedStdout = stdout.replace(ansiEscapeRegex, '');
         
+        if (options.enableTinyDiarize) {
+          resolve(formatWhisperSpeakerTurnTranscript(cleanedStdout));
+          return;
+        }
+
         // Remove metadata-like bracketed content but preserve timestamp patterns for parsing.
         cleanedStdout = cleanedStdout.replace(/\[(?:SPEAKER_TURN|id:\s*\d+|start:|end:)[^\]]*\]/gi, '');
 
@@ -3913,6 +4010,155 @@ export class TranscriberManager extends EventEmitter {
   async transcribeAudio(wavPath: string): Promise<string> {
     const engine = this.getConfiguredTranscriptionEngine();
     return this.transcribeWithEngineFallback(wavPath, engine);
+  }
+
+  async startMeetingCapture(): Promise<MeetingCaptureSession> {
+    if (this.activeMeetingCapture) {
+      throw new Error('Meeting capture is already active.');
+    }
+
+    if (this.status !== 'idle') {
+      throw new Error(`Cannot start meeting capture while transcription is ${this.status}.`);
+    }
+
+    const onboardingComplete = this.preferences.getPreference('onboardingComplete');
+    if (!onboardingComplete) {
+      throw new Error('Complete onboarding before starting meeting capture.');
+    }
+
+    const source = this.getRecordingSource();
+    if (source === 'system-audio' && systemPreferences.getMediaAccessStatus('screen') !== 'granted') {
+      throw new Error('System audio capture requires Screen Recording permission. Open Settings → Privacy & Security → Screen Recording.');
+    }
+
+    const configuredEngine = this.getConfiguredTranscriptionEngine();
+    const meetingDiarizationAvailable = this.modelManager.getModelHealthForSizeSync(MEETING_DIARIZATION_MODEL_SIZE).status === 'ready';
+    const transcriptionEngine = meetingDiarizationAvailable ? 'whisper' : configuredEngine;
+    const whisperModelOverride = meetingDiarizationAvailable ? MEETING_DIARIZATION_MODEL_SIZE : null;
+    if (transcriptionEngine === 'whisper') {
+      const modelAvailable = whisperModelOverride
+        ? await this.modelManager.isModelAvailableForSize(whisperModelOverride)
+        : await this.modelManager.isModelAvailable();
+      if (!modelAvailable) {
+        const selectedModel = whisperModelOverride ?? this.modelManager.getSelectedModel();
+        throw new Error(`Model "${selectedModel}" not available. Please download the model first.`);
+      }
+    }
+
+    this.activeMeetingCapture = {
+      startedAt: new Date().toISOString(),
+      source,
+      transcriptionEngine,
+      whisperModelOverride,
+      speakerDiarizationSupported: meetingDiarizationAvailable,
+    };
+
+    try {
+      this.standardSessionCancelRequested = false;
+      this.activeRecordingSource = source;
+      this.recordingStartTime = Date.now();
+      this.hasAudioContent = false;
+      this.pendingAbandonConfirmation = false;
+      this.currentStack = [];
+      this.screenshotMetadata = [];
+      this.detectedCommands = [];
+      this.detachStandardChunkListener();
+      this.clearStandardLiveTranscript();
+      this.nativeHelper.setHarvestMode('off');
+      this.setStatus('recording');
+      this.overlay.showRecording();
+      this.soundManager.play('recordingStart');
+      await this.nativeHelper.startRecording(source);
+      return this.activeMeetingCapture;
+    } catch (error) {
+      this.activeMeetingCapture = null;
+      this.activeRecordingSource = null;
+      this.clearStack();
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
+      this.emit('error', error as Error);
+      throw error;
+    }
+  }
+
+  async stopMeetingCapture(): Promise<MeetingCaptureResult> {
+    const capture = this.activeMeetingCapture;
+    if (!capture) {
+      throw new Error('No meeting capture is active.');
+    }
+
+    let audioPath: string | null = null;
+
+    try {
+      this.soundManager.play('recordingStop');
+      this.setStatus('transcribing');
+      this.overlay.showTranscribing();
+      this.detachStandardChunkListener();
+      this.nativeHelper.setHarvestMode('off');
+      audioPath = await this.nativeHelper.stopRecording();
+      this.activeRecordingSource = null;
+      const transcript = await this.transcribeMeetingCapture(audioPath, capture);
+      const result: MeetingCaptureResult = {
+        ...capture,
+        speakerDiarizationSupported: transcript.speakerDiarizationSupported,
+        stoppedAt: new Date().toISOString(),
+        transcriptText: transcript.text.trim(),
+        audioPath,
+      };
+      this.activeMeetingCapture = null;
+      this.clearStandardLiveTranscript();
+      this.clearStack();
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
+      return result;
+    } catch (error) {
+      this.activeMeetingCapture = null;
+      this.activeRecordingSource = null;
+      this.clearStandardLiveTranscript();
+      this.clearStack();
+      this.setStatus('idle');
+      this.handleOverlayAfterTranscription();
+      this.emit('error', error as Error);
+      throw error;
+    }
+  }
+
+  private async transcribeMeetingCapture(
+    audioPath: string,
+    capture: MeetingCaptureSession,
+  ): Promise<{ text: string; speakerDiarizationSupported: boolean }> {
+    if (capture.speakerDiarizationSupported && capture.whisperModelOverride) {
+      try {
+        const text = await this.transcribeWithEngineFallback(audioPath, 'whisper', {
+          allowWhisperFallback: false,
+          whisperModelOverride: capture.whisperModelOverride,
+          enableTinyDiarize: true,
+        });
+        return { text, speakerDiarizationSupported: true };
+      } catch (error) {
+        log.warn('Meeting speaker-turn transcription failed, falling back without diarization: %s', error instanceof Error ? error.message : String(error));
+      }
+    }
+
+    const text = await this.transcribeWithEngineFallback(audioPath, capture.transcriptionEngine);
+    return { text, speakerDiarizationSupported: false };
+  }
+
+  async cancelMeetingCapture(): Promise<void> {
+    if (!this.activeMeetingCapture) {
+      return;
+    }
+
+    try {
+      await this.nativeHelper.cancelRecording();
+    } finally {
+      this.activeMeetingCapture = null;
+      this.activeRecordingSource = null;
+      this.clearStandardLiveTranscript();
+      this.clearStack();
+      this.setStatus('idle');
+      this.overlay.showStatus(MESSAGES.overlay.cancelled);
+    }
   }
 
   /**

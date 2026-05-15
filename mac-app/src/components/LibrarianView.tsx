@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fra
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
-import ContentToolbar from './ContentToolbar';
+import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
@@ -87,6 +87,7 @@ import MarkdownCodeEditor, {
   type MarkdownCodeEditorHandle,
   type MarkdownCodeEditorSelectionSnapshot,
 } from './MarkdownCodeEditor';
+import LinkedDocumentsSection from './LinkedDocumentsSection';
 import ImagePreviewOverlay from './ImagePreviewOverlay';
 import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
@@ -96,6 +97,7 @@ import {
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
+  getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionReplacement,
   normalizeWikiRelPath,
@@ -103,6 +105,7 @@ import {
   upsertMarkdownLinkRelationDocument,
   type WikiIndex,
   type LinkAction,
+  type MarkdownLinkedDocument,
   type MarkdownLinkRelationDocument,
   type MarkdownWikiLinkCompletion,
   type WikiIndexInput,
@@ -118,7 +121,53 @@ type FieldTheoryMarkdownTarget = {
 };
 
 export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'external' | null;
+type LibrarianCommandsAPI = NonNullable<Window['commandsAPI']>;
+type MeetingToolbarSession = NonNullable<Awaited<ReturnType<NonNullable<LibrarianCommandsAPI['getActiveMeeting']>>>>;
 const COPY_PATH_FEEDBACK_MS = 1600;
+const MEETING_TOOLBAR_ACTIVE_STATUSES = new Set(['starting', 'recording', 'transcribing', 'summarizing']);
+
+function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | undefined): session is MeetingToolbarSession {
+  return !!session && MEETING_TOOLBAR_ACTIVE_STATUSES.has(session.status);
+}
+
+export type LibraryDocumentViewKind = 'markdown' | 'html' | 'css';
+
+export function getLibraryDocumentViewKind(
+  filePath: string | null | undefined,
+  itemType: LibrarianSelectedItemType = null,
+): LibraryDocumentViewKind {
+  const extension = filePath?.match(/\.([^.\\/]+)$/)?.[1]?.toLowerCase() ?? '';
+  if (extension === 'html' || extension === 'htm') return 'html';
+  if (extension === 'css') return 'css';
+  if (itemType === 'wiki' || itemType === 'artifact' || itemType === 'external') return 'markdown';
+  return 'markdown';
+}
+
+export function getLibraryDocumentDefaultContentMode(kind: LibraryDocumentViewKind): 'rendered' | 'markdown' {
+  return kind === 'css' ? 'markdown' : 'rendered';
+}
+
+export function getLocalFileUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const prefixed = normalized.startsWith('/') ? normalized : `/${normalized}`;
+  return `file://${prefixed.split('/').map((part) => encodeURIComponent(part)).join('/')}`;
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+}
+
+export function getHtmlPreviewSrcDoc(html: string, filePath: string): string {
+  const normalized = filePath.replace(/\\/g, '/');
+  const directoryPath = normalized.includes('/')
+    ? normalized.slice(0, normalized.lastIndexOf('/') + 1)
+    : '/';
+  const baseTag = `<base href="${escapeHtmlAttribute(getLocalFileUrl(directoryPath))}">`;
+  if (/<head(\s[^>]*)?>/i.test(html)) {
+    return html.replace(/<head(\s[^>]*)?>/i, (match) => `${match}${baseTag}`);
+  }
+  return `${baseTag}${html}`;
+}
 
 function libraryRenameTraceEnabled(): boolean {
   try {
@@ -329,10 +378,14 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
 
 export function shouldOpenMarkdownLinkFromMouseDown(input: {
   button: number;
+  metaKey?: boolean;
   altKey: boolean;
   ctrlKey: boolean;
+  renderedEditingActive?: boolean;
 }): boolean {
-  return input.button === 0 && !input.altKey && !input.ctrlKey;
+  if (input.button !== 0 || input.altKey || input.ctrlKey) return false;
+  if (input.renderedEditingActive) return input.metaKey === true;
+  return true;
 }
 
 export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
@@ -776,6 +829,21 @@ export function getMarkdownListToggleEdit(
   const carrotRe = /^(\s*)›+\s/;
 
   const nonBlank = lines.filter((line) => line.trim().length > 0);
+  if (nonBlank.length === 0 && selectionStart === selectionEnd) {
+    const line = lines[0] ?? '';
+    const indent = line.match(/^\s*/)?.[0] ?? '';
+    const marker = kind === 'ordered'
+      ? '1. '
+      : unorderedMarker === 'carrot' ? `${CARROT_LIST_MARKER} ` : '- ';
+    const nextBlock = `${indent}${marker}`;
+    const nextSelection = lineStart + nextBlock.length;
+    return {
+      nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
+      selectionStart: nextSelection,
+      selectionEnd: nextSelection,
+    };
+  }
+
   const allMarked = nonBlank.length > 0 && nonBlank.every((line) => (
     kind === 'ordered' ? orderedRe.test(line) : (unorderedRe.test(line) || carrotRe.test(line))
   ));
@@ -804,6 +872,60 @@ export function getMarkdownListToggleEdit(
     nextValue: `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`,
     selectionStart: lineStart,
     selectionEnd: lineStart + nextBlock.length,
+  };
+}
+
+export function getMarkdownListIndentEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  direction: 'in' | 'out',
+): MarkdownTextEdit | null {
+  const { start: lineStart, end: lineEnd } = getSelectedLineBounds(value, selectionStart, selectionEnd);
+  const block = value.slice(lineStart, lineEnd);
+  const lines = block.split('\n');
+  const selectionIsBlock = selectionStart !== selectionEnd;
+  let changed = false;
+  let collapsedDelta = 0;
+  let blockOffset = 0;
+  const listLinePattern = /^(\s*)(?:[-*+]\s+(?:\[(?: |x|X)\]\s*)?|\d+[.)]\s+|\[(?: |x|X)?\]\s*|>\s?)/;
+
+  const transformed = lines.map((line, index) => {
+    const lineOffset = blockOffset;
+    blockOffset += line.length + (index < lines.length - 1 ? 1 : 0);
+    if (!listLinePattern.test(line)) return line;
+
+    if (direction === 'in') {
+      changed = true;
+      if (!selectionIsBlock && selectionStart > lineStart + lineOffset) collapsedDelta = 2;
+      return `  ${line}`;
+    }
+
+    const removableSpaces = line.match(/^ {1,2}/)?.[0].length ?? 0;
+    if (removableSpaces === 0) return line;
+    changed = true;
+    if (!selectionIsBlock && selectionStart > lineStart + lineOffset) collapsedDelta = -Math.min(
+      removableSpaces,
+      Math.max(0, selectionStart - lineStart - lineOffset),
+    );
+    return line.slice(removableSpaces);
+  });
+
+  if (!changed) return null;
+  const nextBlock = transformed.join('\n');
+  const nextValue = `${value.slice(0, lineStart)}${nextBlock}${value.slice(lineEnd)}`;
+  if (selectionIsBlock) {
+    return {
+      nextValue,
+      selectionStart: lineStart,
+      selectionEnd: lineStart + nextBlock.length,
+    };
+  }
+  const nextSelection = Math.max(lineStart, selectionStart + collapsedDelta);
+  return {
+    nextValue,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
   };
 }
 
@@ -838,6 +960,114 @@ export function getRenderedMarkdownShortcutEdit(input: {
     listShortcutKind,
     input.unorderedListMarker ?? 'dash',
   );
+}
+
+function getRenderedMarkdownHiddenInlineSuffixEnd(value: string, offset: number): number {
+  const lineEndIndex = value.indexOf('\n', offset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  let index = Math.max(0, Math.min(offset, lineEnd));
+  const lineBefore = () => value.slice(lineStart, index);
+  const hasOddTokenCount = (token: string) => lineBefore().split(token).length % 2 === 0;
+  const hasUnclosedMarkdownLinkLabel = () => lineBefore().lastIndexOf('[') > lineBefore().lastIndexOf(']');
+  const hasUnclosedUnderline = () => lineBefore().lastIndexOf('<u>') > lineBefore().lastIndexOf('</u>');
+  const hasUnclosedWikiLink = () => lineBefore().lastIndexOf('[[') > lineBefore().lastIndexOf(']]');
+  const hasUnclosedStandaloneAsterisk = () => (lineBefore().match(/(?<!\*)\*(?!\*)/g)?.length ?? 0) % 2 === 1;
+
+  while (index < lineEnd) {
+    const tail = value.slice(index, lineEnd);
+    const linkClose = tail.match(/^\]\([^)\n]*\)/);
+    if (linkClose && hasUnclosedMarkdownLinkLabel()) {
+      index += linkClose[0].length;
+      continue;
+    }
+    if (tail.startsWith('</u>') && hasUnclosedUnderline()) {
+      index += '</u>'.length;
+      continue;
+    }
+    if (tail.startsWith(']]') && hasUnclosedWikiLink()) {
+      index += 2;
+      continue;
+    }
+    if (tail.startsWith('**') && hasOddTokenCount('**')) {
+      index += 2;
+      continue;
+    }
+    if (tail.startsWith('~~') && hasOddTokenCount('~~')) {
+      index += 2;
+      continue;
+    }
+    if (tail.startsWith('*') && hasUnclosedStandaloneAsterisk()) {
+      index += 1;
+      continue;
+    }
+    if (tail.startsWith('`') && hasOddTokenCount('`')) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+
+  return index;
+}
+
+export function getRenderedMarkdownEnterEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+  const insertionOffset = getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart);
+  return getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
+    ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset)
+    ?? {
+      nextValue: `${value.slice(0, insertionOffset)}\n${value.slice(insertionOffset)}`,
+      selectionStart: insertionOffset + 1,
+      selectionEnd: insertionOffset + 1,
+    };
+}
+
+function linePrefixAt(value: string, offset: number): string {
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  return value.slice(lineStart, offset);
+}
+
+function lineSuffixAt(value: string, offset: number): string {
+  const lineEndIndex = value.indexOf('\n', offset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  return value.slice(offset, lineEnd);
+}
+
+function hasUnclosedStandaloneAsterisk(prefix: string): boolean {
+  return (prefix.match(/(?<!\*)\*(?!\*)/g)?.length ?? 0) % 2 === 1;
+}
+
+function isRenderedMarkdownOpeningBoundary(value: string, offset: number): boolean {
+  const prefix = linePrefixAt(value, offset);
+  const suffix = lineSuffixAt(value, offset);
+  if (/^\s*(?:[-*+]\s+|\d+[.)]\s+|[-*+]\s+\[(?: |x|X)\]\s*|\[(?: |x|X)?\]\s*)$/.test(prefix)) {
+    return true;
+  }
+  if (prefix.endsWith('**') && suffix.includes('**')) return true;
+  if (prefix.endsWith('~~') && suffix.includes('~~')) return true;
+  if (prefix.endsWith('<u>') && suffix.includes('</u>')) return true;
+  if (prefix.endsWith('[[') && suffix.includes(']]')) return true;
+  if (prefix.endsWith('[') && /^[^\]\n]+\]\([^)\n]*\)/.test(suffix)) return true;
+  if (prefix.endsWith('`') && suffix.includes('`')) return true;
+  return prefix.endsWith('*') && hasUnclosedStandaloneAsterisk(prefix) && /(?<!\*)\*(?!\*)/.test(suffix);
+}
+
+export function shouldSuppressRenderedMarkdownBoundaryDelete(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  key: string,
+): boolean {
+  if (selectionStart !== selectionEnd) return false;
+  const offset = Math.max(0, Math.min(selectionStart, value.length));
+  if (key === 'Backspace') return isRenderedMarkdownOpeningBoundary(value, offset);
+  if (key === 'Delete') return getRenderedMarkdownHiddenInlineSuffixEnd(value, offset) > offset;
+  return false;
 }
 
 function expandRenderedMarkdownImageDeleteRange(value: string, start: number, end: number): { start: number; end: number } {
@@ -1336,6 +1566,7 @@ export function shouldInsertClipboardImagePathForPaste(input: { pastedText: stri
 export const LIBRARIAN_SELECTION_STORAGE_KEY = 'librarian-last-selection';
 export const LIBRARIAN_IMMERSIVE_STORAGE_KEY = 'librarian-immersive';
 export const LIBRARIAN_EDITOR_SESSION_STORAGE_KEY = 'librarian-editor-session';
+export const LIBRARIAN_CONTENT_MODE_STORAGE_KEY = 'librarian-content-mode';
 
 export type LibrarianStoredSelection =
   | { type: 'wiki'; relPath: string }
@@ -1491,6 +1722,21 @@ export function persistLibrarianEditorSession(
   session: LibrarianEditorSession
 ): void {
   storage.setItem(LIBRARIAN_EDITOR_SESSION_STORAGE_KEY, JSON.stringify(session));
+}
+
+export function restoreLibrarianContentMode(
+  storage: Pick<Storage, 'getItem'>,
+  fallback: 'rendered' | 'markdown' = 'rendered',
+): 'rendered' | 'markdown' {
+  const saved = storage.getItem(LIBRARIAN_CONTENT_MODE_STORAGE_KEY);
+  return saved === 'rendered' || saved === 'markdown' ? saved : fallback;
+}
+
+export function persistLibrarianContentMode(
+  storage: Pick<Storage, 'setItem'>,
+  contentMode: 'rendered' | 'markdown',
+): void {
+  storage.setItem(LIBRARIAN_CONTENT_MODE_STORAGE_KEY, contentMode);
 }
 
 export function editorSessionMatchesSelection(
@@ -2044,6 +2290,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ? restoredEditorSession?.contentMode ?? 'rendered'
       : 'rendered'
   ));
+  useEffect(() => {
+    persistLibrarianContentMode(localStorage, contentMode);
+  }, [contentMode]);
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
@@ -2455,6 +2704,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // the user's locally-installed Claude Code or Codex CLI against the active
   // markdown file and appends a summary footer on success.
   const [agentKickoffOpen, setAgentKickoffOpen] = useState(false);
+  const [activeMeetingSession, setActiveMeetingSession] = useState<MeetingToolbarSession | null>(null);
+  const [meetingToolbarBusy, setMeetingToolbarBusy] = useState(false);
   // External markdown files opened via macOS file-association (`open-file`)
   // whose canonical path falls outside the wiki root. Stored in Reading shape
   // so activeReading can unify over it; save branches on selectedItemType.
@@ -2492,7 +2743,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setSelectedItemType('external');
     setSelectedPath(null);
     setWikiSelectedRelPath(null);
-    setContentMode('rendered');
+    setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(file.path, 'external')));
     void window.recentAPI?.visit({
       kind: 'external',
       path: file.path,
@@ -2878,10 +3129,56 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType === 'external' ? externalOpenFile :
     selectedReading;
   const activeReadingPath = activeReading?.path ?? null;
+  const activeDocumentKind = getLibraryDocumentViewKind(activeReadingPath, selectedItemType);
+  const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
+  const activeIsHtmlDocument = activeDocumentKind === 'html';
+  const activeIsSourceOnlyDocument = activeDocumentKind === 'css';
   const latestRenderedContent = latestRenderedContentRef.current;
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
+  const activeReadingToolbarHasBreadcrumb = focusToolbarControlsVisible
+    && (selectedItemType === 'wiki' || selectedItemType === 'external')
+    && Boolean(activeReadingPath);
+  const meetingToolbarStatus = activeMeetingSession?.status ?? 'idle';
+  const meetingToolbarRecording = meetingToolbarStatus === 'recording';
+  const meetingToolbarFinalizing = meetingToolbarStatus === 'starting'
+    || meetingToolbarStatus === 'transcribing'
+    || meetingToolbarStatus === 'summarizing';
+  const meetingToolbarVisible = focusToolbarControlsVisible
+    && activeIsMarkdownDocument
+    && Boolean(activeReadingPath)
+    && (selectedItemType === 'wiki' || selectedItemType === 'external');
+  const meetingToolbarDisabled = meetingToolbarBusy || meetingToolbarFinalizing;
+  const meetingToolbarTitle = meetingToolbarFinalizing
+    ? 'Meeting recording is finalizing'
+    : meetingToolbarRecording ? 'Stop meeting recording' : 'Start meeting recording';
+  const showActiveReadingInFolder = () => {
+    if (activeReadingPath) {
+      window.shellAPI?.showItemInFolder(activeReadingPath);
+    }
+  };
+  const handleMeetingToolbarClick = useCallback(async () => {
+    setMeetingToolbarBusy(true);
+    try {
+      const result = meetingToolbarRecording
+        ? await window.commandsAPI?.stopMeeting?.()
+        : await window.commandsAPI?.startMeetingHere?.();
+      if (!result) {
+        console.warn('[Librarian] Meeting toolbar action is unavailable');
+        return;
+      }
+      if (!result.success) {
+        console.warn('[Librarian] Meeting toolbar action failed:', result.error ?? result.summaryError);
+        return;
+      }
+      setActiveMeetingSession(isMeetingToolbarActiveSession(result.session) ? result.session : null);
+    } catch (err) {
+      console.warn('[Librarian] Meeting toolbar action failed:', err);
+    } finally {
+      setMeetingToolbarBusy(false);
+    }
+  }, [meetingToolbarRecording]);
   activeReadingPathRef.current = activeReadingPath;
   activeReadingContentRef.current = activeReadingContent;
   const frozenRenderedDisplayContent = contentMode === 'rendered'
@@ -2903,7 +3200,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [activeReading?.mtime, activeReading?.path, activeReading?.title, onActiveFileUpdatedChange]);
 
   useEffect(() => {
-    if (!active || !activeReading || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) {
+    if (activeIsSourceOnlyDocument && contentMode !== 'markdown') {
+      setContentMode('markdown');
+    }
+  }, [activeIsSourceOnlyDocument, contentMode]);
+
+  useEffect(() => {
+    if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) {
       void window.commandsAPI?.setActiveLibraryFileContext?.(null);
       return;
     }
@@ -2923,7 +3226,30 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       filePath: sidebarItem.absPath,
       title: sidebarItem.title,
     });
-  }, [active, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType]);
+  }, [active, activeIsMarkdownDocument, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType]);
+
+  useEffect(() => {
+    if (!active) {
+      setActiveMeetingSession(null);
+      return;
+    }
+
+    let cancelled = false;
+    const updateActiveMeetingSession = (session: MeetingToolbarSession | null | undefined) => {
+      if (!cancelled) {
+        setActiveMeetingSession(isMeetingToolbarActiveSession(session) ? session : null);
+      }
+    };
+
+    void window.commandsAPI?.getActiveMeeting?.().then(updateActiveMeetingSession).catch((err) => {
+      console.warn('[Librarian] Failed to read active meeting session:', err);
+    });
+    const unsubscribe = window.commandsAPI?.onMeetingStatus?.(updateActiveMeetingSession);
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [active]);
 
   useEffect(() => {
     if (!activeTitlePath || editingTitlePath !== activeTitlePath) {
@@ -3309,9 +3635,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const topFadeActive = !!activeReading && readerTopFadeVisible;
 
   const markdownDisplay = useMemo(() => {
-    if ((selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
+    if (!activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
     return splitFrontmatter(renderedDisplayReadingContent ?? activeReading.content);
-  }, [selectedItemType, activeReading, renderedDisplayReadingContent]);
+  }, [activeIsMarkdownDocument, selectedItemType, activeReading, renderedDisplayReadingContent]);
 
   const wikiIndex = useMemo(() => buildWikiIndex([
     ...wikiIndexPages,
@@ -3323,6 +3649,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     ...commandIndexPages,
   ]), [commandIndexPages, readings, wikiIndexPages]);
   wikiIndexRef.current = wikiIndex;
+
+  const activeMarkdownLinkTarget = useMemo<WikiLinkTarget | null>(() => {
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      return { kind: 'wiki', relPath: wikiSelectedRelPath };
+    }
+    if (selectedItemType === 'artifact' && activeReading?.path) {
+      return { kind: 'artifact', path: activeReading.path };
+    }
+    return null;
+  }, [activeReading?.path, selectedItemType, wikiSelectedRelPath]);
+
+  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
+    if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks') return [];
+    return getMarkdownLinkedDocuments(
+      activeMarkdownLinkTarget,
+      activeReadingContent ?? activeReading.content,
+      markdownLinkRelationDocuments,
+      wikiIndex,
+    );
+  }, [
+    activeMarkdownLinkTarget,
+    activeReading,
+    activeReadingContent,
+    activeIsMarkdownDocument,
+    markdownLinkRelationDocuments,
+    selectedItemType,
+    wikiIndex,
+  ]);
 
   const markdownWikiLinkSuggestionItems = useMemo(() => {
     const seen = new Set<string>();
@@ -3636,7 +3990,78 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, [applyRenderedEditorBody]);
 
-  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
+  const applyRenderedWikiLinkSuggestion = useCallback((
+    suggestion: MarkdownWikiLinkSuggestion,
+    completionFallback: MarkdownWikiLinkCompletion | null,
+  ) => {
+    const editor = renderedMarkdownEditorRef.current;
+    const currentValue = editor?.getValue() ?? displaySourceBody;
+    const selection = editor?.getSelectionRange();
+    const liveCompletion = selection
+      ? getActiveMarkdownWikiLinkCompletion(currentValue, selection.start, selection.end)
+      : null;
+    const completion = liveCompletion ?? completionFallback;
+    if (!completion) return;
+    const edit = getMarkdownWikiLinkCompletionReplacement(currentValue, completion, suggestion.title);
+    if (!edit) return;
+
+    applyRenderedEditorBody(edit.nextValue, {
+      selectionStart: edit.selectionStart,
+      selectionEnd: edit.selectionEnd,
+    });
+    setMarkdownWikiLinkCompletion(null);
+    pendingRenderedEditorSelectionRef.current = {
+      start: edit.selectionStart,
+      end: edit.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+  }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
+
+	  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
+	    const completion = markdownWikiLinkCompletion;
+	    if (completion) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        event.stopPropagation();
+        setMarkdownWikiLinkCompletion(null);
+        return true;
+      }
+
+      if (markdownWikiLinkSuggestions.length > 0) {
+        if (event.key === 'ArrowDown') {
+          event.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index + 1) % markdownWikiLinkSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'ArrowUp') {
+          event.preventDefault();
+          setMarkdownWikiLinkSuggestionIndex((index) => (
+            (index - 1 + markdownWikiLinkSuggestions.length) % markdownWikiLinkSuggestions.length
+          ));
+          return true;
+        }
+
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          const suggestion = markdownWikiLinkSuggestions[
+            Math.min(markdownWikiLinkSuggestionIndex, markdownWikiLinkSuggestions.length - 1)
+          ];
+          applyRenderedWikiLinkSuggestion(suggestion, completion);
+          return true;
+        }
+      }
+    }
+
+    if (isImmersiveToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleFocusChromeShortcut();
+      return true;
+    }
+
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -3665,6 +4090,29 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
 
     const value = editor.getValue();
+    if (event.key === 'Tab' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const indentEdit = getMarkdownListIndentEdit(value, selection.start, selection.end, event.shiftKey ? 'out' : 'in');
+      if (indentEdit) return applyRenderedShortcutEdit(indentEdit);
+    }
+
+    if (
+      (event.key === 'Backspace' || event.key === 'Delete')
+      && !event.metaKey
+      && !event.ctrlKey
+      && !event.altKey
+      && !event.shiftKey
+      && shouldSuppressRenderedMarkdownBoundaryDelete(value, selection.start, selection.end, event.key)
+    ) {
+      event.preventDefault();
+      event.stopPropagation();
+      return true;
+    }
+
+    if (event.key === 'Enter' && !event.metaKey && !event.ctrlKey && !event.altKey) {
+      const enterEdit = getRenderedMarkdownEnterEdit(value, selection.start, selection.end);
+      if (enterEdit) return applyRenderedShortcutEdit(enterEdit);
+    }
+
     const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
       event,
       value,
@@ -3684,17 +4132,63 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [
     activeReading,
     applyRenderedEditorBody,
+    applyRenderedWikiLinkSuggestion,
     clearRenderedEditingState,
     focusRenderedEditor,
-    unorderedListMarker,
-  ]);
+    markdownWikiLinkCompletion,
+	    markdownWikiLinkSuggestionIndex,
+	    markdownWikiLinkSuggestions,
+	    toggleFocusChromeShortcut,
+	    unorderedListMarker,
+	  ]);
+
+  const updateRenderedEditorWikiLinkCompletion = useCallback((
+    snapshot: MarkdownCodeEditorSelectionSnapshot,
+  ) => {
+    const completionPosition = snapshot.caretPosition ?? { top: 0, left: 0 };
+    const autoCloseEdit = snapshot.docChanged && snapshot.inputType === 'insertText' && snapshot.inputData === '['
+      ? getMarkdownWikiLinkAutoCloseEdit(snapshot.value, snapshot.selectionStart, snapshot.selectionEnd)
+      : null;
+    if (autoCloseEdit) {
+      applyRenderedEditorBody(autoCloseEdit.nextValue, {
+        selectionStart: autoCloseEdit.selectionStart,
+        selectionEnd: autoCloseEdit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: autoCloseEdit.selectionStart,
+        end: autoCloseEdit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+        autoCloseEdit.nextValue,
+        autoCloseEdit.selectionStart,
+        autoCloseEdit.selectionEnd,
+        completionPosition,
+      ));
+      return;
+    }
+
+    setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+      snapshot.value,
+      snapshot.selectionStart,
+      snapshot.selectionEnd,
+      completionPosition,
+    ));
+  }, [applyRenderedEditorBody, focusRenderedEditor]);
 
   const handleRenderedEditorSelectionChange = useCallback((snapshot: MarkdownCodeEditorSelectionSnapshot) => {
     activeRenderedCaretOffsetRef.current = snapshot.selectionHead;
-  }, []);
+    updateRenderedEditorWikiLinkCompletion(snapshot);
+  }, [updateRenderedEditorWikiLinkCompletion]);
 
   const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
-    if (!shouldOpenMarkdownLinkFromMouseDown(event)) return false;
+    if (!shouldOpenMarkdownLinkFromMouseDown({
+      button: event.button,
+      metaKey: event.metaKey,
+      altKey: event.altKey,
+      ctrlKey: event.ctrlKey,
+      renderedEditingActive: renderedEditingActiveRef.current,
+    })) return false;
     const action = getMarkdownEditorLinkActionAtOffset(displaySourceBody, offset, wikiIndex);
     if (action.kind === 'noop') return false;
     event.preventDefault();
@@ -3736,13 +4230,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       void insertPastedClipboardImagePathInRenderedEditor(clipboardData);
       return true;
     }
-    if (!pastedText) return false;
+	    if (!pastedText) return false;
 
-    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
-    if (!localImageMarkdown) return false;
-    applyRenderedTextInsertion(localImageMarkdown);
-    return true;
-  }, [applyRenderedTextInsertion, insertPastedClipboardImagePathInRenderedEditor]);
+	    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
+	    applyRenderedTextInsertion(localImageMarkdown ?? pastedText);
+	    return true;
+	  }, [applyRenderedTextInsertion, insertPastedClipboardImagePathInRenderedEditor]);
 
   useEffect(() => {
     clearRenderedEditingState('path-or-mode-changed');
@@ -4622,7 +5115,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       void (async () => {
         setSearchQuery('');
         openWikiPage(initialOpenTarget.path);
-        if (initialOpenTarget.contentMode === 'markdown') {
+        if (initialOpenTarget.contentMode === 'rendered') {
+          setContentMode('rendered');
+        } else if (initialOpenTarget.contentMode === 'markdown') {
           setContentMode('markdown');
           setFocusImmersive(true);
           focusMarkdownEditorOnOpenRef.current = true;
@@ -4704,7 +5199,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setContentMode('rendered');
     } else if (item.type === 'external') {
       await selectExternalFile(item.absPath);
-      setContentMode('rendered');
     } else if (item.type === 'bookmarks') {
       setSelectedItemId(BOOKMARKS_ITEM_ID);
       setSelectedItemType('bookmarks');
@@ -5753,6 +6247,102 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   };
 
+  const renderMarkdownWikiLinkSuggestionMenu = (
+    onSelectSuggestion: (
+      suggestion: MarkdownWikiLinkSuggestion,
+      completion: MarkdownWikiLinkCompletion,
+    ) => void,
+  ) => {
+    const completion = markdownWikiLinkCompletion;
+    if (!completion || markdownWikiLinkSuggestions.length === 0) return null;
+
+    return (
+      <div
+        role="listbox"
+        aria-label="Wiki link suggestions"
+        onMouseDown={(e) => e.preventDefault()}
+        style={{
+          position: 'absolute',
+          top: `${completion.top}px`,
+          left: `${completion.left}px`,
+          width: '260px',
+          maxHeight: '176px',
+          overflowY: 'auto',
+          zIndex: 4,
+          padding: '4px',
+          borderRadius: '6px',
+          backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
+          border: `1px solid ${theme.border}`,
+          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
+          backdropFilter: 'blur(10px)',
+        }}
+      >
+        {markdownWikiLinkSuggestions.map((suggestion, index) => {
+          const selected = index === markdownWikiLinkSuggestionIndex;
+          return (
+            <button
+              key={`${suggestion.kind}:${suggestion.detail}:${suggestion.title}`}
+              type="button"
+              role="option"
+              aria-selected={selected}
+              onMouseEnter={() => setMarkdownWikiLinkSuggestionIndex(index)}
+              onClick={() => onSelectSuggestion(suggestion, completion)}
+              style={{
+                display: 'block',
+                width: '100%',
+                border: 'none',
+                borderRadius: '4px',
+                padding: '6px 7px',
+                textAlign: 'left',
+                backgroundColor: selected
+                  ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
+                  : 'transparent',
+                color: theme.text,
+                cursor: 'pointer',
+                fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+              }}
+            >
+              <span
+                style={{
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: '12px',
+                  lineHeight: '16px',
+                }}
+              >
+                {suggestion.title}
+              </span>
+              <span
+                style={{
+                  display: 'block',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  fontSize: '10px',
+                  lineHeight: '13px',
+                  color: theme.textSecondary,
+                }}
+              >
+                {suggestion.kind} - {suggestion.detail}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    );
+  };
+
+  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen;
+  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
+  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!sidebarTemporarilyExpanded) return;
+    const target = event.target;
+    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
+    setSidebarHoverExpanded(false);
+  }, [sidebarTemporarilyExpanded]);
+
   // Setup wizard - shown on first visit
   if (!loading && setupComplete === false) {
     return <LibrarianSetupWizard onComplete={handleSetupComplete} />;
@@ -5927,15 +6517,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       </div>
     );
   }
-
-  const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen;
-  const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded;
-  const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
-    if (!sidebarTemporarilyExpanded) return;
-    const target = event.target;
-    if (target instanceof Node && sidebarPaneRef.current?.contains(target)) return;
-    setSidebarHoverExpanded(false);
-  }, [sidebarTemporarilyExpanded]);
 
   return (
     <div
@@ -6162,6 +6743,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   >←</button>
                 </div>
               )}
+              {activeReadingToolbarHasBreadcrumb && (
+                <ContentToolbarFolderButton onClick={showActiveReadingInFolder} />
+              )}
               {/* Breadcrumb — "folder / filename" for wiki, "parent / filename"
                   + External chip for external. Artifacts skip this (title
                   already renders prominently in the content area). */}
@@ -6242,8 +6826,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
                 onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
                 showDelete={focusToolbarControlsVisible}
-                onShowInFolder={focusToolbarControlsVisible ? () => activeReading?.path && window.shellAPI?.showItemInFolder(activeReading.path) : undefined}
-                showFolder={focusToolbarControlsVisible}
+                onShowInFolder={focusToolbarControlsVisible && activeReadingPath ? showActiveReadingInFolder : undefined}
+                showFolder={focusToolbarControlsVisible && !activeReadingToolbarHasBreadcrumb}
                 onCopy={focusToolbarControlsVisible && shareStatus?.shared ? copyShareLink : undefined}
                 showCopy={focusToolbarControlsVisible && !!shareStatus?.shared}
                 shareStatus={shareStatus}
@@ -6253,6 +6837,55 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 copyPathCopied={copyPathCopied}
                 copyPathTitle="Copy selected text or file path (⌘C)"
               />
+
+              {meetingToolbarVisible && (
+                <button
+                  type="button"
+                  onClick={() => void handleMeetingToolbarClick()}
+                  disabled={meetingToolbarDisabled}
+                  title={meetingToolbarTitle}
+                  aria-label={meetingToolbarTitle}
+                  style={{
+                    width: '26px',
+                    height: '24px',
+                    padding: '4px 6px',
+                    color: meetingToolbarRecording ? '#dc2626' : theme.textSecondary,
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    borderRadius: '4px',
+                    cursor: meetingToolbarDisabled ? 'default' : 'pointer',
+                    opacity: meetingToolbarDisabled ? 0.65 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    transition: 'background-color 0.15s ease, color 0.15s ease',
+                    // @ts-ignore - opt out of the drag region so the click lands.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (meetingToolbarDisabled) return;
+                    e.currentTarget.style.backgroundColor = meetingToolbarRecording
+                      ? 'rgba(220,38,38,0.08)'
+                      : theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                    e.currentTarget.style.color = meetingToolbarRecording ? '#b91c1c' : theme.text;
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.backgroundColor = 'transparent';
+                    e.currentTarget.style.color = meetingToolbarRecording ? '#dc2626' : theme.textSecondary;
+                  }}
+                >
+                  {meetingToolbarRecording ? (
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                      <rect x="4" y="4" width="8" height="8" rx="1.5" />
+                    </svg>
+                  ) : (
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <circle cx="8" cy="8" r="5.25" stroke="currentColor" strokeWidth="1.5" />
+                      <circle cx="8" cy="8" r="2.25" fill="currentColor" />
+                    </svg>
+                  )}
+                </button>
+              )}
 
               {/* Agent kickoff — opens a popup that dispatches the user's
                   locally-installed Claude Code / Codex CLI against this file. */}
@@ -6413,8 +7046,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     onClick={() => {
                       if (contentMode !== 'markdown' && activeReading) enterEditMode();
                     }}
-                    title="Markdown source"
-                    aria-label="Markdown source"
+                    title={activeIsMarkdownDocument ? 'Markdown source' : 'Source'}
+                    aria-label={activeIsMarkdownDocument ? 'Markdown source' : 'Source'}
                     style={{
                       width: '26px',
                       height: '22px',
@@ -6439,8 +7072,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   </button>
                   <button
                     onClick={() => {
-                      if (contentMode === 'markdown') void exitEditMode();
+                      if (!activeIsSourceOnlyDocument && contentMode === 'markdown') void exitEditMode();
                     }}
+                    disabled={activeIsSourceOnlyDocument}
                     title="Rendered"
                     aria-label="Rendered"
                     style={{
@@ -6456,7 +7090,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                         : 'transparent',
                       border: 'none',
                       borderRadius: '4px',
-                      cursor: 'pointer',
+                      cursor: activeIsSourceOnlyDocument ? 'default' : 'pointer',
+                      opacity: activeIsSourceOnlyDocument ? 0.45 : 1,
                       transition: 'all 0.15s ease',
                     }}
                   >
@@ -6551,7 +7186,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 }}
               />
             )}
-            {contentMode === 'markdown' ? (
+            {contentMode === 'markdown' || activeIsSourceOnlyDocument ? (
               /* Markdown edit mode */
               <div
                 style={{
@@ -6605,90 +7240,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     background="transparent"
                     caretColor={theme.accent}
                     blinkCursor={blinkTextCursor}
-                    placeholder="Write your markdown here..."
+                    placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     dataAttributes={{
-                      'data-ft-agent-context': 'markdown',
+                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
                       'data-ft-agent-file-path': activeReading.path,
                       'data-ft-agent-title': activeReading.title,
                     }}
                   />
                 </div>
-                {markdownWikiLinkCompletion && markdownWikiLinkSuggestions.length > 0 && (
-                  <div
-                    role="listbox"
-                    aria-label="Wiki link suggestions"
-                    onMouseDown={(e) => e.preventDefault()}
-                    style={{
-                      position: 'absolute',
-                      top: `${markdownWikiLinkCompletion.top}px`,
-                      left: `${markdownWikiLinkCompletion.left}px`,
-                      width: '260px',
-                      maxHeight: '176px',
-                      overflowY: 'auto',
-                      zIndex: 4,
-                      padding: '4px',
-                      borderRadius: '6px',
-                      backgroundColor: theme.isDark ? 'rgba(22,22,22,0.96)' : 'rgba(255,255,255,0.96)',
-                      border: `1px solid ${theme.border}`,
-                      boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.28)' : '0 8px 24px rgba(0,0,0,0.12)',
-                      backdropFilter: 'blur(10px)',
-                    }}
-                  >
-                    {markdownWikiLinkSuggestions.map((suggestion, index) => {
-                      const selected = index === markdownWikiLinkSuggestionIndex;
-                      return (
-                        <button
-                          key={`${suggestion.kind}:${suggestion.detail}:${suggestion.title}`}
-                          type="button"
-                          role="option"
-                          aria-selected={selected}
-                          onMouseEnter={() => setMarkdownWikiLinkSuggestionIndex(index)}
-                          onClick={() => applyMarkdownWikiLinkSuggestion(suggestion, markdownWikiLinkCompletion)}
-                          style={{
-                            display: 'block',
-                            width: '100%',
-                            border: 'none',
-                            borderRadius: '4px',
-                            padding: '6px 7px',
-                            textAlign: 'left',
-                            backgroundColor: selected
-                              ? (theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.07)')
-                              : 'transparent',
-                            color: theme.text,
-                            cursor: 'pointer',
-                            fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-                          }}
-                        >
-                          <span
-                            style={{
-                              display: 'block',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              fontSize: '12px',
-                              lineHeight: '16px',
-                            }}
-                          >
-                            {suggestion.title}
-                          </span>
-                          <span
-                            style={{
-                              display: 'block',
-                              overflow: 'hidden',
-                              textOverflow: 'ellipsis',
-                              whiteSpace: 'nowrap',
-                              fontSize: '10px',
-                              lineHeight: '13px',
-                              color: theme.textSecondary,
-                            }}
-                          >
-                            {suggestion.kind} - {suggestion.detail}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
+                {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
                 {markdownUrlPasteChoice && (
                   <div
                     onMouseDown={(e) => e.preventDefault()}
@@ -6758,6 +7318,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               }}
               onClick={(e) => {
                 if (!activeReading) return;
+                if (!activeIsMarkdownDocument) return;
                 if (renderedEditingActiveRef.current) return;
                 const target = e.target instanceof Element ? e.target : null;
                 if (target?.closest('.cm-editor, .cm-content')) {
@@ -6775,7 +7336,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 activateRenderedTextEditing();
               }}
               onKeyDown={(event) => {
-                if (renderedEditingActiveRef.current || !activeReading) return;
+                if (renderedEditingActiveRef.current || !activeReading || !activeIsMarkdownDocument) return;
                 if (event.key !== 'Enter') return;
                 event.preventDefault();
                 activateRenderedTextEditing();
@@ -6786,56 +7347,78 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 position: 'relative',
                 outline: 'none',
                 userSelect: 'text',
-                cursor: activeReading ? 'text' : 'default',
+                cursor: activeReading && activeIsMarkdownDocument ? 'text' : 'default',
                 caretColor: theme.accent,
               }}
             >
-              <MarkdownCodeEditor
-                ref={renderedMarkdownEditorRef}
-                presentation="rendered"
-                value={displaySourceBody}
-                onChange={handleRenderedEditorChange}
-                onKeyDown={handleRenderedEditorKeyDown}
-                onMouseDown={handleRenderedEditorMouseDown}
-                onPaste={handleRenderedEditorPaste}
-                onImagePreview={setRenderedImagePreview}
-                onFocus={() => {
-                  deactivateSidebarKeyboard();
-                  commitTitleEditIfActive();
-                  activateRenderedEditing();
-                  recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
-                }}
-                onBlur={() => clearRenderedEditingState('blur')}
-                onSelectionChange={handleRenderedEditorSelectionChange}
-                fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
-                fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
-                lineHeight={(documentTextStyle.lineHeight as string | number) ?? 1.6}
-                color={(documentTextStyle.color as string) ?? theme.text}
-                headingFontFamily={typographyPreset.headingFontFamily}
-                h1Size={textSizes[textSize].h1}
-                h2Size={textSizes[textSize].h2}
-                h3Size={textSizes[textSize].h3}
-                linkColor={theme.accent}
-                mutedColor={theme.textSecondary}
-                paragraphSpacing={documentParagraphSpacing}
-                background="transparent"
-                caretColor={theme.accent}
-                blinkCursor={blinkTextCursor}
-                placeholder="Rendered text editor"
-                dataAttributes={{
-                  'data-ft-rendered-editor-input': 'true',
-                  'data-ft-agent-context': 'markdown',
-                  'data-ft-agent-file-path': activeReading.path,
-                  'data-ft-agent-title': activeReading.title,
-                }}
-                spellCheck
-                bottomRoomPx={0}
-                style={{
-                  width: '100%',
-                  minHeight: '160px',
-                  height: 'auto',
-                }}
-              />
+              {activeIsHtmlDocument && activeReadingPath ? (
+                <iframe
+                  title={activeReading.title}
+                  data-ft-html-preview="true"
+                  srcDoc={getHtmlPreviewSrcDoc(activeReadingContent ?? activeReading.content, activeReadingPath)}
+                  sandbox=""
+                  style={{
+                    display: 'block',
+                    width: '100%',
+                    minHeight: '520px',
+                    height: 'min(72vh, 820px)',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '6px',
+                    backgroundColor: '#fff',
+                  }}
+                />
+              ) : (
+                <>
+                  <MarkdownCodeEditor
+                    ref={renderedMarkdownEditorRef}
+                    presentation="rendered"
+                    value={displaySourceBody}
+                    onChange={handleRenderedEditorChange}
+                    onKeyDown={handleRenderedEditorKeyDown}
+                    onMouseDown={handleRenderedEditorMouseDown}
+                    onPaste={handleRenderedEditorPaste}
+                    onImagePreview={setRenderedImagePreview}
+                    onFocus={() => {
+                      deactivateSidebarKeyboard();
+                      commitTitleEditIfActive();
+                      activateRenderedEditing();
+                      recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
+                    }}
+                    onBlur={() => clearRenderedEditingState('blur')}
+                    onSelectionChange={handleRenderedEditorSelectionChange}
+                    fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
+                    fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
+                    lineHeight={(documentTextStyle.lineHeight as string | number) ?? 1.6}
+                    color={(documentTextStyle.color as string) ?? theme.text}
+                    headingFontFamily={typographyPreset.headingFontFamily}
+                    h1Size={textSizes[textSize].h1}
+                    h2Size={textSizes[textSize].h2}
+                    h3Size={textSizes[textSize].h3}
+                    linkColor={theme.accent}
+                    mutedColor={theme.textSecondary}
+                    paragraphSpacing={documentParagraphSpacing}
+                    background="transparent"
+                    caretColor={theme.accent}
+                    blinkCursor={blinkTextCursor}
+                    placeholder="Rendered text editor"
+                    dataAttributes={{
+                      'data-ft-rendered-editor-input': 'true',
+                      'data-ft-agent-context': 'markdown',
+                      'data-ft-agent-file-path': activeReading.path,
+                      'data-ft-agent-title': activeReading.title,
+                    }}
+                    spellCheck
+                    bottomRoomPx={0}
+                    style={{
+                      width: '100%',
+                      minHeight: '160px',
+                      height: 'auto',
+                    }}
+                  />
+                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
+                  <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
+                </>
+              )}
               {contentBottomScrollSpace > 0 && (
                 <div
                   aria-hidden="true"
