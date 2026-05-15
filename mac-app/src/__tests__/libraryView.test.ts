@@ -14,6 +14,7 @@ import {
   getRenderedMarkdownNodeStartLine,
   getRenderedMarkdownDeleteShortcutEdit,
   getRenderedMarkdownEnterEdit,
+  getRenderedMarkdownPasteTextEdit,
   getRenderedMarkdownShortcutEdit,
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
@@ -1130,6 +1131,51 @@ describe('rendered markdown edit helpers', () => {
       selectionStart: imageStart,
       selectionEnd: imageStart,
     });
+  });
+
+  it('turns empty rendered list marker lines back into blank lines on delete', () => {
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '- first\n- \nafter',
+      selectionStart: 10,
+      selectionEnd: 10,
+    })).toEqual({
+      nextValue: '- first\n\nafter',
+      selectionStart: 8,
+      selectionEnd: 8,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Delete' }),
+      value: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    })).toEqual({
+      nextValue: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value: '1. ',
+      selectionStart: 3,
+      selectionEnd: 3,
+    })).toEqual({
+      nextValue: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+    });
+  });
+
+  it('fills an empty rendered todo line when pasting todo text', () => {
+    expect(getRenderedMarkdownPasteTextEdit('- [ ] ', 6, 6, '- [ ] follow up')).toEqual({
+      nextValue: '- [ ] follow up',
+      selectionStart: 15,
+      selectionEnd: 15,
+    });
+
+    expect(getRenderedMarkdownPasteTextEdit('- [ ] existing', 6, 6, '- [ ] follow up')).toBeNull();
   });
 
   it('suppresses plain deletes that would expose hidden rendered markdown syntax', () => {

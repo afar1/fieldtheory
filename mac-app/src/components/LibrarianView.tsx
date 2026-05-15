@@ -746,6 +746,52 @@ export function getMarkdownListEnterEdit(value: string, selectionStart: number, 
   return insertAt(line.length - unordered[3].length, insertion);
 }
 
+function getEmptyMarkdownListLineRange(value: string, selectionStart: number, selectionEnd: number): { lineStart: number; lineEnd: number } | null {
+  if (selectionStart !== selectionEnd) return null;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const marker = line.match(/^\s*(?:[-*+]\s+|\d+[.)]\s+|[-*+]\s+\[(?: |x|X)\]\s*|\[(?: |x|X)?\]\s*)$/);
+  if (!marker) return null;
+  return { lineStart, lineEnd };
+}
+
+export function getEmptyMarkdownListMarkerDeleteEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownTextEdit | null {
+  const range = getEmptyMarkdownListLineRange(value, selectionStart, selectionEnd);
+  if (!range) return null;
+  return {
+    nextValue: `${value.slice(0, range.lineStart)}${value.slice(range.lineEnd)}`,
+    selectionStart: range.lineStart,
+    selectionEnd: range.lineStart,
+  };
+}
+
+export function getRenderedMarkdownPasteTextEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  pastedText: string,
+): MarkdownTextEdit | null {
+  const range = getEmptyMarkdownListLineRange(value, selectionStart, selectionEnd);
+  if (!range) return null;
+  const pastedTask = pastedText.trim().match(/^(?:[-*+]\s+)?\[(?: |x|X)?\]\s*(.+)$/);
+  if (!pastedTask?.[1]?.trim()) return null;
+  const line = value.slice(range.lineStart, range.lineEnd);
+  if (!/^\s*(?:[-*+]\s+)?\[(?: |x|X)?\]\s*$/.test(line)) return null;
+  const nextLine = `${line}${pastedTask[1].trim()}`;
+  const nextSelection = range.lineStart + nextLine.length;
+  return {
+    nextValue: `${value.slice(0, range.lineStart)}${nextLine}${value.slice(range.lineEnd)}`,
+    selectionStart: nextSelection,
+    selectionEnd: nextSelection,
+  };
+}
+
 export function getCarrotListTabEdit(
   value: string,
   selectionStart: number,
@@ -1117,6 +1163,9 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
       selectionEnd: selectionStart,
     };
   }
+
+  const emptyMarkerEdit = getEmptyMarkdownListMarkerDeleteEdit(input.value, selectionStart, selectionEnd);
+  if (emptyMarkerEdit) return emptyMarkerEdit;
 
   const imageRange = getAdjacentRenderedMarkdownImageDeleteRange(
     input.value,
@@ -4114,6 +4163,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (indentEdit) return applyRenderedShortcutEdit(indentEdit);
     }
 
+    const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
+      event,
+      value,
+      selectionStart: selection.start,
+      selectionEnd: selection.end,
+    });
+    if (deleteEdit) return applyRenderedShortcutEdit(deleteEdit);
+
     if (
       (event.key === 'Backspace' || event.key === 'Delete')
       && !event.metaKey
@@ -4131,14 +4188,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const enterEdit = getRenderedMarkdownEnterEdit(value, selection.start, selection.end);
       if (enterEdit) return applyRenderedShortcutEdit(enterEdit);
     }
-
-    const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
-      event,
-      value,
-      selectionStart: selection.start,
-      selectionEnd: selection.end,
-    });
-    if (deleteEdit) return applyRenderedShortcutEdit(deleteEdit);
 
     const edit = getRenderedMarkdownShortcutEdit({
       event,
@@ -4225,6 +4274,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const selectionStart = selection?.start ?? currentValue.length;
     const selectionEnd = selection?.end ?? selectionStart;
     const insertedText = formatPastedLocalImageMarkdown(text) ?? text;
+    const pasteEdit = getRenderedMarkdownPasteTextEdit(currentValue, selectionStart, selectionEnd, insertedText);
+    if (pasteEdit) {
+      applyRenderedEditorBody(pasteEdit.nextValue, {
+        selectionStart: pasteEdit.selectionStart,
+        selectionEnd: pasteEdit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: pasteEdit.selectionStart,
+        end: pasteEdit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      return;
+    }
     const nextValue = `${currentValue.slice(0, selectionStart)}${insertedText}${currentValue.slice(selectionEnd)}`;
     const nextSelection = selectionStart + insertedText.length;
     applyRenderedEditorBody(nextValue, {
@@ -5117,7 +5179,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const page = await window.libraryAPI?.createFile(location.rootPath, location.relPath, fileName.trim());
       if (page?.absPath) {
         await selectExternalFile(page.absPath);
-        setContentMode('markdown');
+        setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(page.absPath, 'external')));
         return page;
       }
       return false;
@@ -5127,7 +5189,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (page) {
       dispatchLocalWikiAdded(page);
       openWikiPage(page.relPath);
-      setContentMode('markdown');
+      setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(page.absPath, 'wiki')));
       return page;
     }
     return false;
@@ -5140,7 +5202,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setEditContent(page.content);
     lastSavedContentRef.current = page.content;
     lastSavedVersionRef.current = page.documentVersion;
-    setContentMode('markdown');
+    setContentMode(getLibraryDocumentDefaultContentMode(getLibraryDocumentViewKind(page.absPath, 'wiki')));
   }, [openWikiPage]);
 
   useEffect(() => {
