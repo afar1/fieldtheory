@@ -89,6 +89,7 @@ import {
   collectSidebarSiblingItems,
   clearLibraryDragData,
   canDropLibraryItem,
+  EMBER_ITEM_ID,
   filterStaleRecent,
   filterUnifiedFolders,
   getLibraryDragData,
@@ -1580,6 +1581,21 @@ describe('librarian navigation history helpers', () => {
     });
   });
 
+  it('keeps Ember as a navigable history entry between files', () => {
+    let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' });
+    history = pushLibrarianNavigationEntry(history, { itemType: 'ember', itemPath: EMBER_ITEM_ID });
+    history = pushLibrarianNavigationEntry(history, { itemType: 'wiki', itemPath: 'Ember/Mom' });
+
+    const back = moveLibrarianNavigationHistory(history, -1);
+
+    expect(back?.entry).toEqual({ itemType: 'ember', itemPath: EMBER_ITEM_ID });
+    expect(back?.history.entries).toEqual([
+      { itemType: 'wiki', itemPath: 'entries/a' },
+      { itemType: 'ember', itemPath: EMBER_ITEM_ID },
+      { itemType: 'wiki', itemPath: 'Ember/Mom' },
+    ]);
+  });
+
   it('clears forward history when a new file is opened after going back', () => {
     let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' });
     history = pushLibrarianNavigationEntry(history, { itemType: 'artifact', itemPath: '/tmp/b.md' });
@@ -2383,6 +2399,13 @@ describe('recursive sidebar tree helpers', () => {
 
     expect(unpinned.has('artifacts')).toBe(false);
     expect(toggleSidebarPinnedItemIds(unpinned, 'artifacts').has('artifacts')).toBe(true);
+  });
+
+  it('allows Ember to be pinned and unpinned like other sidebar shortcuts', () => {
+    const pinned = toggleSidebarPinnedItemIds(new Set(), EMBER_ITEM_ID);
+
+    expect(pinned.has(EMBER_ITEM_ID)).toBe(true);
+    expect(toggleSidebarPinnedItemIds(pinned, EMBER_ITEM_ID).has(EMBER_ITEM_ID)).toBe(false);
   });
 
   it('keeps pinned wiki docs and folders pinned after rename', () => {
