@@ -651,6 +651,14 @@ export function getMarkdownWikiLinkCompletionReplacement(
   };
 }
 
+export function getMarkdownWikiLinkCompletionCommitEdit(
+  markdown: string,
+  completion: MarkdownWikiLinkCompletion,
+): MarkdownWikiLinkCompletionEdit | null {
+  const currentTitle = markdown.slice(completion.queryStart, completion.replaceEnd).trim();
+  return getMarkdownWikiLinkCompletionReplacement(markdown, completion, currentTitle);
+}
+
 export function getMarkdownWikiLinkAutoCloseEdit(
   markdown: string,
   selectionStart: number,
