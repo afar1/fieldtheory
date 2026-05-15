@@ -202,6 +202,7 @@ export interface ModelInfo {
   url: string;
   sizeBytes: number;
   description: string;
+  supportsSpeakerDiarization?: boolean;
 }
 
 /**

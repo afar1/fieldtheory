@@ -18,6 +18,7 @@ import { AudioManager } from './audioManager';
 import { TrayManager } from './trayManager';
 import type { TranscriberManager } from './transcriberManager';
 import {
+  DEFAULT_MEETING_SUMMARY_PROMPT,
   PreferencesManager,
   normalizeClipboardHistorySizeKey,
   normalizeLauncherRootSearchEnabledKinds,
@@ -93,6 +94,7 @@ import { CommandsManager, DEFAULT_IMPROVE_COMMAND_CONTENT, PortableCommand } fro
 import { CommandSyncService } from './commandSyncService';
 import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlmProgressEvent } from './localLlmManager';
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
+import { MeetingManager, type MeetingFileContext, type MeetingSession } from './meetingManager';
 import { LibrarySyncService } from './librarySyncService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
@@ -813,6 +815,7 @@ let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let localLlmManager: LocalLlmManager | null = null;
 let maxwellRunManager: MaxwellRunManager | null = null;
+let meetingManager: MeetingManager | null = null;
 let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
@@ -1077,6 +1080,52 @@ function getMaxwellRunManager(): MaxwellRunManager {
     : path.join(app.getPath('userData'), 'maxwell.db');
   maxwellRunManager.setDatabasePath(dbPath);
   return maxwellRunManager;
+}
+
+function broadcastMeetingStatus(status: MeetingSession): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('meetings:status', status);
+    }
+  });
+}
+
+function getMeetingManager(): MeetingManager {
+  if (meetingManager) return meetingManager;
+  if (!librarianManager || !transcriberManager) {
+    throw new Error('Field Theory meetings are not ready');
+  }
+
+  meetingManager = new MeetingManager({
+    librarian: librarianManager,
+    transcriber: transcriberManager,
+    localLlm: getLocalLlmManager(),
+    getMeetingSummaryPrompt: () => preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT,
+    getMaxwellRunManager,
+    readMemorySnapshot: () => readMaxwellMemorySnapshot(true),
+    canWrite: canWriteFieldTheoryContent,
+    onBlockedWrite: () => blockWrite(),
+  });
+  meetingManager.on('status', (status: MeetingSession) => {
+    broadcastMeetingStatus(status);
+  });
+  meetingManager.on('summary-progress', (event: LocalLlmProgressEvent & { filePath?: string; runId?: string }) => {
+    const isDone = event.phase === 'done';
+    const isError = event.kind === 'error' || event.phase === 'error';
+    emitLocalCommandStatus({
+      status: isDone ? 'success' : isError ? 'error' : 'running',
+      message: event.message,
+      detail: compactLocalCommandDetail(event.detail),
+      eventKind: event.kind,
+      commandName: 'summarize-meeting',
+      filePath: event.filePath,
+      mode: 'document',
+      runId: event.runId,
+      phase: event.phase ?? 'generating',
+      error: isError ? event.message : undefined,
+    });
+  });
+  return meetingManager;
 }
 
 const MAXWELL_MEMORY_MAX_CHARS = 12_000;
@@ -6050,6 +6099,37 @@ function setupClipboardIPCHandlers(): void {
       : { success: false, error: 'Offline commands require the local model.' };
   });
 
+  ipcMain.handle(ClipboardIPCChannels.GET_MEETING_SUMMARY_PROMPT, async () => {
+    return preferencesManager?.getPreference('meetingSummaryPrompt') || DEFAULT_MEETING_SUMMARY_PROMPT;
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.SAVE_MEETING_SUMMARY_PROMPT, async (_event, prompt: string) => {
+    if (!preferencesManager) {
+      return { success: false, error: 'Preferences manager not initialized.' };
+    }
+
+    if (typeof prompt !== 'string') {
+      return { success: false, error: 'Meeting notes prompt must be text.' };
+    }
+
+    const trimmed = prompt.trim();
+    if (!trimmed) {
+      return { success: false, error: 'Meeting notes prompt cannot be empty.' };
+    }
+
+    await preferencesManager.save({ meetingSummaryPrompt: prompt });
+    return { success: true, prompt };
+  });
+
+  ipcMain.handle(ClipboardIPCChannels.RESET_MEETING_SUMMARY_PROMPT, async () => {
+    if (!preferencesManager) {
+      return { success: false, prompt: DEFAULT_MEETING_SUMMARY_PROMPT, error: 'Preferences manager not initialized.' };
+    }
+
+    await preferencesManager.save({ meetingSummaryPrompt: DEFAULT_MEETING_SUMMARY_PROMPT });
+    return { success: true, prompt: DEFAULT_MEETING_SUMMARY_PROMPT };
+  });
+
   // =========================================================================
   // Improved Content Management - Save/clear improved versions of transcriptions
   // =========================================================================
@@ -8666,6 +8746,50 @@ function setupClipboardIPCHandlers(): void {
   });
 }
 
+function setupMeetingsIPCHandlers(): void {
+  const runMeetingAction = async (action: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return await action();
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : 'Meeting action failed',
+      };
+    }
+  };
+
+  ipcMain.handle('meetings:create', async (_event, rawTitle?: unknown) => runMeetingAction(async () => {
+    const title = typeof rawTitle === 'string' ? rawTitle : undefined;
+    return getMeetingManager().createMeetingNote(title);
+  }));
+
+  ipcMain.handle('meetings:startHere', async () => runMeetingAction(async () => {
+    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
+    return getMeetingManager().startHere(context);
+  }));
+
+  ipcMain.handle('meetings:stop', async () => runMeetingAction(async () => {
+    return getMeetingManager().stopActiveMeeting();
+  }));
+
+  ipcMain.handle('meetings:cancel', async () => runMeetingAction(async () => {
+    return getMeetingManager().cancelActiveMeeting();
+  }));
+
+  ipcMain.handle('meetings:getActive', () => {
+    try {
+      return getMeetingManager().getActiveSession();
+    } catch {
+      return null;
+    }
+  });
+
+  ipcMain.handle('meetings:summarizeCurrent', async () => runMeetingAction(async () => {
+    const context: MeetingFileContext | null = activeLibraryFileContext ? { ...activeLibraryFileContext } : null;
+    return getMeetingManager().summarizeCurrentMeeting(context);
+  }));
+}
+
 
 /**
  * Set up IPC handlers for onboarding wizard.
@@ -9752,6 +9876,20 @@ async function initTranscriberSystem(): Promise<void> {
     isAvailable: hasFocusedFieldTheoryMarkdownInsertionTarget,
     insertText: insertTextIntoFocusedFieldTheoryMarkdown,
   });
+  transcriberManager.setMeetingCaptureHotkeyHandler(async () => {
+    const result = await getMeetingManager().stopActiveMeeting();
+    if (!result.success) {
+      const message = result.error ?? result.summaryError ?? 'Could not stop meeting';
+      log.warn('Could not stop meeting from transcription hotkey: %s', message);
+      emitLocalCommandStatus({
+        status: 'error',
+        message,
+        commandName: 'stop-meeting',
+        mode: 'document',
+        error: message,
+      });
+    }
+  });
   await transcriberManager.init();
   startupMark('transcriber-manager-init-complete');
   log.info('[audio-startup] after transcriberManager.init(): +%dms', Date.now() - BOOT_MARK);
@@ -10651,6 +10789,7 @@ if (!gotTheLock) {
     setupGazeIPCHandlers();
     setupTranscribeIPCHandlersOnce();
     setupClipboardIPCHandlers();
+    setupMeetingsIPCHandlers();
     setupOnboardingIPCHandlersOnce();
     setupDisplayListeners();
     startupMark('ipc-and-display-handlers-ready');
