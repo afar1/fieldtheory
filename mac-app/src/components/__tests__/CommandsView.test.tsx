@@ -255,17 +255,23 @@ describe('CommandsView command naming', () => {
 
     await screen.findByText('Rendered selection text');
     expect(screen.queryByText('Edit')).toBeNull();
+    expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+    expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
     const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
     expect(editor.style.paddingBottom).toBe('0px');
     expect(editor.style.scrollPaddingBottom).toBe('22.2px');
+    expect(screen.queryByLabelText('Switch to Markdown source')).toBeNull();
+    expect(screen.getByLabelText('Switch to rendered view')).toBeTruthy();
 
-    fireEvent.click(screen.getByLabelText('Rendered'));
+    fireEvent.click(screen.getByLabelText('Switch to rendered view'));
 
     await waitFor(() => {
       expect(screen.queryByPlaceholderText('Write your command markdown here...')).toBeNull();
+      expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+      expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
     });
   });
 
@@ -286,7 +292,7 @@ describe('CommandsView command naming', () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
     await screen.findByText('Rendered selection text');
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
     const editor = await screen.findByPlaceholderText('Write your command markdown here...') as HTMLTextAreaElement;
     const selectionStart = editor.value.indexOf('Rendered selection text');
@@ -436,7 +442,7 @@ describe('CommandsView command naming', () => {
     render(<CommandsView onSwitchToClipboard={vi.fn()} />);
 
     await screen.findByText('Rendered selection text');
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
     const editor = await screen.findByPlaceholderText('Write your command markdown here...');
     expect(screen.queryByText('Save')).toBeNull();
