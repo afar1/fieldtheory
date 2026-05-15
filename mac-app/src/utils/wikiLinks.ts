@@ -51,6 +51,7 @@ export function resolveWikiLink(
   const clean = target.trim();
   if (!clean) return { relPath: null, artifactPath: null, commandPath: null };
   const relKey = normalizeWikiRelPath(clean);
+  if (relKey.startsWith('.meetings/')) return { relPath: relKey, artifactPath: null, commandPath: null };
   if (relKey && index.byRelPath.has(relKey)) return { relPath: relKey, artifactPath: null, commandPath: null };
   const hit = index.byTitle.get(clean.toLowerCase());
   if (hit?.kind === 'wiki') return { relPath: hit.relPath, artifactPath: null, commandPath: null };
@@ -648,6 +649,14 @@ export function getMarkdownWikiLinkCompletionReplacement(
     selectionStart: selection,
     selectionEnd: selection,
   };
+}
+
+export function getMarkdownWikiLinkCompletionCommitEdit(
+  markdown: string,
+  completion: MarkdownWikiLinkCompletion,
+): MarkdownWikiLinkCompletionEdit | null {
+  const currentTitle = markdown.slice(completion.queryStart, completion.replaceEnd).trim();
+  return getMarkdownWikiLinkCompletionReplacement(markdown, completion, currentTitle);
 }
 
 export function getMarkdownWikiLinkAutoCloseEdit(

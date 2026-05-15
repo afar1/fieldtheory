@@ -51,6 +51,9 @@ export const ClipboardIPCChannels = {
   DELETE_LOCAL_LLM: 'clipboard:deleteLocalLLM',
   GET_USE_LOCAL_LLM: 'clipboard:getUseLocalLLM',
   SET_USE_LOCAL_LLM: 'clipboard:setUseLocalLLM',
+  GET_MEETING_SUMMARY_PROMPT: 'clipboard:getMeetingSummaryPrompt',
+  SAVE_MEETING_SUMMARY_PROMPT: 'clipboard:saveMeetingSummaryPrompt',
+  RESET_MEETING_SUMMARY_PROMPT: 'clipboard:resetMeetingSummaryPrompt',
 
   // Improved content management
   SAVE_IMPROVED_CONTENT: 'clipboard:saveImprovedContent',

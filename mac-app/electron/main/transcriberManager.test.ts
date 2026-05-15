@@ -44,10 +44,26 @@ vi.mock('./transcriberTrace', () => ({
 }));
 
 import { clipboard, globalShortcut } from 'electron';
-import { TranscriberManager } from './transcriberManager';
+import { formatWhisperSpeakerTurnTranscript, TranscriberManager } from './transcriberManager';
 
 // Command queue tests for MLX Whisper/Parakeet are covered by stdioJsonServer.test.ts,
 // since both engines use the shared StdioJsonServer class.
+
+describe('formatWhisperSpeakerTurnTranscript', () => {
+  it('turns whisper.cpp tinydiarize markers into stable speaker labels', () => {
+    const text = formatWhisperSpeakerTurnTranscript([
+      '[00:00:00.000 --> 00:00:03.800] Hello there. [SPEAKER_TURN]',
+      '[00:00:03.800 --> 00:00:06.200] Hi, can you hear me? [SPEAKER_TURN]',
+      '[00:00:06.200 --> 00:00:08.260] Yes, sounds good.',
+    ].join('\n'));
+
+    expect(text).toBe([
+      'Speaker 1: Hello there.',
+      'Speaker 2: Hi, can you hear me?',
+      'Speaker 1: Yes, sounds good.',
+    ].join('\n'));
+  });
+});
 
 function createWarmupHarness(prefValues: Record<string, unknown>) {
   const startMlxWhisperServer = vi.fn(async () => {});
@@ -1168,6 +1184,8 @@ describe('TranscriberManager standard real-time chunking', () => {
       modelManager: {
         getSelectedModel: vi.fn(() => 'small'),
         isModelAvailable: vi.fn(async () => true),
+        isModelAvailableForSize: vi.fn(async () => true),
+        getModelHealthForSizeSync: vi.fn(() => ({ status: 'missing' })),
       },
       squaresManager: null,
       commandsManager: null,
@@ -1239,6 +1257,273 @@ describe('TranscriberManager standard real-time chunking', () => {
     escapeHandler();
     expect(manager.overlay.hideConfirmation).toHaveBeenCalledTimes(1);
     expect(manager.cancelRecording).toHaveBeenCalledTimes(1);
+  });
+
+  it('captures meeting audio without clipboard storage or paste', async () => {
+    const storeText = vi.fn(async () => 1);
+    const pasteStack = vi.fn(async () => {});
+    const pasteText = vi.fn(async () => {});
+    const transcribeWithEngineFallback = vi.fn(async () => 'Alice: Hello.\nBob: Hi.');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'idle',
+      hotMicDelegate: null,
+      nativeHelper: {
+        startRecording: vi.fn(async () => undefined),
+        stopRecording: vi.fn(async () => '/tmp/meeting.wav'),
+        cancelRecording: vi.fn(async () => undefined),
+        setHarvestMode: vi.fn(),
+      },
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'onboardingComplete') return true;
+          if (key === 'transcriptionEngine') return 'whisper';
+          return undefined;
+        }),
+      },
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+        isModelAvailableForSize: vi.fn(async () => true),
+        getModelHealthForSizeSync: vi.fn(() => ({ status: 'missing' })),
+      },
+      overlay: {
+        showRecording: vi.fn(),
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      soundManager: { play: vi.fn() },
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText,
+      },
+      currentStack: [],
+      screenshotMetadata: [],
+      detectedCommands: [],
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkReadyListener: null,
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'off',
+      transcribeWithEngineFallback,
+      pasteStack,
+      pasteText,
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    vi.mocked(clipboard.writeText).mockClear();
+    vi.mocked(clipboard.writeImage).mockClear();
+
+    const session = await manager.startMeetingCapture();
+    const result = await manager.stopMeetingCapture();
+
+    expect(session).toMatchObject({
+      source: 'microphone',
+      transcriptionEngine: 'whisper',
+      speakerDiarizationSupported: false,
+    });
+    expect(manager.nativeHelper.startRecording).toHaveBeenCalledWith('microphone');
+    expect(manager.nativeHelper.stopRecording).toHaveBeenCalledTimes(1);
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'whisper');
+    expect(result).toMatchObject({
+      transcriptText: 'Alice: Hello.\nBob: Hi.',
+      audioPath: '/tmp/meeting.wav',
+      source: 'microphone',
+      transcriptionEngine: 'whisper',
+      speakerDiarizationSupported: false,
+    });
+    expect(storeText).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+    expect(pasteText).not.toHaveBeenCalled();
+    expect(clipboard.writeText).not.toHaveBeenCalled();
+    expect(clipboard.writeImage).not.toHaveBeenCalled();
+    expect(manager.status).toBe('idle');
+  });
+
+  it('uses the local tinydiarize whisper model for meeting speaker turns when installed', async () => {
+    const transcribeWithEngineFallback = vi.fn(async () => 'Speaker 1: Hello.\nSpeaker 2: Hi.');
+    const manager: any = new EventEmitter();
+    Object.assign(manager, {
+      status: 'idle',
+      hotMicDelegate: null,
+      nativeHelper: {
+        startRecording: vi.fn(async () => undefined),
+        stopRecording: vi.fn(async () => '/tmp/meeting.wav'),
+        cancelRecording: vi.fn(async () => undefined),
+        setHarvestMode: vi.fn(),
+      },
+      preferences: {
+        getPreference: vi.fn((key: string) => {
+          if (key === 'onboardingComplete') return true;
+          if (key === 'transcriptionEngine') return 'parakeet';
+          return undefined;
+        }),
+      },
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+        isModelAvailableForSize: vi.fn(async () => true),
+        getModelHealthForSizeSync: vi.fn((size: string) => ({ status: size === 'small-tdrz' ? 'ready' : 'missing' })),
+      },
+      overlay: {
+        showRecording: vi.fn(),
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+        showStatus: vi.fn(),
+      },
+      soundManager: { play: vi.fn() },
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText: vi.fn(),
+      },
+      currentStack: [],
+      screenshotMetadata: [],
+      detectedCommands: [],
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      standardChunkReadyListener: null,
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'off',
+      transcribeWithEngineFallback,
+      pasteStack: vi.fn(),
+      pasteText: vi.fn(),
+    });
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    const session = await manager.startMeetingCapture();
+    const result = await manager.stopMeetingCapture();
+
+    expect(session).toMatchObject({
+      transcriptionEngine: 'whisper',
+      whisperModelOverride: 'small-tdrz',
+      speakerDiarizationSupported: true,
+    });
+    expect(transcribeWithEngineFallback).toHaveBeenCalledWith('/tmp/meeting.wav', 'whisper', {
+      allowWhisperFallback: false,
+      whisperModelOverride: 'small-tdrz',
+      enableTinyDiarize: true,
+    });
+    expect(result).toMatchObject({
+      transcriptText: 'Speaker 1: Hello.\nSpeaker 2: Hi.',
+      speakerDiarizationSupported: true,
+    });
+  });
+
+  it('uses the normal dictation hotkey to stop active meeting capture', async () => {
+    const pasteStack = vi.fn(async () => {});
+    const stopRecordingAndTranscribe = vi.fn(async () => {});
+    const meetingCaptureHotkeyHandler = vi.fn(async () => {});
+    const manager: any = {
+      activeMeetingCapture: {
+        startedAt: '2026-05-14T00:00:00.000Z',
+        source: 'microphone',
+        transcriptionEngine: 'whisper',
+        speakerDiarizationSupported: false,
+      },
+      status: 'recording',
+      meetingCaptureHotkeyHandler,
+      meetingCaptureHotkeyStopInFlight: false,
+      pasteStack,
+      stopRecordingAndTranscribe,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.toggleRecording();
+
+    expect(meetingCaptureHotkeyHandler).toHaveBeenCalledOnce();
+    expect(manager.meetingCaptureHotkeyStopInFlight).toBe(false);
+    expect(stopRecordingAndTranscribe).not.toHaveBeenCalled();
+    expect(pasteStack).not.toHaveBeenCalled();
+  });
+
+  it('ignores duplicate meeting stop hotkeys while a stop is already running', async () => {
+    const meetingCaptureHotkeyHandler = vi.fn(async () => {});
+    const manager: any = {
+      activeMeetingCapture: {
+        startedAt: '2026-05-14T00:00:00.000Z',
+        source: 'microphone',
+        transcriptionEngine: 'whisper',
+        speakerDiarizationSupported: false,
+      },
+      status: 'recording',
+      meetingCaptureHotkeyHandler,
+      meetingCaptureHotkeyStopInFlight: true,
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.toggleRecording();
+
+    expect(meetingCaptureHotkeyHandler).not.toHaveBeenCalled();
+  });
+
+  it('keeps normal dictation on the store-and-paste path', async () => {
+    const storeText = vi.fn(async () => 42);
+    const pasteStack = vi.fn(async () => {});
+    const manager: any = {
+      status: 'recording',
+      unregisterAbandonHotkey: vi.fn(),
+      soundManager: { play: vi.fn() },
+      nativeHelper: {
+        isRecordingActive: vi.fn(() => true),
+        snapshotRecording: vi.fn(async () => '/tmp/chunk.wav'),
+        stopRecording: vi.fn(async () => '/tmp/full.wav'),
+        checkFocusedTextInput: vi.fn(async () => true),
+        setHarvestMode: vi.fn(),
+      },
+      processStandardChunkQueue: vi.fn(async () => {}),
+      waitForStandardChunkDrain: vi.fn(async () => {}),
+      detachStandardChunkListener: vi.fn(),
+      pendingImmediateSquaresAction: null,
+      pendingImmediateSquaresText: '',
+      standardPendingChunkQueue: [],
+      standardChunkProcessingInFlight: false,
+      currentStandardHarvestMode: 'dictation',
+      trackPriorityMicUsage: vi.fn(async () => {}),
+      setStatus: vi.fn((status: string) => {
+        manager.status = status;
+      }),
+      overlay: {
+        showTranscribing: vi.fn(),
+        dismiss: vi.fn(),
+      },
+      standardLiveTranscript: '',
+      standardLiveSegments: [],
+      sanitizeTranscriptText: vi.fn((text: string) => text.trim()),
+      clearStandardLiveTranscript: vi.fn(),
+      modelManager: {
+        getSelectedModel: vi.fn(() => 'small'),
+        isModelAvailable: vi.fn(async () => true),
+      },
+      squaresManager: null,
+      commandsManager: null,
+      clipboardManager: {
+        getContinuousContextState: vi.fn(() => ({ active: false })),
+        storeText,
+      },
+      detectedCommands: [],
+      screenshotMetadata: [],
+      currentStack: [],
+      lastTranscription: '',
+      pasteStack,
+      emit: vi.fn(),
+      skipNextPasteFailedNotification: false,
+      handleOverlayAfterTranscription: vi.fn(),
+      transcribeWithEngineFallback: vi.fn(async () => 'dictated text'),
+      getConfiguredTranscriptionEngine: vi.fn(() => 'whisper'),
+      insertFigureReferences: vi.fn((text: string) => text),
+      preferences: { getPreference: vi.fn(() => 'whisper') },
+    };
+    Object.setPrototypeOf(manager, TranscriberManager.prototype);
+
+    await manager.stopRecordingAndTranscribe();
+
+    expect(storeText).toHaveBeenCalledWith('dictated text', 'transcript', undefined, undefined);
+    expect(manager.currentStack).toContain(42);
+    expect(pasteStack).toHaveBeenCalledWith(false);
+    expect(manager.emit).toHaveBeenCalledWith('result', 'dictated text');
   });
 
   it('runs full-file transcription even when real-time transcript text exists', async () => {
