@@ -36,6 +36,8 @@ vi.mock('../AgentKickoffModal', () => ({
 }));
 
 describe('LibrarianView render', () => {
+  type TestMeetingSession = NonNullable<Awaited<ReturnType<NonNullable<NonNullable<Window['commandsAPI']>['getActiveMeeting']>>>>;
+
   it('classifies html and css library documents for the right default view', () => {
     expect(getLibraryDocumentViewKind('/tmp/report.html', 'external')).toBe('html');
     expect(getLibraryDocumentViewKind('/tmp/styles.css', 'external')).toBe('css');
@@ -137,6 +139,10 @@ describe('LibrarianView render', () => {
         getCommandByPath: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
         setActiveLibraryFileContext: vi.fn(),
+        startMeetingHere: vi.fn(async () => ({ success: true, session: null })),
+        stopMeeting: vi.fn(async () => ({ success: true, session: null })),
+        getActiveMeeting: vi.fn(async () => null),
+        onMeetingStatus: vi.fn(() => () => {}),
       },
     });
     Object.defineProperty(window, 'libraryAPI', {
@@ -172,6 +178,14 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.librarianAPI?.getReadings).toHaveBeenCalled();
     });
+  });
+
+  it('renders the empty library state without changing hook order', async () => {
+    window.librarianAPI!.getReadings = vi.fn(async () => []);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('No artifacts yet')).toBeTruthy();
   });
 
   it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
@@ -300,6 +314,71 @@ describe('LibrarianView render', () => {
 
     expect(screen.getAllByLabelText('Show in Finder')).toHaveLength(1);
     expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it('starts and stops a meeting recording from the active file toolbar', async () => {
+    const relPath = 'scratchpad/meeting-toolbar';
+    const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
+    const page: WikiPage = {
+      relPath,
+      absPath,
+      name: 'meeting-toolbar',
+      title: 'meeting-toolbar',
+      lastUpdated: 1,
+      content: 'Meeting toolbar',
+      documentVersion: { mtimeMs: 1, size: 15, sha256: 'meeting-toolbar-version' },
+    };
+    const recordingSession: TestMeetingSession = {
+      meetingId: 'meeting-toolbar-session',
+      title: 'meeting-toolbar',
+      type: 'wiki',
+      filePath: absPath,
+      relPath,
+      status: 'recording',
+      startedAt: '2026-05-14T20:00:00.000Z',
+      endedAt: null,
+      audioPath: null,
+      transcriptPath: null,
+      rawTranscriptPath: null,
+      speakerDiarizationSupported: false,
+    };
+    const doneSession: TestMeetingSession = {
+      ...recordingSession,
+      status: 'done',
+      endedAt: '2026-05-14T20:01:00.000Z',
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.commandsAPI!.startMeetingHere!).mockResolvedValue({
+      success: true,
+      session: recordingSession,
+    });
+    vi.mocked(window.commandsAPI!.stopMeeting!).mockResolvedValue({
+      success: true,
+      session: doneSession,
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const startButton = await screen.findByRole('button', { name: 'Start meeting recording' });
+    fireEvent.click(startButton);
+
+    await waitFor(() => {
+      expect(window.commandsAPI!.startMeetingHere).toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Stop meeting recording' })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop meeting recording' }));
+
+    await waitFor(() => {
+      expect(window.commandsAPI!.stopMeeting).toHaveBeenCalled();
+      expect(screen.getByRole('button', { name: 'Start meeting recording' })).toBeTruthy();
+    });
   });
 
   it('opens html files as previews and css files as source', async () => {
