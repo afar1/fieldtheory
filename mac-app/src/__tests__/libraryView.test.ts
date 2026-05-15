@@ -15,6 +15,7 @@ import {
   getRenderedMarkdownDeleteShortcutEdit,
   getRenderedMarkdownEnterEdit,
   getRenderedMarkdownPasteTextEdit,
+  getRenderedDisplayReadingContent,
   getRenderedMarkdownShortcutEdit,
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
@@ -91,6 +92,7 @@ import {
   filterStaleRecent,
   filterUnifiedFolders,
   getLibraryDragData,
+  getRecentEntrySidebarId,
   getPrimaryArtifactsFinderPath,
   getSidebarFolderFinderPath,
   getSidebarFolderHeaderPositionStyle,
@@ -108,6 +110,7 @@ import {
   shouldShowSidebarTodoStateBadge,
   shouldShowPinnedSidebarDividerBefore,
   splitArchivedSidebarNodes,
+  splitPinnedRecentEntries,
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
@@ -968,6 +971,28 @@ describe('shouldApplyLiveMarkdownFileUpdate', () => {
       lastSavedContent: 'content',
       hasRenderedSaveInFlight: true,
     })).toBe(false);
+  });
+});
+
+describe('getRenderedDisplayReadingContent', () => {
+  it('uses the active rendered display content while rendered editing is active', () => {
+    expect(getRenderedDisplayReadingContent({
+      contentMode: 'rendered',
+      renderedEditingActive: true,
+      activeReadingPath: '/notes/a.md',
+      renderedDisplayContent: { path: '/notes/a.md', content: 'disk update' },
+      activeReadingContent: 'old display',
+    })).toBe('disk update');
+  });
+
+  it('falls back to active content when the frozen rendered content belongs to another file', () => {
+    expect(getRenderedDisplayReadingContent({
+      contentMode: 'rendered',
+      renderedEditingActive: true,
+      activeReadingPath: '/notes/a.md',
+      renderedDisplayContent: { path: '/notes/b.md', content: 'other file' },
+      activeReadingContent: 'current file',
+    })).toBe('current file');
   });
 });
 
@@ -2883,6 +2908,14 @@ describe('splitRecent', () => {
     const expanded = splitRecent(entries, true);
     expect(expanded.entries).toHaveLength(14);
     expect(expanded.entries.map((e) => e.path).at(-1)).toBe('r13');
+  });
+
+  it('splits pinned recents without changing their relative order', () => {
+    const entries = [make('wiki', 'a'), make('external', '/tmp/x.md'), make('wiki', 'b')];
+    expect(getRecentEntrySidebarId(entries[1])).toBe('external:/tmp/x.md');
+    const result = splitPinnedRecentEntries(entries, new Set(['external:/tmp/x.md', 'wiki:b']));
+    expect(result.pinned.map((entry) => entry.path)).toEqual(['/tmp/x.md', 'b']);
+    expect(result.unpinned.map((entry) => entry.path)).toEqual(['a']);
   });
 });
 

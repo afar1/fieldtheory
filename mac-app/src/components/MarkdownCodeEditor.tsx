@@ -421,6 +421,22 @@ function pushRenderedInlineMark(
   }
 }
 
+export function getRenderedMarkdownListIndentStyle(leadingWhitespace: string): string {
+  const indentCh = Array.from(leadingWhitespace).reduce((total, char) => total + (char === '\t' ? 2 : 1), 0);
+  return `--ft-rendered-list-indent: ${indentCh}ch;`;
+}
+
+function pushRenderedListLineDecoration(
+  decorations: RenderedMarkdownDecoration[],
+  lineFrom: number,
+  leadingWhitespace: string,
+): void {
+  decorations.push(Decoration.line({
+    class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS,
+    attributes: { style: getRenderedMarkdownListIndentStyle(leadingWhitespace) },
+  }).range(lineFrom));
+}
+
 function shouldRevealRenderedMarkdownSource(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((range) => {
     if (range.empty) return range.from >= from && range.from <= to;
@@ -733,7 +749,7 @@ function pushRenderedMarkdownEditorLineDecorations(
     const markerTo = checkFrom + taskMatch[3].length + 1;
     const checked = taskMatch[3].toLowerCase() === 'x';
     inlineStart = markerTo - line.from;
-    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS }).range(line.from));
+    pushRenderedListLineDecoration(decorations, line.from, taskMatch[1]);
     decorations.push(
       Decoration.replace({
         widget: new RenderedMarkdownTaskCheckboxWidget(
@@ -766,7 +782,7 @@ function pushRenderedMarkdownEditorLineDecorations(
     const markerTo = line.from + listMatch[0].length;
     const markerText = /^\d/.test(listMatch[2]) ? listMatch[2].replace(/\)$/, '.') : '•';
     inlineStart = listMatch[0].length;
-    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS }).range(line.from));
+    pushRenderedListLineDecoration(decorations, line.from, listMatch[1]);
     decorations.push(
       Decoration.replace({
         widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS, markerText, markerFrom, markerTo),
@@ -1144,8 +1160,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             overflow: 'hidden',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
-            paddingLeft: '1.65em',
-            textIndent: '-1.55em',
+            paddingLeft: 'calc(var(--ft-rendered-list-indent, 0ch) + 1.65em)',
+            textIndent: 'calc(-1 * (var(--ft-rendered-list-indent, 0ch) + 1.55em))',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
             display: 'inline-block',
@@ -1197,6 +1213,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             textDecoration: 'underline',
             textUnderlineOffset: '2px',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}:hover`]: {
+            color: linkColor ?? (theme.isDark ? '#a9c7ff' : '#123a8c'),
+            textDecorationThickness: '2px',
+          },
           [`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}`]: {
             borderRadius: '4px',
             backgroundColor: theme.isDark ? 'rgba(122,167,255,0.12)' : 'rgba(29,78,216,0.08)',
@@ -1206,6 +1226,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             borderBottom: `1px solid ${theme.isDark ? 'rgba(122,167,255,0.42)' : 'rgba(29,78,216,0.32)'}`,
             boxDecorationBreak: 'clone',
             WebkitBoxDecorationBreak: 'clone',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}:hover`]: {
+            backgroundColor: theme.isDark ? 'rgba(122,167,255,0.2)' : 'rgba(29,78,216,0.14)',
+            borderBottomColor: theme.isDark ? 'rgba(122,167,255,0.7)' : 'rgba(29,78,216,0.55)',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_WIKI_SYNTAX_CLASS}`]: {
             color: mutedColor ?? theme.textSecondary,
