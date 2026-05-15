@@ -8,6 +8,7 @@ import {
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionReplacement,
   getWikiBacklinks,
   getWikiLinkedPages,
@@ -79,6 +80,10 @@ describe('resolveWikiLink', () => {
     expect(resolveWikiLink('/debates/consensus.md', index).relPath).toBe('debates/consensus');
   });
 
+  it('resolves hidden meeting sidecar relPaths without requiring sidebar indexing', () => {
+    expect(resolveWikiLink('.meetings/meeting-1/transcript.md', index).relPath).toBe('.meetings/meeting-1/transcript');
+  });
+
   it('returns null for unknown targets', () => {
     expect(resolveWikiLink('nothing here', index).relPath).toBeNull();
     expect(resolveWikiLink('', index).relPath).toBeNull();
@@ -99,6 +104,11 @@ describe('transformWikiLinks', () => {
   it('emits an unresolved sentinel href for missing targets', () => {
     const out = transformWikiLinks('Link to [[Brand New]] page.', index);
     expect(out).toBe('Link to [Brand New](wiki://!/Brand%20New) page.');
+  });
+
+  it('rewrites hidden meeting sidecar links to wiki hrefs', () => {
+    const out = transformWikiLinks('Raw: [[.meetings/meeting-1/transcript|Raw transcript]]', index);
+    expect(out).toBe('Raw: [Raw transcript](wiki://.meetings/meeting-1/transcript)');
   });
 
   it('rewrites artifact title links to artifact hrefs', () => {
@@ -696,6 +706,30 @@ describe('getActiveMarkdownWikiLinkCompletion', () => {
 
     expect(getMarkdownWikiLinkCompletionReplacement(input, completion!, 'Consensus')).toEqual({
       nextValue: 'See [[Consensus]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('commits the current unfinished link and moves the caret after closing brackets', () => {
+    const input = 'See [[Brand New today';
+    const caret = input.indexOf(' today');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionCommitEdit(input, completion!)).toEqual({
+      nextValue: 'See [[Brand New]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('commits the current auto-closed link and moves the caret after existing closing brackets', () => {
+    const input = 'See [[Brand New]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionCommitEdit(input, completion!)).toEqual({
+      nextValue: 'See [[Brand New]] today',
       selectionStart: 17,
       selectionEnd: 17,
     });
