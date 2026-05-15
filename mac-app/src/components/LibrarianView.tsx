@@ -99,6 +99,7 @@ import {
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionReplacement,
   normalizeWikiRelPath,
   transformWikiLinks,
@@ -3986,6 +3987,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           applyRenderedWikiLinkSuggestion(suggestion, completion);
           return true;
         }
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        const editor = renderedMarkdownEditorRef.current;
+        const currentValue = editor?.getValue() ?? displaySourceBody;
+        const selection = editor?.getSelectionRange();
+        const liveCompletion = selection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, selection.start, selection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionCommitEdit(currentValue, liveCompletion ?? completion);
+        if (!edit) return true;
+        applyRenderedEditorBody(edit.nextValue, {
+          selectionStart: edit.selectionStart,
+          selectionEnd: edit.selectionEnd,
+        });
+        setMarkdownWikiLinkCompletion(null);
+        pendingRenderedEditorSelectionRef.current = {
+          start: edit.selectionStart,
+          end: edit.selectionEnd,
+        };
+        focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+        return true;
       }
     }
 
@@ -4068,6 +4091,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyRenderedEditorBody,
     applyRenderedWikiLinkSuggestion,
     clearRenderedEditingState,
+    displaySourceBody,
     focusRenderedEditor,
     markdownWikiLinkCompletion,
 	    markdownWikiLinkSuggestionIndex,
@@ -4743,6 +4767,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           applyMarkdownWikiLinkSuggestion(suggestion, completion);
           return true;
         }
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        event.stopPropagation();
+        const editor = markdownCodeEditorRef.current;
+        const currentValue = editor?.getValue() ?? editContent;
+        const liveSelection = editor?.getSelectionRange();
+        const liveCompletion = liveSelection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, liveSelection.start, liveSelection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionCommitEdit(currentValue, liveCompletion ?? completion);
+        if (!edit) return true;
+        applyMarkdownCodeEditorTextEdit(edit);
+        setMarkdownWikiLinkCompletion(null);
+        return true;
       }
     }
 
