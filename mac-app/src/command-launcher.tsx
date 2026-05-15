@@ -26,6 +26,7 @@ import {
   filterLauncherDirectoryNamespaceItems,
   filterLauncherMoveTargetDirectories,
   filterLauncherNamespaceItems,
+  filterLauncherNormalModeItems,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   buildLauncherAppItems,
@@ -65,6 +66,7 @@ import {
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
+  scoreLauncherSearchableItem,
   type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
   type LauncherDirectoryNamespace,
@@ -170,6 +172,13 @@ type LauncherCloseOptions = {
   generation?: number;
 };
 
+type LauncherMeetingActionResult = {
+  success: boolean;
+  error?: string;
+  openTarget?: FieldTheoryMarkdownTarget;
+  summaryError?: string;
+};
+
 type LauncherResetPayload = {
   isDarkMode?: boolean;
   generation?: number;
@@ -234,59 +243,6 @@ interface LauncherItem {
   clipboardItemId?: number;
   clipboardStackId?: string;
   clipboardSearch?: string;
-}
-
-function fuzzySubsequenceScore(text: string, query: string): number {
-  if (query.length < 2) return 0;
-  let queryIndex = 0;
-  let firstMatch = -1;
-  let lastMatch = -1;
-  let gapPenalty = 0;
-
-  for (let i = 0; i < text.length && queryIndex < query.length; i += 1) {
-    if (text[i] !== query[queryIndex]) continue;
-    if (firstMatch === -1) firstMatch = i;
-    if (lastMatch !== -1) gapPenalty += Math.max(0, i - lastMatch - 1);
-    lastMatch = i;
-    queryIndex += 1;
-  }
-
-  if (queryIndex !== query.length || firstMatch === -1) return 0;
-  return Math.max(40, 220 - firstMatch * 4 - gapPenalty * 8 - (text.length - query.length));
-}
-
-function scoreLauncherText(rawText: string | undefined, query: string): number {
-  const text = rawText?.trim().toLowerCase();
-  if (!text || !query) return 0;
-  if (text === query) return 1000;
-  if (text.startsWith(query)) return 850 - Math.min(120, text.length - query.length);
-  if (text.split(/[\s/._-]+/).some(part => part.startsWith(query))) return 760 - Math.min(120, text.length - query.length);
-  const containsIndex = text.indexOf(query);
-  if (containsIndex >= 0) return 600 - Math.min(180, containsIndex * 5);
-  return fuzzySubsequenceScore(text, query);
-}
-
-function scoreLauncherItem(item: LauncherItem, query: string): number {
-  const candidateScores = [
-    scoreLauncherText(item.name, query),
-    scoreLauncherText(item.displayName, query) - 20,
-    ...item.keywords.map(keyword => scoreLauncherText(keyword, query) - 70),
-  ];
-  const textScore = Math.max(0, ...candidateScores);
-  if (textScore <= 0) return 0;
-
-  let typeScore = 0;
-  if (item.type === 'directory') typeScore += 35;
-  if (item.type === 'command') typeScore += 20;
-  if (item.type === 'app') typeScore += 18;
-  if (item.type === 'file') typeScore += 16;
-  if (item.type === 'bookmark-author') typeScore += 15;
-  if (item.type === 'bookmark-facet') typeScore += 15;
-  if (item.type === 'recent-file') typeScore += 12;
-  if (item.type === 'action') typeScore += 10;
-  if (item.type === 'handoff') typeScore += 3;
-
-  return textScore + typeScore;
 }
 
 function buildLocalInstructionFallbackItem(instruction: string): LauncherItem {
@@ -354,6 +310,10 @@ interface LauncherCommandsAPI {
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; targetApp?: ClipboardRunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
+  createMeetingNote?: (title?: string) => Promise<LauncherMeetingActionResult>;
+  startMeetingHere?: () => Promise<LauncherMeetingActionResult>;
+  stopMeeting?: () => Promise<LauncherMeetingActionResult>;
+  summarizeCurrentMeeting?: () => Promise<LauncherMeetingActionResult>;
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
@@ -1474,6 +1434,19 @@ function CommandLauncher() {
     return buildLocalInstructionFallbackItem(instruction);
   }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
 
+  const getNormalModeMatches = useCallback((rawQuery: string): LauncherItem[] => {
+    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(allItems, rawQuery, usageByItemId, {
+      maxAppResults: LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
+      includeItem: (item) => (
+        item.type !== 'app' || shouldIncludeLauncherAppInNormalSearch({
+          app: item,
+          query: rawQuery.trim().toLowerCase(),
+          usage: usageByItemId[item.id],
+        })
+      ),
+    }));
+  }, [allItems, usageByItemId]);
+
   const visibleLauncherIconPaths = useMemo(() => {
     const paths = new Set<string>();
     for (const item of filtered) {
@@ -1691,7 +1664,7 @@ function CommandLauncher() {
     if (appSearchQuery !== null) {
       const appQuery = appSearchQuery.toLowerCase();
       const results = balanceLauncherNormalModeMatches(appItems.map(item => {
-        const baseScore = scoreLauncherItem(item, appQuery);
+        const baseScore = scoreLauncherSearchableItem(item, appQuery);
         return { item, score: baseScore + getLauncherUsageScore(item, appQuery, usageByItemId, baseScore) };
       }).filter(({ score }) => score > 0));
       setFiltered(results);
@@ -1706,7 +1679,7 @@ function CommandLauncher() {
       const localQueryLower = localQuery.toLowerCase();
       const commandMatches = (localQuery
         ? commandItems
-            .map(item => ({ item, score: scoreLauncherItem(item, localQueryLower) }))
+            .map(item => ({ item, score: scoreLauncherSearchableItem(item, localQueryLower) }))
             .filter(({ score }) => score > 0)
             .sort((a, b) => {
               const recencyDelta = getLauncherItemRecency(b.item) - getLauncherItemRecency(a.item);
@@ -1829,20 +1802,7 @@ function CommandLauncher() {
       return;
     }
 
-    const scoredMatches = allItems.map(item => {
-      const baseScore = scoreLauncherItem(item, q);
-      return { item, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
-    }).filter(s => s.score > 0)
-      .filter(({ item }) => (
-        item.type !== 'app' || shouldIncludeLauncherAppInNormalSearch({
-          app: item,
-          query: q,
-          usage: usageByItemId[item.id],
-        })
-      ));
-    const balancedMatches = dedupeLauncherPersonItems(balanceLauncherNormalModeMatches(scoredMatches, {
-      maxAppResults: LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
-    }));
+    const balancedMatches = getNormalModeMatches(q);
     const fallback = localInstructionFallbackForQuery(query, balancedMatches.length);
     const results = fallback ? [fallback] : balancedMatches;
 
@@ -1860,11 +1820,11 @@ function CommandLauncher() {
       hasBookmarkNamespace: Boolean(bookmarkNamespace),
       resultCount: results.length,
       usedLocalInstructionFallback: Boolean(fallback),
-      totalResultCount: scoredMatches.length,
+      totalResultCount: balancedMatches.length,
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, usageByItemId, launcherDataLoading]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -2258,14 +2218,26 @@ function CommandLauncher() {
       setPreviewPayload(null);
     } else if (e.key === 'Enter') {
       e.preventDefault();
+      const rawQuery = query.trim();
+      const inScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
       if (filtered.length > 0) {
         const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
         const selectedItem = filtered[currentIndex];
+        if (selectedItem?.type === 'local-instruction' && !inScopedMode) {
+          const normalMatch = getNormalModeMatches(rawQuery)[0];
+          if (normalMatch) {
+            invokeItem(normalMatch, { insertWikiLink: normalMatch.type !== 'command' });
+            return;
+          }
+        }
         if (selectedItem) invokeItem(selectedItem, { insertWikiLink: selectedItem.type !== 'command' });
         return;
       }
-      const rawQuery = query.trim();
-      const inScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource);
+      const normalMatch = inScopedMode ? null : getNormalModeMatches(rawQuery)[0];
+      if (normalMatch) {
+        invokeItem(normalMatch, { insertWikiLink: normalMatch.type !== 'command' });
+        return;
+      }
       const commandTarget = inScopedMode
         ? null
         : resolveLauncherCommandOpenTarget([], commandItems, 0, rawQuery, false);
@@ -2298,7 +2270,27 @@ function CommandLauncher() {
       setFiltered([]);
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
     };
-    const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false }));
+    const openMeetingResult = async (
+      result: LauncherMeetingActionResult,
+      errorEvent: string,
+      fallback: string,
+    ): Promise<boolean> => {
+      if (!result.success) {
+        showInvocationError(errorEvent, result.error ?? result.summaryError, fallback);
+        return false;
+      }
+      if (result.openTarget) {
+        const openResult = await commandsAPI.openFieldTheoryMarkdown(result.openTarget);
+        if (!openResult.success) {
+          showInvocationError(`${errorEvent}-open`, openResult.error, 'Open meeting failed');
+          return false;
+        }
+        return true;
+      }
+      closeForInvocation({ skipActivation: true });
+      return true;
+    };
+    const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, targetApp: null }));
     const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
     const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
     traceLauncher('invoke-item', {
@@ -2493,6 +2485,48 @@ function CommandLauncher() {
         case 'start-recording':
           transcribeAPI.toggleRecording?.();
           break;
+        case 'new-meeting-note': {
+          if (!commandsAPI.createMeetingNote) {
+            showLauncherMessage('Meetings are unavailable');
+            return;
+          }
+          const result = await commandsAPI.createMeetingNote();
+          await openMeetingResult(result, 'new-meeting-note-error', 'Could not create meeting note');
+          return;
+        }
+        case 'start-meeting-here': {
+          if (!commandsAPI.startMeetingHere) {
+            showLauncherMessage('Meetings are unavailable');
+            return;
+          }
+          const result = await commandsAPI.startMeetingHere();
+          await openMeetingResult(result, 'start-meeting-error', 'Could not start meeting');
+          return;
+        }
+        case 'stop-meeting': {
+          if (!commandsAPI.stopMeeting) {
+            showLauncherMessage('Meetings are unavailable');
+            return;
+          }
+          setQuery('Finalizing meeting...');
+          setFiltered([]);
+          resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+          const result = await commandsAPI.stopMeeting();
+          await openMeetingResult(result, 'stop-meeting-error', 'Could not stop meeting');
+          return;
+        }
+        case 'summarize-meeting': {
+          if (!commandsAPI.summarizeCurrentMeeting) {
+            showLauncherMessage('Meetings are unavailable');
+            return;
+          }
+          setQuery('Summarizing meeting...');
+          setFiltered([]);
+          resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+          const result = await commandsAPI.summarizeCurrentMeeting();
+          await openMeetingResult(result, 'summarize-meeting-error', 'Could not summarize meeting');
+          return;
+        }
         case 'toggle-theme':
           // Toggle dark/light mode
           (async () => {
