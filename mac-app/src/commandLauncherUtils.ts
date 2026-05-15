@@ -664,20 +664,11 @@ function basename(value: string): string {
   return parts[parts.length - 1] ?? value;
 }
 
-function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: string): number {
+function scoreLauncherOpenCandidateText(rawCandidates: string[], query: string): number {
   const q = normalizeCommandLookupText(query);
-  if (!q || item.type !== 'command' || !item.filePath) return 0;
+  if (!q) return 0;
 
-  const pathName = basename(item.filePath);
-  const candidates = [
-    item.name,
-    item.displayName,
-    pathName,
-    stripCommandMarkdownExtension(pathName),
-    item.filePath,
-    ...(item.keywords ?? []),
-  ].map(normalizeCommandLookupText).filter(Boolean);
-
+  const candidates = rawCandidates.map(normalizeCommandLookupText).filter(Boolean);
   let best = 0;
   for (const candidate of candidates) {
     const withoutExtension = stripCommandMarkdownExtension(candidate);
@@ -687,6 +678,35 @@ function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: st
     else if (candidate.includes(q)) best = Math.max(best, 600);
   }
   return best;
+}
+
+function scoreCommandOpenCandidate(item: LauncherCommandOpenCandidate, query: string): number {
+  if (!query.trim() || item.type !== 'command' || !item.filePath) return 0;
+
+  const pathName = basename(item.filePath);
+  return scoreLauncherOpenCandidateText([
+    item.name,
+    item.displayName,
+    pathName,
+    stripCommandMarkdownExtension(pathName),
+    item.filePath,
+    ...(item.keywords ?? []),
+  ], query);
+}
+
+function scoreFieldTheoryOpenCandidate(item: LauncherFieldTheoryTargetCandidate, query: string): number {
+  if (!query.trim() || !getLauncherFieldTheoryMarkdownTarget(item)) return 0;
+
+  const pathName = basename(item.filePath ?? item.relPath ?? '');
+  return scoreLauncherOpenCandidateText([
+    item.name,
+    item.displayName,
+    pathName,
+    stripCommandMarkdownExtension(pathName),
+    item.relPath ?? '',
+    item.filePath ?? '',
+    ...(item.keywords ?? []),
+  ], query);
 }
 
 export function filterLauncherNamespaceItems<T extends LauncherSearchableItem & LauncherNormalModeItem>(items: T[], search: string): T[] {
@@ -1346,6 +1366,38 @@ export function resolveLauncherCommandOpenTarget<T extends LauncherCommandOpenCa
       return true;
     })
     .map((item) => ({ item, score: scoreCommandOpenCandidate(item, rawQuery) }))
+    .filter(({ score }) => score > 0)
+    .sort((a, b) => b.score - a.score);
+
+  return candidates[0]?.item ?? null;
+}
+
+export function resolveLauncherFieldTheoryOpenTarget<T extends LauncherFieldTheoryTargetCandidate>(
+  filteredItems: T[],
+  fieldTheoryItems: T[],
+  selectedIndex: number,
+  query: string,
+  hasExplicitSelection: boolean,
+): T | null {
+  const selected = filteredItems[selectedIndex];
+  const rawQuery = query.trim();
+  if (selected && getLauncherFieldTheoryMarkdownTarget(selected) && (hasExplicitSelection || !rawQuery)) {
+    return selected;
+  }
+
+  if (!rawQuery) return null;
+
+  const seen = new Set<string>();
+  const candidates = [...filteredItems, ...fieldTheoryItems]
+    .filter((item) => {
+      const target = getLauncherFieldTheoryMarkdownTarget(item);
+      if (!target) return false;
+      const key = `${target.kind}:${target.path}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item) => ({ item, score: scoreFieldTheoryOpenCandidate(item, rawQuery) }))
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score);
 
