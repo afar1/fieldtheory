@@ -8,6 +8,7 @@ import {
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
   getMarkdownWikiLinkAutoCloseEdit,
+  getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionReplacement,
   getWikiBacklinks,
   getWikiLinkedPages,
@@ -696,6 +697,30 @@ describe('getActiveMarkdownWikiLinkCompletion', () => {
 
     expect(getMarkdownWikiLinkCompletionReplacement(input, completion!, 'Consensus')).toEqual({
       nextValue: 'See [[Consensus]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('commits the current unfinished link and moves the caret after closing brackets', () => {
+    const input = 'See [[Brand New today';
+    const caret = input.indexOf(' today');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionCommitEdit(input, completion!)).toEqual({
+      nextValue: 'See [[Brand New]] today',
+      selectionStart: 17,
+      selectionEnd: 17,
+    });
+  });
+
+  it('commits the current auto-closed link and moves the caret after existing closing brackets', () => {
+    const input = 'See [[Brand New]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionCommitEdit(input, completion!)).toEqual({
+      nextValue: 'See [[Brand New]] today',
       selectionStart: 17,
       selectionEnd: 17,
     });
