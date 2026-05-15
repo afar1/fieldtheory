@@ -242,11 +242,20 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: 40, sha256: 'toggle-version' },
     };
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: 5,
+          selectionEnd: 5,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
     const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
@@ -261,6 +270,8 @@ describe('LibrarianView render', () => {
       expect(input?.closest('.cm-editor')).toBeTruthy();
       expect(input?.textContent).toContain('First rendered line');
       expect(input?.textContent).toContain('Second rendered line');
+      expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+      expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
       return input;
     });
 
@@ -270,14 +281,16 @@ describe('LibrarianView render', () => {
     expect(renderedInput?.closest('[data-ft-rendered-editor-root="true"]')).toBe(renderedRoot);
     expect(container.querySelector('textarea[data-ft-rendered-editor-input="true"]')).toBeNull();
 
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
     await waitFor(() => {
       expect(container.querySelector('[data-ft-rendered-editor-root="true"]')).toBeNull();
       expect(container.querySelector('.cm-editor')).toBeTruthy();
+      expect(screen.queryByLabelText('Switch to Markdown source')).toBeNull();
+      expect(screen.getByLabelText('Switch to rendered view')).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByLabelText('Rendered'));
+    fireEvent.click(screen.getByLabelText('Switch to rendered view'));
 
     await waitFor(() => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
@@ -285,6 +298,8 @@ describe('LibrarianView render', () => {
       expect(root?.getAttribute('contenteditable')).toBeNull();
       expect(root?.textContent).toContain('Second rendered line');
       expect(input?.closest('.cm-editor')).toBeTruthy();
+      expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+      expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
     });
   });
 
@@ -430,7 +445,7 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(cssRender.container.querySelector('iframe[data-ft-html-preview="true"]')).toBeNull();
       expect(cssRender.container.querySelector('.cm-editor')?.textContent).toContain('body { color: crimson; }');
-      expect((screen.getByLabelText('Rendered') as HTMLButtonElement).disabled).toBe(true);
+      expect((screen.getByLabelText('Source only') as HTMLButtonElement).disabled).toBe(true);
     });
   });
 
@@ -754,7 +769,7 @@ describe('LibrarianView render', () => {
       const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
       expect(root?.textContent).toContain('hello source image');
     });
-    fireEvent.click(screen.getByLabelText('Markdown source'));
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
 
     const sourceInput = await waitFor(() => {
       const input = container.querySelector('.cm-content') as HTMLElement | null;

@@ -19,6 +19,7 @@ import {
   RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS,
@@ -42,6 +43,9 @@ import {
   getMarkdownCodeEditorSourcePosition,
   getRenderedMarkdownImagePreviewFromEventTarget,
   getRenderedMarkdownListIndentStyle,
+  getRenderedMarkdownListLineLayoutStyle,
+  getRenderedMarkdownListMarkerLayoutStyle,
+  getRenderedMarkdownTaskMarkerLayoutStyle,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   shouldMoveCaretToDocumentEndFromClick,
@@ -362,7 +366,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
-  it('leaves the task marker spacing visible in rendered presentation', () => {
+  it('hides task marker spacing inside the rendered marker column', () => {
     const parent = document.createElement('div');
     document.body.appendChild(parent);
     const view = new EditorView({
@@ -374,7 +378,12 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     });
 
     const lines = Array.from(parent.querySelectorAll('.cm-line'));
-    expect(lines.map((line) => line.textContent)).toEqual([' bare', ' spaced', ' bullet']);
+    expect(lines.map((line) => line.textContent)).toEqual(['bare', 'spaced', 'bullet']);
+    expect(Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`)).map((body) => body.textContent)).toEqual([
+      'bare',
+      'spaced',
+      'bullet',
+    ]);
 
     view.destroy();
     parent.remove();
@@ -423,7 +432,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
-  it('adds source indentation to rendered list hanging indents', () => {
+  it('adds source indentation to rendered list column layout', () => {
     expect(getRenderedMarkdownListIndentStyle('  ')).toBe('--ft-rendered-list-indent: 2ch;');
     expect(getRenderedMarkdownListIndentStyle('\t')).toBe('--ft-rendered-list-indent: 2ch;');
 
@@ -442,9 +451,94 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(lines[0].getAttribute('style')).toContain('--ft-rendered-list-indent: 0ch;');
     expect(lines[1].getAttribute('style')).toContain('--ft-rendered-list-indent: 2ch;');
     expect(lines[2].getAttribute('style')).toContain('--ft-rendered-list-indent: 2ch;');
+    expect(lines.map((line) => line.textContent)).toEqual(['•top item', '•nested item', 'nested todo']);
+    expect(Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`)).map((body) => body.textContent)).toEqual([
+      'top item',
+      'nested item',
+      'nested todo',
+    ]);
 
     view.destroy();
     parent.remove();
+  });
+
+  it('renders bullet, ordered, nested, and task list text in a separate body column', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- top item\n10) ordered item\n  - nested item\n  - [ ] nested task',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const lines = Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`)) as HTMLElement[];
+    const lineStructure = lines.map((line) => ({
+      marker: line.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`)?.textContent ?? null,
+      checkbox: line.querySelector(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`) instanceof HTMLInputElement,
+      body: line.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`)?.textContent ?? null,
+      indent: line.getAttribute('style'),
+    }));
+
+    expect(lineStructure).toEqual([
+      { marker: '•', checkbox: false, body: 'top item', indent: '--ft-rendered-list-indent: 0ch;' },
+      { marker: '10.', checkbox: false, body: 'ordered item', indent: '--ft-rendered-list-indent: 0ch;' },
+      { marker: '•', checkbox: false, body: 'nested item', indent: '--ft-rendered-list-indent: 2ch;' },
+      { marker: null, checkbox: true, body: 'nested task', indent: '--ft-rendered-list-indent: 2ch;' },
+    ]);
+    const firstMarker = lines[0].querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`);
+    const firstBody = lines[0].querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`);
+    const taskMarker = lines[3].querySelector(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`);
+    const taskBody = lines[3].querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`);
+    const appearsBefore = (before: Element | null, after: Element | null): boolean => (
+      !!before && !!after && Boolean(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING)
+    );
+    expect(appearsBefore(firstMarker, firstBody)).toBe(true);
+    expect(appearsBefore(taskMarker, taskBody)).toBe(true);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps inline rendered formatting inside the list body column', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- first **bold** tail',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const body = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`) as HTMLElement | null;
+    // jsdom cannot prove wrapped-line pixels; the live check needs to verify that this body column wraps under "first".
+    expect(body?.textContent).toBe('first bold tail');
+    expect(body?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_STRONG_CLASS}`)?.textContent).toBe('bold');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('keeps rendered list layout out of grid so CodeMirror widget buffers cannot become columns', () => {
+    expect(getRenderedMarkdownListLineLayoutStyle()).toMatchObject({
+      position: 'relative',
+      paddingLeft: 'calc(var(--ft-rendered-list-indent, 0ch) + 2em) !important',
+      textIndent: '0 !important',
+    });
+    expect(getRenderedMarkdownListLineLayoutStyle()).not.toHaveProperty('display', 'grid');
+    expect(getRenderedMarkdownListLineLayoutStyle()).not.toHaveProperty('gridTemplateColumns');
+    expect(getRenderedMarkdownListMarkerLayoutStyle()).toMatchObject({
+      display: 'inline-block',
+      position: 'absolute',
+      left: 'var(--ft-rendered-list-indent, 0ch)',
+    });
+    expect(getRenderedMarkdownTaskMarkerLayoutStyle()).toMatchObject({
+      display: 'inline-block',
+      position: 'absolute',
+      left: 'calc(var(--ft-rendered-list-indent, 0ch) + 0.5em)',
+    });
   });
 
   it('keeps rendered links mapped to their source markdown range', () => {

@@ -63,6 +63,7 @@ export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS = 'cm-rendered-markdown-c
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS = 'cm-rendered-markdown-code-fence-marker';
 export const RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS = 'cm-rendered-markdown-list-line';
 export const RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS = 'cm-rendered-markdown-list-marker';
+export const RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS = 'cm-rendered-markdown-list-body';
 export const RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS = 'cm-rendered-markdown-heading-marker';
 export const RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS = 'cm-rendered-markdown-quote-line';
 export const RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS = 'cm-rendered-markdown-quote-marker';
@@ -437,6 +438,49 @@ function pushRenderedListLineDecoration(
   }).range(lineFrom));
 }
 
+function pushRenderedListBodyDecoration(
+  decorations: RenderedMarkdownDecoration[],
+  from: number,
+  to: number,
+  className = '',
+): void {
+  pushRenderedInlineMark(
+    decorations,
+    from,
+    to,
+    [RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS, className].filter(Boolean).join(' '),
+  );
+}
+
+export function getRenderedMarkdownListLineLayoutStyle(): Record<string, string> {
+  return {
+    position: 'relative',
+    paddingLeft: 'calc(var(--ft-rendered-list-indent, 0ch) + 2em) !important',
+    textIndent: '0 !important',
+  };
+}
+
+export function getRenderedMarkdownListMarkerLayoutStyle(): Record<string, string> {
+  return {
+    display: 'inline-block',
+    position: 'absolute',
+    left: 'var(--ft-rendered-list-indent, 0ch)',
+    width: '1.55em',
+    textAlign: 'right',
+  };
+}
+
+export function getRenderedMarkdownTaskMarkerLayoutStyle(): Record<string, string> {
+  return {
+    display: 'inline-block',
+    position: 'absolute',
+    left: 'calc(var(--ft-rendered-list-indent, 0ch) + 0.5em)',
+    width: '1.05em',
+    height: '1.05em',
+    minWidth: '1.05em',
+  };
+}
+
 function shouldRevealRenderedMarkdownSource(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((range) => {
     if (range.empty) return range.from >= from && range.from <= to;
@@ -747,9 +791,11 @@ function pushRenderedMarkdownEditorLineDecorations(
     const markerFrom = line.from + taskMatch[1].length;
     const checkFrom = markerFrom + taskMatch[2].length + 1;
     const markerTo = checkFrom + taskMatch[3].length + 1;
+    const contentFrom = line.from + taskMatch[0].length;
     const checked = taskMatch[3].toLowerCase() === 'x';
-    inlineStart = markerTo - line.from;
+    inlineStart = contentFrom - line.from;
     pushRenderedListLineDecoration(decorations, line.from, taskMatch[1]);
+    pushRenderedSyntaxReplacement(decorations, line.from, markerFrom);
     decorations.push(
       Decoration.replace({
         widget: new RenderedMarkdownTaskCheckboxWidget(
@@ -759,14 +805,9 @@ function pushRenderedMarkdownEditorLineDecorations(
           checkFrom,
           checkFrom + taskMatch[3].length,
         ),
-      }).range(markerFrom, markerTo),
+      }).range(markerFrom, contentFrom),
     );
-    pushRenderedInlineMark(
-      decorations,
-      markerTo,
-      line.to,
-      checked ? RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS : '',
-    );
+    pushRenderedListBodyDecoration(decorations, contentFrom, line.to, checked ? RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS : '');
   } else if (quoteMatch) {
     const markerFrom = line.from + quoteMatch[1].length;
     const markerTo = line.from + quoteMatch[0].length;
@@ -783,11 +824,13 @@ function pushRenderedMarkdownEditorLineDecorations(
     const markerText = /^\d/.test(listMatch[2]) ? listMatch[2].replace(/\)$/, '.') : '•';
     inlineStart = listMatch[0].length;
     pushRenderedListLineDecoration(decorations, line.from, listMatch[1]);
+    pushRenderedSyntaxReplacement(decorations, line.from, markerFrom);
     decorations.push(
       Decoration.replace({
         widget: new RenderedMarkdownMarkerWidget(RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS, markerText, markerFrom, markerTo),
       }).range(markerFrom, markerTo),
     );
+    pushRenderedListBodyDecoration(decorations, markerTo, line.to);
   }
 
   pushRenderedInlineDecorations(state, decorations, line.from + inlineStart, text.slice(inlineStart));
@@ -1160,14 +1203,15 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             overflow: 'hidden',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
-            paddingLeft: 'calc(var(--ft-rendered-list-indent, 0ch) + 1.65em) !important',
-            textIndent: 'calc(-1 * (var(--ft-rendered-list-indent, 0ch) + 1.55em)) !important',
+            ...getRenderedMarkdownListLineLayoutStyle(),
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
-            display: 'inline-block',
-            width: '1.55em',
+            ...getRenderedMarkdownListMarkerLayoutStyle(),
             color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.58)' : 'rgba(17,17,17,0.58)'),
             fontVariantNumeric: 'tabular-nums',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`]: {
+            display: 'inline',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS}`]: {
             borderLeft: `3px solid ${theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.16)'}`,
@@ -1271,11 +1315,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             lineHeight: 1.35,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`]: {
-            display: 'inline-block',
-            width: '1.05em',
-            height: '1.05em',
-            minWidth: '1.05em',
-            marginRight: '0.5em',
+            ...getRenderedMarkdownTaskMarkerLayoutStyle(),
             verticalAlign: '-0.14em',
             accentColor: linkColor ?? (theme.isDark ? '#7aa7ff' : '#1d4ed8'),
             cursor: 'pointer',
