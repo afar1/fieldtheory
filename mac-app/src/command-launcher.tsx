@@ -623,6 +623,19 @@ const getStyles = (isDark: boolean) => ({
     objectFit: 'contain' as const,
     display: 'block',
   },
+  itemFallbackIcon: {
+    width: '16px',
+    height: '16px',
+    borderRadius: '4px',
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    fontSize: '10px',
+    fontWeight: 700,
+    lineHeight: 1,
+    color: isDark ? 'rgba(255,255,255,0.82)' : 'rgba(17,17,17,0.78)',
+    backgroundColor: isDark ? 'rgba(255,255,255,0.09)' : 'rgba(0,0,0,0.07)',
+  },
   itemHotkey: {
     fontSize: '11px',
     color: isDark ? '#888' : '#6b6b6b',
@@ -2637,9 +2650,16 @@ function CommandLauncher() {
   const renderItemIcon = (item: LauncherItem) => {
     const iconPath = getLauncherNativeIconPathForItem(item);
     const iconDataUrl = iconPath ? launcherIconDataByPath[iconPath] : null;
+    const fallbackIcon = item.type === 'bookmark' || item.actionId === 'view-bookmarks'
+      ? 'X'
+      : item.type === 'app'
+        ? (item.displayName.trim()[0] ?? item.name.trim()[0] ?? '').toUpperCase()
+        : '';
     return (
       <span style={styles.itemIconSlot} aria-hidden="true">
-        {iconDataUrl ? <img src={iconDataUrl} alt="" style={styles.itemIcon} /> : null}
+        {iconDataUrl ? <img src={iconDataUrl} alt="" style={styles.itemIcon} /> : (
+          fallbackIcon ? <span style={styles.itemFallbackIcon}>{fallbackIcon}</span> : null
+        )}
       </span>
     );
   };
