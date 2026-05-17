@@ -30,15 +30,11 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   buildCommandDirectoriesForLauncher,
-  buildLauncherAppItems,
   buildLauncherFileItems,
-  LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
-  balanceLauncherNormalModeMatches,
   compareLauncherItemsByRecency,
   dedupeLauncherPersonItems,
-  getLauncherAppSearchQuery,
   getLauncherClipboardSearchInputState,
   getLauncherFileSearchQuery,
   getLauncherFieldTheoryMarkdownTarget,
@@ -48,7 +44,6 @@ import {
   getLauncherMoveUndoTargetDirRelPath,
   getLauncherAreaActionIdForQuery,
   getLauncherItemRecency,
-  getLauncherUsageScore,
   getLauncherStatusText,
   areLauncherRootSearchEnabledKindsEqual,
   isGeneratedBookmarkTaxonomyPath,
@@ -62,7 +57,6 @@ import {
   resolveLauncherDirectoryNamespace,
   resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
-  shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherLibraryMarkdownItem,
   shouldIncludeLauncherRecentFile,
   shouldExitLauncherClipboardSearch,
@@ -122,14 +116,6 @@ interface PortableCommandDirectoryInfo {
   lastModified: number;
 }
 
-interface LauncherAppInfo {
-  name: string;
-  displayName: string;
-  appPath: string;
-  bundleId?: string;
-  lastModified: number;
-}
-
 interface LauncherFileInfo {
   name: string;
   displayName: string;
@@ -163,7 +149,7 @@ interface HandoffInfo {
 
 type LauncherSourceId = 'wiki' | 'artifact' | 'bookmarks';
 
-type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file' | 'clipboard-item' | 'clipboard-stack';
+type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'file' | 'clipboard-item' | 'clipboard-stack';
 
 interface LauncherRecentEntry {
   kind: 'wiki' | 'external';
@@ -243,8 +229,6 @@ interface LauncherItem {
   // For root search rows
   rootSearchKind?: LauncherRootSearchKind;
   rootSearchLabel?: string;
-  appPath?: string;
-  bundleId?: string;
   isDirectory?: boolean;
   // For local model command runs
   localCommandName?: string;
@@ -315,8 +299,6 @@ interface LauncherCommandsAPI {
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
-  listLauncherApps: () => Promise<LauncherAppInfo[]>;
-  launchApp: (appPath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherFileIcon: (filePath: string) => Promise<LauncherFileIconResult>;
   searchLauncherFiles: (query: string) => Promise<LauncherFileSearchResult>;
   openLauncherFile: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -444,7 +426,6 @@ function launcherItemTypeLabel(item: LauncherItem): string {
     case 'local-command': return 'Local';
     case 'local-instruction': return 'Local';
     case 'source': return 'Source';
-    case 'app': return item.rootSearchLabel ?? 'App';
     case 'file': return item.rootSearchLabel ?? 'File';
     case 'action': return 'Action';
     case 'recent-file': return 'Recent';
@@ -705,7 +686,6 @@ function CommandLauncher() {
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [commandDirectories, setCommandDirectories] = useState<PortableCommandDirectoryInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
-  const [launcherApps, setLauncherApps] = useState<LauncherAppInfo[]>([]);
   const [launcherFiles, setLauncherFiles] = useState<LauncherFileInfo[]>([]);
   const [launcherFileSearchLoading, setLauncherFileSearchLoading] = useState(false);
   const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([]);
@@ -851,16 +831,6 @@ function CommandLauncher() {
       setCommandDirectories(directories || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);
-    }
-  }, []);
-
-  const loadLauncherApps = useCallback(async () => {
-    try {
-      const apps = await commandsAPI.listLauncherApps();
-      setLauncherApps(apps || []);
-    } catch (err) {
-      console.error('[CommandLauncher] Failed to load apps:', err);
-      setLauncherApps([]);
     }
   }, []);
 
@@ -1078,7 +1048,6 @@ function CommandLauncher() {
     setLauncherDataLoading(true);
     await Promise.allSettled([
       loadCommands(),
-      loadLauncherApps(),
       loadLauncherSettings(),
       warmLauncherFileIndex(),
       loadHandoffs(),
@@ -1094,7 +1063,7 @@ function CommandLauncher() {
     if (requestId === launcherDataRequestRef.current) {
       setLauncherDataLoading(false);
     }
-  }, [loadCommands, loadLauncherApps, loadLauncherSettings, warmLauncherFileIndex, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadBookmarkPosts, loadActiveWebPage, refreshLauncherContext]);
+  }, [loadCommands, loadLauncherSettings, warmLauncherFileIndex, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadBookmarkPosts, loadActiveWebPage, refreshLauncherContext]);
 
   const clearLauncherSessionState = useCallback(() => {
     authorNamespaceRef.current = null;
@@ -1294,11 +1263,6 @@ function CommandLauncher() {
     },
   ]), []);
 
-  const appItems = useMemo((): LauncherItem[] => {
-    if (!isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'app')) return [];
-    return buildLauncherAppItems(launcherApps);
-  }, [launcherApps, launcherRootSearchEnabledKinds]);
-
   const fileItems = useMemo((): LauncherItem[] => buildLauncherFileItems(launcherFiles), [launcherFiles]);
 
   const commandFilePaths = useMemo(
@@ -1369,11 +1333,10 @@ function CommandLauncher() {
         };
       });
 
-    return [...appItems, ...sourceItems, ...commandDirectoryItems, ...recentFileItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [appItems, commandItems, commandDirectoryItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, sourceItems, recentFileItems, activeWebPage, lastLibraryMove]);
+    return [...sourceItems, ...commandDirectoryItems, ...recentFileItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [commandItems, commandDirectoryItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, sourceItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
-	  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
-	  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
+  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
   const clipboardSearchQuery = clipboardSearchActive ? query : null;
   const fileSearchEnabled = isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file');
 
@@ -1593,16 +1556,7 @@ function CommandLauncher() {
   }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
 
   const getNormalModeMatches = useCallback((rawQuery: string): LauncherItem[] => {
-    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(allItems, rawQuery, usageByItemId, {
-      maxAppResults: LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
-      includeItem: (item) => (
-        item.type !== 'app' || shouldIncludeLauncherAppInNormalSearch({
-          app: item,
-          query: rawQuery.trim().toLowerCase(),
-          usage: usageByItemId[item.id],
-        })
-      ),
-    }));
+    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(allItems, rawQuery, usageByItemId));
   }, [allItems, usageByItemId]);
 
   const visibleLauncherIconPaths = useMemo(() => {
@@ -1819,18 +1773,6 @@ function CommandLauncher() {
       return;
     }
 
-    if (appSearchQuery !== null) {
-      const appQuery = appSearchQuery.toLowerCase();
-      const results = balanceLauncherNormalModeMatches(appItems.map(item => {
-        const baseScore = scoreLauncherSearchableItem(item, appQuery);
-        return { item, score: baseScore + getLauncherUsageScore(item, appQuery, usageByItemId, baseScore) };
-      }).filter(({ score }) => score > 0));
-      setFiltered(results);
-      selectIndex(0);
-      resizeForResults(results.length, appSearchQuery.length > 0);
-      return;
-    }
-
     const localMatch = query.trim().match(/^local(?:\s+([\s\S]*))?$/i);
     if (localMatch) {
       const localQuery = (localMatch[1] ?? '').trim();
@@ -1960,7 +1902,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -2650,20 +2592,6 @@ function CommandLauncher() {
         await commandsAPI.invokeHandoff(item.filePath);
       }
       closeForInvocation({ skipActivation: true });
-    } else if (item.type === 'app') {
-      if (!item.appPath) {
-        showInvocationError('launch-app-missing-path', 'App path missing', 'Launch failed');
-        return;
-      }
-      const result = await commandsAPI.launchApp(item.appPath).catch((error) => ({
-        success: false,
-        error: error instanceof Error ? error.message : 'Launch failed',
-      }));
-      if (!result.success) {
-        showInvocationError('launch-app-error', result.error, 'Launch failed');
-        return;
-      }
-      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'file') {
       if (!item.filePath) {
         showInvocationError('open-file-missing-path', 'File path missing', 'Open failed');
@@ -2930,9 +2858,7 @@ function CommandLauncher() {
     const iconDataUrl = iconPath ? launcherIconDataByPath[iconPath] : null;
     const fallbackIcon = item.type === 'bookmark' || item.actionId === 'view-bookmarks'
       ? 'X'
-      : item.type === 'app'
-        ? (item.displayName.trim()[0] ?? item.name.trim()[0] ?? '').toUpperCase()
-        : '';
+      : '';
     return (
       <span style={styles.itemIconSlot} aria-hidden="true">
         {iconDataUrl ? <img src={iconDataUrl} alt="" style={styles.itemIcon} /> : (
