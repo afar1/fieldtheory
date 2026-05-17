@@ -2062,21 +2062,24 @@ export function getGroupedFocusChromeProximityOpacity(input: {
 export function getFocusChromeSurfaceOpacity(input: {
   isFocusChromeSurface: boolean;
   focusChromeActive: boolean;
-  groupOpacity: number;
 }): number {
   if (!input.isFocusChromeSurface || !input.focusChromeActive) return 1;
-  return Math.max(0, Math.min(1, input.groupOpacity));
+  return 0;
 }
 
-export function getFocusChromeHintOpacity(input: {
-  isFocusChromeSurface: boolean;
+export function getFocusChromeScopedItemOpacity(input: {
   focusChromeActive: boolean;
-  surfaceOpacity: number;
-  maxOpacity?: number;
+  visualOpacity: number;
 }): number {
-  if (!input.isFocusChromeSurface || !input.focusChromeActive) return 0;
-  const maxOpacity = Math.max(0, Math.min(1, input.maxOpacity ?? 0.62));
-  return Math.max(0, Math.min(maxOpacity, Number(((1 - input.surfaceOpacity) * maxOpacity).toFixed(3))));
+  if (!input.focusChromeActive) return 1;
+  return Math.max(0, Math.min(1, input.visualOpacity));
+}
+
+export function shouldShowFocusToolbarControls(input: {
+  focusChromeActive: boolean;
+  focusChromePinnedVisible: boolean;
+}): boolean {
+  return !input.focusChromeActive || input.focusChromePinnedVisible;
 }
 
 export function getLibrarianContentTopPadding(input: {
@@ -2765,12 +2768,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [focusToolbarMenuOpen, setFocusToolbarMenuOpen] = useState(false);
   const focusChromePinnedVisible = fileFindOpen || focusToolbarMenuOpen;
   const focusChromeProximityOpacity = focusChromeUsesProximityFade ? focusChromeGroupOpacity : 0;
-  const focusChromeProximityVisible = focusChromeProximityOpacity > 0;
   const focusChromeVisualOpacity = !focusChromeUsesProximityFade || focusChromePinnedVisible
     ? 1
     : focusChromeProximityOpacity;
   const focusChromeVisualVisible = focusChromeVisualOpacity > 0;
-  const focusToolbarControlsVisible = !focusChromeActive || (focusChromeUsesProximityFade && (focusChromeProximityVisible || focusChromePinnedVisible));
+  const focusChromeScopedItemOpacity = getFocusChromeScopedItemOpacity({
+    focusChromeActive,
+    visualOpacity: focusChromeVisualOpacity,
+  });
+  const focusChromeScopedItemVisible = !focusChromeActive || focusChromeVisualVisible;
+  const focusToolbarControlsVisible = shouldShowFocusToolbarControls({
+    focusChromeActive,
+    focusChromePinnedVisible,
+  });
   const contentTopPadding = getLibrarianContentTopPadding({
     contentMode,
     focusChromeActive,
@@ -3264,7 +3274,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
-  const activeReadingToolbarHasBreadcrumb = focusToolbarControlsVisible
+  const activeReadingToolbarHasBreadcrumb = !focusChromeActive
     && (selectedItemType === 'wiki' || selectedItemType === 'external')
     && Boolean(activeReadingPath);
   const meetingToolbarStatus = activeMeetingSession?.status ?? 'idle';
@@ -6965,7 +6975,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               alignItems: 'center',
               justifyContent: 'center',
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
-              backgroundColor: theme.bg,
+              backgroundColor: focusChromeActive ? 'transparent' : theme.bg,
               flexShrink: 0,
               position: focusChromeActive ? 'absolute' : 'relative',
               top: focusChromeActive ? 0 : undefined,
@@ -6973,9 +6983,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               right: focusChromeActive ? 0 : undefined,
               zIndex: focusChromeActive ? 20 : undefined,
               boxSizing: 'border-box',
-              opacity: focusChromeVisualOpacity,
-              pointerEvents: focusChromeVisualVisible ? 'auto' : 'none',
-              transition: 'opacity 90ms linear',
+              opacity: 1,
+              pointerEvents: focusChromeActive ? 'none' : 'auto',
             }}
           >
             {/* Inner container - always matches the centered document width. */}
@@ -6990,7 +6999,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             >
               {/* Nav: back (only visible in fullscreen). Copy-path moved to
                   the right of the immersive toggle inside ContentToolbar. */}
-              {isFullScreen && (
+              {isFullScreen && !focusChromeActive && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: '2px', marginRight: '8px' }}>
                   <button
                     onClick={() => setIsFullScreen(false)}
@@ -7001,13 +7010,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   >←</button>
                 </div>
               )}
-              {activeReadingToolbarHasBreadcrumb && (
-                <ContentToolbarFolderButton onShowInFolder={showActiveReadingInFolder} />
-              )}
-              {/* Breadcrumb — "folder / filename" for wiki, "parent / filename"
-                  + External chip for external. Artifacts skip this (title
-                  already renders prominently in the content area). */}
-              {focusToolbarControlsVisible && (selectedItemType === 'wiki' || selectedItemType === 'external') && activeReading && (
+              {activeReadingToolbarHasBreadcrumb && activeReading && (
                 <div
                   style={{
                     display: 'flex',
@@ -7015,12 +7018,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     gap: '6px',
                     minWidth: 0,
                     flexShrink: 1,
+                    opacity: focusChromeScopedItemOpacity,
+                    pointerEvents: focusChromeScopedItemVisible ? 'auto' : 'none',
+                    transition: 'opacity 90ms linear',
                     // @ts-ignore - opt the breadcrumb out of the drag region so
                     // clicks on the External chip's title tooltip land.
                     WebkitAppRegion: 'no-drag',
                   }}
                   title={activeReading.path}
                 >
+                  {!focusChromeActive && (
+                    <ContentToolbarFolderButton onShowInFolder={showActiveReadingInFolder} />
+                  )}
                   <span
                     style={{
                       fontSize: '11px',
@@ -7052,49 +7061,51 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   )}
                 </div>
               )}
-              <ContentToolbar
-                filePath={activeReading?.path || undefined}
-                isFullScreen={isFullScreen}
-                dragSpacer={!focusChromeActive}
-                canNavigateBack={canNavigateBack}
-                canNavigateForward={canNavigateForward}
-                onNavigateBack={() => navigateHistory(-1)}
-                onNavigateForward={() => navigateHistory(1)}
-                textSize={textSize}
-                onTextSizeChange={setTextSize}
-                showTextSize={focusToolbarControlsVisible}
-                typographyPreset={typographyPresetId}
-                typographyPresetOptions={focusToolbarControlsVisible ? LIBRARIAN_TYPOGRAPHY_PRESETS : undefined}
-                onTypographyPresetChange={focusToolbarControlsVisible ? (preset) => {
-                  if (isLibrarianTypographyPresetId(preset)) {
-                    setTypographyPresetId(preset);
-                  }
-                } : undefined}
-                lineHeight={lineHeightId}
-                lineHeightOptions={focusToolbarControlsVisible ? LIBRARIAN_LINE_HEIGHT_OPTIONS : undefined}
-                onLineHeightChange={focusToolbarControlsVisible ? (lineHeight) => {
-                  if (isLibrarianLineHeightId(lineHeight)) {
-                    setLineHeightId(lineHeight);
-                  }
-                } : undefined}
-                unorderedListMarker={unorderedListMarker}
-                onUnorderedListMarkerChange={focusToolbarControlsVisible ? setUnorderedListMarker : undefined}
-                todoMarker={todoMarker}
-                onTodoMarkerChange={focusToolbarControlsVisible ? setTodoMarker : undefined}
-                onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
-                onDelete={focusToolbarControlsVisible ? handleDelete : undefined}
-                showDelete={focusToolbarControlsVisible}
-                onShowInFolder={focusToolbarControlsVisible && activeReadingPath ? showActiveReadingInFolder : undefined}
-                showFolder={focusToolbarControlsVisible && !activeReadingToolbarHasBreadcrumb}
-                onCopy={focusToolbarControlsVisible && shareStatus?.shared ? copyShareLink : undefined}
-                showCopy={focusToolbarControlsVisible && !!shareStatus?.shared}
-                shareStatus={shareStatus}
-                isSharing={isSharing}
-                showShare={false}
-                onCopyPath={focusToolbarControlsVisible && activeReading?.path ? copyActiveReadingTextOrPath : undefined}
-                copyPathCopied={copyPathCopied}
-                copyPathTitle="Copy selected text or file path (⌘C)"
-              />
+              {focusToolbarControlsVisible && (
+                <ContentToolbar
+                  filePath={activeReading?.path || undefined}
+                  isFullScreen={isFullScreen}
+                  dragSpacer={!focusChromeActive}
+                  canNavigateBack={canNavigateBack}
+                  canNavigateForward={canNavigateForward}
+                  onNavigateBack={() => navigateHistory(-1)}
+                  onNavigateForward={() => navigateHistory(1)}
+                  textSize={textSize}
+                  onTextSizeChange={setTextSize}
+                  showTextSize
+                  typographyPreset={typographyPresetId}
+                  typographyPresetOptions={LIBRARIAN_TYPOGRAPHY_PRESETS}
+                  onTypographyPresetChange={(preset) => {
+                    if (isLibrarianTypographyPresetId(preset)) {
+                      setTypographyPresetId(preset);
+                    }
+                  }}
+                  lineHeight={lineHeightId}
+                  lineHeightOptions={LIBRARIAN_LINE_HEIGHT_OPTIONS}
+                  onLineHeightChange={(lineHeight) => {
+                    if (isLibrarianLineHeightId(lineHeight)) {
+                      setLineHeightId(lineHeight);
+                    }
+                  }}
+                  unorderedListMarker={unorderedListMarker}
+                  onUnorderedListMarkerChange={setUnorderedListMarker}
+                  todoMarker={todoMarker}
+                  onTodoMarkerChange={setTodoMarker}
+                  onTypographyMenuOpenChange={setFocusToolbarMenuOpen}
+                  onDelete={handleDelete}
+                  showDelete
+                  onShowInFolder={activeReadingPath ? showActiveReadingInFolder : undefined}
+                  showFolder={!activeReadingToolbarHasBreadcrumb}
+                  onCopy={shareStatus?.shared ? copyShareLink : undefined}
+                  showCopy={!!shareStatus?.shared}
+                  shareStatus={shareStatus}
+                  isSharing={isSharing}
+                  showShare={false}
+                  onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
+                  copyPathCopied={copyPathCopied}
+                  copyPathTitle="Copy selected text or file path (⌘C)"
+                />
+              )}
 
               {meetingToolbarVisible && (
                 <button
@@ -7235,7 +7246,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               )}
 
               {/* Narration Play/Stop button (feature flagged) */}
-              {FEATURE_NARRATION_ENABLED && selectedReading && contentMode !== 'markdown' && (
+              {focusToolbarControlsVisible && FEATURE_NARRATION_ENABLED && selectedReading && contentMode !== 'markdown' && (
                 <button
                   onClick={isPlaying || isGenerating ? handleStopNarration : handlePlayNarration}
                   disabled={isGenerating}
@@ -7310,7 +7321,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
               {/* Immersive/fullscreen toggle sits to the right of the mode
                   toggle so the editor controls stay grouped together. */}
-              <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleFocusChromeShortcut} />
+              <div
+                style={{
+                  marginLeft: focusToolbarControlsVisible ? undefined : 'auto',
+                  opacity: focusChromeScopedItemOpacity,
+                  pointerEvents: focusChromeScopedItemVisible ? 'auto' : 'none',
+                  transition: 'opacity 90ms linear',
+                }}
+              >
+                <ImmersiveToggle isFullScreen={isFullScreen || focusImmersive} onToggle={toggleFocusChromeShortcut} />
+              </div>
             </div>
           </div>
         )}
