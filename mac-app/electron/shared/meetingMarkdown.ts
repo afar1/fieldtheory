@@ -9,6 +9,7 @@ export const DEFAULT_MEETING_SUMMARY_MODEL = 'gemma-4-E4B-it-Q4_K_M';
 export type MeetingSidecarPaths = {
   transcriptPath: string;
   rawTranscriptPath: string;
+  speakersPath: string;
   audioPath: string;
 };
 
@@ -46,6 +47,16 @@ export type CreateMeetingMarkdownOptions = {
 export type MeetingTranscriptEntry = {
   text: string;
   speaker?: string | null;
+  speakerId?: string | null;
+  startMs?: number | null;
+  endMs?: number | null;
+};
+
+export type MeetingSpeaker = {
+  id: string;
+  label: string;
+  source: string;
+  confidence?: number | null;
 };
 
 export type MeetingTranscriptInput =
@@ -165,12 +176,19 @@ function normalizeTranscriptWikiTarget(path: string): string {
   return path.replace(/\.md$/i, '');
 }
 
+function normalizeSpeakerId(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || !/^[A-Za-z0-9_-]+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
 export function getMeetingSidecarPaths(meetingId: string): MeetingSidecarPaths {
   assertValidMeetingId(meetingId);
   const basePath = `.meetings/${meetingId}`;
   return {
     transcriptPath: `${basePath}/transcript.md`,
     rawTranscriptPath: `${basePath}/transcript.jsonl`,
+    speakersPath: `${basePath}/speakers.json`,
     audioPath: `${basePath}/audio.wav`,
   };
 }
@@ -309,7 +327,9 @@ export function renderMeetingTranscriptEntry(entry: string | MeetingTranscriptEn
   if (!text) return '';
 
   const speaker = entry.speaker?.trim();
-  return speaker ? `**${speaker}:** ${text}` : text;
+  const rendered = speaker ? `**${speaker}:** ${text}` : text;
+  const speakerId = normalizeSpeakerId(entry.speakerId);
+  return speakerId ? `<!-- speaker_id: ${speakerId} -->\n${rendered}` : rendered;
 }
 
 export function appendMeetingTranscript(content: string, input: MeetingTranscriptInput): string {

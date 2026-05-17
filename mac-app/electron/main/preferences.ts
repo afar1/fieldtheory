@@ -81,7 +81,8 @@ export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSear
 
 export const DEFAULT_MEETING_SUMMARY_PROMPT = [
   'Given this meeting markdown, update only the Summary section.',
-  'Preserve frontmatter, Notes, Transcript, speaker labels if present, links, figures, and checkboxes.',
+  'Preserve frontmatter, Notes, Transcript, speaker labels and stable speaker IDs if present, links, figures, and checkboxes.',
+  'Do not renumber speakers or invent speaker names unless they are already present in the meeting note.',
   'Keep user-written notes intact. Do not delete or rewrite raw transcript text.',
   'Use concise organized markdown with Decisions, Action Items, Open Questions, and Notable Context when present.',
   'Return the full replacement markdown document.',
