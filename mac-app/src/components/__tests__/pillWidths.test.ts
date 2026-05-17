@@ -92,6 +92,15 @@ describe('computeRightPillWidth', () => {
     ).toBe(18 + 30 + 8 + 22);
   });
 
+  it('allows the waveform slot to widen for the escape hint', () => {
+    expect(
+      computeRightPillWidth({ waveformActive: true, pipeCount: 0, waveformWidth: 56 })
+    ).toBe(18 + 56);
+    expect(
+      computeRightPillWidth({ waveformActive: true, pipeCount: 2, waveformWidth: 56 })
+    ).toBe(18 + 56 + 8 + 22);
+  });
+
   it('1–3 pipes add 22', () => {
     for (let n = 1; n <= 3; n++) {
       expect(

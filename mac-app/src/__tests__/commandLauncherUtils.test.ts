@@ -48,6 +48,7 @@ import {
   resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
+  shouldIncludeLauncherLibraryMarkdownItem,
   shouldIncludeLauncherRecentFile,
   shouldExitLauncherClipboardSearch,
   shouldOfferLocalInstructionFallback,
@@ -419,6 +420,22 @@ describe('shouldIncludeLauncherRecentFile', () => {
   it('keeps recent rows for non-command files', () => {
     expect(shouldIncludeLauncherRecentFile({
       filePath: '/Users/afar/.fieldtheory/library/Notes/today.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+    })).toBe(true);
+  });
+});
+
+describe('shouldIncludeLauncherLibraryMarkdownItem', () => {
+  it('removes wiki rows for portable command files', () => {
+    expect(shouldIncludeLauncherLibraryMarkdownItem({
+      filePath: '/Users/afar/.fieldtheory/library/Commands/write-goal.md',
+      commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
+    })).toBe(false);
+  });
+
+  it('keeps wiki rows for non-command markdown files', () => {
+    expect(shouldIncludeLauncherLibraryMarkdownItem({
+      filePath: '/Users/afar/.fieldtheory/library/Plans/today.md',
       commandFilePaths: new Set(['/Users/afar/.fieldtheory/library/Commands/write-goal.md']),
     })).toBe(true);
   });

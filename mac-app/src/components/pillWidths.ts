@@ -37,17 +37,19 @@ export function computeLeftPillWidth({
 export interface RightPillSlotInputs {
   waveformActive: boolean;
   pipeCount: number;
+  waveformWidth?: number;
 }
 
 export function computeRightPillWidth({
   waveformActive,
   pipeCount,
+  waveformWidth = WAVEFORM_WIDTH,
 }: RightPillSlotInputs): number {
   const pipeSlot = pipeSlotWidthForCount(pipeCount);
   const hasPipeSlot = pipeCount > 0;
   return (
     PILL_PADDING
-    + (waveformActive ? WAVEFORM_WIDTH + (hasPipeSlot ? WAVEFORM_GAP : 0) : 0)
+    + (waveformActive ? waveformWidth + (hasPipeSlot ? WAVEFORM_GAP : 0) : 0)
     + (hasPipeSlot ? pipeSlot : 0)
   );
 }
