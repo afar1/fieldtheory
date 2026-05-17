@@ -2063,10 +2063,9 @@ export function getFocusChromeSurfaceOpacity(input: {
   isFocusChromeSurface: boolean;
   focusChromeActive: boolean;
   groupOpacity: number;
-  childOpacity?: number;
 }): number {
   if (!input.isFocusChromeSurface || !input.focusChromeActive) return 1;
-  return Math.max(0, Math.min(1, Math.max(input.groupOpacity, input.childOpacity ?? 0)));
+  return Math.max(0, Math.min(1, input.groupOpacity));
 }
 
 export function getFocusChromeHintOpacity(input: {
@@ -2109,7 +2108,7 @@ interface LibrarianViewProps {
   onSwitchToClipboard: () => void;
   onSwitchToSettings?: () => void;
   onFullScreenChange?: (isFullScreen: boolean) => void;
-  onFocusChromeActiveChange?: (active: boolean, visualVisible?: boolean, visualOpacity?: number) => void;
+  onFocusChromeActiveChange?: (active: boolean) => void;
   onBookmarksCanvasActiveChange?: (active: boolean) => void;
   onBookmarksCanvasToolbarTopChange?: (top: number | null) => void;
   onSelectedItemTypeChange?: (type: LibrarianSelectedItemType) => void;
@@ -3161,12 +3160,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [canUseFocusImmersive, focusChromeEnabled, setFocusImmersive]);
 
   useEffect(() => {
-    onFocusChromeActiveChange?.(
-      active && focusChromeActive,
-      active && focusChromeActive && focusChromeVisualVisible,
-      active && focusChromeActive ? focusChromeVisualOpacity : 0,
-    );
-  }, [active, focusChromeActive, focusChromeVisualOpacity, focusChromeVisualVisible, onFocusChromeActiveChange]);
+    onFocusChromeActiveChange?.(active && focusChromeActive);
+  }, [active, focusChromeActive, onFocusChromeActiveChange]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
