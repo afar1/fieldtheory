@@ -33,10 +33,15 @@ export default function ParakeetSupportPanel({
   const detailText = detail?.trim() || null;
   const commandText = recoveryCommand?.trim() || null;
 
+  const inFlight = Boolean(
+    progress &&
+    progress.stage !== 'completed' &&
+    progress.stage !== 'failed'
+  );
   const tone = summary
     ? {
-        border: theme.isDark ? 'rgba(239, 68, 68, 0.35)' : '#fecaca',
-        background: theme.isDark ? 'rgba(239, 68, 68, 0.08)' : '#fef2f2',
+        border: theme.isDark ? 'rgba(99, 102, 241, 0.4)' : '#c7d2fe',
+        background: theme.isDark ? 'rgba(99, 102, 241, 0.12)' : '#eef2ff',
       }
     : {
         border: theme.isDark ? 'rgba(59, 130, 246, 0.35)' : '#bfdbfe',
@@ -144,6 +149,23 @@ export default function ParakeetSupportPanel({
             <div style={{ fontSize: '11px', color: theme.textSecondary, lineHeight: 1.4 }}>
               {progress.message}
             </div>
+            {inFlight && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '7px', marginTop: '7px' }}>
+                <span
+                  aria-hidden="true"
+                  style={{
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '999px',
+                    backgroundColor: theme.info,
+                    boxShadow: `0 0 0 4px ${theme.isDark ? 'rgba(59, 130, 246, 0.14)' : 'rgba(59, 130, 246, 0.12)'}`,
+                  }}
+                />
+                <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+                  Still working, even if the percent pauses.
+                </span>
+              </div>
+            )}
             {progressPercent != null && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '8px' }}>
                 <div

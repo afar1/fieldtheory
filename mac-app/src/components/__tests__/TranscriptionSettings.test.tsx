@@ -272,6 +272,60 @@ describe('TranscriptionSettings Parakeet labels', () => {
     expect(screen.getByText(/Fetching 4 files: 42%/i)).toBeTruthy();
   });
 
+  it('hides stale Parakeet errors while setup is actively downloading', async () => {
+    let onParakeetSetupProgress: ((progress: ParakeetSetupProgress) => void) | null = null;
+
+    (window as any).transcribeAPI = makeTranscribeApi({
+      getParakeetStatus: vi.fn(async () =>
+        makeParakeetStatus({
+          engines: [
+            {
+              engine: 'parakeet',
+              label: 'Parakeet English',
+              verified: false,
+              needsReinstall: true,
+              lastError: 'Previous Parakeet download failed',
+              lastErrorDetail: 'old stderr',
+              lastErrorAt: '2026-05-17T00:00:00.000Z',
+            },
+            {
+              engine: 'parakeet-multilingual',
+              label: 'Parakeet Multilingual',
+              verified: false,
+              needsReinstall: false,
+              lastError: null,
+              lastErrorDetail: null,
+              lastErrorAt: null,
+            },
+          ],
+        })
+      ),
+      onParakeetSetupProgress: vi.fn((callback: (progress: ParakeetSetupProgress) => void) => {
+        onParakeetSetupProgress = callback;
+        return () => {};
+      }),
+    });
+    (window as any).hotMicAPI = makeHotMicApi();
+
+    render(<TranscriptionSettings />);
+
+    expect(await screen.findByText(/Previous Parakeet download failed/i)).toBeTruthy();
+
+    await act(async () => {
+      onParakeetSetupProgress?.({
+        engine: 'parakeet',
+        stage: 'downloading-model',
+        message: 'Downloading the Parakeet model…',
+        percent: 42,
+        detail: 'Fetching 4 files: 42%',
+      });
+    });
+
+    expect(screen.queryByText(/Previous Parakeet download failed/i)).toBeNull();
+    expect(screen.queryByText(/needs attention/i)).toBeNull();
+    expect(screen.getByText(/Still working, even if the percent pauses/i)).toBeTruthy();
+  });
+
   it('offers the local meeting speaker-turn model download', async () => {
     const downloadModel = vi.fn(async () => undefined);
     (window as any).transcribeAPI = makeTranscribeApi({

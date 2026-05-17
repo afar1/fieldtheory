@@ -553,6 +553,77 @@ describe('LibrarianView render', () => {
     });
   });
 
+  it('keeps the cursor at the end of inserted recording text in markdown source', async () => {
+    const relPath = 'scratchpad/recording-cursor-test';
+    const content = 'Intro paragraph.\n\nSecond paragraph.';
+    const insertedText = 'Recorded transcription. ';
+    const insertAt = content.indexOf('Second');
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'recording-cursor-test',
+      title: 'recording-cursor-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'recording-cursor-version' },
+    };
+    let insertMarkdownTextHandler: ((text: string) => void) | null = null;
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (key === 'librarian-editor-session') {
+        return JSON.stringify({
+          itemType: 'wiki',
+          itemPath: relPath,
+          contentMode: 'markdown',
+          selectionStart: insertAt,
+          selectionEnd: insertAt,
+          scrollTop: 0,
+        });
+      }
+      return null;
+    });
+    vi.mocked(window.librarianAPI!.onInsertMarkdownText).mockImplementation((callback) => {
+      insertMarkdownTextHandler = callback;
+      return () => {
+        insertMarkdownTextHandler = null;
+      };
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(container.querySelector('.cm-editor')).toBeTruthy();
+      expect(insertMarkdownTextHandler).toBeTruthy();
+    });
+    fireEvent.click(screen.getByLabelText('Switch to Markdown source'));
+    await waitFor(() => {
+      expect(screen.getByLabelText('Switch to rendered view')).toBeTruthy();
+      expect(container.querySelector('[data-ft-rendered-editor-root="true"]')).toBeNull();
+    });
+
+    await act(async () => {
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      insertMarkdownTextHandler?.(insertedText);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    });
+
+    const expectedSelection = insertAt + insertedText.length;
+    await waitFor(() => {
+      const contentNode = container.querySelector('.cm-content') as HTMLElement | null;
+      expect(contentNode?.textContent).toContain(`${insertedText}Second paragraph.`);
+    });
+    await waitFor(() => {
+      const sessionCalls = vi.mocked(window.localStorage.setItem).mock.calls
+        .filter(([key]) => key === 'librarian-editor-session');
+      expect(sessionCalls.length).toBeGreaterThan(0);
+      const latestSession = JSON.parse(sessionCalls[sessionCalls.length - 1][1]);
+      expect(latestSession.selectionStart).toBe(expectedSelection);
+      expect(latestSession.selectionEnd).toBe(expectedSelection);
+    });
+  });
+
   it('keeps rendered mode when Enter commits the file title', async () => {
     const relPath = 'scratchpad/title-enter-rendered-test';
     const page: WikiPage = {

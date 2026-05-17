@@ -626,6 +626,56 @@ async function runWithCommandLauncherExternalInvocation<T>(operation: () => Prom
   }
 }
 
+function findRunningAppForBundleId(bundleId: string): { bundleId: string; name: string } | null {
+  const lowerBundleId = bundleId.toLowerCase();
+  const candidates = [
+    commandLauncherWindow?.getPreviousApp(),
+    getCommandLauncherTargetApp(),
+    clipboardHistoryWindow?.getTargetApp(),
+    ...(clipboardHistoryWindow?.getCachedRunningApps() ?? []),
+    nativeHelper?.getFrontmostApp(),
+  ];
+
+  for (const candidate of candidates) {
+    if (
+      candidate?.bundleId &&
+      candidate.name &&
+      candidate.bundleId.toLowerCase() === lowerBundleId &&
+      isExternalCommandTargetBundleId(candidate.bundleId)
+    ) {
+      return {
+        bundleId: candidate.bundleId,
+        name: candidate.name,
+      };
+    }
+  }
+
+  return isExternalCommandTargetBundleId(bundleId)
+    ? { bundleId, name: bundleId }
+    : null;
+}
+
+async function pasteClipboardFromCommandLauncher(
+  targetBundleId: string,
+  reason: string
+): Promise<boolean> {
+  const targetApp = findRunningAppForBundleId(targetBundleId);
+  if (!targetApp) {
+    appendCommandLauncherTrace('command-launcher-clipboard-paste-no-target', {
+      reason,
+      targetBundleId,
+    });
+    return false;
+  }
+
+  return runWithCommandLauncherExternalInvocation(async () => {
+    clipboardHistoryWindow?.hideAfterPaste(reason);
+    return activateAndPasteFromCommandLauncher(targetApp, {
+      clipboardTrace: readCommandPasteClipboardTrace,
+    });
+  });
+}
+
 function isFieldTheoryBundleId(bundleId: string | null | undefined): boolean {
   return isFieldTheoryCommandTargetBundleId(bundleId);
 }
@@ -5564,22 +5614,31 @@ function setupClipboardIPCHandlers(): void {
         }
       }
 
-      // Dismiss panel mode before paste; app mode stays visible.
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hideAfterPaste('paste-item');
-      }
+      const useCommandLauncherPaste = Boolean(targetBundleId && commandLauncherWindow?.isShowingOrVisible());
 
-      // If a specific target app was provided, activate it and paste there.
-      // Otherwise, use the default behavior (paste to previous app).
-      if (targetBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(targetBundleId);
-      } else if (effectiveBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+      if (useCommandLauncherPaste && targetBundleId) {
+        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-item-command-launcher');
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Clipboard paste failed');
+        }
       } else {
-        // Last-resort paste when no known target app is available.
-        try {
-          await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
-        } catch { /* Silently fail if paste times out */ }
+        // Dismiss panel mode before paste; app mode stays visible.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hideAfterPaste('paste-item');
+        }
+
+        // If a specific target app was provided, activate it and paste there.
+        // Otherwise, use the default behavior (paste to previous app).
+        if (targetBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(targetBundleId);
+        } else if (effectiveBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+        } else {
+          // Last-resort paste when no known target app is available.
+          try {
+            await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+          } catch { /* Silently fail if paste times out */ }
+        }
       }
 
       // Record paste metric
@@ -5648,9 +5707,26 @@ function setupClipboardIPCHandlers(): void {
         effectiveBundleId = targetApp?.bundleId || null;
       }
 
-      // Dismiss panel mode before paste; app mode stays visible.
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hideAfterPaste('paste-stack');
+      const commandLauncherPasteTarget = targetBundleId && commandLauncherWindow?.isShowingOrVisible()
+        ? findRunningAppForBundleId(targetBundleId)
+        : null;
+      if (commandLauncherPasteTarget) {
+        const targetReady = await runWithCommandLauncherExternalInvocation(async () => {
+          const activated = await activateCommandLauncherTargetApp(commandLauncherPasteTarget, 'paste-stack-command-launcher');
+          if (!activated) return false;
+          commandLauncherWindow?.hide(true);
+          clipboardHistoryWindow?.hideAfterPaste('paste-stack-command-launcher');
+          return true;
+        });
+        if (!targetReady) {
+          cursorStatusManager?.showNoTargetError('Clipboard paste failed');
+          return;
+        }
+      } else {
+        // Dismiss panel mode before paste; app mode stays visible.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hideAfterPaste('paste-stack');
+        }
       }
       
       const { nativeImage } = require('electron');
@@ -5681,7 +5757,7 @@ function setupClipboardIPCHandlers(): void {
 
       const orderedItems = orderStackItemsForPaste(items, frontmostBundleId);
 
-      if (frontmostBundleId && clipboardHistoryWindow && !isFinder(frontmostBundleId)) {
+      if (frontmostBundleId && clipboardHistoryWindow && !commandLauncherPasteTarget && !isFinder(frontmostBundleId)) {
         await clipboardHistoryWindow.activateApp(frontmostBundleId);
         // Give macOS a short moment to settle focus before synthetic paste events.
         await new Promise(resolve => setTimeout(resolve, 50));
@@ -5826,22 +5902,31 @@ function setupClipboardIPCHandlers(): void {
         return;
       }
 
-      // Dismiss panel mode before paste; app mode stays visible.
-      if (clipboardHistoryWindow) {
-        clipboardHistoryWindow.hideAfterPaste('paste-text');
-      }
-      
-      // If a specific target app was provided, activate it and paste there
-      if (targetBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(targetBundleId);
-      } else if (effectiveBundleId && clipboardHistoryWindow) {
-        await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+      const useCommandLauncherPaste = Boolean(targetBundleId && commandLauncherWindow?.isShowingOrVisible());
+
+      if (useCommandLauncherPaste && targetBundleId) {
+        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-text-command-launcher');
+        if (!pasted) {
+          cursorStatusManager?.showNoTargetError('Clipboard paste failed');
+        }
       } else {
-        // Last-resort paste when no known target app is available.
-        // Use timeout to prevent hang if target app is unresponsive.
-        try {
-          await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
-        } catch { /* Silently fail if paste times out */ }
+        // Dismiss panel mode before paste; app mode stays visible.
+        if (clipboardHistoryWindow) {
+          clipboardHistoryWindow.hideAfterPaste('paste-text');
+        }
+
+        // If a specific target app was provided, activate it and paste there
+        if (targetBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(targetBundleId);
+        } else if (effectiveBundleId && clipboardHistoryWindow) {
+          await clipboardHistoryWindow.pasteToApp(effectiveBundleId);
+        } else {
+          // Last-resort paste when no known target app is available.
+          // Use timeout to prevent hang if target app is unresponsive.
+          try {
+            await execWithTimeout('osascript -e \'tell application "System Events" to keystroke "v" using command down\'', 3000);
+          } catch { /* Silently fail if paste times out */ }
+        }
       }
     } catch (error) {
       log.error('pasteText error:', error);
