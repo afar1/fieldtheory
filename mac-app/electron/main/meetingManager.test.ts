@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { replaceMeetingSummary } from '../shared/meetingMarkdown';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { MeetingManager, type MeetingFileContext } from './meetingManager';
+import type { MeetingCaptureResult, MeetingCaptureSession } from './transcriberManager';
 
 const tempDirs: string[] = [];
 
@@ -62,18 +63,18 @@ function makeManager(overrides: Partial<ConstructorParameters<typeof MeetingMana
   fs.writeFileSync(audioPath, 'audio');
   const librarian = makeLibrarian(root);
   const transcriber = {
-    startMeetingCapture: vi.fn(async () => ({
+    startMeetingCapture: vi.fn(async (): Promise<MeetingCaptureSession> => ({
       startedAt: '2026-05-14T20:00:00.000Z',
-      source: 'microphone' as const,
-      transcriptionEngine: 'parakeet' as const,
-      speakerDiarizationSupported: false as const,
+      source: 'microphone',
+      transcriptionEngine: 'parakeet',
+      speakerDiarizationSupported: false,
     })),
-    stopMeetingCapture: vi.fn(async () => ({
+    stopMeetingCapture: vi.fn(async (): Promise<MeetingCaptureResult> => ({
       startedAt: '2026-05-14T20:00:00.000Z',
       stoppedAt: '2026-05-14T20:03:00.000Z',
-      source: 'microphone' as const,
-      transcriptionEngine: 'parakeet' as const,
-      speakerDiarizationSupported: false as const,
+      source: 'microphone',
+      transcriptionEngine: 'parakeet',
+      speakerDiarizationSupported: false,
       transcriptText: 'Alice: Keep the markdown file as the source of truth.\nBob: Add clean summary notes.',
       audioPath,
     })),
@@ -148,25 +149,91 @@ describe('MeetingManager', () => {
     expect(transcriber.stopMeetingCapture).toHaveBeenCalledOnce();
     expect(localLlm.runReplacementCommand).toHaveBeenCalledWith(expect.objectContaining({
       commandName: 'summarize-meeting',
-      commandContent: 'Summarize only the Summary section.',
+      commandContent: expect.stringContaining('Summarize only the Summary section.'),
+    }), expect.any(Object));
+    expect(localLlm.runReplacementCommand).toHaveBeenCalledWith(expect.objectContaining({
+      commandContent: expect.stringContaining('Do not renumber Speaker 1, Speaker 2, Speaker 3, or any named speaker.'),
     }), expect.any(Object));
 
     const finalContent = fs.readFileSync(context.filePath, 'utf-8');
     expect(finalContent).toContain('- typed while talking');
     expect(finalContent).toContain('Raw transcript: [[.meetings/meeting-1/transcript|Raw transcript]]');
+    expect(finalContent).toContain('<!-- speaker_id: spk_1 -->\n**Alice:** Keep the markdown file as the source of truth.');
+    expect(finalContent).toContain('<!-- speaker_id: spk_2 -->\n**Bob:** Add clean summary notes.');
     expect(finalContent).toContain('**Alice:** Keep the markdown file as the source of truth.');
     expect(finalContent).toContain('**Bob:** Add clean summary notes.');
     expect(finalContent).toContain('**Decisions:** Keep markdown native.');
     expect(finalContent).toContain('status: done');
     expect(fs.existsSync(path.join(root, '.meetings', 'meeting-1', 'transcript.md'))).toBe(true);
     expect(fs.existsSync(path.join(root, '.meetings', 'meeting-1', 'transcript.jsonl'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '.meetings', 'meeting-1', 'speakers.json'))).toBe(true);
     expect(fs.existsSync(path.join(root, '.meetings', 'meeting-1', 'audio.wav'))).toBe(true);
+    const speakers = JSON.parse(fs.readFileSync(path.join(root, '.meetings', 'meeting-1', 'speakers.json'), 'utf-8'));
+    expect(speakers).toMatchObject({
+      meetingId: 'meeting-1',
+      source: 'transcript-label',
+      speakers: [
+        { id: 'spk_1', label: 'Alice', source: 'transcript-label' },
+        { id: 'spk_2', label: 'Bob', source: 'transcript-label' },
+      ],
+    });
+    const rawTranscript = fs.readFileSync(path.join(root, '.meetings', 'meeting-1', 'transcript.jsonl'), 'utf-8');
+    expect(rawTranscript).toContain('"speaker_id":"spk_1"');
+    expect(rawTranscript).toContain('"speaker_id":"spk_2"');
     expect(progressEvents).toContainEqual(expect.objectContaining({
       kind: 'file_change',
       message: 'Meeting summary done',
       phase: 'done',
       filePath: context.filePath,
     }));
+  });
+
+  it('keeps meeting speaker labels beyond Speaker 2 in the note and raw sidecar', async () => {
+    const { manager, root, audioPath, transcriber, localLlm } = makeManager();
+    transcriber.stopMeetingCapture.mockResolvedValueOnce({
+      startedAt: '2026-05-14T20:00:00.000Z',
+      stoppedAt: '2026-05-14T20:03:00.000Z',
+      source: 'microphone',
+      transcriptionEngine: 'whisper',
+      speakerDiarizationSupported: true,
+      transcriptText: [
+        'Speaker 1: First person opens.',
+        'Speaker 2: Second person responds.',
+        'Speaker 3: Third person joins.',
+      ].join('\n'),
+      audioPath,
+    });
+    localLlm.runReplacementCommand.mockImplementationOnce(async ({ targetContent }: { targetContent: string }) => {
+      expect(fs.existsSync(path.join(root, '.meetings', 'meeting-1', 'speakers.json'))).toBe(true);
+      return replaceMeetingSummary(targetContent, '**Decisions:** Keep speaker identity stable.');
+    });
+    const created = await manager.createMeetingNote('Multi Speaker');
+    const context = contextFromResult(created);
+
+    await manager.startHere(context);
+    const result = await manager.stopActiveMeeting();
+
+    expect(result.success).toBe(true);
+    const finalContent = fs.readFileSync(context.filePath, 'utf-8');
+    expect(finalContent).toContain('<!-- speaker_id: spk_1 -->\n**Speaker 1:** First person opens.');
+    expect(finalContent).toContain('<!-- speaker_id: spk_2 -->\n**Speaker 2:** Second person responds.');
+    expect(finalContent).toContain('<!-- speaker_id: spk_3 -->\n**Speaker 3:** Third person joins.');
+    expect(finalContent).toContain('**Speaker 1:** First person opens.');
+    expect(finalContent).toContain('**Speaker 2:** Second person responds.');
+    expect(finalContent).toContain('**Speaker 3:** Third person joins.');
+    const speakers = JSON.parse(fs.readFileSync(path.join(root, '.meetings', 'meeting-1', 'speakers.json'), 'utf-8'));
+    expect(speakers).toMatchObject({
+      source: 'turn-marker',
+      speakers: [
+        { id: 'spk_1', label: 'Speaker 1', source: 'turn-marker' },
+        { id: 'spk_2', label: 'Speaker 2', source: 'turn-marker' },
+        { id: 'spk_3', label: 'Speaker 3', source: 'turn-marker' },
+      ],
+    });
+    const rawTranscript = fs.readFileSync(path.join(root, '.meetings', 'meeting-1', 'transcript.jsonl'), 'utf-8');
+    expect(rawTranscript).toContain('"speaker_id":"spk_3"');
+    expect(rawTranscript).toContain('"speaker":"Speaker 3"');
+    expect(rawTranscript).toContain('"text":"Third person joins."');
   });
 
   it('re-reads the file after Maxwell runs so notes typed during summary survive', async () => {
@@ -214,8 +281,11 @@ describe('MeetingManager', () => {
     expect(finalContent).toContain('**Decisions:** Preserve live edits.');
     expect(maxwellRuns.createPendingRun).toHaveBeenCalledWith(expect.objectContaining({
       commandName: 'summarize-meeting',
-      commandContent: 'Custom meeting prompt.',
+      commandContent: expect.stringContaining('Custom meeting prompt.'),
       targetPath: context.filePath,
+    }));
+    expect(maxwellRuns.createPendingRun).toHaveBeenCalledWith(expect.objectContaining({
+      commandContent: expect.stringContaining('Speaker identity contract:'),
     }));
     expect(maxwellRuns.markSuccess).toHaveBeenCalledWith('run-1', expect.objectContaining({
       summary: 'Updated meeting summary',
