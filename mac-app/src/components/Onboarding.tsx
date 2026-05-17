@@ -270,15 +270,26 @@ function ModelPhase({
   const selectedParakeetEngineStatus = selectedEngine === 'whisper'
     ? null
     : getVisibleParakeetEngineStatus(parakeetStatus, selectedEngine);
-  const selectedParakeetSetupError = selectedParakeetEngineStatus?.setupError ?? parakeetSetupError;
-  const selectedParakeetSupportSummary = selectedParakeetSetupError?.summary ?? selectedParakeetEngineStatus?.lastError ?? null;
-  const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
-  const selectedParakeetErrorDetail = selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
   const selectedParakeetProgress = selectedEngine === 'whisper'
     ? null
     : parakeetSetupProgress?.engine === selectedEngine
       ? parakeetSetupProgress
       : null;
+  const selectedParakeetSetupActive = Boolean(
+    selectedParakeetProgress &&
+    selectedParakeetProgress.stage !== 'completed' &&
+    selectedParakeetProgress.stage !== 'failed'
+  );
+  const selectedParakeetSetupError = selectedParakeetSetupActive
+    ? null
+    : selectedParakeetEngineStatus?.setupError ?? parakeetSetupError;
+  const selectedParakeetSupportSummary = selectedParakeetSetupActive
+    ? null
+    : selectedParakeetSetupError?.summary ?? selectedParakeetEngineStatus?.lastError ?? null;
+  const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
+  const selectedParakeetErrorDetail = selectedParakeetSetupActive
+    ? null
+    : selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
 
   // AI integration state - shown when either engine is ready
   const [aiStatus, setAiStatus] = useState<AIIntegrationStatus | null>(null);
@@ -388,7 +399,7 @@ function ModelPhase({
                 {engineVerified ? (
                   <span style={{ fontSize: '11px', color: theme.success, fontWeight: 500 }}>Installed</span>
                 ) : isPendingAction ? (
-                  <span style={{ fontSize: '11px', color: theme.warning, fontWeight: 500 }}>{pendingActionLabel}</span>
+                  <span style={{ fontSize: '11px', color: theme.info, fontWeight: 500 }}>{pendingActionLabel}</span>
                 ) : (
                   <button
                     onClick={(e) => { e.stopPropagation(); onSetupParakeet(engineOption.id); }}
@@ -1086,9 +1097,6 @@ function AccountPhase({ onFinish, onFinishReturning, theme, styles }: AccountPha
       <h1 style={styles.title}>Create Your Free Account</h1>
       <p style={styles.subtitle}>
         Sign in to get started with Field Theory.
-      </p>
-      <p style={{ ...styles.subtitle, opacity: 0.7, fontSize: '0.85em', marginTop: '-4px' }}>
-        Every Pro feature is free for your first 14 days — and your trial resets every 30 days, so you can come back later to try new features without committing.
       </p>
 
       <div style={styles.accountForm}>

@@ -26,6 +26,7 @@ type LocalModelHealth = {
 };
 
 const DEFAULT_MODEL_ID = 'gemma-4-E4B-it-Q4_K_M';
+const FIELD_THEORY_MODEL_DIR = '~/.fieldtheory/models';
 
 function formatBytes(bytes: number | null | undefined): string {
   if (!bytes || bytes <= 0) return 'Unknown';
@@ -36,6 +37,21 @@ function formatBytes(bytes: number | null | undefined): string {
 function abbreviateHomePath(filePath: string | undefined): string {
   if (!filePath) return 'Unknown';
   return filePath.replace(/^\/Users\/[^/]+/, '~');
+}
+
+function getFieldTheoryModelPath(filename: string | undefined): string {
+  return `${FIELD_THEORY_MODEL_DIR}/${filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf'}`;
+}
+
+function getGemmaDownloadCommand(model: LocalModelInfo | undefined): string {
+  const filename = model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf';
+  const sourceUrl = model?.sourceUrl ?? 'https://huggingface.co/ggml-org/gemma-4-E4B-it-GGUF';
+  return `mkdir -p ${FIELD_THEORY_MODEL_DIR} && curl -L --fail --continue-at - -o ${getFieldTheoryModelPath(filename)} "${sourceUrl}/resolve/main/${filename}?download=true"`;
+}
+
+function getGemmaLinkCommand(model: LocalModelInfo | undefined): string {
+  const filename = model?.filename ?? 'gemma-4-E4B-it-Q4_K_M.gguf';
+  return `mkdir -p ${FIELD_THEORY_MODEL_DIR} && ln -sf "/path/to/${filename}" ${getFieldTheoryModelPath(filename)}`;
 }
 
 export default function LocalModelSettings() {
@@ -51,6 +67,7 @@ export default function LocalModelSettings() {
   const [promptSaving, setPromptSaving] = useState(false);
   const [promptMessage, setPromptMessage] = useState<string | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
+  const [copiedCommand, setCopiedCommand] = useState<'download' | 'link' | null>(null);
 
   const load = useCallback(async () => {
     const api = window.clipboardAPI;
@@ -98,6 +115,32 @@ export default function LocalModelSettings() {
       : health?.status === 'corrupt'
         ? 'Repair or download'
         : 'Find or download';
+  const downloadCommand = getGemmaDownloadCommand(model);
+  const linkCommand = getGemmaLinkCommand(model);
+
+  const handleCopyCommand = useCallback(async (kind: 'download' | 'link', command: string) => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(command);
+      } else {
+        const textarea = document.createElement('textarea');
+        textarea.value = command;
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      }
+      setCopiedCommand(kind);
+      window.setTimeout(() => {
+        setCopiedCommand((current) => (current === kind ? null : current));
+      }, 1800);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not copy command.');
+    }
+  }, []);
 
   const handlePrimaryAction = useCallback(async () => {
     const api = window.clipboardAPI;
@@ -282,6 +325,39 @@ export default function LocalModelSettings() {
         </span>
       </div>
 
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          padding: '10px 12px',
+          borderRadius: '8px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.surface1,
+        }}
+      >
+        <div style={{ fontSize: '12px', fontWeight: 600, color: theme.text }}>
+          Terminal setup
+        </div>
+        <div style={{ fontSize: '11px', lineHeight: 1.45, color: theme.textSecondary }}>
+          Maxwell checks {getFieldTheoryModelPath(model?.filename)} automatically. Download Gemma 4 there, or link an existing GGUF file to that path.
+        </div>
+        <TerminalCommand
+          label="Download Gemma 4"
+          command={downloadCommand}
+          copied={copiedCommand === 'download'}
+          onCopy={() => void handleCopyCommand('download', downloadCommand)}
+          theme={theme}
+        />
+        <TerminalCommand
+          label="Link existing GGUF"
+          command={linkCommand}
+          copied={copiedCommand === 'link'}
+          onCopy={() => void handleCopyCommand('link', linkCommand)}
+          theme={theme}
+        />
+      </div>
+
       {message && <SettingsNotice theme={theme} tone="success">{message}</SettingsNotice>}
       {error && <SettingsNotice theme={theme} tone="warning">{error}</SettingsNotice>}
 
@@ -363,6 +439,61 @@ export default function LocalModelSettings() {
 
       {promptMessage && <SettingsNotice theme={theme} tone="success">{promptMessage}</SettingsNotice>}
       {promptError && <SettingsNotice theme={theme} tone="warning">{promptError}</SettingsNotice>}
+    </div>
+  );
+}
+
+function TerminalCommand({
+  label,
+  command,
+  copied,
+  onCopy,
+  theme,
+}: {
+  label: string;
+  command: string;
+  copied: boolean;
+  onCopy: () => void;
+  theme: ReturnType<typeof useTheme>['theme'];
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+        <span style={{ fontSize: '11px', fontWeight: 600, color: theme.text }}>{label}</span>
+        <button
+          type="button"
+          onClick={onCopy}
+          style={{
+            padding: '4px 8px',
+            borderRadius: '6px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.surface2 ?? theme.surface1,
+            color: theme.text,
+            fontSize: '11px',
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          {copied ? 'Copied' : 'Copy'}
+        </button>
+      </div>
+      <code
+        style={{
+          display: 'block',
+          padding: '7px 8px',
+          borderRadius: '6px',
+          border: `1px solid ${theme.border}`,
+          backgroundColor: theme.isDark ? 'rgba(15, 23, 42, 0.5)' : '#f8fafc',
+          color: theme.text,
+          fontSize: '11px',
+          lineHeight: 1.4,
+          whiteSpace: 'pre-wrap',
+          wordBreak: 'break-word',
+          userSelect: 'text',
+        }}
+      >
+        {command}
+      </code>
     </div>
   );
 }

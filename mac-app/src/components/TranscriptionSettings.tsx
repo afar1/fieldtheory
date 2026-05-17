@@ -376,15 +376,26 @@ export default function TranscriptionSettings() {
   const selectedParakeetEngineStatus = selectedEngine === 'whisper'
     ? null
     : getParakeetEngineStatus(selectedEngine);
-  const selectedParakeetSetupError = selectedParakeetEngineStatus?.setupError ?? parakeetSetupError;
-  const selectedParakeetSupportSummary = selectedParakeetSetupError?.summary ?? selectedParakeetEngineStatus?.lastError ?? null;
-  const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
-  const selectedParakeetErrorDetail = selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
   const selectedParakeetProgress = selectedEngine === 'whisper'
     ? null
     : parakeetSetupProgress?.engine === selectedEngine
       ? parakeetSetupProgress
       : null;
+  const selectedParakeetSetupActive = Boolean(
+    selectedParakeetProgress &&
+    selectedParakeetProgress.stage !== 'completed' &&
+    selectedParakeetProgress.stage !== 'failed'
+  );
+  const selectedParakeetSetupError = selectedParakeetSetupActive
+    ? null
+    : selectedParakeetEngineStatus?.setupError ?? parakeetSetupError;
+  const selectedParakeetSupportSummary = selectedParakeetSetupActive
+    ? null
+    : selectedParakeetSetupError?.summary ?? selectedParakeetEngineStatus?.lastError ?? null;
+  const selectedParakeetRecoveryMessage = getVisibleParakeetRecoveryMessage(selectedParakeetSupportSummary);
+  const selectedParakeetErrorDetail = selectedParakeetSetupActive
+    ? null
+    : selectedParakeetSetupError?.detail ?? selectedParakeetEngineStatus?.lastErrorDetail ?? null;
 
   const handleDeleteModel = useCallback(async (modelSize: string) => {
     if (!window.transcribeAPI || deletingModel) return;
@@ -842,7 +853,7 @@ export default function TranscriptionSettings() {
                       {verifiedBadge.label}
                     </span>
                   ) : isPendingAction ? (
-                    <span style={{ fontSize: '11px', color: theme.warning }}>{pendingActionLabel}</span>
+                    <span style={{ fontSize: '11px', color: theme.info }}>{pendingActionLabel}</span>
                   ) : (
                     <button
                       onClick={(e) => { e.stopPropagation(); handleSetupParakeet(engineOption.id); }}

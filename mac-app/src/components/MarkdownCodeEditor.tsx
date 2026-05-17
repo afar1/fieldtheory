@@ -1470,8 +1470,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // Sync external value into the editor when it diverges.
-    useEffect(() => {
+    // Sync external value into the editor before parent-scheduled cursor restores run.
+    useLayoutEffect(() => {
       const view = viewRef.current;
       if (!view) return;
       if (value === lastAppliedValueRef.current) return;
