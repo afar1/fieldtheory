@@ -107,6 +107,7 @@ const FLOATING_COMPLETE_SETTLE_MS = 60;
 const FLOATING_CONTENT_FALLBACK_WIDTH = WAVEFORM_WIDTH;
 const FLOATING_BUTTON_EDGE_INSET_PX = 6;
 const ESCAPE_HINT_DISPLAY_MS = 1_600;
+const ESCAPE_HINT_WIDTH = 56;
 const STATIC_WAVEFORM_LEVELS = new Array(WAVEFORM_BAR_COUNT).fill(0);
 const DRAWER_TEXT_SIZE_DEFAULT = 14;
 const DRAWER_TEXT_SIZE_MIN = 11;
@@ -289,8 +290,9 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
     ? STATIC_WAVEFORM_LEVELS
     : waveformLevels;
   const escapeHintActive = waveformActive && escapeHintVisible;
+  const waveformSlotWidth = escapeHintActive ? ESCAPE_HINT_WIDTH : WAVEFORM_WIDTH;
 
-  const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount });
+  const rightSlotSum = computeRightPillWidth({ waveformActive, pipeCount, waveformWidth: waveformSlotWidth });
   useEffect(() => {
     onSlotSumChange?.(rightSlotSum);
   }, [rightSlotSum, onSlotSumChange]);
@@ -307,7 +309,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
     >
       <PillSlot
         visible={waveformActive}
-        width={WAVEFORM_WIDTH}
+        width={waveformSlotWidth}
         marginRight={waveformSlotMargin}
         style={floating ? { justifyContent: 'center' } : undefined}
       >
@@ -316,7 +318,7 @@ function RightPill({ sectionWidth, onSlotSumChange, sectionTransitionDelay, floa
           style={escapeHintActive ? rightStyles.escapeHintContainer : rightStyles.waveformContainer}
         >
           {escapeHintActive ? (
-            <span style={rightStyles.escapeHintText}>esc</span>
+            <span style={rightStyles.escapeHintText}>Press Esc</span>
           ) : (
             <WaveformBars levels={displayedWaveformLevels} color={waveformColor} />
           )}
@@ -358,11 +360,11 @@ const rightStyles: Record<string, React.CSSProperties> = {
     height: '14px',
   },
   escapeHintText: {
-    fontSize: '10px',
+    fontSize: '12px',
     fontWeight: 650,
     lineHeight: 1,
     letterSpacing: 0,
-    textTransform: 'lowercase',
+    whiteSpace: 'nowrap',
     color: 'rgba(255, 255, 255, 0.88)',
     animation: `escapeHintFade ${ESCAPE_HINT_DISPLAY_MS}ms ease-out forwards`,
   },

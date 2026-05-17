@@ -380,6 +380,14 @@ export function getRecentEntrySidebarId(entry: RecentEntry): string {
   return `${entry.kind}:${entry.path}`;
 }
 
+export function getRecentEntryParentLabel(entry: Pick<RecentEntry, 'kind' | 'path'>): string {
+  const parts = entry.path.replace(/\\/g, '/').split('/').filter(Boolean);
+  if (entry.kind === 'wiki') {
+    return parts.length > 1 ? parts.slice(0, -1).join(' / ') : 'Library';
+  }
+  return parts.length > 1 ? parts[parts.length - 2] : 'File';
+}
+
 export function splitPinnedRecentEntries(
   entries: RecentEntry[],
   pinnedItemIds: ReadonlySet<string>,
@@ -657,16 +665,6 @@ function makeBookmarksItem(): UnifiedItem {
     id: BOOKMARKS_ITEM_ID,
     title: 'View bookmarks',
     type: 'bookmarks',
-    absPath: '',
-    timestamp: 0,
-  };
-}
-
-function makeEmberItem(): UnifiedItem {
-  return {
-    id: EMBER_ITEM_ID,
-    title: 'Ember',
-    type: 'ember',
     absPath: '',
     timestamp: 0,
   };
@@ -1083,12 +1081,24 @@ export function getWikiSidebarExpansionIds(rootPath: string, relPath: string): s
   return ids;
 }
 
-export function getSelectedWikiAutoExpandKey(
-  selectedId: string | null | undefined,
-  rootPath: string | null | undefined
-): string | null {
-  if (!selectedId?.startsWith('wiki:') || !rootPath) return null;
-  return `${rootPath}::${selectedId}`;
+function getRecentEntryRevealLocation(entry: RecentEntry, roots: LibraryRoot[]): LibraryCreateLocation | null {
+  if (entry.kind === 'wiki') {
+    const builtinRoot = roots.find((root) => root.builtin);
+    return builtinRoot ? { rootPath: builtinRoot.path, relPath: entry.path, builtin: true } : null;
+  }
+
+  const normalizedPath = entry.path.replace(/\\/g, '/');
+  const matchingRoot = roots
+    .filter((root) => {
+      const rootPath = root.path.replace(/\\/g, '/').replace(/\/+$/, '');
+      return normalizedPath === rootPath || normalizedPath.startsWith(`${rootPath}/`);
+    })
+    .sort((a, b) => b.path.length - a.path.length)[0];
+  if (!matchingRoot) return null;
+
+  const rootPath = matchingRoot.path.replace(/\\/g, '/').replace(/\/+$/, '');
+  const relPath = normalizedPath.slice(rootPath.length).replace(/^\/+/, '');
+  return { rootPath: matchingRoot.path, relPath, builtin: matchingRoot.builtin };
 }
 
 export function virtualizeBookmarksGroup(nodes: SidebarNode[], root: LibraryRoot, sortMode: SortMode = 'alpha'): SidebarNode[] {
@@ -1230,7 +1240,6 @@ function WikiSidebar({
   const selectedFileIdsRef = useRef<Set<string>>(selectedFileIds);
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [collapsingFileIds, setCollapsingFileIds] = useState<Set<string>>(() => new Set());
-  const autoExpandedSelectedWikiKeyRef = useRef<string | null>(null);
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollJumpElementRef = useRef<HTMLElement | null>(null);
@@ -1243,33 +1252,6 @@ function WikiSidebar({
       return next;
     });
   }, []);
-
-  // Auto-expand the parent folder of the selected wiki item so programmatic
-  // opens (open-file, wiki:// links, Recent clicks) reveal the entry instead
-  // of leaving it hidden under a collapsed folder. Track the selection so
-  // focus-triggered tree reloads do not reopen a folder the user collapsed.
-  useEffect(() => {
-    if (!selectedId?.startsWith('wiki:')) {
-      autoExpandedSelectedWikiKeyRef.current = null;
-      return;
-    }
-    const relPath = selectedId.slice('wiki:'.length);
-    const builtinRoot = libraryRoots.find((root) => root.builtin);
-    if (!builtinRoot) return;
-    const autoExpandKey = getSelectedWikiAutoExpandKey(selectedId, builtinRoot.path);
-    if (!autoExpandKey || autoExpandedSelectedWikiKeyRef.current === autoExpandKey) return;
-    autoExpandedSelectedWikiKeyRef.current = autoExpandKey;
-    setExpandedFolders((prev) => {
-      const next = new Set(prev);
-      let changed = false;
-      for (const id of getWikiSidebarExpansionIds(builtinRoot.path, relPath)) {
-        if (next.has(id)) continue;
-        next.add(id);
-        changed = true;
-      }
-      return changed ? next : prev;
-    });
-  }, [selectedId, libraryRoots]);
 
   // Scroll the selected item into view when the selection changes programmatically.
   useEffect(() => {
@@ -1687,7 +1669,35 @@ function WikiSidebar({
     return node?.kind === 'file' ? node.item : null;
   }, [sidebarRootsWithTodoOverrides]);
   const filteredRecentEntries = useMemo(() => filterStaleRecent(recent, wikiTree), [recent, wikiTree]);
-  const emberActionItem = useMemo(() => makeEmberItem(), []);
+  const revealRecentEntryInTree = useCallback((entry: RecentEntry) => {
+    const location = getRecentEntryRevealLocation(entry, libraryRoots);
+    if (!location) return;
+    setExpandedFolders((prev) => {
+      const next = new Set(prev);
+      for (const id of getWikiSidebarExpansionIds(location.rootPath, location.relPath)) {
+        next.add(id);
+      }
+      return next;
+    });
+    if (entry.kind === 'wiki') {
+      onSelectItem({
+        id: `wiki:${entry.path}`,
+        title: entry.title,
+        type: 'wiki',
+        absPath: '',
+        relPath: entry.path,
+        timestamp: 0,
+      });
+      return;
+    }
+    onSelectItem({
+      id: `external:${entry.path}`,
+      title: entry.title,
+      type: 'external',
+      absPath: entry.path,
+      timestamp: 0,
+    });
+  }, [libraryRoots, onSelectItem]);
   const visibleSidebarRoots = useMemo(
     () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
     [filteredSidebarRoots]
@@ -2484,6 +2494,41 @@ function WikiSidebar({
         />
       )}
 
+      {!isSearching && filteredRecentEntries.length > 0 && (
+        <RecentBlock
+          recent={filteredRecentEntries}
+          expanded={recentExpanded}
+          onExpand={setRecentExpanded}
+          collapsed={recentCollapsed}
+          onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
+          showDivider={false}
+          selectedId={selectedId}
+          theme={theme}
+          onRevealEntry={revealRecentEntryInTree}
+          onOpenWiki={(relPath, title) =>
+            onSelectItem({
+              id: `wiki:${relPath}`,
+              title,
+              type: 'wiki',
+              // Recent wiki items don't carry the abs path; Show-in-Finder
+              // isn't exposed here so the empty string is fine.
+              absPath: '',
+              relPath,
+              timestamp: 0,
+            })
+          }
+          onOpenExternal={(absPath, title) =>
+            onSelectItem({
+              id: `external:${absPath}`,
+              title,
+              type: 'external',
+              absPath,
+              timestamp: 0,
+            })
+          }
+        />
+      )}
+
       {emptyWiki ? (
         <div style={{ padding: '8px 12px', fontSize: '11px', color: theme.textSecondary }}>
           No pages yet. Run <code style={{ fontSize: '10px', background: theme.hoverBg, padding: '1px 4px', borderRadius: '3px' }}>ft sync && ft wiki</code> to generate.
@@ -2613,49 +2658,6 @@ function WikiSidebar({
           isSelected={selectedId === bookmarksActionItem.id}
           theme={theme}
           onOpen={() => onSelectItem(bookmarksActionItem)}
-        />
-      )}
-
-      {!isSearching && (
-        <EmberShortcutBlock
-          item={emberActionItem}
-          isSelected={selectedId === emberActionItem.id}
-          theme={theme}
-          onOpen={() => onSelectItem(emberActionItem)}
-        />
-      )}
-
-      {!isSearching && filteredRecentEntries.length > 0 && (
-        <RecentBlock
-          recent={filteredRecentEntries}
-          expanded={recentExpanded}
-          onExpand={setRecentExpanded}
-          collapsed={recentCollapsed}
-          onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
-          showDivider={!bookmarksActionItem}
-          selectedId={selectedId}
-          theme={theme}
-          onOpenWiki={(relPath, title) =>
-            onSelectItem({
-              id: `wiki:${relPath}`,
-              title,
-              type: 'wiki',
-              // Recent wiki items don't carry the abs path; Show-in-Finder
-              // isn't exposed here so the empty string is fine.
-              absPath: '',
-              relPath,
-              timestamp: 0,
-            })
-          }
-          onOpenExternal={(absPath, title) =>
-            onSelectItem({
-              id: `external:${absPath}`,
-              title,
-              type: 'external',
-              absPath,
-              timestamp: 0,
-            })
-          }
         />
       )}
         </div>
@@ -3809,6 +3811,9 @@ function SidebarShortcutRow({
   icon,
   title,
   titleAttr,
+  meta,
+  metaTitle,
+  onMetaClick,
   isSelected,
   theme,
   indent = 10,
@@ -3817,6 +3822,9 @@ function SidebarShortcutRow({
   icon: React.ReactNode;
   title: string;
   titleAttr?: string;
+  meta?: string;
+  metaTitle?: string;
+  onMetaClick?: () => void;
   isSelected: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   indent?: number;
@@ -3848,6 +3856,35 @@ function SidebarShortcutRow({
     >
       {icon}
       <span style={librarySidebarFadeTextStyle()}>{title}</span>
+      {meta && (
+        <button
+          type="button"
+          title={metaTitle}
+          aria-label={metaTitle}
+          onClick={(event) => {
+            event.stopPropagation();
+            onMetaClick?.();
+          }}
+          style={{
+            maxWidth: '92px',
+            minWidth: 0,
+            flexShrink: 0,
+            border: 'none',
+            padding: '1px 5px',
+            borderRadius: '6px',
+            color: theme.textSecondary,
+            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
+            fontSize: '9px',
+            lineHeight: '13px',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            cursor: onMetaClick ? 'pointer' : 'default',
+          }}
+        >
+          {meta}
+        </button>
+      )}
     </div>
   );
 }
@@ -3861,11 +3898,12 @@ interface RecentBlockProps {
   showDivider?: boolean;
   selectedId: string | null;
   theme: ReturnType<typeof useTheme>['theme'];
+  onRevealEntry: (entry: RecentEntry) => void;
   onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onRevealEntry, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
   if (visibleRecent.total === 0) return null;
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
@@ -3908,12 +3946,16 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
       {!collapsed && visibleRecent.entries.map((e) => {
         const id = getRecentEntrySidebarId(e);
         const isSel = selectedId === id;
+        const parentLabel = getRecentEntryParentLabel(e);
         return (
           <SidebarShortcutRow
             key={id}
             icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
             title={e.title}
             titleAttr={e.kind === 'external' ? e.path : e.title}
+            meta={parentLabel}
+            metaTitle={`Reveal in ${parentLabel}`}
+            onMetaClick={() => onRevealEntry(e)}
             isSelected={isSel}
             theme={theme}
             indent={24}
@@ -3944,28 +3986,6 @@ function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
       <SidebarDivider theme={theme} />
       <SidebarShortcutRow
         icon={<SidebarBookmarkIcon color={sidebarIconColor} />}
-        title={item.title}
-        isSelected={isSelected}
-        theme={theme}
-        onOpen={onOpen}
-      />
-    </div>
-  );
-}
-
-function EmberShortcutBlock({ item, isSelected, theme, onOpen }: {
-  item: UnifiedItem;
-  isSelected: boolean;
-  theme: ReturnType<typeof useTheme>['theme'];
-  onOpen: () => void;
-}) {
-  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
-
-  return (
-    <div>
-      <SidebarDivider theme={theme} />
-      <SidebarShortcutRow
-        icon={<SidebarFolderIcon color={sidebarIconColor} />}
         title={item.title}
         isSelected={isSelected}
         theme={theme}

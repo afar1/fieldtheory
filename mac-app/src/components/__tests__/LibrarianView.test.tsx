@@ -37,6 +37,19 @@ vi.mock('../AgentKickoffModal', () => ({
 
 describe('LibrarianView render', () => {
   type TestMeetingSession = NonNullable<Awaited<ReturnType<NonNullable<NonNullable<Window['commandsAPI']>['getActiveMeeting']>>>>;
+  const testLibraryRootPath = '/Users/afar/.fieldtheory/library';
+  const expandedScratchpadFolders = JSON.stringify([
+    `root:${testLibraryRootPath}`,
+    `${testLibraryRootPath}::scratchpad`,
+  ]);
+
+  function mockStoredWikiSelection(relPath: string, options: { expandScratchpad?: boolean } = {}): void {
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      if (options.expandScratchpad && key === 'wiki-expanded-folders') return expandedScratchpadFolders;
+      return null;
+    });
+  }
 
   it('classifies html and css library documents for the right default view', () => {
     expect(getLibraryDocumentViewKind('/tmp/report.html', 'external')).toBe('html');
@@ -225,6 +238,84 @@ describe('LibrarianView render', () => {
     expect(screen.queryByRole('button', { name: /pin recent/i })).toBeNull();
   });
 
+  it('does not expand folders just because a recent wiki file is selected', async () => {
+    const relPath = 'scratchpad/meetings/team-notes';
+    Object.defineProperty(window, 'recentAPI', {
+      configurable: true,
+      value: {
+        list: vi.fn(async () => [{
+          kind: 'wiki' as const,
+          path: relPath,
+          title: 'Team Notes',
+          lastOpenedAt: 10,
+        }]),
+        onChanged: vi.fn(() => () => {}),
+        visit: vi.fn(async () => {}),
+      },
+    });
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath,
+        absPath: '/tmp/team-notes.md',
+        name: 'team-notes',
+        title: 'Team Notes',
+        lastUpdated: 10,
+      }],
+    }]);
+    window.wikiAPI!.getPage = vi.fn(async () => ({
+      relPath,
+      absPath: '/tmp/team-notes.md',
+      name: 'team-notes',
+      title: 'Team Notes',
+      lastUpdated: 10,
+      content: 'notes',
+      documentVersion: { mtimeMs: 1, size: 5, sha256: 'notes' },
+    }));
+    window.libraryAPI!.getRoots = vi.fn(async () => [{
+      path: '/wiki',
+      label: 'Wiki',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'dir' as const,
+          name: 'meetings',
+          relPath: 'scratchpad/meetings',
+          children: [{
+            kind: 'file' as const,
+            relPath,
+            absPath: '/tmp/team-notes.md',
+            name: 'team-notes',
+            title: 'Team Notes',
+            lastUpdated: 10,
+          }],
+        }],
+      }],
+    }]);
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath }}
+      />
+    );
+
+    expect(await screen.findByText('Team Notes')).toBeTruthy();
+    expect(screen.getAllByText('Team Notes')).toHaveLength(1);
+    expect(screen.queryByText('Meetings')).toBeNull();
+
+    fireEvent.click(screen.getByTitle('Reveal in scratchpad / meetings'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Meetings')).toBeTruthy();
+    });
+    expect(screen.getAllByText('Team Notes')).toHaveLength(2);
+  });
+
   it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
     const relPath = "scratchpad/Monday May 4th - to do's";
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
@@ -238,11 +329,7 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: content.length, sha256 },
     });
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage)
       .mockResolvedValueOnce(makePage('old rendered body', 'old-version'))
       .mockResolvedValueOnce(makePage('old rendered body', 'old-version'))
@@ -352,11 +439,7 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: 27, sha256: 'title-enter-rendered-version' },
     };
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
     const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
@@ -389,11 +472,7 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: 13, sha256: 'toolbar-order-version' },
     };
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
@@ -437,11 +516,7 @@ describe('LibrarianView render', () => {
       endedAt: '2026-05-14T20:01:00.000Z',
     };
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
     vi.mocked(window.commandsAPI!.startMeetingHere!).mockResolvedValue({
       success: true,
@@ -1390,11 +1465,7 @@ describe('LibrarianView render', () => {
       }],
     });
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.wikiAPI!.getPage).mockImplementation(async () => makePage());
     vi.mocked(window.libraryAPI!.getRoots).mockImplementation(async () => [makeRoot()]);
     vi.mocked(window.wikiAPI!.save).mockImplementation(async (_relPath, nextContent) => {
@@ -1478,11 +1549,7 @@ describe('LibrarianView render', () => {
       }],
     });
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath: firstRelPath })
-        : null
-    ));
+    mockStoredWikiSelection(firstRelPath, { expandScratchpad: true });
     vi.mocked(window.libraryAPI!.getRoots).mockImplementation(async () => [makeRoot()]);
     vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (relPath) => makePage(relPath));
     vi.mocked(window.wikiAPI!.save).mockImplementation(async (relPath, nextContent) => {
@@ -1555,11 +1622,7 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: relPath.length, sha256: relPath },
     });
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath: visibleRelPath })
-        : null
-    ));
+    mockStoredWikiSelection(visibleRelPath, { expandScratchpad: true });
     vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
       path: '/Users/afar/.fieldtheory/library',
       label: 'Library',
@@ -1641,11 +1704,7 @@ describe('LibrarianView render', () => {
       }],
     });
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.libraryAPI!.getRoots).mockImplementation(() => {
       if (!holdReload) return Promise.resolve([makeRoot()]);
       return new Promise<LibraryRoot[]>((resolve) => {
@@ -1701,11 +1760,7 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: 24, sha256: 'right-click-hover-version' },
     };
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath })
-        : null
-    ));
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
     vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
       path: '/Users/afar/.fieldtheory/library',
       label: 'Library',
@@ -1765,11 +1820,7 @@ describe('LibrarianView render', () => {
       documentVersion: { mtimeMs: 1, size: relPath.length, sha256: relPath },
     });
 
-    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
-      key === 'librarian-last-selection'
-        ? JSON.stringify({ type: 'wiki', relPath: firstRelPath })
-        : null
-    ));
+    mockStoredWikiSelection(firstRelPath, { expandScratchpad: true });
     vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
       path: '/Users/afar/.fieldtheory/library',
       label: 'Library',

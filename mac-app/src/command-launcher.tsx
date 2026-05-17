@@ -62,6 +62,7 @@ import {
   resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
   shouldIncludeLauncherAppInNormalSearch,
+  shouldIncludeLauncherLibraryMarkdownItem,
   shouldIncludeLauncherRecentFile,
   shouldExitLauncherClipboardSearch,
   shouldOfferLocalInstructionFallback,
@@ -1230,6 +1231,12 @@ function CommandLauncher() {
     [commandItems],
   );
 
+  const libraryMarkdownSearchItems = useMemo(() => (
+    libraryMarkdownItems.filter((item) => (
+      shouldIncludeLauncherLibraryMarkdownItem({ filePath: item.filePath, commandFilePaths })
+    ))
+  ), [commandFilePaths, libraryMarkdownItems]);
+
   const recentFileItems = useMemo((): LauncherItem[] => {
     return recentEntries.flatMap((entry) => {
       const libraryItem = entry.kind === 'wiki'
@@ -1288,13 +1295,13 @@ function CommandLauncher() {
       });
 
     const recentKeys = new Set(recentFileItems.map(item => `${item.recentKind}:${item.recentKind === 'wiki' ? item.relPath : item.filePath}`));
-    const markdownItems = [...libraryMarkdownItems, ...artifactReadings].filter((item) => {
+    const markdownItems = [...libraryMarkdownSearchItems, ...artifactReadings].filter((item) => {
       if (item.type === 'wiki-page') return !recentKeys.has(`wiki:${item.relPath}`);
       if (item.type === 'markdown-file') return !recentKeys.has(`external:${item.filePath}`);
       return true;
     });
     return [...appItems, ...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...recentFileItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [appItems, commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
+  }, [appItems, commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownSearchItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
 	  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
 	  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
@@ -1815,7 +1822,7 @@ function CommandLauncher() {
 
     if (directoryNamespace) {
       const results = filterLauncherDirectoryNamespaceItems(
-        [...libraryMarkdownItems, ...artifactReadings, ...commandItems],
+        [...libraryMarkdownSearchItems, ...artifactReadings, ...commandItems],
         directoryNamespace,
         q,
       );
@@ -1842,7 +1849,7 @@ function CommandLauncher() {
     }
 
     if (namespacePrefix) {
-      const pool = namespacePrefix === 'wiki' ? libraryMarkdownItems : artifactReadings;
+      const pool = namespacePrefix === 'wiki' ? libraryMarkdownSearchItems : artifactReadings;
       const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, q));
       setFiltered(results.slice(0, 20));
       selectIndex(0);
@@ -1853,7 +1860,7 @@ function CommandLauncher() {
     const nsMatch = q.match(/^(wiki|artifact)\s+(.*)$/);
     if (nsMatch) {
       const [, ns, search] = nsMatch;
-      const pool = ns === 'wiki' ? libraryMarkdownItems : artifactReadings;
+      const pool = ns === 'wiki' ? libraryMarkdownSearchItems : artifactReadings;
       const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, search));
       setFiltered(results.slice(0, 20));
       selectIndex(0);
@@ -1869,7 +1876,7 @@ function CommandLauncher() {
         displayName: 'wiki.md — lookup',
         keywords: ['wiki'],
         filePath: WIKI_COMMAND_PATH ?? undefined,
-      }, ...libraryMarkdownItems.slice(0, 5)]);
+      }, ...libraryMarkdownSearchItems.slice(0, 5)]);
       selectIndex(0);
       resizeForResults(6);
       return;
@@ -1906,7 +1913,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {

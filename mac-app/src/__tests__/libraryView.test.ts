@@ -95,10 +95,10 @@ import {
   filterUnifiedFolders,
   getLibraryDragData,
   getRecentEntrySidebarId,
+  getRecentEntryParentLabel,
   getPrimaryArtifactsFinderPath,
   getSidebarFolderFinderPath,
   getSidebarFolderHeaderPositionStyle,
-  getSelectedWikiAutoExpandKey,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
   hideReadmeOnlyLibraryArtifactsFolder,
@@ -2874,22 +2874,12 @@ describe('recursive sidebar tree helpers', () => {
     expect(result[1]).toBe(scratchpad);
   });
 
-  it('expands scratchpad ancestors for a newly selected wiki file', () => {
+  it('builds ancestor ids for explicit sidebar reveal actions', () => {
     expect(getWikiSidebarExpansionIds('/wiki', 'scratchpad/meetings/team-notes')).toEqual([
       'root:/wiki',
       '/wiki::scratchpad',
       '/wiki::scratchpad/meetings',
     ]);
-  });
-
-  it('keys selected wiki auto-expansion by root and selected item', () => {
-    const key = getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', '/wiki');
-
-    expect(key).toBe('/wiki::wiki:scratchpad/team-notes');
-    expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', '/wiki')).toBe(key);
-    expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/other-note', '/wiki')).not.toBe(key);
-    expect(getSelectedWikiAutoExpandKey('artifact:/tmp/team-notes.md', '/wiki')).toBeNull();
-    expect(getSelectedWikiAutoExpandKey('wiki:scratchpad/team-notes', null)).toBeNull();
   });
 
   it('caps scratchpad until the user explicitly expands it', () => {
@@ -3077,6 +3067,17 @@ describe('splitRecent', () => {
     const out = splitRecent(entries, false);
     expect(out.entries.map((e) => e.path)).toEqual(['a', 'x', 'b']);
     expect(out.total).toBe(3);
+  });
+
+  it('shows a compact parent label for recent entries', () => {
+    expect(getRecentEntryParentLabel({
+      kind: 'wiki',
+      path: 'scratchpad/meetings/team-notes',
+    })).toBe('scratchpad / meetings');
+    expect(getRecentEntryParentLabel({
+      kind: 'external',
+      path: '/Users/afar/.fieldtheory/library/Plans/Plan.md',
+    })).toBe('Plans');
   });
 
   it('caps the combined list when collapsed and shows every remaining item when expanded', () => {

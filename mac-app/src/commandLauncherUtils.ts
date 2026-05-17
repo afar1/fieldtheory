@@ -562,11 +562,21 @@ export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeIte
   return results;
 }
 
-export function shouldIncludeLauncherRecentFile(input: {
+interface LauncherCommandFileFilterInput {
   filePath?: string | null;
   commandFilePaths: ReadonlySet<string>;
-}): boolean {
+}
+
+function shouldIncludeLauncherNonCommandFile(input: LauncherCommandFileFilterInput): boolean {
   return !input.filePath || !input.commandFilePaths.has(input.filePath);
+}
+
+export function shouldIncludeLauncherRecentFile(input: LauncherCommandFileFilterInput): boolean {
+  return shouldIncludeLauncherNonCommandFile(input);
+}
+
+export function shouldIncludeLauncherLibraryMarkdownItem(input: LauncherCommandFileFilterInput): boolean {
+  return shouldIncludeLauncherNonCommandFile(input);
 }
 
 export function isLauncherPreviewToggleKey(event: { key?: string; code?: string }): boolean {
