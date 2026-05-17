@@ -1731,6 +1731,16 @@ export const EMPTY_LIBRARIAN_NAVIGATION_HISTORY: LibrarianNavigationHistory = {
 
 const LIBRARIAN_NAVIGATION_HISTORY_LIMIT = 50;
 
+export function getLibrarianBracketNavigationDirection(
+  event: Pick<KeyboardEvent, 'key' | 'metaKey' | 'shiftKey' | 'ctrlKey' | 'altKey'>,
+  input: { canNavigateBack: boolean; canNavigateForward: boolean },
+): -1 | 0 | 1 | null {
+  if (!event.metaKey || event.shiftKey || event.ctrlKey || event.altKey) return null;
+  if (event.key === '[') return input.canNavigateBack ? -1 : 0;
+  if (event.key === ']') return input.canNavigateForward ? 1 : 0;
+  return null;
+}
+
 function sameLibrarianNavigationEntry(
   a: LibrarianNavigationEntry | null,
   b: LibrarianNavigationEntry | null,
@@ -4236,6 +4246,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
+    if (navigationDirection !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (navigationDirection !== 0) navigateHistory(navigationDirection);
+      return true;
+    }
+
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
@@ -4308,14 +4326,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyRenderedEditorBody,
     applyRenderedWikiLinkSuggestion,
     clearRenderedEditingState,
+    canNavigateBack,
+    canNavigateForward,
     displaySourceBody,
     focusRenderedEditor,
     markdownWikiLinkCompletion,
-	    markdownWikiLinkSuggestionIndex,
-	    markdownWikiLinkSuggestions,
-	    toggleFocusChromeShortcut,
-	    unorderedListMarker,
-	  ]);
+    markdownWikiLinkSuggestionIndex,
+    markdownWikiLinkSuggestions,
+    navigateHistory,
+    toggleFocusChromeShortcut,
+    unorderedListMarker,
+  ]);
 
   const updateRenderedEditorWikiLinkCompletion = useCallback((
     snapshot: MarkdownCodeEditorSelectionSnapshot,
@@ -4908,6 +4929,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
+    if (navigationDirection !== null) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (navigationDirection !== 0) navigateHistory(navigationDirection);
+      return true;
+    }
+
     if (event.key.toLowerCase() === 'i' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
@@ -5074,9 +5103,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyMarkdownWikiLinkSuggestion,
     editContent,
     exitEditMode,
+    canNavigateBack,
+    canNavigateForward,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
+    navigateHistory,
     restoreMarkdownCodeEditorProgrammaticUndo,
     scheduleEditorSessionPersist,
     toggleFocusChromeShortcut,
@@ -6201,17 +6233,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
 
       // Cmd+[ / Cmd+] - match the toolbar back and forward controls.
-      if (e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey) {
-        if (e.key === '[' && canNavigateBack) {
-          e.preventDefault();
-          navigateHistory(-1);
-          return;
-        }
-        if (e.key === ']' && canNavigateForward) {
-          e.preventDefault();
-          navigateHistory(1);
-          return;
-        }
+      const navigationDirection = getLibrarianBracketNavigationDirection(e, { canNavigateBack, canNavigateForward });
+      if (navigationDirection !== null) {
+        e.preventDefault();
+        if (navigationDirection !== 0) navigateHistory(navigationDirection);
+        return;
       }
 
       if (document.activeElement === searchInputRef.current) {
