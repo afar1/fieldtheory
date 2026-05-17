@@ -25,6 +25,7 @@ import {
   getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
+  getLibrarianBracketNavigationDirection,
   getLibrarianContentBottomScrollSpace,
   getLibrarianContentTopPadding,
   highlightFileFindMatches,
@@ -1581,6 +1582,32 @@ describe('librarian editor session helpers', () => {
 });
 
 describe('librarian navigation history helpers', () => {
+  it('maps Cmd+[ and Cmd+] to navigation even when no history move is available', () => {
+    expect(getLibrarianBracketNavigationDirection(mkKey({ key: '[', metaKey: true }), {
+      canNavigateBack: true,
+      canNavigateForward: true,
+    })).toBe(-1);
+    expect(getLibrarianBracketNavigationDirection(mkKey({ key: ']', metaKey: true }), {
+      canNavigateBack: true,
+      canNavigateForward: true,
+    })).toBe(1);
+    expect(getLibrarianBracketNavigationDirection(mkKey({ key: '[', metaKey: true }), {
+      canNavigateBack: false,
+      canNavigateForward: true,
+    })).toBe(0);
+  });
+
+  it('does not treat shifted or non-bracket shortcuts as navigation', () => {
+    expect(getLibrarianBracketNavigationDirection(mkKey({ key: '[', metaKey: true, shiftKey: true }), {
+      canNavigateBack: true,
+      canNavigateForward: true,
+    })).toBeNull();
+    expect(getLibrarianBracketNavigationDirection(mkKey({ key: 'a', metaKey: true }), {
+      canNavigateBack: true,
+      canNavigateForward: true,
+    })).toBeNull();
+  });
+
   it('pushes file navigation entries and ignores consecutive duplicates', () => {
     let history = pushLibrarianNavigationEntry({ entries: [], index: -1 }, { itemType: 'wiki', itemPath: 'entries/a' });
     history = pushLibrarianNavigationEntry(history, { itemType: 'wiki', itemPath: 'entries/a' });

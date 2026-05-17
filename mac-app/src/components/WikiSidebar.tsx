@@ -1687,13 +1687,7 @@ function WikiSidebar({
     return node?.kind === 'file' ? node.item : null;
   }, [sidebarRootsWithTodoOverrides]);
   const filteredRecentEntries = useMemo(() => filterStaleRecent(recent, wikiTree), [recent, wikiTree]);
-  const { pinned: pinnedRecentEntries, unpinned: unpinnedRecentEntries } = useMemo(
-    () => splitPinnedRecentEntries(filteredRecentEntries, pinnedItemIds),
-    [filteredRecentEntries, pinnedItemIds],
-  );
   const emberActionItem = useMemo(() => makeEmberItem(), []);
-  const bookmarksPinned = !!bookmarksActionItem && pinnedItemIds.has(BOOKMARKS_ITEM_ID);
-  const emberPinned = pinnedItemIds.has(EMBER_ITEM_ID);
   const visibleSidebarRoots = useMemo(
     () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
     [filteredSidebarRoots]
@@ -2349,9 +2343,6 @@ function WikiSidebar({
     if (!targetId) return;
     setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
   }, [closeContextMenu, contextPinTargetId]);
-  const togglePinnedId = useCallback((targetId: string) => {
-    setPinnedItemIds((prev) => toggleSidebarPinnedItemIds(prev, targetId));
-  }, []);
 
   return (
     <div
@@ -2616,68 +2607,32 @@ function WikiSidebar({
         </div>
       )}
 
-      {!isSearching && (bookmarksPinned || emberPinned || pinnedRecentEntries.length > 0) && (
-        <PinnedShortcutBlock
-          bookmarksItem={bookmarksPinned ? bookmarksActionItem : null}
-          emberItem={emberPinned ? emberActionItem : null}
-          recent={pinnedRecentEntries}
-          selectedId={selectedId}
-          theme={theme}
-          onOpenBookmarks={() => {
-            if (bookmarksActionItem) onSelectItem(bookmarksActionItem);
-          }}
-          onOpenEmber={() => onSelectItem(emberActionItem)}
-          onOpenWiki={(relPath, title) =>
-            onSelectItem({
-              id: `wiki:${relPath}`,
-              title,
-              type: 'wiki',
-              absPath: '',
-              relPath,
-              timestamp: 0,
-            })
-          }
-          onOpenExternal={(absPath, title) =>
-            onSelectItem({
-              id: `external:${absPath}`,
-              title,
-              type: 'external',
-              absPath,
-              timestamp: 0,
-            })
-          }
-          onTogglePin={togglePinnedId}
-        />
-      )}
-
-      {!isSearching && bookmarksActionItem && !bookmarksPinned && (
+      {!isSearching && bookmarksActionItem && (
         <BookmarksShortcutBlock
           item={bookmarksActionItem}
           isSelected={selectedId === bookmarksActionItem.id}
           theme={theme}
           onOpen={() => onSelectItem(bookmarksActionItem)}
-          onTogglePin={() => togglePinnedId(BOOKMARKS_ITEM_ID)}
         />
       )}
 
-      {!isSearching && !emberPinned && (
+      {!isSearching && (
         <EmberShortcutBlock
           item={emberActionItem}
           isSelected={selectedId === emberActionItem.id}
           theme={theme}
           onOpen={() => onSelectItem(emberActionItem)}
-          onTogglePin={() => togglePinnedId(EMBER_ITEM_ID)}
         />
       )}
 
-      {!isSearching && unpinnedRecentEntries.length > 0 && (
+      {!isSearching && filteredRecentEntries.length > 0 && (
         <RecentBlock
-          recent={unpinnedRecentEntries}
+          recent={filteredRecentEntries}
           expanded={recentExpanded}
           onExpand={setRecentExpanded}
           collapsed={recentCollapsed}
           onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
-          showDivider={!bookmarksActionItem || bookmarksPinned}
+          showDivider={!bookmarksActionItem}
           selectedId={selectedId}
           theme={theme}
           onOpenWiki={(relPath, title) =>
@@ -2701,7 +2656,6 @@ function WikiSidebar({
               timestamp: 0,
             })
           }
-          onTogglePin={togglePinnedId}
         />
       )}
         </div>
@@ -3851,34 +3805,6 @@ function SidebarDivider({ theme }: {
   );
 }
 
-function sidebarPinButtonStyle(theme: ReturnType<typeof useTheme>['theme']): React.CSSProperties {
-  return {
-    width: '20px',
-    height: '20px',
-    marginLeft: 'auto',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    color: theme.textSecondary,
-    backgroundColor: 'transparent',
-    border: 'none',
-    borderRadius: '4px',
-    cursor: 'pointer',
-    flexShrink: 0,
-  };
-}
-
-function SidebarPinIcon() {
-  return (
-    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M12 17v5" />
-      <path d="M5 17h14" />
-      <path d="M7 9h10" />
-      <path d="M9 9V4h6v5l2 8H7l2-8Z" />
-    </svg>
-  );
-}
-
 function SidebarShortcutRow({
   icon,
   title,
@@ -3887,8 +3813,6 @@ function SidebarShortcutRow({
   theme,
   indent = 10,
   onOpen,
-  onTogglePin,
-  pinLabel,
 }: {
   icon: React.ReactNode;
   title: string;
@@ -3897,8 +3821,6 @@ function SidebarShortcutRow({
   theme: ReturnType<typeof useTheme>['theme'];
   indent?: number;
   onOpen: () => void;
-  onTogglePin?: () => void;
-  pinLabel?: string;
 }) {
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   return (
@@ -3926,99 +3848,6 @@ function SidebarShortcutRow({
     >
       {icon}
       <span style={librarySidebarFadeTextStyle()}>{title}</span>
-      {onTogglePin && (
-        <button
-          type="button"
-          aria-label={pinLabel}
-          title={pinLabel}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onTogglePin();
-          }}
-          style={sidebarPinButtonStyle(theme)}
-        >
-          <SidebarPinIcon />
-        </button>
-      )}
-    </div>
-  );
-}
-
-function PinnedShortcutBlock({
-  bookmarksItem,
-  emberItem,
-  recent,
-  selectedId,
-  theme,
-  onOpenBookmarks,
-  onOpenEmber,
-  onOpenWiki,
-  onOpenExternal,
-  onTogglePin,
-}: {
-  bookmarksItem: UnifiedItem | null;
-  emberItem: UnifiedItem | null;
-  recent: RecentEntry[];
-  selectedId: string | null;
-  theme: ReturnType<typeof useTheme>['theme'];
-  onOpenBookmarks: () => void;
-  onOpenEmber: () => void;
-  onOpenWiki: (relPath: string, title: string) => void;
-  onOpenExternal: (absPath: string, title: string) => void;
-  onTogglePin: (id: string) => void;
-}) {
-  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
-  const rows: React.ReactNode[] = [];
-  if (bookmarksItem) {
-    rows.push(
-      <SidebarShortcutRow
-        key={BOOKMARKS_ITEM_ID}
-        icon={<SidebarBookmarkIcon color={sidebarIconColor} />}
-        title={bookmarksItem.title}
-        isSelected={selectedId === BOOKMARKS_ITEM_ID}
-        theme={theme}
-        onOpen={onOpenBookmarks}
-        onTogglePin={() => onTogglePin(BOOKMARKS_ITEM_ID)}
-        pinLabel="Unpin bookmarks"
-      />,
-    );
-  }
-  if (emberItem) {
-    rows.push(
-      <SidebarShortcutRow
-        key={EMBER_ITEM_ID}
-        icon={<SidebarFolderIcon color={sidebarIconColor} />}
-        title={emberItem.title}
-        isSelected={selectedId === EMBER_ITEM_ID}
-        theme={theme}
-        onOpen={onOpenEmber}
-        onTogglePin={() => onTogglePin(EMBER_ITEM_ID)}
-        pinLabel="Unpin Ember"
-      />,
-    );
-  }
-  for (const entry of recent) {
-    const id = getRecentEntrySidebarId(entry);
-    rows.push(
-      <SidebarShortcutRow
-        key={id}
-        icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
-        title={entry.title}
-        titleAttr={entry.kind === 'external' ? entry.path : entry.title}
-        isSelected={selectedId === id}
-        theme={theme}
-        onOpen={() => (entry.kind === 'wiki' ? onOpenWiki(entry.path, entry.title) : onOpenExternal(entry.path, entry.title))}
-        onTogglePin={() => onTogglePin(id)}
-        pinLabel="Unpin recent"
-      />,
-    );
-  }
-  if (rows.length === 0) return null;
-  return (
-    <div>
-      {rows}
-      <SidebarDivider theme={theme} />
     </div>
   );
 }
@@ -4034,10 +3863,9 @@ interface RecentBlockProps {
   theme: ReturnType<typeof useTheme>['theme'];
   onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
-  onTogglePin: (id: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal, onTogglePin }: RecentBlockProps) {
+function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
   if (visibleRecent.total === 0) return null;
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
@@ -4090,8 +3918,6 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
             theme={theme}
             indent={24}
             onOpen={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
-            onTogglePin={() => onTogglePin(id)}
-            pinLabel="Pin recent"
           />
         );
       })}
@@ -4105,12 +3931,11 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
   );
 }
 
-function BookmarksShortcutBlock({ item, isSelected, theme, onOpen, onTogglePin }: {
+function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
   item: UnifiedItem;
   isSelected: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onOpen: () => void;
-  onTogglePin: () => void;
 }) {
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
 
@@ -4123,19 +3948,16 @@ function BookmarksShortcutBlock({ item, isSelected, theme, onOpen, onTogglePin }
         isSelected={isSelected}
         theme={theme}
         onOpen={onOpen}
-        onTogglePin={onTogglePin}
-        pinLabel="Pin bookmarks"
       />
     </div>
   );
 }
 
-function EmberShortcutBlock({ item, isSelected, theme, onOpen, onTogglePin }: {
+function EmberShortcutBlock({ item, isSelected, theme, onOpen }: {
   item: UnifiedItem;
   isSelected: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   onOpen: () => void;
-  onTogglePin: () => void;
 }) {
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
 
@@ -4148,8 +3970,6 @@ function EmberShortcutBlock({ item, isSelected, theme, onOpen, onTogglePin }: {
         isSelected={isSelected}
         theme={theme}
         onOpen={onOpen}
-        onTogglePin={onTogglePin}
-        pinLabel="Pin Ember"
       />
     </div>
   );

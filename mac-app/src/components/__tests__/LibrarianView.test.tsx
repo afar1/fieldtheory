@@ -188,6 +188,43 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('No artifacts yet')).toBeTruthy();
   });
 
+  it('shows pinned recent docs only in Recents and without pin buttons', async () => {
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'library-pinned-item-ids'
+        ? JSON.stringify(['wiki:scratchpad/pinned-note'])
+        : null
+    ));
+    Object.defineProperty(window, 'recentAPI', {
+      configurable: true,
+      value: {
+        list: vi.fn(async () => [{
+          kind: 'wiki' as const,
+          path: 'scratchpad/pinned-note',
+          title: 'Pinned Note',
+          lastOpenedAt: 10,
+        }]),
+        onChanged: vi.fn(() => () => {}),
+        visit: vi.fn(async () => {}),
+      },
+    });
+    window.wikiAPI!.getTree = vi.fn(async () => [{
+      name: 'scratchpad',
+      files: [{
+        relPath: 'scratchpad/pinned-note',
+        absPath: '/tmp/pinned-note.md',
+        name: 'pinned-note',
+        title: 'Pinned Note',
+        lastUpdated: 10,
+      }],
+    }]);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    expect(await screen.findByText('Pinned Note')).toBeTruthy();
+    expect(screen.getAllByText('Pinned Note')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: /pin recent/i })).toBeNull();
+  });
+
   it('refreshes the active rendered wiki page from disk without a watcher event', async () => {
     const relPath = "scratchpad/Monday May 4th - to do's";
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
