@@ -7254,6 +7254,13 @@ function setupClipboardIPCHandlers(): void {
     }));
   });
 
+  ipcMain.handle(CommandsIPCChannels.GET_COMMAND_DIRECTORIES, async () => {
+    if (!commandsManager) {
+      return [];
+    }
+    return commandsManager.getCommandDirectories();
+  });
+
   ipcMain.handle(CommandsIPCChannels.REFRESH_COMMANDS, async () => {
     if (!commandsManager) {
       return [];
