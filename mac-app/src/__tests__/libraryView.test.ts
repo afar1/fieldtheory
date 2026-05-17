@@ -11,6 +11,7 @@ import {
   getMarkdownBodySelectionRange,
   getMarkdownListIndentEdit,
   getMarkdownListToggleEdit,
+  getMarkdownWordDeleteBackwardPreservingListMarkerEdit,
   getRenderedMarkdownNodeStartLine,
   getRenderedMarkdownDeleteShortcutEdit,
   getRenderedMarkdownEnterEdit,
@@ -1886,7 +1887,7 @@ describe('librarian content top padding', () => {
       isFullScreen: false,
     });
 
-    expect(focusPadding - normalPadding).toBe(42);
+    expect(focusPadding - normalPadding).toBe(40);
   });
 
   it('keeps markdown document content in place when focus chrome removes the toolbar row from layout', () => {
@@ -1901,7 +1902,7 @@ describe('librarian content top padding', () => {
       isFullScreen: false,
     });
 
-    expect(focusPadding - normalPadding).toBe(42);
+    expect(focusPadding - normalPadding).toBe(40);
   });
 
   it('keeps bottom room as rendered scroll space while focus chrome overlays the footer', () => {
@@ -1917,6 +1918,64 @@ describe('librarian content top padding', () => {
       contentMode: 'markdown',
       focusChromeActive: true,
     })).toBe(0);
+  });
+});
+
+describe('markdown word delete around list markers', () => {
+  it('deletes the previous word without deleting an unordered list marker', () => {
+    expect(getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+      '- hello',
+      '- hello'.length,
+      '- hello'.length,
+    )).toEqual({
+      nextValue: '- ',
+      selectionStart: 2,
+      selectionEnd: 2,
+    });
+  });
+
+  it('deletes the previous word without deleting a todo marker', () => {
+    expect(getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+      '- [ ] hello',
+      '- [ ] hello'.length,
+      '- [ ] hello'.length,
+    )).toEqual({
+      nextValue: '- [ ] ',
+      selectionStart: 6,
+      selectionEnd: 6,
+    });
+  });
+
+  it('deletes the previous word without deleting an ordered list marker', () => {
+    expect(getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+      '12. hello',
+      '12. hello'.length,
+      '12. hello'.length,
+    )).toEqual({
+      nextValue: '12. ',
+      selectionStart: 4,
+      selectionEnd: 4,
+    });
+  });
+
+  it('deletes the previous word without deleting a carrot list marker', () => {
+    expect(getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+      '›› hello',
+      '›› hello'.length,
+      '›› hello'.length,
+    )).toEqual({
+      nextValue: '›› ',
+      selectionStart: 3,
+      selectionEnd: 3,
+    });
+  });
+
+  it('does not handle non-list word deletion', () => {
+    expect(getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+      'plain hello',
+      'plain hello'.length,
+      'plain hello'.length,
+    )).toBeNull();
   });
 });
 

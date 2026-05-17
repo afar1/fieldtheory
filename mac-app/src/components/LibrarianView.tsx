@@ -470,7 +470,7 @@ export function isTextEntryInputType(type: string | null | undefined): boolean {
 
 const PRESERVED_BLANK_MARKDOWN_LINE = '\u00A0';
 const FILE_FIND_MARK_ATTR = 'data-ft-file-find-mark';
-const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 42;
+const LIBRARIAN_DOCUMENT_TOOLBAR_ROW_HEIGHT_PX = 40;
 const LIBRARIAN_MARKDOWN_CONTENT_TOP_PADDING_PX = 22;
 const LIBRARIAN_RENDERED_CONTENT_TOP_PADDING_PX = 28;
 const LIBRARIAN_FULLSCREEN_RENDERED_CONTENT_TOP_PADDING_PX = 16;
@@ -540,6 +540,55 @@ function parseCarrotListLine(line: string): { indent: string; markers: string; t
     indent: match[1],
     markers: match[2],
     text: match[3] ?? '',
+  };
+}
+
+function getMarkdownProtectedListMarkerEnd(line: string): number | null {
+  const task = line.match(/^\s*(?:(?:[-*+]|\d+[.)]|›+)\s+)?\[(?: |x|X)\]\s+/);
+  if (task) return task[0].length;
+
+  const list = line.match(/^\s*(?:[-*+]|\d+[.)]|›+)\s+/);
+  if (list) return list[0].length;
+
+  return null;
+}
+
+function getMarkdownWordDeleteBackwardStart(value: string, floor: number, sourceStart: number): number {
+  let index = sourceStart;
+  const startedAfterWhitespace = /\s/.test(value[index - 1] ?? '');
+  const shouldRemovePreviousSeparator = startedAfterWhitespace && !/\S/.test(value[sourceStart] ?? '');
+  while (index > floor && /\s/.test(value[index - 1] ?? '')) index -= 1;
+  while (index > floor && !/\s/.test(value[index - 1] ?? '')) index -= 1;
+  if (shouldRemovePreviousSeparator) {
+    while (index > floor && /\s/.test(value[index - 1] ?? '')) index -= 1;
+  }
+  return index;
+}
+
+export function getMarkdownWordDeleteBackwardPreservingListMarkerEdit(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): MarkdownTextEdit | null {
+  if (selectionStart !== selectionEnd) return null;
+
+  const lineStart = value.lastIndexOf('\n', Math.max(0, selectionStart - 1)) + 1;
+  const lineEndIndex = value.indexOf('\n', selectionStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const markerEnd = getMarkdownProtectedListMarkerEnd(line);
+  if (markerEnd === null) return null;
+
+  const sourceFloor = lineStart + markerEnd;
+  if (selectionStart <= sourceFloor) return null;
+
+  const deleteStart = getMarkdownWordDeleteBackwardStart(value, sourceFloor, selectionStart);
+  if (deleteStart >= selectionStart) return null;
+
+  return {
+    nextValue: `${value.slice(0, deleteStart)}${value.slice(selectionStart)}`,
+    selectionStart: deleteStart,
+    selectionEnd: deleteStart,
   };
 }
 
@@ -4876,6 +4925,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
     }
 
+    if (event.key === 'Backspace' && event.altKey && !event.metaKey && !event.ctrlKey && !event.shiftKey) {
+      const edit = getMarkdownWordDeleteBackwardPreservingListMarkerEdit(value, selection.start, selection.end);
+      if (edit) {
+        event.preventDefault();
+        applyMarkdownCodeEditorTextEdit(edit);
+        return true;
+      }
+    }
+
     const formattingKind = getMarkdownFormattingShortcut(event);
     if (formattingKind) {
       const edit = getMarkdownFormattingEdit(value, selection.start, selection.end, formattingKind);
@@ -7535,9 +7593,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       deactivateSidebarKeyboard();
                       commitTitleEditIfActive();
                       activateRenderedEditing();
+                      window.librarianAPI?.setMarkdownEditorFocused(true);
                       recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
                     }}
-                    onBlur={() => clearRenderedEditingState('blur')}
+                    onBlur={() => {
+                      window.librarianAPI?.setMarkdownEditorFocused(false);
+                      clearRenderedEditingState('blur');
+                    }}
                     onSelectionChange={handleRenderedEditorSelectionChange}
                     fontFamily={(documentTextStyle.fontFamily as string) ?? '-apple-system, BlinkMacSystemFont, sans-serif'}
                     fontSize={(documentTextStyle.fontSize as string | number) ?? 16}
