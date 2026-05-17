@@ -199,6 +199,10 @@ describe('CommandLauncherWindow.show()', () => {
     expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:reset', { isDarkMode: false, generation: 1 });
     expect(mockWindow.webContents.send.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.show.mock.invocationCallOrder[0]);
     expect(mockWindow.show.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.focus.mock.invocationCallOrder[0]);
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:focus-input', { generation: 1 });
+    const focusInputCallIndex = mockWindow.webContents.send.mock.calls.findIndex(([channel]) => channel === 'command-launcher:focus-input');
+    expect(focusInputCallIndex).toBeGreaterThan(-1);
+    expect(mockWindow.focus.mock.invocationCallOrder[0]).toBeLessThan(mockWindow.webContents.send.mock.invocationCallOrder[focusInputCallIndex]);
   });
 
   it('does not replace an external previous app with Field Theory', async () => {

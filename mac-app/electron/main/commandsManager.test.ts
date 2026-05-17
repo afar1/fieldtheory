@@ -213,22 +213,23 @@ describe('CommandsManager default internal commands', () => {
     );
   });
 
-  it('uses command frontmatter titles in the launcher command list', async () => {
+  it('uses the command basename for launcher labels when frontmatter title is stale', async () => {
     const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
+    const filePath = join(defaultDir, 'entry.md');
+    writeFileSync(filePath, '---\nkind: command\ntitle: "Wiki entry capture (Field Theory)"\nenabled: true\n---\n\nBody\n');
     await manager.addWatchedDir(defaultDir);
-    const command = manager.createCommand(defaultDir, 'plain-name', '---\ntitle: Clear Name\n---\n\nBody\n');
 
-    expect(command).not.toBeNull();
     expect(manager.getCommands()).toEqual([
       expect.objectContaining({
-        name: 'plain-name',
-        displayName: 'Clear Name',
+        name: 'entry',
+        displayName: 'entry',
       }),
     ]);
+    expect(readFileSync(filePath, 'utf8')).toContain('title: "Wiki entry capture (Field Theory)"');
   });
 
-  it('updates cached launcher command labels when a command title is saved', async () => {
+  it('keeps cached launcher command labels tied to the filename when a command title is saved', async () => {
     const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
     mkdirSync(defaultDir, { recursive: true });
     await manager.addWatchedDir(defaultDir);
@@ -241,7 +242,7 @@ describe('CommandsManager default internal commands', () => {
     expect(manager.getCommands()).toEqual([
       expect.objectContaining({
         name: 'rename-display',
-        displayName: 'New Name',
+        displayName: 'rename-display',
       }),
     ]);
   });
@@ -303,7 +304,7 @@ describe('CommandsManager default internal commands', () => {
 
     expect(command).not.toBeNull();
     expect(readFileSync(command!.path, 'utf8')).toBe(
-      '---\ntitle: Existing\nkind: command\nenabled: true\n---\n\n# Typed\n'
+      '---\nkind: command\ntitle: "typed"\nenabled: true\n---\n\n# Typed\n'
     );
   });
 
@@ -368,5 +369,52 @@ describe('CommandsManager default internal commands', () => {
     expect(manager.renameCommand(command!.path, 'nested/outside')).toBeNull();
     expect(existsSync(join(tempRoot, '.fieldtheory', 'outside.md'))).toBe(false);
     expect(existsSync(join(defaultDir, 'nested', 'outside.md'))).toBe(false);
+  });
+
+  it('updates command frontmatter title during app-driven renames', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'wiki-entry-capture', '---\ntags: [capture]\ntitle: Old Title\n---\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    const newPath = manager.renameCommand(command!.path, 'entry');
+
+    expect(newPath).toBe(join(defaultDir, 'entry.md'));
+    const renamedContent = readFileSync(newPath!, 'utf8');
+    expect(renamedContent).toContain('tags: [capture]');
+    expect(renamedContent).toContain('kind: command');
+    expect(renamedContent).toContain('title: "entry"');
+    expect(renamedContent).toContain('enabled: true');
+    expect(renamedContent).not.toContain('Old Title');
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'entry',
+        displayName: 'entry',
+        filePath: newPath,
+      }),
+    ]);
+  });
+
+  it('does not rewrite stale frontmatter titles from external command renames', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    const oldPath = join(defaultDir, 'Wiki entry capture (Field Theory).md');
+    const newPath = join(defaultDir, 'entry.md');
+    const content = '---\nkind: command\ntitle: "Wiki entry capture (Field Theory)"\nenabled: true\n---\n\nBody\n';
+    writeFileSync(oldPath, content);
+    await manager.addWatchedDir(defaultDir);
+
+    renameSync(oldPath, newPath);
+    await manager.refresh();
+
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'entry',
+        displayName: 'entry',
+        filePath: newPath,
+      }),
+    ]);
+    expect(readFileSync(newPath, 'utf8')).toBe(content);
   });
 });

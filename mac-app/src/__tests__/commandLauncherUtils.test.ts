@@ -1423,6 +1423,20 @@ describe('resolveLauncherDirectoryNamespace', () => {
     expect(resolveLauncherDirectoryNamespace(directoryItems, directoryItems, 0, 'scratch')).toBe(directoryItems[0]);
   });
 
+  it('uses a selected portable-command folder row as a directory namespace', () => {
+    const commandDirectory = {
+      id: 'command-directory-/commands/Writing',
+      type: 'directory',
+      name: 'Writing',
+      displayName: 'Writing',
+      directoryPath: '/commands/Writing',
+      directoryRelPath: 'Writing',
+      keywords: ['Writing', 'portable commands'],
+    };
+
+    expect(resolveLauncherDirectoryNamespace([commandDirectory], directoryItems, 0, 'entry')).toBe(commandDirectory);
+  });
+
   it('finds an exact typed directory name', () => {
     expect(resolveLauncherDirectoryNamespace([], directoryItems, 0, 'scratchpad')).toBe(directoryItems[0]);
   });
@@ -1487,6 +1501,19 @@ describe('resolveLauncherCommandOpenTarget', () => {
 
   it('honors an explicit selected command row', () => {
     expect(resolveLauncherCommandOpenTarget(commandItems, commandItems, 0, 'refactor', true)).toBe(commandItems[0]);
+  });
+
+  it('does not resolve a typed command over an explicit selected file row', () => {
+    expect(resolveLauncherCommandOpenTarget([
+      {
+        id: 'plan-entry',
+        type: 'wiki-page',
+        name: 'entry',
+        displayName: 'Entry plan',
+        filePath: '/Users/afar/.fieldtheory/library/Plans/entry.md',
+        keywords: ['entry', 'Plans'],
+      },
+    ], commandItems, 0, 'refactor', true)).toBeNull();
   });
 
   it('ignores a non-command selected row when the typed command is clear', () => {
@@ -1559,6 +1586,26 @@ describe('resolveLauncherFieldTheoryOpenTarget', () => {
     )).toBe(fieldTheoryItems[0]);
   });
 
+  it('honors an explicit selected plan row even when the query also matches a command', () => {
+    const planItem = {
+      id: 'wiki-plan-entry',
+      type: 'wiki-page',
+      name: 'entry',
+      displayName: 'entry',
+      relPath: 'Plans/entry',
+      filePath: '/Users/afar/.fieldtheory/library/Plans/entry.md',
+      keywords: ['entry', 'Plans'],
+    };
+
+    expect(resolveLauncherFieldTheoryOpenTarget(
+      [planItem],
+      [...fieldTheoryItems, planItem],
+      0,
+      'entry',
+      true,
+    )).toBe(planItem);
+  });
+
   it('does not open row zero for an unrelated markdown query', () => {
     expect(resolveLauncherFieldTheoryOpenTarget(
       [fieldTheoryItems[0]],
@@ -1592,6 +1639,26 @@ describe('getLauncherFieldTheoryMarkdownTarget', () => {
       filePath: '/Users/afar/Notes/Roadmap.md',
       keywords: ['Roadmap'],
     })).toEqual({ kind: 'external', path: '/Users/afar/Notes/Roadmap.md' });
+  });
+
+  it('opens handoff markdown files and root file-search markdown files as external Field Theory files', () => {
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'handoff-daily',
+      type: 'handoff',
+      name: 'daily',
+      displayName: 'daily',
+      filePath: '/Users/afar/.fieldtheory/handoffs/daily.md',
+      keywords: ['daily'],
+    })).toEqual({ kind: 'external', path: '/Users/afar/.fieldtheory/handoffs/daily.md' });
+    expect(getLauncherFieldTheoryMarkdownTarget({
+      id: 'file-note',
+      type: 'file',
+      name: 'note.md',
+      displayName: 'note.md',
+      filePath: '/Users/afar/Downloads/note.md',
+      isDirectory: false,
+      keywords: ['note.md'],
+    })).toEqual({ kind: 'external', path: '/Users/afar/Downloads/note.md' });
   });
 
   it('keeps wiki pages, artifacts, and commands on their existing target kinds', () => {

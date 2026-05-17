@@ -319,6 +319,12 @@ export class CommandLauncherWindow {
       this.window!.show();
       this.window!.moveTop(); // Ensure we're at top of window stack (above immersive clipboard)
       this.window!.focus();
+      this.window!.webContents.send('command-launcher:focus-input', {
+        generation: this.showGeneration,
+      });
+      appendCommandLauncherTrace('show-sent-focus-input', {
+        generation: this.showGeneration,
+      });
       this._isShowing = false; // Window is now visible, clear the showing flag
 
       appendCommandLauncherTrace('show-complete', {

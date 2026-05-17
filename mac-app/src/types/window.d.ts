@@ -1542,6 +1542,7 @@ interface CommandsAPI {
   onLauncherPreviewBookmark?: (callback: (bookmark: Bookmark) => void) => () => void;
   onLauncherPreview?: (callback: (preview: LauncherPreviewPayload) => void) => () => void;
   onLauncherReset?: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void) => () => void;
+  onLauncherFocusInput?: (callback: (payload?: { generation?: number }) => void) => () => void;
   getLauncherContext?: () => Promise<{ fieldTheoryActive: boolean; targetApp?: RunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;

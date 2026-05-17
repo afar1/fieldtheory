@@ -433,6 +433,7 @@ export interface LauncherFieldTheoryTargetCandidate extends LauncherVisibleItem 
   filePath?: string;
   relPath?: string;
   recentKind?: 'wiki' | 'external';
+  isDirectory?: boolean;
   keywords?: string[];
 }
 
@@ -1410,6 +1411,7 @@ export function resolveLauncherCommandOpenTarget<T extends LauncherCommandOpenCa
   if (selected?.type === 'command' && selected.filePath && (hasExplicitSelection || !rawQuery)) {
     return selected;
   }
+  if (hasExplicitSelection && selected) return null;
 
   if (!rawQuery) return null;
 
@@ -1478,6 +1480,12 @@ export function getLauncherFieldTheoryMarkdownTarget(
   }
   if (item.type === 'command' && item.filePath) {
     return { kind: 'command', path: item.filePath };
+  }
+  if (item.type === 'handoff' && item.filePath) {
+    return { kind: 'external', path: item.filePath };
+  }
+  if (item.type === 'file' && item.filePath && !item.isDirectory && /\.(md|markdown)$/i.test(item.filePath)) {
+    return { kind: 'external', path: item.filePath };
   }
   return null;
 }

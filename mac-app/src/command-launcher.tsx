@@ -346,6 +346,7 @@ interface LauncherCommandsAPI {
   launcherPreviewShow?: (preview: LauncherPreviewPayload) => void;
   launcherPreviewHide?: () => void;
   onLauncherReset: (callback: (payload?: LauncherResetPayload) => void) => () => void;
+  onLauncherFocusInput?: (callback: (payload?: { generation?: number }) => void) => () => void;
 }
 
 interface LauncherClipboardAPI {
@@ -824,6 +825,13 @@ function CommandLauncher() {
     setQuery(next.query);
   }, [clipboardSearchActive]);
 
+  const focusLauncherInput = useCallback(() => {
+    inputRef.current?.focus();
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }, []);
+
   const handleListItemMouseMove = useCallback((event: React.MouseEvent, index: number) => {
     const last = lastMousePositionRef.current;
     const moved = !last || last.x !== event.clientX || last.y !== event.clientY;
@@ -1149,15 +1157,16 @@ function CommandLauncher() {
       if (typeof payload?.generation === 'number') {
         launcherGenerationRef.current = payload.generation;
       }
+      const earlyTypedQuery = document.hasFocus() && document.activeElement === inputRef.current
+        ? inputRef.current?.value ?? ''
+        : '';
       flushSync(() => {
         clearLauncherSessionState();
+        if (earlyTypedQuery) setQuery(earlyTypedQuery);
         setLauncherSessionReady(true);
       });
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
-      inputRef.current?.focus();
-      window.requestAnimationFrame(() => {
-        inputRef.current?.focus();
-      });
+      focusLauncherInput();
       void loadLauncherData();
       void themeAPI.getTheme()
         .then(dark => applyTheme(dark ?? payload?.isDarkMode ?? false))
@@ -1165,6 +1174,10 @@ function CommandLauncher() {
     };
 
     const unsubscribe = commandsAPI.onLauncherReset(handleReset);
+    const unsubscribeFocusInput = commandsAPI.onLauncherFocusInput?.((payload) => {
+      if (typeof payload?.generation === 'number' && payload.generation !== launcherGenerationRef.current) return;
+      focusLauncherInput();
+    });
     const unsubscribeSquaresConfig = squaresAPI.onConfigChanged?.((config) => {
       setShowSquaresInCommandLauncher(normalizeSquaresConfig(config).showInCommandLauncher);
     });
@@ -1187,13 +1200,14 @@ function CommandLauncher() {
     });
     return () => {
       unsubscribe();
+      unsubscribeFocusInput?.();
       unsubscribeTheme?.();
       unsubscribeSquaresConfig?.();
       unsubscribeBookmarks?.();
       unsubscribeCommands?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, resizeLauncher]);
+  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, resizeLauncher]);
 
   useEffect(() => {
     window.addEventListener('blur', prepareLauncherForNextOpen);
@@ -2209,7 +2223,6 @@ function CommandLauncher() {
       }
 
       if (moveSource) return;
-      if (fileSearchQuery !== null) return;
 
       const selectedForTab = filtered[currentIndex];
       const selectedSource = selectedForTab?.type === 'source' ? selectedForTab : null;
@@ -2221,6 +2234,43 @@ function CommandLauncher() {
         enterLauncherSource(sourceTarget.sourceId);
         return;
       }
+
+      if (hasExplicitSelectionRef.current && selectedForTab?.type === 'directory' && selectedForTab.directoryPath) {
+        setDirectoryNamespace({
+          label: selectedForTab.displayName,
+          directoryPath: selectedForTab.directoryPath,
+          directoryRelPath: selectedForTab.directoryRelPath,
+        });
+        setQuery('');
+        selectIndex(0);
+        return;
+      }
+
+      if (hasExplicitSelectionRef.current && selectedForTab?.type === 'file' && selectedForTab.isDirectory && selectedForTab.filePath) {
+        setDirectoryNamespace({
+          label: selectedForTab.displayName,
+          directoryPath: selectedForTab.filePath,
+        });
+        setQuery('');
+        selectIndex(0);
+        return;
+      }
+
+      if (hasExplicitSelectionRef.current) {
+        const selectedFieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
+          filtered,
+          allItems,
+          currentIndex,
+          rawQuery,
+          true,
+        );
+        if (selectedFieldTheoryTarget) {
+          void invokeItem(selectedFieldTheoryTarget, { openFieldTheoryTarget: true });
+          return;
+        }
+      }
+
+      if (fileSearchQuery !== null) return;
 
       const commandTarget = resolveLauncherCommandOpenTarget(
         filtered,
