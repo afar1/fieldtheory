@@ -89,7 +89,7 @@ export function formatWhisperSpeakerTurnTranscript(stdout: string): string {
       lines.push(`Speaker ${speakerIndex}: ${text}`);
     }
 
-    if (hasSpeakerTurn) speakerIndex = speakerIndex === 1 ? 2 : 1;
+    if (hasSpeakerTurn) speakerIndex += 1;
   }
 
   return lines.join('\n').trim();

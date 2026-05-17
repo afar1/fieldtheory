@@ -941,7 +941,7 @@ export default function TranscriptionSettings() {
                   <span style={styles.modelSize}>{formatModelSize(meetingDiarizationModel.sizeBytes)}</span>
                 </div>
                 <span style={styles.modelHint}>
-                  Uses whisper.cpp tinydiarize for Speaker 1 / Speaker 2 labels when meetings stop.
+                  Labels detected speaker turns as Speaker 1, Speaker 2, Speaker 3, and so on when meetings stop.
                 </span>
               </div>
               <div style={styles.rowControls}>

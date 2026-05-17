@@ -160,6 +160,12 @@ describe('meetingMarkdown', () => {
 
     expect(updated).toContain('## Transcript\n\n**Ari:** We should keep the markdown file as the source of truth.\n\nUnlabeled audio is preserved without inventing a speaker.\n');
     expect(renderMeetingTranscriptEntry({ speaker: '', text: 'No speaker label.' })).toBe('No speaker label.');
+    expect(renderMeetingTranscriptEntry({ speaker: 'Ari', speakerId: 'spk_1', text: 'Stable identity stays hidden.' })).toBe(
+      '<!-- speaker_id: spk_1 -->\n**Ari:** Stable identity stays hidden.',
+    );
+    expect(renderMeetingTranscriptEntry({ speaker: 'Ari', speakerId: 'spk_1 --> bad', text: 'Ignore unsafe ids.' })).toBe(
+      '**Ari:** Ignore unsafe ids.',
+    );
   });
 
   it('creates the transcript section when appending to a plain meeting note', () => {
@@ -207,6 +213,7 @@ describe('meetingMarkdown', () => {
     expect(getMeetingSidecarPaths('meeting_123')).toEqual({
       transcriptPath: '.meetings/meeting_123/transcript.md',
       rawTranscriptPath: '.meetings/meeting_123/transcript.jsonl',
+      speakersPath: '.meetings/meeting_123/speakers.json',
       audioPath: '.meetings/meeting_123/audio.wav',
     });
     expect(renderMeetingRawTranscriptWikiLink('meeting_123')).toBe('[[.meetings/meeting_123/transcript|Raw transcript]]');

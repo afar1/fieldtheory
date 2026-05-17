@@ -11,9 +11,11 @@ import {
   isMeetingDocument,
   parseMeetingFrontmatter,
   renderMeetingRawTranscriptWikiLink,
+  renderMeetingTranscriptEntry,
   replaceMeetingSummary,
   setMeetingFrontmatter,
   setMeetingStatus,
+  type MeetingSpeaker,
   type MeetingTranscriptEntry,
 } from '../shared/meetingMarkdown';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
@@ -106,6 +108,12 @@ type MeetingSidecarWriteResult = {
   audioPath: string | null;
   transcriptPath: string;
   rawTranscriptPath: string;
+  speakersPath: string;
+};
+
+type MeetingSpeakerIdentity = {
+  entries: MeetingTranscriptEntry[];
+  speakers: MeetingSpeaker[];
 };
 
 type PreparedMeetingTarget =
@@ -193,8 +201,58 @@ function transcriptEntriesFromText(text: string): MeetingTranscriptEntry[] {
   return entries.length > 0 ? entries : [{ text: trimmed }];
 }
 
+function normalizeSpeakerLabel(label: string): string {
+  return label.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function assignSpeakerIdentities(
+  entries: MeetingTranscriptEntry[],
+  speakerDiarizationSupported: boolean,
+): MeetingSpeakerIdentity {
+  const speakers: MeetingSpeaker[] = [];
+  const speakerIdsByLabel = new Map<string, string>();
+  const source = speakerDiarizationSupported ? 'turn-marker' : 'transcript-label';
+
+  const identifiedEntries = entries.map((entry) => {
+    const label = entry.speaker?.trim();
+    if (!label) return entry;
+
+    const normalized = normalizeSpeakerLabel(label);
+    let speakerId = speakerIdsByLabel.get(normalized);
+    if (!speakerId) {
+      speakerId = `spk_${speakers.length + 1}`;
+      speakerIdsByLabel.set(normalized, speakerId);
+      speakers.push({
+        id: speakerId,
+        label,
+        source,
+      });
+    }
+
+    return {
+      ...entry,
+      speaker: label,
+      speakerId,
+    };
+  });
+
+  return { entries: identifiedEntries, speakers };
+}
+
 function jsonLine(value: Record<string, unknown>): string {
   return `${JSON.stringify(value)}\n`;
+}
+
+function withSpeakerIdentitySummaryGuard(prompt: string): string {
+  const trimmed = prompt.trim();
+  const guard = [
+    'Speaker identity contract:',
+    'Use transcript speaker labels exactly as written.',
+    'Do not renumber Speaker 1, Speaker 2, Speaker 3, or any named speaker.',
+    'Do not invent speaker names unless they are already present in the meeting note.',
+  ].join('\n');
+  if (trimmed.includes('Speaker identity contract:')) return trimmed;
+  return trimmed ? `${trimmed}\n\n${guard}` : guard;
 }
 
 export class MeetingManager extends EventEmitter {
@@ -310,10 +368,13 @@ export class MeetingManager extends EventEmitter {
 
     let sidecars: MeetingSidecarWriteResult;
     try {
-      sidecars = this.writeSidecars(active.meetingId, target, capture);
-      const entries = transcriptEntriesFromText(capture.transcriptText);
+      const speakerIdentity = assignSpeakerIdentities(
+        transcriptEntriesFromText(capture.transcriptText),
+        capture.speakerDiarizationSupported,
+      );
+      sidecars = this.writeSidecars(active.meetingId, target, capture, speakerIdentity);
       const rawLink = `Raw transcript: ${renderMeetingRawTranscriptWikiLink(sidecars.transcriptPath)}`;
-      const transcriptInput = entries.length > 0 ? [rawLink, ...entries] : [rawLink, '(No transcript text returned.)'];
+      const transcriptInput = speakerIdentity.entries.length > 0 ? [rawLink, ...speakerIdentity.entries] : [rawLink, '(No transcript text returned.)'];
       const updated = await this.updateLatestTarget(target, (content) => {
         const withTranscript = appendMeetingTranscript(content, transcriptInput);
         return setMeetingFrontmatter(withTranscript, {
@@ -403,7 +464,7 @@ export class MeetingManager extends EventEmitter {
       const statusContent = await this.updateLatestTarget(target, (content) => setMeetingStatus(content, 'summarizing'));
 
       const localLlm = this.options.localLlm;
-      const prompt = this.options.getMeetingSummaryPrompt();
+      const prompt = withSpeakerIdentitySummaryGuard(this.options.getMeetingSummaryPrompt());
       const memorySnapshot = this.options.readMemorySnapshot?.() ?? null;
       const preVersion = readDocumentVersion(target.filePath);
       maxwellRuns = this.options.getMaxwellRunManager?.() ?? null;
@@ -526,12 +587,17 @@ export class MeetingManager extends EventEmitter {
     return { success: true, target, meetingId, openTarget: openTargetFor(target, nextContent) };
   }
 
-  private writeSidecars(meetingId: string, target: MeetingFileContext, capture: MeetingCaptureResult): MeetingSidecarWriteResult {
+  private writeSidecars(
+    meetingId: string,
+    target: MeetingFileContext,
+    capture: MeetingCaptureResult,
+    speakerIdentity: MeetingSpeakerIdentity,
+  ): MeetingSidecarWriteResult {
     const sidecars = getMeetingSidecarPaths(meetingId);
     const sidecarDir = path.join(this.options.librarian.getWikiRoot(), '.meetings', meetingId);
     fs.mkdirSync(sidecarDir, { recursive: true });
 
-    const entries = transcriptEntriesFromText(capture.transcriptText);
+    const { entries, speakers } = speakerIdentity;
     const transcriptMarkdown = [
       '# Raw Transcript',
       '',
@@ -539,11 +605,12 @@ export class MeetingManager extends EventEmitter {
       `Stopped: ${capture.stoppedAt}`,
       `Engine: ${capture.transcriptionEngine}`,
       `Speaker diarization: ${capture.speakerDiarizationSupported ? 'supported' : 'not available'}`,
+      `Speaker map: ${sidecars.speakersPath}`,
       '',
       '## Transcript',
       '',
       entries.length > 0
-        ? entries.map(entry => entry.speaker ? `**${entry.speaker}:** ${entry.text}` : entry.text).join('\n\n')
+        ? entries.map(renderMeetingTranscriptEntry).join('\n\n')
         : '(No transcript text returned.)',
       '',
     ].join('\n');
@@ -558,15 +625,26 @@ export class MeetingManager extends EventEmitter {
         transcriptionEngine: capture.transcriptionEngine,
         speakerDiarizationSupported: capture.speakerDiarizationSupported,
         source: capture.source,
+        speakersPath: sidecars.speakersPath,
       }),
       ...entries.map((entry, index) => jsonLine({
         type: 'transcript_entry',
         index,
+        speaker_id: entry.speakerId ?? null,
         speaker: entry.speaker ?? null,
+        start_ms: entry.startMs ?? null,
+        end_ms: entry.endMs ?? null,
         text: entry.text,
       })),
     ].join('');
     fs.writeFileSync(path.join(sidecarDir, 'transcript.jsonl'), rawLines, 'utf-8');
+    fs.writeFileSync(path.join(sidecarDir, 'speakers.json'), JSON.stringify({
+      version: 1,
+      meetingId,
+      generatedAt: capture.stoppedAt,
+      source: capture.speakerDiarizationSupported ? 'turn-marker' : 'transcript-label',
+      speakers,
+    }, null, 2), 'utf-8');
 
     let audioPath: string | null = null;
     if (capture.audioPath && fs.existsSync(capture.audioPath)) {
@@ -582,6 +660,7 @@ export class MeetingManager extends EventEmitter {
       audioPath,
       transcriptPath: sidecars.transcriptPath,
       rawTranscriptPath: sidecars.rawTranscriptPath,
+      speakersPath: sidecars.speakersPath,
     };
   }
 
