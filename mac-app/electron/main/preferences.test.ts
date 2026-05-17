@@ -202,7 +202,8 @@ describe('PreferencesManager', () => {
     const loaded = await preferences.load();
 
     expect(loaded.meetingSummaryPrompt).toBe(DEFAULT_MEETING_SUMMARY_PROMPT);
-    expect(loaded.meetingSummaryPrompt).toContain('speaker labels if present');
+    expect(loaded.meetingSummaryPrompt).toContain('stable speaker IDs if present');
+    expect(loaded.meetingSummaryPrompt).toContain('Do not renumber speakers');
     expect(loaded.meetingSummaryPrompt).toContain('links, figures, and checkboxes');
   });
 
