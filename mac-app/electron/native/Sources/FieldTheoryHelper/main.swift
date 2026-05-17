@@ -2379,9 +2379,8 @@ final class MessageHandler {
         let source = CGEventSource(stateID: .hidSystemState) ?? CGEventSource(stateID: .combinedSessionState)
         let targetPid = targetApp.processIdentifier
 
-        let pasteKeyDownPosted = postKeyEventToPid(source: source, virtualKey: 0x09, keyDown: true, flags: .maskCommand, pid: targetPid)
-        let pasteKeyUpPosted = postKeyEventToPid(source: source, virtualKey: 0x09, keyDown: false, flags: .maskCommand, pid: targetPid)
-        guard pasteKeyDownPosted && pasteKeyUpPosted else {
+        let pastePosted = postCommandVToPid(source: source, pid: targetPid)
+        guard pastePosted else {
             sendTypeResult(
                 success: false,
                 error: "Failed to create paste key events",
@@ -2447,6 +2446,18 @@ final class MessageHandler {
         event.flags = flags
         event.postToPid(pid)
         return true
+    }
+
+    private func postCommandVToPid(source: CGEventSource?, pid: pid_t) -> Bool {
+        let commandKey: CGKeyCode = 0x37
+        let vKey: CGKeyCode = 0x09
+
+        let commandDownPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let pasteKeyDownPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: true, flags: .maskCommand, pid: pid)
+        let pasteKeyUpPosted = postKeyEventToPid(source: source, virtualKey: vKey, keyDown: false, flags: .maskCommand, pid: pid)
+        let commandUpPosted = postKeyEventToPid(source: source, virtualKey: commandKey, keyDown: false, flags: [], pid: pid)
+
+        return commandDownPosted && pasteKeyDownPosted && pasteKeyUpPosted && commandUpPosted
     }
 
     /// Focus a specific window of an app by matching a substring in its title.

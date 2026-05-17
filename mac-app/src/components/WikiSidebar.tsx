@@ -1,4 +1,4 @@
-import { memo, useState, useEffect, useCallback, useMemo, useRef, type MutableRefObject } from 'react';
+import { memo, useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import {
@@ -58,6 +58,8 @@ const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
 const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
 const LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE = 56;
 const SCRATCHPAD_COLLAPSED_ITEM_LIMIT = 20;
+const RECENT_ROW_MOVE_ANIMATION_MS = 180;
+const RECENT_ROW_MOVE_ANIMATION_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 const EMPTY_TODO_STATE_OVERRIDES: Record<string, SidebarTodoStateOverride | undefined> = {};
 const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
 const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
@@ -81,6 +83,16 @@ const waitForSidebarCollapseAnimation = () => new Promise<void>((resolve) => {
 
 export function getSidebarFolderHeaderPositionStyle(depth: number): React.CSSProperties {
   return depth === 0 ? { position: 'sticky', top: 0, zIndex: 3 } : {};
+}
+
+export function getSidebarDividerStyle(isDark: boolean): React.CSSProperties {
+  return {
+    border: 'none',
+    height: '1px',
+    flexShrink: 0,
+    margin: '8px 12px 4px',
+    backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+  };
 }
 
 function libraryRenameTraceEnabled(): boolean {
@@ -386,6 +398,15 @@ export function getRecentEntryParentLabel(entry: Pick<RecentEntry, 'kind' | 'pat
     return parts.length > 1 ? parts.slice(0, -1).join(' / ') : 'Library';
   }
   return parts.length > 1 ? parts[parts.length - 2] : 'File';
+}
+
+export function getRecentRowMoveKeyframes(previousTop: number, currentTop: number): Keyframe[] | null {
+  const deltaY = previousTop - currentTop;
+  if (Math.abs(deltaY) < 1) return null;
+  return [
+    { transform: `translateY(${deltaY}px)` },
+    { transform: 'translateY(0)' },
+  ];
 }
 
 export function splitPinnedRecentEntries(
@@ -1254,14 +1275,19 @@ function WikiSidebar({
   }, []);
 
   // Scroll the selected item into view when the selection changes programmatically.
+  const lastAutoScrolledSelectedIdRef = useRef<string | null>(null);
   useEffect(() => {
     if (!selectedId) return;
-    // Defer to next frame so the newly-expanded folder has rendered its items.
+    if (lastAutoScrolledSelectedIdRef.current === selectedId) return;
+    // Defer to next frame so the selected row has rendered.
     const id = requestAnimationFrame(() => {
-      selectedItemRef.current?.scrollIntoView({ block: 'nearest' });
+      const selectedNode = selectedItemRef.current;
+      if (!selectedNode) return;
+      lastAutoScrolledSelectedIdRef.current = selectedId;
+      selectedNode.scrollIntoView({ block: 'nearest' });
     });
     return () => cancelAnimationFrame(id);
-  }, [selectedId, expandedFolders, wikiTree, libraryRoots, artifacts, searchQuery]);
+  }, [selectedId, wikiTree, libraryRoots, artifacts, searchQuery]);
 
   const pruneDeletedWikiPage = useCallback((relPath: string) => {
     deletedWikiRelPathsRef.current.add(relPath);
@@ -2388,7 +2414,7 @@ function WikiSidebar({
           updateScrollJumpTarget();
           updateSidebarTopFade();
         }}
-        style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column' }}
+        style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
         <div style={{ padding: '0 12px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <input
@@ -3797,12 +3823,7 @@ function SidebarDivider({ theme }: {
 }) {
   return (
     <hr
-      style={{
-        border: 'none',
-        height: '1px',
-        margin: '8px 12px 4px',
-        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
-      }}
+      style={getSidebarDividerStyle(theme.isDark)}
     />
   );
 }
@@ -3905,6 +3926,36 @@ interface RecentBlockProps {
 
 function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onRevealEntry, onOpenWiki, onOpenExternal }: RecentBlockProps) {
   const visibleRecent = splitRecent(recent, expanded);
+  const recentRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const previousRecentRowTopsRef = useRef<Map<string, number>>(new Map());
+  const setRecentRowRef = useCallback((id: string, node: HTMLDivElement | null) => {
+    if (node) recentRowRefs.current.set(id, node);
+    else recentRowRefs.current.delete(id);
+  }, []);
+  useLayoutEffect(() => {
+    const previousTops = previousRecentRowTopsRef.current;
+    const nextTops = new Map<string, number>();
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+    for (const [id, node] of recentRowRefs.current) {
+      const currentTop = node.offsetTop;
+      nextTops.set(id, currentTop);
+      if (reduceMotion || typeof node.animate !== 'function') continue;
+
+      const previousTop = previousTops.get(id);
+      if (previousTop === undefined) continue;
+
+      const keyframes = getRecentRowMoveKeyframes(previousTop, currentTop);
+      if (!keyframes) continue;
+
+      node.animate(keyframes, {
+        duration: RECENT_ROW_MOVE_ANIMATION_MS,
+        easing: RECENT_ROW_MOVE_ANIMATION_EASING,
+      });
+    }
+
+    previousRecentRowTopsRef.current = nextTops;
+  });
   if (visibleRecent.total === 0) return null;
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
@@ -3948,19 +3999,25 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
         const isSel = selectedId === id;
         const parentLabel = getRecentEntryParentLabel(e);
         return (
-          <SidebarShortcutRow
+          <div
             key={id}
-            icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
-            title={e.title}
-            titleAttr={e.kind === 'external' ? e.path : e.title}
-            meta={parentLabel}
-            metaTitle={`Reveal in ${parentLabel}`}
-            onMetaClick={() => onRevealEntry(e)}
-            isSelected={isSel}
-            theme={theme}
-            indent={24}
-            onOpen={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
-          />
+            data-recent-row-id={id}
+            ref={(node) => setRecentRowRef(id, node)}
+            style={{ willChange: 'transform' }}
+          >
+            <SidebarShortcutRow
+              icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
+              title={e.title}
+              titleAttr={e.kind === 'external' ? e.path : e.title}
+              meta={parentLabel}
+              metaTitle={`Reveal in ${parentLabel}`}
+              onMetaClick={() => onRevealEntry(e)}
+              isSelected={isSel}
+              theme={theme}
+              indent={24}
+              onOpen={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
+            />
+          </div>
         );
       })}
       {!collapsed && visibleRecent.total > visibleRecent.entries.length && (

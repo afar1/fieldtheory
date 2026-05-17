@@ -96,7 +96,9 @@ import {
   getLibraryDragData,
   getRecentEntrySidebarId,
   getRecentEntryParentLabel,
+  getRecentRowMoveKeyframes,
   getPrimaryArtifactsFinderPath,
+  getSidebarDividerStyle,
   getSidebarFolderFinderPath,
   getSidebarFolderHeaderPositionStyle,
   getWikiSidebarExpansionIds,
@@ -2535,6 +2537,13 @@ describe('recursive sidebar tree helpers', () => {
     expect(getSidebarFolderHeaderPositionStyle(1)).toEqual({});
   });
 
+  it('keeps sidebar dividers from shrinking away when the nav overflows', () => {
+    expect(getSidebarDividerStyle(false)).toMatchObject({
+      height: '1px',
+      flexShrink: 0,
+    });
+  });
+
   it('allows the Librarian Artifacts root to be unpinned', () => {
     const unpinned = toggleSidebarPinnedItemIds(new Set(['artifacts']), 'artifacts');
 
@@ -3097,6 +3106,21 @@ describe('splitRecent', () => {
     const result = splitPinnedRecentEntries(entries, new Set(['external:/tmp/x.md', 'wiki:b']));
     expect(result.pinned.map((entry) => entry.path)).toEqual(['/tmp/x.md', 'b']);
     expect(result.unpinned.map((entry) => entry.path)).toEqual(['a']);
+  });
+
+  it('builds inverse transform keyframes when recent rows move', () => {
+    expect(getRecentRowMoveKeyframes(120, 92)).toEqual([
+      { transform: 'translateY(28px)' },
+      { transform: 'translateY(0)' },
+    ]);
+    expect(getRecentRowMoveKeyframes(92, 120)).toEqual([
+      { transform: 'translateY(-28px)' },
+      { transform: 'translateY(0)' },
+    ]);
+  });
+
+  it('skips recent row animation for stationary rows', () => {
+    expect(getRecentRowMoveKeyframes(120, 120.5)).toBeNull();
   });
 });
 

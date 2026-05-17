@@ -238,6 +238,132 @@ describe('LibrarianView render', () => {
     expect(screen.queryByRole('button', { name: /pin recent/i })).toBeNull();
   });
 
+  it('animates recent rows when a selection changes their order', async () => {
+    const animate = vi.fn();
+    const originalAnimateDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'animate');
+    const originalOffsetTopDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetTop');
+    Object.defineProperty(HTMLElement.prototype, 'animate', {
+      configurable: true,
+      value: animate,
+    });
+    Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
+      configurable: true,
+      get(this: HTMLElement) {
+        const rows = Array.from(document.querySelectorAll('[data-recent-row-id]'));
+        return rows.indexOf(this) * 28;
+      },
+    });
+
+    try {
+      const alpha = {
+        kind: 'wiki' as const,
+        path: 'scratchpad/alpha',
+        title: 'Alpha',
+        lastOpenedAt: 10,
+      };
+      const beta = {
+        kind: 'wiki' as const,
+        path: 'scratchpad/beta',
+        title: 'Beta',
+        lastOpenedAt: 9,
+      };
+      let recentEntries = [alpha, beta];
+      let onRecentChanged: (() => void) | null = null;
+      Object.defineProperty(window, 'recentAPI', {
+        configurable: true,
+        value: {
+          list: vi.fn(async () => recentEntries),
+          onChanged: vi.fn((handler: () => void) => {
+            onRecentChanged = handler;
+            return () => {};
+          }),
+          visit: vi.fn(async () => []),
+        },
+      });
+      window.wikiAPI!.getTree = vi.fn(async () => [{
+        name: 'scratchpad',
+        files: [
+          { relPath: alpha.path, absPath: '/tmp/alpha.md', name: 'alpha', title: alpha.title, lastUpdated: 10 },
+          { relPath: beta.path, absPath: '/tmp/beta.md', name: 'beta', title: beta.title, lastUpdated: 9 },
+        ],
+      }]);
+
+      render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+      expect(await screen.findByText('Alpha')).toBeTruthy();
+      expect(screen.getByText('Beta')).toBeTruthy();
+      expect(animate).not.toHaveBeenCalled();
+
+      await act(async () => {
+        recentEntries = [beta, alpha];
+        onRecentChanged?.();
+      });
+
+      await waitFor(() => expect(animate).toHaveBeenCalledTimes(2));
+      const startTransforms = animate.mock.calls.map((call) => (call[0] as Keyframe[])[0]?.transform);
+      expect(startTransforms).toEqual(expect.arrayContaining(['translateY(28px)', 'translateY(-28px)']));
+    } finally {
+      if (originalAnimateDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'animate', originalAnimateDescriptor);
+      } else {
+        delete (HTMLElement.prototype as unknown as { animate?: Element['animate'] }).animate;
+      }
+      if (originalOffsetTopDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'offsetTop', originalOffsetTopDescriptor);
+      }
+    }
+  });
+
+  it('does not auto-scroll the selected row again when a different folder opens', async () => {
+    const scrollIntoView = vi.fn();
+    const originalScrollIntoViewDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'scrollIntoView');
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      window.libraryAPI!.getRoots = vi.fn(async () => [{
+        path: '/wiki',
+        label: 'Wiki',
+        builtin: true,
+        tree: [{
+          kind: 'dir' as const,
+          name: 'Plans',
+          relPath: 'Plans',
+          children: [{
+            kind: 'file' as const,
+            relPath: 'Plans/plan-a',
+            absPath: '/wiki/Plans/plan-a.md',
+            name: 'plan-a',
+            title: 'Plan A',
+            lastUpdated: 10,
+          }],
+        }],
+      }]);
+
+      render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+      expect(await screen.findByText('example.md')).toBeTruthy();
+      await waitFor(() => expect(scrollIntoView).toHaveBeenCalled());
+      scrollIntoView.mockClear();
+
+      fireEvent.click(screen.getByText('Plans'));
+      expect(await screen.findByText('Plan A')).toBeTruthy();
+      await act(async () => {
+        await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+      });
+
+      expect(scrollIntoView).not.toHaveBeenCalled();
+    } finally {
+      if (originalScrollIntoViewDescriptor) {
+        Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', originalScrollIntoViewDescriptor);
+      } else {
+        delete (HTMLElement.prototype as unknown as { scrollIntoView?: Element['scrollIntoView'] }).scrollIntoView;
+      }
+    }
+  });
+
   it('does not expand folders just because a recent wiki file is selected', async () => {
     const relPath = 'scratchpad/meetings/team-notes';
     Object.defineProperty(window, 'recentAPI', {
