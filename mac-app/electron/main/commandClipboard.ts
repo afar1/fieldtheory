@@ -2,10 +2,16 @@ import { clipboard, type NativeImage } from 'electron';
 
 export const COMMAND_CLIPBOARD_RESTORE_DELAY_MS = 1500;
 
-const COMMAND_FILE_TEXT_CONTENT_TARGET_BUNDLE_IDS = new Set([
-  'net.whatsapp.whatsapp',
-  'com.tinyspeck.slackmacgap',
-]);
+export type CommandFilePasteMode = 'text-reference' | 'markdown-content';
+
+export type CommandFilePasteSource =
+  | { kind: 'command'; name: string; filePath: string }
+  | { kind: 'handoff'; fileName: string; filePath: string };
+
+export type CommandFilePasteTextInput = CommandFilePasteSource & {
+  mode: CommandFilePasteMode;
+  markdownContent: string;
+};
 
 export type ClipboardFormatSnapshot = {
   format: string;
@@ -130,7 +136,21 @@ export function waitForCommandClipboardPasteRead(delayMs = COMMAND_CLIPBOARD_RES
   return new Promise(resolve => setTimeout(resolve, delayMs));
 }
 
-export function shouldPasteCommandFileContentsAsText(bundleId: string | null | undefined): boolean {
-  if (!bundleId) return false;
-  return COMMAND_FILE_TEXT_CONTENT_TARGET_BUNDLE_IDS.has(bundleId.toLowerCase());
+export function resolveCommandFilePasteMode(input: { isTerminal: boolean; isIDE: boolean }): CommandFilePasteMode {
+  if (input.isTerminal || input.isIDE) return 'text-reference';
+  // Generic file-upload support cannot be inferred reliably from bundle IDs.
+  // Rich composers can always receive markdown text, so use that as the durable fallback.
+  return 'markdown-content';
+}
+
+function formatCommandFileTextReference(source: CommandFilePasteSource): string {
+  if (source.kind === 'command') {
+    return `[${source.name}.md]\n${source.filePath} `;
+  }
+  return `${source.fileName}\n${source.filePath} `;
+}
+
+export function formatCommandFilePasteText(input: CommandFilePasteTextInput): string {
+  if (input.mode === 'markdown-content') return input.markdownContent;
+  return formatCommandFileTextReference(input);
 }

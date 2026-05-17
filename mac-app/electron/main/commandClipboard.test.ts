@@ -10,8 +10,9 @@ import {
   captureCommandClipboardPayload,
   captureClipboardSnapshot,
   clipboardMatchesCommandPayload,
+  formatCommandFilePasteText,
   restoreClipboardSnapshot,
-  shouldPasteCommandFileContentsAsText,
+  resolveCommandFilePasteMode,
   waitForCommandClipboardPasteRead,
   type CommandClipboard,
 } from './commandClipboard';
@@ -203,17 +204,58 @@ describe('clipboardMatchesCommandPayload', () => {
   });
 });
 
-describe('shouldPasteCommandFileContentsAsText', () => {
-  it('uses plain command file contents for WhatsApp because it rejects local file pasteboard payloads', () => {
-    expect(shouldPasteCommandFileContentsAsText('net.whatsapp.WhatsApp')).toBe(true);
+describe('resolveCommandFilePasteMode', () => {
+  it('keeps terminal-style targets on text references', () => {
+    expect(resolveCommandFilePasteMode({ isTerminal: true, isIDE: false })).toBe('text-reference');
   });
 
-  it('uses plain command file contents for Slack because its composer can ignore local file pasteboard payloads', () => {
-    expect(shouldPasteCommandFileContentsAsText('com.tinyspeck.slackmacgap')).toBe(true);
+  it('keeps IDE terminal-style targets on text references', () => {
+    expect(resolveCommandFilePasteMode({ isTerminal: false, isIDE: true })).toBe('text-reference');
   });
 
-  it('keeps the default file payload behavior for other non-terminal apps', () => {
-    expect(shouldPasteCommandFileContentsAsText('com.apple.TextEdit')).toBe(false);
-    expect(shouldPasteCommandFileContentsAsText(null)).toBe(false);
+  it('uses markdown content for generic rich composer targets without app names', () => {
+    expect(resolveCommandFilePasteMode({ isTerminal: false, isIDE: false })).toBe('markdown-content');
+  });
+});
+
+describe('formatCommandFilePasteText', () => {
+  it('formats portable command md files as command references for terminal-style targets', () => {
+    expect(formatCommandFilePasteText({
+      kind: 'command',
+      name: 'review',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
+      mode: 'text-reference',
+      markdownContent: '# Review',
+    })).toBe('[review.md]\n/Users/afar/.fieldtheory/library/Commands/review.md ');
+  });
+
+  it('formats handoff md files as file references for terminal-style targets', () => {
+    expect(formatCommandFilePasteText({
+      kind: 'handoff',
+      fileName: 'Research note.md',
+      filePath: '/Users/afar/.fieldtheory/library/Research note.md',
+      mode: 'text-reference',
+      markdownContent: '# Research note',
+    })).toBe('Research note.md\n/Users/afar/.fieldtheory/library/Research note.md ');
+  });
+
+  it('uses markdown content for portable command md files in rich composer targets', () => {
+    expect(formatCommandFilePasteText({
+      kind: 'command',
+      name: 'review',
+      filePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
+      mode: 'markdown-content',
+      markdownContent: '# Review\nRun the review.',
+    })).toBe('# Review\nRun the review.');
+  });
+
+  it('uses markdown content for handoff md files in rich composer targets', () => {
+    expect(formatCommandFilePasteText({
+      kind: 'handoff',
+      fileName: 'Research note.md',
+      filePath: '/Users/afar/.fieldtheory/library/Research note.md',
+      mode: 'markdown-content',
+      markdownContent: '# Research note\nUse this note.',
+    })).toBe('# Research note\nUse this note.');
   });
 });
