@@ -1469,6 +1469,15 @@ interface MarkdownPreview {
   content: string;
 }
 
+interface PortableCommandDirectoryInfo {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
+}
+
 type LauncherPreviewPayload =
   | { kind: 'bookmark'; bookmark: Bookmark }
   | { kind: 'markdown'; title: string; filePath: string; content: string };
@@ -1484,6 +1493,7 @@ interface CommandsAPI {
   setDirectory: (directoryPath: string | null) => Promise<{ success: boolean; error?: string }>;
   browseDirectory: () => Promise<string | null>;
   getCommands: () => Promise<PortableCommandInfo[]>;
+  getCommandDirectories: () => Promise<PortableCommandDirectoryInfo[]>;
   refreshCommands: () => Promise<PortableCommandInfo[]>;
   getCommandContent: (commandName: string) => Promise<{ content: string; filePath: string } | null>;
   onCommandsChanged: (callback: (commands: PortableCommandInfo[]) => void) => () => void;

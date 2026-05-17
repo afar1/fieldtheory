@@ -251,7 +251,17 @@ export interface LauncherDirectoryItem extends LauncherSearchableItem {
   rootBuiltin: boolean;
   directoryPath: string;
   directoryRelPath?: string;
+  lastUpdated?: number;
   hotkeyDisplay: string;
+}
+
+export interface LauncherCommandDirectorySource {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
 }
 
 export type LauncherBookmarkFacetKind = 'category' | 'domain' | 'entity';
@@ -500,6 +510,7 @@ export function scoreLauncherSearchableItem<T extends LauncherSearchableItem & L
 
   let typeScore = 0;
   if (item.type === 'directory') typeScore += 35;
+  if (item.type === 'source') typeScore += 30;
   if (item.type === 'command') typeScore += 20;
   if (item.type === 'app') typeScore += 18;
   if (item.type === 'file') typeScore += 16;
@@ -528,8 +539,13 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   a: ScoredLauncherNormalModeItem<T>,
   b: ScoredLauncherNormalModeItem<T>,
 ): number {
-  const aTypePriority = a.item.type === 'command' || a.item.type === 'app' ? 1 : 0;
-  const bTypePriority = b.item.type === 'command' || b.item.type === 'app' ? 1 : 0;
+  const launcherTypePriority = (item: LauncherNormalModeItem): number => {
+    if (item.type === 'command') return 2;
+    if (item.type === 'app') return 1;
+    return 0;
+  };
+  const aTypePriority = launcherTypePriority(a.item);
+  const bTypePriority = launcherTypePriority(b.item);
   if (aTypePriority !== bTypePriority) return bTypePriority - aTypePriority;
 
   const aRecency = getLauncherItemRecency(a.item);
@@ -800,6 +816,34 @@ export function flattenLibraryDirectoriesForLauncher(roots: LauncherLibraryRoot[
   }
 
   return items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+}
+
+export function buildCommandDirectoriesForLauncher(directories: LauncherCommandDirectorySource[]): LauncherDirectoryItem[] {
+  return directories.map((directory): LauncherDirectoryItem => ({
+    id: `command-directory-${directory.directoryPath}`,
+    type: 'directory',
+    name: directory.name,
+    displayName: directory.displayName,
+    keywords: [
+      directory.name,
+      directory.displayName,
+      directory.directoryRelPath,
+      directory.directoryPath,
+      directory.rootPath,
+      'command',
+      'commands',
+      'portable command',
+      'portable commands',
+      'folder',
+      ...directory.displayName.split(/[\\/]/),
+    ].filter(Boolean),
+    rootPath: directory.rootPath,
+    rootBuiltin: false,
+    directoryPath: directory.directoryPath,
+    directoryRelPath: directory.directoryRelPath,
+    lastUpdated: Number.isFinite(directory.lastModified) ? directory.lastModified : undefined,
+    hotkeyDisplay: 'folder',
+  })).sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
 
 export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): LauncherLibraryMarkdownItem[] {
@@ -1485,7 +1529,7 @@ export function buildBuiltInLauncherActions(
   hotkeys: LauncherHotkeyMap,
   isDarkMode: boolean,
   squaresHotkeys: Record<string, string> = DEFAULT_SQUARES_HOTKEYS,
-  showSquaresInCommandLauncher = true
+  _showSquaresInCommandLauncher = true
 ): BuiltInLauncherAction[] {
   const baseActions: BuiltInLauncherAction[] = [
     {
@@ -1649,10 +1693,6 @@ export function buildBuiltInLauncherActions(
       actionId: 'toggle-theme',
     },
   ];
-
-  if (!showSquaresInCommandLauncher) {
-    return baseActions;
-  }
 
   return [
     ...baseActions,

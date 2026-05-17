@@ -11,6 +11,7 @@ export const CommandsIPCChannels = {
 
   // Commands listing
   GET_COMMANDS: 'commands:getCommands',
+  GET_COMMAND_DIRECTORIES: 'commands:getCommandDirectories',
   REFRESH_COMMANDS: 'commands:refreshCommands',
 
   // Command content
@@ -74,6 +75,15 @@ export interface PortableCommandInfo {
   displayName: string;    // Human-readable name
   filePath: string;       // Full path to the markdown file
   lastModified: number;   // File modification time
+}
+
+export interface PortableCommandDirectoryInfo {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
 }
 
 export interface LauncherAppInfo {

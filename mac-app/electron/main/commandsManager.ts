@@ -154,6 +154,15 @@ export interface PortableCommand {
   lastModified: number;   // File modification time for cache invalidation
 }
 
+export interface PortableCommandDirectory {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
+}
+
 /**
  * Command with full content loaded.
  */
@@ -512,6 +521,61 @@ export class CommandsManager extends EventEmitter {
     return Array.from(this.commands.values()).filter(command => !this.isLegacyCommandPath(command.filePath));
   }
 
+  getCommandDirectories(): PortableCommandDirectory[] {
+    const items: PortableCommandDirectory[] = [];
+    const seen = new Set<string>();
+
+    const addDirectory = (rootPath: string, directoryPath: string) => {
+      const normalizedRoot = this.normalizePath(rootPath);
+      const normalizedDirectory = this.normalizePath(directoryPath);
+      if (seen.has(normalizedDirectory)) return;
+      seen.add(normalizedDirectory);
+
+      let stats: fs.Stats;
+      try {
+        stats = fs.statSync(normalizedDirectory);
+        if (!stats.isDirectory()) return;
+      } catch {
+        return;
+      }
+
+      const relPath = path.relative(normalizedRoot, normalizedDirectory);
+      const cleanRelPath = relPath === '.' ? '' : relPath.replace(/\\/g, '/');
+      const rootName = path.basename(normalizedRoot);
+      const name = cleanRelPath ? path.basename(normalizedDirectory) : rootName;
+      items.push({
+        name,
+        displayName: cleanRelPath || rootName,
+        rootPath: normalizedRoot,
+        directoryPath: normalizedDirectory,
+        directoryRelPath: cleanRelPath,
+        lastModified: stats.mtimeMs,
+      });
+    };
+
+    const visit = (rootPath: string, dirPath: string) => {
+      addDirectory(rootPath, dirPath);
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      } catch {
+        return;
+      }
+
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+        visit(rootPath, path.join(dirPath, entry.name));
+      }
+    };
+
+    for (const rootPath of this.watchedRootPaths()) {
+      if (this.isLegacyCommandsDirectoryPath(rootPath)) continue;
+      visit(rootPath, rootPath);
+    }
+
+    return items.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }
+
   /**
    * Get a command by name (case-insensitive).
    */
@@ -581,6 +645,16 @@ export class CommandsManager extends EventEmitter {
 
   private commandFileNameFromUserInput(name: string): string | null {
     return markdownFileNameFromUserInput(name);
+  }
+
+  private commandDisplayNameFromFile(filePath: string, fallbackName: string): string {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      const title = parseMarkdownFrontmatter(content).meta.title?.trim();
+      return title || fallbackName;
+    } catch {
+      return fallbackName;
+    }
   }
 
   /**
@@ -676,10 +750,7 @@ export class CommandsManager extends EventEmitter {
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-
-      // Preserve original filename as displayName (respecting casing)
-      // e.g., "camelCase.md" -> "camelCase", "Best.md" -> "Best"
-      const displayName = nameWithoutExt;
+      const displayName = this.commandDisplayNameFromFile(filePath, nameWithoutExt);
 
       return {
         name: nameWithoutExt.toLowerCase(),
@@ -691,6 +762,21 @@ export class CommandsManager extends EventEmitter {
       log.error(`Error creating command from ${filePath}:`, error);
       return null;
     }
+  }
+
+  private updateCachedCommandFromFile(filePath: string): PortableCommand | null {
+    const normalizedFilePath = this.normalizePath(filePath);
+    for (const [name, command] of this.commands) {
+      if (this.normalizePath(command.filePath) === normalizedFilePath) {
+        this.commands.delete(name);
+      }
+    }
+
+    const command = this.createCommandFromFile(filePath);
+    if (command) {
+      this.commands.set(command.name, command);
+    }
+    return command;
   }
 
   /**
@@ -711,12 +797,12 @@ export class CommandsManager extends EventEmitter {
         { recursive: true, signal: this.watcherAbort.signal },
         async (eventType, filename) => {
           try {
-            if (filename && this.isMarkdownFile(filename)) {
-              // Rescan the directory to update commands
-              this.commands.clear();
-              await this.scanDirectory();
-              this.emit('commandsChanged', this.getCommands());
-            }
+            // File saves, file renames, and folder renames can all affect
+            // launcher labels, paths, and folder rows.
+            if (!filename) return;
+            this.commands.clear();
+            await this.scanDirectory();
+            this.emit('commandsChanged', this.getCommands());
           } catch (error) {
             log.error('Error handling file change:', error);
           }
@@ -1164,10 +1250,9 @@ End of User Commands
         { recursive: true, signal: abort.signal },
         async (eventType, filename) => {
           try {
-            if (filename && this.isMarkdownFile(filename)) {
-              // Rescan all directories to update commands
-              await this.refresh();
-            }
+            // Folder renames do not always report a markdown filename, but
+            // they still change launcher folder rows and command paths.
+            if (filename) await this.refresh();
           } catch (error) {
             log.error('Error handling file change:', error);
           }
@@ -1297,9 +1382,7 @@ End of User Commands
       const stats = fs.statSync(safePath);
       const filename = path.basename(safePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-
-      // Preserve original filename as displayName (respecting casing)
-      const displayName = nameWithoutExt;
+      const displayName = this.commandDisplayNameFromFile(safePath, nameWithoutExt);
 
       return {
         name: nameWithoutExt.toLowerCase(),
@@ -1323,7 +1406,11 @@ End of User Commands
       const safePath = this.resolveWatchedCommandFile(filePath);
       if (!safePath) return { ok: false, reason: 'not-found' };
       const result = writeTextFileWithConflictGuard(safePath, content, expectedVersion);
-      if (result.ok) log.info(`Saved command: ${safePath}`);
+      if (result.ok) {
+        this.updateCachedCommandFromFile(safePath);
+        this.emit('commandsChanged', this.getCommands());
+        log.info(`Saved command: ${safePath}`);
+      }
       return result;
     } catch (error) {
       log.error(`Error saving command ${filePath}:`, error);
@@ -1420,12 +1507,9 @@ End of User Commands
       const oldCommand = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safeOldPath));
       if (oldCommand) {
         this.commands.delete(oldCommand.name);
-        const newCommand = this.createCommandFromFile(newFilePath);
-        if (newCommand) {
-          this.commands.set(newCommand.name, newCommand);
-        }
-        this.emit('commandsChanged', this.getCommands());
       }
+      this.updateCachedCommandFromFile(newFilePath);
+      this.emit('commandsChanged', this.getCommands());
 
       log.info(`Renamed command: ${oldFilePath} -> ${newFilePath}`);
       return newFilePath;

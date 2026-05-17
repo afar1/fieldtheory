@@ -2969,6 +2969,7 @@ const CommandsIPCChannels = {
   SET_DIRECTORY: 'commands:setDirectory',
   BROWSE_DIRECTORY: 'commands:browseDirectory',
   GET_COMMANDS: 'commands:getCommands',
+  GET_COMMAND_DIRECTORIES: 'commands:getCommandDirectories',
   REFRESH_COMMANDS: 'commands:refreshCommands',
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
   LIST_LAUNCHER_APPS: 'commands:listLauncherApps',
@@ -3017,6 +3018,16 @@ type PortableCommandInfo = {
   name: string;
   displayName: string;
   filePath: string;
+  lastModified: number;
+};
+
+type PortableCommandDirectoryInfo = {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
 };
 
 type LauncherAppInfo = {
@@ -3250,6 +3261,10 @@ const commandsAPI = {
   // Get all available commands.
   getCommands: async (): Promise<PortableCommandInfo[]> => {
     return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMANDS);
+  },
+
+  getCommandDirectories: async (): Promise<PortableCommandDirectoryInfo[]> => {
+    return ipcRenderer.invoke(CommandsIPCChannels.GET_COMMAND_DIRECTORIES);
   },
 
   // Refresh the commands list by rescanning the directory.

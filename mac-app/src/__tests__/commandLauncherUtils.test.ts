@@ -15,6 +15,7 @@ import {
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
+  buildCommandDirectoriesForLauncher,
   buildLauncherAppItems,
   buildLauncherFileItems,
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
@@ -316,6 +317,18 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
   });
 
+  it('keeps command matches ahead of app matches while typing', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('newer-app', 'app', undefined, 300), score: 1000 },
+      { item: item('older-command', 'command', undefined, 100), score: 800 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'older-command',
+      'newer-app',
+    ]);
+  });
+
   it('keeps app matches ahead of newer recent files', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('recent-safari-note', 'recent-file', 300), score: 1000 },
@@ -340,9 +353,9 @@ describe('balanceLauncherNormalModeMatches', () => {
     ], { maxAppResults: 2 });
 
     expect(results.map(result => result.id)).toEqual([
+      'search-command',
       'safari-app',
       'slack-app',
-      'search-command',
       'scratchpad-note',
     ]);
   });
@@ -820,6 +833,49 @@ describe('flattenLibraryDirectoriesForLauncher', () => {
         directoryRelPath: '',
       }),
     ]);
+  });
+});
+
+describe('buildCommandDirectoriesForLauncher', () => {
+  it('builds searchable portable-command folder rows including empty folders from the command manager', () => {
+    const items = buildCommandDirectoriesForLauncher([
+      {
+        name: 'Commands',
+        displayName: 'Commands',
+        rootPath: '/Users/tester/.fieldtheory/library/Commands',
+        directoryPath: '/Users/tester/.fieldtheory/library/Commands',
+        directoryRelPath: '',
+        lastModified: 100,
+      },
+      {
+        name: 'Writing',
+        displayName: 'Writing',
+        rootPath: '/Users/tester/.fieldtheory/library/Commands',
+        directoryPath: '/Users/tester/.fieldtheory/library/Commands/Writing',
+        directoryRelPath: 'Writing',
+        lastModified: 200,
+      },
+    ]);
+
+    expect(items).toEqual([
+      expect.objectContaining({
+        type: 'directory',
+        name: 'Commands',
+        displayName: 'Commands',
+        directoryPath: '/Users/tester/.fieldtheory/library/Commands',
+        directoryRelPath: '',
+        hotkeyDisplay: 'folder',
+      }),
+      expect.objectContaining({
+        type: 'directory',
+        name: 'Writing',
+        displayName: 'Writing',
+        directoryPath: '/Users/tester/.fieldtheory/library/Commands/Writing',
+        directoryRelPath: 'Writing',
+        lastUpdated: 200,
+      }),
+    ]);
+    expect(items[1].keywords).toEqual(expect.arrayContaining(['portable commands', 'folder', 'Writing']));
   });
 });
 
@@ -1638,13 +1694,13 @@ describe('buildBuiltInLauncherActions', () => {
     }
   });
 
-  it('omits Squares actions when portable command visibility is disabled', () => {
+  it('keeps Squares actions visible even when portable command visibility is disabled', () => {
     const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true, DEFAULT_SQUARES_HOTKEYS, false);
 
     const actionIds = new Set(actions.map((action) => action.actionId));
 
     for (const def of SQUARES_ACTION_DEFS) {
-      expect(actionIds.has(def.actionId)).toBe(false);
+      expect(actionIds.has(def.actionId)).toBe(true);
     }
     expect(actionIds.has('settings')).toBe(true);
     expect(actionIds.has('take-screenshot')).toBe(true);

@@ -29,6 +29,7 @@ import {
   filterLauncherNormalModeItems,
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
+  buildCommandDirectoriesForLauncher,
   buildLauncherAppItems,
   buildLauncherFileItems,
   LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
@@ -112,6 +113,15 @@ interface PortableCommandInfo {
   lastModified: number;
 }
 
+interface PortableCommandDirectoryInfo {
+  name: string;
+  displayName: string;
+  rootPath: string;
+  directoryPath: string;
+  directoryRelPath: string;
+  lastModified: number;
+}
+
 interface LauncherAppInfo {
   name: string;
   displayName: string;
@@ -151,7 +161,9 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file' | 'clipboard-item' | 'clipboard-stack';
+type LauncherSourceId = 'wiki' | 'artifact' | 'bookmarks';
+
+type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file' | 'clipboard-item' | 'clipboard-stack';
 
 interface LauncherRecentEntry {
   kind: 'wiki' | 'external';
@@ -161,8 +173,8 @@ interface LauncherRecentEntry {
 }
 
 type BookmarkNamespace =
-  | { kind: 'facet'; label: string; paths: string[] }
-  | { kind: 'search'; label: string; query: string };
+  | { kind: 'all'; label: string }
+  | { kind: 'facet'; label: string; paths: string[] };
 
 type MarkdownPreview = {
   title: string;
@@ -226,6 +238,8 @@ interface LauncherItem {
   lastOpenedAt?: number;
   // For actions
   actionId?: string;
+  // For source scopes
+  sourceId?: LauncherSourceId;
   // For root search rows
   rootSearchKind?: LauncherRootSearchKind;
   rootSearchLabel?: string;
@@ -291,13 +305,12 @@ const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
 type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
 type FieldTheoryMarkdownTarget = LauncherFieldTheoryMarkdownTarget;
 
-let WIKI_COMMAND_PATH: string | null = null;
-try { WIKI_COMMAND_PATH = `${process.env.HOME}/.fieldtheory/library/Commands/wiki.md`; } catch {}
-
 // Window API types for the launcher's standalone renderer context.
 // In the launcher window, these APIs are always available (not optional).
 interface LauncherCommandsAPI {
   getCommands: () => Promise<PortableCommandInfo[]>;
+  getCommandDirectories: () => Promise<PortableCommandDirectoryInfo[]>;
+  onCommandsChanged?: (callback: (commands: PortableCommandInfo[]) => void) => () => void;
   getHandoffs: () => Promise<HandoffInfo[]>;
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
@@ -373,7 +386,6 @@ interface LauncherBookmarksAPI {
   getAuthors: () => Promise<BookmarkAuthorSummary[]>;
   getAuthorBookmarks: (handle: string) => Promise<Bookmark[]>;
   getTaxonomyBookmarks: (filePaths: string[]) => Promise<Bookmark[]>;
-  search: (query: string) => Promise<Bookmark[]>;
   getActiveWebPage?: () => Promise<{ success: boolean; page?: ActiveWebPage; error?: string }>;
   saveActiveWebPage?: () => Promise<{ success: boolean; page?: ActiveWebPage; bookmark?: Bookmark; markdownPath?: string; created?: boolean; error?: string }>;
   invokeBookmark: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -413,6 +425,10 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
     id: item.id,
     type: item.type,
     displayName: item.displayName,
+    actionId: item.actionId ?? null,
+    sourceId: item.sourceId ?? null,
+    filePath: item.filePath ?? null,
+    relPath: item.relPath ?? null,
     authorHandle: item.authorHandle ?? null,
     bookmarkId: item.bookmarkId ?? null,
     directoryPath: item.directoryPath ?? null,
@@ -426,6 +442,7 @@ function launcherItemTypeLabel(item: LauncherItem): string {
     case 'command': return 'Command';
     case 'local-command': return 'Local';
     case 'local-instruction': return 'Local';
+    case 'source': return 'Source';
     case 'app': return item.rootSearchLabel ?? 'App';
     case 'file': return item.rootSearchLabel ?? 'File';
     case 'action': return 'Action';
@@ -685,6 +702,7 @@ function CommandLauncher() {
   const [clipboardSearchActive, setClipboardSearchActive] = useState(false);
   const [lastLibraryMove, setLastLibraryMove] = useState<LauncherLibraryMoveRecord | null>(null);
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
+  const [commandDirectories, setCommandDirectories] = useState<PortableCommandDirectoryInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
   const [launcherApps, setLauncherApps] = useState<LauncherAppInfo[]>([]);
   const [launcherFiles, setLauncherFiles] = useState<LauncherFileInfo[]>([]);
@@ -710,8 +728,8 @@ function CommandLauncher() {
   const [authorBookmarks, setAuthorBookmarks] = useState<Bookmark[]>([]);
   const [bookmarkNamespaceItems, setBookmarkNamespaceItems] = useState<LauncherItem[]>([]);
   const [bookmarkNamespaceBookmarks, setBookmarkNamespaceBookmarks] = useState<Bookmark[]>([]);
-  const [webBookmarkItems, setWebBookmarkItems] = useState<LauncherItem[]>([]);
-  const [webBookmarks, setWebBookmarks] = useState<Bookmark[]>([]);
+  const [bookmarkPostItems, setBookmarkPostItems] = useState<LauncherItem[]>([]);
+  const [bookmarkPosts, setBookmarkPosts] = useState<Bookmark[]>([]);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [launcherDataLoading, setLauncherDataLoading] = useState(true);
   const [launcherSessionReady, setLauncherSessionReady] = useState(false);
@@ -817,8 +835,12 @@ function CommandLauncher() {
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
     try {
-      const cmds = await commandsAPI.getCommands();
+      const [cmds, directories] = await Promise.all([
+        commandsAPI.getCommands(),
+        commandsAPI.getCommandDirectories(),
+      ]);
       setCommands(cmds || []);
+      setCommandDirectories(directories || []);
     } catch (err) {
       console.error('[CommandLauncher] Failed to load commands:', err);
     }
@@ -904,22 +926,20 @@ function CommandLauncher() {
     } catch {}
   }, []);
 
-  const loadWebBookmarks = useCallback(async () => {
+  const loadBookmarkPosts = useCallback(async () => {
     try {
       const snapshot = await bookmarksAPI?.getAll();
       const bookmarks = (snapshot?.bookmarks ?? [])
-        .filter((bookmark) => bookmark.sourceType === 'web')
         .sort((a, b) => {
           const aTime = new Date(a.savedAt ?? a.postedAt).getTime();
           const bTime = new Date(b.savedAt ?? b.postedAt).getTime();
           return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-        })
-        .slice(0, 100);
-      setWebBookmarks(bookmarks);
-      setWebBookmarkItems(buildBookmarkPostLauncherItems(bookmarks));
+        });
+      setBookmarkPosts(bookmarks);
+      setBookmarkPostItems(buildBookmarkPostLauncherItems(bookmarks));
     } catch {
-      setWebBookmarks([]);
-      setWebBookmarkItems([]);
+      setBookmarkPosts([]);
+      setBookmarkPostItems([]);
     }
   }, []);
 
@@ -967,9 +987,9 @@ function CommandLauncher() {
   const loadBookmarkNamespace = useCallback(async (namespace: BookmarkNamespace) => {
     const requestId = ++bookmarkNamespaceRequestRef.current;
     try {
-      const bookmarks = namespace.kind === 'facet'
-        ? await bookmarksAPI?.getTaxonomyBookmarks(namespace.paths)
-        : await bookmarksAPI?.search(namespace.query);
+      const bookmarks = namespace.kind === 'all'
+        ? (await bookmarksAPI?.getAll())?.bookmarks
+        : await bookmarksAPI?.getTaxonomyBookmarks(namespace.paths);
       if (requestId !== bookmarkNamespaceRequestRef.current || bookmarkNamespaceRef.current !== namespace) return;
       const nextBookmarks = bookmarks ?? [];
       setBookmarkNamespaceBookmarks(nextBookmarks);
@@ -1059,14 +1079,14 @@ function CommandLauncher() {
       loadArtifacts(),
       loadRecentEntries(),
       loadBookmarkAuthors(),
-      loadWebBookmarks(),
+      loadBookmarkPosts(),
       loadActiveWebPage(),
       refreshLauncherContext(),
     ]);
     if (requestId === launcherDataRequestRef.current) {
       setLauncherDataLoading(false);
     }
-  }, [loadCommands, loadLauncherApps, loadLauncherSettings, warmLauncherFileIndex, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadWebBookmarks, loadActiveWebPage, refreshLauncherContext]);
+  }, [loadCommands, loadLauncherApps, loadLauncherSettings, warmLauncherFileIndex, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadBookmarkPosts, loadActiveWebPage, refreshLauncherContext]);
 
   const clearLauncherSessionState = useCallback(() => {
     authorNamespaceRef.current = null;
@@ -1150,11 +1170,17 @@ function CommandLauncher() {
     });
     const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
       loadBookmarkAuthors();
-      loadWebBookmarks();
+      loadBookmarkPosts();
       const handle = authorNamespaceRef.current;
       if (handle) loadAuthorBookmarks(handle);
       const namespace = bookmarkNamespaceRef.current;
       if (namespace) loadBookmarkNamespace(namespace);
+    });
+    const unsubscribeCommands = commandsAPI.onCommandsChanged?.((nextCommands) => {
+      setCommands(nextCommands || []);
+      void commandsAPI.getCommandDirectories()
+        .then(directories => setCommandDirectories(directories || []))
+        .catch(() => setCommandDirectories([]));
     });
     const unsubscribeRecent = recentAPI?.onChanged?.(() => {
       loadRecentEntries();
@@ -1164,9 +1190,10 @@ function CommandLauncher() {
       unsubscribeTheme?.();
       unsubscribeSquaresConfig?.();
       unsubscribeBookmarks?.();
+      unsubscribeCommands?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, resizeLauncher]);
+  }, [applyTheme, clearLauncherSessionState, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, resizeLauncher]);
 
   useEffect(() => {
     window.addEventListener('blur', prepareLauncherForNextOpen);
@@ -1218,6 +1245,40 @@ function CommandLauncher() {
       filePath: cmd.filePath,
       lastUpdated: cmd.lastModified,
     })), [commands]);
+
+  const commandDirectoryItems = useMemo((): LauncherItem[] => (
+    buildCommandDirectoriesForLauncher(commandDirectories)
+  ), [commandDirectories]);
+
+  const sourceItems = useMemo((): LauncherItem[] => ([
+    {
+      id: 'source-wiki',
+      type: 'source' as const,
+      sourceId: 'wiki' as const,
+      name: 'wiki',
+      displayName: 'Wiki',
+      keywords: ['wiki', 'markdown', 'library', 'notes', 'pages'],
+      hotkeyDisplay: 'source',
+    },
+    {
+      id: 'source-bookmarks',
+      type: 'source' as const,
+      sourceId: 'bookmarks' as const,
+      name: 'bookmarks',
+      displayName: 'Bookmarks',
+      keywords: ['bookmarks', 'bookmark', 'tweets', 'tweet', 'posts', 'post', 'x', 'links'],
+      hotkeyDisplay: 'source',
+    },
+    {
+      id: 'source-artifact',
+      type: 'source' as const,
+      sourceId: 'artifact' as const,
+      name: 'artifact',
+      displayName: 'Artifacts',
+      keywords: ['artifact', 'artifacts', 'readings'],
+      hotkeyDisplay: 'source',
+    },
+  ]), []);
 
   const appItems = useMemo((): LauncherItem[] => {
     if (!isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'app')) return [];
@@ -1294,14 +1355,8 @@ function CommandLauncher() {
         };
       });
 
-    const recentKeys = new Set(recentFileItems.map(item => `${item.recentKind}:${item.recentKind === 'wiki' ? item.relPath : item.filePath}`));
-    const markdownItems = [...libraryMarkdownSearchItems, ...artifactReadings].filter((item) => {
-      if (item.type === 'wiki-page') return !recentKeys.has(`wiki:${item.relPath}`);
-      if (item.type === 'markdown-file') return !recentKeys.has(`external:${item.filePath}`);
-      return true;
-    });
-    return [...appItems, ...directoryItems, ...bookmarkFacetItems, ...bookmarkAuthorItems, ...webBookmarkItems, ...recentFileItems, ...markdownItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [appItems, commandItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownSearchItems, artifactReadings, directoryItems, bookmarkAuthorItems, bookmarkFacetItems, webBookmarkItems, recentFileItems, activeWebPage, lastLibraryMove]);
+    return [...appItems, ...sourceItems, ...commandDirectoryItems, ...recentFileItems, ...commandItems, ...handoffItems, ...actionItems];
+  }, [appItems, commandItems, commandDirectoryItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, sourceItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
 	  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
 	  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
@@ -1354,9 +1409,9 @@ function CommandLauncher() {
     if (item?.type !== 'bookmark' || !item.bookmarkId) return null;
     const bookmarks = authorNamespace ? authorBookmarks : bookmarkNamespaceBookmarks;
     return bookmarks.find((bookmark) => bookmark.id === item.bookmarkId)
-      ?? webBookmarks.find((bookmark) => bookmark.id === item.bookmarkId)
+      ?? bookmarkPosts.find((bookmark) => bookmark.id === item.bookmarkId)
       ?? null;
-  }, [authorBookmarks, authorNamespace, bookmarkNamespaceBookmarks, webBookmarks]);
+  }, [authorBookmarks, authorNamespace, bookmarkNamespaceBookmarks, bookmarkPosts]);
 
   const markdownPreviewPathForItem = useCallback((item: LauncherItem | undefined): string | null => {
     if (!item?.filePath) return null;
@@ -1841,7 +1896,10 @@ function CommandLauncher() {
     }
 
     if (bookmarkNamespace) {
-      const results = filterLauncherNamespaceItems(bookmarkNamespaceItems, q);
+      const pool = bookmarkNamespace.kind === 'all'
+        ? [...bookmarkAuthorItems, ...bookmarkFacetItems, ...(bookmarkNamespaceItems.length > 0 ? bookmarkNamespaceItems : bookmarkPostItems)]
+        : bookmarkNamespaceItems;
+      const results = filterLauncherNamespaceItems(pool, q);
       setFiltered(results);
       selectIndex(0);
       resizeForResults(results.length, true);
@@ -1849,36 +1907,11 @@ function CommandLauncher() {
     }
 
     if (namespacePrefix) {
-      const pool = namespacePrefix === 'wiki' ? libraryMarkdownSearchItems : artifactReadings;
+      const pool = namespacePrefix === 'wiki' ? [...directoryItems, ...libraryMarkdownSearchItems] : artifactReadings;
       const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, q));
       setFiltered(results.slice(0, 20));
       selectIndex(0);
       resizeForResults(results.length, true);
-      return;
-    }
-
-    const nsMatch = q.match(/^(wiki|artifact)\s+(.*)$/);
-    if (nsMatch) {
-      const [, ns, search] = nsMatch;
-      const pool = ns === 'wiki' ? libraryMarkdownSearchItems : artifactReadings;
-      const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, search));
-      setFiltered(results.slice(0, 20));
-      selectIndex(0);
-      resizeForResults(results.length, true);
-      return;
-    }
-
-    if (q === 'wiki') {
-      setFiltered([{
-        id: 'wiki-command',
-        type: 'command' as const,
-        name: 'wiki',
-        displayName: 'wiki.md — lookup',
-        keywords: ['wiki'],
-        filePath: WIKI_COMMAND_PATH ?? undefined,
-      }, ...libraryMarkdownSearchItems.slice(0, 5)]);
-      selectIndex(0);
-      resizeForResults(6);
       return;
     }
 
@@ -1913,7 +1946,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkNamespaceItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
+  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -2086,6 +2119,23 @@ function CommandLauncher() {
     return (hydrated[item.clipboardStackId] ?? row.items).map(stackItem => stackItem.id);
   }, [fetchClipboardStackItemsById]);
 
+  const enterLauncherSource = useCallback((sourceId: LauncherSourceId) => {
+    setDirectoryNamespace(null);
+    setAuthorNamespace(null);
+    setBookmarkNamespace(null);
+    setMoveSource(null);
+    setBookmarkNamespaceBookmarks([]);
+    setBookmarkNamespaceItems([]);
+    if (sourceId === 'bookmarks') {
+      setNamespacePrefix(null);
+      setBookmarkNamespace({ kind: 'all', label: 'bookmarks' });
+    } else {
+      setNamespacePrefix(sourceId);
+    }
+    setQuery('');
+    selectIndex(0);
+  }, [selectIndex]);
+
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -2161,6 +2211,17 @@ function CommandLauncher() {
       if (moveSource) return;
       if (fileSearchQuery !== null) return;
 
+      const selectedForTab = filtered[currentIndex];
+      const selectedSource = selectedForTab?.type === 'source' ? selectedForTab : null;
+      const typedSource = !hasExplicitSelectionRef.current && selectedForTab?.type !== 'command'
+        ? sourceItems.find(item => item.name === q || (q.length > 0 && item.name.startsWith(q)))
+        : null;
+      const sourceTarget = selectedSource ?? typedSource;
+      if (sourceTarget?.sourceId) {
+        enterLauncherSource(sourceTarget.sourceId);
+        return;
+      }
+
       const commandTarget = resolveLauncherCommandOpenTarget(
         filtered,
         commandItems,
@@ -2186,7 +2247,36 @@ function CommandLauncher() {
       }
 
       if (namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace) {
-        const authorHandle = resolveLauncherAuthorNamespaceHandle([], bookmarkAuthorItems, 0, rawQuery);
+        const directory = namespacePrefix === 'wiki'
+          ? resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery)
+          : null;
+        if (directory?.directoryPath) {
+          setDirectoryNamespace({
+            label: directory.displayName,
+            directoryPath: directory.directoryPath,
+            directoryRelPath: directory.directoryRelPath,
+          });
+          setNamespacePrefix(null);
+          setBookmarkNamespace(null);
+          setAuthorNamespace(null);
+          setQuery('');
+          selectIndex(0);
+          return;
+        }
+
+        const bookmarkFacet = bookmarkNamespace
+          ? resolveLauncherBookmarkFacetNamespace(filtered, bookmarkFacetItems, currentIndex, rawQuery)
+          : null;
+        if (bookmarkFacet?.facetPaths?.length) {
+          setBookmarkNamespace({ kind: 'facet', label: bookmarkFacet.displayName, paths: bookmarkFacet.facetPaths });
+          setQuery('');
+          selectIndex(0);
+          return;
+        }
+
+        const authorHandle = bookmarkNamespace
+          ? resolveLauncherAuthorNamespaceHandle(filtered, bookmarkAuthorItems, currentIndex, rawQuery)
+          : null;
         if (authorHandle) {
           setNamespacePrefix(null);
           setDirectoryNamespace(null);
@@ -2210,38 +2300,13 @@ function CommandLauncher() {
         return;
       }
 
-      const bookmarkFacet = resolveLauncherBookmarkFacetNamespace(filtered, bookmarkFacetItems, currentIndex, rawQuery);
-      if (bookmarkFacet?.facetPaths?.length) {
-        setBookmarkNamespace({ kind: 'facet', label: bookmarkFacet.displayName, paths: bookmarkFacet.facetPaths });
-        setQuery('');
-        selectIndex(0);
-        return;
-      }
-
-      const authorHandle = resolveLauncherAuthorNamespaceHandle(filtered, bookmarkAuthorItems, currentIndex, rawQuery);
-      if (authorHandle) {
-        setAuthorNamespace(authorHandle);
-        setQuery('');
-        selectIndex(0);
-        return;
-      }
-
       for (const prefix of NAMESPACE_PREFIXES) {
         if (prefix.startsWith(q) && q.length > 0) {
-          setNamespacePrefix(prefix);
-          previewRequestRef.current += 1;
-          setPreviewOpen(false);
-          setPreviewPayload(null);
-          setQuery('');
+          enterLauncherSource(prefix);
           return;
         }
       }
 
-      if (rawQuery) {
-        setBookmarkNamespace({ kind: 'search', label: `search: ${rawQuery}`, query: rawQuery });
-        setQuery('');
-        selectIndex(0);
-      }
     } else if (shouldHandleLauncherPreviewShortcut(e, hasNavigatedRef.current, previewOpen)) {
       const currentIndex = selectedIndexRef.current;
       const selectedItem = filtered[currentIndex];
@@ -2318,6 +2383,15 @@ function CommandLauncher() {
       if (filtered.length > 0) {
         const currentIndex = resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length);
         const selectedItem = filtered[currentIndex];
+        traceLauncher('enter-key', {
+          query: rawQuery,
+          namespaceLabel: namespaceLabel ?? null,
+          inScopedMode,
+          filteredCount: filtered.length,
+          selectedIndex: currentIndex,
+          selectedItem: describeLauncherItem(selectedItem),
+          hasExplicitSelection: hasExplicitSelectionRef.current,
+        });
         if (selectedItem?.type === 'local-instruction' && !inScopedMode) {
           const normalMatch = getNormalModeMatches(rawQuery)[0];
           if (normalMatch) {
@@ -2330,6 +2404,10 @@ function CommandLauncher() {
       }
       const normalMatch = inScopedMode ? null : getNormalModeMatches(rawQuery)[0];
       if (normalMatch) {
+        traceLauncher('enter-key-resolved-normal-match', {
+          query: rawQuery,
+          selectedItem: describeLauncherItem(normalMatch),
+        });
         invokeItem(normalMatch, { insertWikiLink: normalMatch.type !== 'command' });
         return;
       }
@@ -2337,6 +2415,10 @@ function CommandLauncher() {
         ? null
         : resolveLauncherCommandOpenTarget([], commandItems, 0, rawQuery, false);
       if (commandTarget) {
+        traceLauncher('enter-key-resolved-command', {
+          query: rawQuery,
+          selectedItem: describeLauncherItem(commandTarget),
+        });
         invokeItem(commandTarget, { insertWikiLink: false });
         return;
       }
@@ -2386,11 +2468,18 @@ function CommandLauncher() {
       return true;
     };
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, targetApp: null }));
+    if (item.type === 'source' && item.sourceId) {
+      traceLauncher('invoke-source-scope', { sourceId: item.sourceId });
+      enterLauncherSource(item.sourceId);
+      return;
+    }
     const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
     const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
     traceLauncher('invoke-item', {
       item: describeLauncherItem(item),
       fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
+      targetBundleId: latestContext?.targetApp?.bundleId ?? null,
+      targetName: latestContext?.targetApp?.name ?? null,
       hasFieldTheoryTarget: !!fieldTheoryTarget,
       openFieldTheoryTarget: options.openFieldTheoryTarget ?? false,
       insertWikiLink: options.insertWikiLink ?? false,
@@ -2401,7 +2490,6 @@ function CommandLauncher() {
         showInvocationError('paste-clipboard-launcher-no-target', 'No external target app available', 'No external target app available');
         return;
       }
-      closeForInvocation({ skipActivation: true });
       if (item.type === 'clipboard-stack') {
         const itemIds = await getClipboardLauncherStackItemIds(item);
         if (itemIds.length > 0) {
@@ -2411,6 +2499,7 @@ function CommandLauncher() {
         const clipboardItem = item.clipboardRow?.type === 'item' ? item.clipboardRow.item : null;
         await clipboardAPI.pasteItem(item.clipboardItemId, targetBundleId, clipboardItem?.useImprovedVersion);
       }
+      prepareLauncherForNextOpen();
       return;
     }
     if (shouldPastePortableCommand({
@@ -2648,7 +2737,7 @@ function CommandLauncher() {
             created: result.created ?? null,
             url: result.page?.url ?? result.bookmark?.url ?? null,
           });
-          await loadWebBookmarks();
+          await loadBookmarkPosts();
 
           if (!markdownPath) {
             setQuery('Saved, but no markdown path was returned');
@@ -2729,7 +2818,7 @@ function CommandLauncher() {
       }
       closeForInvocation();
     }
-  }, [applyTheme, clipboardPreviewContentForItem, dismissPreview, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadWebBookmarks, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
+  }, [applyTheme, clipboardPreviewContentForItem, dismissPreview, enterLauncherSource, getClipboardLauncherStackItemIds, getFieldTheoryTarget, getWikiLinkText, loadLibraryMarkdown, loadBookmarkPosts, moveLibraryFileToDirectory, moveSource, noteItemUsage, prepareLauncherForNextOpen, resizeLauncher, selectIndex, showLauncherMessage, undoLastLibraryMove]);
 
   const openMainFieldTheoryWindow = useCallback(async () => {
     dismissPreview();
@@ -2936,7 +3025,7 @@ function CommandLauncher() {
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       {renderItemIcon(item)}
-                      <span style={styles.itemName}>{item.name}</span>
+                      <span style={styles.itemName}>{item.displayName || item.name}</span>
                     </li>
                   );
                 })}
@@ -2958,7 +3047,7 @@ function CommandLauncher() {
                 >
                   {renderItemIcon(item)}
                   <span style={styles.itemName}>
-                    {item.type === 'command' ? item.name : item.displayName}
+                    {item.type === 'command' ? (item.displayName || item.name) : item.displayName}
                   </span>
                   <span style={styles.itemMeta}>
                     {showMetaText && <span style={styles.itemHotkey}>{metaText}</span>}

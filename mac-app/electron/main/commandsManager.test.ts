@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -211,6 +211,87 @@ describe('CommandsManager default internal commands', () => {
     expect(readFileSync(command!.path, 'utf8')).toBe(
       '---\nkind: command\ntitle: "fresh"\nenabled: true\n---\n\n# Fresh\n\nBody\n'
     );
+  });
+
+  it('uses command frontmatter titles in the launcher command list', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'plain-name', '---\ntitle: Clear Name\n---\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'plain-name',
+        displayName: 'Clear Name',
+      }),
+    ]);
+  });
+
+  it('updates cached launcher command labels when a command title is saved', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    mkdirSync(defaultDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    const command = manager.createCommand(defaultDir, 'rename-display', '---\ntitle: Old Name\n---\n\nBody\n');
+
+    expect(command).not.toBeNull();
+    const result = manager.saveCommand(command!.path, '---\ntitle: New Name\n---\n\nBody\n', readDocumentVersion(command!.path));
+
+    expect(result.ok).toBe(true);
+    expect(manager.getCommands()).toEqual([
+      expect.objectContaining({
+        name: 'rename-display',
+        displayName: 'New Name',
+      }),
+    ]);
+  });
+
+  it('lists command folders from watched directories including duplicate, empty, renamed, and missing folders', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const emptyDir = join(defaultDir, 'Empty');
+    const renamedDir = join(defaultDir, 'Renamed');
+    const otherDir = join(tempRoot, 'Other Commands');
+    const duplicateEmptyDir = join(otherDir, 'Empty');
+    mkdirSync(emptyDir, { recursive: true });
+    mkdirSync(duplicateEmptyDir, { recursive: true });
+    await manager.addWatchedDir(defaultDir);
+    await manager.addWatchedDir(otherDir);
+
+    expect(manager.getCommandDirectories()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Commands',
+        displayName: 'Commands',
+        directoryPath: defaultDir,
+        directoryRelPath: '',
+      }),
+      expect.objectContaining({
+        name: 'Empty',
+        displayName: 'Empty',
+        directoryPath: emptyDir,
+        directoryRelPath: 'Empty',
+      }),
+      expect.objectContaining({
+        name: 'Empty',
+        displayName: 'Empty',
+        directoryPath: duplicateEmptyDir,
+        directoryRelPath: 'Empty',
+      }),
+    ]));
+
+    renameSync(emptyDir, renamedDir);
+
+    expect(manager.getCommandDirectories()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'Renamed',
+        displayName: 'Renamed',
+        directoryPath: renamedDir,
+        directoryRelPath: 'Renamed',
+      }),
+    ]));
+    expect(manager.getCommandDirectories().map(directory => directory.directoryPath)).not.toContain(emptyDir);
+
+    rmSync(renamedDir, { recursive: true, force: true });
+    expect(manager.getCommandDirectories().map(directory => directory.directoryPath)).not.toContain(renamedDir);
   });
 
   it('forces the command kind when created content has non-command frontmatter', async () => {
