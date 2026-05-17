@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import FeedbackView from './FeedbackView';
 import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeHintOpacity, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
@@ -200,6 +200,7 @@ function maxTransitionMs(style: CSSStyleDeclaration): number {
 
 const FOCUS_CHROME_ICON_SIZE_PX = 32;
 const FOCUS_CHROME_ICON_TOP_PX = 48;
+const FOCUS_CHROME_ICON_OPACITY = 0.62;
 const FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX = 220;
 const FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX = 160;
 const FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX = 128;
@@ -583,17 +584,12 @@ export default function ClipboardHistory() {
   const appChromeOpacity = getFocusChromeSurfaceOpacity({
     isFocusChromeSurface,
     focusChromeActive: focusChromeSurfaceEnabled,
-    groupOpacity: focusChromeGroupOpacity,
   });
-  const footerChromeOpacity = focusChromeOverlayActive ? focusChromeGroupOpacity : 1;
+  const footerChromeOpacity = focusChromeOverlayActive ? 0 : 1;
   const appChromeInteractive = appChromeOpacity > 0.05;
   const footerChromeInteractive = footerChromeOpacity > 0.05;
   const appChromeHidden = focusChromeOverlayActive && !appChromeInteractive;
-  const focusChromeIconOpacity = getFocusChromeHintOpacity({
-    isFocusChromeSurface,
-    focusChromeActive: focusChromeSurfaceEnabled,
-    surfaceOpacity: appChromeOpacity,
-  });
+  const focusChromeIconOpacity = focusChromeOverlayActive ? FOCUS_CHROME_ICON_OPACITY : 0;
   const showFocusChromeIcon = focusChromeOverlayActive;
   const footerChromeHidden = bookmarksCanvasChromeActive || (focusChromeOverlayActive && !footerChromeInteractive);
   const [footerFps, setFooterFps] = useState<number | null>(null);
@@ -4346,7 +4342,6 @@ export default function ClipboardHistory() {
             justifyContent: 'center',
             pointerEvents: 'none',
             opacity: focusChromeIconOpacity,
-            transition: 'opacity 90ms linear',
           }}
         >
           <img
@@ -7495,13 +7490,13 @@ export default function ClipboardHistory() {
               ? { top: `${FIELD_THEORY_CHROME_OVERLAY_TOP_PX + appTitlebarOffsetPx}px` }
               : { bottom: '8px' }),
             zIndex: 20,
-            pointerEvents: 'auto',
+            pointerEvents: focusChromeOverlayActive ? 'none' : 'auto',
             width: '34px',
             height: '34px',
             display: 'flex',
             alignItems: 'flex-end',
             justifyContent: 'flex-end',
-            opacity: appChromeHidden && !themeToggleProximityVisible ? 0 : 1,
+            opacity: focusChromeOverlayActive || (appChromeHidden && !themeToggleProximityVisible) ? 0 : 1,
             transition: 'opacity 180ms ease',
           }}
         >

@@ -21,7 +21,7 @@ import {
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
   getRenderedMarkdownSelectionFormatEdit,
-  getFocusChromeHintOpacity,
+  getFocusChromeScopedItemOpacity,
   getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
@@ -63,6 +63,7 @@ import {
   restoreLibrarianSelection,
   shouldRevealFocusChrome,
   shouldRevealGroupedFocusChrome,
+  shouldShowFocusToolbarControls,
   shouldHandleMarkdownTodoTabShortcut,
   shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldOpenMarkdownEditorLinkFromMouseDown,
@@ -1796,33 +1797,44 @@ describe('focus chrome proximity', () => {
     })).toBeGreaterThan(0);
   });
 
-  it('keeps the top nav on the same opacity ramp as the chrome group', () => {
+  it('keeps the parent top nav hidden while document focus chrome is active', () => {
     expect(getFocusChromeSurfaceOpacity({
       isFocusChromeSurface: true,
       focusChromeActive: true,
-      groupOpacity: 0.42,
-    })).toBe(0.42);
-  });
-
-  it('keeps pinned child chrome from forcing the parent top chrome fully visible', () => {
-    expect(getFocusChromeSurfaceOpacity({
-      isFocusChromeSurface: true,
-      focusChromeActive: true,
-      groupOpacity: 0.25,
-    })).toBe(0.25);
-  });
-
-  it('fades the focus logo out as the chrome surface fades in', () => {
-    expect(getFocusChromeHintOpacity({
-      isFocusChromeSurface: true,
-      focusChromeActive: true,
-      surfaceOpacity: 0,
-    })).toBe(0.62);
-    expect(getFocusChromeHintOpacity({
-      isFocusChromeSurface: true,
-      focusChromeActive: true,
-      surfaceOpacity: 1,
     })).toBe(0);
+  });
+
+  it('keeps the parent top nav visible outside document focus chrome', () => {
+    expect(getFocusChromeSurfaceOpacity({
+      isFocusChromeSurface: false,
+      focusChromeActive: true,
+    })).toBe(1);
+  });
+
+  it('uses proximity opacity for the scoped focus controls', () => {
+    expect(getFocusChromeScopedItemOpacity({
+      focusChromeActive: true,
+      visualOpacity: 0.42,
+    })).toBe(0.42);
+    expect(getFocusChromeScopedItemOpacity({
+      focusChromeActive: false,
+      visualOpacity: 0,
+    })).toBe(1);
+  });
+
+  it('keeps the rest of the toolbar out of proximity reveal unless pinned', () => {
+    expect(shouldShowFocusToolbarControls({
+      focusChromeActive: true,
+      focusChromePinnedVisible: false,
+    })).toBe(false);
+    expect(shouldShowFocusToolbarControls({
+      focusChromeActive: true,
+      focusChromePinnedVisible: true,
+    })).toBe(true);
+    expect(shouldShowFocusToolbarControls({
+      focusChromeActive: false,
+      focusChromePinnedVisible: false,
+    })).toBe(true);
   });
 });
 
