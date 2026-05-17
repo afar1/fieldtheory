@@ -38,18 +38,15 @@ function yamlQuoted(value: string): string {
 
 function withCommandFrontmatter(content: string, title: string): string {
   const parsed = parseMarkdownFrontmatter(content);
-  const existingKind = (parsed.meta.kind ?? parsed.meta.type)?.trim().toLowerCase();
-  if (existingKind === 'command') return content;
-
   const commandLines = [
     'kind: command',
-    parsed.meta.title ? null : `title: ${yamlQuoted(title)}`,
+    `title: ${yamlQuoted(title)}`,
     parsed.meta.enabled ? null : 'enabled: true',
   ].filter((line): line is string => Boolean(line));
 
   if (parsed.raw !== null) {
     const frontmatterLines = parsed.raw.trim().length > 0
-      ? parsed.lines.filter((line) => !/^\s*(kind|type)\s*:/i.test(line))
+      ? parsed.lines.filter((line) => !/^\s*(kind|type|title)\s*:/i.test(line))
       : [];
     return `---\n${[
       ...frontmatterLines,
@@ -58,6 +55,10 @@ function withCommandFrontmatter(content: string, title: string): string {
   }
 
   return `---\n${commandLines.join('\n')}\n---\n\n${content.replace(/^\n+/, '')}`;
+}
+
+function commandBaseNameFromFileName(fileName: string): string {
+  return fileName.replace(/\.(md|markdown)$/i, '');
 }
 
 const DEFAULT_INTERNAL_COMMAND_TEMPLATES: Array<{ name: string; content: string }> = [
@@ -647,13 +648,15 @@ export class CommandsManager extends EventEmitter {
     return markdownFileNameFromUserInput(name);
   }
 
-  private commandDisplayNameFromFile(filePath: string, fallbackName: string): string {
+  private syncCommandFrontmatterTitle(filePath: string, title: string): void {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
-      const title = parseMarkdownFrontmatter(content).meta.title?.trim();
-      return title || fallbackName;
-    } catch {
-      return fallbackName;
+      const nextContent = withCommandFrontmatter(content, title);
+      if (nextContent !== content) {
+        fs.writeFileSync(filePath, nextContent, 'utf-8');
+      }
+    } catch (error) {
+      log.warn(`Failed to sync command frontmatter title for ${filePath}:`, error);
     }
   }
 
@@ -749,13 +752,12 @@ export class CommandsManager extends EventEmitter {
     try {
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
-      const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-      const displayName = this.commandDisplayNameFromFile(filePath, nameWithoutExt);
+      const nameWithoutExt = commandBaseNameFromFileName(filename);
 
       return {
         name: nameWithoutExt.toLowerCase(),
         filePath,
-        displayName,
+        displayName: nameWithoutExt,
         lastModified: stats.mtimeMs,
       };
     } catch (error) {
@@ -1381,13 +1383,12 @@ End of User Commands
       const content = fs.readFileSync(safePath, 'utf-8');
       const stats = fs.statSync(safePath);
       const filename = path.basename(safePath);
-      const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-      const displayName = this.commandDisplayNameFromFile(safePath, nameWithoutExt);
+      const nameWithoutExt = commandBaseNameFromFileName(filename);
 
       return {
         name: nameWithoutExt.toLowerCase(),
         filePath: safePath,
-        displayName,
+        displayName: nameWithoutExt,
         lastModified: stats.mtimeMs,
         content,
         documentVersion: readDocumentVersion(safePath),
@@ -1437,7 +1438,7 @@ End of User Commands
       }
 
       // Create the file
-      fs.writeFileSync(filePath, withCommandFrontmatter(content, fileName.replace(/\.(md|markdown)$/i, '')), 'utf-8');
+      fs.writeFileSync(filePath, withCommandFrontmatter(content, commandBaseNameFromFileName(fileName)), 'utf-8');
 
       // Add to commands map immediately (don't wait for file watcher)
       const command = this.createCommandFromFile(filePath);
@@ -1447,7 +1448,7 @@ End of User Commands
       }
 
       log.info(`Created command: ${filePath}`);
-      return { path: filePath, name: fileName.replace('.md', '') };
+      return { path: filePath, name: commandBaseNameFromFileName(fileName) };
     } catch (error) {
       log.error('Error creating command:', error);
       return null;
@@ -1502,6 +1503,7 @@ End of User Commands
 
       // Rename the file
       fs.renameSync(safeOldPath, newFilePath);
+      this.syncCommandFrontmatterTitle(newFilePath, commandBaseNameFromFileName(newFileName));
 
       // Update commands map
       const oldCommand = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safeOldPath));

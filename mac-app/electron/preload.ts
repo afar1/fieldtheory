@@ -3486,11 +3486,19 @@ const commandsAPI = {
   },
 
   // Listen for reset events (when launcher is shown).
-  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean }) => void): (() => void) => {
-    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean }) => callback(payload);
+  onLauncherReset: (callback: (payload?: { isDarkMode?: boolean; generation?: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { isDarkMode?: boolean; generation?: number }) => callback(payload);
     ipcRenderer.on('command-launcher:reset', handler);
     return () => {
       ipcRenderer.removeListener('command-launcher:reset', handler);
+    };
+  },
+
+  onLauncherFocusInput: (callback: (payload?: { generation?: number }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload?: { generation?: number }) => callback(payload);
+    ipcRenderer.on('command-launcher:focus-input', handler);
+    return () => {
+      ipcRenderer.removeListener('command-launcher:focus-input', handler);
     };
   },
 
