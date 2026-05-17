@@ -1,3 +1,5 @@
+import type { MarkdownContentMode } from './utils/markdownContentMode';
+
 // =============================================================================
 // Hotkey Formatting
 // =============================================================================
@@ -409,7 +411,7 @@ export interface LauncherCommandOpenCandidate extends LauncherVisibleItem {
 export type LauncherFieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: MarkdownContentMode;
   selectionStart?: number;
   selectionEnd?: number;
   clipboardItemId?: number;

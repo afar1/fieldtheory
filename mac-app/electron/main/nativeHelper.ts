@@ -633,7 +633,15 @@ export class NativeHelper extends EventEmitter {
    * Type text into a specific app via pasteboard + CGEvent simulation.
    * Used by Hot Mic to inject transcribed text into terminal apps.
    */
-  async typeIntoApp(bundleId: string, text: string, pressEnter: boolean): Promise<{ success: boolean; error?: string }> {
+  async typeIntoApp(bundleId: string, text: string, pressEnter: boolean): Promise<{
+    success: boolean;
+    error?: string;
+    accessibilityTrusted?: boolean;
+    targetFrontmost?: boolean;
+    focusedTextInput?: boolean;
+    pasteboardWritten?: boolean;
+    eventTarget?: string;
+  }> {
     if (!this.child || !this.child.stdin.writable) {
       return { success: false, error: 'Helper not running' };
     }
@@ -649,7 +657,15 @@ export class NativeHelper extends EventEmitter {
       const onMessage = (msg: HelperOutgoingMessage) => {
         if (msg.type === 'typeIntoAppResult') {
           cleanup();
-          resolve({ success: msg.success, error: msg.error });
+          resolve({
+            success: msg.success,
+            error: msg.error,
+            accessibilityTrusted: msg.accessibilityTrusted,
+            targetFrontmost: msg.targetFrontmost,
+            focusedTextInput: msg.focusedTextInput,
+            pasteboardWritten: msg.pasteboardWritten,
+            eventTarget: msg.eventTarget,
+          });
         }
       };
 

@@ -6,11 +6,13 @@
 export type WikiIndex = {
   byTitle: Map<string, WikiLinkTarget>;
   byRelPath: Set<string>;
+  byFilePath?: Map<string, MarkdownWikiLinkPasteTarget>;
 };
 
 export type WikiIndexInput = {
   relPath: string;
   title: string;
+  absPath?: string;
   artifactPath?: string;
   commandPath?: string;
 };
@@ -20,6 +22,10 @@ export type WikiLinkTarget =
   | { kind: 'artifact'; path: string }
   | { kind: 'command'; path: string };
 
+export type MarkdownWikiLinkPasteTarget = {
+  title: string;
+};
+
 /** Canonical form for a wiki relPath: trimmed, no leading slashes, no .md
  *  extension. Every caller that persists or compares a relPath should route
  *  through this so index lookups, URL sentinels, and selection state agree. */
@@ -27,21 +33,77 @@ export function normalizeWikiRelPath(input: string): string {
   return input.trim().replace(/^\/+/, '').replace(/\.md$/i, '');
 }
 
+function stripPastedFilePathWrapper(input: string): string {
+  let clean = input.trim();
+  while (clean.length >= 2) {
+    const first = clean[0];
+    const last = clean[clean.length - 1];
+    if ((first === '<' && last === '>')
+      || (first === '"' && last === '"')
+      || (first === "'" && last === "'")
+      || (first === '`' && last === '`')) {
+      clean = clean.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+  return clean;
+}
+
+function fileUrlToPath(input: string): string | null {
+  if (!/^file:\/\//i.test(input)) return null;
+  try {
+    const url = new URL(input);
+    if (url.protocol !== 'file:') return null;
+    return decodeURIComponent(url.pathname);
+  } catch {
+    return input.replace(/^file:\/\//i, '');
+  }
+}
+
+function normalizeWikiFilePathKey(input: string): string {
+  const clean = stripPastedFilePathWrapper(input);
+  if (!clean) return '';
+  const filePath = fileUrlToPath(clean) ?? clean;
+  try {
+    return decodeURIComponent(filePath).replace(/\/+$/g, '');
+  } catch {
+    return filePath.replace(/\/+$/g, '');
+  }
+}
+
+function addWikiFilePathTarget(
+  byFilePath: Map<string, MarkdownWikiLinkPasteTarget>,
+  path: string | undefined,
+  title: string,
+): void {
+  if (!path || !title.trim()) return;
+  const key = normalizeWikiFilePathKey(path);
+  if (key && !byFilePath.has(key)) byFilePath.set(key, { title: title.trim() });
+}
+
 export function buildWikiIndex(pages: WikiIndexInput[]): WikiIndex {
   const byTitle = new Map<string, WikiLinkTarget>();
   const byRelPath = new Set<string>();
+  const byFilePath = new Map<string, MarkdownWikiLinkPasteTarget>();
   for (const page of pages) {
     if (!page.artifactPath && !page.commandPath) byRelPath.add(page.relPath);
+    const target: WikiLinkTarget = page.artifactPath
+      ? { kind: 'artifact', path: page.artifactPath }
+      : page.commandPath
+        ? { kind: 'command', path: page.commandPath }
+        : { kind: 'wiki', relPath: page.relPath };
     const key = page.title.trim().toLowerCase();
     if (key && !byTitle.has(key)) {
-      byTitle.set(key, page.artifactPath
-        ? { kind: 'artifact', path: page.artifactPath }
-        : page.commandPath
-          ? { kind: 'command', path: page.commandPath }
-          : { kind: 'wiki', relPath: page.relPath });
+      byTitle.set(key, target);
     }
+    addWikiFilePathTarget(byFilePath, page.absPath, page.title);
+    addWikiFilePathTarget(byFilePath, page.artifactPath, page.title);
+    addWikiFilePathTarget(byFilePath, page.commandPath, page.title);
+    addWikiFilePathTarget(byFilePath, page.relPath, page.title);
+    if (!page.relPath.endsWith('.md')) addWikiFilePathTarget(byFilePath, `${page.relPath}.md`, page.title);
   }
-  return { byTitle, byRelPath };
+  return { byTitle, byRelPath, byFilePath };
 }
 
 export function resolveWikiLink(
@@ -58,6 +120,41 @@ export function resolveWikiLink(
   if (hit?.kind === 'artifact') return { relPath: null, artifactPath: hit.path, commandPath: null };
   if (hit?.kind === 'command') return { relPath: null, artifactPath: null, commandPath: hit.path };
   return { relPath: null, artifactPath: null, commandPath: null };
+}
+
+function getPastedFilePathCandidates(text: string): string[] {
+  const trimmed = text.trim();
+  if (!trimmed) return [];
+  const lines = trimmed
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith('#'));
+  return lines.length > 1 ? lines : [trimmed];
+}
+
+function formatPastedWikiLinkTitle(title: string): string | null {
+  const clean = title.trim();
+  if (!clean || /[\r\n\[\]]/.test(clean)) return null;
+  return `[[${clean}]]`;
+}
+
+export function getMarkdownWikiLinkPasteText(
+  pastedText: string,
+  index: WikiIndex,
+): string | null {
+  const byFilePath = index.byFilePath;
+  if (!byFilePath) return null;
+
+  const links: string[] = [];
+  for (const candidate of getPastedFilePathCandidates(pastedText)) {
+    const target = byFilePath.get(normalizeWikiFilePathKey(candidate));
+    if (!target) return null;
+    const link = formatPastedWikiLinkTitle(target.title);
+    if (!link) return null;
+    links.push(link);
+  }
+
+  return links.length > 0 ? links.join('\n') : null;
 }
 
 const UNRESOLVED_PREFIX = 'wiki://!/';

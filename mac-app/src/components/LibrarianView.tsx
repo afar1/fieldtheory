@@ -27,7 +27,7 @@ import WikiSidebar, {
 import BookmarksPane from './BookmarksPane';
 import EmberPane from './EmberPane';
 import { prefetchBookmarks } from '../services/bookmarksCache';
-import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
+import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureFlags';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
@@ -96,11 +96,18 @@ import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import '../utils/scrollDiagnostics.bootstrap';
 import {
+  coerceMarkdownContentMode,
+  getNextMarkdownContentMode,
+  isMarkdownContentMode,
+  type MarkdownContentMode,
+} from '../utils/markdownContentMode';
+import {
   buildWikiIndex,
   getActiveMarkdownWikiLinkCompletion,
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionReplacement,
@@ -119,7 +126,7 @@ import {
 type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: MarkdownContentMode;
   selectionStart?: number;
   selectionEnd?: number;
 };
@@ -147,7 +154,7 @@ export function getLibraryDocumentViewKind(
   return 'markdown';
 }
 
-export function getLibraryDocumentDefaultContentMode(kind: LibraryDocumentViewKind): 'rendered' | 'markdown' {
+export function getLibraryDocumentDefaultContentMode(kind: LibraryDocumentViewKind): MarkdownContentMode {
   return kind === 'css' ? 'markdown' : 'rendered';
 }
 
@@ -330,7 +337,7 @@ export function rebaseMarkdownTodoStateChange(
 }
 
 export function shouldApplyLiveMarkdownFileUpdate(input: {
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   editContent: string;
   lastSavedContent: string | null;
   hasPendingRenderedSave?: boolean;
@@ -342,7 +349,7 @@ export function shouldApplyLiveMarkdownFileUpdate(input: {
 }
 
 export function getRenderedDisplayReadingContent(input: {
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   renderedEditingActive: boolean;
   activeReadingPath: string | null;
   renderedDisplayContent: { path: string; content: string } | null;
@@ -1626,6 +1633,15 @@ async function getPastedClipboardImagePath(data: DataTransfer): Promise<string |
   }) ?? null;
 }
 
+function getClipboardMarkdownFileReferenceText(data: DataTransfer, pastedText: string): string {
+  const filePaths = Array.from(data.files)
+    .map((file) => (file as File & { path?: string }).path)
+    .filter((path): path is string => !!path);
+  if (filePaths.length > 0) return filePaths.join('\n');
+  const uriList = data.getData('text/uri-list');
+  return uriList.trim() ? uriList : pastedText;
+}
+
 export function shouldInsertClipboardImagePathForPaste(input: { pastedText: string; hasImage: boolean }): boolean {
   return input.hasImage;
 }
@@ -1643,7 +1659,7 @@ export type LibrarianStoredSelection =
 export type LibrarianEditorSession = {
   itemType: 'wiki' | 'artifact' | 'external';
   itemPath: string;
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   selectionStart: number;
   selectionEnd: number;
   scrollTop: number;
@@ -1769,7 +1785,7 @@ export function restoreLibrarianEditorSession(storage: Pick<Storage, 'getItem'>)
     if (
       (parsed?.itemType === 'wiki' || parsed?.itemType === 'artifact' || parsed?.itemType === 'external') &&
       typeof parsed.itemPath === 'string' &&
-      (parsed.contentMode === 'rendered' || parsed.contentMode === 'markdown')
+      isMarkdownContentMode(parsed.contentMode)
     ) {
       return {
         itemType: parsed.itemType,
@@ -1834,7 +1850,7 @@ export function formatBreadcrumb(
   return parts.length > 1 ? parts[parts.length - 2] : 'External';
 }
 
-export function getLibrarianTitleFontSize(title: string, contentMode: 'rendered' | 'markdown'): number {
+export function getLibrarianTitleFontSize(title: string, contentMode: MarkdownContentMode): number {
   const base = contentMode === 'markdown' ? 26 : 30;
   const length = title.trim().length;
   if (length <= 48) return base;
@@ -2016,7 +2032,7 @@ export function getFocusChromeHintOpacity(input: {
 }
 
 export function getLibrarianContentTopPadding(input: {
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   focusChromeActive: boolean;
   isFullScreen: boolean;
 }): number {
@@ -2032,7 +2048,7 @@ export function getLibrarianContentTopPadding(input: {
 }
 
 export function getLibrarianContentBottomScrollSpace(input: {
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   focusChromeActive: boolean;
 }): number {
   if (input.contentMode === 'markdown') return 0;
@@ -2340,8 +2356,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [isMutedForToday, setIsMutedForToday] = useState(false);
   const [isMuting, setIsMuting] = useState(false);
 
-  // Content mode: 'rendered' shows formatted prose, 'markdown' shows editable raw source
-  const [contentMode, setContentMode] = useState<'rendered' | 'markdown'>('rendered');
+  // Content mode: rendered prose, markdown source, or gated Typedown spike.
+  const [contentMode, setContentMode] = useState<MarkdownContentMode>('rendered');
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
@@ -4523,6 +4539,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setContentMode('rendered');
   }, [captureContentScrollRatio, flushCurrentEdit]);
 
+  const switchToTypedownMode = useCallback(async () => {
+    if (!FEATURE_TYPEDOWN_ENABLED) return;
+    captureContentScrollRatio();
+    await flushCurrentEdit();
+    setContentMode('typedown');
+  }, [captureContentScrollRatio, flushCurrentEdit]);
+
   const captureEditorSession = useCallback((): LibrarianEditorSession | null => {
     const target = getEditorSessionTarget();
     if (!target) return null;
@@ -4760,6 +4783,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    if (clipboardData) {
+      const wikiLinkPasteText = getMarkdownWikiLinkPasteText(
+        getClipboardMarkdownFileReferenceText(clipboardData, pastedText),
+        wikiIndex,
+      );
+      if (wikiLinkPasteText) {
+        insertMarkdownText(wikiLinkPasteText);
+        return true;
+      }
+    }
+
     const editor = markdownCodeEditorRef.current;
     if (!editor) return false;
     const selection = editor.getSelectionRange();
@@ -4776,7 +4810,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     applyMarkdownUrlPasteEdit(pasteEdit);
     return true;
-  }, [applyMarkdownUrlPasteEdit, insertMarkdownText, insertPastedClipboardImagePath]);
+  }, [applyMarkdownUrlPasteEdit, insertMarkdownText, insertPastedClipboardImagePath, wikiIndex]);
 
   const applyMarkdownUrlPasteKind = useCallback((kind: MarkdownUrlPasteKind) => {
     if (!markdownUrlPasteChoice) return;
@@ -5247,9 +5281,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       void (async () => {
         setSearchQuery('');
         openWikiPage(initialOpenTarget.path);
-        if (initialOpenTarget.contentMode === 'rendered') {
-          setContentMode('rendered');
-        } else if (initialOpenTarget.contentMode === 'markdown') {
+        const requestedContentMode = coerceMarkdownContentMode(initialOpenTarget.contentMode, {
+          typedownEnabled: FEATURE_TYPEDOWN_ENABLED,
+          fallback: 'rendered',
+        });
+        if (requestedContentMode === 'markdown') {
           setContentMode('markdown');
           setFocusImmersive(true);
           focusMarkdownEditorOnOpenRef.current = true;
@@ -5269,6 +5305,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             lastSavedContentRef.current = page.content;
             lastSavedVersionRef.current = page.documentVersion;
           }
+        } else if (requestedContentMode === 'typedown') {
+          setContentMode('typedown');
+        } else {
+          setContentMode('rendered');
         }
         onInitialOpenTargetConsumed?.();
       })();
@@ -5996,13 +6036,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return;
       }
 
-      // Cmd+. - toggle between rendered and markdown.
+      // Cmd+. - cycles the available markdown content modes.
       if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
-        if (contentMode === 'markdown') {
+        const nextMode = getNextMarkdownContentMode(contentMode, {
+          typedownEnabled: activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED,
+        });
+        if (nextMode === 'rendered') {
           void exitEditMode();
-        } else if (activeReading) {
+        } else if (nextMode === 'markdown' && activeReading) {
           enterEditMode();
+        } else if (nextMode === 'typedown') {
+          void switchToTypedownMode();
         }
         return;
       }
@@ -6252,7 +6297,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, onSwitchToClipboard, enterEditMode, exitEditMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -6282,7 +6327,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const folders = await window.wikiAPI?.getTree();
       if (!folders) return;
       setWikiIndexPages(
-        folders.flatMap((f) => f.files.map((p) => ({ relPath: p.relPath, title: p.title }))),
+        folders.flatMap((f) => f.files.map((p) => ({ relPath: p.relPath, title: p.title, absPath: p.absPath }))),
       );
     };
     void load();
@@ -7203,6 +7248,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onSwitchToRendered={() => {
                     void exitEditMode();
                   }}
+                  onSwitchToTypedown={() => {
+                    void switchToTypedownMode();
+                  }}
+                  typedownEnabled={activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED}
                 />
               )}
 

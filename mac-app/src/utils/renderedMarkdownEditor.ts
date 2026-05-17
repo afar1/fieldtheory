@@ -1,4 +1,5 @@
 import { parseMarkdownFrontmatter } from '../../electron/shared/markdownFrontmatter';
+import type { MarkdownContentMode } from './markdownContentMode';
 
 export type RenderedMarkdownTextEdit = {
   nextValue: string;
@@ -42,7 +43,7 @@ export type RenderedEditorDebugEntry = {
   timestamp: number;
   stage: string;
   path: string | null;
-  contentMode: 'rendered' | 'markdown';
+  contentMode: MarkdownContentMode;
   editingActive: boolean;
   scrollTop: number | null;
   details: Record<string, unknown>;

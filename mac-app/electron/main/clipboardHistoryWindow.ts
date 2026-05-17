@@ -1277,13 +1277,18 @@ export class ClipboardHistoryWindow {
     const showInDock = this.shouldUseAppWindow();
 
     // Hide the whole app when callers want macOS to complete a native focus
-    // handoff. Keep the Dock icon visible in app-window mode.
+    // handoff. In app-window mode, hide only the window so Field Theory stays
+    // visible in the Dock and Cmd+Tab.
     if (hideApp) {
-      if (!showInDock && process.platform === 'darwin') {
-        app.dock.hide();
+      if (showInDock) {
+        this.logLifecycle('hide:window-hidden-app-visible');
+      } else {
+        if (process.platform === 'darwin') {
+          app.dock.hide();
+        }
+        app.hide();
+        this.logLifecycle('hide:app-hidden');
       }
-      app.hide();
-      this.logLifecycle('hide:app-hidden');
     } else {
       // Even when not hiding the whole app, ensure dock stays hidden.
       // Immersive mode (alwaysOnTop:false) or dock.bounce() can cause the

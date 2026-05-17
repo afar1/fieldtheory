@@ -1,42 +1,58 @@
 import { useTheme } from '../contexts/ThemeContext';
+import { getNextMarkdownContentMode, type MarkdownContentMode } from '../utils/markdownContentMode';
 
-export type ContentModeToggleButtonMode = 'rendered' | 'markdown';
+export type ContentModeToggleButtonMode = MarkdownContentMode;
 
 interface ContentModeToggleButtonProps {
   mode: ContentModeToggleButtonMode;
   onSwitchToSource: () => void;
   onSwitchToRendered: () => void;
+  onSwitchToTypedown?: () => void;
   disabled?: boolean;
   sourceLabel?: string;
   renderedLabel?: string;
+  typedownEnabled?: boolean;
+  typedownLabel?: string;
 }
 
 export default function ContentModeToggleButton({
   mode,
   onSwitchToSource,
   onSwitchToRendered,
+  onSwitchToTypedown,
   disabled = false,
   sourceLabel = 'Switch to Markdown source',
   renderedLabel = 'Switch to rendered view',
+  typedownEnabled = false,
+  typedownLabel = 'Switch to Typedown',
 }: ContentModeToggleButtonProps) {
   const { theme } = useTheme();
-  const label = disabled ? 'Source only' : mode === 'markdown' ? renderedLabel : sourceLabel;
+  const nextMode = getNextMarkdownContentMode(mode, { typedownEnabled });
+  const label = disabled
+    ? 'Source only'
+    : nextMode === 'markdown'
+      ? sourceLabel
+      : nextMode === 'typedown'
+        ? typedownLabel
+        : renderedLabel;
 
   return (
     <button
       type="button"
       onClick={() => {
         if (disabled) return;
-        if (mode === 'markdown') {
+        if (nextMode === 'rendered') {
           onSwitchToRendered();
-        } else {
+        } else if (nextMode === 'markdown') {
           onSwitchToSource();
+        } else {
+          onSwitchToTypedown?.();
         }
       }}
       disabled={disabled}
       title={label}
       aria-label={label}
-      aria-pressed={mode === 'markdown'}
+      aria-pressed={mode !== 'rendered'}
       style={{
         padding: '4px 8px',
         fontSize: '11px',
@@ -61,6 +77,12 @@ export default function ContentModeToggleButton({
       {mode === 'markdown' && !disabled ? (
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
           <path d="M2 4h12M2 8h12M2 12h8" />
+        </svg>
+      ) : mode === 'typedown' && !disabled ? (
+        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 4h10" />
+          <path d="M8 4v8" />
+          <path d="M5.5 12h5" />
         </svg>
       ) : (
         <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">

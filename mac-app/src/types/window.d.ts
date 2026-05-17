@@ -1387,7 +1387,7 @@ interface HandoffInfo {
 interface FieldTheoryMarkdownTarget {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
-  contentMode?: 'rendered' | 'markdown';
+  contentMode?: 'rendered' | 'markdown' | 'typedown';
   selectionStart?: number;
   selectionEnd?: number;
   clipboardItemId?: number;

@@ -163,4 +163,38 @@ describe('NativeHelper recording command sequencing', () => {
 
     expect(settled).toHaveBeenCalledWith(null);
   });
+
+  it('passes native paste diagnostics back to command launcher callers', async () => {
+    const { helper, sentCommands } = createHelperHarness();
+
+    const typePromise = helper.typeIntoApp('com.mitchellh.ghostty', '[pr.md]\n/commands/pr.md ', false);
+    await flushMicrotasks();
+
+    expect(sentCommands()).toEqual([{
+      type: 'typeIntoApp',
+      bundleId: 'com.mitchellh.ghostty',
+      text: '[pr.md]\n/commands/pr.md ',
+      pressEnter: false,
+    }]);
+
+    helper.handleMessage({
+      type: 'typeIntoAppResult',
+      success: true,
+      accessibilityTrusted: true,
+      targetFrontmost: true,
+      focusedTextInput: true,
+      pasteboardWritten: true,
+      eventTarget: 'pid',
+    });
+
+    await expect(typePromise).resolves.toEqual({
+      success: true,
+      error: undefined,
+      accessibilityTrusted: true,
+      targetFrontmost: true,
+      focusedTextInput: true,
+      pasteboardWritten: true,
+      eventTarget: 'pid',
+    });
+  });
 });

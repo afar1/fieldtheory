@@ -596,6 +596,11 @@ async function typeTextFromCommandLauncher(
       targetName: targetApp.name,
       success: result.success,
       error: result.error ?? null,
+      accessibilityTrusted: result.accessibilityTrusted ?? null,
+      targetFrontmost: result.targetFrontmost ?? null,
+      focusedTextInput: result.focusedTextInput ?? null,
+      pasteboardWritten: result.pasteboardWritten ?? null,
+      eventTarget: result.eventTarget ?? null,
       frontmostBundleId: frontmost?.bundleId ?? null,
       frontmostName: frontmost?.name ?? null,
       clipboard: readCommandPasteClipboardTrace(),
@@ -1474,7 +1479,7 @@ function hideFieldTheoryForAlfred(): void {
  */
 async function isTranscriptionEngineReady(): Promise<boolean> {
   if (!transcriberManager) return false;
-  const engine = preferencesManager?.get()?.transcriptionEngine;
+  const engine = transcriberManager.getConfiguredTranscriptionEngine();
   if (isParakeetEngine(engine)) {
     return transcriberManager.isParakeetInstalled();
   }
@@ -2377,6 +2382,7 @@ function setupAppMetadataIPCHandlersOnce(): void {
 function showEarlyOnboardingIfNeeded(): boolean {
   const prefs = preferencesManager?.get();
   if (prefs?.onboardingComplete) return false;
+  if (userDataManager?.isLoggedIn()) return false;
   setupOnboardingIPCHandlersOnce();
   setupTranscribeIPCHandlersOnce();
   onboardingWindow = onboardingWindow ?? createOnboardingWindow();
@@ -8211,11 +8217,26 @@ function setupClipboardIPCHandlers(): void {
     };
   });
 
-  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
+  ipcMain.handle('commands:openFieldTheoryMarkdown', async (_event, target: { kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard'; path: string; contentMode?: 'rendered' | 'markdown' | 'typedown'; selectionStart?: number; selectionEnd?: number; clipboardItemId?: number; clipboardStackId?: string; clipboardSearch?: string }) => {
+    appendCommandLauncherTrace('open-field-theory-markdown-start', {
+      kind: target?.kind ?? null,
+      path: target?.path ?? null,
+      contentMode: target?.contentMode ?? null,
+    });
     if (!target?.path || !['wiki', 'artifact', 'command', 'external', 'bookmarks', 'library', 'commands', 'clipboard'].includes(target.kind)) {
+      appendCommandLauncherTrace('open-field-theory-markdown-error', {
+        reason: 'invalid-target',
+        kind: target?.kind ?? null,
+        path: target?.path ?? null,
+      });
       return { success: false, error: 'Invalid markdown target' };
     }
     if (!clipboardHistoryWindow) {
+      appendCommandLauncherTrace('open-field-theory-markdown-error', {
+        reason: 'missing-field-theory-window',
+        kind: target.kind,
+        path: target.path,
+      });
       return { success: false, error: 'Field Theory window not available' };
     }
 
@@ -8239,6 +8260,11 @@ function setupClipboardIPCHandlers(): void {
 
     commandLauncherWindow?.hide(true);
     clipboardHistoryWindow.getWindow()?.webContents.send('commands:openMarkdownFromLauncher', target);
+    appendCommandLauncherTrace('open-field-theory-markdown-success', {
+      kind: target.kind,
+      path: target.path,
+      contentMode: target.contentMode ?? null,
+    });
     return { success: true };
   });
 
@@ -8823,7 +8849,7 @@ function setupOnboardingIPCHandlers(): void {
   // Mark onboarding as complete.
   ipcMain.handle(OnboardingIPCChannels.COMPLETE_ONBOARDING, async () => {
     if (!preferencesManager) return false;
-    await preferencesManager.save({ onboardingComplete: true });
+    await preferencesManager.save({ onboardingComplete: true, onboardingStep: undefined });
 
     // Register hotkeys now that onboarding is complete
     registerHotkeysAfterOnboarding();
@@ -8844,7 +8870,7 @@ function setupOnboardingIPCHandlers(): void {
   // Skip onboarding (set up later).
   ipcMain.handle(OnboardingIPCChannels.SKIP_ONBOARDING, async () => {
     if (!preferencesManager) return false;
-    await preferencesManager.save({ onboardingComplete: true });
+    await preferencesManager.save({ onboardingComplete: true, onboardingStep: undefined });
 
     // Register hotkeys now that onboarding is complete
     registerHotkeysAfterOnboarding();
@@ -11620,8 +11646,12 @@ if (!gotTheLock) {
 
     if (isFullyReady) {
       // All requirements met - mark onboarding complete and allow app access
-      if (!prefs?.onboardingComplete) {
-        await preferencesManager?.save({ onboardingComplete: true });
+      if (!prefs?.onboardingComplete || prefs?.onboardingStep !== undefined) {
+        await preferencesManager?.save({ onboardingComplete: true, onboardingStep: undefined });
+      }
+      if (onboardingWindow) {
+        onboardingWindow.close();
+        onboardingWindow = null;
       }
       registerHotkeysAfterOnboarding();
       showClipboardHistoryOnStartup();

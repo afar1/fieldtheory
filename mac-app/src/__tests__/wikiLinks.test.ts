@@ -7,6 +7,7 @@ import {
   getMarkdownEditorLinkActionAtOffset,
   getMarkdownEditorLinkHits,
   getMarkdownLinkedDocuments,
+  getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionCommitEdit,
   getMarkdownWikiLinkCompletionReplacement,
@@ -87,6 +88,54 @@ describe('resolveWikiLink', () => {
   it('returns null for unknown targets', () => {
     expect(resolveWikiLink('nothing here', index).relPath).toBeNull();
     expect(resolveWikiLink('', index).relPath).toBeNull();
+  });
+});
+
+describe('getMarkdownWikiLinkPasteText', () => {
+  const pasteIndex = buildWikiIndex([
+    {
+      relPath: 'scratchpad/running-list',
+      absPath: '/Users/afar/.fieldtheory/library/scratchpad/Running list.md',
+      title: 'Running list',
+    },
+    {
+      relPath: '/Users/afar/.fieldtheory/librarian/artifacts/review.md',
+      title: 'Review Artifact',
+      artifactPath: '/Users/afar/.fieldtheory/librarian/artifacts/review.md',
+    },
+    {
+      relPath: '/Users/afar/.fieldtheory/library/Commands/refactor.md',
+      title: 'refactor',
+      commandPath: '/Users/afar/.fieldtheory/library/Commands/refactor.md',
+    },
+  ]);
+
+  it('turns a known pasted Library file path into a wikilink', () => {
+    expect(getMarkdownWikiLinkPasteText(
+      '/Users/afar/.fieldtheory/library/scratchpad/Running list.md',
+      pasteIndex,
+    )).toBe('[[Running list]]');
+  });
+
+  it('accepts file URLs from clipboard uri lists', () => {
+    expect(getMarkdownWikiLinkPasteText(
+      'file:///Users/afar/.fieldtheory/library/scratchpad/Running%20list.md',
+      pasteIndex,
+    )).toBe('[[Running list]]');
+  });
+
+  it('turns known artifact and command paths into wikilinks', () => {
+    expect(getMarkdownWikiLinkPasteText(
+      [
+        '/Users/afar/.fieldtheory/librarian/artifacts/review.md',
+        '/Users/afar/.fieldtheory/library/Commands/refactor.md',
+      ].join('\n'),
+      pasteIndex,
+    )).toBe('[[Review Artifact]]\n[[refactor]]');
+  });
+
+  it('leaves unknown pasted paths alone', () => {
+    expect(getMarkdownWikiLinkPasteText('/Users/afar/notes/unknown.md', pasteIndex)).toBeNull();
   });
 });
 
