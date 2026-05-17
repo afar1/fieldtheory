@@ -1801,17 +1801,15 @@ describe('focus chrome proximity', () => {
       isFocusChromeSurface: true,
       focusChromeActive: true,
       groupOpacity: 0.42,
-      childOpacity: 0.42,
     })).toBe(0.42);
   });
 
-  it('uses pinned child chrome without making proximity fades snap to full opacity', () => {
+  it('keeps pinned child chrome from forcing the parent top chrome fully visible', () => {
     expect(getFocusChromeSurfaceOpacity({
       isFocusChromeSurface: true,
       focusChromeActive: true,
       groupOpacity: 0.25,
-      childOpacity: 1,
-    })).toBe(1);
+    })).toBe(0.25);
   });
 
   it('fades the focus logo out as the chrome surface fades in', () => {

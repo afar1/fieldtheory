@@ -215,6 +215,13 @@ const FIELD_THEORY_TOP_CHROME_DRAG_STYLE = {
 const FIELD_THEORY_TOP_CHROME_NO_DRAG_STYLE = {
   WebkitAppRegion: 'no-drag',
 } as React.CSSProperties;
+type ClientBounds = Pick<DOMRect, 'left' | 'top' | 'right' | 'bottom'>;
+const isClientPointOutsideBounds = (clientX: number, clientY: number, bounds: ClientBounds) => (
+  clientX < bounds.left
+  || clientX > bounds.right
+  || clientY < bounds.top
+  || clientY > bounds.bottom
+);
 
 /**
  * Check if any items in a stack have improved content.
@@ -561,7 +568,6 @@ export default function ClipboardHistory() {
   const [focusChromeChildActive, setFocusChromeChildActive] = useState(false);
   const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = useState(false);
   const [focusChromeGroupOpacity, setFocusChromeGroupOpacity] = useState(0);
-  const [focusChromeChildOpacity, setFocusChromeChildOpacity] = useState(0);
   const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
@@ -578,7 +584,6 @@ export default function ClipboardHistory() {
     isFocusChromeSurface,
     focusChromeActive: focusChromeSurfaceEnabled,
     groupOpacity: focusChromeGroupOpacity,
-    childOpacity: focusChromeChildOpacity,
   });
   const footerChromeOpacity = focusChromeOverlayActive ? focusChromeGroupOpacity : 1;
   const appChromeInteractive = appChromeOpacity > 0.05;
@@ -625,7 +630,6 @@ export default function ClipboardHistory() {
   const disableGlobalFocusChrome = useCallback(() => {
     setFocusChromeGlobalEnabled(false);
     setFocusChromeGroupOpacity(0);
-    setFocusChromeChildOpacity(0);
 
     const previous = focusChromePreviousSidebarCollapsedRef.current;
     if (previous === null) return;
@@ -646,14 +650,12 @@ export default function ClipboardHistory() {
         setFocusChromeGlobalEnabled(false);
         focusChromePreviousSidebarCollapsedRef.current = null;
         setFocusChromeGroupOpacity(0);
-        setFocusChromeChildOpacity(0);
       }
       return !collapsed;
     });
   }, [focusChromeSurfaceEnabled, navSidebarToggleEnabled]);
-  const handleFocusChromeActiveChange = useCallback((active: boolean, _visualVisible = false, visualOpacity = 0) => {
+  const handleFocusChromeActiveChange = useCallback((active: boolean) => {
     setFocusChromeChildActive(active);
-    setFocusChromeChildOpacity(active ? visualOpacity : 0);
     if (!active && !focusChromeGlobalEnabledRef.current) {
       setFocusChromeGroupOpacity(0);
 
@@ -691,7 +693,15 @@ export default function ClipboardHistory() {
       });
       setFocusChromeGroupOpacity(opacity);
     };
-    const hideProximityChrome = () => setFocusChromeGroupOpacity(0);
+    const hideProximityChrome = (event: MouseEvent) => {
+      if (!isClientPointOutsideBounds(event.clientX, event.clientY, {
+        left: 0,
+        top: 0,
+        right: window.innerWidth,
+        bottom: window.innerHeight,
+      })) return;
+      setFocusChromeGroupOpacity(0);
+    };
 
     window.addEventListener('mousemove', updateProximity);
     window.addEventListener('mouseleave', hideProximityChrome);
@@ -3804,7 +3814,9 @@ export default function ClipboardHistory() {
     loadItems(true);
   };
 
-  const handleWindowBoundaryMouseLeave = useCallback(() => {
+  const handleWindowBoundaryMouseLeave = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!isClientPointOutsideBounds(event.clientX, event.clientY, bounds)) return;
     setFocusChromeGroupOpacity(0);
     setThemeToggleProximityVisible(false);
   }, []);
