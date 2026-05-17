@@ -2093,7 +2093,7 @@ function CommandLauncher() {
         return;
       }
       prepareLauncherForNextOpen();
-      commandsAPI.launcherClose();
+      commandsAPI.launcherClose({ skipActivation: true, generation: launcherGenerationRef.current });
     } else if (shouldExitLauncherClipboardSearch({ active: clipboardSearchActive, query, key: e.key })) {
       e.preventDefault();
       setClipboardSearchActive(false);
