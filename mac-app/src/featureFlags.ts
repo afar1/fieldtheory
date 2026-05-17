@@ -26,3 +26,9 @@ export const FEATURE_SHARING_ENABLED = false;
  * Disabled by default. Uses ElevenLabs API.
  */
 export const FEATURE_NARRATION_ENABLED = false;
+
+/**
+ * Typedown editor spike - hidden native/AppKit Markdown editor viability path.
+ * Disabled until the native bridge is proven against the existing editor contract.
+ */
+export const FEATURE_TYPEDOWN_ENABLED = false;

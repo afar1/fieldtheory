@@ -319,6 +319,11 @@ export interface TypeIntoAppResultMessage extends HelperMessage {
   type: 'typeIntoAppResult';
   success: boolean;
   error?: string;
+  accessibilityTrusted?: boolean;
+  targetFrontmost?: boolean;
+  focusedTextInput?: boolean;
+  pasteboardWritten?: boolean;
+  eventTarget?: string;
 }
 
 /**

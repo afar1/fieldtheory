@@ -1256,9 +1256,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             cursor: 'pointer',
             textDecoration: 'underline',
             textUnderlineOffset: '2px',
+            borderRadius: '3px',
+            transition: 'color 120ms ease, background-color 120ms ease, text-decoration-color 120ms ease',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}:hover`]: {
             color: linkColor ?? (theme.isDark ? '#a9c7ff' : '#123a8c'),
+            backgroundColor: theme.isDark ? 'rgba(122,167,255,0.16)' : 'rgba(15,118,110,0.12)',
+            textDecorationColor: caretColor ?? linkColor ?? theme.accent,
             textDecorationThickness: '2px',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_WIKI_LINK_CLASS}`]: {

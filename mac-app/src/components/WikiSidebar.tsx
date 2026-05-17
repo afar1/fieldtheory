@@ -681,6 +681,27 @@ function sidebarNodePinnedRank(node: SidebarNode, pinnedItemIds: ReadonlySet<str
   return pinnedItemIds.has(node.id) ? 1 : 0;
 }
 
+function sidebarNodeArchivedRank(node: SidebarNode, pinnedItemIds: ReadonlySet<string>): number {
+  if (pinnedItemIds.has(node.id)) return 0;
+  return node.kind === 'file' && node.item.archived ? 1 : 0;
+}
+
+function isArchivedSidebarNode(node: SidebarNode, pinnedItemIds: ReadonlySet<string>): boolean {
+  return sidebarNodeArchivedRank(node, pinnedItemIds) > 0;
+}
+
+export function splitArchivedSidebarNodes(
+  nodes: SidebarNode[],
+  pinnedItemIds: ReadonlySet<string> = new Set(),
+): { normalNodes: SidebarNode[]; archivedNodes: SidebarNode[] } {
+  const archivedNodes = nodes.filter((node) => isArchivedSidebarNode(node, pinnedItemIds));
+  if (archivedNodes.length === 0) return { normalNodes: nodes, archivedNodes };
+  return {
+    normalNodes: nodes.filter((node) => !isArchivedSidebarNode(node, pinnedItemIds)),
+    archivedNodes,
+  };
+}
+
 export function sortSidebarNodes(
   nodes: SidebarNode[],
   sortMode: SortMode = 'alpha',
@@ -689,6 +710,8 @@ export function sortSidebarNodes(
   return [...nodes].sort((a, b) => {
     const pinnedDelta = sidebarNodePinnedRank(b, pinnedItemIds) - sidebarNodePinnedRank(a, pinnedItemIds);
     if (pinnedDelta !== 0) return pinnedDelta;
+    const archivedDelta = sidebarNodeArchivedRank(a, pinnedItemIds) - sidebarNodeArchivedRank(b, pinnedItemIds);
+    if (archivedDelta !== 0) return archivedDelta;
     if (sortMode === 'time') {
       const byTimestamp = sidebarNodeSortTimestamp(b) - sidebarNodeSortTimestamp(a);
       if (byTimestamp !== 0) return byTimestamp;
@@ -697,15 +720,6 @@ export function sortSidebarNodes(
     const right = b.kind === 'dir' ? b.label : b.item.title;
     return left.localeCompare(right, undefined, { sensitivity: 'base' });
   });
-}
-
-export function splitArchivedSidebarNodes(nodes: SidebarNode[]): { normalNodes: SidebarNode[]; archivedNodes: SidebarNode[] } {
-  const archivedNodes = nodes.filter((node) => node.kind === 'file' && node.item.archived);
-  if (archivedNodes.length === 0) return { normalNodes: nodes, archivedNodes };
-  return {
-    normalNodes: nodes.filter((node) => node.kind !== 'file' || !node.item.archived),
-    archivedNodes,
-  };
 }
 
 export function orderTopLevelSidebarNodes(
@@ -2885,7 +2899,7 @@ function TreeNode({
   }
 
   const isExpanded = isSearching || expandedFolders.has(node.id);
-  const { normalNodes, archivedNodes } = splitArchivedSidebarNodes(node.children);
+  const { normalNodes, archivedNodes } = splitArchivedSidebarNodes(node.children, pinnedItemIds);
   const itemCount = countSidebarItems(node.children);
   const nodeCreateLocation = getSidebarNodeCreateLocation(node);
   const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
@@ -2954,7 +2968,7 @@ function TreeNode({
           onClick={() => toggleFolder(node.id)}
           onContextMenu={(event) => onContextMenu(event, node)}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : theme.bg)}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = folderBackgroundColor)}
           style={{
             ...getSidebarFolderHeaderPositionStyle(depth),
             display: 'flex',
@@ -2970,75 +2984,75 @@ function TreeNode({
             backgroundColor: folderBackgroundColor,
           }}
         >
-        <SidebarFolderIcon color={sidebarIconColor} />
-        <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>{node.label}</span>
-        <span style={{
-          minWidth: '14px',
-          height: '14px',
-          padding: '0 4px',
-          borderRadius: '999px',
-          boxSizing: 'border-box',
-          display: 'inline-flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          flexShrink: 0,
-          color: theme.textSecondary,
-          backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-          fontWeight: 400,
-          fontSize: '9px',
-          lineHeight: '14px',
-          opacity: 0.72,
-        }}>
-          {itemCount}
-        </span>
-        {node.hasUnread && (
-          <span
-            aria-label="Unread shared document"
-            style={{
-              width: '6px',
-              height: '6px',
-              borderRadius: '50%',
-              backgroundColor: '#3b82f6',
-              flexShrink: 0,
-              marginLeft: '2px',
-            }}
-          />
-        )}
-        {node.canCreateFile && (
-          <button
-            className="bm-new-file-btn"
-            onClick={(e) => { e.stopPropagation(); beginCreateFile(nodeCreateLocation); }}
-            title={node.name === SCRATCHPAD_FOLDER_NAME ? 'New scratchpad entry' : 'New file'}
-            aria-label={`New file in ${node.label}`}
-            style={{
-              marginLeft: 'auto',
-              width: '18px',
-              height: '18px',
-              display: 'flex',
+            <SidebarFolderIcon color={sidebarIconColor} />
+            <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>{node.label}</span>
+            <span style={{
+              minWidth: '14px',
+              height: '14px',
+              padding: '0 4px',
+              borderRadius: '999px',
+              boxSizing: 'border-box',
+              display: 'inline-flex',
               alignItems: 'center',
               justifyContent: 'center',
-              padding: 0,
-              background: 'transparent',
-              border: 'none',
-              borderRadius: '3px',
+              flexShrink: 0,
               color: theme.textSecondary,
-              cursor: 'pointer',
-              opacity: 0,
-              transition: 'opacity 0.12s ease, background 0.12s ease',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'transparent';
-            }}
-          >
-            <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
-              <path d="M8 3v10M3 8h10" />
-            </svg>
-          </button>
-        )}
-      </div>
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
+              fontWeight: 400,
+              fontSize: '9px',
+              lineHeight: '14px',
+              opacity: 0.72,
+            }}>
+              {itemCount}
+            </span>
+            {node.hasUnread && (
+              <span
+                aria-label="Unread shared document"
+                style={{
+                  width: '6px',
+                  height: '6px',
+                  borderRadius: '50%',
+                  backgroundColor: '#3b82f6',
+                  flexShrink: 0,
+                  marginLeft: '2px',
+                }}
+              />
+            )}
+            {node.canCreateFile && (
+              <button
+                className="bm-new-file-btn"
+                onClick={(e) => { e.stopPropagation(); beginCreateFile(nodeCreateLocation); }}
+                title={node.name === SCRATCHPAD_FOLDER_NAME ? 'New scratchpad entry' : 'New file'}
+                aria-label={`New file in ${node.label}`}
+                style={{
+                  marginLeft: 'auto',
+                  width: '18px',
+                  height: '18px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                  background: 'transparent',
+                  border: 'none',
+                  borderRadius: '3px',
+                  color: theme.textSecondary,
+                  cursor: 'pointer',
+                  opacity: 0,
+                  transition: 'opacity 0.12s ease, background 0.12s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round">
+                  <path d="M8 3v10M3 8h10" />
+                </svg>
+              </button>
+            )}
+          </div>
 
       {node.canCreateFile && creating?.kind === 'file' && createLocationMatches(creating.location, nodeCreateLocation) && (
         <CreateInput

@@ -491,7 +491,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(hide).not.toHaveBeenCalled();
   });
 
-  it('keeps the Dock visible when hiding the app-mode window', () => {
+  it('keeps the Dock and application visible when hiding the app-mode window', () => {
     (window as any).preferencesManager.get.mockReturnValue({ fieldTheoryWindowMode: 'app' });
     const existingWindow = attachExistingWindow(window, vi.fn());
 
@@ -499,7 +499,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
 
     expect(existingWindow.hide).toHaveBeenCalled();
     expect(mockApp.dock.hide).not.toHaveBeenCalled();
-    expect(mockApp.hide).toHaveBeenCalled();
+    expect(mockApp.hide).not.toHaveBeenCalled();
   });
 
   it('skips activation when no previous app is known', async () => {

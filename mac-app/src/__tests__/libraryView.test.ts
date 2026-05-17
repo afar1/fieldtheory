@@ -1539,6 +1539,30 @@ describe('librarian editor session helpers', () => {
     });
   });
 
+  it('restores persisted Typedown editor sessions as a known content mode', () => {
+    const session = restoreLibrarianEditorSession({
+      getItem: (key) => key === 'librarian-editor-session'
+        ? JSON.stringify({
+          itemType: 'wiki',
+          itemPath: 'Notes/Typedown',
+          contentMode: 'typedown',
+          selectionStart: 3,
+          selectionEnd: 8,
+          scrollTop: 13,
+        })
+        : null,
+    });
+
+    expect(session).toMatchObject({
+      itemType: 'wiki',
+      itemPath: 'Notes/Typedown',
+      contentMode: 'typedown',
+      selectionStart: 3,
+      selectionEnd: 8,
+      scrollTop: 13,
+    });
+  });
+
   it('matches restored editor session to the selected wiki page', () => {
     expect(editorSessionMatchesSelection(
       {
@@ -2190,6 +2214,43 @@ describe('recursive sidebar tree helpers', () => {
       'Middle',
       'Newest',
       'Old',
+    ]);
+  });
+
+  it('sorts archived files below normal sibling files unless they are pinned', () => {
+    const pinned = new Set(['wiki:Archived pinned']);
+    const result = sortSidebarNodes([
+      archivedFile('Archived late', 30),
+      file('Normal old', 10),
+      archivedFile('Archived pinned', 5),
+      file('Normal new', 20),
+    ], 'time', pinned);
+
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Archived pinned',
+      'Normal new',
+      'Normal old',
+      'Archived late',
+    ]);
+  });
+
+  it('splits unpinned archived files so scratchpad can render them below show more', () => {
+    const pinned = new Set(['wiki:Archived pinned']);
+    const archived = archivedFile('Archived late', 30);
+    const archivedPinned = archivedFile('Archived pinned', 5);
+
+    const result = splitArchivedSidebarNodes([
+      file('Normal', 10),
+      archived,
+      archivedPinned,
+    ], pinned);
+
+    expect(result.normalNodes.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Normal',
+      'Archived pinned',
+    ]);
+    expect(result.archivedNodes.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Archived late',
     ]);
   });
 

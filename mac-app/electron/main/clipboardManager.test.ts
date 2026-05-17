@@ -83,6 +83,7 @@ import {
   buildScreencaptureCommand,
   ClipboardManager,
   isIDEWithTerminal,
+  isTerminalApp,
   orderStackItemsForPaste,
   shouldPasteMixedStackImagesFirst,
 } from './clipboardManager';
@@ -444,6 +445,12 @@ describe('isIDEWithTerminal', () => {
     expect(isIDEWithTerminal('com.anthropic.claudefordesktop')).toBe(true);
     expect(isIDEWithTerminal('com.todesktop.230313mzl4w4u92')).toBe(true);
     expect(isIDEWithTerminal('com.openai.codex')).toBe(true);
+  });
+});
+
+describe('isTerminalApp', () => {
+  it('treats Ghostty as a terminal target for portable command text references', () => {
+    expect(isTerminalApp('com.mitchellh.ghostty')).toBe(true);
   });
 });
 
