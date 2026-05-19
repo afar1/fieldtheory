@@ -180,6 +180,8 @@ export interface LocalCommandStatus {
   mode?: LocalCommandRunMode;
   runId?: string;
   phase?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
   changedLines?: number;
   changedBytes?: number;
   error?: string;

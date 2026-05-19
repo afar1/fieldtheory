@@ -2145,6 +2145,189 @@ interface LibrarianViewProps {
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
   sidebarCollapsed: boolean;
+  maxwellFluxStatus?: MaxwellFluxStatus | null;
+}
+
+type MaxwellFluxStatus = {
+  status: 'running' | 'success' | 'error' | 'notice';
+  commandName?: string;
+  filePath?: string;
+  mode?: 'document' | 'selection';
+  runId?: string;
+  phase?: string;
+  selectionStart?: number;
+  selectionEnd?: number;
+};
+
+function normalizeMaxwellFluxPath(path?: string | null): string | null {
+  if (!path) return null;
+  return path.replace(/\/+$/, '');
+}
+
+function isMaxwellFluxActive(status: MaxwellFluxStatus | null | undefined, activePath: string | null): boolean {
+  if (status?.status !== 'running') return false;
+  const statusPath = normalizeMaxwellFluxPath(status.filePath);
+  const readingPath = normalizeMaxwellFluxPath(activePath);
+  return Boolean(statusPath && readingPath && statusPath === readingPath);
+}
+
+function clampMaxwellFluxPercent(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
+}
+
+function getMaxwellFluxBand(status: MaxwellFluxStatus, contentLength: number): { top: string; height: string } | { inset: number } {
+  if (status.mode !== 'selection' || typeof status.selectionStart !== 'number' || typeof status.selectionEnd !== 'number') {
+    return { inset: 0 };
+  }
+  const length = Math.max(contentLength, 1);
+  const startPct = clampMaxwellFluxPercent((Math.min(status.selectionStart, status.selectionEnd) / length) * 100, 4, 82);
+  const endPct = clampMaxwellFluxPercent((Math.max(status.selectionStart, status.selectionEnd) / length) * 100, startPct + 6, 96);
+  const height = clampMaxwellFluxPercent(endPct - startPct + 10, 18, 42);
+  return {
+    top: `${clampMaxwellFluxPercent(startPct - 5, 3, 94 - height)}%`,
+    height: `${height}%`,
+  };
+}
+
+function buildMaxwellFluxLines(seed: string): string[] {
+  const alphabet = '01ABCDEFGHIJKLMNOPQRSTUVWXYZ#$%&*+-/<>[]{}';
+  let state = 0;
+  for (let index = 0; index < seed.length; index += 1) {
+    state = (state * 31 + seed.charCodeAt(index)) >>> 0;
+  }
+  return Array.from({ length: 18 }, (_, lineIndex) => {
+    let line = '';
+    for (let charIndex = 0; charIndex < 34; charIndex += 1) {
+      state = (state * 1664525 + 1013904223 + lineIndex + charIndex) >>> 0;
+      line += alphabet[state % alphabet.length];
+    }
+    return line;
+  });
+}
+
+function MaxwellFluxOverlay({
+  status,
+  contentLength,
+  isDark,
+}: {
+  status: MaxwellFluxStatus;
+  contentLength: number;
+  isDark: boolean;
+}) {
+  const seed = `${status.runId ?? ''}:${status.phase ?? ''}:${status.commandName ?? 'maxwell'}`;
+  const lines = useMemo(() => buildMaxwellFluxLines(seed), [seed]);
+  const band = getMaxwellFluxBand(status, contentLength);
+  const label = status.mode === 'selection' ? 'Maxwell editing selection' : 'Maxwell editing document';
+
+  return (
+    <div
+      aria-hidden="true"
+      style={{
+        position: 'absolute',
+        inset: 0,
+        zIndex: 4,
+        pointerEvents: 'none',
+      }}
+    >
+      <style>{`
+        @keyframes ftMaxwellFluxDrift {
+          from { transform: translate3d(0, -16px, 0); }
+          to { transform: translate3d(0, 16px, 0); }
+        }
+        @keyframes ftMaxwellFluxScan {
+          from { transform: translate3d(0, -100%, 0); opacity: 0; }
+          20% { opacity: 0.42; }
+          80% { opacity: 0.18; }
+          to { transform: translate3d(0, 100%, 0); opacity: 0; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          [data-ft-maxwell-flux-lines],
+          [data-ft-maxwell-flux-scan] { animation: none !important; }
+        }
+      `}</style>
+      <div
+        style={{
+          position: 'absolute',
+          ...band,
+          overflow: 'hidden',
+          borderRadius: '7px',
+          border: `1px solid ${isDark ? 'rgba(255,255,255,0.16)' : 'rgba(0,0,0,0.14)'}`,
+          background: isDark
+            ? 'linear-gradient(180deg, rgba(245,245,245,0.10), rgba(245,245,245,0.04))'
+            : 'linear-gradient(180deg, rgba(0,0,0,0.055), rgba(0,0,0,0.025))',
+          boxShadow: isDark
+            ? 'inset 0 0 0 1px rgba(255,255,255,0.04), 0 14px 40px rgba(0,0,0,0.26)'
+            : 'inset 0 0 0 1px rgba(255,255,255,0.62), 0 12px 32px rgba(0,0,0,0.08)',
+          backdropFilter: 'blur(1.5px) saturate(0)',
+          mixBlendMode: isDark ? 'screen' : 'multiply',
+        }}
+      >
+        <div
+          data-ft-maxwell-flux-lines="true"
+          style={{
+            position: 'absolute',
+            inset: '-18px 0',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+            gap: '12px',
+            padding: '0 18px',
+            color: isDark ? 'rgba(255,255,255,0.46)' : 'rgba(0,0,0,0.34)',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            fontSize: '10px',
+            lineHeight: 1.45,
+            letterSpacing: 0,
+            whiteSpace: 'pre-wrap',
+            animation: 'ftMaxwellFluxDrift 1.45s linear infinite alternate',
+          }}
+        >
+          {lines.map((line, index) => (
+            <span key={`${line}-${index}`}>{line}</span>
+          ))}
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundImage: isDark
+              ? 'repeating-linear-gradient(180deg, rgba(255,255,255,0.12) 0, rgba(255,255,255,0.12) 1px, transparent 1px, transparent 6px)'
+              : 'repeating-linear-gradient(180deg, rgba(0,0,0,0.10) 0, rgba(0,0,0,0.10) 1px, transparent 1px, transparent 6px)',
+            opacity: 0.38,
+          }}
+        />
+        <div
+          data-ft-maxwell-flux-scan="true"
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            height: '52%',
+            top: 0,
+            background: isDark
+              ? 'linear-gradient(180deg, transparent, rgba(255,255,255,0.24), transparent)'
+              : 'linear-gradient(180deg, transparent, rgba(0,0,0,0.18), transparent)',
+            animation: 'ftMaxwellFluxScan 1.8s ease-in-out infinite',
+          }}
+        />
+        <div
+          style={{
+            position: 'absolute',
+            right: '10px',
+            top: '8px',
+            padding: '3px 7px',
+            borderRadius: '999px',
+            color: isDark ? 'rgba(255,255,255,0.76)' : 'rgba(0,0,0,0.62)',
+            backgroundColor: isDark ? 'rgba(0,0,0,0.34)' : 'rgba(255,255,255,0.62)',
+            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
+            fontSize: '10px',
+            lineHeight: 1.2,
+            letterSpacing: 0,
+          }}
+        >
+          {label}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 type MarkdownRenderNode = {
@@ -2226,7 +2409,7 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed, maxwellFluxStatus }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -3874,6 +4057,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const displaySourceBody = useMemo(() => (
     removeEmptyMarkdownCommentPlaceholders(rawDisplaySourceBody)
   ), [rawDisplaySourceBody]);
+  const showMaxwellFlux = isMaxwellFluxActive(maxwellFluxStatus, activeReadingPath);
+  const maxwellFluxContentLength = (contentMode === 'markdown' || activeIsSourceOnlyDocument)
+    ? editContent.length
+    : displaySourceBody.length;
   useEffect(() => {
     if (!active) {
       setMarkdownLinkRelationDocuments([]);
@@ -7499,6 +7686,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       'data-ft-agent-title': activeReading.title,
                     }}
                   />
+                  {showMaxwellFlux && maxwellFluxStatus && (
+                    <MaxwellFluxOverlay
+                      status={maxwellFluxStatus}
+                      contentLength={maxwellFluxContentLength}
+                      isDark={theme.isDark}
+                    />
+                  )}
                 </div>
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
                 {markdownUrlPasteChoice && (
@@ -7671,6 +7865,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       height: 'auto',
                     }}
                   />
+                  {showMaxwellFlux && maxwellFluxStatus && (
+                    <MaxwellFluxOverlay
+                      status={maxwellFluxStatus}
+                      contentLength={maxwellFluxContentLength}
+                      isDark={theme.isDark}
+                    />
+                  )}
                   {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>
