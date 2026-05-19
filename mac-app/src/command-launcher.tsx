@@ -552,15 +552,19 @@ const getStyles = (isDark: boolean) => ({
     gap: '8px',
   },
   listItemSelected: {
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.13)' : 'rgba(0, 0, 0, 0.085)',
-    boxShadow: `inset 3px 0 0 ${isDark ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.32)'}`,
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.105)' : 'rgba(0, 0, 0, 0.07)',
+    boxShadow: `inset 2px 0 0 ${isDark ? 'rgba(255, 255, 255, 0.44)' : 'rgba(0, 0, 0, 0.28)'}`,
   },
   listItemSelectedSoft: {
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.038)',
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.04)' : 'rgba(0, 0, 0, 0.032)',
+  },
+  listItemCommitted: {
+    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.135)' : 'rgba(0, 0, 0, 0.085)',
+    boxShadow: `inset 2px 0 0 ${isDark ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.4)'}`,
   },
   itemName: {
     flex: 1,
-    fontWeight: 500,
+    fontWeight: 560,
     letterSpacing: 0,
     overflow: 'hidden',
     textOverflow: 'ellipsis',
@@ -628,8 +632,8 @@ const getStyles = (isDark: boolean) => ({
     border: `1px solid ${isDark ? 'rgba(255, 255, 255, 0.12)' : 'rgba(0, 0, 0, 0.1)'}`,
   },
   itemHotkey: {
-    fontSize: '11px',
-    color: isDark ? '#888' : '#6b6b6b',
+    fontSize: '10px',
+    color: isDark ? '#777' : '#747474',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     flexShrink: 0,
   },
@@ -640,15 +644,14 @@ const getStyles = (isDark: boolean) => ({
     flexShrink: 0,
   },
   itemTypeTag: {
-    fontSize: '8px',
+    fontSize: '9px',
     lineHeight: '12px',
-    padding: '0 5px',
-    borderRadius: '3px',
-    color: isDark ? '#8b8b8b' : '#767676',
-    backgroundColor: isDark ? 'rgba(255, 255, 255, 0.055)' : 'rgba(0, 0, 0, 0.045)',
+    padding: 0,
+    color: isDark ? '#686868' : '#8a8a8a',
+    backgroundColor: 'transparent',
     fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.3px',
+    textTransform: 'none' as const,
+    letterSpacing: 0,
   },
   emptyState: {
     padding: '9px 12px',
@@ -724,6 +727,7 @@ function CommandLauncher() {
   const [launcherIconDataByPath, setLauncherIconDataByPath] = useState<Record<string, string | null>>({});
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [hasExplicitSelection, setHasExplicitSelection] = useState(false);
+  const [committedItemId, setCommittedItemId] = useState<string | null>(null);
   const [usageByItemId, setUsageByItemId] = useState<LauncherUsageMap>(() => readLauncherUsageMap());
   const selectedIndexRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -790,6 +794,7 @@ function CommandLauncher() {
   }, [selectIndex]);
 
   const showLauncherMessage = useCallback((message: string) => {
+    setCommittedItemId(null);
     setClipboardSearchActive(false);
     setQuery(message);
     setFiltered([]);
@@ -1092,6 +1097,7 @@ function CommandLauncher() {
     setBookmarkNamespaceItems([]);
     setFiltered([]);
     setHasExplicitSelection(false);
+    setCommittedItemId(null);
     selectIndex(0);
   }, [selectIndex]);
 
@@ -1694,6 +1700,8 @@ function CommandLauncher() {
 
   // Filter items when query changes.
   useEffect(() => {
+    if (committedItemId) return;
+
     const filterStartedAt = performance.now();
     const inputHeight = LAUNCHER_COLLAPSED_HEIGHT;
     const emptyStateHeight = 34;
@@ -1902,7 +1910,7 @@ function CommandLauncher() {
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
+  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -2428,6 +2436,17 @@ function CommandLauncher() {
       prepareLauncherForNextOpen();
       commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
     };
+    const willPastePortableCommand = shouldPastePortableCommand({
+      itemType: item.type,
+      openFieldTheoryTarget: options.openFieldTheoryTarget,
+      insertWikiLink: options.insertWikiLink,
+    });
+    if (willPastePortableCommand) {
+      flushSync(() => {
+        setLauncherSessionReady(false);
+      });
+    }
+    setCommittedItemId(item.id);
     if (item.type !== 'local-instruction') {
       noteItemUsage(item.id);
     }
@@ -2435,6 +2454,8 @@ function CommandLauncher() {
     const showInvocationError = (event: string, error: string | undefined, fallback: string) => {
       const message = error ?? fallback;
       traceLauncher(event, { error: message });
+      setCommittedItemId(null);
+      setLauncherSessionReady(true);
       setQuery(message);
       setFiltered([]);
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
@@ -2462,6 +2483,7 @@ function CommandLauncher() {
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, targetApp: null }));
     if (item.type === 'source' && item.sourceId) {
       traceLauncher('invoke-source-scope', { sourceId: item.sourceId });
+      setCommittedItemId(null);
       enterLauncherSource(item.sourceId);
       return;
     }
@@ -2494,11 +2516,7 @@ function CommandLauncher() {
       prepareLauncherForNextOpen();
       return;
     }
-    if (shouldPastePortableCommand({
-      itemType: item.type,
-      openFieldTheoryTarget: options.openFieldTheoryTarget,
-      insertWikiLink: options.insertWikiLink,
-    })) {
+    if (willPastePortableCommand) {
       traceLauncher('invoke-command-paste-request', {
         commandName: item.name,
         fieldTheoryActive: latestContext?.fieldTheoryActive ?? false,
@@ -2563,6 +2581,7 @@ function CommandLauncher() {
         return;
       }
       if (item.directoryPath) {
+        setCommittedItemId(null);
         setDirectoryNamespace({
           label: item.displayName,
           directoryPath: item.directoryPath,
@@ -2578,6 +2597,7 @@ function CommandLauncher() {
       closeForInvocation();
     } else if (item.type === 'bookmark-facet') {
       if (item.facetPaths?.length) {
+        setCommittedItemId(null);
         setBookmarkNamespace({ kind: 'facet', label: item.displayName, paths: item.facetPaths });
         setQuery('');
         selectIndex(0);
@@ -2753,13 +2773,16 @@ function CommandLauncher() {
         case 'move-current-library-file': {
           if (!latestContext?.fieldTheoryActive) {
             showLauncherMessage('Open Field Theory to move the current file');
+            setCommittedItemId(null);
             return;
           }
           const source = await commandsAPI.getActiveLibraryFileContext?.();
           if (!source) {
             showLauncherMessage('No current Library file to move');
+            setCommittedItemId(null);
             return;
           }
+          setCommittedItemId(null);
           setMoveSource(source);
           setQuery('');
           selectIndex(0);
@@ -2817,10 +2840,29 @@ function CommandLauncher() {
   }
 
   const styles = getStyles(isDarkMode);
-  const selectedItemStyle = (index: number) => {
+  const selectedItemStyle = (item: LauncherItem, index: number) => {
+    if (item.id === committedItemId) return styles.listItemCommitted;
     if (index !== selectedIndex) return {};
     return hasExplicitSelection ? styles.listItemSelected : styles.listItemSelectedSoft;
   };
+  const namespaceTagStyle = (() => {
+    if (!namespaceLabel) return styles.namespaceTag;
+    const label = namespaceLabel.toLowerCase();
+    const color = label.startsWith('move:')
+      ? (isDarkMode ? 'rgba(234, 179, 8, 0.18)' : 'rgba(234, 179, 8, 0.14)')
+      : label === 'clipboard'
+        ? (isDarkMode ? 'rgba(45, 212, 191, 0.15)' : 'rgba(20, 184, 166, 0.11)')
+        : label === 'bookmarks' || label.startsWith('@')
+          ? (isDarkMode ? 'rgba(96, 165, 250, 0.16)' : 'rgba(37, 99, 235, 0.09)')
+          : label === 'artifact'
+            ? (isDarkMode ? 'rgba(167, 139, 250, 0.16)' : 'rgba(124, 58, 237, 0.09)')
+            : (isDarkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.06)');
+    return {
+      ...styles.namespaceTag,
+      backgroundColor: color,
+      color: isDarkMode ? '#f0f0f0' : '#202020',
+    };
+  })();
   const statusText = getLauncherStatusText({
     hasQuery: query.trim() !== '',
     namespaceLabel,
@@ -2898,7 +2940,7 @@ function CommandLauncher() {
           />
         </button>
         {namespaceLabel && (
-          <span style={styles.namespaceTag}>{namespaceLabel}</span>
+          <span style={namespaceTagStyle}>{namespaceLabel}</span>
         )}
         <input
           ref={inputRef}
@@ -2943,7 +2985,7 @@ function CommandLauncher() {
                       data-item-index={globalIndex}
                       style={{
                         ...styles.listItem,
-                        ...selectedItemStyle(globalIndex),
+                        ...selectedItemStyle(item, globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
@@ -2969,7 +3011,7 @@ function CommandLauncher() {
                       data-item-index={globalIndex}
                       style={{
                         ...styles.listItem,
-                        ...selectedItemStyle(globalIndex),
+                        ...selectedItemStyle(item, globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
@@ -2995,7 +3037,7 @@ function CommandLauncher() {
                       data-item-index={globalIndex}
                       style={{
                         ...styles.listItem,
-                        ...selectedItemStyle(globalIndex),
+                        ...selectedItemStyle(item, globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                       onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
@@ -3010,13 +3052,17 @@ function CommandLauncher() {
             filtered.map((item, i) => {
               const metaText = item.type === 'handoff' ? item.timeAgo : item.hotkeyDisplay;
               const showMetaText = Boolean(metaText && !(item.type === 'directory' && metaText === 'folder'));
+              const showPreviewHint = Boolean(
+                !showMetaText &&
+                (bookmarkForItem(item) || markdownPreviewPathForItem(item) || clipboardPreviewContentForItem(item))
+              );
               return (
                 <li
                   key={item.id}
                   data-item-index={i}
                   style={{
                     ...styles.listItem,
-                    ...selectedItemStyle(i),
+                    ...selectedItemStyle(item, i),
                   }}
                   onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
                   onMouseMove={(event) => handleListItemMouseMove(event, i)}
@@ -3027,6 +3073,7 @@ function CommandLauncher() {
                   </span>
                   <span style={styles.itemMeta}>
                     {showMetaText && <span style={styles.itemHotkey}>{metaText}</span>}
+                    {showPreviewHint && <span style={styles.itemHotkey}>space</span>}
                     <span style={styles.itemTypeTag}>{launcherItemTypeLabel(item)}</span>
                   </span>
                 </li>

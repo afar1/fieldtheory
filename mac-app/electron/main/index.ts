@@ -7824,6 +7824,7 @@ function setupClipboardIPCHandlers(): void {
       }
     };
 
+    let selectionStatusFields = (): { selectionStart?: number; selectionEnd?: number } => ({});
     try {
       emitLocalCommandStatus({
         status: 'running',
@@ -7870,6 +7871,9 @@ function setupClipboardIPCHandlers(): void {
         }
         resolvedSelection = selection;
       }
+      selectionStatusFields = () => resolvedSelection
+        ? { selectionStart: resolvedSelection.start, selectionEnd: resolvedSelection.end }
+        : {};
 
       const localManager = getLocalLlmManager();
       const maxwellStartedAt = Date.now();
@@ -7918,6 +7922,7 @@ function setupClipboardIPCHandlers(): void {
           mode,
           runId: maxwellRunId,
           phase: event.phase ?? 'generating',
+          ...selectionStatusFields(),
         });
       };
 
@@ -7931,6 +7936,7 @@ function setupClipboardIPCHandlers(): void {
         mode,
         runId: maxwellRunId,
         phase: 'generating',
+        ...selectionStatusFields(),
       });
 
       let replacement: string;
@@ -7969,6 +7975,7 @@ function setupClipboardIPCHandlers(): void {
           mode,
           runId: maxwellRunId,
           phase: 'cancelled',
+          ...selectionStatusFields(),
         });
         return { success: false, error: 'Maxwell run cancelled', commandName: loaded.name, mode, runId: maxwellRunId };
       }
@@ -7991,6 +7998,7 @@ function setupClipboardIPCHandlers(): void {
         phase: 'saving',
         changedLines: changeSummary.changedLines,
         changedBytes: changeSummary.changedBytes,
+        ...selectionStatusFields(),
       });
 
       const saveResult = activeLibraryFileContext.type === 'wiki'
@@ -8025,6 +8033,7 @@ function setupClipboardIPCHandlers(): void {
           mode,
           runId: maxwellRunId,
           error,
+          ...selectionStatusFields(),
         });
         return { success: false, error, commandName: loaded.name, mode, runId: maxwellRunId };
       }
@@ -8061,6 +8070,7 @@ function setupClipboardIPCHandlers(): void {
         phase: 'done',
         changedLines: changeSummary.changedLines,
         changedBytes: changeSummary.changedBytes,
+        ...selectionStatusFields(),
       });
       return { success: true, filePath: activeLibraryFileContext.filePath, commandName: loaded.name, mode, runId: maxwellRunId };
     } catch (error) {
@@ -8075,6 +8085,7 @@ function setupClipboardIPCHandlers(): void {
           mode,
           runId: maxwellRunId,
           phase: 'cancelled',
+          ...selectionStatusFields(),
         });
         return { success: false, error: 'Maxwell run cancelled', commandName: statusCommandName, mode, runId: maxwellRunId };
       }
@@ -8090,6 +8101,7 @@ function setupClipboardIPCHandlers(): void {
         mode,
         runId: maxwellRunId,
         error: message,
+        ...selectionStatusFields(),
       });
       return { success: false, error: message, commandName: statusCommandName, mode, runId: maxwellRunId };
     } finally {
