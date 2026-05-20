@@ -4525,6 +4525,21 @@ const externalAPI = {
 };
 contextBridge.exposeInMainWorld('externalAPI', externalAPI);
 
+const markdownImagesAPI = {
+  copyImageForDocument: (
+    documentPath: string,
+    imagePath: string,
+    alt?: string,
+  ): Promise<{ markdown: string; destination: string; copiedPath: string } | null> =>
+    ipcRenderer.invoke('markdownImages:copyImageForDocument', documentPath, imagePath, alt),
+  makeImagesPortable: (
+    documentPath: string,
+    content: string,
+  ): Promise<{ content: string; copied: number; rewritten: number; missing: number }> =>
+    ipcRenderer.invoke('markdownImages:makeImagesPortable', documentPath, content),
+};
+contextBridge.exposeInMainWorld('markdownImagesAPI', markdownImagesAPI);
+
 interface RecentEntry {
   kind: 'wiki' | 'external';
   path: string;

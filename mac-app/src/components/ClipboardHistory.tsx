@@ -1658,7 +1658,8 @@ export default function ClipboardHistory() {
         return;
       }
 
-      const saved = await window.wikiAPI?.save(page.relPath, markdown);
+      const portableMarkdown = (await window.markdownImagesAPI?.makeImagesPortable(page.absPath, markdown))?.content ?? markdown;
+      const saved = await window.wikiAPI?.save(page.relPath, portableMarkdown);
       if (!isDocumentSaveOk(saved)) {
         showFeedback('could not save markdown');
         return;
@@ -1669,8 +1670,8 @@ export default function ClipboardHistory() {
         kind: 'wiki',
         path: page.relPath,
         contentMode: 'markdown',
-        selectionStart: markdown.length,
-        selectionEnd: markdown.length,
+        selectionStart: portableMarkdown.length,
+        selectionEnd: portableMarkdown.length,
       });
       setShowSettings(false);
       setLibraryKeepsCurrentSizeKey(false);

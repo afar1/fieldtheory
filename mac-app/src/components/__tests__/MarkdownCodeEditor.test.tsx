@@ -34,6 +34,7 @@ import {
   buildRenderedMarkdownEditorDecorations,
   buildRenderedMarkdownEditorDecorationsForRanges,
   checkedMarkdownTaskLineExtension,
+  createRenderedMarkdownEditorPresentationExtension,
   renderedMarkdownEditorPresentationExtension,
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
@@ -288,6 +289,28 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 	    view.destroy();
 	    parent.remove();
 	  });
+
+  it('renders relative image links from the markdown document path', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '![Reference](<./Team%20Notes.assets/Screenshot%201.png>)',
+        extensions: [createRenderedMarkdownEditorPresentationExtension('/Users/afar/Google Drive/Team Notes.md')],
+      }),
+      parent,
+    });
+
+    const renderedImage = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`) as HTMLElement | null;
+    const renderedImageImg = renderedImage?.querySelector('img') ?? null;
+    expect(renderedImage?.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR))
+      .toBe('ftlocalfile:///Users/afar/Google%20Drive/Team%20Notes.assets/Screenshot%201.png');
+    expect(renderedImageImg?.getAttribute('src'))
+      .toBe('ftlocalfile:///Users/afar/Google%20Drive/Team%20Notes.assets/Screenshot%201.png');
+
+    view.destroy();
+    parent.remove();
+  });
 
 	  it('hides empty inline formatting placeholders while keeping the typing position', () => {
 	    const render = (doc: string, cursor: number) => {
