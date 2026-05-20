@@ -481,6 +481,33 @@ export function getRenderedMarkdownTaskMarkerLayoutStyle(): Record<string, strin
   };
 }
 
+export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
+  const clampedOffset = Math.max(0, Math.min(value.length, offset));
+  const lineStart = clampedOffset === 0 ? 0 : value.lastIndexOf('\n', clampedOffset - 1) + 1;
+  const lineEndIndex = value.indexOf('\n', lineStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const text = value.slice(lineStart, lineEnd);
+  const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)/.exec(text);
+  const listMatch = /^(\s*)((?:[-*+])|(?:\d+[.)]))\s+/.exec(text);
+  const markerLength = taskMatch?.[0].length ?? listMatch?.[0].length ?? 0;
+  if (markerLength === 0) return null;
+  const markerEnd = lineStart + markerLength;
+  return clampedOffset >= lineStart && clampedOffset < markerEnd ? markerEnd : null;
+}
+
+export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input: InputEvent): boolean {
+  if (input.inputType !== 'insertText' || !input.data || input.isComposing) return false;
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const bodyStart = getRenderedMarkdownListBodyStart(view.state.doc.toString(), selection.from);
+  if (bodyStart === null || bodyStart === selection.from) return false;
+  view.dispatch({
+    changes: { from: bodyStart, insert: input.data },
+    selection: { anchor: bodyStart + input.data.length },
+  });
+  return true;
+}
+
 function shouldRevealRenderedMarkdownSource(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((range) => {
     if (range.empty) return range.from >= from && range.from <= to;
@@ -1392,6 +1419,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                 inputType: input.inputType,
                 data: input.data,
               };
+              if (presentation === 'rendered' && handleRenderedMarkdownEditorBeforeInput(view, input)) {
+                event.preventDefault();
+                return true;
+              }
               return false;
             },
             mousedown: (event, view) => {

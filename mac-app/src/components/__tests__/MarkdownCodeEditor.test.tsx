@@ -42,10 +42,12 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListIndentStyle,
   getRenderedMarkdownListLineLayoutStyle,
   getRenderedMarkdownListMarkerLayoutStyle,
   getRenderedMarkdownTaskMarkerLayoutStyle,
+  handleRenderedMarkdownEditorBeforeInput,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   shouldMoveCaretToDocumentEndFromClick,
@@ -496,6 +498,48 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     );
     expect(appearsBefore(firstMarker, firstBody)).toBe(true);
     expect(appearsBefore(taskMarker, taskBody)).toBe(true);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('redirects typing from hidden list markers into the rendered list body', () => {
+    expect(getRenderedMarkdownListBodyStart('- make', 0)).toBe(2);
+    expect(getRenderedMarkdownListBodyStart('10. make', 0)).toBe(4);
+    expect(getRenderedMarkdownListBodyStart('  - [ ] make', 1)).toBe(8);
+    expect(getRenderedMarkdownListBodyStart('- make', 2)).toBeNull();
+    expect(getRenderedMarkdownListBodyStart('> quote', 0)).toBeNull();
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- make\n1. ordered\n- [ ] task',
+        selection: EditorSelection.cursor(0),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: '"',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- "make\n1. ordered\n- [ ] task');
+
+    view.dispatch({ selection: EditorSelection.cursor('- "make\n'.length) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: '"',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] task');
+
+    view.dispatch({ selection: EditorSelection.cursor('- "make\n1. "ordered\n'.length) });
+    expect(handleRenderedMarkdownEditorBeforeInput(view, new InputEvent('beforeinput', {
+      inputType: 'insertText',
+      data: '"',
+    }))).toBe(true);
+    expect(view.state.doc.toString()).toBe('- "make\n1. "ordered\n- [ ] "task');
 
     view.destroy();
     parent.remove();
