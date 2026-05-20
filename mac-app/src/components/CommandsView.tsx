@@ -326,7 +326,7 @@ export default function CommandsView({
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; id?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
-  const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
 
   const [uncontrolledFocusImmersive, setUncontrolledFocusImmersive] = useState(false);
@@ -653,13 +653,13 @@ export default function CommandsView({
     );
   }, [activeLinkTarget, markdownLinkRelationDocuments, selectedCommand, wikiIndex]);
 
-  const flashCopyPathCopied = useCallback(() => {
-    setCopyPathCopied(true);
+  const flashCopyFeedback = useCallback((label: string) => {
+    setCopyFeedbackLabel(label);
     if (copyPathFeedbackTimerRef.current !== null) {
       window.clearTimeout(copyPathFeedbackTimerRef.current);
     }
     copyPathFeedbackTimerRef.current = window.setTimeout(() => {
-      setCopyPathCopied(false);
+      setCopyFeedbackLabel(null);
       copyPathFeedbackTimerRef.current = null;
     }, COPY_PATH_FEEDBACK_MS);
   }, []);
@@ -689,26 +689,35 @@ export default function CommandsView({
     return selectedCommand.filePath;
   }, [getRenderedSelectionText, selectedCommand?.filePath]);
 
-  const copySelectedCommandTextOrPath = useCallback(async () => {
+  const getSelectedCommandCopyPayload = useCallback((): { text: string; label: string } | null => {
     const text = getSelectedCommandTextOrPath();
-    if (!text) return;
+    if (!text) return null;
+    return {
+      text,
+      label: text === selectedCommand?.filePath ? 'Copied file path' : 'Copied segment',
+    };
+  }, [getSelectedCommandTextOrPath, selectedCommand?.filePath]);
+
+  const copySelectedCommandTextOrPath = useCallback(async () => {
+    const payload = getSelectedCommandCopyPayload();
+    if (!payload) return;
     try {
-      await navigator.clipboard.writeText(text);
-      flashCopyPathCopied();
+      await navigator.clipboard.writeText(payload.text);
+      flashCopyFeedback(payload.label);
     } catch (err) {
       console.error('Failed to copy command text or path:', err);
     }
-  }, [flashCopyPathCopied, getSelectedCommandTextOrPath]);
+  }, [flashCopyFeedback, getSelectedCommandCopyPayload]);
 
   const copySelectedCommandPath = useCallback(async () => {
     if (!selectedCommand?.filePath) return;
     try {
       await navigator.clipboard.writeText(selectedCommand.filePath);
-      flashCopyPathCopied();
+      flashCopyFeedback('Copied file path');
     } catch (err) {
       console.error('Failed to copy command path:', err);
     }
-  }, [flashCopyPathCopied, selectedCommand?.filePath]);
+  }, [flashCopyFeedback, selectedCommand?.filePath]);
 
   const openFieldTheoryMarkdownTarget = useCallback((target: WikiLinkTarget) => {
     void window.commandsAPI?.openFieldTheoryMarkdown?.({
@@ -2201,7 +2210,7 @@ export default function CommandsView({
                 onShowInFolder={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand ? showSelectedCommandInFolder : undefined}
                 showFolder={focusToolbarControlsVisible && viewMode === 'mine' && !!selectedCommand && !commandToolbarContextHasFolder}
                 onCopyPath={focusToolbarControlsVisible && viewMode === 'mine' && selectedCommand?.filePath ? copySelectedCommandTextOrPath : undefined}
-                copyPathCopied={copyPathCopied}
+                copyPathCopied={copyFeedbackLabel !== null}
                 copyPathTitle="Copy selected text or command path (⌘C)"
               />
 
@@ -2551,7 +2560,7 @@ export default function CommandsView({
       )}
       {deleteConfirmationDialog}
 
-      {copyPathCopied && (
+      {copyFeedbackLabel && (
         <div
           role="status"
           style={{
@@ -2569,7 +2578,7 @@ export default function CommandsView({
             zIndex: 6,
           }}
         >
-          Copied path
+          {copyFeedbackLabel}
         </div>
       )}
     </div>

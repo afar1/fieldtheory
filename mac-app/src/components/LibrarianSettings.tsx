@@ -9,7 +9,13 @@ import { useEffect, useState, useCallback, useRef, useMemo, type MouseEvent } fr
 import { useTheme } from '../contexts/ThemeContext';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, persistRenderedEditClickMode, restoreRenderedEditClickMode } from '../utils/editorShortcuts';
-import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
+import {
+  SettingsBadge,
+  SettingsCard,
+  SettingsDisabledBlock,
+  SettingsDivider,
+  SettingsSectionHeading,
+} from './settings/SettingsPrimitives';
 
 interface LibrarianSettingsProps {
   librarianEnabled?: boolean;
@@ -21,6 +27,7 @@ const LIBRARY_FOLDER_TOGGLES = [
   { id: 'scratchpad', label: 'Scratchpad', hint: 'Quick notes and captures' },
   { id: 'debates', label: 'Debates', hint: 'Structured debate notes' },
   { id: 'Plans', label: 'Plans', hint: 'Saved planning notes' },
+  { id: 'bookmarks-shortcut', label: 'Bookmarks', hint: 'Shortcut to the Bookmarks view' },
   { id: 'bookmarks-from-x', label: 'Bookmarks from x.com', hint: 'Synced bookmark categories, domains, and entities' },
   { id: 'entries', label: 'Entries', hint: 'Authored wiki entries' },
 ] as const;
@@ -451,10 +458,10 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
       {/* Librarian Settings */}
       <div
         style={{
-          padding: '16px',
-          borderRadius: '8px',
-          backgroundColor: theme.isDark ? theme.bgSecondary : '#f9fafb',
-          border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '16px',
+          padding: 0,
         }}
       >
         {/* Enable toggle with status tag */}
@@ -560,8 +567,147 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
           </button>
         </div>
 
+        <SettingsCard theme={theme}>
+          <SettingsSectionHeading
+            theme={theme}
+            title="Watched paths"
+            description="Folders Field Theory scans for markdown notes and artifacts."
+          />
+          {watchedDirs.length > 0 ? (
+            <div style={{ marginTop: '-4px' }}>
+              {watchedDirs.map((dir, index) => {
+                const count = readingCountsByDir[dir.path] || 0;
+                return (
+                  <div key={dir.path}>
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '12px',
+                        padding: '11px 0',
+                      }}
+                    >
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          width: '7px',
+                          height: '7px',
+                          borderRadius: '999px',
+                          backgroundColor: dir.enabled
+                            ? (theme.isDark ? '#5bb88a' : '#3d8b6a')
+                            : theme.textSecondary,
+                          opacity: dir.enabled ? 1 : 0.45,
+                          flexShrink: 0,
+                        }}
+                      />
+                      <code
+                        style={{
+                          fontSize: '12px',
+                          fontFamily: "'SF Mono', Monaco, monospace",
+                          color: theme.text,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                          display: 'block',
+                          flex: 1,
+                          minWidth: 0,
+                        }}
+                      >
+                        {formatPath(dir.path)}
+                      </code>
+                      <span
+                        style={{
+                          fontSize: '10.5px',
+                          color: theme.textSecondary,
+                          fontFamily: "'SF Mono', Monaco, monospace",
+                          fontVariantNumeric: 'tabular-nums',
+                          minWidth: '66px',
+                          textAlign: 'right',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {count} reading{count !== 1 ? 's' : ''}
+                      </span>
+                      <SettingsBadge theme={theme} tone={dir.enabled ? 'success' : 'neutral'}>
+                        {dir.enabled ? 'watching' : 'off'}
+                      </SettingsBadge>
+                      <button
+                        onClick={() => handleRemove(dir.path)}
+                        title="Remove watched path"
+                        style={{
+                          padding: '0 4px',
+                          fontSize: '16px',
+                          lineHeight: 1,
+                          color: theme.textSecondary,
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          flexShrink: 0,
+                        }}
+                      >
+                        ×
+                      </button>
+                    </div>
+                    {index < watchedDirs.length - 1 && <SettingsDivider theme={theme} margin="0" />}
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={{ fontSize: '12px', color: theme.textSecondary, lineHeight: 1.5 }}>
+              No watched paths yet.
+            </div>
+          )}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '14px' }}>
+            <input
+              type="text"
+              value={manualPath}
+              onChange={(event) => setManualPath(event.target.value)}
+              onKeyDown={(event) => event.key === 'Enter' && handleManualPathSubmit()}
+              placeholder="Enter path..."
+              style={{
+                flex: 1,
+                minWidth: 0,
+                padding: '8px 10px',
+                fontSize: '12px',
+                fontFamily: "'SF Mono', Monaco, monospace",
+                backgroundColor: theme.isDark ? theme.surface2 : '#fff',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                color: theme.text,
+                outline: 'none',
+              }}
+            />
+            <button
+              onClick={handleManualPathSubmit}
+              disabled={!manualPath.trim() || isScanning}
+              style={{
+                padding: '8px 12px',
+                fontSize: '12px',
+                fontWeight: 500,
+                color: manualPath.trim() && !isScanning ? '#fff' : theme.textSecondary,
+                backgroundColor: manualPath.trim() && !isScanning ? theme.accent : 'transparent',
+                border: manualPath.trim() && !isScanning ? `1px solid ${theme.accent}` : `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                cursor: manualPath.trim() && !isScanning ? 'pointer' : 'not-allowed',
+                minWidth: '76px',
+              }}
+            >
+              {isScanning ? `Scanning${scanningDots}` : 'Add path'}
+            </button>
+          </div>
+        </SettingsCard>
+
         {/* Platforms section - required for Librarian to function */}
-        <div style={{ marginBottom: '16px' }}>
+        <div
+          style={{
+            padding: '18px',
+            borderRadius: '14px',
+            backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+            border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+            boxShadow: theme.isDark ? '0 1px 0 rgba(255,255,255,0.03)' : '0 1px 2px rgba(15, 23, 42, 0.05)',
+          }}
+        >
           <div style={{ marginBottom: '8px' }}>
             <span style={{ fontSize: '11px', color: theme.textSecondary }}>
               Platforms

@@ -1128,6 +1128,7 @@ describe('TranscriberManager standard real-time chunking', () => {
       screenshotMetadata: [{ itemId: 1 }],
       detectedCommands: [{ name: 'debug', filePath: '/tmp/debug.md' }],
       pasteStack,
+      emit: vi.fn(),
     };
     Object.setPrototypeOf(manager, TranscriberManager.prototype);
 
@@ -1139,6 +1140,7 @@ describe('TranscriberManager standard real-time chunking', () => {
     expect(manager.currentStack).toEqual([]);
     expect(manager.screenshotMetadata).toEqual([]);
     expect(manager.detectedCommands).toEqual([]);
+    expect(manager.emit).toHaveBeenCalledWith('stackChanged', 0);
   });
 
   it('discard-cancels an in-flight transcription before it stores or pastes text', async () => {

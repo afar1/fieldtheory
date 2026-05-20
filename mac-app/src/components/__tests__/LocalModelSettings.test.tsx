@@ -108,13 +108,13 @@ describe('LocalModelSettings', () => {
     expect(await screen.findByText('Found and linked the existing local model.')).toBeTruthy();
   });
 
-  it('shows copyable Gemma 4 terminal commands that Maxwell can use', async () => {
+  it('shows copyable Gemma 4 terminal commands that Field Theory can use', async () => {
     (window as any).clipboardAPI.getLocalLLMHealth.mockResolvedValue({ [modelId]: makeHealth('missing') });
 
     render(<LocalModelSettings />);
 
     expect(await screen.findByText('Terminal setup')).toBeTruthy();
-    expect(screen.getByText(/Maxwell checks ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf automatically/i)).toBeTruthy();
+    expect(screen.getByText(/Field Theory checks ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf automatically/i)).toBeTruthy();
     expect(screen.getByText(/curl -L --fail --continue-at - -o ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
     expect(screen.getByText(/ln -sf "\/path\/to\/gemma-4-E4B-it-Q4_K_M\.gguf" ~\/\.fieldtheory\/models\/gemma-4-E4B-it-Q4_K_M\.gguf/i)).toBeTruthy();
     expect(screen.getAllByRole('button', { name: 'Copy' })).toHaveLength(2);

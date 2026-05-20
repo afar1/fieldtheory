@@ -362,6 +362,7 @@ interface LauncherThemeAPI {
 interface LauncherLibraryAPI {
   getRoots: () => Promise<LauncherLibraryRoot[]>;
   moveItem?: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
+  onRootsChanged?: (callback: () => void) => () => void;
 }
 
 interface LauncherBookmarksAPI {
@@ -751,6 +752,7 @@ function CommandLauncher() {
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const lastMousePositionRef = useRef<{ x: number; y: number } | null>(null);
+  const launcherClosingForInvocationRef = useRef(false);
 
   const resizeLauncher = useCallback((height: number) => {
     const nextHeight = Math.max(LAUNCHER_COLLAPSED_HEIGHT, Math.round(height));
@@ -1101,12 +1103,14 @@ function CommandLauncher() {
     selectIndex(0);
   }, [selectIndex]);
 
-  const prepareLauncherForNextOpen = useCallback(() => {
+  const prepareLauncherForNextOpen = useCallback((options: { revealWhenReady?: boolean } = {}) => {
+    const revealWhenReady = options.revealWhenReady ?? true;
     flushSync(() => {
       setLauncherSessionReady(false);
       clearLauncherSessionState();
     });
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+    if (!revealWhenReady) return;
     window.requestAnimationFrame(() => {
       setLauncherSessionReady(true);
     });
@@ -1136,6 +1140,7 @@ function CommandLauncher() {
         ? inputRef.current?.value ?? ''
         : '';
       flushSync(() => {
+        launcherClosingForInvocationRef.current = false;
         clearLauncherSessionState();
         if (earlyTypedQuery) setQuery(earlyTypedQuery);
         setLauncherSessionReady(true);
@@ -1170,6 +1175,9 @@ function CommandLauncher() {
         .then(directories => setCommandDirectories(directories || []))
         .catch(() => setCommandDirectories([]));
     });
+    const unsubscribeLibraryRoots = libraryAPI?.onRootsChanged?.(() => {
+      void loadLibraryMarkdown();
+    });
     const unsubscribeRecent = recentAPI?.onChanged?.(() => {
       loadRecentEntries();
     });
@@ -1180,14 +1188,20 @@ function CommandLauncher() {
       unsubscribeSquaresConfig?.();
       unsubscribeBookmarks?.();
       unsubscribeCommands?.();
+      unsubscribeLibraryRoots?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, resizeLauncher]);
+  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher]);
 
   useEffect(() => {
-    window.addEventListener('blur', prepareLauncherForNextOpen);
+    const handleBlur = () => {
+      prepareLauncherForNextOpen({
+        revealWhenReady: !launcherClosingForInvocationRef.current,
+      });
+    };
+    window.addEventListener('blur', handleBlur);
     return () => {
-      window.removeEventListener('blur', prepareLauncherForNextOpen);
+      window.removeEventListener('blur', handleBlur);
     };
   }, [prepareLauncherForNextOpen]);
 
@@ -1339,8 +1353,17 @@ function CommandLauncher() {
         };
       });
 
-    return [...sourceItems, ...commandDirectoryItems, ...recentFileItems, ...commandItems, ...handoffItems, ...actionItems];
-  }, [commandItems, commandDirectoryItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, sourceItems, recentFileItems, activeWebPage, lastLibraryMove]);
+    return [
+      ...commandItems,
+      ...commandDirectoryItems,
+      ...directoryItems,
+      ...libraryMarkdownSearchItems,
+      ...sourceItems,
+      ...recentFileItems,
+      ...handoffItems,
+      ...actionItems,
+    ];
+  }, [commandItems, commandDirectoryItems, directoryItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownSearchItems, sourceItems, recentFileItems, activeWebPage, lastLibraryMove]);
 
   const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
   const clipboardSearchQuery = clipboardSearchActive ? query : null;
@@ -2442,11 +2465,14 @@ function CommandLauncher() {
       insertWikiLink: options.insertWikiLink,
     });
     if (willPastePortableCommand) {
+      launcherClosingForInvocationRef.current = true;
       flushSync(() => {
+        setCommittedItemId(item.id);
         setLauncherSessionReady(false);
       });
+    } else {
+      setCommittedItemId(item.id);
     }
-    setCommittedItemId(item.id);
     if (item.type !== 'local-instruction') {
       noteItemUsage(item.id);
     }
@@ -2454,6 +2480,7 @@ function CommandLauncher() {
     const showInvocationError = (event: string, error: string | undefined, fallback: string) => {
       const message = error ?? fallback;
       traceLauncher(event, { error: message });
+      launcherClosingForInvocationRef.current = false;
       setCommittedItemId(null);
       setLauncherSessionReady(true);
       setQuery(message);
@@ -2529,7 +2556,7 @@ function CommandLauncher() {
         showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
         return;
       }
-      prepareLauncherForNextOpen();
+      prepareLauncherForNextOpen({ revealWhenReady: false });
       return;
     }
     if (item.type === 'local-command' || item.type === 'local-instruction') {
@@ -2909,6 +2936,9 @@ function CommandLauncher() {
       </span>
     );
   };
+  const itemSupportsPreview = (item: LauncherItem) => (
+    Boolean(bookmarkForItem(item) || markdownPreviewPathForItem(item) || clipboardPreviewContentForItem(item))
+  );
 
   return (
     <div style={{
@@ -3052,10 +3082,7 @@ function CommandLauncher() {
             filtered.map((item, i) => {
               const metaText = item.type === 'handoff' ? item.timeAgo : item.hotkeyDisplay;
               const showMetaText = Boolean(metaText && !(item.type === 'directory' && metaText === 'folder'));
-              const showPreviewHint = Boolean(
-                !showMetaText &&
-                (bookmarkForItem(item) || markdownPreviewPathForItem(item) || clipboardPreviewContentForItem(item))
-              );
+              const showPreviewHint = itemSupportsPreview(item) && !showMetaText;
               return (
                 <li
                   key={item.id}

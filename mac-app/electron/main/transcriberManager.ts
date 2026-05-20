@@ -1793,9 +1793,7 @@ export class TranscriberManager extends EventEmitter {
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.hasAudioContent = false;
-      this.currentStack = [];
-      this.screenshotMetadata = [];
-      this.detectedCommands = [];
+      this.clearStack();
       this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     } catch (error) {
@@ -1805,9 +1803,7 @@ export class TranscriberManager extends EventEmitter {
       this.clearStandardLiveTranscript();
       this.setStatus('idle');
       this.hasAudioContent = false;
-      this.currentStack = [];
-      this.screenshotMetadata = [];
-      this.detectedCommands = [];
+      this.clearStack();
       this.overlay.showStatus(MESSAGES.overlay.cancelled);
       this.unregisterAbandonHotkey();
     }

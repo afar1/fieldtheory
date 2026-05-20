@@ -249,7 +249,7 @@ describe('LibrarianView render', () => {
     Object.defineProperty(HTMLElement.prototype, 'offsetTop', {
       configurable: true,
       get(this: HTMLElement) {
-        const rows = Array.from(document.querySelectorAll('[data-recent-row-id]'));
+        const rows = Array.from(document.querySelectorAll('[data-library-sidebar-row-id]'));
         return rows.indexOf(this) * 28;
       },
     });

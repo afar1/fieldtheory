@@ -13,6 +13,7 @@ import {
   formatCommandFilePasteText,
   restoreClipboardSnapshot,
   resolveCommandFilePasteMode,
+  shouldUseNativeCommandFileTyping,
   waitForCommandClipboardPasteRead,
   type CommandClipboard,
 } from './commandClipboard';
@@ -215,6 +216,32 @@ describe('resolveCommandFilePasteMode', () => {
 
   it('uses markdown content for generic rich composer targets without app names', () => {
     expect(resolveCommandFilePasteMode({ isTerminal: false, isIDE: false })).toBe('markdown-content');
+  });
+});
+
+describe('shouldUseNativeCommandFileTyping', () => {
+  it('keeps native typing for terminal text references', () => {
+    expect(shouldUseNativeCommandFileTyping({
+      mode: 'text-reference',
+      isTerminal: true,
+      isIDE: false,
+    })).toBe(true);
+  });
+
+  it('skips native typing for IDE text references so target inputs keep normal paste focus', () => {
+    expect(shouldUseNativeCommandFileTyping({
+      mode: 'text-reference',
+      isTerminal: false,
+      isIDE: true,
+    })).toBe(false);
+  });
+
+  it('keeps native typing available for markdown content targets', () => {
+    expect(shouldUseNativeCommandFileTyping({
+      mode: 'markdown-content',
+      isTerminal: false,
+      isIDE: false,
+    })).toBe(true);
   });
 });
 

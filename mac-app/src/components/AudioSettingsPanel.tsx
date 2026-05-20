@@ -5,6 +5,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import { getSettingsDividerColor } from './settings/SettingsPrimitives';
 
 // Import types for the API exposed via preload.
 // Note: These are available on window.audioAPI and window.platform.
@@ -90,17 +91,6 @@ export default function AudioSettingsPanel() {
       unsubscribeInputMode();
     };
   }, [isMacOS]);
-
-  // Handler for toggling priority mode.
-  const handleTogglePriority = useCallback(async () => {
-    if (!audioState || !window.audioAPI) return;
-
-    try {
-      await window.audioAPI.setPriorityMode(!audioState.priorityMode);
-    } catch (err) {
-      console.error('Failed to toggle priority mode:', err);
-    }
-  }, [audioState]);
 
   // Handler for setting priority device.
   const handleSetPriorityDevice = useCallback(async (deviceId: string | null) => {
@@ -198,95 +188,122 @@ export default function AudioSettingsPanel() {
 
   return (
     <div style={styles.container}>
-      {/* Priority microphone selector - selecting a mic auto-enables priority mode */}
-      <div style={styles.row}>
-        <span style={styles.rowLabel}>Priority Mic</span>
-        <div style={styles.rowControls}>
-          <select
-            value={audioState.priorityDeviceId || ''}
-            onChange={async (e) => {
-              const deviceId = e.target.value || null;
-              await handleSetPriorityDevice(deviceId);
-              // Auto-enable priority mode when selecting a device.
-              if (deviceId && !audioState.priorityMode && window.audioAPI) {
-                await window.audioAPI.setPriorityMode(true);
-              }
-            }}
-            style={styles.select}
-          >
-            <option value="">None</option>
-            {inputDevices.map((device) => (
-              <option key={device.id} value={device.id}>
-                {device.name}
-              </option>
-            ))}
-          </select>
-          <div style={styles.modeSegment}>
-            <button
-              type="button"
-              onClick={() => handleSetInputMode('standard')}
-              style={{
-                ...styles.modeButton,
-                ...(inputMode === 'standard' ? styles.modeButtonActive : {}),
-              }}
-            >
-              Standard
-            </button>
-            <button
-              type="button"
-              onClick={() => handleSetInputMode('hot-mic')}
-              style={{
-                ...styles.modeButton,
-                ...(inputMode === 'hot-mic' ? styles.modeButtonActive : {}),
-              }}
-            >
-              Hot Mic
-            </button>
+      <section style={styles.card}>
+        <header style={styles.cardHeader}>
+          <div style={styles.cardTitle}>Input</div>
+          <div style={styles.cardSub}>
+            Field Theory uses your system default mic unless you choose a priority mic here.
+            {currentDefault ? ` Current default: ${currentDefault.name}.` : ''}
           </div>
-          {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
-            <button onClick={handleResetOverride} style={styles.btn}>
-              Reset
-            </button>
-          )}
-        </div>
-      </div>
-      
-      {/* Priority microphone helper text and Set as Favorite button */}
-      {audioState.priorityDeviceId && (
-        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span>Your microphone will not auto-switch while a priority mic is selected.</span>
-          {priorityDevice && priorityDevice.name !== favoriteDeviceName && (
-            <button onClick={handleSetAsFavorite} style={{ ...styles.btn, fontSize: '11px', padding: '2px 6px', marginLeft: 'auto' }}>
-              set as favorite
-            </button>
-          )}
-        </div>
-      )}
+        </header>
 
-      {/* Favorite - shows the saved device that auto-connects on startup */}
-      {favoriteDeviceName ? (
-        <>
-          <div style={styles.row}>
-            <span style={styles.rowLabel}>Favorite</span>
+        {/* Priority microphone selector - selecting a mic auto-enables priority mode */}
+        <div style={styles.row}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Priority mic</span>
+            <span style={styles.rowHint}>
+              Locks recording to this device and prevents automatic input switching.
+            </span>
+          </div>
+          <div style={styles.rowControls}>
+            <select
+              value={audioState.priorityDeviceId || ''}
+              onChange={async (e) => {
+                const deviceId = e.target.value || null;
+                await handleSetPriorityDevice(deviceId);
+                // Auto-enable priority mode when selecting a device.
+                if (deviceId && !audioState.priorityMode && window.audioAPI) {
+                  await window.audioAPI.setPriorityMode(true);
+                }
+              }}
+              style={styles.select}
+            >
+              <option value="">None</option>
+              {inputDevices.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.name}
+                </option>
+              ))}
+            </select>
+            {audioState.userOverrideId && audioState.priorityMode && priorityDevice && (
+              <button onClick={handleResetOverride} style={styles.btn}>
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div style={styles.row}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Input mode</span>
+            <span style={styles.rowHint}>
+              Standard records on demand. Hot Mic keeps the voice command path active.
+            </span>
+          </div>
+          <div style={styles.rowControls}>
+            <div style={styles.modeSegment}>
+              <button
+                type="button"
+                onClick={() => handleSetInputMode('standard')}
+                style={{
+                  ...styles.modeButton,
+                  ...(inputMode === 'standard' ? styles.modeButtonActive : {}),
+                }}
+              >
+                Standard
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetInputMode('hot-mic')}
+                style={{
+                  ...styles.modeButton,
+                  ...(inputMode === 'hot-mic' ? styles.modeButtonActive : {}),
+                }}
+              >
+                Hot Mic
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {audioState.priorityDeviceId && (
+          <div style={styles.callout}>
+            <span>Your microphone will not auto-switch while a priority mic is selected.</span>
+            {priorityDevice && priorityDevice.name !== favoriteDeviceName && (
+              <button onClick={handleSetAsFavorite} style={styles.inlineBtn}>
+                set as favorite
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+
+      <section style={styles.card}>
+        <header style={styles.cardHeader}>
+          <div style={styles.cardTitle}>Favorite</div>
+          <div style={styles.cardSub}>
+            Restores a known microphone when Field Theory starts or when the device reconnects.
+          </div>
+        </header>
+
+        {favoriteDeviceName ? (
+          <div style={{ ...styles.row, borderBottom: 0 }}>
+            <div style={styles.rowText}>
+              <span style={styles.rowLabel}>Saved device</span>
+              <span style={styles.rowHint}>{favoriteDeviceName}</span>
+            </div>
             <div style={styles.rowControls}>
-              <span style={{ fontSize: '13px', color: theme.text, marginRight: '8px' }}>
-                {favoriteDeviceName}
-              </span>
               <button onClick={handleClearFavorite} style={styles.btn}>
                 Clear
               </button>
             </div>
           </div>
-          <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px' }}>
-            Your favorite is automatically restored when you restart the app or when the device reconnects.
+        ) : (
+          <div style={styles.emptyMessage}>
+            No favorite set. Select a priority mic and click "set as favorite" to auto-restore it on startup.
           </div>
-        </>
-      ) : (
-        <div style={{ fontSize: '11px', color: '#6b7280', marginBottom: '12px', paddingLeft: '2px' }}>
-          No favorite set. Select a priority mic and click "set as favorite" to auto-restore it on startup.
-        </div>
-      )}
-
+        )}
+      </section>
     </div>
   );
 }
@@ -297,6 +314,28 @@ export default function AudioSettingsPanel() {
 const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
+  },
+  card: {
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+    padding: '18px 22px 4px',
+    marginBottom: '16px',
+  },
+  cardHeader: {
+    marginBottom: '14px',
+  },
+  cardTitle: {
+    fontSize: '16px',
+    fontWeight: 500,
+    color: theme.text,
+    letterSpacing: '-0.01em',
+  },
+  cardSub: {
+    fontSize: '12px',
+    color: theme.textSecondary,
+    marginTop: '4px',
+    lineHeight: 1.5,
   },
   heading: {
     display: 'none', // Hidden in new design - section header comes from parent
@@ -316,13 +355,28 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '4px 0',
-    minHeight: '32px',
+    gap: '16px',
+    padding: '12px 0',
+    minHeight: '40px',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
+  },
+  rowText: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '3px',
+    minWidth: 0,
+    flex: 1,
   },
   rowLabel: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: theme.text,
-    fontWeight: 400,
+    fontWeight: 500,
+    lineHeight: 1.35,
+  },
+  rowHint: {
+    fontSize: '11.5px',
+    color: theme.textSecondary,
+    lineHeight: 1.5,
   },
   rowValue: {
     fontSize: '12px',
@@ -333,25 +387,31 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+    flexShrink: 0,
   },
   modeSegment: {
     display: 'flex',
     alignItems: 'center',
-    borderRadius: '8px',
+    padding: '2px',
+    backgroundColor: theme.isDark ? '#20232a' : '#f8fafc',
+    borderRadius: '6px',
     border: `1px solid ${theme.border}`,
-    overflow: 'hidden',
   },
   modeButton: {
-    border: 'none',
+    border: '1px solid transparent',
+    borderRadius: '4px',
     backgroundColor: 'transparent',
     color: theme.textSecondary,
-    fontSize: '11px',
-    padding: '4px 8px',
+    fontSize: '12px',
+    fontWeight: 500,
+    padding: '4px 12px',
     cursor: 'pointer',
   },
   modeButtonActive: {
-    backgroundColor: theme.accent,
-    color: '#fff',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    borderColor: theme.border,
+    color: theme.text,
+    boxShadow: theme.isDark ? 'none' : '0 1px 2px rgba(60, 40, 20, 0.06)',
   },
 
   // Button styles.
@@ -364,6 +424,27 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     cursor: 'pointer',
+  },
+  inlineBtn: {
+    padding: '2px 6px',
+    fontSize: '11px',
+    fontWeight: 500,
+    color: theme.text,
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '5px',
+    cursor: 'pointer',
+    marginLeft: 'auto',
+  },
+  callout: {
+    fontSize: '11.5px',
+    color: theme.textSecondary,
+    padding: '12px 0 14px',
+    display: 'flex',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: '12px',
+    lineHeight: 1.5,
   },
 
   // Toggle switch.
@@ -404,28 +485,8 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     minWidth: '180px',
   },
 
-  // Section header with divider line.
   devicesSection: {
     marginTop: '12px',
-  },
-  sectionHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '12px',
-    marginBottom: '8px',
-  },
-  sectionTitle: {
-    fontSize: '11px',
-    fontWeight: 600,
-    color: theme.textSecondary,
-    textTransform: 'uppercase' as const,
-    letterSpacing: '0.08em',
-    whiteSpace: 'nowrap' as const,
-  },
-  sectionLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: theme.border,
   },
 
   // Device row (compact).
@@ -448,9 +509,9 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     color: theme.success,
   },
   emptyMessage: {
-    padding: '12px',
+    padding: '0 0 14px',
     color: theme.textSecondary,
-    fontStyle: 'italic',
-    fontSize: '12px',
+    fontSize: '11.5px',
+    lineHeight: 1.5,
   },
 });

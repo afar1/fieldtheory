@@ -1,6 +1,7 @@
 import { memo, useState, useEffect, useCallback, useMemo, useRef, useLayoutEffect, type MutableRefObject } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
+import { getBookmarks, onBookmarksChanged, peekBookmarks } from '../services/bookmarksCache';
 import {
   SIDEBAR_DARK_ICON_COLOR,
   SIDEBAR_DARK_TEXT_COLOR,
@@ -33,13 +34,16 @@ interface UnifiedItem {
 }
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
+export const BOOKMARKS_SHORTCUT_FOLDER_ID = 'bookmarks-shortcut';
 export const EMBER_ITEM_ID = 'ember:root';
 export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
+const POSSIBLE_TOP_NAV_AVAILABLE = false;
 export const LIBRARY_DEFAULT_FOLDER_IDS = [
   'artifacts',
   SCRATCHPAD_FOLDER_NAME,
   'debates',
   'Plans',
+  BOOKMARKS_SHORTCUT_FOLDER_ID,
   'bookmarks-from-x',
   'entries',
   'categories',
@@ -54,17 +58,33 @@ const LIBRARY_DRAG_TEXT_PREFIX = 'fieldtheory-library-item:';
 const LIBRARY_SIDEBAR_ROW_PADDING_Y = '6px';
 const LIBRARY_SIDEBAR_ROW_LINE_HEIGHT = '16px';
 const LIBRARY_SIDEBAR_ROW_MIN_HEIGHT = '28px';
+const LIBRARY_SIDEBAR_DEPTH_INDENT = 12;
+const LIBRARY_SIDEBAR_EDGE_PADDING = 12;
 const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
 const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
 const LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE = 56;
 const SCRATCHPAD_COLLAPSED_ITEM_LIMIT = 20;
+const RECENT_SIDEBAR_ITEM_LIMIT = 7;
 const RECENT_ROW_MOVE_ANIMATION_MS = 180;
 const RECENT_ROW_MOVE_ANIMATION_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
 const EMPTY_TODO_STATE_OVERRIDES: Record<string, SidebarTodoStateOverride | undefined> = {};
 const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
+const LIBRARY_ICON_COLOR_STORAGE_KEY = 'library-sidebar-icon-color-indices';
+const LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY = 'library-sidebar-icon-color-order';
+const LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY = 'library-new-doc-location';
 const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
 const LOCAL_WIKI_ADDED_EVENT = 'fieldtheory:wiki-added-local';
 const LOCAL_WIKI_DELETED_EVENT = 'fieldtheory:wiki-deleted-local';
+const LIBRARY_SIDEBAR_ICON_COLOR_PALETTE = [
+  '#8a8a8a',
+  '#b45309',
+  '#dc2626',
+  '#0f766e',
+  '#2563eb',
+  '#7c3aed',
+  '#be185d',
+] as const;
+const DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER = LIBRARY_SIDEBAR_ICON_COLOR_PALETTE.map((_color, index) => index);
 const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): React.CSSProperties => ({
   flex: 1,
   minWidth: 0,
@@ -77,6 +97,68 @@ const librarySidebarFadeTextStyle = (fadeWidth = LIBRARY_SIDEBAR_FADE_WIDTH): Re
 const getLibrarySidebarFileHoverBg = (isDark: boolean) => (
   isDark ? 'rgba(255,255,255,0.035)' : 'rgba(0,0,0,0.022)'
 );
+export function getLibrarySidebarIconColor(
+  colorIndex: number | undefined,
+  fallbackColor: string,
+): string {
+  if (colorIndex === undefined || colorIndex < 0) return fallbackColor;
+  return LIBRARY_SIDEBAR_ICON_COLOR_PALETTE[colorIndex % LIBRARY_SIDEBAR_ICON_COLOR_PALETTE.length];
+}
+
+export function normalizeLibrarySidebarIconColorOrder(value: unknown): number[] {
+  if (!Array.isArray(value)) return DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER;
+  const seen = new Set<number>();
+  const next: number[] = [];
+  for (const item of value) {
+    if (!Number.isInteger(item)) continue;
+    if (item < 0 || item >= LIBRARY_SIDEBAR_ICON_COLOR_PALETTE.length) continue;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    next.push(item);
+  }
+  for (const item of DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER) {
+    if (!seen.has(item)) next.push(item);
+  }
+  return next;
+}
+
+export function reorderLibrarySidebarIconColorOrder(
+  order: readonly number[],
+  fromIndex: number,
+  toIndex: number,
+): number[] {
+  if (fromIndex < 0 || fromIndex >= order.length || toIndex < 0 || toIndex >= order.length || fromIndex === toIndex) {
+    return [...order];
+  }
+  const next = [...order];
+  const [moved] = next.splice(fromIndex, 1);
+  next.splice(toIndex, 0, moved);
+  return next;
+}
+
+export function getSidebarIconColorDragTargetIndex(
+  startIndex: number,
+  startY: number,
+  currentY: number,
+  rowHeight: number,
+  itemCount: number,
+): number {
+  if (itemCount <= 0) return 0;
+  const safeRowHeight = Math.max(1, rowHeight);
+  const rowDelta = Math.round((currentY - startY) / safeRowHeight);
+  return Math.max(0, Math.min(itemCount - 1, startIndex + rowDelta));
+}
+
+function collectSidebarIconTargetIds(nodes: readonly SidebarNode[]): string[] {
+  const ids: string[] = [];
+  const visit = (node: SidebarNode) => {
+    ids.push(node.id);
+    if (node.kind === 'dir') node.children.forEach(visit);
+  };
+  nodes.forEach(visit);
+  return ids;
+}
+
 const waitForSidebarCollapseAnimation = () => new Promise<void>((resolve) => {
   window.setTimeout(resolve, 140);
 });
@@ -92,6 +174,18 @@ export function getSidebarDividerStyle(isDark: boolean): React.CSSProperties {
     flexShrink: 0,
     margin: '8px 12px 4px',
     backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.08)',
+  };
+}
+
+function getSidebarChildGuideStyle(depth: number, isDark: boolean): React.CSSProperties {
+  return {
+    position: 'absolute',
+    top: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+    bottom: '2px',
+    left: `${LIBRARY_SIDEBAR_EDGE_PADDING + depth * LIBRARY_SIDEBAR_DEPTH_INDENT + 6}px`,
+    width: '1px',
+    backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+    pointerEvents: 'none',
   };
 }
 
@@ -236,6 +330,15 @@ type CreatingState =
   | { kind: 'dir'; location: LibraryCreateLocation }
   | null;
 
+type NewDocLocationOption = {
+  id: string;
+  label: string;
+  pathLabel: string;
+  depth: number;
+  location: LibraryCreateLocation;
+  iconColorIndex?: number;
+};
+
 type LibraryFolderConfirmationRequest = {
   title: string;
   message: string;
@@ -372,18 +475,15 @@ export function filterUnifiedFolders(folders: UnifiedFolder[], searchQuery: stri
     .filter((folder) => folder.items.length > 0);
 }
 
-/** Clip the recent list for the sidebar. Expanded means all remaining recent
- *  items are visible in one click. */
 export function splitRecent(
   entries: RecentEntry[],
-  expanded: boolean,
-  collapsed: number = 6,
+  limit: number = RECENT_SIDEBAR_ITEM_LIMIT,
 ): {
   entries: RecentEntry[];
   total: number;
 } {
   return {
-    entries: expanded ? entries : entries.slice(0, collapsed),
+    entries: entries.slice(0, limit),
     total: entries.length,
   };
 }
@@ -398,6 +498,10 @@ export function getRecentEntryParentLabel(entry: Pick<RecentEntry, 'kind' | 'pat
     return parts.length > 1 ? parts.slice(0, -1).join(' / ') : 'Library';
   }
   return parts.length > 1 ? parts[parts.length - 2] : 'File';
+}
+
+export function getRecentEntryParentPath(entry: Pick<RecentEntry, 'kind' | 'path'>): string {
+  return `/ ${getRecentEntryParentLabel(entry).replace(/\s*\/\s*/g, ' / ')}`;
 }
 
 export function getRecentRowMoveKeyframes(previousTop: number, currentTop: number): Keyframe[] | null {
@@ -684,7 +788,7 @@ export function ensureScratchpadPinned(folders: UnifiedFolder[]): UnifiedFolder[
 function makeBookmarksItem(): UnifiedItem {
   return {
     id: BOOKMARKS_ITEM_ID,
-    title: 'View bookmarks',
+    title: 'Bookmarks',
     type: 'bookmarks',
     absPath: '',
     timestamp: 0,
@@ -703,6 +807,17 @@ function sidebarNodePinnedRank(node: SidebarNode, pinnedItemIds: ReadonlySet<str
 function sidebarNodeArchivedRank(node: SidebarNode, pinnedItemIds: ReadonlySet<string>): number {
   if (pinnedItemIds.has(node.id)) return 0;
   return node.kind === 'file' && node.item.archived ? 1 : 0;
+}
+
+function sidebarNodeColorRank(
+  node: SidebarNode,
+  iconColorIndices: Readonly<Record<string, number>>,
+  iconColorOrder: readonly number[],
+): number {
+  const colorIndex = iconColorIndices[node.id];
+  const effectiveColorIndex = typeof colorIndex === 'number' ? colorIndex : 0;
+  const orderedIndex = iconColorOrder.indexOf(effectiveColorIndex);
+  return orderedIndex >= 0 ? orderedIndex : effectiveColorIndex;
 }
 
 function isArchivedSidebarNode(node: SidebarNode, pinnedItemIds: ReadonlySet<string>): boolean {
@@ -725,12 +840,16 @@ export function sortSidebarNodes(
   nodes: SidebarNode[],
   sortMode: SortMode = 'alpha',
   pinnedItemIds: ReadonlySet<string> = new Set(),
+  iconColorIndices: Readonly<Record<string, number>> = {},
+  iconColorOrder: readonly number[] = DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER,
 ): SidebarNode[] {
   return [...nodes].sort((a, b) => {
     const pinnedDelta = sidebarNodePinnedRank(b, pinnedItemIds) - sidebarNodePinnedRank(a, pinnedItemIds);
     if (pinnedDelta !== 0) return pinnedDelta;
     const archivedDelta = sidebarNodeArchivedRank(a, pinnedItemIds) - sidebarNodeArchivedRank(b, pinnedItemIds);
     if (archivedDelta !== 0) return archivedDelta;
+    const colorDelta = sidebarNodeColorRank(a, iconColorIndices, iconColorOrder) - sidebarNodeColorRank(b, iconColorIndices, iconColorOrder);
+    if (colorDelta !== 0) return colorDelta;
     if (sortMode === 'time') {
       const byTimestamp = sidebarNodeSortTimestamp(b) - sidebarNodeSortTimestamp(a);
       if (byTimestamp !== 0) return byTimestamp;
@@ -745,32 +864,27 @@ export function orderTopLevelSidebarNodes(
   nodes: SidebarNode[],
   _sortMode: SortMode = 'alpha',
   pinnedItemIds: ReadonlySet<string> = new Set(),
+  iconColorIndices: Readonly<Record<string, number>> = {},
+  iconColorOrder: readonly number[] = DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER,
 ): SidebarNode[] {
-  return sortSidebarNodes(nodes, 'alpha', pinnedItemIds);
+  return sortSidebarNodes(nodes, 'alpha', pinnedItemIds, iconColorIndices, iconColorOrder);
 }
 
 export function applyPinnedSidebarOrder(
   nodes: SidebarNode[],
   sortMode: SortMode,
   pinnedItemIds: ReadonlySet<string>,
+  iconColorIndices: Readonly<Record<string, number>> = {},
+  iconColorOrder: readonly number[] = DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER,
 ): SidebarNode[] {
-  if (pinnedItemIds.size === 0) return nodes;
+  if (pinnedItemIds.size === 0 && Object.keys(iconColorIndices).length === 0) return nodes;
   return sortSidebarNodes(nodes.map((node) => {
     if (node.kind === 'file') return node;
     return {
       ...node,
-      children: applyPinnedSidebarOrder(node.children, sortMode, pinnedItemIds),
+      children: applyPinnedSidebarOrder(node.children, sortMode, pinnedItemIds, iconColorIndices, iconColorOrder),
     };
-  }), sortMode, pinnedItemIds);
-}
-
-export function shouldShowPinnedSidebarDividerBefore(
-  nodes: SidebarNode[],
-  index: number,
-  pinnedItemIds: ReadonlySet<string>,
-): boolean {
-  if (index <= 0 || index >= nodes.length || pinnedItemIds.size === 0) return false;
-  return sidebarNodePinnedRank(nodes[index - 1], pinnedItemIds) > 0 && sidebarNodePinnedRank(nodes[index], pinnedItemIds) === 0;
+  }), sortMode, pinnedItemIds, iconColorIndices, iconColorOrder);
 }
 
 export function toggleSidebarPinnedItemIds(
@@ -840,6 +954,10 @@ export function filterHiddenDefaultSidebarNodes(nodes: SidebarNode[], hiddenFold
     const filtered: SidebarNode[] = [];
 
     for (const node of items) {
+      if (node.kind === 'file' && node.id === BOOKMARKS_ITEM_ID && hidden.has(BOOKMARKS_SHORTCUT_FOLDER_ID)) {
+        changed = true;
+        continue;
+      }
       const folderId = getLibraryFolderVisibilityId(node);
       if (folderId && hidden.has(folderId)) {
         changed = true;
@@ -1008,6 +1126,13 @@ function getLibraryCreateLocationKey(location: LibraryCreateLocation): string {
   return `${location.rootPath}::${location.relPath}`;
 }
 
+function getLibraryCreateLocationPathLabel(location: Pick<LibraryCreateLocation, 'relPath'>): string {
+  const label = location.relPath
+    ? location.relPath.split('/').filter(Boolean).join(' / ')
+    : 'Library';
+  return `/ ${label}`;
+}
+
 function getSidebarNodeCreateLocation(node: Extract<SidebarNode, { kind: 'dir' }>): LibraryCreateLocation {
   return {
     rootPath: node.rootPath,
@@ -1018,6 +1143,45 @@ function getSidebarNodeCreateLocation(node: Extract<SidebarNode, { kind: 'dir' }
 
 function createLocationMatches(left: LibraryCreateLocation, right: LibraryCreateLocation): boolean {
   return getLibraryCreateLocationKey(left) === getLibraryCreateLocationKey(right);
+}
+
+function shouldHideUnavailablePossibleSidebarNode(node: SidebarNode): boolean {
+  return !POSSIBLE_TOP_NAV_AVAILABLE &&
+    node.kind === 'dir' &&
+    node.builtin &&
+    !node.relPath.includes('/') &&
+    node.relPath.toLowerCase() === 'possible';
+}
+
+function filterUnavailablePossibleSidebarNodes(nodes: SidebarNode[]): SidebarNode[] {
+  let changed = false;
+  const filtered = nodes.filter((node) => {
+    const keep = !shouldHideUnavailablePossibleSidebarNode(node);
+    if (!keep) changed = true;
+    return keep;
+  });
+  return changed ? filtered : nodes;
+}
+
+function collectNewDocLocationOptions(
+  nodes: readonly SidebarNode[],
+): NewDocLocationOption[] {
+  const options: NewDocLocationOption[] = [];
+  for (const node of nodes) {
+    if (node.kind === 'file') continue;
+    if (node.canCreateFile) {
+      const location = getSidebarNodeCreateLocation(node);
+      options.push({
+        id: node.id,
+        label: node.label,
+        pathLabel: getLibraryCreateLocationPathLabel(location),
+        depth: 0,
+        location,
+        iconColorIndex: 0,
+      });
+    }
+  }
+  return options;
 }
 
 function joinLibraryRelPath(parent: string, name: string): string {
@@ -1168,6 +1332,7 @@ function rootToSidebarNode(
   if (root.builtin) {
     children = virtualizeBookmarksGroup(children, root, sortMode);
     children = hideReadmeOnlyLibraryArtifactsFolder(children);
+    children = filterUnavailablePossibleSidebarNodes(children);
     children = ensureScratchpadNodePresent(children, root);
   }
   return {
@@ -1229,7 +1394,6 @@ function WikiSidebar({
   const [newName, setNewName] = useState('');
   const createInputRef = useRef<HTMLInputElement | null>(null);
   const [recent, setRecent] = useState<RecentEntry[]>([]);
-  const [recentExpanded, setRecentExpanded] = useState(false);
   const [recentCollapsed, setRecentCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem('wiki-recent-collapsed') === '1';
@@ -1248,6 +1412,31 @@ function WikiSidebar({
       return new Set();
     }
   });
+  const [iconColorIndices, setIconColorIndices] = useState<Record<string, number>>(() => {
+    try {
+      const saved = localStorage.getItem(LIBRARY_ICON_COLOR_STORAGE_KEY);
+      const parsed = saved ? JSON.parse(saved) : null;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+      return Object.fromEntries(
+        Object.entries(parsed).filter((entry): entry is [string, number] => (
+          typeof entry[0] === 'string' &&
+          typeof entry[1] === 'number' &&
+          Number.isInteger(entry[1]) &&
+          entry[1] >= 0
+        )),
+      );
+    } catch {
+      return {};
+    }
+  });
+  const [iconColorOrder, setIconColorOrder] = useState<number[]>(() => {
+    try {
+      const saved = localStorage.getItem(LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY);
+      return normalizeLibrarySidebarIconColorOrder(saved ? JSON.parse(saved) : null);
+    } catch {
+      return DEFAULT_LIBRARY_SIDEBAR_ICON_COLOR_ORDER;
+    }
+  });
   const selectedItemRef = useRef<HTMLDivElement | null>(null);
   const archiveUndoRef = useRef<SidebarArchiveUndo | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -1264,8 +1453,22 @@ function WikiSidebar({
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollJumpElementRef = useRef<HTMLElement | null>(null);
+  const iconColorUndoStackRef = useRef<Record<string, number>[]>([]);
   const [scrollJumpTarget, setScrollJumpTarget] = useState<'top' | 'bottom' | null>(null);
   const [sidebarTopFadeVisible, setSidebarTopFadeVisible] = useState(false);
+  const [iconColorPicker, setIconColorPicker] = useState<{
+    id: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [newDocLocationKey, setNewDocLocationKey] = useState<string>(() => {
+    try {
+      return localStorage.getItem(LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY) ?? '';
+    } catch {
+      return '';
+    }
+  });
+  const [newDocLocationPicker, setNewDocLocationPicker] = useState<{ x: number; y: number } | null>(null);
   const updateSelectedFileIds = useCallback((nextOrUpdater: Set<string> | ((prev: Set<string>) => Set<string>)) => {
     setSelectedFileIds((prev) => {
       const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
@@ -1493,6 +1696,81 @@ function WikiSidebar({
     localStorage.setItem(LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY, JSON.stringify([...pinnedItemIds]));
   }, [pinnedItemIds]);
 
+  useEffect(() => {
+    localStorage.setItem(LIBRARY_ICON_COLOR_STORAGE_KEY, JSON.stringify(iconColorIndices));
+  }, [iconColorIndices]);
+
+  useEffect(() => {
+    localStorage.setItem(LIBRARY_ICON_COLOR_ORDER_STORAGE_KEY, JSON.stringify(iconColorOrder));
+  }, [iconColorOrder]);
+
+  useEffect(() => {
+    if (newDocLocationKey) localStorage.setItem(LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY, newDocLocationKey);
+  }, [newDocLocationKey]);
+
+  const openSidebarIconColorPicker = useCallback((id: string, event: React.MouseEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setIconColorPicker({
+      id,
+      x: rect.right + 12,
+      y: rect.top + rect.height / 2,
+    });
+  }, []);
+
+  const openNewDocLocationPicker = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setNewDocLocationPicker({
+      x: rect.right + 12,
+      y: rect.top - 6,
+    });
+  }, []);
+
+  const selectNewDocLocation = useCallback((option: NewDocLocationOption) => {
+    setNewDocLocationKey(getLibraryCreateLocationKey(option.location));
+    setNewDocLocationPicker(null);
+  }, []);
+
+  const pushIconColorUndo = useCallback((previous: Record<string, number>) => {
+    iconColorUndoStackRef.current = [...iconColorUndoStackRef.current.slice(-19), { ...previous }];
+  }, []);
+
+  const selectSidebarIconColor = useCallback((id: string, colorIndex: number, targetIds?: readonly string[]) => {
+    setIconColorIndices((prev) => {
+      const ids = targetIds?.length ? targetIds : [id];
+      if (ids.every((targetId) => prev[targetId] === colorIndex)) return prev;
+      pushIconColorUndo(prev);
+      const next = { ...prev };
+      for (const targetId of ids) next[targetId] = colorIndex;
+      return next;
+    });
+    setIconColorPicker(null);
+  }, [pushIconColorUndo]);
+
+  useEffect(() => {
+    if (!active) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!event.metaKey || event.shiftKey || event.key.toLowerCase() !== 'z') return;
+      const target = event.target;
+      if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"]')) return;
+      const previous = iconColorUndoStackRef.current.pop();
+      if (!previous) return;
+      event.preventDefault();
+      setIconColorIndices(previous);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [active]);
+
+  const setSidebarIconColorOrder = useCallback((nextOrder: readonly number[]) => {
+    setIconColorOrder(normalizeLibrarySidebarIconColorOrder([...nextOrder]));
+  }, []);
+
+  const getSidebarIconColor = useCallback((id: string, fallbackColor: string) => (
+    getLibrarySidebarIconColor(iconColorIndices[id], fallbackColor)
+  ), [iconColorIndices]);
+
+  const getSidebarIconColorIndex = useCallback((id: string) => iconColorIndices[id], [iconColorIndices]);
+
   const toggleFolder = (name: string) => {
     setExpandedFolders((prev) => {
       const next = new Set(prev);
@@ -1678,8 +1956,14 @@ function WikiSidebar({
     const libraryRootNodes = libraryRoots.map((root) => rootToSidebarNode(root, sortMode, taggedDocByPath));
     roots.push(...flattenBuiltinSidebarRoots(libraryRootNodes));
     const visibleRoots = filterHiddenDefaultSidebarNodes(roots, hiddenDefaultFolders);
-    return orderTopLevelSidebarNodes(applyPinnedSidebarOrder(visibleRoots, sortMode, pinnedItemIds), sortMode, pinnedItemIds);
-  }, [artifacts, hiddenDefaultFolders, libraryRoots, pinnedItemIds, sortMode, taggedDocs]);
+    return orderTopLevelSidebarNodes(
+      applyPinnedSidebarOrder(visibleRoots, sortMode, pinnedItemIds, iconColorIndices, iconColorOrder),
+      sortMode,
+      pinnedItemIds,
+      iconColorIndices,
+      iconColorOrder,
+    );
+  }, [artifacts, hiddenDefaultFolders, iconColorIndices, iconColorOrder, libraryRoots, pinnedItemIds, sortMode, taggedDocs]);
 
   const sidebarRootsWithTodoOverrides = useMemo(
     () => applyTodoStateOverridesToNodes(sidebarRoots, todoStateOverrides),
@@ -1690,10 +1974,6 @@ function WikiSidebar({
     () => filterSidebarNodes(sidebarRootsWithTodoOverrides, searchQuery),
     [sidebarRootsWithTodoOverrides, searchQuery]
   );
-  const bookmarksActionItem = useMemo(() => {
-    const node = sidebarRootsWithTodoOverrides.find((item) => item.id === BOOKMARKS_ITEM_ID);
-    return node?.kind === 'file' ? node.item : null;
-  }, [sidebarRootsWithTodoOverrides]);
   const filteredRecentEntries = useMemo(() => filterStaleRecent(recent, wikiTree), [recent, wikiTree]);
   const revealRecentEntryInTree = useCallback((entry: RecentEntry) => {
     const location = getRecentEntryRevealLocation(entry, libraryRoots);
@@ -1724,10 +2004,82 @@ function WikiSidebar({
       timestamp: 0,
     });
   }, [libraryRoots, onSelectItem]);
+  const isSearching = searchQuery.trim().length > 0;
   const visibleSidebarRoots = useMemo(
     () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
     [filteredSidebarRoots]
   );
+  const bookmarksActionNode = useMemo(() => {
+    const node = filteredSidebarRoots.find((item) => item.id === BOOKMARKS_ITEM_ID);
+    return node?.kind === 'file' ? node : null;
+  }, [filteredSidebarRoots]);
+  const bookmarksActionItem = bookmarksActionNode?.item ?? null;
+  const [bookmarkCount, setBookmarkCount] = useState<number | null>(() => peekBookmarks()?.bookmarks.length ?? null);
+  useEffect(() => {
+    if (!bookmarksActionItem) return;
+    let cancelled = false;
+    const applySnapshot = (snapshot: BookmarksSnapshot) => {
+      if (!cancelled) setBookmarkCount(snapshot.bookmarks.length);
+    };
+
+    const cachedBookmarks = peekBookmarks();
+    if (cachedBookmarks) applySnapshot(cachedBookmarks);
+    void getBookmarks().then(applySnapshot);
+    const unsubscribe = onBookmarksChanged(applySnapshot);
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [bookmarksActionItem]);
+  const newDocLocationOptions = useMemo(
+    () => collectNewDocLocationOptions(visibleSidebarRoots),
+    [visibleSidebarRoots]
+  );
+  const selectedNewDocLocation = useMemo(() => {
+    if (newDocLocationOptions.length === 0) return null;
+    const selected = newDocLocationOptions.find((option) => getLibraryCreateLocationKey(option.location) === newDocLocationKey);
+    return selected ?? newDocLocationOptions.find((option) => option.location.relPath === SCRATCHPAD_FOLDER_NAME) ?? newDocLocationOptions[0];
+  }, [newDocLocationKey, newDocLocationOptions]);
+  const sidebarIconTargetIds = useMemo(() => {
+    const ids = collectSidebarIconTargetIds(visibleSidebarRoots);
+    if (!isSearching && selectedNewDocLocation) ids.push('new-doc:root');
+    if (!isSearching && filteredRecentEntries.length > 0) {
+      ids.push('recent:root');
+      ids.push(...filteredRecentEntries.map((entry) => `recent-entry:${getRecentEntrySidebarId(entry)}`));
+    }
+    if (!isSearching && bookmarksActionItem) ids.push(BOOKMARKS_ITEM_ID);
+    return ids;
+  }, [bookmarksActionItem, filteredRecentEntries, isSearching, selectedNewDocLocation, visibleSidebarRoots]);
+
+  const sidebarRowTopsRef = useRef<Map<string, number>>(new Map());
+  useLayoutEffect(() => {
+    const root = sidebarScrollRef.current;
+    if (!root) return;
+    const previousTops = sidebarRowTopsRef.current;
+    const nextTops = new Map<string, number>();
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+    for (const node of root.querySelectorAll<HTMLElement>('[data-library-sidebar-row-id]')) {
+      const rowId = node.dataset.librarySidebarRowId;
+      if (!rowId) continue;
+      const currentTop = node.offsetTop;
+      nextTops.set(rowId, currentTop);
+      if (reduceMotion || typeof node.animate !== 'function') continue;
+
+      const previousTop = previousTops.get(rowId);
+      if (previousTop === undefined) continue;
+
+      const keyframes = getRecentRowMoveKeyframes(previousTop, currentTop);
+      if (!keyframes) continue;
+
+      node.animate(keyframes, {
+        duration: RECENT_ROW_MOVE_ANIMATION_MS,
+        easing: RECENT_ROW_MOVE_ANIMATION_EASING,
+      });
+    }
+
+    sidebarRowTopsRef.current = nextTops;
+  }, [expandedFolders, filteredRecentEntries, filteredSidebarRoots, recentCollapsed, searchQuery, selectedNewDocLocation]);
 
   const allFlatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots), [filteredSidebarRoots]);
   const flatItems = useMemo(() => collectSidebarItems(filteredSidebarRoots, false), [filteredSidebarRoots]);
@@ -1894,8 +2246,7 @@ function WikiSidebar({
   }, []);
 
   const totalPages = countSidebarItems(sidebarRootsWithTodoOverrides);
-  const visiblePages = flatItems.length;
-  const isSearching = searchQuery.trim().length > 0;
+  const visiblePages = flatItems.filter((item) => item.type !== 'bookmarks').length;
 
   const emptyWiki = visibleSidebarRoots.length === 0 && !bookmarksActionItem;
   const contextActiveNodeId = contextMenu?.node?.id ?? null;
@@ -1928,8 +2279,9 @@ function WikiSidebar({
   const canCreateInContext = !contextDir || contextDir.canCreateFile;
   const contextDefaultFolderId = contextDir ? getDefaultFolderId(contextDir) : null;
   const contextUserFolderId = contextDir ? getUserFolderVisibilityId(contextDir) : null;
-  const contextHideFolderId = contextDefaultFolderId ?? contextUserFolderId;
-  const contextHideDirLabel = contextDefaultFolderId ? 'Hide folder' : contextUserFolderId ? 'Remove from FT' : null;
+  const contextHideBookmarks = contextFile?.type === 'bookmarks';
+  const contextHideFolderId = contextHideBookmarks ? BOOKMARKS_SHORTCUT_FOLDER_ID : contextDefaultFolderId ?? contextUserFolderId;
+  const contextHideDirLabel = contextHideBookmarks ? 'Hide Bookmarks' : contextDefaultFolderId ? 'Hide folder' : contextUserFolderId ? 'Remove from FT' : null;
   const canDeleteContextDir = !!contextDir?.canDeleteDir;
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact' || contextFile?.type === 'external';
   const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
@@ -2225,14 +2577,14 @@ function WikiSidebar({
 
   const hideContextDir = useCallback(() => {
     const folderId = contextHideFolderId;
-    const target = contextDir;
+    const targetLabel = contextHideBookmarks ? 'Bookmarks' : contextDir?.label ?? folderId;
     closeContextMenu();
     if (!folderId) return;
 
     setFolderConfirmation({
-      title: 'Hide folder?',
-      message: `Hide "${target?.label ?? folderId}" from the Library sidebar? You can restore it in Settings.`,
-      confirmLabel: 'Hide folder',
+      title: contextHideBookmarks ? 'Hide Bookmarks?' : 'Hide folder?',
+      message: `Hide "${targetLabel}" from the Library sidebar? You can restore it in Settings.`,
+      confirmLabel: contextHideBookmarks ? 'Hide Bookmarks' : 'Hide folder',
       onConfirm: async () => {
         const previous = hiddenDefaultFolders;
         const optimistic = [...new Set([...previous, folderId])];
@@ -2247,7 +2599,7 @@ function WikiSidebar({
         }
       },
     });
-  }, [closeContextMenu, contextDir, contextHideFolderId, hiddenDefaultFolders, loadTree]);
+  }, [closeContextMenu, contextDir, contextHideBookmarks, contextHideFolderId, hiddenDefaultFolders, loadTree]);
 
   const deleteContextFile = useCallback(() => {
     const target = contextFile;
@@ -2416,7 +2768,7 @@ function WikiSidebar({
         }}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
-        <div style={{ padding: '0 12px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div style={{ padding: '0 10px 8px', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <input
             ref={searchInputRef}
             value={searchQuery}
@@ -2441,10 +2793,12 @@ function WikiSidebar({
             style={{
               flex: '1 1 auto',
               minWidth: 0,
-              padding: '7px 10px',
+              height: '30px',
+              boxSizing: 'border-box',
+              padding: '0 10px',
               fontSize: '11px',
               color: theme.text,
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.55)',
               border: `1px solid ${theme.border}`,
               borderRadius: '6px',
               outline: 'none',
@@ -2462,15 +2816,16 @@ function WikiSidebar({
               backgroundColor: 'transparent',
               border: 'none',
               cursor: 'pointer',
-              borderRadius: '4px',
+              borderRadius: '6px',
+              outline: 'none',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
               gap: '3px',
               opacity: 0.7,
             }}
-            onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.backgroundColor = theme.hoverBg; }}
-            onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.backgroundColor = 'transparent'; }}
+            onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.color = theme.text; }}
+            onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; e.currentTarget.style.color = theme.textSecondary; }}
             title={sortMode === 'alpha' ? 'Sort by date' : 'Sort A-Z'}
           >
             {sortMode === 'alpha' ? (
@@ -2490,7 +2845,7 @@ function WikiSidebar({
         </div>
 
       {/* Page count */}
-      <div style={{ padding: '0 12px 8px', fontSize: '10px', color: theme.textSecondary, opacity: 0.6 }}>
+      <div style={{ padding: '0 12px 8px', fontSize: '10px', color: theme.textSecondary, opacity: 0.62, letterSpacing: 0 }}>
         {isSearching ? `${visiblePages} of ${totalPages} pages` : `${totalPages} pages`}
       </div>
 
@@ -2520,16 +2875,27 @@ function WikiSidebar({
         />
       )}
 
+      {!isSearching && selectedNewDocLocation && (
+        <NewDocShortcutBlock
+          option={selectedNewDocLocation}
+          theme={theme}
+          iconColor={getSidebarIconColor('new-doc:root', theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR)}
+          onOpen={() => beginCreateFile(selectedNewDocLocation.location)}
+          onOpenIconColorPicker={(event) => openSidebarIconColorPicker('new-doc:root', event)}
+          onOpenLocationPicker={openNewDocLocationPicker}
+        />
+      )}
+
       {!isSearching && filteredRecentEntries.length > 0 && (
         <RecentBlock
           recent={filteredRecentEntries}
-          expanded={recentExpanded}
-          onExpand={setRecentExpanded}
           collapsed={recentCollapsed}
-          onToggleCollapsed={() => setRecentCollapsed((v) => !v)}
+          onToggleCollapsed={() => setRecentCollapsed((value) => !value)}
           showDivider={false}
           selectedId={selectedId}
           theme={theme}
+          getSidebarIconColor={getSidebarIconColor}
+          onOpenIconColorPicker={openSidebarIconColorPicker}
           onRevealEntry={revealRecentEntryInTree}
           onOpenWiki={(relPath, title) =>
             onSelectItem({
@@ -2552,7 +2918,29 @@ function WikiSidebar({
               timestamp: 0,
             })
           }
+          showTrailingDivider={!bookmarksActionItem}
         />
+      )}
+
+      {!isSearching && bookmarksActionItem && (
+        <>
+          <SidebarShortcutRow
+            icon={<SidebarBookmarkIcon color={getSidebarIconColor(BOOKMARKS_ITEM_ID, theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR)} />}
+            title={bookmarksActionItem.title}
+            count={bookmarkCount ?? undefined}
+            isSelected={selectedId === BOOKMARKS_ITEM_ID}
+            theme={theme}
+            indent={LIBRARY_SIDEBAR_EDGE_PADDING}
+            fontWeight={500}
+            rowId={BOOKMARKS_ITEM_ID}
+            onIconClick={(event) => openSidebarIconColorPicker(BOOKMARKS_ITEM_ID, event)}
+            onOpen={() => onSelectItem(bookmarksActionItem)}
+            onContextMenu={(event) => {
+              if (bookmarksActionNode) openContextMenu(event, bookmarksActionNode);
+            }}
+          />
+          <SidebarDivider theme={theme} />
+        </>
       )}
 
       {emptyWiki ? (
@@ -2595,7 +2983,9 @@ function WikiSidebar({
           onContextMenu={openContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
-          showPinnedDividerBefore={!isSearching && shouldShowPinnedSidebarDividerBefore(visibleSidebarRoots, index, pinnedItemIds)}
+          getSidebarIconColor={getSidebarIconColor}
+          getSidebarIconColorIndex={getSidebarIconColorIndex}
+          onOpenIconColorPicker={openSidebarIconColorPicker}
         />
       ))}
 
@@ -2612,7 +3002,7 @@ function WikiSidebar({
           canShowFolderInFinder={!!contextFolderFinderPath}
           canRenameFile={canRenameContextFile}
           archiveFileLabel={archiveContextFileLabel}
-          canCopyFilePath={!!contextFile}
+          canCopyFilePath={!!contextFile && contextFile.type !== 'bookmarks'}
           canShowFileInFinder={!!contextFileFinderPath}
           canDeleteFile={canDeleteContextFile}
           pinLabel={contextPinLabel}
@@ -2654,6 +3044,34 @@ function WikiSidebar({
           onDeleteDir={deleteContextDir}
         />
       )}
+      {iconColorPicker && (
+        <SidebarIconColorPicker
+          x={iconColorPicker.x}
+          y={iconColorPicker.y}
+          theme={theme}
+          colorOrder={iconColorOrder}
+          selectedColorIndex={iconColorIndices[iconColorPicker.id]}
+          onSelect={(colorIndex, applyToAll) => selectSidebarIconColor(
+            iconColorPicker.id,
+            colorIndex,
+            applyToAll ? sidebarIconTargetIds : undefined,
+          )}
+          onReorder={setSidebarIconColorOrder}
+          onClose={() => setIconColorPicker(null)}
+        />
+      )}
+      {newDocLocationPicker && (
+        <NewDocLocationPicker
+          x={newDocLocationPicker.x}
+          y={newDocLocationPicker.y}
+          theme={theme}
+          options={newDocLocationOptions}
+          selectedKey={selectedNewDocLocation ? getLibraryCreateLocationKey(selectedNewDocLocation.location) : ''}
+          iconColor={theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR}
+          onSelect={selectNewDocLocation}
+          onClose={() => setNewDocLocationPicker(null)}
+        />
+      )}
       {deleteConfirmationDialog}
       <LibraryFolderConfirmationDialog
         request={folderConfirmation}
@@ -2678,14 +3096,6 @@ function WikiSidebar({
         </div>
       )}
 
-      {!isSearching && bookmarksActionItem && (
-        <BookmarksShortcutBlock
-          item={bookmarksActionItem}
-          isSelected={selectedId === bookmarksActionItem.id}
-          theme={theme}
-          onOpen={() => onSelectItem(bookmarksActionItem)}
-        />
-      )}
         </div>
         {scrollJumpTarget && (
           <button
@@ -2814,7 +3224,10 @@ function TreeNode({
   onContextMenu,
   onKeyboardScopeActive,
   pinnedItemIds,
-  showPinnedDividerBefore = false,
+  getSidebarIconColor,
+  getSidebarIconColorIndex,
+  onOpenIconColorPicker,
+  inheritedIconColorIndex,
 }: {
   node: SidebarNode;
   depth: number;
@@ -2845,38 +3258,42 @@ function TreeNode({
   onContextMenu: (event: React.MouseEvent, node: SidebarNode | null) => void;
   onKeyboardScopeActive?: () => void;
   pinnedItemIds: ReadonlySet<string>;
-  showPinnedDividerBefore?: boolean;
+  getSidebarIconColor: (id: string, fallbackColor: string) => string;
+  getSidebarIconColorIndex: (id: string) => number | undefined;
+  onOpenIconColorPicker: (id: string, event: React.MouseEvent<HTMLElement>) => void;
+  inheritedIconColorIndex?: number;
 }) {
   const [scratchpadExpanded, setScratchpadExpanded] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
-  const pinnedDivider = showPinnedDividerBefore ? <SidebarDivider theme={theme} /> : null;
 
   if (node.kind === 'file') {
     const isSel = node.item.id === selectedId;
     const explicitlySelected = selectedFileIds.has(node.item.id);
+    const fileIconColorIndex = inheritedIconColorIndex ?? getSidebarIconColorIndex(node.id);
+    const fallbackIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
     return (
-      <>
-        {pinnedDivider}
-        <FileItem
-          item={node.item}
-          depth={depth}
-          isSelected={isSel || explicitlySelected}
-          explicitlySelected={explicitlySelected}
-          showSelectionMarker={selectedFileIds.size > 0 && node.item.type !== 'bookmarks'}
-          isCollapsing={collapsingFileIds.has(node.item.id)}
-          isContextActive={contextActiveNodeId === node.id}
-          selectedKeyboardActive={selectedKeyboardActive}
-          theme={theme}
-          onSelect={(event) => onSelectItem(node.item, event)}
-          onToggleSelection={() => onToggleItemSelection(node.item)}
-          onContextMenu={(event) => onContextMenu(event, node)}
-          onKeyboardScopeActive={onKeyboardScopeActive}
-          requestRename={renameRequestId === node.item.id}
-          onRenameRequestConsumed={onRenameRequestConsumed}
-          draggable={!!node.item.rootPath && (node.item.type === 'wiki' || node.item.type === 'external')}
-          refProp={isSel ? selectedItemRef : undefined}
-        />
-      </>
+      <FileItem
+        item={node.item}
+        depth={depth}
+        isPinned={pinnedItemIds.has(node.id)}
+        isSelected={isSel || explicitlySelected}
+        explicitlySelected={explicitlySelected}
+        showSelectionMarker={selectedFileIds.size > 0 && node.item.type !== 'bookmarks'}
+        isCollapsing={collapsingFileIds.has(node.item.id)}
+        isContextActive={contextActiveNodeId === node.id}
+        selectedKeyboardActive={selectedKeyboardActive}
+        theme={theme}
+        iconColor={getLibrarySidebarIconColor(fileIconColorIndex, fallbackIconColor)}
+        onOpenIconColorPicker={(event) => onOpenIconColorPicker(node.id, event)}
+        onSelect={(event) => onSelectItem(node.item, event)}
+        onToggleSelection={() => onToggleItemSelection(node.item)}
+        onContextMenu={(event) => onContextMenu(event, node)}
+        onKeyboardScopeActive={onKeyboardScopeActive}
+        requestRename={renameRequestId === node.item.id}
+        onRenameRequestConsumed={onRenameRequestConsumed}
+        draggable={!!node.item.rootPath && (node.item.type === 'wiki' || node.item.type === 'external')}
+        refProp={isSel ? selectedItemRef : undefined}
+      />
     );
   }
 
@@ -2890,11 +3307,18 @@ function TreeNode({
   const shouldCapScratchpad = shouldCapScratchpadSidebarNode(normalNode, isSearching, scratchpadExpanded);
   const visibleChildren = shouldCapScratchpad ? normalNodes.slice(0, SCRATCHPAD_COLLAPSED_ITEM_LIMIT) : normalNodes;
   const hiddenScratchpadCount = normalNodes.length - visibleChildren.length;
+  const showChildGuide = isExpanded && (
+    visibleChildren.length > 0 ||
+    hiddenScratchpadCount > 0 ||
+    archivedNodes.length > 0
+  );
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const folderIconColorIndex = getSidebarIconColorIndex(node.id) ?? inheritedIconColorIndex;
+  const folderIconColor = getLibrarySidebarIconColor(folderIconColorIndex, sidebarIconColor);
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const folderContextActive = contextActiveNodeId === node.id;
-  const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : theme.bg;
+  const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : 'transparent';
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -2902,10 +3326,10 @@ function TreeNode({
 
   return (
     <>
-      {pinnedDivider}
-      <div data-library-dir-node="true" data-library-dir-id={node.id}>
+      <div data-library-dir-node="true" data-library-dir-id={node.id} style={{ position: 'relative' }}>
         <div
           className={`bm-folder-header${folderContextActive ? ' bm-folder-header-context' : ''}`}
+          data-library-sidebar-row-id={node.id}
           draggable={canDragDir}
           onDragStart={(event) => {
             if (!canDragDir) {
@@ -2956,37 +3380,24 @@ function TreeNode({
             display: 'flex',
             alignItems: 'center',
             gap: SIDEBAR_ICON_TEXT_GAP,
-            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${12 + depth * 12}px`,
+            minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+            margin: 0,
+            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING + depth * LIBRARY_SIDEBAR_DEPTH_INDENT}px`,
             cursor: 'pointer',
             fontSize: '12px',
-            fontWeight: 400,
+            fontWeight: depth === 0 ? 500 : 400,
             lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             color: sidebarTextColor,
             userSelect: 'none',
             backgroundColor: folderBackgroundColor,
+            borderRadius: 0,
           }}
         >
-            <SidebarFolderIcon color={sidebarIconColor} />
+            <SidebarIconButton label={`Change color for ${node.label}`} onClick={(event) => onOpenIconColorPicker(node.id, event)}>
+              <SidebarFolderIcon color={folderIconColor} />
+            </SidebarIconButton>
             <span style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap' }}>{node.label}</span>
-            <span style={{
-              minWidth: '14px',
-              height: '14px',
-              padding: '0 4px',
-              borderRadius: '999px',
-              boxSizing: 'border-box',
-              display: 'inline-flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              flexShrink: 0,
-              color: theme.textSecondary,
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
-              fontWeight: 400,
-              fontSize: '9px',
-              lineHeight: '14px',
-              opacity: 0.72,
-            }}>
-              {itemCount}
-            </span>
+            <SidebarCountPill count={itemCount} theme={theme} />
             {node.hasUnread && (
               <span
                 aria-label="Unread shared document"
@@ -3000,6 +3411,7 @@ function TreeNode({
                 }}
               />
             )}
+            <span aria-hidden="true" style={{ flex: '1 0 auto', minWidth: '8px' }} />
             {node.canCreateFile && (
               <button
                 className="bm-new-file-btn"
@@ -3007,7 +3419,6 @@ function TreeNode({
                 title={node.name === SCRATCHPAD_FOLDER_NAME ? 'New scratchpad entry' : 'New file'}
                 aria-label={`New file in ${node.label}`}
                 style={{
-                  marginLeft: 'auto',
                   width: '18px',
                   height: '18px',
                   display: 'flex',
@@ -3034,7 +3445,14 @@ function TreeNode({
                 </svg>
               </button>
             )}
+            {pinnedItemIds.has(node.id) && (
+              <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
+                <SidebarPinIcon />
+              </span>
+            )}
           </div>
+
+      {showChildGuide && <span aria-hidden="true" style={getSidebarChildGuideStyle(depth, theme.isDark)} />}
 
       {node.canCreateFile && creating?.kind === 'file' && createLocationMatches(creating.location, nodeCreateLocation) && (
         <CreateInput
@@ -3094,7 +3512,10 @@ function TreeNode({
           onContextMenu={onContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
-          showPinnedDividerBefore={!isSearching && shouldShowPinnedSidebarDividerBefore(visibleChildren, index, pinnedItemIds)}
+          getSidebarIconColor={getSidebarIconColor}
+          getSidebarIconColorIndex={getSidebarIconColorIndex}
+          onOpenIconColorPicker={onOpenIconColorPicker}
+          inheritedIconColorIndex={folderIconColorIndex}
         />
       ))}
       {isExpanded && hiddenScratchpadCount > 0 && (
@@ -3104,12 +3525,17 @@ function TreeNode({
             setScratchpadExpanded(true);
           }}
           style={{
-            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${24 + depth * 12}px`,
+            minHeight: '24px',
+            boxSizing: 'border-box',
+            padding: `4px ${LIBRARY_SIDEBAR_EDGE_PADDING}px 4px ${24 + depth * LIBRARY_SIDEBAR_DEPTH_INDENT}px`,
             fontSize: '10px',
+            fontStyle: 'italic',
             lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             color: theme.textSecondary,
             cursor: 'pointer',
-            opacity: 0.68,
+            opacity: 0.52,
+            display: 'flex',
+            alignItems: 'center',
           }}
           onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
           onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
@@ -3124,17 +3550,23 @@ function TreeNode({
             setArchiveExpanded((expanded) => !expanded);
           }}
           style={{
-            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${24 + depth * 12}px`,
+            minHeight: '24px',
+            boxSizing: 'border-box',
+            padding: `4px ${LIBRARY_SIDEBAR_EDGE_PADDING}px 4px ${24 + depth * LIBRARY_SIDEBAR_DEPTH_INDENT}px`,
             fontSize: '10px',
             lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             color: theme.textSecondary,
             cursor: 'pointer',
-            opacity: 0.68,
+            opacity: 0.72,
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
           }}
           onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
           onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
         >
-          {archiveExpanded ? 'Hide archive' : `Archive (${archivedNodes.length})`}
+          <SidebarChevron expanded={archiveExpanded} color="currentColor" size={9} opacity={0.75} />
+          <span>{archiveExpanded ? 'Hide archive' : `Archive (${archivedNodes.length})`}</span>
         </div>
       )}
       {isExpanded && archiveExpanded && archivedNodes.map((child, index) => (
@@ -3169,7 +3601,10 @@ function TreeNode({
           onContextMenu={onContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
-          showPinnedDividerBefore={!isSearching && shouldShowPinnedSidebarDividerBefore(archivedNodes, index, pinnedItemIds)}
+          getSidebarIconColor={getSidebarIconColor}
+          getSidebarIconColorIndex={getSidebarIconColorIndex}
+          onOpenIconColorPicker={onOpenIconColorPicker}
+          inheritedIconColorIndex={folderIconColorIndex}
         />
       ))}
       </div>
@@ -3341,13 +3776,14 @@ function LibraryContextMenu({
   const itemStyle: React.CSSProperties = {
     display: 'block',
     width: '100%',
+    minHeight: '28px',
     padding: '6px 10px',
     textAlign: 'left',
     fontSize: '12px',
     color: theme.text,
     background: 'transparent',
     border: 'none',
-    borderRadius: '4px',
+    borderRadius: '5px',
     cursor: 'pointer',
   };
   const disabledItemStyle: React.CSSProperties = {
@@ -3365,8 +3801,20 @@ function LibraryContextMenu({
   };
   const dividerStyle: React.CSSProperties = {
     height: '1px',
-    margin: '4px 2px',
+    margin: '5px 2px',
     backgroundColor: theme.border,
+  };
+  const menuStyle: React.CSSProperties = {
+    position: 'fixed',
+    left: x,
+    top: y,
+    zIndex: 1000,
+    minWidth: '196px',
+    padding: '5px',
+    backgroundColor: theme.surface2,
+    border: `1px solid ${theme.border}`,
+    borderRadius: '8px',
+    boxShadow: theme.isDark ? '0 14px 34px rgba(0,0,0,0.48)' : '0 14px 34px rgba(0,0,0,0.16)',
   };
   const hasBottomFolderAction = canRemoveRoot || !!hideDirLabel;
   const hasBottomAction = hasBottomFolderAction || canDeleteDir || canDeleteFile;
@@ -3376,19 +3824,16 @@ function LibraryContextMenu({
       <div
         onClick={(event) => event.stopPropagation()}
         onMouseDown={(event) => event.stopPropagation()}
-        style={{
-          position: 'fixed',
-          left: x,
-          top: y,
-          zIndex: 1000,
-          minWidth: '180px',
-          padding: '4px',
-          backgroundColor: theme.surface2,
-          border: `1px solid ${theme.border}`,
-          borderRadius: '6px',
-          boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.45)' : '0 8px 24px rgba(0,0,0,0.15)',
-        }}
+        style={menuStyle}
       >
+        <div style={{
+          padding: '4px 10px 6px',
+          fontSize: '10px',
+          lineHeight: '14px',
+          color: theme.textSecondary,
+        }}>
+          {multiSelectionCount} selected
+        </div>
         {multiArchiveLabel && (
           <button style={itemStyle} onClick={onToggleMultiArchive} onMouseEnter={setHover} onMouseLeave={clearHover}>{multiArchiveLabel}</button>
         )}
@@ -3416,18 +3861,7 @@ function LibraryContextMenu({
     <div
       onClick={(event) => event.stopPropagation()}
       onMouseDown={(event) => event.stopPropagation()}
-      style={{
-        position: 'fixed',
-        left: x,
-        top: y,
-        zIndex: 1000,
-        minWidth: '170px',
-        padding: '4px',
-        backgroundColor: theme.surface2,
-        border: `1px solid ${theme.border}`,
-        borderRadius: '6px',
-        boxShadow: theme.isDark ? '0 8px 24px rgba(0,0,0,0.45)' : '0 8px 24px rgba(0,0,0,0.15)',
-      }}
+      style={menuStyle}
     >
       <button
         style={canCreate ? itemStyle : disabledItemStyle}
@@ -3504,6 +3938,8 @@ function LibraryContextMenu({
 function FileItem({
   item,
   depth = 0,
+  isPinned,
+  iconColor,
   isSelected,
   explicitlySelected,
   showSelectionMarker,
@@ -3511,6 +3947,7 @@ function FileItem({
   isContextActive,
   selectedKeyboardActive,
   theme,
+  onOpenIconColorPicker,
   onSelect,
   onToggleSelection,
   onContextMenu,
@@ -3522,6 +3959,8 @@ function FileItem({
 }: {
   item: UnifiedItem;
   depth?: number;
+  isPinned: boolean;
+  iconColor: string;
   isSelected: boolean;
   explicitlySelected: boolean;
   showSelectionMarker: boolean;
@@ -3529,6 +3968,7 @@ function FileItem({
   isContextActive: boolean;
   selectedKeyboardActive: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
+  onOpenIconColorPicker: (event: React.MouseEvent<HTMLElement>) => void;
   onSelect: (event: React.MouseEvent) => void;
   onToggleSelection: () => void;
   onContextMenu?: (event: React.MouseEvent) => void;
@@ -3552,6 +3992,9 @@ function FileItem({
   const canRename = item.type === 'wiki' && !!item.relPath;
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+  const icon = item.type === 'bookmarks'
+    ? <SidebarBookmarkIcon color={iconColor} />
+    : <SidebarMarkdownIcon color={iconColor} />;
 
   const beginRename = useCallback(() => {
     if (!canRename) return;
@@ -3579,8 +4022,8 @@ function FileItem({
   const documentSelectionColor = theme.isDark ? '#38bdf8' : '#0284c7';
   const rowSelected = selectedInSidebar || selectedInDocument;
   const fileHoverBg = getLibrarySidebarFileHoverBg(theme.isDark);
-  const selectedSidebarBg = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-  const selectedDocumentBg = theme.isDark ? 'rgba(56,189,248,0.08)' : 'rgba(2,132,199,0.08)';
+  const selectedSidebarBg = theme.isDark ? 'rgba(56,189,248,0.14)' : 'rgba(2,132,199,0.12)';
+  const selectedDocumentBg = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
   const contextSelectedBg = theme.isDark ? 'rgba(255,255,255,0.11)' : 'rgba(0,0,0,0.065)';
   const fileBackgroundColor = isContextActive
     ? (rowSelected ? contextSelectedBg : fileHoverBg)
@@ -3589,8 +4032,8 @@ function FileItem({
       : selectedInDocument
         ? selectedDocumentBg
         : undefined;
-  const horizontalPadding = canShowInFinder ? 28 : 12;
-  const leftPadding = 12 + depth * 12;
+  const horizontalPadding = canShowInFinder ? 28 : LIBRARY_SIDEBAR_EDGE_PADDING;
+  const leftPadding = LIBRARY_SIDEBAR_EDGE_PADDING + depth * LIBRARY_SIDEBAR_DEPTH_INDENT;
   const rowPadding = isCollapsing
     ? `0 ${horizontalPadding}px 0 ${leftPadding}px`
     : `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${horizontalPadding}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${leftPadding}px`;
@@ -3599,6 +4042,7 @@ function FileItem({
   return (
     <div
       className={`bm-file-row${rowSelected ? ' bm-file-row-selected' : ''}${isContextActive ? ' bm-file-row-context' : ''}`}
+      data-library-sidebar-row-id={item.id}
       ref={refProp}
       tabIndex={-1}
       draggable={draggable}
@@ -3638,9 +4082,9 @@ function FileItem({
         cursor: 'pointer',
         backgroundColor: fileBackgroundColor,
         borderLeft: selectedInSidebar
-          ? `2px solid ${theme.accent}`
+          ? `2px solid ${documentSelectionColor}`
           : selectedInDocument
-            ? `2px solid ${documentSelectionColor}`
+            ? `2px solid ${theme.textSecondary}`
             : '2px solid transparent',
         opacity: isCollapsing ? 0 : 1,
         transform: isCollapsing ? 'translateX(4px)' : 'translateX(0)',
@@ -3724,12 +4168,12 @@ function FileItem({
                       strokeLinejoin="round"
                     />
                   </svg>
-                ) : (
-                  <SidebarMarkdownIcon color={sidebarIconColor} />
-                )}
+                ) : icon}
               </button>
             ) : (
-              <SidebarMarkdownIcon color={sidebarIconColor} />
+              <SidebarIconButton label={`Change color for ${item.title}`} onClick={onOpenIconColorPicker}>
+                {icon}
+              </SidebarIconButton>
             )}
             <div style={{
               fontSize: '12px',
@@ -3740,6 +4184,11 @@ function FileItem({
             }}>
               {item.title}
             </div>
+            {isPinned && (
+              <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
+                <SidebarPinIcon />
+              </span>
+            )}
             {showTodoStateBadge && (
               <span
                 aria-label={item.todoState === 'done' ? 'done task note' : 'open task note'}
@@ -3828,9 +4277,589 @@ function SidebarDivider({ theme }: {
   );
 }
 
+function SidebarChevron({
+  expanded,
+  color,
+  size = 10,
+  opacity = 0.72,
+}: {
+  expanded: boolean;
+  color: string;
+  size?: number;
+  opacity?: number;
+}) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{
+        flex: `0 0 ${size}px`,
+        color,
+        opacity,
+        transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+        transition: 'transform 0.12s ease',
+      }}
+    >
+      <path d="M6 4l4 4-4 4" />
+    </svg>
+  );
+}
+
+function SidebarCountPill({
+  count,
+  theme,
+}: {
+  count: number;
+  theme: ReturnType<typeof useTheme>['theme'];
+}) {
+  return (
+    <span style={{
+      minWidth: '14px',
+      height: '14px',
+      padding: '0 4px',
+      borderRadius: '999px',
+      boxSizing: 'border-box',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      flexShrink: 0,
+      color: theme.textSecondary,
+      backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.035)',
+      fontWeight: 400,
+      fontSize: '9px',
+      lineHeight: '14px',
+      opacity: 0.72,
+    }}>
+      {count}
+    </span>
+  );
+}
+
+function SidebarPinIcon() {
+  return (
+    <svg
+      width="11"
+      height="11"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block' }}
+    >
+      <path d="M5.5 2.5h5l-1 4 2.5 2.5v1H9.1L8 14l-1.1-4H4V9l2.5-2.5-1-4Z" />
+    </svg>
+  );
+}
+
+function SidebarNewDocIcon({ color }: { color: string }) {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.25"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ display: 'block', flexShrink: 0, color, opacity: 0.46 }}
+    >
+      <path d="M4.25 2.25h5.1l2.4 2.45v9.05h-7.5V2.25Z" />
+      <path d="M9.25 2.5v2.35h2.25" />
+      <path d="M5.9 8.2h4.2" />
+      <path d="M5.9 10.4h3.3" />
+    </svg>
+  );
+}
+
+function SidebarIconButton({
+  label,
+  onClick,
+  children,
+}: {
+  label: string;
+  onClick: (event: React.MouseEvent<HTMLElement>) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onMouseDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onClick(event);
+      }}
+      style={{
+        width: '14px',
+        height: '14px',
+        padding: 0,
+        margin: 0,
+        flex: '0 0 14px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: 'inherit',
+        backgroundColor: 'transparent',
+        border: 'none',
+        borderRadius: '3px',
+        cursor: 'pointer',
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function NewDocShortcutBlock({
+  option,
+  theme,
+  iconColor,
+  onOpen,
+  onOpenIconColorPicker,
+  onOpenLocationPicker,
+}: {
+  option: NewDocLocationOption;
+  theme: ReturnType<typeof useTheme>['theme'];
+  iconColor: string;
+  onOpen: () => void;
+  onOpenIconColorPicker: (event: React.MouseEvent<HTMLElement>) => void;
+  onOpenLocationPicker: (event: React.MouseEvent<HTMLElement>) => void;
+}) {
+  const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+  return (
+    <div
+      onClick={onOpen}
+      title={`New doc in ${option.pathLabel}`}
+      style={{
+        boxSizing: 'border-box',
+        minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
+        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING}px`,
+        fontSize: '12px',
+        fontWeight: 500,
+        lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+        color: sidebarTextColor,
+        display: 'flex',
+        alignItems: 'center',
+        gap: SIDEBAR_ICON_TEXT_GAP,
+        cursor: 'pointer',
+        userSelect: 'none',
+      }}
+      onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+      onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
+    >
+      <SidebarIconButton label="Change color for New doc" onClick={onOpenIconColorPicker}>
+        <SidebarNewDocIcon color={iconColor} />
+      </SidebarIconButton>
+      <span style={{ flex: '0 1 auto', minWidth: 0, whiteSpace: 'nowrap' }}>New doc</span>
+      <span aria-hidden="true" style={{ flex: '1 0 auto', minWidth: '8px' }} />
+      <button
+        type="button"
+        title="Choose new doc folder"
+        aria-label="Choose new doc folder"
+        onClick={(event) => {
+          event.stopPropagation();
+          onOpenLocationPicker(event);
+        }}
+        style={{
+          maxWidth: '112px',
+          minWidth: 0,
+          flexShrink: 1,
+          border: 'none',
+          padding: 0,
+          backgroundColor: 'transparent',
+          color: theme.textSecondary,
+          fontSize: '10px',
+          fontStyle: 'italic',
+          lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          cursor: 'pointer',
+          opacity: 0.52,
+        }}
+        onMouseEnter={(event) => { event.currentTarget.style.color = theme.text; }}
+        onMouseLeave={(event) => { event.currentTarget.style.color = theme.textSecondary; }}
+      >
+        {option.pathLabel}
+      </button>
+    </div>
+  );
+}
+
+function NewDocLocationPicker({
+  x,
+  y,
+  theme,
+  options,
+  selectedKey,
+  iconColor,
+  onSelect,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  theme: ReturnType<typeof useTheme>['theme'];
+  options: readonly NewDocLocationOption[];
+  selectedKey: string;
+  iconColor: string;
+  onSelect: (option: NewDocLocationOption) => void;
+  onClose: () => void;
+}) {
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        onMouseDown={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 999,
+          backgroundColor: 'transparent',
+        }}
+      />
+      <div
+        role="menu"
+        aria-label="Choose new doc folder"
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left: x,
+          top: y,
+          zIndex: 1000,
+          width: '188px',
+          maxHeight: 'min(360px, calc(100vh - 32px))',
+          overflowY: 'auto',
+          padding: '6px',
+          backgroundColor: theme.surface2,
+          border: `1px solid ${theme.border}`,
+          borderRadius: '8px',
+          boxShadow: theme.isDark ? '0 14px 34px rgba(0,0,0,0.48)' : '0 14px 34px rgba(0,0,0,0.16)',
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '-8px',
+            top: '50%',
+            width: '8px',
+            height: '1px',
+            backgroundColor: theme.border,
+          }}
+        />
+        {options.map((option) => {
+          const isSelected = getLibraryCreateLocationKey(option.location) === selectedKey;
+          return (
+            <button
+              key={option.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={isSelected}
+              onClick={() => onSelect(option)}
+              style={{
+                width: '100%',
+                minHeight: '28px',
+                padding: `6px 8px 6px ${8 + option.depth * 12}px`,
+                border: 'none',
+                borderRadius: '5px',
+                backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.045)') : 'transparent',
+                color: theme.text,
+                display: 'flex',
+                alignItems: 'center',
+                gap: SIDEBAR_ICON_TEXT_GAP,
+                cursor: 'pointer',
+                textAlign: 'left',
+              }}
+              onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
+              onMouseLeave={(event) => {
+                event.currentTarget.style.backgroundColor = isSelected
+                  ? (theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.045)')
+                  : 'transparent';
+              }}
+            >
+              <SidebarFolderIcon color={iconColor} />
+              <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '12px', fontWeight: 500 }}>
+                {option.label}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </>
+  );
+}
+
+function SidebarIconColorPicker({
+  x,
+  y,
+  theme,
+  colorOrder,
+  selectedColorIndex,
+  onSelect,
+  onReorder,
+  onClose,
+}: {
+  x: number;
+  y: number;
+  theme: ReturnType<typeof useTheme>['theme'];
+  colorOrder: readonly number[];
+  selectedColorIndex?: number;
+  onSelect: (colorIndex: number, applyToAll: boolean) => void;
+  onReorder: (nextOrder: readonly number[]) => void;
+  onClose: () => void;
+}) {
+  const [dragColorIndex, setDragColorIndex] = useState<number | null>(null);
+  const [draftColorOrder, setDraftColorOrder] = useState<number[]>(() => normalizeLibrarySidebarIconColorOrder(colorOrder));
+  const didDragRef = useRef(false);
+  const draftColorOrderRef = useRef<number[]>(draftColorOrder);
+  const dotRefs = useRef<Map<number, HTMLButtonElement>>(new Map());
+  const previousDotTopsRef = useRef<Map<number, number>>(new Map());
+  const pointerDragRef = useRef<{
+    colorIndex: number;
+    pointerId: number;
+    startIndex: number;
+    startY: number;
+    rowHeight: number;
+    startOrder: number[];
+  } | null>(null);
+  const orderedColors = draftColorOrder;
+
+  useEffect(() => {
+    if (dragColorIndex !== null) return;
+    const nextOrder = normalizeLibrarySidebarIconColorOrder(colorOrder);
+    draftColorOrderRef.current = nextOrder;
+    setDraftColorOrder(nextOrder);
+  }, [colorOrder, dragColorIndex]);
+
+  const setDotRef = useCallback((colorIndex: number, node: HTMLButtonElement | null) => {
+    if (node) dotRefs.current.set(colorIndex, node);
+    else dotRefs.current.delete(colorIndex);
+  }, []);
+
+  const getDotRowHeight = useCallback((order: readonly number[], colorIndex: number) => {
+    const currentIndex = order.indexOf(colorIndex);
+    const currentNode = dotRefs.current.get(colorIndex);
+    const nextNode = currentIndex >= 0 ? dotRefs.current.get(order[currentIndex + 1]) : null;
+    const previousNode = currentIndex > 0 ? dotRefs.current.get(order[currentIndex - 1]) : null;
+    if (currentNode && nextNode) return nextNode.offsetTop - currentNode.offsetTop;
+    if (currentNode && previousNode) return currentNode.offsetTop - previousNode.offsetTop;
+    return 28;
+  }, []);
+
+  const commitPointerDrag = useCallback((node: HTMLButtonElement, pointerId: number) => {
+    if (!pointerDragRef.current || pointerDragRef.current.pointerId !== pointerId) return;
+    if (didDragRef.current) onReorder(draftColorOrderRef.current);
+    try {
+      node.releasePointerCapture(pointerId);
+    } catch {
+      // Pointer capture may already be released if the window canceled the drag.
+    }
+    pointerDragRef.current = null;
+    setDragColorIndex(null);
+  }, [onReorder]);
+
+  const cancelPointerDrag = useCallback((node: HTMLButtonElement, pointerId: number) => {
+    const drag = pointerDragRef.current;
+    if (!drag || drag.pointerId !== pointerId) return;
+    if (didDragRef.current) {
+      draftColorOrderRef.current = drag.startOrder;
+      setDraftColorOrder(drag.startOrder);
+    }
+    try {
+      node.releasePointerCapture(pointerId);
+    } catch {
+      // Pointer capture may already be released if the window canceled the drag.
+    }
+    pointerDragRef.current = null;
+    setDragColorIndex(null);
+  }, []);
+
+  useLayoutEffect(() => {
+    const previousTops = previousDotTopsRef.current;
+    const nextTops = new Map<number, number>();
+    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+
+    for (const colorIndex of orderedColors) {
+      const node = dotRefs.current.get(colorIndex);
+      if (!node) continue;
+      const currentTop = node.offsetTop;
+      nextTops.set(colorIndex, currentTop);
+      if (reduceMotion || typeof node.animate !== 'function') continue;
+
+      const previousTop = previousTops.get(colorIndex);
+      if (previousTop === undefined) continue;
+
+      const keyframes = getRecentRowMoveKeyframes(previousTop, currentTop);
+      if (!keyframes) continue;
+
+      node.animate(keyframes, {
+        duration: RECENT_ROW_MOVE_ANIMATION_MS,
+        easing: RECENT_ROW_MOVE_ANIMATION_EASING,
+      });
+    }
+
+    previousDotTopsRef.current = nextTops;
+  }, [orderedColors]);
+
+  return (
+    <>
+      <div
+        aria-hidden="true"
+        onMouseDown={onClose}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          zIndex: 999,
+          backgroundColor: 'transparent',
+        }}
+      />
+      <div
+        role="menu"
+        aria-label="Choose icon color"
+        onMouseDown={(event) => event.stopPropagation()}
+        style={{
+          position: 'fixed',
+          left: x,
+          top: y,
+          transform: 'translateY(-50%)',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: '6px',
+          padding: '7px',
+          backgroundColor: theme.surface2,
+          border: `1px solid ${theme.border}`,
+          borderRadius: '8px',
+          boxShadow: theme.isDark ? '0 14px 34px rgba(0,0,0,0.48)' : '0 14px 34px rgba(0,0,0,0.16)',
+        }}
+      >
+        <span
+          aria-hidden="true"
+          style={{
+            position: 'absolute',
+            left: '-8px',
+            top: '50%',
+            width: '8px',
+            height: '1px',
+            backgroundColor: theme.border,
+          }}
+        />
+        {orderedColors.map((colorIndex, index) => (
+          <button
+            key={colorIndex}
+            ref={(node) => setDotRef(colorIndex, node)}
+            type="button"
+            role="menuitem"
+            aria-label={`Use icon color ${index + 1}`}
+            aria-pressed={selectedColorIndex === colorIndex}
+            onClick={(event) => {
+              if (didDragRef.current) {
+                didDragRef.current = false;
+                return;
+              }
+              onSelect(colorIndex, event.metaKey);
+            }}
+            onPointerDown={(event) => {
+              if (event.button !== 0) return;
+              event.stopPropagation();
+              const order = draftColorOrderRef.current;
+              pointerDragRef.current = {
+                colorIndex,
+                pointerId: event.pointerId,
+                startIndex: order.indexOf(colorIndex),
+                startY: event.clientY,
+                rowHeight: getDotRowHeight(order, colorIndex),
+                startOrder: order,
+              };
+              didDragRef.current = false;
+              event.currentTarget.setPointerCapture(event.pointerId);
+            }}
+            onPointerMove={(event) => {
+              const drag = pointerDragRef.current;
+              if (!drag || drag.pointerId !== event.pointerId) return;
+              const targetIndex = getSidebarIconColorDragTargetIndex(
+                drag.startIndex,
+                drag.startY,
+                event.clientY,
+                drag.rowHeight,
+                drag.startOrder.length,
+              );
+              const currentIndex = draftColorOrderRef.current.indexOf(drag.colorIndex);
+              if (targetIndex === currentIndex) return;
+              didDragRef.current = true;
+              setDragColorIndex(drag.colorIndex);
+              const nextOrder = reorderLibrarySidebarIconColorOrder(draftColorOrderRef.current, currentIndex, targetIndex);
+              draftColorOrderRef.current = nextOrder;
+              setDraftColorOrder(nextOrder);
+            }}
+            onPointerUp={(event) => {
+              commitPointerDrag(event.currentTarget, event.pointerId);
+            }}
+            onPointerCancel={(event) => {
+              cancelPointerDrag(event.currentTarget, event.pointerId);
+            }}
+            style={{
+              width: '22px',
+              height: '22px',
+              boxSizing: 'border-box',
+              padding: 0,
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              border: 'none',
+              borderRadius: '999px',
+              backgroundColor: 'transparent',
+              opacity: dragColorIndex === colorIndex ? 0.36 : 0.62,
+              cursor: dragColorIndex === colorIndex ? 'grabbing' : 'default',
+              outline: 'none',
+              touchAction: 'none',
+              boxShadow: selectedColorIndex === colorIndex
+                ? `inset 0 0 0 1px ${theme.isDark ? 'rgba(255,255,255,0.22)' : 'rgba(0,0,0,0.16)'}`
+                : undefined,
+            }}
+            onMouseEnter={(event) => {
+              if (dragColorIndex !== colorIndex) event.currentTarget.style.opacity = '0.86';
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.opacity = dragColorIndex === colorIndex ? '0.36' : '0.62';
+            }}
+          >
+            <span
+              aria-hidden="true"
+              style={{
+                width: '16px',
+                height: '16px',
+                borderRadius: '999px',
+                backgroundColor: LIBRARY_SIDEBAR_ICON_COLOR_PALETTE[colorIndex],
+                boxShadow: `inset 0 0 0 1px ${theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)'}`,
+              }}
+            />
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function SidebarShortcutRow({
   icon,
   title,
+  count,
   titleAttr,
   meta,
   metaTitle,
@@ -3838,10 +4867,15 @@ function SidebarShortcutRow({
   isSelected,
   theme,
   indent = 10,
+  fontWeight = 400,
+  rowId,
+  onIconClick,
   onOpen,
+  onContextMenu,
 }: {
   icon: React.ReactNode;
   title: string;
+  count?: number;
   titleAttr?: string;
   meta?: string;
   metaTitle?: string;
@@ -3849,19 +4883,34 @@ function SidebarShortcutRow({
   isSelected: boolean;
   theme: ReturnType<typeof useTheme>['theme'];
   indent?: number;
+  fontWeight?: React.CSSProperties['fontWeight'];
+  rowId?: string;
+  onIconClick?: (event: React.MouseEvent<HTMLElement>) => void;
   onOpen: () => void;
+  onContextMenu?: (event: React.MouseEvent) => void;
 }) {
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
+  const titleStyle = count === undefined
+    ? librarySidebarFadeTextStyle()
+    : {
+      flex: '0 1 auto',
+      minWidth: 0,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+    };
   return (
     <div
+      data-library-sidebar-row-id={rowId}
       onClick={onOpen}
+      onContextMenu={onContextMenu}
       title={titleAttr}
       style={{
         boxSizing: 'border-box',
         minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
-        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${indent}px`,
+        padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${indent}px`,
         fontSize: '12px',
-        fontWeight: 400,
+        fontWeight,
         lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
         color: sidebarTextColor,
         display: 'flex',
@@ -3870,13 +4919,18 @@ function SidebarShortcutRow({
         cursor: 'pointer',
         userSelect: 'none',
         backgroundColor: isSelected ? (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)') : 'transparent',
-        borderLeft: isSelected ? `2px solid ${theme.accent}` : '2px solid transparent',
+        boxShadow: isSelected ? `inset 2px 0 0 ${theme.accent}` : undefined,
       }}
       onMouseEnter={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = theme.hoverBg; }}
       onMouseLeave={(event) => { if (!isSelected) event.currentTarget.style.backgroundColor = 'transparent'; }}
     >
-      {icon}
-      <span style={librarySidebarFadeTextStyle()}>{title}</span>
+      {onIconClick ? (
+        <SidebarIconButton label={`Change color for ${title}`} onClick={onIconClick}>
+          {icon}
+        </SidebarIconButton>
+      ) : icon}
+      <span style={titleStyle}>{title}</span>
+      {count !== undefined && <SidebarCountPill count={count} theme={theme} />}
       {meta && (
         <button
           type="button"
@@ -3891,17 +4945,21 @@ function SidebarShortcutRow({
             minWidth: 0,
             flexShrink: 0,
             border: 'none',
-            padding: '1px 5px',
-            borderRadius: '6px',
+            padding: 0,
+            borderRadius: 0,
             color: theme.textSecondary,
-            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.05)',
-            fontSize: '9px',
-            lineHeight: '13px',
+            backgroundColor: 'transparent',
+            fontSize: '10px',
+            fontStyle: 'italic',
+            lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             whiteSpace: 'nowrap',
             overflow: 'hidden',
             textOverflow: 'ellipsis',
             cursor: onMetaClick ? 'pointer' : 'default',
+            opacity: 0.52,
           }}
+          onMouseEnter={(event) => { event.currentTarget.style.color = theme.text; }}
+          onMouseLeave={(event) => { event.currentTarget.style.color = theme.textSecondary; }}
         >
           {meta}
         </button>
@@ -3912,60 +4970,34 @@ function SidebarShortcutRow({
 
 interface RecentBlockProps {
   recent: RecentEntry[];
-  expanded: boolean;
-  onExpand: (expanded: boolean) => void;
   collapsed: boolean;
   onToggleCollapsed: () => void;
   showDivider?: boolean;
+  showTrailingDivider?: boolean;
   selectedId: string | null;
   theme: ReturnType<typeof useTheme>['theme'];
+  getSidebarIconColor: (id: string, fallbackColor: string) => string;
+  onOpenIconColorPicker: (id: string, event: React.MouseEvent<HTMLElement>) => void;
   onRevealEntry: (entry: RecentEntry) => void;
   onOpenWiki: (relPath: string, title: string) => void;
   onOpenExternal: (absPath: string, title: string) => void;
 }
 
-function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed, showDivider = true, selectedId, theme, onRevealEntry, onOpenWiki, onOpenExternal }: RecentBlockProps) {
-  const visibleRecent = splitRecent(recent, expanded);
-  const recentRowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
-  const previousRecentRowTopsRef = useRef<Map<string, number>>(new Map());
-  const setRecentRowRef = useCallback((id: string, node: HTMLDivElement | null) => {
-    if (node) recentRowRefs.current.set(id, node);
-    else recentRowRefs.current.delete(id);
-  }, []);
-  useLayoutEffect(() => {
-    const previousTops = previousRecentRowTopsRef.current;
-    const nextTops = new Map<string, number>();
-    const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
-
-    for (const [id, node] of recentRowRefs.current) {
-      const currentTop = node.offsetTop;
-      nextTops.set(id, currentTop);
-      if (reduceMotion || typeof node.animate !== 'function') continue;
-
-      const previousTop = previousTops.get(id);
-      if (previousTop === undefined) continue;
-
-      const keyframes = getRecentRowMoveKeyframes(previousTop, currentTop);
-      if (!keyframes) continue;
-
-      node.animate(keyframes, {
-        duration: RECENT_ROW_MOVE_ANIMATION_MS,
-        easing: RECENT_ROW_MOVE_ANIMATION_EASING,
-      });
-    }
-
-    previousRecentRowTopsRef.current = nextTops;
-  });
+function RecentBlock({ recent, collapsed, onToggleCollapsed, showDivider = true, showTrailingDivider = true, selectedId, theme, getSidebarIconColor, onOpenIconColorPicker, onRevealEntry, onOpenWiki, onOpenExternal }: RecentBlockProps) {
+  const visibleRecent = splitRecent(recent);
   if (visibleRecent.total === 0) return null;
   const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
+  const recentIconId = 'recent:root';
+  const recentIconColor = getSidebarIconColor(recentIconId, sidebarIconColor);
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
 
   const headerStyle: React.CSSProperties = {
     boxSizing: 'border-box',
     minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
-    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} 12px`,
+    margin: 0,
+    padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING}px`,
     fontSize: '12px',
-    fontWeight: 400,
+    fontWeight: 500,
     lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
     color: sidebarTextColor,
     display: 'flex',
@@ -3973,81 +5005,52 @@ function RecentBlock({ recent, expanded, onExpand, collapsed, onToggleCollapsed,
     gap: SIDEBAR_ICON_TEXT_GAP,
     cursor: 'pointer',
     userSelect: 'none',
-  };
-  const showMoreStyle: React.CSSProperties = {
-    padding: '3px 12px 5px 20px',
-    fontSize: '10px',
-    color: theme.textSecondary,
-    cursor: 'pointer',
-    opacity: 0.6,
+    backgroundColor: 'transparent',
   };
 
   return (
-    <div style={{ marginBottom: '4px' }}>
+    <div style={{ position: 'relative' }}>
       {showDivider && <SidebarDivider theme={theme} />}
       <div
+        data-library-sidebar-row-id={recentIconId}
         style={headerStyle}
         onClick={onToggleCollapsed}
         onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
         onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
       >
-        <SidebarRecentIcon color={sidebarIconColor} />
-        <span>Recents</span>
+        <SidebarIconButton label="Change color for Recents" onClick={(event) => onOpenIconColorPicker(recentIconId, event)}>
+          <SidebarRecentIcon color={recentIconColor} />
+        </SidebarIconButton>
+        <span style={{ flex: '0 1 auto', minWidth: 0 }}>Recents</span>
+        <SidebarCountPill count={visibleRecent.total} theme={theme} />
+        <span aria-hidden="true" style={{ flex: '1 0 auto', minWidth: '8px' }} />
       </div>
+      {!collapsed && visibleRecent.entries.length > 0 && <span aria-hidden="true" style={getSidebarChildGuideStyle(0, theme.isDark)} />}
       {!collapsed && visibleRecent.entries.map((e) => {
         const id = getRecentEntrySidebarId(e);
+        const iconId = `recent-entry:${id}`;
         const isSel = selectedId === id;
         const parentLabel = getRecentEntryParentLabel(e);
+        const parentPath = getRecentEntryParentPath(e);
         return (
-          <div
+          <SidebarShortcutRow
             key={id}
-            data-recent-row-id={id}
-            ref={(node) => setRecentRowRef(id, node)}
-            style={{ willChange: 'transform' }}
-          >
-            <SidebarShortcutRow
-              icon={<SidebarMarkdownIcon color={sidebarIconColor} />}
-              title={e.title}
-              titleAttr={e.kind === 'external' ? e.path : e.title}
-              meta={parentLabel}
-              metaTitle={`Reveal in ${parentLabel}`}
-              onMetaClick={() => onRevealEntry(e)}
-              isSelected={isSel}
-              theme={theme}
-              indent={24}
-              onOpen={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
-            />
-          </div>
+            icon={<SidebarMarkdownIcon color={getSidebarIconColor(iconId, sidebarIconColor)} />}
+            title={e.title}
+            titleAttr={e.kind === 'external' ? e.path : e.title}
+            meta={parentPath}
+            metaTitle={`Reveal in ${parentLabel}`}
+            onMetaClick={() => onRevealEntry(e)}
+            isSelected={isSel}
+            theme={theme}
+            indent={24}
+            rowId={iconId}
+            onIconClick={(event) => onOpenIconColorPicker(iconId, event)}
+            onOpen={() => (e.kind === 'wiki' ? onOpenWiki(e.path, e.title) : onOpenExternal(e.path, e.title))}
+          />
         );
       })}
-      {!collapsed && visibleRecent.total > visibleRecent.entries.length && (
-        <div onClick={() => onExpand(true)} style={showMoreStyle}>Show more ({visibleRecent.total - visibleRecent.entries.length})</div>
-      )}
-      {!collapsed && expanded && (
-        <div onClick={() => onExpand(false)} style={showMoreStyle}>Show less</div>
-      )}
-    </div>
-  );
-}
-
-function BookmarksShortcutBlock({ item, isSelected, theme, onOpen }: {
-  item: UnifiedItem;
-  isSelected: boolean;
-  theme: ReturnType<typeof useTheme>['theme'];
-  onOpen: () => void;
-}) {
-  const sidebarIconColor = theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR;
-
-  return (
-    <div>
-      <SidebarDivider theme={theme} />
-      <SidebarShortcutRow
-        icon={<SidebarBookmarkIcon color={sidebarIconColor} />}
-        title={item.title}
-        isSelected={isSelected}
-        theme={theme}
-        onOpen={onOpen}
-      />
+      {showTrailingDivider && <SidebarDivider theme={theme} />}
     </div>
   );
 }

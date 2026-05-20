@@ -4,6 +4,7 @@ import {
   getSettingsBadgeStyle,
   SettingsBadge,
   SettingsDisabledBlock,
+  SettingsRow,
 } from '../SettingsPrimitives';
 
 const theme = {
@@ -75,5 +76,14 @@ describe('SettingsBadge', () => {
     expect(styles.color).toBe(theme.warning);
     expect(styles.borderRadius).toBe('999px');
     expect(styles.padding).toBe('2px 6px');
+  });
+});
+
+describe('SettingsRow', () => {
+  it('can omit its trailing divider for the last row in a card', () => {
+    const { container } = render(<SettingsRow theme={theme} label="Final row" last />);
+
+    const row = container.firstElementChild as HTMLElement;
+    expect(row.style.borderBottom).toBe('0px');
   });
 });

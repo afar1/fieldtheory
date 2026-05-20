@@ -80,6 +80,7 @@ import {
 import { KeyCap } from './KeyCap';
 import { DraggableDroppableRow } from './DraggableDroppableRow';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
+import { getSettingsDividerColor } from './settings/SettingsPrimitives';
 
 const WINDOW_STYLE_TRANSITION_IN_KEY = 'ftWindowStyleTransitionIn';
 
@@ -2689,6 +2690,16 @@ export default function ClipboardHistory() {
     const context = getAgentImproveContext();
     const selectedText = context?.kind === 'selection' ? context.content : '';
     try {
+      const activeContext = await window.commandsAPI.getActiveLibraryFileContext?.();
+      if (!activeContext && context?.filePath) {
+        await window.commandsAPI.setActiveLibraryFileContext?.({
+          type: 'external',
+          rootPath: '',
+          relPath: context.filePath,
+          filePath: context.filePath,
+          title: context.title ?? context.filePath.split('/').pop() ?? 'Document',
+        });
+      }
       await window.commandsAPI.runLocalCommand({
         commandName: 'improve',
         mode: 'selection',
@@ -4381,7 +4392,6 @@ export default function ClipboardHistory() {
           {([
             ['librarian', 'Library', 'Personal wiki'],
             ['clipboard', TAB_LABELS.clipboard, undefined],
-            ['possible', 'Possible', 'Possible ideas'],
           ] as const).map(([mode, label, title]) => {
             const isSelected = viewMode === mode && !showSettings;
             const bgColor = isSelected ? theme.accent : 'transparent';
@@ -4819,6 +4829,7 @@ export default function ClipboardHistory() {
             minHeight: 0,
             display: viewMode === 'librarian' ? 'flex' : 'none',
             flexDirection: 'column',
+            borderTop: focusChromeOverlayActive ? 'none' : `1px solid ${getSettingsDividerColor(theme)}`,
           }}
         >
           <LibrarianView
@@ -4954,7 +4965,8 @@ export default function ClipboardHistory() {
             display: 'flex', 
             flexDirection: 'column', 
             overflow: 'hidden', 
-            padding: '0 16px 16px 16px',
+            padding: '12px 10px 16px',
+            borderTop: `1px solid ${getSettingsDividerColor(theme)}`,
           }}
         >
           {/* Screen Recording Permission Banner */}
@@ -5010,13 +5022,14 @@ export default function ClipboardHistory() {
               data-fieldtheory-top-nav-search="true"
               style={{
                 width: '100%',
-                padding: '7px 10px',
+                height: '30px',
+                padding: '0 10px',
                 border: `1px solid ${theme.border}`,
                 borderRadius: '6px',
                 fontSize: '11px',
                 outline: 'none',
                 boxSizing: 'border-box',
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.055)' : 'rgba(255,255,255,0.55)',
                 color: theme.text,
                 // @ts-ignore - prevent drag on input
                 WebkitAppRegion: 'no-drag',

@@ -94,9 +94,12 @@ import {
   filterStaleRecent,
   filterUnifiedFolders,
   getLibraryDragData,
+  getLibrarySidebarIconColor,
   getRecentEntrySidebarId,
   getRecentEntryParentLabel,
+  getRecentEntryParentPath,
   getRecentRowMoveKeyframes,
+  getSidebarIconColorDragTargetIndex,
   getPrimaryArtifactsFinderPath,
   getSidebarDividerStyle,
   getSidebarFolderFinderPath,
@@ -105,14 +108,15 @@ import {
   hasLibraryDragData,
   hideReadmeOnlyLibraryArtifactsFolder,
   libraryRootsHaveBuiltinRelPath,
+  normalizeLibrarySidebarIconColorOrder,
   orderTopLevelSidebarNodes,
+  reorderLibrarySidebarIconColorOrder,
   removeWikiRelPathFromLibraryRoots,
   removeWikiRelPathFromTree,
   renamePinnedSidebarIds,
   renameLibraryRootRelPath,
   shouldCapScratchpadSidebarNode,
   shouldShowSidebarTodoStateBadge,
-  shouldShowPinnedSidebarDividerBefore,
   splitArchivedSidebarNodes,
   splitPinnedRecentEntries,
   splitRecent,
@@ -2352,7 +2356,7 @@ describe('recursive sidebar tree helpers', () => {
     ]);
   });
 
-  it('marks the first unpinned item after pinned sidebar items for a divider', () => {
+  it('promotes pinned sidebar items without changing the unpinned order', () => {
     const pinned = new Set(['wiki:Middle']);
     const result = sortSidebarNodes([
       file('Old', 10),
@@ -2360,10 +2364,56 @@ describe('recursive sidebar tree helpers', () => {
       file('Middle', 20),
     ], 'time', pinned);
 
-    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
-      false,
-      true,
-      false,
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Middle',
+      'Newest',
+      'Old',
+    ]);
+  });
+
+  it('groups sidebar items by icon color before sorting within each group', () => {
+    const result = sortSidebarNodes([
+      file('Zulu', 10),
+      file('Alpha', 30),
+      file('Beta', 20),
+    ], 'time', new Set(), {
+      'wiki:Alpha': 1,
+      'wiki:Beta': 1,
+    });
+
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Zulu',
+      'Alpha',
+      'Beta',
+    ]);
+  });
+
+  it('treats uncolored items as the grey color group when color order changes', () => {
+    const result = sortSidebarNodes([
+      file('Grey', 10),
+      file('Blue', 20),
+    ], 'alpha', new Set(), {
+      'wiki:Blue': 4,
+    }, [4, 0, 1, 2, 3, 5, 6]);
+
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Blue',
+      'Grey',
+    ]);
+  });
+
+  it('uses the dragged icon color order when grouping sidebar items', () => {
+    const result = sortSidebarNodes([
+      file('Warm', 10),
+      file('Cool', 20),
+    ], 'alpha', new Set(), {
+      'wiki:Warm': 0,
+      'wiki:Cool': 1,
+    }, [1, 0, 2, 3, 4, 5, 6]);
+
+    expect(result.map((node) => node.kind === 'file' ? node.item.title : node.label)).toEqual([
+      'Cool',
+      'Warm',
     ]);
   });
 
@@ -2479,14 +2529,6 @@ describe('recursive sidebar tree helpers', () => {
       'Artifact',
       'Other',
     ]);
-    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
-      false,
-      false,
-    ]);
-    expect(artifacts?.kind === 'dir' ? artifacts.children.map((_node, index) => shouldShowPinnedSidebarDividerBefore(artifacts.children, index, pinned)) : []).toEqual([
-      false,
-      true,
-    ]);
   });
 
   it('still promotes pinned directories above unpinned directories', () => {
@@ -2501,10 +2543,6 @@ describe('recursive sidebar tree helpers', () => {
     expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
       'Z-artifacts',
       'Scratchpad',
-    ]);
-    expect(result.map((node, index) => shouldShowPinnedSidebarDividerBefore(result, index, pinned))).toEqual([
-      false,
-      true,
     ]);
   });
 
@@ -2609,14 +2647,14 @@ describe('recursive sidebar tree helpers', () => {
     const nodes = [dir('entries'), dir('domains'), dir('categories')];
     const result = virtualizeBookmarksGroup(nodes, root);
     expect(result.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
-      'entries',
       'bookmarks:root',
+      'entries',
     ]);
     expect(result.some((node) => node.kind === 'dir' && node.label === 'Bookmarks from x.com')).toBe(false);
     const bookmarksNode = result.find((node) => node.id === 'bookmarks:root');
     expect(bookmarksNode?.kind).toBe('file');
     if (bookmarksNode?.kind !== 'file') return;
-    expect(bookmarksNode.item).toMatchObject({ title: 'View bookmarks', type: 'bookmarks' });
+    expect(bookmarksNode.item).toMatchObject({ title: 'Bookmarks', type: 'bookmarks' });
     expect(result.some((node) => node.kind === 'dir' && node.name === 'categories')).toBe(false);
   });
 
@@ -2624,8 +2662,8 @@ describe('recursive sidebar tree helpers', () => {
     const nodes = [dir('entries'), dir('bookmarks-from-x'), dir('domains')];
     const result = virtualizeBookmarksGroup(nodes, root);
     expect(result.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
-      'entries',
       'bookmarks:root',
+      'entries',
     ]);
     expect(result.some((node) => node.kind === 'dir' && node.name === 'bookmarks-from-x')).toBe(false);
   });
@@ -2634,8 +2672,8 @@ describe('recursive sidebar tree helpers', () => {
     const nodes = [dir('entries'), dir('bookmarks', [file('Saved bookmark', 1)])];
     const result = virtualizeBookmarksGroup(nodes, root);
     expect(result.map((node) => node.kind === 'dir' ? node.name : node.id)).toEqual([
-      'entries',
       'bookmarks:root',
+      'entries',
     ]);
     expect(result.some((node) => node.kind === 'dir' && node.name === 'bookmarks')).toBe(false);
   });
@@ -3073,7 +3111,7 @@ describe('splitRecent', () => {
 
   it('keeps one recent list in input order', () => {
     const entries = [make('wiki', 'a'), make('external', 'x'), make('wiki', 'b')];
-    const out = splitRecent(entries, false);
+    const out = splitRecent(entries);
     expect(out.entries.map((e) => e.path)).toEqual(['a', 'x', 'b']);
     expect(out.total).toBe(3);
   });
@@ -3089,15 +3127,23 @@ describe('splitRecent', () => {
     })).toBe('Plans');
   });
 
-  it('caps the combined list when collapsed and shows every remaining item when expanded', () => {
-    const entries = Array.from({ length: 14 }, (_, i) => make(i % 2 === 0 ? 'wiki' : 'external', `r${i}`));
-    const collapsed = splitRecent(entries, false);
-    expect(collapsed.entries).toHaveLength(6);
-    expect(collapsed.total).toBe(14);
+  it('formats recent parent paths with spaced slash separators', () => {
+    expect(getRecentEntryParentPath({
+      kind: 'wiki',
+      path: 'scratchpad/meetings/team-notes',
+    })).toBe('/ scratchpad / meetings');
+    expect(getRecentEntryParentPath({
+      kind: 'external',
+      path: '/Users/afar/.fieldtheory/library/Plans/Plan.md',
+    })).toBe('/ Plans');
+  });
 
-    const expanded = splitRecent(entries, true);
-    expect(expanded.entries).toHaveLength(14);
-    expect(expanded.entries.map((e) => e.path).at(-1)).toBe('r13');
+  it('caps the combined list to seven sidebar items', () => {
+    const entries = Array.from({ length: 14 }, (_, i) => make(i % 2 === 0 ? 'wiki' : 'external', `r${i}`));
+    const out = splitRecent(entries);
+    expect(out.entries).toHaveLength(7);
+    expect(out.total).toBe(14);
+    expect(out.entries.map((e) => e.path).at(-1)).toBe('r6');
   });
 
   it('splits pinned recents without changing their relative order', () => {
@@ -3121,6 +3167,25 @@ describe('splitRecent', () => {
 
   it('skips recent row animation for stationary rows', () => {
     expect(getRecentRowMoveKeyframes(120, 120.5)).toBeNull();
+  });
+});
+
+describe('sidebar icon colors', () => {
+  it('uses the fallback before a color is chosen and resolves selected colors', () => {
+    expect(getLibrarySidebarIconColor(undefined, '#8a8a8a')).toBe('#8a8a8a');
+    expect(getLibrarySidebarIconColor(0, '#111111')).toBe('#8a8a8a');
+    expect(getLibrarySidebarIconColor(7, '#8a8a8a')).toBe(getLibrarySidebarIconColor(0, '#8a8a8a'));
+  });
+
+  it('normalizes and reorders the icon color order', () => {
+    expect(normalizeLibrarySidebarIconColorOrder([2, 2, 99, 1]).slice(0, 3)).toEqual([2, 1, 0]);
+    expect(reorderLibrarySidebarIconColorOrder([0, 1, 2, 3], 0, 2)).toEqual([1, 2, 0, 3]);
+  });
+
+  it('keeps color drag target changes thresholded by row height', () => {
+    expect(getSidebarIconColorDragTargetIndex(2, 100, 112, 28, 7)).toBe(2);
+    expect(getSidebarIconColorDragTargetIndex(2, 100, 115, 28, 7)).toBe(3);
+    expect(getSidebarIconColorDragTargetIndex(2, 100, 61, 28, 7)).toBe(1);
   });
 });
 
