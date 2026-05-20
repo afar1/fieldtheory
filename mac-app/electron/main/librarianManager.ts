@@ -51,6 +51,7 @@ export const DEFAULT_LIBRARY_FOLDER_IDS = [
   'scratchpad',
   'debates',
   'Plans',
+  'bookmarks-shortcut',
   'bookmarks-from-x',
   'entries',
   'categories',

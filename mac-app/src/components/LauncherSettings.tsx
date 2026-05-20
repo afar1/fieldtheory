@@ -7,29 +7,13 @@ import {
 } from '../commandLauncherUtils';
 import { useTheme } from '../contexts/ThemeContext';
 import {
-  SettingsBadge,
-  SettingsInsetGroup,
+  SettingsCard,
   SettingsRow,
   SettingsSectionHeading,
   SettingsToggle,
 } from './settings/SettingsPrimitives';
 
 const ACTIVE_LAUNCHER_ROOT_KINDS: LauncherRootSearchKind[] = ['app', 'file'];
-const PLANNED_LAUNCHER_ROOT_KINDS: LauncherRootSearchKind[] = [
-  'system-setting',
-  'contact',
-  'recent-document',
-  'url',
-  'web-search',
-  'calculator',
-  'unit',
-  'currency',
-  'time-zone',
-  'dictionary',
-  'calendar',
-  'system-command',
-  'terminal-command',
-];
 
 export default function LauncherSettings() {
   const { theme } = useTheme();
@@ -67,55 +51,33 @@ export default function LauncherSettings() {
   }, [enabledKinds, persistEnabledKinds]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      <div>
-        <SettingsSectionHeading theme={theme} title="Launcher" />
-        <SettingsInsetGroup theme={theme}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {ACTIVE_LAUNCHER_ROOT_KINDS.map((kind) => (
-              <SettingsRow
-                key={kind}
-                theme={theme}
-                label={LAUNCHER_ROOT_SEARCH_KIND_LABELS[kind]}
-                control={(
-                  <SettingsToggle
-                    theme={theme}
-                    checked={enabledKinds[kind]}
-                    onClick={() => toggleKind(kind)}
-                    activeColor={theme.success}
-                  />
-                )}
-              />
-            ))}
-          </div>
-        </SettingsInsetGroup>
-      </div>
-
-      <div>
-        <SettingsSectionHeading theme={theme} title="Later" />
-        <SettingsInsetGroup theme={theme}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-            {PLANNED_LAUNCHER_ROOT_KINDS.map((kind) => (
-              <SettingsRow
-                key={kind}
-                theme={theme}
-                label={LAUNCHER_ROOT_SEARCH_KIND_LABELS[kind]}
-                control={(
-                  <>
-                    <SettingsBadge theme={theme}>{enabledKinds[kind] ? 'On' : 'Off'}</SettingsBadge>
-                    <SettingsToggle
-                      theme={theme}
-                      checked={enabledKinds[kind]}
-                      onClick={() => {}}
-                      disabled
-                    />
-                  </>
-                )}
-              />
-            ))}
-          </div>
-        </SettingsInsetGroup>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <SettingsCard theme={theme}>
+        <SettingsSectionHeading
+          theme={theme}
+          title="Launcher"
+          description="Choose which supported root search sources the launcher includes."
+        />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          {ACTIVE_LAUNCHER_ROOT_KINDS.map((kind, index) => (
+            <SettingsRow
+              key={kind}
+              theme={theme}
+              label={LAUNCHER_ROOT_SEARCH_KIND_LABELS[kind]}
+              hint={kind === 'app' ? 'Installed applications in launcher root search.' : 'Indexed files in launcher root search.'}
+              last={index === ACTIVE_LAUNCHER_ROOT_KINDS.length - 1}
+              control={(
+                <SettingsToggle
+                  theme={theme}
+                  checked={enabledKinds[kind]}
+                  onClick={() => toggleKind(kind)}
+                  activeColor={theme.success}
+                />
+              )}
+            />
+          ))}
+        </div>
+      </SettingsCard>
     </div>
   );
 }

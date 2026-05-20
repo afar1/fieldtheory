@@ -4,7 +4,12 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { SettingsDivider, SettingsRow, SettingsToggle } from './settings/SettingsPrimitives';
+import {
+  SettingsCard,
+  SettingsRow,
+  SettingsSectionHeading,
+  SettingsToggle,
+} from './settings/SettingsPrimitives';
 
 interface SoundConfig {
   enabled: boolean;
@@ -59,38 +64,52 @@ export default function SoundsSettings() {
   }, []);
 
   return (
-    <div style={{ padding: 0 }}>
-      <SettingsRow
-        theme={theme}
-        label="Librarian Sound"
-        hint="Plays when a new Librarian artifact is created."
-        control={(
-          <SettingsToggle
-            theme={theme}
-            checked={librarianSoundEnabled}
-            onClick={() => handleLibrarianSoundChange(!librarianSoundEnabled)}
-            activeColor={theme.success}
-            title={librarianSoundEnabled ? 'Librarian sound enabled' : 'Librarian sound disabled'}
-          />
-        )}
-      />
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <SettingsCard theme={theme}>
+        <SettingsSectionHeading
+          theme={theme}
+          title="Librarian"
+          description="Plays when a new Librarian artifact is created. Quiet by design."
+        />
+        <SettingsRow
+          theme={theme}
+          label="Librarian sound"
+          hint="Use the existing artifact-created sound."
+          last
+          control={(
+            <SettingsToggle
+              theme={theme}
+              checked={librarianSoundEnabled}
+              onClick={() => handleLibrarianSoundChange(!librarianSoundEnabled)}
+              activeColor={theme.success}
+              title={librarianSoundEnabled ? 'Librarian sound enabled' : 'Librarian sound disabled'}
+            />
+          )}
+        />
+      </SettingsCard>
 
-      <SettingsDivider theme={theme} margin="12px 0" />
-
-      <SettingsRow
-        theme={theme}
-        label="Other Sounds"
-        hint="Recording, transcription, window, and paste sounds."
-        control={(
-          <SettingsToggle
-            theme={theme}
-            checked={soundsEnabled}
-            onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
-            activeColor={theme.success}
-            title={soundsEnabled ? 'Other sounds enabled' : 'Other sounds disabled'}
-          />
-        )}
-      />
+      <SettingsCard theme={theme}>
+        <SettingsSectionHeading
+          theme={theme}
+          title="Other sounds"
+          description="Recording, transcription, window, and paste sounds."
+        />
+        <SettingsRow
+          theme={theme}
+          label="Other sounds"
+          hint="Uses the current single app-wide sound toggle."
+          last
+          control={(
+            <SettingsToggle
+              theme={theme}
+              checked={soundsEnabled}
+              onClick={() => handleSoundsEnabledChange(!soundsEnabled)}
+              activeColor={theme.success}
+              title={soundsEnabled ? 'Other sounds enabled' : 'Other sounds disabled'}
+            />
+          )}
+        />
+      </SettingsCard>
     </div>
   );
 }

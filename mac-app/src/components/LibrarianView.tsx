@@ -41,7 +41,6 @@ import {
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
-  isSidebarToggleShortcut,
   restoreTextCursorBlink,
 } from '../utils/editorShortcuts';
 import {
@@ -2582,7 +2581,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
-  const [copyPathCopied, setCopyPathCopied] = useState(false);
+  const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
 
@@ -3536,7 +3535,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [activeIsSourceOnlyDocument, contentMode]);
 
   useEffect(() => {
-    if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external')) {
+    if (!active || !activeReading || !activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact')) {
       void window.commandsAPI?.setActiveLibraryFileContext?.(null);
       return;
     }
@@ -3545,6 +3544,36 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       item.id === selectedItemId || item.absPath === activeReading.path
     ));
     if (!sidebarItem?.rootPath || !sidebarItem.relPath || (sidebarItem.type !== 'wiki' && sidebarItem.type !== 'external')) {
+      if (selectedItemType === 'wiki' && wikiSelectedRelPath && activeReading.path) {
+        void window.commandsAPI?.setActiveLibraryFileContext?.({
+          type: 'wiki',
+          rootPath: '',
+          relPath: wikiSelectedRelPath,
+          filePath: activeReading.path,
+          title: activeReading.title,
+        });
+        return;
+      }
+      if (selectedItemType === 'external' && activeReading.path) {
+        void window.commandsAPI?.setActiveLibraryFileContext?.({
+          type: 'external',
+          rootPath: '',
+          relPath: activeReading.path,
+          filePath: activeReading.path,
+          title: activeReading.title,
+        });
+        return;
+      }
+      if (selectedItemType === 'artifact' && activeReading.path) {
+        void window.commandsAPI?.setActiveLibraryFileContext?.({
+          type: 'external',
+          rootPath: '',
+          relPath: activeReading.path,
+          filePath: activeReading.path,
+          title: activeReading.title,
+        });
+        return;
+      }
       void window.commandsAPI?.setActiveLibraryFileContext?.(null);
       return;
     }
@@ -3556,7 +3585,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       filePath: sidebarItem.absPath,
       title: sidebarItem.title,
     });
-  }, [active, activeIsMarkdownDocument, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType]);
+  }, [active, activeIsMarkdownDocument, activeReading?.path, activeReading?.title, selectedItemId, selectedItemType, wikiSelectedRelPath]);
 
   useEffect(() => {
     if (!active) {
@@ -5792,13 +5821,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setTimeout(() => setLinkCopied(false), 2000);
   }, [shareStatus?.url]);
 
-  const flashCopyPathCopied = useCallback(() => {
-    setCopyPathCopied(true);
+  const flashCopyFeedback = useCallback((label: string) => {
+    setCopyFeedbackLabel(label);
     if (copyPathFeedbackTimerRef.current !== null) {
       window.clearTimeout(copyPathFeedbackTimerRef.current);
     }
     copyPathFeedbackTimerRef.current = window.setTimeout(() => {
-      setCopyPathCopied(false);
+      setCopyFeedbackLabel(null);
       copyPathFeedbackTimerRef.current = null;
     }, COPY_PATH_FEEDBACK_MS);
   }, []);
@@ -5833,26 +5862,35 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return activeReading?.path ?? '';
   }, [activeReading?.path, contentMode, getRenderedSelectionText]);
 
-  const copyActiveReadingTextOrPath = useCallback(async () => {
+  const getActiveReadingCopyPayload = useCallback((): { text: string; label: string } | null => {
     const text = getActiveReadingCopyText();
-    if (!text) return;
+    if (!text) return null;
+    return {
+      text,
+      label: text === activeReading?.path ? 'Copied file path' : 'Copied segment',
+    };
+  }, [activeReading?.path, getActiveReadingCopyText]);
+
+  const copyActiveReadingTextOrPath = useCallback(async () => {
+    const payload = getActiveReadingCopyPayload();
+    if (!payload) return;
     try {
-      await navigator.clipboard.writeText(text);
-      flashCopyPathCopied();
+      await navigator.clipboard.writeText(payload.text);
+      flashCopyFeedback(payload.label);
     } catch (err) {
       console.warn('[Librarian] Failed to copy text or path:', err);
     }
-  }, [flashCopyPathCopied, getActiveReadingCopyText]);
+  }, [flashCopyFeedback, getActiveReadingCopyPayload]);
 
   const copyActiveReadingPath = useCallback(async () => {
     if (!activeReading?.path) return;
     try {
       await navigator.clipboard.writeText(activeReading.path);
-      flashCopyPathCopied();
+      flashCopyFeedback('Copied file path');
     } catch (err) {
       console.warn('[Librarian] Failed to copy path:', err);
     }
-  }, [activeReading?.path, flashCopyPathCopied]);
+  }, [activeReading?.path, flashCopyFeedback]);
 
   useEffect(() => {
     return () => {
@@ -6310,14 +6348,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         toggleFocusChromeShortcut();
         return;
       }
-      if (selectedItemType === 'bookmarks' && isSidebarToggleShortcut(e)) {
-        e.preventDefault();
-        e.stopPropagation();
-        e.stopImmediatePropagation();
-        toggleImmersive();
-        return;
-      }
-
       // Cmd+. - cycles the available markdown content modes.
       if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
@@ -7315,7 +7345,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   isSharing={isSharing}
                   showShare={false}
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
-                  copyPathCopied={copyPathCopied}
+                  copyPathCopied={copyFeedbackLabel !== null}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                 />
               )}
@@ -7680,20 +7710,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     blinkCursor={blinkTextCursor}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
-                    dataAttributes={{
-                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
-                      'data-ft-agent-file-path': activeReading.path,
-                      'data-ft-agent-title': activeReading.title,
-                    }}
-                  />
-                  {showMaxwellFlux && maxwellFluxStatus && (
-                    <MaxwellFluxOverlay
-                      status={maxwellFluxStatus}
-                      contentLength={maxwellFluxContentLength}
-                      isDark={theme.isDark}
-                    />
-                  )}
-                </div>
+	                    dataAttributes={{
+	                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
+	                      'data-ft-agent-file-path': activeReading.path,
+	                      'data-ft-agent-title': activeReading.title,
+	                    }}
+	                  />
+	                </div>
                 {renderMarkdownWikiLinkSuggestionMenu(applyMarkdownWikiLinkSuggestion)}
                 {markdownUrlPasteChoice && (
                   <div
@@ -7787,7 +7810,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 event.preventDefault();
                 activateRenderedTextEditing();
               }}
-              onCopy={flashCopyPathCopied}
+              onCopy={() => flashCopyFeedback('Copied segment')}
               style={{
                 ...documentTextStyle,
                 position: 'relative',
@@ -7863,16 +7886,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       width: '100%',
                       minHeight: '160px',
                       height: 'auto',
-                    }}
-                  />
-                  {showMaxwellFlux && maxwellFluxStatus && (
-                    <MaxwellFluxOverlay
-                      status={maxwellFluxStatus}
-                      contentLength={maxwellFluxContentLength}
-                      isDark={theme.isDark}
-                    />
-                  )}
-                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
+	                    }}
+	                  />
+	                  {renderMarkdownWikiLinkSuggestionMenu(applyRenderedWikiLinkSuggestion)}
                   <LinkedDocumentsSection links={linkedDocuments} onOpen={openMarkdownLinkTarget} />
                 </>
               )}
@@ -8119,7 +8135,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </div>
       )}
 
-      {copyPathCopied && (
+      {copyFeedbackLabel && (
         <div
           role="status"
           style={{
@@ -8137,7 +8153,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             zIndex: 6,
           }}
         >
-          Copied path
+          {copyFeedbackLabel}
         </div>
       )}
 

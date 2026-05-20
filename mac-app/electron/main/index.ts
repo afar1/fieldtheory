@@ -148,8 +148,10 @@ import {
   clipboardMatchesCommandPayload,
   formatCommandFilePasteText,
   resolveCommandFilePasteMode,
+  shouldUseNativeCommandFileTyping,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
+  type ClipboardSnapshot,
   type CommandClipboardPayloadSnapshot,
 } from './commandClipboard';
 import { TaggedDocsIPCChannels, TaggedDocsManager, type TaggedDoc, type TaggedDocsScanProgress } from './taggedDocsManager';
@@ -491,6 +493,74 @@ function appendCommandLauncherVisibilityTrace(
 
 function commandPayloadTrace(text: string): Record<string, unknown> {
   return isCommandPayloadTraceEnabled() ? { payload: text } : {};
+}
+
+function scheduleCommandClipboardRestore(input: {
+  commandName: string;
+  commandPath: string;
+  restoreGeneration: number;
+  restoreSnapshot: ClipboardSnapshot;
+  launcherClipboardPayload: CommandClipboardPayloadSnapshot | null;
+}): void {
+  const {
+    commandName,
+    commandPath,
+    restoreGeneration,
+    restoreSnapshot,
+    launcherClipboardPayload,
+  } = input;
+
+  void (async () => {
+    appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
+      commandName,
+      commandPath,
+      delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
+      generation: restoreGeneration,
+    });
+
+    await waitForCommandClipboardPasteRead();
+
+    if (commandClipboardRestoreCoordinator.canRestore(restoreGeneration)) {
+      try {
+        const clipboardStillHasLauncherPayload = launcherClipboardPayload
+          ? clipboardMatchesCommandPayload(launcherClipboardPayload)
+          : false;
+        if (clipboardStillHasLauncherPayload) {
+          restoreClipboardSnapshot(restoreSnapshot);
+          clipboardManager?.syncClipboardHash();
+          appendCommandLauncherTrace('invoke-command-clipboard-restored', {
+            commandName,
+            commandPath,
+            generation: restoreGeneration,
+            reason: 'clipboard-still-launcher-payload',
+          });
+        } else {
+          appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+            commandName,
+            commandPath,
+            generation: restoreGeneration,
+            reason: launcherClipboardPayload ? 'clipboard-changed-after-launcher-paste' : 'missing-launcher-payload-snapshot',
+          });
+        }
+      } finally {
+        commandClipboardRestoreCoordinator.finish(restoreGeneration);
+      }
+    } else {
+      appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
+        commandName,
+        commandPath,
+        generation: restoreGeneration,
+        reason: 'newer-command-invocation',
+      });
+    }
+  })().catch((error) => {
+    appendCommandLauncherTrace('invoke-command-clipboard-restore-error', {
+      commandName,
+      commandPath,
+      generation: restoreGeneration,
+      error,
+    });
+  });
 }
 
 async function activateCommandLauncherTargetApp(
@@ -8430,7 +8500,16 @@ function setupClipboardIPCHandlers(): void {
 
         let pasted = false;
         let fallbackRan = false;
-        pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+        if (shouldUseNativeCommandFileTyping({ mode: pasteMode, isTerminal, isIDE })) {
+          pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
+        } else {
+          appendCommandLauncherTrace('invoke-handoff-native-type-skipped', {
+            filePath,
+            targetBundleId: targetApp.bundleId,
+            targetName: targetApp.name,
+            contentMode: pasteMode,
+          });
+        }
         if (!pasted) {
           fallbackRan = true;
           appendCommandLauncherTrace('invoke-handoff-native-type-fallback', {
@@ -8534,7 +8613,16 @@ function setupClipboardIPCHandlers(): void {
           });
 
           let pasted = false;
-          pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command');
+          if (shouldUseNativeCommandFileTyping({ mode: pasteMode, isTerminal, isIDE })) {
+            pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command');
+          } else {
+            appendCommandLauncherTrace('invoke-command-native-type-skipped', {
+              commandName,
+              targetBundleId: targetApp.bundleId,
+              targetName: targetApp.name,
+              contentMode: pasteMode,
+            });
+          }
           if (!pasted) {
             fallbackRan = true;
             appendCommandLauncherTrace('invoke-command-native-type-fallback', {
@@ -8554,46 +8642,13 @@ function setupClipboardIPCHandlers(): void {
             return { success: false, error: 'Could not paste into target app' };
           }
         } finally {
-          appendCommandLauncherTrace('invoke-command-wait-before-clipboard-restore', {
+          scheduleCommandClipboardRestore({
             commandName,
             commandPath: command.filePath,
-            delayMs: COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
-            generation: clipboardRestore.generation,
+            restoreGeneration: clipboardRestore.generation,
+            restoreSnapshot: clipboardRestore.snapshot,
+            launcherClipboardPayload,
           });
-          await waitForCommandClipboardPasteRead();
-          if (commandClipboardRestoreCoordinator.canRestore(clipboardRestore.generation)) {
-            const clipboardStillHasLauncherPayload = launcherClipboardPayload
-              ? clipboardMatchesCommandPayload(launcherClipboardPayload)
-              : false;
-            try {
-              if (clipboardStillHasLauncherPayload) {
-                restoreClipboardSnapshot(clipboardRestore.snapshot);
-                clipboardManager?.syncClipboardHash();
-                appendCommandLauncherTrace('invoke-command-clipboard-restored', {
-                  commandName,
-                  commandPath: command.filePath,
-                  generation: clipboardRestore.generation,
-                  reason: 'clipboard-still-launcher-payload',
-                });
-              } else {
-                appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
-                  commandName,
-                  commandPath: command.filePath,
-                  generation: clipboardRestore.generation,
-                  reason: launcherClipboardPayload ? 'clipboard-changed-after-launcher-paste' : 'missing-launcher-payload-snapshot',
-                });
-              }
-            } finally {
-              commandClipboardRestoreCoordinator.finish(clipboardRestore.generation);
-            }
-          } else {
-            appendCommandLauncherTrace('invoke-command-clipboard-restore-skipped', {
-              commandName,
-              commandPath: command.filePath,
-              generation: clipboardRestore.generation,
-              reason: 'newer-command-invocation',
-            });
-          }
         }
         return null;
       });

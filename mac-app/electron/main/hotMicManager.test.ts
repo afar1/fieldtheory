@@ -1186,6 +1186,7 @@ describe('HotMicManager Escape dismissal', () => {
       showEscapeHint: vi.fn(),
       updateDrawerTranscript: vi.fn(),
       updateHotMic: vi.fn(),
+      updateStackCount: vi.fn(),
     };
     const deactivated = vi.fn();
     const inputModeResetRequested = vi.fn();
@@ -1213,7 +1214,45 @@ describe('HotMicManager Escape dismissal', () => {
     escapeHandler();
     expect(deactivated).toHaveBeenCalledTimes(1);
     expect(inputModeResetRequested).toHaveBeenCalledTimes(1);
+    expect(dynamicIslandManager.updateStackCount).toHaveBeenCalledWith(0);
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(false, 0, '');
     expect(globalShortcut.unregister).toHaveBeenCalledWith('Escape');
+    manager.destroy();
+  });
+
+  it('clears screenshot UI state when the second Escape dismisses Hot Mic', () => {
+    const { manager, clipboardItems } = createManager();
+    const dynamicIslandManager = {
+      sendMuteState: vi.fn(),
+      showEscapeHint: vi.fn(),
+      updateDrawerTranscript: vi.fn(),
+      updateHotMic: vi.fn(),
+      updateStackCount: vi.fn(),
+    };
+    const screenshotStackChanged = vi.fn();
+
+    manager.setDynamicIslandManager(dynamicIslandManager as any);
+    manager.on('screenshotStackChanged', screenshotStackChanged);
+    vi.mocked(globalShortcut.register).mockClear().mockReturnValue(true);
+
+    (manager as any).setState('listening');
+    (manager as any).hotMicSessionStartMs = Date.now() - 1000;
+    clipboardItems.set(801, { id: 801, type: 'screenshot', imageData: Buffer.from([1]), createdAt: Date.now() - 500 });
+    manager.addScreenshotToSession(801);
+    const escapeHandler = vi.mocked(globalShortcut.register).mock.calls.find(
+      ([accelerator]) => accelerator === 'Escape'
+    )?.[1] as () => void;
+
+    escapeHandler();
+    escapeHandler();
+
+    expect((manager as any).hotMicScreenshotMetadata).toEqual([]);
+    expect((manager as any).hotMicSessionItemIds).toEqual([]);
+    expect(screenshotStackChanged).toHaveBeenCalledWith(0);
+    expect(dynamicIslandManager.updateStackCount).toHaveBeenCalledWith(0);
+    expect(dynamicIslandManager.updateDrawerTranscript).toHaveBeenCalledWith('');
+    expect(dynamicIslandManager.updateHotMic).toHaveBeenCalledWith(false, 0, '');
     manager.destroy();
   });
 
@@ -1226,6 +1265,7 @@ describe('HotMicManager Escape dismissal', () => {
       showEscapeHint: vi.fn(),
       updateDrawerTranscript: vi.fn(),
       updateHotMic: vi.fn(),
+      updateStackCount: vi.fn(),
     };
     const deactivated = vi.fn();
     const inputModeResetRequested = vi.fn();

@@ -1389,6 +1389,7 @@ export class HotMicManager extends EventEmitter {
 
     this.pendingEscapeDismiss = false;
     this.clearEscapeDismissResetTimer();
+    this.clearHotMicDismissalUi();
     this.handleLongPress();
   }
 
@@ -3442,6 +3443,13 @@ export class HotMicManager extends EventEmitter {
     } else {
       this.dynamicIslandManager?.updateHotMic(false, 0, '');
     }
+  }
+
+  private clearHotMicDismissalUi(): void {
+    this.clearHotMicDraftContext(true);
+    this.dynamicIslandManager?.updateStackCount(0);
+    this.dynamicIslandManager?.updateDrawerTranscript('');
+    this.dynamicIslandManager?.updateHotMic(false, 0, '');
   }
 
   // ---------------------------------------------------------------------------

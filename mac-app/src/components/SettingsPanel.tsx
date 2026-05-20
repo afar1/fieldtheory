@@ -22,7 +22,7 @@ import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
-import { getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
+import { getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
@@ -83,6 +83,38 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'rectangle': 'Window Management',
 };
 
+const SECTION_GLYPHS: Record<SettingsSection, string> = {
+  'account': '◉',
+  'appearance': '◐',
+  'audio': '∿',
+  'keyboard': '⌘',
+  'launcher': '⌖',
+  'librarian': '◇',
+  'local-model': '▢',
+  'commands': '/',
+  'sounds': '♪',
+  'stats': '▥',
+  'terminal-commands': '/',
+  'hot-mic': '⚇',
+  'rectangle': '▣',
+};
+
+const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
+  'account': 'Profile, sign-in, local sync, and support.',
+  'appearance': 'Theme, app behavior, permissions, and retention.',
+  'audio': 'Microphone, transcription, and word corrections.',
+  'keyboard': 'Global shortcuts and app-local reference bindings.',
+  'launcher': 'What the command launcher surfaces and how it opens.',
+  'librarian': 'What Field Theory watches, captures, and surfaces.',
+  'local-model': 'On-device model setup and maintenance.',
+  'commands': 'Markdown command files Field Theory loads from disk.',
+  'sounds': 'Sound cues for recording and app events.',
+  'stats': 'Usage metrics from this installation.',
+  'terminal-commands': 'Terminal command allowlist rules.',
+  'hot-mic': 'Always-listening voice controls and hotkey behavior.',
+  'rectangle': 'Window actions, tiling, and spoken window commands.',
+};
+
 // Alphabetically ordered sections for navigation
 const SECTIONS_ORDER: SettingsSection[] = [
   'account',
@@ -111,7 +143,6 @@ function SectionHeader({ title, onHiddenReveal, styles }: { title: string; onHid
       }}
     >
       <span style={styles.sectionTitle}>{title}</span>
-      <div style={styles.sectionLine} />
     </div>
   );
 }
@@ -1348,22 +1379,37 @@ export default function SettingsPanel({
       <div style={styles.sidebar}>
         <div style={styles.sidebarNav}>
           {SECTIONS_ORDER.map((section) => {
+            const active = selectedSection === section;
             return (
             <button
               key={section}
               onClick={() => setSelectedSection(section)}
+              aria-current={active ? 'page' : undefined}
               style={{
                 ...styles.sidebarItem,
-                backgroundColor: selectedSection === section ? theme.selectedBg : 'transparent',
-                borderColor: selectedSection === section ? theme.border : 'transparent',
-                color: selectedSection === section ? theme.text : theme.textSecondary,
-                boxShadow: selectedSection === section
-                  ? (theme.isDark ? 'inset 0 1px 0 rgba(255,255,255,0.03)' : '0 1px 1px rgba(15, 23, 42, 0.04)')
+                backgroundColor: active ? theme.selectedBg : 'transparent',
+                color: active ? theme.text : theme.textSecondary,
+                boxShadow: active
+                  ? (theme.isDark ? 'inset 0 1px 0 rgba(255,255,255,0.04)' : '0 1px 0 rgba(60, 40, 20, 0.03)')
                   : 'none',
                 cursor: 'pointer',
               }}
             >
-              {SECTION_LABELS[section]}
+              <span
+                style={{
+                  ...styles.sidebarRail,
+                  backgroundColor: active ? theme.accent : 'transparent',
+                }}
+              />
+              <span
+                style={{
+                  ...styles.sidebarGlyph,
+                  color: active ? theme.accent : theme.textSecondary,
+                }}
+              >
+                {SECTION_GLYPHS[section]}
+              </span>
+              <span style={styles.sidebarLabel}>{SECTION_LABELS[section]}</span>
             </button>
             );
           })}
@@ -1373,6 +1419,11 @@ export default function SettingsPanel({
       {/* Right Content Area */}
       <div style={styles.content}>
       <div style={styles.contentInner}>
+      <header style={styles.contentMasthead}>
+        <div style={styles.contentEyebrow}>Settings · {SECTION_LABELS[selectedSection]}</div>
+        <h2 style={styles.contentTitle}>{SECTION_LABELS[selectedSection]}</h2>
+        <p style={styles.contentSubtitle}>{SECTION_DESCRIPTIONS[selectedSection]}</p>
+      </header>
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       {selectedSection === 'appearance' && (
         <>
@@ -1389,7 +1440,7 @@ export default function SettingsPanel({
             onClick={toggleDarkMode}
             style={{ ...styles.toggle, backgroundColor: theme.isDark ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: theme.isDark ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
 
@@ -1404,7 +1455,7 @@ export default function SettingsPanel({
             onClick={() => handleToggleTextCursorBlink(!blinkTextCursor)}
             style={{ ...styles.toggle, backgroundColor: blinkTextCursor ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: blinkTextCursor ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: blinkTextCursor ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
 
@@ -1487,7 +1538,7 @@ export default function SettingsPanel({
             onClick={() => handleTogglePerformanceHud(!performanceHudEnabled)}
             style={{ ...styles.toggle, backgroundColor: performanceHudEnabled ? theme.success : '#d1d5db' }}
           >
-            <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: performanceHudEnabled ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
 
@@ -1503,7 +1554,7 @@ export default function SettingsPanel({
             onClick={() => handleSetFieldTheoryWindowMode(fieldTheoryWindowMode === 'app' ? 'panel' : 'app')}
             style={{ ...styles.toggle, backgroundColor: fieldTheoryWindowMode === 'app' ? theme.success : '#d1d5db', opacity: fieldTheoryWindowMode === null ? 0.6 : 1 }}
           >
-            <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: fieldTheoryWindowMode === 'app' ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
       </div>
@@ -1534,7 +1585,7 @@ export default function SettingsPanel({
             }}
             style={{ ...styles.toggle, backgroundColor: dynamicIslandAutoHide ? theme.success : '#d1d5db', opacity: dynamicIslandAutoHide === null ? 0.6 : 1 }}
           >
-            <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(20px)' : 'translateX(2px)' }} />
+            <span style={{ ...styles.toggleKnob, transform: dynamicIslandAutoHide ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
         </div>
 
@@ -1915,7 +1966,7 @@ export default function SettingsPanel({
               }}
               style={{ ...styles.toggle, backgroundColor: squaresEnabled ? theme.accent : '#d1d5db' }}
             >
-              <span style={{ ...styles.toggleKnob, transform: squaresEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+              <span style={{ ...styles.toggleKnob, transform: squaresEnabled ? 'translateX(16px)' : 'translateX(2px)' }} />
             </button>
           </div>
         </div>
@@ -2089,26 +2140,21 @@ export default function SettingsPanel({
 
       {/* Portable Commands Section */}
       {selectedSection === 'commands' && (
-      <>
-      <div style={styles.section}>
-        <SectionHeader title="Portable Commands" styles={styles} />
+      <div style={styles.sectionStack}>
         <CommandsSettings />
       </div>
-
-      </>
       )}
 
       {/* Launcher Section */}
       {selectedSection === 'launcher' && (
-      <div style={styles.section}>
+      <div style={styles.sectionStack}>
         <LauncherSettings />
       </div>
       )}
 
       {/* Librarian Section */}
       {selectedSection === 'librarian' && (
-      <div style={styles.section}>
-        <SectionHeader title="Librarian" styles={styles} />
+      <div style={styles.sectionStack}>
         <LibrarianSettings
           librarianEnabled={librarianEnabled}
           onLibrarianEnabledChange={onLibrarianEnabledChange}
@@ -2118,7 +2164,7 @@ export default function SettingsPanel({
 
       {/* Local model Section */}
       {selectedSection === 'local-model' && (
-      <div style={styles.section}>
+      <div style={styles.sectionStack}>
         <LocalModelSettings />
       </div>
       )}
@@ -2133,30 +2179,28 @@ export default function SettingsPanel({
 
       {/* Your Stats Section - user-visible usage metrics */}
       {selectedSection === 'stats' && (
-      <div style={styles.section}>
+      <div style={styles.sectionStack}>
         <UserStatsPanel />
       </div>
       )}
 
       {/* Hot Mic Section */}
       {selectedSection === 'hot-mic' && (
-      <div style={styles.section}>
-        <SectionHeader title="Hot Mic" styles={styles} />
+      <div style={styles.sectionStack}>
         <HotMicSettings />
       </div>
       )}
 
       {/* Windows Section */}
       {selectedSection === 'rectangle' && (
-      <div style={styles.section}>
+      <div style={styles.sectionStack}>
         <RectangleSettings />
       </div>
       )}
 
       {/* Sounds Section */}
       {selectedSection === 'sounds' && (
-      <div style={styles.section}>
-        <SectionHeader title="Sounds" styles={styles} />
+      <div style={styles.sectionStack}>
         <SoundsSettings />
       </div>
       )}
@@ -2366,7 +2410,7 @@ export default function SettingsPanel({
                   onClick={() => handleToggleFieldTheorySync(!syncLocalEnabled)}
                   style={{ ...styles.toggle, backgroundColor: syncLocalEnabled ? theme.success : '#d1d5db' }}
                 >
-                  <span style={{ ...styles.toggleKnob, transform: syncLocalEnabled ? 'translateX(20px)' : 'translateX(2px)' }} />
+                  <span style={{ ...styles.toggleKnob, transform: syncLocalEnabled ? 'translateX(16px)' : 'translateX(2px)' }} />
                 </button>
               </div>
             )}
@@ -2440,7 +2484,7 @@ export default function SettingsPanel({
 
             {/* Delete Account - only show when signed in */}
             {session && (
-              <div style={{ ...styles.row, marginTop: '24px', borderTop: `1px solid ${theme.border}`, paddingTop: '16px' }}>
+              <div style={{ ...styles.row, marginTop: '24px', borderTop: `1px solid ${getSettingsDividerColor(theme)}`, paddingTop: '16px' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <span style={{ ...styles.rowLabel, color: theme.error }}>Delete Account</span>
                   <span style={styles.rowHint}>Permanently delete your account and all data</span>
@@ -2581,45 +2625,107 @@ const getStyles = (theme: Theme): SettingsStyles => ({
     flex: 1,
     minHeight: 0, // Required for flex children to shrink below content size
     boxSizing: 'border-box',
-    borderTop: `1px solid ${theme.border}`,
     position: 'relative' as const,
+    backgroundColor: theme.isDark ? '#15181e' : '#faf9f7',
+    borderTop: `1px solid ${getSettingsDividerColor(theme)}`,
   },
   sidebar: {
-    width: '208px',
-    minWidth: '208px',
-    padding: '16px 14px 24px 14px',
-    borderRight: `1px solid ${theme.border}`,
-    backgroundColor: theme.surface0,
+    width: '232px',
+    minWidth: '232px',
+    padding: '18px 10px 14px',
+    borderRight: `1px solid ${theme.isDark ? theme.border : '#ece8e0'}`,
+    backgroundColor: theme.isDark ? '#191c22' : '#f1efea',
     overflowY: 'auto',
     boxSizing: 'border-box',
   },
   sidebarNav: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '4px',
+    gap: '1px',
   },
   sidebarItem: {
-    padding: '9px 12px',
-    fontSize: '12px',
-    fontWeight: 500,
+    position: 'relative' as const,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '11px',
+    padding: '8px 10px',
+    fontSize: '13px',
+    fontWeight: 400,
     textAlign: 'left',
-    border: '1px solid transparent',
-    borderRadius: '10px',
+    border: '2px solid transparent',
+    borderRightWidth: 0,
+    borderRadius: '6px',
     cursor: 'pointer',
-    transition: 'background-color 0.15s, color 0.15s, border-color 0.15s',
+    transition: 'background-color 0.15s, color 0.15s',
     outline: 'none',
+    minHeight: '34px',
+    width: '100%',
+  },
+  sidebarRail: {
+    position: 'absolute' as const,
+    left: 0,
+    top: 0,
+    bottom: 0,
+    width: '2px',
+    borderRadius: '6px 0 0 6px',
+  },
+  sidebarGlyph: {
+    width: '18px',
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+    fontSize: '14px',
+    lineHeight: 1,
+    textAlign: 'center' as const,
+    flex: '0 0 18px',
+  },
+  sidebarLabel: {
+    flex: 1,
+    minWidth: 0,
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap' as const,
   },
   content: {
     flex: 1,
     minHeight: 0, // Required for flex children to shrink below content size
-    padding: '24px 28px 40px 28px',
     overflowY: 'auto',
     boxSizing: 'border-box',
+    backgroundColor: theme.isDark ? '#15181e' : '#faf9f7',
   },
   contentInner: {
     width: '100%',
-    maxWidth: '780px',
+    maxWidth: '900px',
     margin: '0 auto',
+    padding: '26px 36px 96px',
+    boxSizing: 'border-box',
+  },
+  contentMasthead: {
+    paddingBottom: '22px',
+    marginBottom: '24px',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
+  },
+  contentEyebrow: {
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+    fontSize: '10.5px',
+    color: theme.textSecondary,
+    letterSpacing: '1px',
+    textTransform: 'uppercase' as const,
+    marginBottom: '6px',
+  },
+  contentTitle: {
+    margin: 0,
+    fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+    fontSize: '26px',
+    fontWeight: 500,
+    lineHeight: 1.05,
+    color: theme.text,
+  },
+  contentSubtitle: {
+    maxWidth: '560px',
+    margin: '7px 0 0',
+    fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+    fontSize: '14.5px',
+    lineHeight: 1.55,
+    color: theme.textSecondary,
   },
   // Legacy container (kept for compatibility)
   container: {
@@ -2656,43 +2762,47 @@ const getStyles = (theme: Theme): SettingsStyles => ({
   // Section with divider line
   section: {
     ...getSettingsSurfaceStyle(theme),
-    marginBottom: '20px',
+    marginBottom: '16px',
+  },
+  sectionStack: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '16px',
+    marginBottom: '16px',
   },
   sectionHeader: {
     display: 'flex',
     alignItems: 'center',
     gap: '10px',
     marginTop: 0,
-    marginBottom: '14px',
+    marginBottom: '12px',
   },
   sectionTitle: {
-    fontSize: '13px',
-    fontWeight: 600,
+    fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+    fontSize: '16px',
+    fontWeight: 500,
     color: theme.text,
-    letterSpacing: '-0.01em',
+    letterSpacing: 0,
     whiteSpace: 'nowrap' as const,
   },
-  sectionLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: theme.isDark ? theme.border : '#edf1f5',
-  },
-
   // Flat row layout: label left, control right
   row: {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '10px 0',
-    minHeight: '42px',
+    gap: '16px',
+    padding: '12px 0',
+    minHeight: '44px',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
   },
   rowLabel: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: theme.text,
     fontWeight: 500,
+    lineHeight: 1.35,
   },
   rowValue: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: theme.text,
     fontWeight: 500,
   },
@@ -2702,15 +2812,15 @@ const getStyles = (theme: Theme): SettingsStyles => ({
     gap: '8px',
   },
   rowHint: {
-    fontSize: '11px',
+    fontSize: '11.5px',
     color: theme.textSecondary,
     fontWeight: 400,
-    lineHeight: 1.45,
+    lineHeight: 1.5,
+    maxWidth: '460px',
   },
   shortcutReferenceGroup: {
-    marginTop: '8px',
-    paddingTop: '12px',
-    borderTop: `1px solid ${theme.border}`,
+    marginTop: '16px',
+    paddingTop: '4px',
   },
   shortcutReferenceHeader: {
     display: 'flex',
@@ -2720,27 +2830,28 @@ const getStyles = (theme: Theme): SettingsStyles => ({
     padding: '0 0 4px',
   },
   readOnlyShortcut: {
-    padding: '7px 12px',
-    fontSize: '12px',
+    padding: '2px 6px',
+    fontSize: '10.5px',
     fontWeight: 500,
     color: theme.textSecondary,
-    backgroundColor: theme.isDark ? theme.surface1 : '#f9fafb',
-    border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
-    minWidth: '80px',
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.isDark ? theme.border : '#dad6cd'}`,
+    borderRadius: '3px',
+    minWidth: '56px',
     textAlign: 'center' as const,
     cursor: 'default',
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
   },
 
   // Unified button styles
   btn: {
-    padding: '7px 12px',
+    padding: '6px 12px',
     fontSize: '12px',
     fontWeight: 500,
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface2 : '#fff',
     border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
+    borderRadius: '5px',
     cursor: 'pointer',
     minWidth: '80px',
     textAlign: 'center' as const,
@@ -2769,23 +2880,23 @@ const getStyles = (theme: Theme): SettingsStyles => ({
   },
   linkBtn: {
     backgroundColor: 'transparent',
-    border: 'none',
+    border: `1px solid ${theme.isDark ? theme.border : '#ece8e0'}`,
+    borderRadius: '5px',
     color: theme.textSecondary,
     fontSize: '12px',
-    padding: '4px 0',
+    padding: '6px 12px',
     cursor: 'pointer',
-    textDecoration: 'underline',
-    textUnderlineOffset: '2px',
+    textDecoration: 'none',
   },
 
   // Toggle switch
   toggle: {
     position: 'relative' as const,
-    width: '44px',
-    minWidth: '44px',
-    height: '24px',
-    minHeight: '24px',
-    borderRadius: '12px',
+    width: '32px',
+    minWidth: '32px',
+    height: '18px',
+    minHeight: '18px',
+    borderRadius: '999px',
     cursor: 'pointer',
     border: 'none',
     padding: 0,
@@ -2796,9 +2907,9 @@ const getStyles = (theme: Theme): SettingsStyles => ({
     position: 'absolute' as const,
     top: '2px',
     left: 0,
-    width: '20px',
-    height: '20px',
-    borderRadius: '10px',
+    width: '14px',
+    height: '14px',
+    borderRadius: '999px',
     backgroundColor: '#fff',
     boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
     transition: 'transform 0.2s',
@@ -2806,24 +2917,24 @@ const getStyles = (theme: Theme): SettingsStyles => ({
 
   // Select dropdown
   select: {
-    padding: '8px 12px',
+    padding: '6px 10px',
     fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-    border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
+    border: `1px solid ${theme.isDark ? theme.border : '#dad6cd'}`,
+    borderRadius: '5px',
     cursor: 'pointer',
     minWidth: '160px',
   },
 
   // Input field
   input: {
-    padding: '8px 12px',
+    padding: '6px 10px',
     fontSize: '12px',
     color: theme.text,
     backgroundColor: theme.isDark ? theme.surface2 : '#fff',
-    border: `1px solid ${theme.border}`,
-    borderRadius: '8px',
+    border: `1px solid ${theme.isDark ? theme.border : '#dad6cd'}`,
+    borderRadius: '5px',
     outline: 'none',
     flex: 1,
   },
@@ -2854,7 +2965,7 @@ const getStyles = (theme: Theme): SettingsStyles => ({
     alignItems: 'center',
     justifyContent: 'space-between',
     padding: '8px 0',
-    borderBottom: `1px solid ${theme.border}`,
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
   },
   modelName: {
     fontSize: '12px',

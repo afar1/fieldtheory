@@ -8,6 +8,8 @@ interface SettingsRowProps {
   control?: ReactNode;
   children?: ReactNode;
   align?: 'center' | 'flex-start';
+  divider?: boolean;
+  last?: boolean;
 }
 
 interface SettingsToggleProps {
@@ -47,21 +49,25 @@ interface SettingsBadgeProps {
 export function getSettingsSurfaceStyle(theme: Theme, variant: 'surface' | 'inset' = 'surface'): CSSProperties {
   if (variant === 'inset') {
     return {
-      padding: '14px',
-      borderRadius: '10px',
-      backgroundColor: theme.isDark ? theme.surface2 : '#fcfcfd',
-      border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-      boxShadow: theme.isDark ? 'none' : 'inset 0 1px 0 rgba(255,255,255,0.7)',
+      padding: '14px 16px',
+      borderRadius: '6px',
+      backgroundColor: theme.isDark ? theme.surface2 : '#faf9f7',
+      border: `1px solid ${theme.isDark ? theme.border : '#ece8e0'}`,
+      boxShadow: 'none',
     };
   }
 
   return {
-    padding: '18px',
-    borderRadius: '14px',
+    padding: '18px 22px',
+    borderRadius: '6px',
     backgroundColor: theme.isDark ? theme.surface1 : '#ffffff',
-    border: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
-    boxShadow: theme.isDark ? '0 1px 0 rgba(255,255,255,0.03)' : '0 1px 2px rgba(15, 23, 42, 0.05)',
+    border: `1px solid ${theme.isDark ? theme.border : '#ece8e0'}`,
+    boxShadow: theme.isDark ? 'none' : '0 1px 0 rgba(60, 40, 20, 0.02)',
   };
+}
+
+export function getSettingsDividerColor(theme: Theme): string {
+  return theme.isDark ? theme.border : '#ece8e0';
 }
 
 export function getSettingsBadgeStyle(theme: Theme, tone: SettingsBadgeTone = 'neutral'): CSSProperties {
@@ -85,13 +91,16 @@ export function getSettingsBadgeStyle(theme: Theme, tone: SettingsBadgeTone = 'n
   }[tone];
 
   return {
-    fontSize: '10px',
+    fontFamily: '"SF Mono", Menlo, Monaco, Consolas, monospace',
+    fontSize: '9.5px',
     lineHeight: 1.3,
     fontWeight: 500,
     color: toneStyles.color,
     padding: '2px 6px',
     borderRadius: '999px',
     backgroundColor: toneStyles.backgroundColor,
+    letterSpacing: '0.5px',
+    textTransform: 'uppercase',
     whiteSpace: 'nowrap',
   };
 }
@@ -101,9 +110,10 @@ export function SettingsSectionHeading({ theme, title, description }: SettingsSe
     <div style={{ marginBottom: '14px' }}>
       <div
         style={{
-          fontSize: '13px',
-          fontWeight: 600,
-          letterSpacing: '-0.01em',
+          fontFamily: '"Newsreader", "Iowan Old Style", Georgia, serif',
+          fontSize: '16px',
+          fontWeight: 500,
+          letterSpacing: 0,
           color: theme.text,
           margin: 0,
         }}
@@ -113,9 +123,9 @@ export function SettingsSectionHeading({ theme, title, description }: SettingsSe
       {description && (
         <p
           style={{
-            fontSize: '11px',
+            fontSize: '12px',
             color: theme.textSecondary,
-            margin: '6px 0 0 0',
+            margin: '4px 0 0 0',
             lineHeight: 1.5,
           }}
         >
@@ -126,14 +136,24 @@ export function SettingsSectionHeading({ theme, title, description }: SettingsSe
   );
 }
 
-export function SettingsRow({ theme, label, hint, control, children, align = 'center' }: SettingsRowProps) {
+export function SettingsRow({
+  theme,
+  label,
+  hint,
+  control,
+  children,
+  align = 'center',
+  divider = true,
+  last = false,
+}: SettingsRowProps) {
   const labelBlock = (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: hint ? '4px' : 0, flex: 1 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: hint ? '3px' : 0, flex: 1, minWidth: 0 }}>
       <span
         style={{
-          fontSize: '12px',
+          fontSize: '13px',
           color: theme.text,
-          fontWeight: 400,
+          fontWeight: 500,
+          lineHeight: 1.35,
         }}
       >
         {label}
@@ -141,9 +161,10 @@ export function SettingsRow({ theme, label, hint, control, children, align = 'ce
       {hint && (
         <span
           style={{
-            fontSize: '11px',
+            fontSize: '11.5px',
             color: theme.textSecondary,
-            lineHeight: 1.4,
+            lineHeight: 1.5,
+            maxWidth: '460px',
           }}
         >
           {hint}
@@ -158,8 +179,9 @@ export function SettingsRow({ theme, label, hint, control, children, align = 'ce
         display: 'flex',
         alignItems: align,
         justifyContent: 'space-between',
-        gap: '12px',
-        padding: '4px 0',
+        gap: '16px',
+        padding: '12px 0',
+        borderBottom: divider && !last ? `1px solid ${getSettingsDividerColor(theme)}` : 0,
       }}
     >
       {labelBlock}
@@ -186,17 +208,17 @@ export function SettingsToggle({
       title={title}
       style={{
         position: 'relative',
-        width: '44px',
-        minWidth: '44px',
-        height: '24px',
-        minHeight: '24px',
-        borderRadius: '12px',
+        width: '32px',
+        minWidth: '32px',
+        height: '18px',
+        minHeight: '18px',
+        borderRadius: '999px',
         cursor: disabled ? 'not-allowed' : 'pointer',
         border: 'none',
         padding: 0,
         flexShrink: 0,
         transition: 'background-color 0.2s ease, opacity 0.2s ease',
-        backgroundColor: checked ? onColor : '#d1d5db',
+        backgroundColor: checked ? onColor : (theme.isDark ? '#3a3d45' : '#d4cfc4'),
         opacity: disabled ? 0.5 : 1,
       }}
     >
@@ -205,13 +227,13 @@ export function SettingsToggle({
           position: 'absolute',
           top: '2px',
           left: 0,
-          width: '20px',
-          height: '20px',
-          borderRadius: '10px',
+          width: '14px',
+          height: '14px',
+          borderRadius: '999px',
           backgroundColor: '#fff',
-          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.18)',
           transition: 'transform 0.2s ease',
-          transform: checked ? 'translateX(22px)' : 'translateX(2px)',
+          transform: checked ? 'translateX(16px)' : 'translateX(2px)',
         }}
       />
     </button>
@@ -223,7 +245,7 @@ export function SettingsDivider({ theme, margin = '16px 0' }: { theme: Theme; ma
     <div
       style={{
         height: '1px',
-        backgroundColor: theme.border,
+        backgroundColor: getSettingsDividerColor(theme),
         margin,
       }}
     />

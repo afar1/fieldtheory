@@ -329,6 +329,30 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
   });
 
+  it('keeps command matches ahead of directory matches', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('newer-folder', 'directory', undefined, 300), score: 1000 },
+      { item: item('older-command', 'command', undefined, 100), score: 800 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'older-command',
+      'newer-folder',
+    ]);
+  });
+
+  it('keeps directory matches ahead of newer markdown files', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('newer-page', 'wiki-page', undefined, 300), score: 1000 },
+      { item: item('older-folder', 'directory', undefined, 100), score: 800 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'older-folder',
+      'newer-page',
+    ]);
+  });
+
   it('keeps app matches ahead of newer recent files', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('recent-safari-note', 'recent-file', 300), score: 1000 },

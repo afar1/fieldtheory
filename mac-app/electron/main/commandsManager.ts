@@ -57,7 +57,7 @@ function withCommandFrontmatter(content: string, title: string): string {
   return `---\n${commandLines.join('\n')}\n---\n\n${content.replace(/^\n+/, '')}`;
 }
 
-function commandBaseNameFromFileName(fileName: string): string {
+function commandTitleFromFileName(fileName: string): string {
   return fileName.replace(/\.(md|markdown)$/i, '');
 }
 
@@ -752,7 +752,8 @@ export class CommandsManager extends EventEmitter {
     try {
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
-      const nameWithoutExt = commandBaseNameFromFileName(filename);
+      const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
+      const displayName = nameWithoutExt;
 
       return {
         name: nameWithoutExt.toLowerCase(),
@@ -1383,7 +1384,8 @@ End of User Commands
       const content = fs.readFileSync(safePath, 'utf-8');
       const stats = fs.statSync(safePath);
       const filename = path.basename(safePath);
-      const nameWithoutExt = commandBaseNameFromFileName(filename);
+      const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
+      const displayName = nameWithoutExt;
 
       return {
         name: nameWithoutExt.toLowerCase(),
@@ -1438,7 +1440,7 @@ End of User Commands
       }
 
       // Create the file
-      fs.writeFileSync(filePath, withCommandFrontmatter(content, commandBaseNameFromFileName(fileName)), 'utf-8');
+      fs.writeFileSync(filePath, withCommandFrontmatter(content, commandTitleFromFileName(fileName)), 'utf-8');
 
       // Add to commands map immediately (don't wait for file watcher)
       const command = this.createCommandFromFile(filePath);
@@ -1448,7 +1450,7 @@ End of User Commands
       }
 
       log.info(`Created command: ${filePath}`);
-      return { path: filePath, name: commandBaseNameFromFileName(fileName) };
+      return { path: filePath, name: commandTitleFromFileName(fileName) };
     } catch (error) {
       log.error('Error creating command:', error);
       return null;
@@ -1503,7 +1505,7 @@ End of User Commands
 
       // Rename the file
       fs.renameSync(safeOldPath, newFilePath);
-      this.syncCommandFrontmatterTitle(newFilePath, commandBaseNameFromFileName(newFileName));
+      this.syncCommandFrontmatterTitle(newFilePath, commandTitleFromFileName(newFileName));
 
       // Update commands map
       const oldCommand = Array.from(this.commands.values()).find(c => this.normalizePath(c.filePath) === this.normalizePath(safeOldPath));

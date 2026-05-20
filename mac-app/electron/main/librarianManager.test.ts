@@ -1058,8 +1058,9 @@ describe('recursive wiki tree scan', () => {
 
 describe('hidden default library folders', () => {
   it('normalizes persisted folder ids to FT folders first, then custom folders', () => {
-    expect(normalizeHiddenDefaultFolders(['Client Notes', 'entries', '../bad', 'entries', 'artifacts', 'Shared Markdown'])).toEqual([
+    expect(normalizeHiddenDefaultFolders(['Client Notes', 'entries', '../bad', 'entries', 'bookmarks-shortcut', 'artifacts', 'Shared Markdown'])).toEqual([
       'artifacts',
+      'bookmarks-shortcut',
       'entries',
       'Client Notes',
       'Shared Markdown',

@@ -541,7 +541,8 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   b: ScoredLauncherNormalModeItem<T>,
 ): number {
   const launcherTypePriority = (item: LauncherNormalModeItem): number => {
-    if (item.type === 'command') return 2;
+    if (item.type === 'command') return 3;
+    if (item.type === 'directory') return 2;
     if (item.type === 'app') return 1;
     return 0;
   };

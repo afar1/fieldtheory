@@ -143,6 +143,16 @@ export function resolveCommandFilePasteMode(input: { isTerminal: boolean; isIDE:
   return 'markdown-content';
 }
 
+export function shouldUseNativeCommandFileTyping(input: {
+  mode: CommandFilePasteMode;
+  isTerminal: boolean;
+  isIDE: boolean;
+}): boolean {
+  if (input.isTerminal) return true;
+  if (input.mode === 'markdown-content') return true;
+  return !input.isIDE;
+}
+
 function formatCommandFileTextReference(source: CommandFilePasteSource): string {
   if (source.kind === 'command') {
     return `[${source.name}.md]\n${source.filePath} `;

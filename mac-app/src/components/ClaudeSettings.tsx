@@ -8,6 +8,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import {
+  getSettingsDividerColor,
   SettingsBadge,
   type SettingsBadgeTone,
   SettingsInsetGroup,
@@ -508,7 +509,7 @@ export default function ClaudeSettings() {
                     <div
                       style={{
                         padding: '0 12px 12px 12px',
-                        borderTop: `1px solid ${theme.isDark ? theme.border : '#e5e7eb'}`,
+                        borderTop: `1px solid ${getSettingsDividerColor(theme)}`,
                         paddingTop: '10px',
                       }}
                     >

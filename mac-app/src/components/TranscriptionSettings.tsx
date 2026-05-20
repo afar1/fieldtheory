@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
+import { getSettingsDividerColor } from './settings/SettingsPrimitives';
 import type { ParakeetSetupError, ParakeetSetupProgress, ParakeetStatus } from '../types/window';
 import ParakeetSupportPanel from './ParakeetSupportPanel';
 import {
@@ -668,13 +669,19 @@ export default function TranscriptionSettings() {
 
   return (
     <div style={styles.container}>
-      <div style={{ marginTop: '16px' }}>
-        <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>Shortcuts</span>
-          <div style={styles.sectionLine} />
-        </div>
+      <section style={styles.card}>
+        <header style={styles.cardHeader}>
+          <div style={styles.cardTitle}>Capture</div>
+          <div style={styles.cardSub}>
+            Shortcuts and source controls for starting and switching local recording.
+          </div>
+        </header>
+
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Standard Recording</span>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Standard recording</span>
+            <span style={styles.modelHint}>Starts a normal one-shot recording.</span>
+          </div>
           <div style={styles.rowControls}>
             {isCapturingHotkey ? (
               <>
@@ -712,8 +719,12 @@ export default function TranscriptionSettings() {
             )}
           </div>
         </div>
+
         <div style={styles.row}>
-          <span style={styles.rowLabel}>Toggle Hot Mic / Standard</span>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Toggle Hot Mic / Standard</span>
+            <span style={styles.modelHint}>Switches between push-to-record and always-listening command mode.</span>
+          </div>
           <div style={styles.rowControls}>
             {window.hotMicAPI?.setHotkey ? (
               <>
@@ -765,9 +776,9 @@ export default function TranscriptionSettings() {
           </div>
         )}
 
-        <div style={{ ...styles.row, alignItems: 'flex-start' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <span style={styles.rowLabel}>Recording Source</span>
+        <div style={{ ...styles.row, borderBottom: 0 }}>
+          <div style={styles.rowText}>
+            <span style={styles.rowLabel}>Recording source</span>
             <span style={styles.modelHint}>
               System audio uses Screen Recording permission and captures call output instead of your microphone.
             </span>
@@ -787,15 +798,15 @@ export default function TranscriptionSettings() {
             </button>
           </div>
         </div>
+      </section>
 
-        <div style={{ height: '12px' }} />
-      </div>
-
-      <div style={styles.modelsSection}>
-        <div style={styles.sectionHeader}>
-          <span style={styles.sectionTitle}>Primary Engine</span>
-          <div style={styles.sectionLine} />
-        </div>
+      <section style={styles.card}>
+        <header style={styles.cardHeader}>
+          <div style={styles.cardTitle}>Transcription</div>
+          <div style={styles.cardSub}>
+            Local engines and model downloads used to turn captured audio into text.
+          </div>
+        </header>
 
         <div style={styles.modelsList}>
           {PARAKEET_VISIBLE_ENGINE_OPTIONS.map((engineOption) => {
@@ -875,13 +886,13 @@ export default function TranscriptionSettings() {
                   : `Setting up ${PARAKEET_VISIBLE_ENGINE_OPTIONS.find((o) => o.id === selectedEngine)?.label ?? 'Parakeet'}`
               }
               summary={selectedParakeetSupportSummary}
-            recoveryMessage={
-              selectedParakeetSetupError?.moreInfo
-              ?? selectedParakeetRecoveryMessage
-              ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
-            }
-            recoveryCommand={selectedParakeetSetupError?.recoveryCommand}
-            detail={selectedParakeetErrorDetail}
+              recoveryMessage={
+                selectedParakeetSetupError?.moreInfo
+                ?? selectedParakeetRecoveryMessage
+                ?? 'Open Diagnostics if the error repeats so support can inspect the Parakeet failure.'
+              }
+              recoveryCommand={selectedParakeetSetupError?.recoveryCommand}
+              detail={selectedParakeetErrorDetail}
               progress={selectedParakeetProgress}
             />
           )}
@@ -1004,7 +1015,7 @@ export default function TranscriptionSettings() {
             </div>
           )}
         </div>
-      </div>
+      </section>
 
       {error && (
         <div style={styles.copyableErrorBlock}>
@@ -1028,6 +1039,27 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
   container: {
     padding: 0,
   },
+  card: {
+    backgroundColor: theme.isDark ? theme.surface1 : '#fff',
+    border: `1px solid ${theme.border}`,
+    borderRadius: '6px',
+    padding: '18px 22px 16px',
+    marginBottom: '16px',
+  },
+  cardHeader: {
+    marginBottom: '14px',
+  },
+  cardTitle: {
+    fontSize: '16px',
+    fontWeight: 500,
+    color: theme.text,
+  },
+  cardSub: {
+    fontSize: '12px',
+    color: theme.textSecondary,
+    marginTop: '4px',
+    lineHeight: 1.5,
+  },
   notAvailable: {
     color: theme.textSecondary,
     fontStyle: 'italic',
@@ -1039,13 +1071,23 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: '4px 0',
-    minHeight: '32px',
+    gap: '16px',
+    padding: '12px 0',
+    minHeight: '40px',
+    borderBottom: `1px solid ${getSettingsDividerColor(theme)}`,
+  },
+  rowText: {
+    display: 'flex',
+    flexDirection: 'column' as const,
+    gap: '3px',
+    minWidth: 0,
+    flex: 1,
   },
   rowLabel: {
-    fontSize: '12px',
+    fontSize: '13px',
     color: theme.text,
-    fontWeight: 400,
+    fontWeight: 500,
+    lineHeight: 1.35,
   },
   rowValue: {
     fontSize: '12px',
@@ -1058,6 +1100,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     alignItems: 'center',
     gap: '8px',
+    flexShrink: 0,
   },
 
   // Status dot indicator.
@@ -1169,35 +1212,11 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     cursor: 'pointer',
   },
 
-  // Models section.
-  modelsSection: {
-    marginTop: '16px',
-  },
-  sectionHeader: {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '10px',
-    marginBottom: '14px',
-  },
-  sectionTitle: {
-    fontSize: '13px',
-    fontWeight: 600,
-    color: theme.text,
-    letterSpacing: '-0.01em',
-    whiteSpace: 'nowrap' as const,
-  },
-  sectionLine: {
-    flex: 1,
-    height: '1px',
-    backgroundColor: theme.isDark ? theme.border : '#edf1f5',
-  },
-
   // Model list and cards.
   modelsList: {
     display: 'flex',
     flexDirection: 'column' as const,
     gap: '4px',
-    marginTop: '8px',
   },
   modelCard: {
     display: 'flex',
@@ -1211,6 +1230,7 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     display: 'flex',
     flexDirection: 'column' as const,
     gap: '2px',
+    minWidth: 0,
   },
   modelCardHeader: {
     display: 'flex',
