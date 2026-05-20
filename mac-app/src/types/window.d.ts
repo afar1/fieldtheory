@@ -2156,6 +2156,18 @@ declare global {
     onOpenExternal: (callback: (absPath: string) => void) => () => void;
   }
 
+  interface MarkdownImagesAPI {
+    copyImageForDocument: (
+      documentPath: string,
+      imagePath: string,
+      alt?: string,
+    ) => Promise<{ markdown: string; destination: string; copiedPath: string } | null>;
+    makeImagesPortable: (
+      documentPath: string,
+      content: string,
+    ) => Promise<{ content: string; copied: number; rewritten: number; missing: number }>;
+  }
+
   interface RecentEntry {
     kind: 'wiki' | 'external';
     path: string;
@@ -2595,6 +2607,7 @@ declare global {
     librarianAPI?: LibrarianAPI;
     libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
+    markdownImagesAPI?: MarkdownImagesAPI;
     possibleAPI?: PossibleAPI;
     externalAPI?: ExternalAPI;
     recentAPI?: RecentAPI;

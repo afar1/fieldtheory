@@ -4160,7 +4160,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       recordRenderedEditorDebug('save-skipped', { reason: 'no-active-reading' });
       return;
     }
-    const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
+    let normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
     const expectedVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetType = selectedItemType;
     const targetPath = activeReading.path;
@@ -4178,6 +4178,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!deferReactState) setSaveStatus('saving');
     renderedSaveInFlightRef.current += 1;
     try {
+      normalizedContent = (await window.markdownImagesAPI?.makeImagesPortable(targetPath, normalizedContent))?.content ?? normalizedContent;
       let result: DocumentSaveResult | null | undefined;
       let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
       if (targetType === 'wiki' && wikiSelectedRelPath) {
@@ -4645,8 +4646,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const insertPastedClipboardImagePathInRenderedEditor = useCallback(async (clipboardData: DataTransfer) => {
     const imagePath = await getPastedClipboardImagePath(clipboardData);
-    if (imagePath) applyRenderedTextInsertion(formatLocalImageMarkdown(imagePath));
-  }, [applyRenderedTextInsertion]);
+    if (!imagePath) return;
+    const portable = activeReading?.path
+      ? await window.markdownImagesAPI?.copyImageForDocument(activeReading.path, imagePath, 'Image')
+      : null;
+    applyRenderedTextInsertion(portable?.markdown ?? formatLocalImageMarkdown(imagePath));
+  }, [activeReading?.path, applyRenderedTextInsertion]);
 
   const handleRenderedEditorPaste = useCallback((event: ClipboardEvent): boolean => {
     const clipboardData = event.clipboardData;
@@ -5041,8 +5046,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const insertPastedClipboardImagePath = useCallback(async (clipboardData: DataTransfer) => {
     const imagePath = await getPastedClipboardImagePath(clipboardData);
-    if (imagePath) insertMarkdownText(formatLocalImageMarkdown(imagePath));
-  }, [insertMarkdownText]);
+    if (!imagePath) return;
+    const portable = activeReading?.path
+      ? await window.markdownImagesAPI?.copyImageForDocument(activeReading.path, imagePath, 'Image')
+      : null;
+    insertMarkdownText(portable?.markdown ?? formatLocalImageMarkdown(imagePath));
+  }, [activeReading?.path, insertMarkdownText]);
 
   const applyMarkdownUrlPasteEdit = useCallback((pasteEdit: MarkdownUrlPasteEdit) => {
     markWritingActive();
@@ -5507,28 +5516,31 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       done = true;
       setSaveStatus('saving');
       try {
+        const portableContent = targetReadingPath
+          ? (await window.markdownImagesAPI?.makeImagesPortable(targetReadingPath, targetContent))?.content ?? targetContent
+          : targetContent;
         let result: DocumentSaveResult | null | undefined;
         let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
         if (targetType === 'wiki' && targetWikiPath) {
-          result = await window.wikiAPI?.save(targetWikiPath, targetContent, targetVersion);
-          overwrite = (version) => window.wikiAPI?.save(targetWikiPath, targetContent, version) ?? Promise.resolve(undefined);
+          result = await window.wikiAPI?.save(targetWikiPath, portableContent, targetVersion);
+          overwrite = (version) => window.wikiAPI?.save(targetWikiPath, portableContent, version) ?? Promise.resolve(undefined);
         } else if (targetType === 'external' && targetReadingPath) {
-          result = await window.externalAPI?.save(targetReadingPath, targetContent, targetVersion);
-          overwrite = (version) => window.externalAPI?.save(targetReadingPath, targetContent, version) ?? Promise.resolve(undefined);
+          result = await window.externalAPI?.save(targetReadingPath, portableContent, targetVersion);
+          overwrite = (version) => window.externalAPI?.save(targetReadingPath, portableContent, version) ?? Promise.resolve(undefined);
         } else if (targetReadingPath) {
-          result = await window.librarianAPI?.saveReading(targetReadingPath, targetContent, targetVersion);
-          overwrite = (version) => window.librarianAPI?.saveReading(targetReadingPath, targetContent, version) ?? Promise.resolve(undefined);
+          result = await window.librarianAPI?.saveReading(targetReadingPath, portableContent, targetVersion);
+          overwrite = (version) => window.librarianAPI?.saveReading(targetReadingPath, portableContent, version) ?? Promise.resolve(undefined);
         } else {
           return;
         }
 
         if (isDocumentSaveConflict(result)) {
-          const resolved = await resolveSaveConflict(result, targetType, targetReadingPath, targetContent, targetTitle, overwrite);
+          const resolved = await resolveSaveConflict(result, targetType, targetReadingPath, portableContent, targetTitle, overwrite);
           setSaveStatus(resolved ? 'saved' : 'idle');
           return;
         }
         if (!isDocumentSaveOk(result)) throw new Error('save failed');
-        applySavedDocumentState(targetType, targetReadingPath, targetContent, getDocumentSaveVersion(result), targetTitle);
+        applySavedDocumentState(targetType, targetReadingPath, portableContent, getDocumentSaveVersion(result), targetTitle);
         setSaveStatus('saved');
       } catch {
         setSaveStatus('idle');
@@ -7710,6 +7722,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     blinkCursor={blinkTextCursor}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
+                    documentPath={activeReading.path}
 	                    dataAttributes={{
 	                      'data-ft-agent-context': activeIsMarkdownDocument ? 'markdown' : 'source',
 	                      'data-ft-agent-file-path': activeReading.path,
@@ -7874,6 +7887,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     blinkCursor={blinkTextCursor}
                     placeholder="Rendered text editor"
+                    documentPath={activeReading.path}
                     dataAttributes={{
                       'data-ft-rendered-editor-input': 'true',
                       'data-ft-agent-context': 'markdown',

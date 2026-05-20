@@ -18,7 +18,7 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { EditorState, Compartment, RangeSetBuilder, Transaction, type Range } from '@codemirror/state';
+import { EditorState, Compartment, Facet, RangeSetBuilder, Transaction, type Range } from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
@@ -41,6 +41,7 @@ import { tags as t } from '@lezer/highlight';
 import { useTheme } from '../contexts/ThemeContext';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
+import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
@@ -146,6 +147,7 @@ interface MarkdownCodeEditorProps {
   readOnly?: boolean;
   spellCheck?: boolean;
   dataAttributes?: Record<string, string | undefined>;
+  documentPath?: string | null;
   style?: React.CSSProperties;
   onKeyDown?: (event: KeyboardEvent) => boolean | void;
   onMouseDown?: (event: MouseEvent, offset: number) => boolean | void;
@@ -258,14 +260,6 @@ class RenderedMarkdownMarkerWidget extends WidgetType {
   }
 }
 
-function normalizeRenderedMarkdownImageSource(destination: string): string | null {
-  const raw = destination.trim().replace(/^<(.+)>$/, '$1');
-  if (/^file:/i.test(raw)) return raw.replace(/^file:/i, 'ftlocalfile:');
-  if (/^(https?|ftlocalfile|ftmedia):/i.test(raw)) return raw;
-  if (/^data:image\//i.test(raw)) return raw;
-  return null;
-}
-
 function parseNullableMarkdownSourceOffset(value: string | null): number | null {
   if (value === null) return null;
   const parsed = Number.parseInt(value, 10);
@@ -290,6 +284,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
   constructor(
     private readonly alt: string,
     private readonly destination: string,
+    private readonly documentPath: string | null | undefined,
     private readonly sourceFrom: number,
     private readonly sourceTo: number,
   ) {
@@ -299,6 +294,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
   eq(other: RenderedMarkdownImageWidget): boolean {
     return other.alt === this.alt
       && other.destination === this.destination
+      && other.documentPath === this.documentPath
       && other.sourceFrom === this.sourceFrom
       && other.sourceTo === this.sourceTo;
   }
@@ -313,7 +309,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
     image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR, String(this.sourceFrom));
     image.setAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR, String(this.sourceTo));
 
-    const src = normalizeRenderedMarkdownImageSource(this.destination);
+    const src = normalizeMarkdownImageUrl(this.destination, this.documentPath);
     const alt = this.alt || 'Image';
     if (src) {
       image.setAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR, src);
@@ -389,6 +385,11 @@ class RenderedMarkdownTaskCheckboxWidget extends WidgetType {
 }
 
 type RenderedMarkdownDecoration = Range<Decoration>;
+
+const renderedMarkdownDocumentPathFacet = Facet.define<string | null, string | null>({
+  combine: (values) => values[0] ?? null,
+});
+
 type RenderedMarkdownEditorRange = { from: number; to: number };
 type RenderedMarkdownEditorLineRange = { fromLine: number; toLine: number };
 
@@ -558,6 +559,7 @@ function pushRenderedInlineDecorations(
   decorations: RenderedMarkdownDecoration[],
   lineFrom: number,
   text: string,
+  documentPath?: string | null,
 ): void {
 	  const protectedRanges: Array<{ from: number; to: number }> = [];
 	  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
@@ -574,7 +576,7 @@ function pushRenderedInlineDecorations(
       decorations,
       from,
       to,
-      new RenderedMarkdownImageWidget(match[1], match[2], from, to),
+      new RenderedMarkdownImageWidget(match[1], match[2], documentPath, from, to),
     );
   }
 
@@ -771,6 +773,7 @@ function pushRenderedMarkdownEditorLineDecorations(
   decorations: RenderedMarkdownDecoration[],
   lineNumber: number,
   codeFenceMarker: string | null,
+  documentPath?: string | null,
 ): string | null {
   const line = state.doc.line(lineNumber);
   const text = line.text;
@@ -860,13 +863,14 @@ function pushRenderedMarkdownEditorLineDecorations(
     pushRenderedListBodyDecoration(decorations, markerTo, line.to);
   }
 
-  pushRenderedInlineDecorations(state, decorations, line.from + inlineStart, text.slice(inlineStart));
+  pushRenderedInlineDecorations(state, decorations, line.from + inlineStart, text.slice(inlineStart), documentPath);
   return codeFenceMarker;
 }
 
 export function buildRenderedMarkdownEditorDecorationsForRanges(
   state: EditorState,
   ranges: readonly RenderedMarkdownEditorRange[],
+  documentPath?: string | null,
 ): DecorationSet {
   const decorations: RenderedMarkdownDecoration[] = [];
   const lineRanges = normalizeRenderedMarkdownEditorLineRanges(state, ranges);
@@ -874,7 +878,7 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   for (const range of lineRanges) {
     let codeFenceMarker = getRenderedMarkdownCodeFenceMarkerBeforeLine(state, range.fromLine);
     for (let lineNumber = range.fromLine; lineNumber <= range.toLine; lineNumber += 1) {
-      codeFenceMarker = pushRenderedMarkdownEditorLineDecorations(state, decorations, lineNumber, codeFenceMarker);
+      codeFenceMarker = pushRenderedMarkdownEditorLineDecorations(state, decorations, lineNumber, codeFenceMarker, documentPath);
     }
   }
 
@@ -886,28 +890,39 @@ export function buildRenderedMarkdownEditorDecorationsForRanges(
   );
 }
 
-export function buildRenderedMarkdownEditorDecorations(state: EditorState): DecorationSet {
-  return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }]);
+export function buildRenderedMarkdownEditorDecorations(state: EditorState, documentPath?: string | null): DecorationSet {
+  return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }], documentPath);
 }
 
-export const renderedMarkdownEditorPresentationExtension = ViewPlugin.fromClass(
-  class {
-    decorations: DecorationSet;
+export function createRenderedMarkdownEditorPresentationExtension(documentPath?: string | null) {
+  return ViewPlugin.fromClass(
+    class {
+      decorations: DecorationSet;
 
-    constructor(view: EditorView) {
-      this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(view.state, view.visibleRanges);
-    }
-
-    update(update: ViewUpdate) {
-      if (update.docChanged || update.viewportChanged || update.selectionSet) {
-        this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(update.state, update.view.visibleRanges);
+      constructor(view: EditorView) {
+        const activeDocumentPath = documentPath ?? view.state.facet(renderedMarkdownDocumentPathFacet);
+        this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(view.state, view.visibleRanges, activeDocumentPath);
       }
-    }
-  },
-  {
-    decorations: (plugin) => plugin.decorations,
-  },
-);
+
+      update(update: ViewUpdate) {
+        if (
+          update.docChanged
+          || update.viewportChanged
+          || update.selectionSet
+          || update.startState.facet(renderedMarkdownDocumentPathFacet) !== update.state.facet(renderedMarkdownDocumentPathFacet)
+        ) {
+          const activeDocumentPath = documentPath ?? update.state.facet(renderedMarkdownDocumentPathFacet);
+          this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(update.state, update.view.visibleRanges, activeDocumentPath);
+        }
+      }
+    },
+    {
+      decorations: (plugin) => plugin.decorations,
+    },
+  );
+}
+
+export const renderedMarkdownEditorPresentationExtension = createRenderedMarkdownEditorPresentationExtension();
 
 export function isMarkdownCodeEditorFileSwapUpdate(update: { transactions: readonly Transaction[] }): boolean {
   return update.transactions.some((transaction) => transaction.isUserEvent(MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT));
@@ -1086,6 +1101,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       readOnly = false,
       spellCheck = true,
       dataAttributes,
+      documentPath,
       style,
       onScroll,
       bottomRoomPx: bottomRoomPxProp,
@@ -1111,6 +1127,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const syntaxHighlightCompartment = useRef(new Compartment()).current;
     const historyCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
+    const documentPathCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
     const scrollFpsSamplerRef = useScrollFpsSampler('markdown');
 
@@ -1387,7 +1404,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           historyCompartment.of(history()),
           keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
           markdown(),
-          ...(presentation === 'rendered' ? [renderedMarkdownEditorPresentationExtension] : []),
+          documentPathCompartment.of(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
+          ...(presentation === 'rendered' ? [createRenderedMarkdownEditorPresentationExtension()] : []),
           syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
@@ -1511,6 +1529,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       if (current === value) return;
       dispatchMarkdownCodeEditorFileSwap(view, historyCompartment, value);
     }, [historyCompartment, value]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: documentPathCompartment.reconfigure(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
+      });
+    }, [documentPath, documentPathCompartment]);
 
     // Reconfigure theme when style props or color scheme change.
     useEffect(() => {

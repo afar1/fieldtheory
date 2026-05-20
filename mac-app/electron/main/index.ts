@@ -139,6 +139,7 @@ import {
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
+import { copyImageForMarkdownDocument, makeMarkdownImagesPortable } from './portableMarkdownImages';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
@@ -3505,6 +3506,22 @@ function setupLibrarianIPCHandlers(): void {
       log.error(`external:save failed for ${absPath}:`, error);
       return { ok: false, reason: 'error' };
     }
+  });
+
+  ipcMain.handle('markdownImages:copyImageForDocument', (_event, documentPath: string, imagePath: string, alt?: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return null;
+    }
+    return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image');
+  });
+
+  ipcMain.handle('markdownImages:makeImagesPortable', (_event, documentPath: string, content: string) => {
+    if (!canWriteFieldTheoryContent()) {
+      blockWrite();
+      return { content, copied: 0, rewritten: 0, missing: 0 };
+    }
+    return makeMarkdownImagesPortable(documentPath, content);
   });
 
   ipcMain.handle(
