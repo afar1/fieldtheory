@@ -150,7 +150,7 @@ export function shouldUseNativeCommandFileTyping(input: {
 }): boolean {
   if (input.isTerminal) return true;
   if (input.mode === 'markdown-content') return true;
-  return !input.isIDE;
+  return input.isIDE;
 }
 
 function formatCommandFileTextReference(source: CommandFilePasteSource): string {

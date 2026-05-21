@@ -21,6 +21,7 @@ import {
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   getLauncherAppSearchQuery,
   getLauncherFileSearchQuery,
+  getLauncherInvocationVisibilityPolicy,
   isLauncherRootSearchKindEnabled,
   LAUNCHER_ROOT_SEARCH_KIND_LABELS,
   normalizeLauncherRootSearchEnabledKinds,
@@ -273,14 +274,55 @@ describe('shouldPastePortableCommand', () => {
   });
 });
 
+describe('getLauncherInvocationVisibilityPolicy', () => {
+  it('keeps external paste invocations hidden through blur', () => {
+    expect(getLauncherInvocationVisibilityPolicy({
+      itemType: 'command',
+      openFieldTheoryTarget: false,
+      insertWikiLink: false,
+    })).toEqual({
+      suppressRevealDuringBlur: true,
+      revealWhenReadyAfterSuccess: false,
+      closeFromRendererAfterSuccess: false,
+    });
+
+    expect(getLauncherInvocationVisibilityPolicy({
+      itemType: 'clipboard-item',
+    })).toEqual({
+      suppressRevealDuringBlur: true,
+      revealWhenReadyAfterSuccess: false,
+      closeFromRendererAfterSuccess: true,
+    });
+
+    expect(getLauncherInvocationVisibilityPolicy({
+      itemType: 'clipboard-stack',
+    })).toEqual({
+      suppressRevealDuringBlur: true,
+      revealWhenReadyAfterSuccess: false,
+      closeFromRendererAfterSuccess: true,
+    });
+  });
+
+  it('does not suppress normal launcher navigation actions', () => {
+    expect(getLauncherInvocationVisibilityPolicy({
+      itemType: 'wiki-page',
+    })).toEqual({
+      suppressRevealDuringBlur: false,
+      revealWhenReadyAfterSuccess: true,
+      closeFromRendererAfterSuccess: false,
+    });
+  });
+});
+
 describe('balanceLauncherNormalModeMatches', () => {
-  const item = (id: string, type: string, lastOpenedAt?: number, lastUpdated?: number) => ({
+  const item = (id: string, type: string, lastOpenedAt?: number, lastUpdated?: number, isPinned = false) => ({
     id,
     type,
     name: id,
     displayName: id,
     lastOpenedAt,
     lastUpdated,
+    isPinned,
   });
 
   it('orders search results by most recent item across types', () => {
@@ -350,6 +392,18 @@ describe('balanceLauncherNormalModeMatches', () => {
     expect(results.map(result => result.id)).toEqual([
       'older-folder',
       'newer-page',
+    ]);
+  });
+
+  it('keeps stronger directory text matches ahead of newer fuzzy directory matches', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('commands-folder', 'directory', undefined, 300), score: 120 },
+      { item: item('plans-folder', 'directory', undefined, 100), score: 1000 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual([
+      'plans-folder',
+      'commands-folder',
     ]);
   });
 
@@ -429,6 +483,24 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
 
     expect(results.map(result => result.id)).toEqual(['newer-command', 'older-command']);
+  });
+
+  it('keeps pinned command matches ahead of newer unpinned command matches', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('newer-command', 'command', undefined, 300), score: 1000 },
+      { item: item('pinned-command', 'command', undefined, 100, true), score: 900 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual(['pinned-command', 'newer-command']);
+  });
+
+  it('does not let pinned markdown outrank a command match', () => {
+    const results = balanceLauncherNormalModeMatches([
+      { item: item('command-match', 'command', undefined, 100), score: 800 },
+      { item: item('pinned-note', 'wiki-page', undefined, 300, true), score: 1000 },
+    ]);
+
+    expect(results.map(result => result.id)).toEqual(['command-match', 'pinned-note']);
   });
 
   it('caps recent-only searches while keeping latest-opened order', () => {
@@ -1323,12 +1395,8 @@ describe('shouldHandleLauncherPreviewShortcut', () => {
     expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, false, false)).toBe(false);
   });
 
-  it('captures space after keyboard result navigation', () => {
+  it('captures space after a result is explicitly selected', () => {
     expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, true, false)).toBe(true);
-  });
-
-  it('does not capture space for mouse-only hover selection', () => {
-    expect(shouldHandleLauncherPreviewShortcut({ key: ' ' }, false, false)).toBe(false);
   });
 
   it('captures space while preview is open so it can close', () => {

@@ -5,6 +5,7 @@ For the repo map and where to start reading code, see [arch.md](../arch.md).
 The release build is local-first by default: core tools work without requiring login, and unfinished Field Theory cloud sync is gated for internal users only.
 Clipboard history is local-only and must never be synced by Field Theory.
 The main desktop shell is `src/components/ClipboardHistory.tsx`; `src/command-launcher.tsx` is a separate launcher surface; `src/main.tsx` and `src/App.tsx` are the settings/onboarding window rather than the main app shell.
+Treat `~/.fieldtheory/library/` plus `~/.fieldtheory/library/Commands/` as first-class product state, not incidental support files.
 
 ## Setup
 

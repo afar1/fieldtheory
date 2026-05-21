@@ -1235,6 +1235,56 @@ describe('librarian watcher cleanup', () => {
   });
 });
 
+describe('librarian user data', () => {
+  it('answers setup status from per-user settings as soon as a logged-in user data manager is attached', () => {
+    const rootDir = makeTempDir();
+    const userDir = path.join(rootDir, 'users', 'current-user');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, 'librarian-settings.json'),
+      JSON.stringify({ librarianSetupComplete: false }),
+      'utf-8',
+    );
+    fs.writeFileSync(
+      path.join(userDir, 'librarian-settings.json'),
+      JSON.stringify({ librarianSetupComplete: true }),
+      'utf-8',
+    );
+
+    const loadIndex = vi.fn();
+    const invalidateWikiTreeCache = vi.fn();
+    const invalidateLibraryRootsCache = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      userDataManager: unknown;
+      settingsPath: string;
+      indexPath: string;
+      settings: unknown;
+      setUserDataManager: LibrarianManager['setUserDataManager'];
+      isSetupComplete: LibrarianManager['isSetupComplete'];
+      loadIndex: typeof loadIndex;
+      invalidateWikiTreeCache: typeof invalidateWikiTreeCache;
+      invalidateLibraryRootsCache: typeof invalidateLibraryRootsCache;
+    };
+    manager.settingsPath = path.join(rootDir, 'librarian-settings.json');
+    manager.indexPath = path.join(rootDir, 'librarian-index.json');
+    manager.settings = { librarianSetupComplete: false };
+    manager.loadIndex = loadIndex;
+    manager.invalidateWikiTreeCache = invalidateWikiTreeCache;
+    manager.invalidateLibraryRootsCache = invalidateLibraryRootsCache;
+
+    manager.setUserDataManager({
+      isLoggedIn: () => true,
+      getUserDataPath: (subpath?: string) => subpath ? path.join(userDir, subpath) : userDir,
+    } as any);
+
+    expect(loadIndex).toHaveBeenCalledTimes(1);
+    expect(manager.isSetupComplete()).toBe(true);
+    expect(manager.settingsPath).toBe(path.join(userDir, 'librarian-settings.json'));
+    expect(invalidateWikiTreeCache).toHaveBeenCalledTimes(1);
+    expect(invalidateLibraryRootsCache).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('library roots', () => {
   it('rejects adding the whole home folder as a library root', () => {
     const manager = Object.create(LibrarianManager.prototype) as LibrarianManager;

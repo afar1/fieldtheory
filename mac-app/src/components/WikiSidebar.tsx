@@ -3319,6 +3319,7 @@ function TreeNode({
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const folderContextActive = contextActiveNodeId === node.id;
   const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : 'transparent';
+  const stickyFolderBackgroundColor = depth === 0 ? theme.bg : folderBackgroundColor;
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -3374,7 +3375,7 @@ function TreeNode({
           onClick={() => toggleFolder(node.id)}
           onContextMenu={(event) => onContextMenu(event, node)}
           onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
-          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = folderBackgroundColor)}
+          onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = stickyFolderBackgroundColor)}
           style={{
             ...getSidebarFolderHeaderPositionStyle(depth),
             display: 'flex',
@@ -3389,10 +3390,24 @@ function TreeNode({
             lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             color: sidebarTextColor,
             userSelect: 'none',
-            backgroundColor: folderBackgroundColor,
+            backgroundColor: stickyFolderBackgroundColor,
             borderRadius: 0,
           }}
         >
+            {depth === 0 && isExpanded && (
+              <span
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: '-18px',
+                  height: '18px',
+                  pointerEvents: 'none',
+                  background: `linear-gradient(to bottom, ${stickyFolderBackgroundColor} 0%, ${stickyFolderBackgroundColor}00 100%)`,
+                }}
+              />
+            )}
             <SidebarIconButton label={`Change color for ${node.label}`} onClick={(event) => onOpenIconColorPicker(node.id, event)}>
               <SidebarFolderIcon color={folderIconColor} />
             </SidebarIconButton>

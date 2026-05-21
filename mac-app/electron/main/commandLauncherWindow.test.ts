@@ -648,6 +648,29 @@ describe('CommandLauncherWindow preview IPC', () => {
     expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher-preview:payload', preview);
   });
 
+  it('keeps the launcher focused when showing preview triggers a transient blur', () => {
+    const launcher = new CommandLauncherWindow();
+    launcher.preload();
+    const blurHandler = mockWindow.on.mock.calls
+      .find(([event]) => event === 'blur')?.[1];
+    expect(blurHandler).toBeTypeOf('function');
+
+    mockWindow.isVisible.mockReturnValue(true);
+    const preview = { kind: 'markdown', title: 'refactor.md', filePath: '/tmp/refactor.md', content: '# Refactor' };
+    mockIpcMainHandlers.get('command-launcher:preview-show')?.({}, preview);
+    mockWindow.hide.mockClear();
+    mockWindow.focus.mockClear();
+    mockWindow.webContents.send.mockClear();
+
+    blurHandler?.();
+
+    expect(mockWindow.hide).not.toHaveBeenCalled();
+    expect(mockWindow.focus).toHaveBeenCalled();
+    expect(mockWindow.webContents.send).toHaveBeenCalledWith('command-launcher:focus-input', {
+      generation: expect.any(Number),
+    });
+  });
+
   it('centers the detached preview over the launcher anchor bounds', async () => {
     const nativeHelper = {
       getFrontmostApp: vi.fn(() => ({ bundleId: 'com.fieldtheory.app', name: 'Field Theory' })),
