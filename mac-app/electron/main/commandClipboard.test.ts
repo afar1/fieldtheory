@@ -228,12 +228,12 @@ describe('shouldUseNativeCommandFileTyping', () => {
     })).toBe(true);
   });
 
-  it('skips native typing for IDE text references so target inputs keep normal paste focus', () => {
+  it('uses native typing for IDE text references so focused editor inputs receive the command', () => {
     expect(shouldUseNativeCommandFileTyping({
       mode: 'text-reference',
       isTerminal: false,
       isIDE: true,
-    })).toBe(false);
+    })).toBe(true);
   });
 
   it('keeps native typing available for markdown content targets', () => {

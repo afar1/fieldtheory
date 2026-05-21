@@ -107,8 +107,6 @@ type FooterLocalCommandStatus = {
   mode?: 'document' | 'selection';
   runId?: string;
   phase?: string;
-  selectionStart?: number;
-  selectionEnd?: number;
   changedLines?: number;
   changedBytes?: number;
   error?: string;
@@ -4857,7 +4855,6 @@ export default function ClipboardHistory() {
             onActiveFileUpdatedChange={setLibraryActiveFileUpdated}
             preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
-            maxwellFluxStatus={localCommandStatus}
           />
         </div>
       )}

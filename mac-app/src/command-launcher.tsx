@@ -45,6 +45,7 @@ import {
   getLauncherAreaActionIdForQuery,
   getLauncherItemRecency,
   getLauncherStatusText,
+  getLauncherInvocationVisibilityPolicy,
   areLauncherRootSearchEnabledKindsEqual,
   isGeneratedBookmarkTaxonomyPath,
   isLauncherRootSearchKindEnabled,
@@ -219,6 +220,7 @@ interface LauncherItem {
   // For commands, handoffs, wiki pages, and artifacts
   filePath?: string;
   relPath?: string;
+  isPinned?: boolean;
   lastUpdated?: number;
   recentKind?: LauncherRecentEntry['kind'];
   lastOpenedAt?: number;
@@ -267,6 +269,22 @@ function buildLocalInstructionFallbackItem(instruction: string): LauncherItem {
 }
 
 const LAUNCHER_USAGE_STORAGE_KEY = 'launcherItemUsage.v1';
+const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
+
+function readLibraryPinnedItemIds(): Set<string> {
+  try {
+    const raw = localStorage.getItem(LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+function isLibraryMarkdownLauncherItemPinned(item: Pick<LauncherItem, 'type' | 'filePath' | 'relPath'>, pinnedItemIds: ReadonlySet<string>): boolean {
+  if (item.type === 'wiki-page' && item.relPath && pinnedItemIds.has(`wiki:${item.relPath}`)) return true;
+  return Boolean(item.filePath && pinnedItemIds.has(`external:${item.filePath}`));
+}
 
 function readLauncherUsageMap(): LauncherUsageMap {
   try {
@@ -338,6 +356,7 @@ interface LauncherClipboardAPI {
   pasteStack?: (ids: number[], targetBundleId?: string) => Promise<void>;
   queryItemsByStackId?: (stackId: string) => Promise<ClipboardItem[]>;
   getUniqueStacks?: () => Promise<StackInfo[]>;
+  updateStackId?: (itemIds: number[], stackId: string | null) => Promise<void>;
   getHotkeys: () => Promise<{
     screenshot?: string;
     fullScreen?: string;
@@ -422,6 +441,20 @@ function describeLauncherItem(item: LauncherItem | undefined): Record<string, un
 }
 
 function launcherItemTypeLabel(item: LauncherItem): string {
+  const parentDirectoryLabel = (target: LauncherItem): string | null => {
+    if (target.relPath) {
+      const parent = target.relPath.split('/').slice(0, -1).join('/');
+      if (parent) return parent;
+    }
+    if (target.filePath) {
+      const normalized = target.filePath.replace(/\\/g, '/');
+      const parts = normalized.split('/').filter(Boolean);
+      const parentName = parts.length > 1 ? parts[parts.length - 2] : null;
+      if (parentName) return parentName;
+    }
+    return null;
+  };
+
   switch (item.type) {
     case 'command': return 'Command';
     case 'local-command': return 'Local';
@@ -431,8 +464,8 @@ function launcherItemTypeLabel(item: LauncherItem): string {
     case 'action': return 'Action';
     case 'recent-file': return 'Recent';
     case 'handoff': return 'Handoff';
-    case 'wiki-page': return 'Wiki';
-    case 'markdown-file': return 'Markdown';
+    case 'wiki-page': return parentDirectoryLabel(item) ?? 'Wiki';
+    case 'markdown-file': return parentDirectoryLabel(item) ?? 'Markdown';
     case 'artifact': return 'Artifact';
     case 'bookmark': return 'Bookmark';
     case 'bookmark-author': return 'Author';
@@ -562,6 +595,14 @@ const getStyles = (isDark: boolean) => ({
   listItemCommitted: {
     backgroundColor: isDark ? 'rgba(255, 255, 255, 0.135)' : 'rgba(0, 0, 0, 0.085)',
     boxShadow: `inset 2px 0 0 ${isDark ? 'rgba(255, 255, 255, 0.7)' : 'rgba(0, 0, 0, 0.4)'}`,
+  },
+  listItemClipboardSelected: {
+    backgroundColor: isDark ? 'rgba(56, 189, 248, 0.13)' : 'rgba(2, 132, 199, 0.11)',
+    boxShadow: `inset 3px 0 0 ${isDark ? 'rgba(56, 189, 248, 0.75)' : 'rgba(2, 132, 199, 0.7)'}`,
+  },
+  listItemClipboardDropTarget: {
+    backgroundColor: isDark ? 'rgba(34, 197, 94, 0.14)' : 'rgba(22, 163, 74, 0.11)',
+    boxShadow: `inset 3px 0 0 ${isDark ? 'rgba(34, 197, 94, 0.7)' : 'rgba(22, 163, 74, 0.65)'}`,
   },
   itemName: {
     flex: 1,
@@ -696,6 +737,9 @@ function CommandLauncher() {
   const [clipboardStacks, setClipboardStacks] = useState<StackInfo[]>([]);
   const [clipboardHydratedStackItemsById, setClipboardHydratedStackItemsById] = useState<Record<string, ClipboardItem[]>>({});
   const [clipboardSearchLoading, setClipboardSearchLoading] = useState(false);
+  const [clipboardSelectedItemIds, setClipboardSelectedItemIds] = useState<Set<number>>(new Set());
+  const [clipboardDragId, setClipboardDragId] = useState<string | null>(null);
+  const [clipboardDropId, setClipboardDropId] = useState<string | null>(null);
   const [launcherRootSearchEnabledKinds, setLauncherRootSearchEnabledKinds] = useState<Record<LauncherRootSearchKind, boolean>>(
     DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   );
@@ -705,6 +749,7 @@ function CommandLauncher() {
   const [showSquaresInCommandLauncher, setShowSquaresInCommandLauncher] = useState(true);
   const [isDarkMode, setIsDarkMode] = useState<boolean | null>(() => themeAPI.initialTheme ?? null);
   const [libraryMarkdownItems, setLibraryMarkdownItems] = useState<LauncherItem[]>([]);
+  const [pinnedItemIds, setPinnedItemIds] = useState<Set<string>>(() => readLibraryPinnedItemIds());
   const [directoryItems, setDirectoryItems] = useState<LauncherItem[]>([]);
   const [artifactReadings, setArtifactReadings] = useState<LauncherItem[]>([]);
   const [bookmarkAuthorItems, setBookmarkAuthorItems] = useState<LauncherItem[]>([]);
@@ -740,6 +785,7 @@ function CommandLauncher() {
   const activeWebPageRequestRef = useRef(0);
   const previewWindowWasOpenRef = useRef(false);
   const previewRequestRef = useRef(0);
+  const lastPreviewWindowPayloadKeyRef = useRef<string | null>(null);
   const launcherIconPendingPathsRef = useRef(new Set<string>());
   const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
@@ -751,7 +797,6 @@ function CommandLauncher() {
   const launcherGenerationRef = useRef(0);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
-  const lastMousePositionRef = useRef<{ x: number; y: number } | null>(null);
   const launcherClosingForInvocationRef = useRef(false);
 
   const resizeLauncher = useCallback((height: number) => {
@@ -798,6 +843,9 @@ function CommandLauncher() {
   const showLauncherMessage = useCallback((message: string) => {
     setCommittedItemId(null);
     setClipboardSearchActive(false);
+    setClipboardSelectedItemIds(new Set());
+    setClipboardDragId(null);
+    setClipboardDropId(null);
     setQuery(message);
     setFiltered([]);
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
@@ -818,14 +866,6 @@ function CommandLauncher() {
       inputRef.current?.focus();
     });
   }, []);
-
-  const handleListItemMouseMove = useCallback((event: React.MouseEvent, index: number) => {
-    const last = lastMousePositionRef.current;
-    const moved = !last || last.x !== event.clientX || last.y !== event.clientY;
-    if (!moved) return;
-    lastMousePositionRef.current = { x: event.clientX, y: event.clientY };
-    selectExplicitItem(index);
-  }, [selectExplicitItem]);
 
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
@@ -1081,11 +1121,10 @@ function CommandLauncher() {
     previewRequestRef.current += 1;
     manualPreviewRef.current = false;
     hasNavigatedRef.current = false;
-	    hasExplicitSelectionRef.current = false;
-	    lastMousePositionRef.current = null;
-	    setQuery('');
-	    setClipboardSearchActive(false);
-	    setNamespacePrefix(null);
+    hasExplicitSelectionRef.current = false;
+    setQuery('');
+    setClipboardSearchActive(false);
+    setNamespacePrefix(null);
     setDirectoryNamespace(null);
     setAuthorNamespace(null);
     setBookmarkNamespace(null);
@@ -1141,6 +1180,7 @@ function CommandLauncher() {
         : '';
       flushSync(() => {
         launcherClosingForInvocationRef.current = false;
+        setPinnedItemIds(readLibraryPinnedItemIds());
         clearLauncherSessionState();
         if (earlyTypedQuery) setQuery(earlyTypedQuery);
         setLauncherSessionReady(true);
@@ -1237,6 +1277,13 @@ function CommandLauncher() {
     loadBookmarkNamespace(bookmarkNamespace);
   }, [bookmarkNamespace, loadBookmarkNamespace]);
 
+  const pinnedLibraryFilePaths = useMemo(() => new Set(
+    libraryMarkdownItems
+      .filter(item => isLibraryMarkdownLauncherItemPinned(item, pinnedItemIds))
+      .map(item => item.filePath)
+      .filter((filePath): filePath is string => Boolean(filePath)),
+  ), [libraryMarkdownItems, pinnedItemIds]);
+
   const commandItems = useMemo((): LauncherItem[] => commands
     .filter(cmd => !isGeneratedBookmarkTaxonomyPath(cmd.filePath))
     .map(cmd => ({
@@ -1246,8 +1293,9 @@ function CommandLauncher() {
       displayName: cmd.displayName,
       keywords: [cmd.name, cmd.displayName, ...cmd.name.split('-'), ...cmd.name.split('_')],
       filePath: cmd.filePath,
+      isPinned: pinnedItemIds.has(`external:${cmd.filePath}`) || pinnedLibraryFilePaths.has(cmd.filePath),
       lastUpdated: cmd.lastModified,
-    })), [commands]);
+    })), [commands, pinnedItemIds, pinnedLibraryFilePaths]);
 
   const commandDirectoryItems = useMemo((): LauncherItem[] => (
     buildCommandDirectoriesForLauncher(commandDirectories)
@@ -1293,8 +1341,11 @@ function CommandLauncher() {
   const libraryMarkdownSearchItems = useMemo(() => (
     libraryMarkdownItems.filter((item) => (
       shouldIncludeLauncherLibraryMarkdownItem({ filePath: item.filePath, commandFilePaths })
-    ))
-  ), [commandFilePaths, libraryMarkdownItems]);
+    )).map(item => ({
+      ...item,
+      isPinned: isLibraryMarkdownLauncherItemPinned(item, pinnedItemIds),
+    }))
+  ), [commandFilePaths, libraryMarkdownItems, pinnedItemIds]);
 
   const recentFileItems = useMemo((): LauncherItem[] => {
     return recentEntries.flatMap((entry) => {
@@ -1517,6 +1568,20 @@ function CommandLauncher() {
     });
   }, [bookmarkForItem, clipboardPreviewContentForItem, markdownPreviewPathForItem]);
 
+  const previewPayloadKey = useMemo(() => {
+    if (!previewPayload) return null;
+    if (previewPayload.kind === 'bookmark') return `bookmark:${previewPayload.bookmark.id}`;
+    if (previewPayload.kind === 'markdown') return `markdown:${previewPayload.filePath}:${previewPayload.content.length}`;
+    const content = previewPayload.content;
+    const contentKey = content.type === 'image'
+      ? `${content.itemId}:${content.width ?? 0}:${content.height ?? 0}:${content.data ? 'full' : 'thumb'}`
+      : `${content.content.length}`;
+    return `clipboard:${previewPayload.title}:${content.type}:${contentKey}`;
+  }, [previewPayload]);
+
+  const selectedPreviewItem = filtered[selectedIndex];
+  const selectedPreviewItemId = selectedPreviewItem?.id ?? null;
+
   useEffect(() => {
     if (!previewOpen) return;
     traceLauncher('preview-state', {
@@ -1536,6 +1601,7 @@ function CommandLauncher() {
         commandsAPI.launcherPreviewHide?.();
         previewWindowWasOpenRef.current = false;
       }
+      lastPreviewWindowPayloadKeyRef.current = null;
       setPreviewPayload(null);
       return;
     }
@@ -1544,8 +1610,11 @@ function CommandLauncher() {
         commandsAPI.launcherPreviewHide?.();
         previewWindowWasOpenRef.current = false;
       }
+      lastPreviewWindowPayloadKeyRef.current = null;
       return;
     }
+    if (lastPreviewWindowPayloadKeyRef.current === previewPayloadKey) return;
+    lastPreviewWindowPayloadKeyRef.current = previewPayloadKey;
     previewWindowWasOpenRef.current = true;
     traceLauncher('preview-window-show', {
       selectedIndex,
@@ -1554,14 +1623,19 @@ function CommandLauncher() {
       filePath: previewPayload.kind === 'markdown' ? previewPayload.filePath : null,
     });
     commandsAPI.launcherPreviewShow?.(previewPayload);
-  }, [previewOpen, previewPayload, selectedIndex]);
+  }, [previewOpen, previewPayload, previewPayloadKey, selectedIndex]);
 
   useEffect(() => {
     if (!previewOpen) return;
     if (manualPreviewRef.current) return;
-    const selected = filtered[selectedIndex];
-    void loadPreviewForItem(selected, selectedIndex, 'selection');
-  }, [filtered, loadPreviewForItem, previewOpen, selectedIndex]);
+    const delayMs = previewWindowWasOpenRef.current ? 70 : 0;
+    const timeout = window.setTimeout(() => {
+      void loadPreviewForItem(selectedPreviewItem, selectedIndex, 'selection');
+    }, delayMs);
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [loadPreviewForItem, previewOpen, selectedIndex, selectedPreviewItem, selectedPreviewItemId]);
 
   // Check if query is a help command.
   const isHelpQuery = useMemo(() => {
@@ -1597,49 +1671,59 @@ function CommandLauncher() {
     return Array.from(paths).slice(0, LAUNCHER_NORMAL_MODE_MAX_RESULTS);
   }, [filtered]);
 
-  useEffect(() => {
+  const loadClipboardLauncherResults = useCallback(async (search: string): Promise<void> => {
     const requestId = ++clipboardSearchRequestRef.current;
-    if (clipboardSearchQuery === null) {
-      setClipboardItems([]);
-      setClipboardStacks([]);
-      setClipboardHydratedStackItemsById({});
-      setClipboardSearchLoading(false);
-      return;
-    }
-
     setClipboardSearchLoading(true);
     const options: ClipboardQueryOptions = {
       limit: 50,
       offset: 0,
     };
-    if (clipboardSearchQuery.trim()) {
-      options.search = clipboardSearchQuery.trim();
+    if (search.trim()) {
+      options.search = search.trim();
     }
 
-    let cancelled = false;
-    void Promise.all([
-      clipboardAPI.queryItems(options),
-      clipboardAPI.getUniqueStacks?.() ?? Promise.resolve([]),
-    ]).then(([items, stacks]) => {
-      if (cancelled || requestId !== clipboardSearchRequestRef.current) return;
+    try {
+      const [items, stacks] = await Promise.all([
+        clipboardAPI.queryItems(options),
+        clipboardAPI.getUniqueStacks?.() ?? Promise.resolve([]),
+      ]);
+      if (requestId !== clipboardSearchRequestRef.current) return;
       setClipboardHydratedStackItemsById({});
       setClipboardItems(items ?? []);
       setClipboardStacks(stacks ?? []);
-    }).catch((error) => {
-      if (cancelled || requestId !== clipboardSearchRequestRef.current) return;
+    } catch (error) {
+      if (requestId !== clipboardSearchRequestRef.current) return;
       console.error('[CommandLauncher] Failed to load clipboard results:', error);
       setClipboardItems([]);
       setClipboardStacks([]);
       setClipboardHydratedStackItemsById({});
-    }).finally(() => {
-      if (cancelled || requestId !== clipboardSearchRequestRef.current) return;
+    } finally {
+      if (requestId !== clipboardSearchRequestRef.current) return;
       setClipboardSearchLoading(false);
-    });
+    }
+  }, []);
 
+  useEffect(() => {
+    if (clipboardSearchQuery === null) {
+      clipboardSearchRequestRef.current += 1;
+      setClipboardItems([]);
+      setClipboardStacks([]);
+      setClipboardHydratedStackItemsById({});
+      setClipboardSelectedItemIds(new Set());
+      setClipboardDragId(null);
+      setClipboardDropId(null);
+      setClipboardSearchLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    void loadClipboardLauncherResults(clipboardSearchQuery).then(() => {
+      if (cancelled) return;
+    });
     return () => {
       cancelled = true;
     };
-  }, [clipboardSearchQuery]);
+  }, [clipboardSearchQuery, loadClipboardLauncherResults]);
 
   useEffect(() => {
     if (clipboardSearchQuery === null) return;
@@ -1653,6 +1737,19 @@ function CommandLauncher() {
       console.error('[CommandLauncher] Failed to hydrate clipboard stack results:', error);
     });
   }, [clipboardHydratedStackItemsById, clipboardItems, clipboardSearchQuery, clipboardStacks, fetchClipboardStackItemsById]);
+
+  useEffect(() => {
+    if (clipboardSearchQuery === null || clipboardSelectedItemIds.size === 0) return;
+    const visibleIds = new Set<number>();
+    for (const item of clipboardItems) visibleIds.add(item.id);
+    for (const stackItems of Object.values(clipboardHydratedStackItemsById)) {
+      for (const item of stackItems) visibleIds.add(item.id);
+    }
+    setClipboardSelectedItemIds((prev) => {
+      const next = new Set([...prev].filter(id => visibleIds.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [clipboardHydratedStackItemsById, clipboardItems, clipboardSearchQuery, clipboardSelectedItemIds.size]);
 
   useEffect(() => {
     const isScopedMode = Boolean(namespacePrefix || directoryNamespace || authorNamespace || bookmarkNamespace || moveSource || clipboardSearchQuery !== null);
@@ -1813,6 +1910,8 @@ function CommandLauncher() {
             .map(item => ({ item, score: scoreLauncherSearchableItem(item, localQueryLower) }))
             .filter(({ score }) => score > 0)
             .sort((a, b) => {
+              const pinnedDelta = Number(Boolean(b.item.isPinned)) - Number(Boolean(a.item.isPinned));
+              if (pinnedDelta !== 0) return pinnedDelta;
               const recencyDelta = getLauncherItemRecency(b.item) - getLauncherItemRecency(a.item);
               return recencyDelta || b.score - a.score;
             })
@@ -2106,6 +2205,95 @@ function CommandLauncher() {
     return (hydrated[item.clipboardStackId] ?? row.items).map(stackItem => stackItem.id);
   }, [fetchClipboardStackItemsById]);
 
+  const getClipboardLauncherItemIds = useCallback(async (item: LauncherItem | undefined): Promise<number[]> => {
+    if (!item) return [];
+    if (item.type === 'clipboard-item' && typeof item.clipboardItemId === 'number') return [item.clipboardItemId];
+    if (item.type === 'clipboard-stack') return getClipboardLauncherStackItemIds(item);
+    return [];
+  }, [getClipboardLauncherStackItemIds]);
+
+  const refreshClipboardLauncherResults = useCallback(async () => {
+    if (clipboardSearchQuery === null) return;
+    await loadClipboardLauncherResults(clipboardSearchQuery);
+  }, [clipboardSearchQuery, loadClipboardLauncherResults]);
+
+  const toggleClipboardLauncherSelection = useCallback(async (item: LauncherItem | undefined) => {
+    const itemIds = await getClipboardLauncherItemIds(item);
+    if (itemIds.length === 0) return;
+    setClipboardSelectedItemIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = itemIds.every(id => next.has(id));
+      if (allSelected) itemIds.forEach(id => next.delete(id));
+      else itemIds.forEach(id => next.add(id));
+      return next;
+    });
+  }, [getClipboardLauncherItemIds]);
+
+  const stackClipboardLauncherSelection = useCallback(async () => {
+    if (!clipboardAPI.updateStackId || clipboardSelectedItemIds.size < 2) return;
+    const itemIds = Array.from(clipboardSelectedItemIds);
+    const newStackId = crypto.randomUUID();
+    await clipboardAPI.updateStackId(itemIds, newStackId);
+    setClipboardSelectedItemIds(new Set());
+    await refreshClipboardLauncherResults();
+  }, [clipboardSelectedItemIds, refreshClipboardLauncherResults]);
+
+  const unstackClipboardLauncherItem = useCallback(async (item: LauncherItem | undefined) => {
+    if (!clipboardAPI.updateStackId || !item) return;
+    if (item.type === 'clipboard-stack') {
+      const itemIds = await getClipboardLauncherStackItemIds(item);
+      if (itemIds.length < 2) return;
+      await clipboardAPI.updateStackId(itemIds, null);
+      setClipboardSelectedItemIds(new Set());
+      await refreshClipboardLauncherResults();
+      return;
+    }
+    if (item.type === 'clipboard-item' && typeof item.clipboardItemId === 'number') {
+      const previousStackId = item.clipboardRow?.type === 'item'
+        ? item.clipboardRow.item.stackId
+        : null;
+      if (!previousStackId) return;
+      await clipboardAPI.updateStackId([item.clipboardItemId], null);
+      setClipboardSelectedItemIds((prev) => {
+        const next = new Set(prev);
+        next.delete(item.clipboardItemId as number);
+        return next;
+      });
+      await refreshClipboardLauncherResults();
+    }
+  }, [getClipboardLauncherStackItemIds, refreshClipboardLauncherResults]);
+
+  const applyClipboardLauncherDrop = useCallback(async (activeId: string, overId: string) => {
+    if (!clipboardAPI.updateStackId || activeId === overId) return;
+    const [activeType, activeValue] = activeId.split(':');
+    const [overType, overValue] = overId.split(':');
+
+    if (activeType === 'item') {
+      const draggedItemId = Number(activeValue);
+      if (!Number.isFinite(draggedItemId)) return;
+      if (overType === 'stack') {
+        await clipboardAPI.updateStackId([draggedItemId], overValue);
+      } else if (overType === 'item') {
+        const targetItemId = Number(overValue);
+        if (!Number.isFinite(targetItemId) || draggedItemId === targetItemId) return;
+        await clipboardAPI.updateStackId([draggedItemId, targetItemId], crypto.randomUUID());
+      }
+    } else if (activeType === 'stack') {
+      if (overType === 'stack' && activeValue !== overValue) {
+        const stackItems = await clipboardAPI.queryItemsByStackId?.(activeValue);
+        const itemIds = stackItems?.map(item => item.id) ?? [];
+        if (itemIds.length > 0) await clipboardAPI.updateStackId(itemIds, overValue);
+      } else if (overType === 'item') {
+        const targetItemId = Number(overValue);
+        if (!Number.isFinite(targetItemId)) return;
+        await clipboardAPI.updateStackId([targetItemId], activeValue);
+      }
+    }
+
+    setClipboardSelectedItemIds(new Set());
+    await refreshClipboardLauncherResults();
+  }, [refreshClipboardLauncherResults]);
+
   const enterLauncherSource = useCallback((sourceId: LauncherSourceId) => {
     setDirectoryNamespace(null);
     setAuthorNamespace(null);
@@ -2125,6 +2313,7 @@ function CommandLauncher() {
 
   // Handle keyboard navigation.
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    const plainKey = !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey;
     if (e.key === 'Escape') {
       e.preventDefault();
       e.stopPropagation();
@@ -2144,6 +2333,17 @@ function CommandLauncher() {
       setFiltered([]);
       selectIndex(0);
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
+    } else if (clipboardSearchQuery !== null && plainKey && e.key === 'x') {
+      e.preventDefault();
+      const selectedItem = filtered[resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length)];
+      void toggleClipboardLauncherSelection(selectedItem);
+    } else if (clipboardSearchQuery !== null && plainKey && e.key === 's') {
+      e.preventDefault();
+      void stackClipboardLauncherSelection();
+    } else if (clipboardSearchQuery !== null && plainKey && e.key === 'u') {
+      e.preventDefault();
+      const selectedItem = filtered[resolveHighlightedLauncherIndex(selectedIndexRef.current, filtered.length)];
+      void unstackClipboardLauncherItem(selectedItem);
     } else if (e.key === 'ArrowDown') {
       e.preventDefault();
       if (filtered.length === 0) return;
@@ -2257,6 +2457,18 @@ function CommandLauncher() {
         return;
       }
 
+      const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
+      if (directory?.directoryPath) {
+        setDirectoryNamespace({
+          label: directory.displayName,
+          directoryPath: directory.directoryPath,
+          directoryRelPath: directory.directoryRelPath,
+        });
+        setQuery('');
+        selectIndex(0);
+        return;
+      }
+
       const fieldTheoryTarget = resolveLauncherFieldTheoryOpenTarget(
         filtered,
         allItems,
@@ -2311,18 +2523,6 @@ function CommandLauncher() {
         return;
       }
 
-      const directory = resolveLauncherDirectoryNamespace(filtered, directoryItems, currentIndex, rawQuery);
-      if (directory?.directoryPath) {
-        setDirectoryNamespace({
-          label: directory.displayName,
-          directoryPath: directory.directoryPath,
-          directoryRelPath: directory.directoryRelPath,
-        });
-        setQuery('');
-        selectIndex(0);
-        return;
-      }
-
       for (const prefix of NAMESPACE_PREFIXES) {
         if (prefix.startsWith(q) && q.length > 0) {
           enterLauncherSource(prefix);
@@ -2330,7 +2530,7 @@ function CommandLauncher() {
         }
       }
 
-    } else if (shouldHandleLauncherPreviewShortcut(e, hasNavigatedRef.current, previewOpen)) {
+    } else if (shouldHandleLauncherPreviewShortcut(e, hasExplicitSelectionRef.current, previewOpen)) {
       const currentIndex = selectedIndexRef.current;
       const selectedItem = filtered[currentIndex];
       traceLauncher('preview-key', {
@@ -2459,12 +2659,17 @@ function CommandLauncher() {
       prepareLauncherForNextOpen();
       commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
     };
+    const visibilityPolicy = getLauncherInvocationVisibilityPolicy({
+      itemType: item.type,
+      openFieldTheoryTarget: options.openFieldTheoryTarget,
+      insertWikiLink: options.insertWikiLink,
+    });
     const willPastePortableCommand = shouldPastePortableCommand({
       itemType: item.type,
       openFieldTheoryTarget: options.openFieldTheoryTarget,
       insertWikiLink: options.insertWikiLink,
     });
-    if (willPastePortableCommand) {
+    if (visibilityPolicy.suppressRevealDuringBlur) {
       launcherClosingForInvocationRef.current = true;
       flushSync(() => {
         setCommittedItemId(item.id);
@@ -2540,7 +2745,10 @@ function CommandLauncher() {
         const clipboardItem = item.clipboardRow?.type === 'item' ? item.clipboardRow.item : null;
         await clipboardAPI.pasteItem(item.clipboardItemId, targetBundleId, clipboardItem?.useImprovedVersion);
       }
-      prepareLauncherForNextOpen();
+      prepareLauncherForNextOpen({ revealWhenReady: visibilityPolicy.revealWhenReadyAfterSuccess });
+      if (visibilityPolicy.closeFromRendererAfterSuccess) {
+        commandsAPI.launcherClose({ skipActivation: true, generation: invocationGeneration });
+      }
       return;
     }
     if (willPastePortableCommand) {
@@ -2556,7 +2764,7 @@ function CommandLauncher() {
         showInvocationError('invoke-command-renderer-error', result.error, 'Command paste failed');
         return;
       }
-      prepareLauncherForNextOpen({ revealWhenReady: false });
+      prepareLauncherForNextOpen({ revealWhenReady: visibilityPolicy.revealWhenReadyAfterSuccess });
       return;
     }
     if (item.type === 'local-command' || item.type === 'local-instruction') {
@@ -2872,6 +3080,20 @@ function CommandLauncher() {
     if (index !== selectedIndex) return {};
     return hasExplicitSelection ? styles.listItemSelected : styles.listItemSelectedSoft;
   };
+  const getClipboardLauncherDragId = (item: LauncherItem): string | null => {
+    if (item.type === 'clipboard-item' && typeof item.clipboardItemId === 'number') return `item:${item.clipboardItemId}`;
+    if (item.type === 'clipboard-stack' && item.clipboardStackId) return `stack:${item.clipboardStackId}`;
+    return null;
+  };
+  const isClipboardLauncherMarked = (item: LauncherItem): boolean => {
+    if (item.type === 'clipboard-item' && typeof item.clipboardItemId === 'number') {
+      return clipboardSelectedItemIds.has(item.clipboardItemId);
+    }
+    if (item.type === 'clipboard-stack' && item.clipboardRow?.type === 'stack') {
+      return item.clipboardRow.items.some(stackItem => clipboardSelectedItemIds.has(stackItem.id));
+    }
+    return false;
+  };
   const namespaceTagStyle = (() => {
     if (!namespaceLabel) return styles.namespaceTag;
     const label = namespaceLabel.toLowerCase();
@@ -2936,10 +3158,6 @@ function CommandLauncher() {
       </span>
     );
   };
-  const itemSupportsPreview = (item: LauncherItem) => (
-    Boolean(bookmarkForItem(item) || markdownPreviewPathForItem(item) || clipboardPreviewContentForItem(item))
-  );
-
   return (
     <div style={{
       ...styles.container,
@@ -2995,9 +3213,6 @@ function CommandLauncher() {
         <ul
           ref={listRef}
           style={styles.list}
-          onMouseLeave={() => {
-            lastMousePositionRef.current = null;
-          }}
         >
           {isHelpQuery ? (
             // Help mode: show grouped by type with section headers.
@@ -3018,7 +3233,6 @@ function CommandLauncher() {
                         ...selectedItemStyle(item, globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName}</span>
@@ -3044,7 +3258,6 @@ function CommandLauncher() {
                         ...selectedItemStyle(item, globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName}</span>
@@ -3070,7 +3283,6 @@ function CommandLauncher() {
                         ...selectedItemStyle(item, globalIndex),
                       }}
                       onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                      onMouseMove={(event) => handleListItemMouseMove(event, globalIndex)}
                     >
                       {renderItemIcon(item)}
                       <span style={styles.itemName}>{item.displayName || item.name}</span>
@@ -3082,17 +3294,48 @@ function CommandLauncher() {
             filtered.map((item, i) => {
               const metaText = item.type === 'handoff' ? item.timeAgo : item.hotkeyDisplay;
               const showMetaText = Boolean(metaText && !(item.type === 'directory' && metaText === 'folder'));
-              const showPreviewHint = itemSupportsPreview(item) && !showMetaText;
+              const clipboardDragItemId = getClipboardLauncherDragId(item);
+              const isClipboardDropTarget = Boolean(clipboardDragItemId && clipboardDropId === clipboardDragItemId && clipboardDragId !== clipboardDragItemId);
               return (
                 <li
                   key={item.id}
                   data-item-index={i}
+                  draggable={Boolean(clipboardSearchQuery !== null && clipboardDragItemId)}
+                  onDragStart={(event) => {
+                    if (!clipboardDragItemId) return;
+                    setClipboardDragId(clipboardDragItemId);
+                    event.dataTransfer.setData('text/plain', clipboardDragItemId);
+                    event.dataTransfer.effectAllowed = 'move';
+                  }}
+                  onDragOver={(event) => {
+                    if (!clipboardDragId || !clipboardDragItemId || clipboardDragId === clipboardDragItemId) return;
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = 'move';
+                    setClipboardDropId(clipboardDragItemId);
+                  }}
+                  onDragLeave={() => {
+                    if (clipboardDropId === clipboardDragItemId) setClipboardDropId(null);
+                  }}
+                  onDrop={(event) => {
+                    if (!clipboardDragItemId) return;
+                    event.preventDefault();
+                    const activeId = clipboardDragId ?? event.dataTransfer.getData('text/plain');
+                    setClipboardDragId(null);
+                    setClipboardDropId(null);
+                    if (activeId) void applyClipboardLauncherDrop(activeId, clipboardDragItemId);
+                  }}
+                  onDragEnd={() => {
+                    setClipboardDragId(null);
+                    setClipboardDropId(null);
+                  }}
                   style={{
                     ...styles.listItem,
+                    ...(isClipboardLauncherMarked(item) ? styles.listItemClipboardSelected : {}),
                     ...selectedItemStyle(item, i),
+                    ...(isClipboardDropTarget ? styles.listItemClipboardDropTarget : {}),
+                    cursor: clipboardDragItemId ? (clipboardDragId ? 'grabbing' : 'grab') : styles.listItem.cursor,
                   }}
                   onClick={(event) => invokeItem(item, { insertWikiLink: event.metaKey })}
-                  onMouseMove={(event) => handleListItemMouseMove(event, i)}
                 >
                   {renderItemIcon(item)}
                   <span style={styles.itemName}>
@@ -3100,7 +3343,6 @@ function CommandLauncher() {
                   </span>
                   <span style={styles.itemMeta}>
                     {showMetaText && <span style={styles.itemHotkey}>{metaText}</span>}
-                    {showPreviewHint && <span style={styles.itemHotkey}>space</span>}
                     <span style={styles.itemTypeTag}>{launcherItemTypeLabel(item)}</span>
                   </span>
                 </li>

@@ -1815,6 +1815,12 @@ export class LibrarianManager extends EventEmitter {
    */
   setUserDataManager(manager: UserDataManager): void {
     this.userDataManager = manager;
+    if (!manager.isLoggedIn()) return;
+    this.updatePathsForUser();
+    this.settings = this.loadSettings();
+    this.loadIndex();
+    this.invalidateWikiTreeCache();
+    this.invalidateLibraryRootsCache();
   }
 
   /**

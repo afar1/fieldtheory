@@ -27,6 +27,7 @@ const log = createLogger('CommandLauncher');
 
 const execFileAsync = promisify(execFile);
 const COMMAND_LAUNCHER_FRESH_BOUNDS_TIMEOUT_MS = 35;
+const COMMAND_LAUNCHER_PREVIEW_BLUR_SUPPRESSION_MS = 150;
 
 /**
  * Represents a running application with its bundle ID and display name.
@@ -109,6 +110,7 @@ export class CommandLauncherWindow {
   private previewWindow: BrowserWindow | null = null;
   private previewPayload: Record<string, unknown> | null = null;
   private previewAnchorBounds: AnchorBounds | null = null;
+  private suppressPreviewBlurUntil = 0;
 
   constructor(nativeHelper?: NativeHelper, options: CommandLauncherWindowOptions = {}) {
     this.nativeHelper = nativeHelper || null;
@@ -549,6 +551,16 @@ export class CommandLauncherWindow {
         frontmostBundleId: frontmostApp?.bundleId ?? null,
         frontmostName: frontmostApp?.name ?? null,
       });
+      if (Date.now() < this.suppressPreviewBlurUntil) {
+        appendCommandLauncherTrace('window-blur-ignored-preview-show', {
+          previewVisible: this.previewWindow?.isVisible() ?? false,
+        });
+        this.window?.focus();
+        this.window?.webContents.send('command-launcher:focus-input', {
+          generation: this.showGeneration,
+        });
+        return;
+      }
       this.hide();
     });
 
@@ -675,9 +687,16 @@ export class CommandLauncherWindow {
       ...bounds,
     });
 
+    this.suppressPreviewBlurUntil = Date.now() + COMMAND_LAUNCHER_PREVIEW_BLUR_SUPPRESSION_MS;
     this.previewWindow!.showInactive();
-    this.previewWindow!.moveTop();
     this.previewWindow!.webContents.send('command-launcher-preview:payload', preview);
+    if (this.window && !this.window.isDestroyed() && this.window.isVisible()) {
+      this.window.focus();
+      this.window.webContents.send('command-launcher:focus-input', {
+        generation: this.showGeneration,
+      });
+    }
+    this.previewWindow!.moveTop();
   }
 
   private getPreviewBounds(requestedHeight: number): Electron.Rectangle {

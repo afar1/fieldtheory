@@ -201,6 +201,25 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('No artifacts yet')).toBeTruthy();
   });
 
+  it('shows the sidebar while Library has no selected page even when sidebar collapse is enabled', async () => {
+    window.librarianAPI!.getReadings = vi.fn(async () => [{
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+    }]);
+
+    const { container } = render(<LibrarianView sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Select a page');
+    const sidebarPane = container.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement | null;
+    expect(sidebarPane?.style.width).not.toBe('0px');
+    expect(container.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]')).toBeNull();
+  });
+
   it('shows pinned recent docs only in Recents and without pin buttons', async () => {
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
       key === 'library-pinned-item-ids'
@@ -2071,6 +2090,17 @@ describe('LibrarianView render', () => {
       createdAt: 0,
       mtime: 0,
     }]);
+    window.librarianAPI!.getReading = vi.fn(async () => ({
+      path: '/tmp/library/example.md',
+      title: 'example.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+      content: '# Example\n',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'example' },
+    }));
 
     const { container } = render(<LibrarianView sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
 
@@ -2085,6 +2115,10 @@ describe('LibrarianView render', () => {
       '[data-fieldtheory-collapsed-sidebar-pane="true"]'
     ) as HTMLElement | null;
 
+    fireEvent.click(await screen.findByText('example.md'));
+    await waitFor(() => {
+      expect(window.librarianAPI?.getReading).toHaveBeenCalledWith('/tmp/library/example.md');
+    });
     expect(getHoverStrip()).toBeTruthy();
 
     fireEvent.mouseMove(root, { clientX: 80 });

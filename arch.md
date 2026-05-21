@@ -2,7 +2,15 @@
 
 Start in `mac-app/` unless the task clearly says `ios/`, `md/`, `townsquare/`, `www/`, or the repo-root Expo app.
 
-The product intent is a local-first personal operating surface: capture, think, write, organize, and trigger agents from macOS using markdown and local files as durable artifacts. Auth, sync, and cloud features exist, but they are layered on top and often gated; do not treat the server as the default source of truth for core behavior.
+The product intent is a local-first personal operating surface: capture, think, write, organize, and trigger agents from macOS using markdown and local files as durable artifacts. The author keeps pushing toward non-destructive behavior, editable command files, and filesystem truth over opaque app state. Auth, sync, and cloud features exist, but they are layered on top and often gated; do not treat the server as the default source of truth for core behavior.
+
+## Fast Orientation
+
+- The real product is the mac app in `mac-app/`.
+- The main durable user surface is `~/.fieldtheory/library/`.
+- Portable commands live in `~/.fieldtheory/library/Commands/` and are normal markdown files, not hardcoded config.
+- Librarian artifacts and command-job side effects live under `~/.fieldtheory/librarian/`.
+- This repo also contains adjacent apps and large upstream/runtime code. Do not start at the repo root unless the task points there.
 
 ## Trust Order
 
@@ -34,10 +42,14 @@ The product intent is a local-first personal operating surface: capture, think, 
 
 - `ClipboardManager`, `ClipboardHistoryWindow`, `HotMicManager`, `AudioManager`, `TranscriberManager`
   Core capture, dictation, transcription, and popup-window behavior.
+- `LibrarianManager`, `DocumentSaveGuard`, `pathSafety`, `libraryMigration`
+  The real local-document control plane: watched Library folders, safe writes, rename/move rules, and legacy-to-canonical path migration.
 - `CommandsManager`, `CommandLauncherWindow`, `CommandSyncService`, `LibrarySyncService`
   Portable commands, launcher plumbing, and the gated sync layer.
 - `AgentKickoffManager`, `AgentHookInstaller`, `LocalLlmManager`, `MaxwellRunManager`
   Agent kickoff, local-model execution, and long-running command/automation flows.
+- `AccountStatusManager`, `releaseSyncPolicy`, `useAuthSessionBridge`
+  Account state exists, but it wraps local capability instead of defining the whole product.
 - `SquaresManager`, `DynamicIslandManager`, `MeetingManager`, `TaggedDocsManager`, `RecentManager`
   Window actions, floating recording UI, meeting flows, tagged-doc scanning, and recents.
 - `possibleIdeasManager`
@@ -55,11 +67,15 @@ The product intent is a local-first personal operating surface: capture, think, 
   Separate Atomic knowledge-base app/codebase inside this repo. Do not confuse its architecture or editor stack with Field Theory's.
 - `townsquare/`, `www/`, `og-service/`
   Adjacent web properties and support services, not the main desktop app.
+- `src/`, `ggml/`, `include/`, `examples/`, `bindings/`, `models/`, `tests/`
+  Upstream/runtime-heavy code and build artifacts that support local model work. Important when touching transcription/runtime plumbing, but usually not where product behavior changes start.
 
 ## Working Model
 
 The author is building a personal tool that stays close to the filesystem. Favor local data safety, visible user control, markdown as the durable format, commands as editable documents, and opt-in cloud features instead of cloud replacement.
 
 If a task touches local storage, path migration, or where artifacts belong, trust `fieldTheoryPaths.ts` before older docs.
-If a task touches Library editing, start in `LibrarianView.tsx` and `MarkdownCodeEditor.tsx`, not just the renderer.
+If a task touches Library editing, start in `LibrarianView.tsx`, `MarkdownCodeEditor.tsx`, and the save/path helpers behind them, not just the renderer.
+If a task touches commands or automations, assume markdown command files plus `LibrarianManager` are part of the product surface, not just tooling.
+If a task touches auth or sync, check whether it is release-gated before assuming it is part of the default user path.
 If docs and code disagree, trust the live code.

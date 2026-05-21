@@ -80,6 +80,25 @@ export function shouldPastePortableCommand(input: {
     && input.insertWikiLink !== true;
 }
 
+export function getLauncherInvocationVisibilityPolicy(input: {
+  itemType?: string | null;
+  openFieldTheoryTarget?: boolean;
+  insertWikiLink?: boolean;
+}): {
+  suppressRevealDuringBlur: boolean;
+  revealWhenReadyAfterSuccess: boolean;
+  closeFromRendererAfterSuccess: boolean;
+} {
+  const isClipboardPaste = input.itemType === 'clipboard-item' || input.itemType === 'clipboard-stack';
+  const isExternalPaste = shouldPastePortableCommand(input) || isClipboardPaste;
+
+  return {
+    suppressRevealDuringBlur: isExternalPaste,
+    revealWhenReadyAfterSuccess: !isExternalPaste,
+    closeFromRendererAfterSuccess: isClipboardPaste,
+  };
+}
+
 // =============================================================================
 // Library Markdown Flattening
 // =============================================================================
@@ -447,6 +466,7 @@ export interface LauncherUsageScoreItem {
 
 export interface LauncherNormalModeItem {
   type?: string;
+  isPinned?: boolean;
   lastOpenedAt?: number;
   lastUpdated?: number;
   postedAt?: string;
@@ -550,6 +570,13 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   const bTypePriority = launcherTypePriority(b.item);
   if (aTypePriority !== bTypePriority) return bTypePriority - aTypePriority;
 
+  const pinnedDelta = Number(Boolean(b.item.isPinned)) - Number(Boolean(a.item.isPinned));
+  if (pinnedDelta !== 0) return pinnedDelta;
+
+  if ((a.item.type === 'directory' || b.item.type === 'directory') && a.score !== b.score) {
+    return b.score - a.score;
+  }
+
   const aRecency = getLauncherItemRecency(a.item);
   const bRecency = getLauncherItemRecency(b.item);
   if ((aRecency || bRecency) && aRecency !== bRecency) return bRecency - aRecency;
@@ -603,10 +630,10 @@ export function isLauncherPreviewToggleKey(event: { key?: string; code?: string 
 
 export function shouldHandleLauncherPreviewShortcut(
   event: { key?: string; code?: string },
-  hasKeyboardSelection: boolean,
+  hasExplicitSelection: boolean,
   previewOpen: boolean,
 ): boolean {
-  return isLauncherPreviewToggleKey(event) && (hasKeyboardSelection || previewOpen);
+  return isLauncherPreviewToggleKey(event) && (hasExplicitSelection || previewOpen);
 }
 
 export function nextLauncherArrowIndex(
@@ -1082,6 +1109,8 @@ function compareLauncherDirectoryItemsByRecency<T extends LauncherSearchableItem
 }
 
 export function compareLauncherItemsByRecency<T extends LauncherSearchableItem & LauncherNormalModeItem>(a: T, b: T): number {
+  const pinnedDelta = Number(Boolean(b.isPinned)) - Number(Boolean(a.isPinned));
+  if (pinnedDelta !== 0) return pinnedDelta;
   const aRecency = getLauncherItemRecency(a);
   const bRecency = getLauncherItemRecency(b);
   if (aRecency !== bRecency) return bRecency - aRecency;

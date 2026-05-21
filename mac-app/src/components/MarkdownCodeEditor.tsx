@@ -389,7 +389,6 @@ type RenderedMarkdownDecoration = Range<Decoration>;
 const renderedMarkdownDocumentPathFacet = Facet.define<string | null, string | null>({
   combine: (values) => values[0] ?? null,
 });
-
 type RenderedMarkdownEditorRange = { from: number; to: number };
 type RenderedMarkdownEditorLineRange = { fromLine: number; toLine: number };
 
@@ -1518,6 +1517,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       // We deliberately mount once; reactive props are reconfigured below.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: documentPathCompartment.reconfigure(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
+      });
+    }, [documentPath, documentPathCompartment]);
 
     // Sync external value into the editor before parent-scheduled cursor restores run.
     useLayoutEffect(() => {
