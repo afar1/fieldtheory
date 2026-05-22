@@ -56,6 +56,7 @@ import {
   handleRenderedMarkdownEditorBeforeInput,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
+  isVisualLineNumberRowSelected,
   shouldMoveCaretToDocumentEndFromClick,
 } from '../MarkdownCodeEditor';
 
@@ -246,6 +247,12 @@ describe('MarkdownCodeEditor line numbers', () => {
       { top: 31, width: 100, height: 20 },
       { top: 52, width: 40, height: 20 },
     ], 20)).toBe(3);
+  });
+
+  it('only marks wrapped visual line numbers whose rows intersect selection rects', () => {
+    expect(isVisualLineNumberRowSelected(10, [31], 20)).toBe(false);
+    expect(isVisualLineNumberRowSelected(31.4, [31], 20)).toBe(true);
+    expect(isVisualLineNumberRowSelected(52, [31], 20)).toBe(false);
   });
 
   it('marks selected line numbers distinctly', () => {

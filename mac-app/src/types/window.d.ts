@@ -2170,6 +2170,11 @@ declare global {
       documentPath: string,
       content: string,
     ) => Promise<{ content: string; copied: number; rewritten: number; missing: number }>;
+    deleteUnusedCopiedImages: (
+      documentPath: string,
+      removedMarkdown: string,
+      remainingContent: string,
+    ) => Promise<{ deleted: number; skipped: number; missing: number }>;
   }
 
   interface RecentEntry {

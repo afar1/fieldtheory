@@ -645,6 +645,71 @@ describe('LibrarianView render', () => {
     });
   });
 
+  it('keeps command-launcher image insertion in rendered mode when rendered is active', async () => {
+    const relPath = 'scratchpad/rendered-command-image-insert-test';
+    const content = 'hello rendered command image';
+    const insertedText = '![Image](<file:///Users/afar/Pictures/Inserted%20Image.png>)';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-command-image-insert-test',
+      title: 'rendered-command-image-insert-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-command-image-version' },
+    };
+    let insertMarkdownTextHandler: ((text: string) => void) | null = null;
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.librarianAPI!.onInsertMarkdownText).mockImplementation((callback) => {
+      insertMarkdownTextHandler = callback;
+      return () => {
+        insertMarkdownTextHandler = null;
+      };
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + insertedText.length, sha256: 'rendered-command-image-saved' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain(content);
+      expect(insertMarkdownTextHandler).toBeTruthy();
+      if (!root) throw new Error('Rendered editor root missing');
+      return root;
+    });
+    fireEvent.click(renderedRoot);
+
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain(content);
+      return input;
+    });
+
+    await act(async () => {
+      insertMarkdownTextHandler?.(insertedText);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    });
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        `${content}${insertedText}`,
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
+    expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+  });
+
   it('keeps rendered mode when Enter commits the file title', async () => {
     const relPath = 'scratchpad/title-enter-rendered-test';
     const page: WikiPage = {
