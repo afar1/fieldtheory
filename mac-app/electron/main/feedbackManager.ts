@@ -281,11 +281,19 @@ export class FeedbackManager extends EventEmitter {
   }
 
   private teardownRealtimeSubscription(): void {
-    if (this.realtimeChannel) {
-      this.supabase?.removeChannel(this.realtimeChannel);
-      this.realtimeChannel = null;
-    }
+    const channel = this.realtimeChannel;
+    this.realtimeChannel = null;
     this.realtimeConnected = false;
+    if (!channel) return;
+
+    try {
+      const removal = this.supabase?.removeChannel(channel);
+      void removal?.catch((err) => {
+        log.error('Realtime teardown failed:', err);
+      });
+    } catch (err) {
+      log.error('Realtime teardown failed:', err);
+    }
   }
 
   private startPollingFallback(): void {
