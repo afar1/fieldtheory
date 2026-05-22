@@ -350,6 +350,8 @@ export class AuthManager extends EventEmitter {
       'fieldtheory-mac',
       'field-theory',
       'Field Theory',
+      'Field Theory Experimental',
+      'Electron',
       'littleai-mac',
       'Oscar',
     ];

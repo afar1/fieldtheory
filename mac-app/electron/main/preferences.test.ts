@@ -164,7 +164,29 @@ describe('PreferencesManager', () => {
     expect(loaded.clickAwayToDismiss).toBe(false);
   });
 
-  it('migrates legacy click-away prefs back into Field Theory panel mode', async () => {
+  it('migrates legacy click-away prefs into Field Theory panel mode on load', async () => {
+    const prefsPath = path.join(tempDir, 'preferences.json');
+    await fs.writeFile(
+      prefsPath,
+      JSON.stringify(
+        {
+          clickAwayToDismiss: true,
+        },
+        null,
+        2,
+      ),
+      'utf-8',
+    );
+
+    const preferences = new PreferencesManager();
+    const loaded = await preferences.load();
+
+    expect(loaded.fieldTheoryWindowMode).toBe('panel');
+    expect(loaded.showInDock).toBe(false);
+    expect(loaded.clickAwayToDismiss).toBe(true);
+  });
+
+  it('does not let a click-away-only save override explicit Field Theory app mode', async () => {
     const prefsPath = path.join(tempDir, 'preferences.json');
     await fs.writeFile(
       prefsPath,
@@ -183,8 +205,8 @@ describe('PreferencesManager', () => {
     await preferences.save({ clickAwayToDismiss: true });
 
     const saved = JSON.parse(await fs.readFile(prefsPath, 'utf-8')) as Record<string, unknown>;
-    expect(saved.fieldTheoryWindowMode).toBe('panel');
-    expect(saved.showInDock).toBe(false);
+    expect(saved.fieldTheoryWindowMode).toBe('app');
+    expect(saved.showInDock).toBe(true);
     expect(saved.clickAwayToDismiss).toBe(true);
   });
 
@@ -213,7 +235,7 @@ describe('PreferencesManager', () => {
     expect(resolveFieldTheoryWindowMode({ clickAwayToDismiss: true })).toBe('panel');
   });
 
-  it('mirrors hotkeys to shared prefs and preserves them when signed out', async () => {
+  it('mirrors shared device prefs and preserves them when signed out', async () => {
     const sharedPrefsPath = path.join(tempDir, 'preferences.json');
     const userPrefsPath = path.join(tempDir, 'users', 'user-123', 'preferences.json');
     await fs.mkdir(path.dirname(userPrefsPath), { recursive: true });
@@ -252,7 +274,9 @@ describe('PreferencesManager', () => {
     expect(sharedPrefs.clipboardHistoryHotkey).toBe('Command+Option+Space');
     expect(sharedPrefs.commandLauncherHotkey).toBe('Command+Shift+L');
     expect(sharedPrefs.transcriptionHotkey).toBe('Control+Space');
-    expect(sharedPrefs.showInDock).toBeUndefined();
+    expect(sharedPrefs.fieldTheoryWindowMode).toBe('app');
+    expect(sharedPrefs.showInDock).toBe(true);
+    expect(sharedPrefs.clickAwayToDismiss).toBe(false);
 
     loggedIn = false;
     await preferences.resetForSignedOutState();

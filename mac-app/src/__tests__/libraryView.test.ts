@@ -1130,6 +1130,7 @@ describe('rendered markdown edit helpers', () => {
     const value = 'before\n![Image](<file:///tmp/Figure.png>)\nafter';
     const imageStart = value.indexOf('![');
     const imageEnd = value.indexOf('\nafter');
+    const imageMarkdown = '![Image](<file:///tmp/Figure.png>)';
 
     expect(getRenderedMarkdownDeleteShortcutEdit({
       event: mkKey({ key: 'Backspace' }),
@@ -1140,6 +1141,7 @@ describe('rendered markdown edit helpers', () => {
       nextValue: 'before\nafter',
       selectionStart: imageStart,
       selectionEnd: imageStart,
+      deletedMarkdownImages: [imageMarkdown],
     });
 
     expect(getRenderedMarkdownDeleteShortcutEdit({
@@ -1151,6 +1153,44 @@ describe('rendered markdown edit helpers', () => {
       nextValue: 'before\nafter',
       selectionStart: imageStart,
       selectionEnd: imageStart,
+      deletedMarkdownImages: [imageMarkdown],
+    });
+  });
+
+  it('deletes selected rendered image markdown fragments as a single block', () => {
+    const value = 'before\n![Image](<./Doc.assets/Screenshot%201.png>)\nafter';
+    const imageStart = value.indexOf('![');
+    const selectedStart = value.indexOf('Image');
+    const selectedEnd = selectedStart + 'Image'.length;
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value,
+      selectionStart: selectedStart,
+      selectionEnd: selectedEnd,
+    })).toEqual({
+      nextValue: 'before\nafter',
+      selectionStart: imageStart,
+      selectionEnd: imageStart,
+      deletedMarkdownImages: ['![Image](<./Doc.assets/Screenshot%201.png>)'],
+    });
+  });
+
+  it('deletes rendered image markdown when the source offset is inside its destination', () => {
+    const value = 'before\n![Image](<./Doc.assets/Screenshot%201.png>)\nafter';
+    const imageStart = value.indexOf('![');
+    const destinationOffset = value.indexOf('Screenshot');
+
+    expect(getRenderedMarkdownDeleteShortcutEdit({
+      event: mkKey({ key: 'Backspace' }),
+      value,
+      selectionStart: destinationOffset,
+      selectionEnd: destinationOffset,
+    })).toEqual({
+      nextValue: 'before\nafter',
+      selectionStart: imageStart,
+      selectionEnd: imageStart,
+      deletedMarkdownImages: ['![Image](<./Doc.assets/Screenshot%201.png>)'],
     });
   });
 

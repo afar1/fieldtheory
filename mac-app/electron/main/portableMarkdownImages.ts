@@ -17,6 +17,12 @@ export interface PortableMarkdownImagesRepairResult {
   missing: number;
 }
 
+export interface PortableMarkdownImagesDeleteResult {
+  deleted: number;
+  skipped: number;
+  missing: number;
+}
+
 const PRIVATE_FIELD_THEORY_FIGURES_RE = /\/Library\/Application Support\/fieldtheory-mac\/users\/[^/]+\/figures\//i;
 const MARKDOWN_IMAGE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\s]+)\)/g;
 
@@ -52,6 +58,25 @@ function localPathFromMarkdownDestination(destination: string): string | null {
   if (raw.startsWith('~/')) return path.join(os.homedir(), raw.slice(2));
   if (path.isAbsolute(raw)) return raw;
   return null;
+}
+
+function isPathInside(parentPath: string, childPath: string): boolean {
+  const relPath = path.relative(parentPath, childPath);
+  return relPath !== '' && !relPath.startsWith('..') && !path.isAbsolute(relPath);
+}
+
+function copiedAssetPathFromMarkdownDestination(documentPath: string, destination: string): string | null {
+  const raw = destination.trim().replace(/^<(.+)>$/, '$1');
+  if (!raw || path.isAbsolute(raw) || /^[a-z][a-z0-9+.-]*:/i.test(raw)) return null;
+  let decoded = raw;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  const assetsDir = documentAssetsDir(documentPath);
+  const assetPath = path.resolve(path.dirname(documentPath), decoded);
+  return isPathInside(assetsDir, assetPath) ? assetPath : null;
 }
 
 function isPrivateFieldTheoryFigurePath(filePath: string): boolean {
@@ -109,4 +134,39 @@ export function makeMarkdownImagesPortable(documentPath: string, content: string
     rewritten,
     missing,
   };
+}
+
+export function deleteUnusedCopiedMarkdownImages(
+  documentPath: string,
+  removedMarkdown: string,
+  remainingContent: string,
+): PortableMarkdownImagesDeleteResult {
+  if (!path.isAbsolute(documentPath)) return { deleted: 0, skipped: 0, missing: 0 };
+
+  const referencedAssets = new Set<string>();
+  for (const match of remainingContent.matchAll(MARKDOWN_IMAGE_RE)) {
+    const assetPath = copiedAssetPathFromMarkdownDestination(documentPath, match[2]);
+    if (assetPath) referencedAssets.add(assetPath);
+  }
+
+  let deleted = 0;
+  let skipped = 0;
+  let missing = 0;
+  const seenRemovedAssets = new Set<string>();
+  for (const match of removedMarkdown.matchAll(MARKDOWN_IMAGE_RE)) {
+    const assetPath = copiedAssetPathFromMarkdownDestination(documentPath, match[2]);
+    if (!assetPath || seenRemovedAssets.has(assetPath) || referencedAssets.has(assetPath)) {
+      skipped += 1;
+      continue;
+    }
+    seenRemovedAssets.add(assetPath);
+    if (!fs.existsSync(assetPath)) {
+      missing += 1;
+      continue;
+    }
+    fs.unlinkSync(assetPath);
+    deleted += 1;
+  }
+
+  return { deleted, skipped, missing };
 }

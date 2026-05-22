@@ -315,6 +315,24 @@ export function doesBrowserSelectionIntersectElement(selection: Selection | null
   return false;
 }
 
+export function isVisualLineNumberRowSelected(
+  rowTop: number,
+  selectedRowTops: readonly number[],
+  lineHeight: number,
+): boolean {
+  const topTolerance = Math.max(1, lineHeight / 2);
+  return selectedRowTops.some((top) => Math.abs(top - rowTop) < topTolerance);
+}
+
+function getBrowserSelectionVisualRowTops(selection: Selection | null, lineHeight: number): number[] {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return [];
+  const rects: DOMRect[] = [];
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    rects.push(...Array.from(selection.getRangeAt(index).getClientRects()));
+  }
+  return getVisualLineRowTopsFromClientRects(rects, lineHeight);
+}
+
 function isLineElementSelected(view: EditorView, lineElement: HTMLElement | undefined): boolean {
   if (!lineElement) return false;
   return doesBrowserSelectionIntersectElement(view.dom.ownerDocument.getSelection(), lineElement);
@@ -325,6 +343,8 @@ function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineN
   const lineHeight = getMeasuredEditorLineHeight(view);
   const blocks = view.viewportLineBlocks;
   const lineElements = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line'));
+  const browserSelection = view.dom.ownerDocument.getSelection();
+  const selectedRowTops = getBrowserSelectionVisualRowTops(browserSelection, lineHeight);
   let visualLineNumber = blocks.length > 0 ? view.state.doc.lineAt(blocks[0].from).number : 1;
   const signatureParts: string[] = [];
   const rows: VisualLineNumberOverlayRow[] = [];
@@ -340,8 +360,16 @@ function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineN
       signatureParts.push(`${line.from}:hidden`);
       continue;
     }
-    const selected = isSourceLineSelected(view.state, line) || isLineElementSelected(view, lineElement);
-    for (const top of rowTops) {
+    const isFallbackSelected = selectedRowTops.length === 0
+      && (isSourceLineSelected(view.state, line) || isLineElementSelected(view, lineElement));
+    const rowSelectionState = rowTops.map((top) => (
+      selectedRowTops.length > 0
+        ? isVisualLineNumberRowSelected(top, selectedRowTops, lineHeight)
+        : isFallbackSelected
+    ));
+    for (let rowIndex = 0; rowIndex < rowTops.length; rowIndex += 1) {
+      const top = rowTops[rowIndex];
+      const selected = rowSelectionState[rowIndex] ?? false;
       rows.push({
         number: String(visualLineNumber),
         top: top - editorRect.top,
@@ -349,7 +377,9 @@ function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineN
       });
       visualLineNumber += 1;
     }
-    signatureParts.push(`${line.from}:${selected ? 'selected' : 'plain'}:${rowTops.map((top) => Math.round(top - editorRect.top)).join(',')}`);
+    signatureParts.push(`${line.from}:${rowTops.map((top, rowIndex) => (
+      `${Math.round(top - editorRect.top)}:${rowSelectionState[rowIndex] ? 'selected' : 'plain'}`
+    )).join(',')}`);
   }
 
   return {

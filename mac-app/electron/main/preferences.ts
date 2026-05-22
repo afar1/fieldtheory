@@ -158,6 +158,20 @@ function normalizeFieldTheoryWindowMode(prefs: Partial<Preferences>): Partial<Pr
   return prefs;
 }
 
+function normalizeFieldTheoryWindowModeSavePatch(prefs: Partial<Preferences>): Partial<Preferences> {
+  if (prefs.fieldTheoryWindowMode === 'app' || prefs.fieldTheoryWindowMode === 'panel') {
+    const mode = prefs.fieldTheoryWindowMode;
+    return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
+  }
+
+  if (prefs.showInDock === true || prefs.showInDock === false) {
+    const mode = prefs.showInDock ? 'app' : 'panel';
+    return { ...prefs, fieldTheoryWindowMode: mode, showInDock: mode === 'app', clickAwayToDismiss: mode === 'panel' };
+  }
+
+  return prefs;
+}
+
 // Note: LocalQuotas interface removed - server is now single source of truth for usage tracking.
 
 /**
@@ -478,6 +492,19 @@ const SHARED_HOTKEY_PREFERENCE_KEYS = [
   'hotMicHotkey',
 ] as const satisfies ReadonlyArray<keyof Preferences>;
 
+const SHARED_SURFACE_PREFERENCE_KEYS = [
+  'fieldTheoryWindowMode',
+  'showInDock',
+  'clickAwayToDismiss',
+  'recordingIndicatorMode',
+  'hotMicIslandAutoHide',
+] as const satisfies ReadonlyArray<keyof Preferences>;
+
+const SHARED_PREFERENCE_KEYS = [
+  ...SHARED_HOTKEY_PREFERENCE_KEYS,
+  ...SHARED_SURFACE_PREFERENCE_KEYS,
+] as const satisfies ReadonlyArray<keyof Preferences>;
+
 /**
  * Manages application preferences stored as JSON.
  *
@@ -538,10 +565,10 @@ export class PreferencesManager {
     }
   }
 
-  private pickSharedHotkeys(source: Partial<Preferences>): Partial<Preferences> {
+  private pickSharedPreferences(source: Partial<Preferences>): Partial<Preferences> {
     const shared: Partial<Preferences> = {};
 
-    for (const key of SHARED_HOTKEY_PREFERENCE_KEYS) {
+    for (const key of SHARED_PREFERENCE_KEYS) {
       const value = source[key];
       if (value !== undefined) {
         (shared as Record<string, unknown>)[key] = value;
@@ -551,17 +578,17 @@ export class PreferencesManager {
     return shared;
   }
 
-  private async syncSharedHotkeysFromPreferences(source: Partial<Preferences>): Promise<void> {
+  private async syncSharedPreferencesFromPreferences(source: Partial<Preferences>): Promise<void> {
     const sharedPrefsPath = this.getSharedPrefsPath();
     if (sharedPrefsPath === this.prefsPath) {
       return;
     }
 
-    const nextSharedHotkeys = this.pickSharedHotkeys(source);
+    const nextSharedPrefs = this.pickSharedPreferences(source);
     const existingSharedPrefs = (await this.readPrefsFile(sharedPrefsPath)) ?? {};
-    const existingSharedHotkeys = this.pickSharedHotkeys(existingSharedPrefs);
+    const existingPickedSharedPrefs = this.pickSharedPreferences(existingSharedPrefs);
 
-    if (JSON.stringify(existingSharedHotkeys) === JSON.stringify(nextSharedHotkeys)) {
+    if (JSON.stringify(existingPickedSharedPrefs) === JSON.stringify(nextSharedPrefs)) {
       return;
     }
 
@@ -569,7 +596,7 @@ export class PreferencesManager {
     await fs.mkdir(dir, { recursive: true }).catch(() => {});
     await fs.writeFile(
       sharedPrefsPath,
-      JSON.stringify({ ...existingSharedPrefs, ...nextSharedHotkeys }, null, 2),
+      JSON.stringify({ ...existingSharedPrefs, ...nextSharedPrefs }, null, 2),
       'utf-8',
     );
   }
@@ -582,15 +609,15 @@ export class PreferencesManager {
     // Update path in case user changed
     this.updatePrefsPath();
     const sharedPrefsPath = this.getSharedPrefsPath();
-    const sharedHotkeys =
+    const sharedPrefs =
       this.prefsPath === sharedPrefsPath
         ? {}
-        : this.pickSharedHotkeys((await this.readPrefsFile(sharedPrefsPath)) ?? {});
+        : this.pickSharedPreferences((await this.readPrefsFile(sharedPrefsPath)) ?? {});
 
     const loaded = await this.readPrefsFile(this.prefsPath);
     if (loaded) {
-      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...normalizeFieldTheoryWindowMode(loaded) };
-      await this.syncSharedHotkeysFromPreferences(this.preferences);
+      this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs, ...normalizeFieldTheoryWindowMode(loaded) };
+      await this.syncSharedPreferencesFromPreferences(this.preferences);
       return this.preferences;
     }
 
@@ -600,7 +627,7 @@ export class PreferencesManager {
       if (legacyPath !== this.prefsPath) {
         const legacyPrefs = await this.readPrefsFile(legacyPath);
         if (legacyPrefs) {
-          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys, ...normalizeFieldTheoryWindowMode(legacyPrefs) };
+          this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs, ...normalizeFieldTheoryWindowMode(legacyPrefs) };
           // Save to new per-user path
           await this.save({});
           return this.preferences;
@@ -608,7 +635,7 @@ export class PreferencesManager {
       }
     }
 
-    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys };
+    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs };
     return this.preferences;
   }
 
@@ -636,7 +663,7 @@ export class PreferencesManager {
    * Internal save implementation.
    */
   private async saveInternal(prefs: Partial<Preferences>): Promise<void> {
-    const normalizedPrefs = normalizeFieldTheoryWindowMode(prefs);
+    const normalizedPrefs = normalizeFieldTheoryWindowModeSavePatch(prefs);
     // Check if path needs updating (user logged in since last load)
     const oldPath = this.prefsPath;
     this.updatePrefsPath();
@@ -664,7 +691,7 @@ export class PreferencesManager {
 
     try {
       await fs.writeFile(this.prefsPath, JSON.stringify(this.preferences, null, 2), 'utf-8');
-      await this.syncSharedHotkeysFromPreferences(this.preferences);
+      await this.syncSharedPreferencesFromPreferences(this.preferences);
     } catch (error) {
       log.error('Failed to save preferences:', error);
       throw error;
@@ -683,10 +710,10 @@ export class PreferencesManager {
    */
   async resetForSignedOutState(): Promise<void> {
     this.updatePrefsPath();
-    const sharedHotkeys = this.pickSharedHotkeys(
+    const sharedPrefs = this.pickSharedPreferences(
       (await this.readPrefsFile(this.getSharedPrefsPath())) ?? {}
     );
-    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedHotkeys };
+    this.preferences = { ...DEFAULT_PREFERENCES, ...sharedPrefs };
   }
 
   /**

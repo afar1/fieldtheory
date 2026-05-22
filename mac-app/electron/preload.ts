@@ -4557,6 +4557,12 @@ const markdownImagesAPI = {
     content: string,
   ): Promise<{ content: string; copied: number; rewritten: number; missing: number }> =>
     ipcRenderer.invoke('markdownImages:makeImagesPortable', documentPath, content),
+  deleteUnusedCopiedImages: (
+    documentPath: string,
+    removedMarkdown: string,
+    remainingContent: string,
+  ): Promise<{ deleted: number; skipped: number; missing: number }> =>
+    ipcRenderer.invoke('markdownImages:deleteUnusedCopiedImages', documentPath, removedMarkdown, remainingContent),
 };
 contextBridge.exposeInMainWorld('markdownImagesAPI', markdownImagesAPI);
 

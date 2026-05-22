@@ -2,7 +2,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { copyImageForMarkdownDocument, makeMarkdownImagesPortable } from './portableMarkdownImages';
+import { copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
 
 describe('portable markdown images main helpers', () => {
   let tmpDir: string;
@@ -59,5 +59,46 @@ describe('portable markdown images main helpers', () => {
     expect(result.rewritten).toBe(1);
     expect(result.content).toBe('![Image](<./Absolute.assets/Screenshot%202.png>)');
     expect(fs.existsSync(path.join(tmpDir, 'Absolute.assets', 'Screenshot 2.png'))).toBe(true);
+  });
+
+  it('deletes removed copied image assets when no remaining image references them', () => {
+    const documentPath = path.join(tmpDir, 'Delete Me.md');
+    const imagePath = path.join(tmpDir, 'Screenshot 3.png');
+    fs.writeFileSync(imagePath, Buffer.from([1, 2, 3]));
+    const copied = copyImageForMarkdownDocument(documentPath, imagePath, 'Image');
+
+    const result = deleteUnusedCopiedMarkdownImages(documentPath, copied!.markdown, 'remaining text');
+
+    expect(result).toEqual({ deleted: 1, skipped: 0, missing: 0 });
+    expect(fs.existsSync(copied!.copiedPath)).toBe(false);
+  });
+
+  it('keeps copied image assets that are still referenced', () => {
+    const documentPath = path.join(tmpDir, 'Still Used.md');
+    const imagePath = path.join(tmpDir, 'Screenshot 4.png');
+    fs.writeFileSync(imagePath, Buffer.from([4, 5, 6]));
+    const copied = copyImageForMarkdownDocument(documentPath, imagePath, 'Image');
+
+    const result = deleteUnusedCopiedMarkdownImages(documentPath, copied!.markdown, copied!.markdown);
+
+    expect(result).toEqual({ deleted: 0, skipped: 1, missing: 0 });
+    expect(fs.existsSync(copied!.copiedPath)).toBe(true);
+  });
+
+  it('does not delete image paths outside the document assets folder', () => {
+    const documentPath = path.join(tmpDir, 'Safe.md');
+    const otherDir = path.join(tmpDir, 'Other.assets');
+    fs.mkdirSync(otherDir, { recursive: true });
+    const otherImagePath = path.join(otherDir, 'Outside.png');
+    fs.writeFileSync(otherImagePath, Buffer.from([7, 8, 9]));
+
+    const result = deleteUnusedCopiedMarkdownImages(
+      documentPath,
+      '![Image](<./Other.assets/Outside.png>)',
+      '',
+    );
+
+    expect(result).toEqual({ deleted: 0, skipped: 1, missing: 0 });
+    expect(fs.existsSync(otherImagePath)).toBe(true);
   });
 });

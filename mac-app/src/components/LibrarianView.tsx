@@ -581,6 +581,7 @@ type MarkdownTextEdit = {
   nextValue: string;
   selectionStart: number;
   selectionEnd: number;
+  deletedMarkdownImages?: string[];
 };
 
 type MarkdownUndoSnapshot = {
@@ -1258,23 +1259,58 @@ function expandRenderedMarkdownImageDeleteRange(value: string, start: number, en
   return { start: lineStart, end: lineEnd };
 }
 
+const RENDERED_MARKDOWN_IMAGE_RE = /!\[[^\]\n]*\]\((?:<[^>\n]+>|[^)\n]*)\)/g;
+
+type RenderedMarkdownImageDeleteRange = {
+  start: number;
+  end: number;
+  deletedMarkdownImages: string[];
+};
+
 function getAdjacentRenderedMarkdownImageDeleteRange(
   value: string,
   offset: number,
   direction: 'backward' | 'forward',
-): { start: number; end: number } | null {
-  for (const match of value.matchAll(/!\[[^\]\n]*\]\((?:<[^>\n]+>|[^)\n]*)\)/g)) {
+): RenderedMarkdownImageDeleteRange | null {
+  for (const match of value.matchAll(RENDERED_MARKDOWN_IMAGE_RE)) {
     if (match.index === undefined) continue;
     const start = match.index;
     const end = start + match[0].length;
     if (
-      (direction === 'backward' && end === offset)
-      || (direction === 'forward' && start === offset)
+      (direction === 'backward' && start < offset && offset <= end)
+      || (direction === 'forward' && start <= offset && offset < end)
     ) {
-      return expandRenderedMarkdownImageDeleteRange(value, start, end);
+      return {
+        ...expandRenderedMarkdownImageDeleteRange(value, start, end),
+        deletedMarkdownImages: [match[0]],
+      };
     }
   }
   return null;
+}
+
+function getSelectedRenderedMarkdownImageDeleteRange(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+): RenderedMarkdownImageDeleteRange | null {
+  let deleteStart = selectionStart;
+  let deleteEnd = selectionEnd;
+  const deletedMarkdownImages: string[] = [];
+  for (const match of value.matchAll(RENDERED_MARKDOWN_IMAGE_RE)) {
+    if (match.index === undefined) continue;
+    const start = match.index;
+    const end = start + match[0].length;
+    if (selectionStart < end && selectionEnd > start) {
+      const range = expandRenderedMarkdownImageDeleteRange(value, start, end);
+      deleteStart = Math.min(deleteStart, range.start);
+      deleteEnd = Math.max(deleteEnd, range.end);
+      deletedMarkdownImages.push(match[0]);
+    }
+  }
+  return deletedMarkdownImages.length
+    ? { start: deleteStart, end: deleteEnd, deletedMarkdownImages }
+    : null;
 }
 
 export function getRenderedMarkdownDeleteShortcutEdit(input: {
@@ -1290,6 +1326,15 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
   const selectionStart = Math.max(0, Math.min(input.selectionStart, input.value.length));
   const selectionEnd = Math.max(selectionStart, Math.min(input.selectionEnd, input.value.length));
   if (selectionStart !== selectionEnd) {
+    const imageRange = getSelectedRenderedMarkdownImageDeleteRange(input.value, selectionStart, selectionEnd);
+    if (imageRange) {
+      return {
+        nextValue: `${input.value.slice(0, imageRange.start)}${input.value.slice(imageRange.end)}`,
+        selectionStart: imageRange.start,
+        selectionEnd: imageRange.start,
+        deletedMarkdownImages: imageRange.deletedMarkdownImages,
+      };
+    }
     return {
       nextValue: `${input.value.slice(0, selectionStart)}${input.value.slice(selectionEnd)}`,
       selectionStart,
@@ -1310,6 +1355,7 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
       nextValue: `${input.value.slice(0, imageRange.start)}${input.value.slice(imageRange.end)}`,
       selectionStart: imageRange.start,
       selectionEnd: imageRange.start,
+      deletedMarkdownImages: imageRange.deletedMarkdownImages,
     };
   }
 
@@ -2311,6 +2357,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const lastSavedContentRef = useRef<string | null>(null);
   const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
   const lastSeededPathRef = useRef<string | null>(null);
+  const pendingCopiedImageDeletesRef = useRef<Array<{ documentPath: string; markdownImages: string[] }>>([]);
   const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
@@ -4137,6 +4184,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     };
   }, [active, commandIndexPages, readings, wikiIndex, wikiIndexPages]);
 
+  const flushPendingCopiedImageDeletes = useCallback((documentPath: string, remainingContent: string) => {
+    const pending = pendingCopiedImageDeletesRef.current;
+    const matching = pending.filter((item) => item.documentPath === documentPath);
+    if (matching.length === 0) return;
+    pendingCopiedImageDeletesRef.current = pending.filter((item) => item.documentPath !== documentPath);
+    void window.markdownImagesAPI?.deleteUnusedCopiedImages(
+      documentPath,
+      matching.flatMap((item) => item.markdownImages).join('\n'),
+      remainingContent,
+    );
+  }, []);
+
   const saveRenderedContent = useCallback(async (nextContent: string) => {
     if (!activeReading) {
       recordRenderedEditorDebug('save-skipped', { reason: 'no-active-reading' });
@@ -4188,6 +4247,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const nextVersion = getDocumentSaveVersion(result);
       if (deferReactState) {
         rememberSavedDocumentContent(targetPath, normalizedContent, nextVersion);
+        flushPendingCopiedImageDeletes(targetPath, normalizedContent);
         recordRenderedEditorDebug('save-ok', {
           targetType,
           nextVersion,
@@ -4199,6 +4259,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       applySavedDocumentState(targetType, targetPath, normalizedContent, nextVersion, targetTitle);
       setEditContent(normalizedContent);
       setSaveStatus('saved');
+      flushPendingCopiedImageDeletes(targetPath, normalizedContent);
       recordRenderedEditorDebug('save-ok', {
         targetType,
         nextVersion,
@@ -4212,7 +4273,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } finally {
       renderedSaveInFlightRef.current = Math.max(0, renderedSaveInFlightRef.current - 1);
     }
-  }, [activeReading, applySavedDocumentState, getRenderedCursorDebugState, recordRenderedEditorDebug, rememberSavedDocumentContent, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, flushPendingCopiedImageDeletes, getRenderedCursorDebugState, recordRenderedEditorDebug, rememberSavedDocumentContent, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
 
   const applyRenderedContentLocalState = useCallback((
     nextContent: string,
@@ -4546,6 +4607,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         start: edit.selectionStart,
         end: edit.selectionEnd,
       };
+      if (edit.deletedMarkdownImages?.length) {
+        pendingCopiedImageDeletesRef.current.push({
+          documentPath: activeReading.path,
+          markdownImages: edit.deletedMarkdownImages,
+        });
+      }
       focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
       return true;
     };
@@ -5077,13 +5144,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
 
   const insertMarkdownText = useCallback((text: string) => {
+    if (contentMode === 'rendered') {
+      applyRenderedTextInsertion(text);
+      return;
+    }
     if (contentMode !== 'markdown') {
       setContentMode('markdown');
       requestAnimationFrame(() => applyMarkdownTextInsertion(text));
       return;
     }
     applyMarkdownTextInsertion(text);
-  }, [applyMarkdownTextInsertion, contentMode]);
+  }, [applyMarkdownTextInsertion, applyRenderedTextInsertion, contentMode]);
 
   useLayoutEffect(() => {
     if (contentMode !== 'markdown') return;
@@ -7726,7 +7797,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         )}
 
         {/* Scrollable content area */}
-        <div style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', justifyContent: 'center' }}>
+        <div
+          onWheel={(event) => {
+            const scrollEl = contentScrollRef.current;
+            if (!scrollEl || contentMode === 'markdown') return;
+            const target = event.target instanceof Node ? event.target : null;
+            if (target && scrollEl.contains(target)) return;
+            event.preventDefault();
+            scrollEl.scrollBy({ top: event.deltaY, left: event.deltaX });
+            updateRenderedDocumentTopFade(scrollEl);
+          }}
+          style={{ position: 'relative', flex: 1, minHeight: 0, overflow: 'hidden', display: 'flex', justifyContent: 'center' }}
+        >
         <div
           ref={setContentScrollRef}
           onScroll={(e) => {
