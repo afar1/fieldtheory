@@ -359,6 +359,7 @@ interface LauncherCommandsAPI {
   summarizeCurrentMeeting?: () => Promise<LauncherMeetingActionResult>;
   openFieldTheoryMarkdown: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText: (text: string) => Promise<{ success: boolean; error?: string }>;
+  insertClipboardItemsAsMarkdown?: (ids: number[]) => Promise<{ success: boolean; error?: string }>;
   launcherResize: (height: number) => void;
   launcherClose: (options?: LauncherCloseOptions) => void;
   launcherTrace?: (event: string, details?: Record<string, unknown>) => void;
@@ -2791,6 +2792,25 @@ function CommandLauncher() {
       insertWikiLink: options.insertWikiLink ?? false,
     });
     if (item.type === 'clipboard-item' || item.type === 'clipboard-stack') {
+      if (latestContext?.fieldTheoryActive && commandsAPI.insertClipboardItemsAsMarkdown) {
+        const itemIds = item.type === 'clipboard-stack'
+          ? await getClipboardLauncherStackItemIds(item)
+          : typeof item.clipboardItemId === 'number'
+            ? [item.clipboardItemId]
+            : [];
+        const result = itemIds.length > 0
+          ? await commandsAPI.insertClipboardItemsAsMarkdown(itemIds).catch((error) => ({
+            success: false,
+            error: error instanceof Error ? error.message : 'Insert failed',
+          }))
+          : { success: false, error: 'Clipboard item not found' };
+        if (!result.success) {
+          showInvocationError('insert-clipboard-markdown-error', result.error, 'Insert failed');
+          return;
+        }
+        prepareLauncherForNextOpen({ revealWhenReady: visibilityPolicy.revealWhenReadyAfterSuccess });
+        return;
+      }
       const targetBundleId = latestContext?.targetApp?.bundleId;
       if (!targetBundleId) {
         showInvocationError('paste-clipboard-launcher-no-target', 'No external target app available', 'No external target app available');

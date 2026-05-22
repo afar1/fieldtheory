@@ -47,6 +47,7 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownFormattingBoundaryLineBreakEdit,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListIndentStyle,
   getRenderedMarkdownListLineLayoutStyle,
@@ -287,6 +288,13 @@ describe('MarkdownCodeEditor line numbers', () => {
 });
 
 describe('MarkdownCodeEditor rendered presentation', () => {
+  it('inserts Enter before a rendered bold span so the word keeps its styling markers', () => {
+    expect(getRenderedMarkdownFormattingBoundaryLineBreakEdit('**bold**', 2)).toEqual({
+      insertAt: 0,
+      selection: 0,
+    });
+  });
+
 	  it('hides common markdown syntax behind styled editable text', () => {
 	    const parent = document.createElement('div');
 	    document.body.appendChild(parent);

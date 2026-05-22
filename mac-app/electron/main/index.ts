@@ -769,6 +769,55 @@ function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
   return true;
 }
 
+export function formatFieldTheoryMarkdownImageDestination(filePath: string): string {
+  const expandedPath = filePath === '~' || filePath.startsWith('~/')
+    ? `${os.homedir()}${filePath.slice(1)}`
+    : filePath;
+  const url = /^file:\/\//i.test(expandedPath)
+    ? expandedPath
+    : `file://${expandedPath.split('/').map((part, index) => (
+      index === 0 ? '' : encodeURIComponent(part)
+    )).join('/')}`;
+  return `<${url.replace(/>/g, '%3E')}>`;
+}
+
+export async function buildFieldTheoryMarkdownClipboardPayload(
+  items: ClipboardItem[],
+  exportImageToCache: (item: ClipboardItem) => Promise<string | null>,
+): Promise<string> {
+  const textBlocks: string[] = [];
+  const imageBlocks: string[] = [];
+  let imageIndex = 1;
+
+  for (const item of items) {
+    const text = (item.useImprovedVersion && item.improvedContent)
+      ? item.improvedContent
+      : item.content;
+    if (text && (item.type === 'text' || item.type === 'transcript' || !item.imageData)) {
+      textBlocks.push(text.trimEnd());
+    }
+  }
+
+  for (const item of items) {
+    if (!item.imageData && item.type !== 'image' && item.type !== 'screenshot') continue;
+    const imagePath = await exportImageToCache(item);
+    if (!imagePath) {
+      imageBlocks.push(`> Image ${imageIndex} was unavailable when this note was created.`);
+      imageIndex += 1;
+      continue;
+    }
+    const alt = item.figureLabel
+      ? `figure ${item.figureLabel}`
+      : item.sourceAppName
+        ? `${item.sourceAppName} image`
+        : `Image ${imageIndex}`;
+    imageBlocks.push(`![${alt.replace(/\]/g, '\\]')}](${formatFieldTheoryMarkdownImageDestination(imagePath)})`);
+    imageIndex += 1;
+  }
+
+  return [...textBlocks, ...imageBlocks].filter(Boolean).join('\n\n');
+}
+
 function resolveClipboardFullScreenHotkeyPreference(prefs: {
   clipboardFullScreenHotkey?: string | null;
   clipboardDesktopScreenshotHotkey?: string | null;
@@ -8478,6 +8527,29 @@ function setupClipboardIPCHandlers(): void {
     }
     commandLauncherWindow?.hide(true);
     clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+    return { success: true };
+  });
+
+  ipcMain.handle('commands:insertClipboardItemsAsMarkdown', async (_event, ids: number[]) => {
+    if (!clipboardHistoryWindow || !clipboardManager) {
+      return { success: false, error: 'No markdown editor target' };
+    }
+    const manager = clipboardManager;
+    const items = ids
+      .map((id) => manager.getItem(id))
+      .filter((item): item is ClipboardItem => Boolean(item));
+    if (items.length === 0) {
+      return { success: false, error: 'Clipboard item not found' };
+    }
+    const payload = await buildFieldTheoryMarkdownClipboardPayload(
+      items,
+      (item) => manager.exportImageToCache(item),
+    );
+    if (!payload) {
+      return { success: false, error: 'Clipboard item has no insertable content' };
+    }
+    commandLauncherWindow?.hide(true);
+    clipboardHistoryWindow.getWindow()?.webContents.send('librarian:insertMarkdownText', payload);
     return { success: true };
   });
 
