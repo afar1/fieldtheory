@@ -3963,6 +3963,131 @@ const librarianAPI = {
 type LibrarianAPI = typeof librarianAPI;
 
 // =============================================================================
+// Shared/River Files API
+// =============================================================================
+
+type SharedFileType = 'document' | 'command' | 'plan';
+
+type SharedFileStatus = {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+};
+
+type SharedFileShareInput = {
+  filePath: string;
+  title?: string;
+  content: string;
+  type?: SharedFileType;
+};
+
+type SharedFileUpdateResult = {
+  ok: boolean;
+  revision?: number;
+  cachePath?: string;
+  conflictPath?: string;
+  remoteContent?: string;
+  error?: string;
+};
+
+type SharedFilePresenceUser = {
+  userId: string;
+  email: string | null;
+  initials: string;
+};
+
+type SharedFilesAvailability = {
+  available: boolean;
+  hasTeamMembers: boolean;
+  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  currentTeamScopeUserId?: string | null;
+};
+
+const sharedFilesAPI = {
+  getAvailability: (): Promise<SharedFilesAvailability> =>
+    ipcRenderer.invoke('sharedFiles:getAvailability'),
+  getStatus: (filePath: string): Promise<SharedFileStatus> =>
+    ipcRenderer.invoke('sharedFiles:getStatus', filePath),
+  share: (input: SharedFileShareInput): Promise<SharedFileStatus> =>
+    ipcRenderer.invoke('sharedFiles:share', input),
+  unshare: (filePath: string): Promise<boolean> =>
+    ipcRenderer.invoke('sharedFiles:unshare', filePath),
+  sync: (): Promise<{ written: number; removed: number; errors: string[] }> =>
+    ipcRenderer.invoke('sharedFiles:sync'),
+  updateContent: (sharedId: string, content: string, expectedRevision: number): Promise<SharedFileUpdateResult> =>
+    ipcRenderer.invoke('sharedFiles:updateContent', sharedId, content, expectedRevision),
+  setActivePresence: (sharedId: string | null): Promise<SharedFilePresenceUser[]> =>
+    ipcRenderer.invoke('sharedFiles:setActivePresence', sharedId),
+  onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { sharedId: string; users: SharedFilePresenceUser[] }) => callback(payload);
+    ipcRenderer.on('sharedFiles:presenceChanged', handler);
+    return () => ipcRenderer.removeListener('sharedFiles:presenceChanged', handler);
+  },
+};
+
+type SharedFilesAPI = typeof sharedFilesAPI;
+
+type SharedTeamUnavailableReason =
+  | 'not_authenticated'
+  | 'no_team_members'
+  | 'pending_only'
+  | 'ambiguous_team_scope'
+  | 'lookup_failed';
+
+interface SharedTeamMember {
+  contactId: string;
+  userId: string | null;
+  email: string;
+  role: 'owner' | 'member';
+  teamScopeUserId: string;
+}
+
+interface SharedTeamInvite {
+  contactId: string;
+  ownerUserId: string;
+  contactUserId: string | null;
+  email: string;
+  direction: 'incoming' | 'outgoing';
+  createdAt: string | null;
+}
+
+interface SharedTeamState {
+  available: boolean;
+  currentTeamScopeUserId: string | null;
+  reason?: SharedTeamUnavailableReason;
+  isOwner: boolean;
+  members: SharedTeamMember[];
+  pendingIncoming: SharedTeamInvite[];
+  pendingOutgoing: SharedTeamInvite[];
+}
+
+interface SharedTeamMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+const teamAPI = {
+  getState: (): Promise<SharedTeamState> =>
+    ipcRenderer.invoke('team:getState'),
+  inviteMember: (email: string): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:inviteMember', email),
+  respondToInvite: (contactId: string, accept: boolean): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:respondToInvite', contactId, accept),
+  removeMember: (contactId: string): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:removeMember', contactId),
+  leaveTeam: (): Promise<SharedTeamMutationResult> =>
+    ipcRenderer.invoke('team:leaveTeam'),
+  onTeamChanged: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('team:changed', handler);
+    return () => ipcRenderer.removeListener('team:changed', handler);
+  },
+};
+
+type TeamAPI = typeof teamAPI;
+
+// =============================================================================
 // Metrics API - User-visible usage stats
 // "The metrics you see are the metrics we see."
 // =============================================================================
@@ -4224,6 +4349,8 @@ type ScenarioAPI = typeof scenarioAPI;
 contextBridge.exposeInMainWorld('electronAPI', electronAPI);
 contextBridge.exposeInMainWorld('themeAPI', themeAPI);
 contextBridge.exposeInMainWorld('librarianAPI', librarianAPI);
+contextBridge.exposeInMainWorld('sharedFilesAPI', sharedFilesAPI);
+contextBridge.exposeInMainWorld('teamAPI', teamAPI);
 
 interface WikiPageMeta {
   relPath: string;
@@ -5117,6 +5244,8 @@ declare global {
     diagnosticsAPI: DiagnosticsAPI;
     commandsAPI: CommandsAPI;
     librarianAPI: LibrarianAPI;
+    sharedFilesAPI: SharedFilesAPI;
+    teamAPI: TeamAPI;
     metricsAPI: MetricsAPI;
     squaresAPI: SquaresAPIType;
     scenarioAPI: ScenarioAPI;

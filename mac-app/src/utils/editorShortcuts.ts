@@ -94,6 +94,55 @@ export function isThemeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): b
   return e.key.toLowerCase() === 'l' && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export const DEFAULT_SHARED_FILE_TOGGLE_HOTKEY = 'Command+Shift+S';
+export const SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY = 'fieldtheory-shared-file-toggle-hotkey';
+
+type HotkeyEventLike = Pick<KeyboardEvent | React.KeyboardEvent, 'key' | 'code' | 'metaKey' | 'shiftKey' | 'ctrlKey' | 'altKey'>;
+
+function normalizeHotkeyToken(token: string): string {
+  const normalized = token.trim().toLowerCase();
+  if (normalized === 'cmd' || normalized === 'command' || normalized === 'meta') return 'command';
+  if (normalized === 'cmdorctrl' || normalized === 'commandorcontrol') return 'command';
+  if (normalized === 'control' || normalized === 'ctrl') return 'control';
+  if (normalized === 'option' || normalized === 'alt') return 'option';
+  if (normalized === 'shift') return 'shift';
+  return normalized.length === 1 ? normalized : normalized.replace(/^key/i, '').toLowerCase();
+}
+
+export function isHotkeyEvent(e: HotkeyEventLike, hotkey: string): boolean {
+  const tokens = hotkey.split('+').map(normalizeHotkeyToken).filter(Boolean);
+  const keyToken = tokens.find((token) => token !== 'command' && token !== 'control' && token !== 'option' && token !== 'shift');
+  if (!keyToken) return false;
+
+  const eventKey = e.key.length === 1 ? e.key.toLowerCase() : e.key.toLowerCase();
+  const eventCode = e.code.replace(/^Key/i, '').toLowerCase();
+  const keyMatches = eventKey === keyToken || eventCode === keyToken;
+  if (!keyMatches) return false;
+
+  const wantsCommand = tokens.includes('command');
+  const wantsControl = tokens.includes('control');
+  const wantsOption = tokens.includes('option');
+  const wantsShift = tokens.includes('shift');
+
+  return e.metaKey === wantsCommand
+    && e.ctrlKey === wantsControl
+    && e.altKey === wantsOption
+    && e.shiftKey === wantsShift;
+}
+
+export function restoreSharedFileToggleHotkey(storage: Pick<Storage, 'getItem'>): string {
+  const stored = storage.getItem(SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY)?.trim();
+  return stored || DEFAULT_SHARED_FILE_TOGGLE_HOTKEY;
+}
+
+export function persistSharedFileToggleHotkey(storage: Pick<Storage, 'setItem'>, hotkey: string): void {
+  storage.setItem(SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY, hotkey.trim() || DEFAULT_SHARED_FILE_TOGGLE_HOTKEY);
+}
+
+export function isSharedFileToggleShortcut(e: HotkeyEventLike, hotkey = DEFAULT_SHARED_FILE_TOGGLE_HOTKEY): boolean {
+  return isHotkeyEvent(e, hotkey);
+}
+
 export function isKeyboardShortcutsHelpShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
   return (e.key === '?' || (e.key === '/' && e.shiftKey)) && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey;
 }
@@ -143,6 +192,7 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
   { keys: 'Command+F', label: 'Find in file' },
   { keys: 'Command+C', label: 'Copy selected text or file path' },
   { keys: 'Command+Shift+C', label: 'Copy file path' },
+  { keys: 'Command+Shift+S', label: 'Toggle River sharing' },
   { keys: 'Command+N', label: 'New file' },
   { keys: 'Command+Shift+N', label: 'New folder' },
   { keys: 'Command+[ / ]', label: 'Back or forward' },

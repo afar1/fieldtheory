@@ -27,10 +27,13 @@ import { commandsDir } from './fieldTheoryPaths';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { existingPathInsideRoots, isMarkdownDocumentPath, isPathInside, markdownFileNameFromUserInput, realpathIfExists } from './pathSafety';
 import { parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
+import { inferSharedFileType, parseSharedFileFrontmatter, sharedFilesRoot, SHARED_FILES_UI_LABEL } from './sharedFiles';
 
 const log = createLogger('Commands');
 
 export const DEFAULT_IMPROVE_COMMAND_CONTENT = "Improve the selected text for clarity while preserving meaning, tone, markdown formatting, links, filenames, screenshots, and checkbox state. Return only the improved replacement text.\n";
+
+const SHARED_COMMAND_SOURCE_LABEL = SHARED_FILES_UI_LABEL;
 
 function yamlQuoted(value: string): string {
   return JSON.stringify(value);
@@ -153,6 +156,10 @@ export interface PortableCommand {
   filePath: string;       // Full path to the markdown file
   displayName: string;    // Human-readable name (e.g., "Debug" from "debug.md")
   lastModified: number;   // File modification time for cache invalidation
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
 }
 
 export interface PortableCommandDirectory {
@@ -162,6 +169,16 @@ export interface PortableCommandDirectory {
   directoryPath: string;
   directoryRelPath: string;
   lastModified: number;
+}
+
+interface CommandSourceContext {
+  source: 'private' | 'shared';
+  sourceLabel?: string;
+  sourceRootPath?: string;
+}
+
+interface SharedCommandMetadata {
+  type: ReturnType<typeof inferSharedFileType>;
 }
 
 /**
@@ -331,6 +348,8 @@ export class CommandsManager extends EventEmitter {
       await this.scanDirectory(dirPath);
       this.watchDirectory(dirPath);
     }
+    await this.scanSharedCommandSources();
+    this.watchSharedCommandSources();
 
     this.emit('commandsChanged', this.getCommands());
   }
@@ -361,6 +380,71 @@ export class CommandsManager extends EventEmitter {
 
   private legacyCommandsDirectory(): string | null {
     return this.legacyCommandsDirectoryForDefault(this.getDefaultDirectory());
+  }
+
+  private sharedCommandCacheRoot(): string {
+    return this.normalizePath(sharedFilesRoot());
+  }
+
+  private sharedCommandSourceForPath(filePath: string): CommandSourceContext | null {
+    const normalizedRoot = this.sharedCommandCacheRoot();
+    const normalizedFilePath = this.normalizePath(this.expandPath(filePath));
+    if (!isPathInside(normalizedRoot, normalizedFilePath)) return null;
+
+    return {
+      source: 'shared',
+      sourceLabel: SHARED_COMMAND_SOURCE_LABEL,
+      sourceRootPath: normalizedRoot,
+    };
+  }
+
+  private sharedCommandSources(): CommandSourceContext[] {
+    const normalizedRoot = this.sharedCommandCacheRoot();
+    try {
+      if (!fs.statSync(normalizedRoot).isDirectory()) return [];
+    } catch {
+      return [];
+    }
+
+    return [{
+      source: 'shared',
+      sourceLabel: SHARED_COMMAND_SOURCE_LABEL,
+      sourceRootPath: normalizedRoot,
+    }];
+  }
+
+  private sharedCommandMetadata(filePath: string): SharedCommandMetadata | null {
+    try {
+      const content = fs.readFileSync(filePath, 'utf-8');
+      return {
+        type: parseSharedFileFrontmatter(content)?.type ?? inferSharedFileType({ filePath, content }),
+      };
+    } catch (error) {
+      log.warn(`Failed to read shared command metadata for ${filePath}:`, error);
+      return null;
+    }
+  }
+
+  private sharedCommandRelPath(
+    filePath: string,
+    source: CommandSourceContext,
+  ): string | undefined {
+    if (!source.sourceRootPath) return undefined;
+    return path.relative(source.sourceRootPath, filePath).replace(/\\/g, '/');
+  }
+
+  private isSharedCommandFile(
+    filePath: string,
+    source: CommandSourceContext,
+    metadata: SharedCommandMetadata | null,
+  ): boolean {
+    if (metadata?.type === 'command') return true;
+
+    const relPath = this.sharedCommandRelPath(filePath, source);
+    if (relPath?.split('/').some(part => part.toLowerCase() === 'commands')) {
+      return true;
+    }
+    return false;
   }
 
   private isLegacyCommandsDirectoryPath(dirPath: string): boolean {
@@ -492,6 +576,7 @@ export class CommandsManager extends EventEmitter {
     if (expandedPath) {
       try {
         await this.scanDirectory();
+        await this.scanSharedCommandSources();
       } catch (error) {
         log.error('Error scanning directory:', error);
       }
@@ -709,10 +794,23 @@ export class CommandsManager extends EventEmitter {
     }
   }
 
+  private async scanSharedCommandSources(): Promise<void> {
+    for (const source of this.sharedCommandSources()) {
+      if (!source.sourceRootPath) continue;
+      await this.scanDirectoryRecursive(source.sourceRootPath, source);
+    }
+  }
+
+  private watchSharedCommandSources(): void {
+    for (const source of this.sharedCommandSources()) {
+      if (source.sourceRootPath) this.watchDirectory(source.sourceRootPath);
+    }
+  }
+
   /**
    * Recursively scan a directory for markdown files.
    */
-  private async scanDirectoryRecursive(dirPath: string): Promise<void> {
+  private async scanDirectoryRecursive(dirPath: string, source?: CommandSourceContext): Promise<void> {
     try {
       const entries = fs.readdirSync(dirPath, { withFileTypes: true });
 
@@ -724,11 +822,12 @@ export class CommandsManager extends EventEmitter {
 
         if (entry.isDirectory()) {
           // Recursively scan subdirectories
-          await this.scanDirectoryRecursive(fullPath);
+          await this.scanDirectoryRecursive(fullPath, source);
         } else if (entry.isFile() && this.isMarkdownFile(entry.name)) {
           // Add markdown file as a command
-          const command = this.createCommandFromFile(fullPath);
-          if (command && !this.commands.has(command.name)) {
+          const command = this.createCommandFromFile(fullPath, source);
+          const existing = command ? this.commands.get(command.name) : null;
+          if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
             this.commands.set(command.name, command);
           }
         }
@@ -748,23 +847,39 @@ export class CommandsManager extends EventEmitter {
   /**
    * Create a PortableCommand from a file path.
    */
-  private createCommandFromFile(filePath: string): PortableCommand | null {
+  private createCommandFromFile(filePath: string, sourceContext?: CommandSourceContext): PortableCommand | null {
     try {
+      const source = sourceContext ?? this.sharedCommandSourceForPath(filePath) ?? { source: 'private' as const };
+      const sharedMetadata = source.source === 'shared' ? this.sharedCommandMetadata(filePath) : null;
+      if (source.source === 'shared' && !this.isSharedCommandFile(filePath, source, sharedMetadata)) {
+        return null;
+      }
+
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-      const displayName = nameWithoutExt;
+      const displayName = source.source === 'shared' && source.sourceLabel
+        ? `${nameWithoutExt} - ${source.sourceLabel}`
+        : nameWithoutExt;
 
       return {
         name: nameWithoutExt.toLowerCase(),
         filePath,
         displayName,
         lastModified: stats.mtimeMs,
+        source: source.source,
+        sourceLabel: source.sourceLabel,
+        sourceRootPath: source.sourceRootPath,
+        sourceRelPath: source.source === 'shared' ? this.sharedCommandRelPath(filePath, source) : undefined,
       };
     } catch (error) {
       log.error(`Error creating command from ${filePath}:`, error);
       return null;
     }
+  }
+
+  private shouldReplaceCommand(existing: PortableCommand, next: PortableCommand): boolean {
+    return existing.source === 'shared' && next.source !== 'shared';
   }
 
   private updateCachedCommandFromFile(filePath: string): PortableCommand | null {
@@ -776,7 +891,8 @@ export class CommandsManager extends EventEmitter {
     }
 
     const command = this.createCommandFromFile(filePath);
-    if (command) {
+    const existing = command ? this.commands.get(command.name) : null;
+    if (command && (!existing || this.shouldReplaceCommand(existing, command))) {
       this.commands.set(command.name, command);
     }
     return command;
@@ -1206,6 +1322,9 @@ End of User Commands
       await this.scanDirectory();
     }
 
+    await this.scanSharedCommandSources();
+    this.watchSharedCommandSources();
+
     this.emit('commandsChanged', this.getCommands());
   }
 
@@ -1601,6 +1720,7 @@ End of User Commands
     // Only include commands from directories with mobile sync enabled
     for (const command of this.commands.values()) {
       if (this.isLegacyCommandPath(command.filePath)) continue;
+      if (command.source === 'shared') continue;
 
       // Check if this command's directory has mobile sync enabled
       const commandDir = path.dirname(command.filePath);

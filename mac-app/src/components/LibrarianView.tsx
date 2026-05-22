@@ -44,6 +44,8 @@ import {
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
   isSearchFocusShortcut,
+  isSharedFileToggleShortcut,
+  restoreSharedFileToggleHotkey,
   restoreTextCursorBlink,
 } from '../utils/editorShortcuts';
 import {
@@ -144,6 +146,18 @@ function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | u
 }
 
 export type LibraryDocumentViewKind = 'markdown' | 'html' | 'css';
+type SharedFileType = 'document' | 'command' | 'plan';
+interface SharedFileStatus {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+}
+interface SharedFilePresenceUser {
+  userId: string;
+  email: string | null;
+  initials: string;
+}
 
 export function getLibraryDocumentViewKind(
   filePath: string | null | undefined,
@@ -244,6 +258,13 @@ function readingFromExternalMarkdownFile(file: ExternalMarkdownFile): Reading {
     mtime: file.mtime,
     documentVersion: file.documentVersion,
   };
+}
+
+function inferSharedFileTypeForActiveReading(filePath: string | null): SharedFileType {
+  const normalized = (filePath ?? '').replace(/\\/g, '/').toLowerCase();
+  if (normalized.includes('/commands/')) return 'command';
+  if (normalized.includes('/plans/')) return 'plan';
+  return 'document';
 }
 
 export function deletedLibraryItemMatchesSelection(
@@ -2516,10 +2537,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Sharing state
   const [shareStatus, setShareStatus] = useState<{ shared: boolean; slug?: string; url?: string } | null>(null);
   const [isSharing, setIsSharing] = useState(false);
+  const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
+  const [sharedFileStatus, setSharedFileStatus] = useState<SharedFileStatus | null>(null);
+  const [sharedFilePresenceUsers, setSharedFilePresenceUsers] = useState<SharedFilePresenceUser[]>([]);
+  const [isTogglingSharedFile, setIsTogglingSharedFile] = useState(false);
+  const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
   const [linkCopied, setLinkCopied] = useState(false);
   const [copyFeedbackLabel, setCopyFeedbackLabel] = useState<string | null>(null);
   const [shortcutsHelpOpen, setShortcutsHelpOpen] = useState(false);
   const [bookmarksCanvasActive, setBookmarksCanvasActive] = useState<boolean>(() => localStorage.getItem('bookmarks-view-mode') !== 'list');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadAvailability = () => window.sharedFilesAPI?.getAvailability?.().then((availability) => {
+      if (!cancelled) setSharedFilesAvailable(availability?.available === true);
+    });
+    void loadAvailability();
+    const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
+      void loadAvailability();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const handleSharedFileHotkeyChanged = () => {
+      setSharedFileToggleHotkey(restoreSharedFileToggleHotkey(localStorage));
+    };
+    window.addEventListener('fieldtheory:shared-file-toggle-hotkey-changed', handleSharedFileHotkeyChanged);
+    return () => window.removeEventListener('fieldtheory:shared-file-toggle-hotkey-changed', handleSharedFileHotkeyChanged);
+  }, []);
 
   // Narration state
   const [narrationStatus, setNarrationStatus] = useState<{
@@ -5645,6 +5694,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetTitle = activeReading.title;
     const targetVersion = lastSavedVersionRef.current ?? activeReading.documentVersion;
     const targetContent = removeEmptyMarkdownCommentPlaceholders(editContent);
+    const targetSharedFileStatus = sharedFileStatus;
     let done = false;
     const doSave = async () => {
       if (done) return;
@@ -5676,6 +5726,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
         if (!isDocumentSaveOk(result)) throw new Error('save failed');
         applySavedDocumentState(targetType, targetReadingPath, portableContent, getDocumentSaveVersion(result), targetTitle);
+        if (targetSharedFileStatus?.shared && targetSharedFileStatus.sharedId) {
+          const sharedResult = await window.sharedFilesAPI?.updateContent(
+            targetSharedFileStatus.sharedId,
+            portableContent,
+            targetSharedFileStatus.revision ?? 0,
+          );
+          if (sharedResult?.revision !== undefined) {
+            setSharedFileStatus((prev) => {
+              if (!prev || prev.sharedId !== targetSharedFileStatus.sharedId) return prev;
+              return { ...prev, revision: sharedResult.revision, cachePath: sharedResult.cachePath ?? prev.cachePath };
+            });
+          }
+          if (sharedResult?.conflictPath) {
+            console.warn('[Librarian] River edit saved as private conflict copy:', sharedResult.conflictPath);
+          }
+        }
         setSaveStatus('saved');
       } catch {
         setSaveStatus('idle');
@@ -5688,7 +5754,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     flushSaveRef.current = doSave;
     const timer = setTimeout(() => { void doSave(); }, 400);
     return () => clearTimeout(timer);
-  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, selectedItemType, sharedFileStatus, wikiSelectedRelPath]);
 
   // Keep the internal save state from staying in "saved" after auto-save settles.
   // 2.5s is long enough to notice when clicking away to another file without
@@ -5960,6 +6026,33 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setIsSharing(false);
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
+
+  const handleToggleSharedFile = useCallback(async () => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      if (sharedFileStatus?.shared) {
+        const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
+        if (success) setSharedFileStatus({ shared: false });
+        return;
+      }
+
+      const content = activeReadingContentRef.current ?? activeReading.content;
+      const status = await window.sharedFilesAPI?.share({
+        filePath: activeReadingPath,
+        title: activeReading.title,
+        content,
+        type: inferSharedFileTypeForActiveReading(activeReadingPath),
+      });
+      setSharedFileStatus(status ?? { shared: false });
+    } catch (err) {
+      console.error('[Librarian] River sharing error:', err);
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
 
   const copyShareLink = useCallback(async () => {
     if (!shareStatus?.url) return;
@@ -6370,6 +6463,45 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     loadShareStatus();
   }, [selectedPath]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function loadSharedFileStatus() {
+      if (!sharedFilesAvailable || !activeReadingPath || !activeIsMarkdownDocument) {
+        setSharedFileStatus(null);
+        return;
+      }
+      const status = await window.sharedFilesAPI?.getStatus(activeReadingPath);
+      if (!cancelled) setSharedFileStatus(status ?? { shared: false });
+    }
+    void loadSharedFileStatus();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeIsMarkdownDocument, activeReadingPath, sharedFilesAvailable]);
+
+  useEffect(() => {
+    const sharedId = sharedFileStatus?.shared ? sharedFileStatus.sharedId ?? null : null;
+    if (!active || !sharedId) {
+      setSharedFilePresenceUsers([]);
+      void window.sharedFilesAPI?.setActivePresence(null);
+      return;
+    }
+
+    let cancelled = false;
+    const unsubscribe = window.sharedFilesAPI?.onPresenceChanged((payload) => {
+      if (payload.sharedId === sharedId) setSharedFilePresenceUsers(payload.users);
+    });
+    void window.sharedFilesAPI?.setActivePresence(sharedId).then((users) => {
+      if (!cancelled) setSharedFilePresenceUsers(users ?? []);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      void window.sharedFilesAPI?.setActivePresence(null);
+    };
+  }, [active, sharedFileStatus?.shared, sharedFileStatus?.sharedId]);
+
   // Listen for new readings
   useEffect(() => {
     const unsubscribe = window.librarianAPI?.onReadingAdded((reading) => {
@@ -6518,6 +6650,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         } else if (nextMode === 'typedown') {
           void switchToTypedownMode();
         }
+        return;
+      }
+
+      if (sharedFilesAvailable && isSharedFileToggleShortcut(e, sharedFileToggleHotkey) && activeReading?.path && activeIsMarkdownDocument) {
+        e.preventDefault();
+        void handleToggleSharedFile();
         return;
       }
 
@@ -6760,7 +6898,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -7547,13 +7685,53 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   showFolder={!activeReadingToolbarHasBreadcrumb}
                   onCopy={shareStatus?.shared ? copyShareLink : undefined}
                   showCopy={!!shareStatus?.shared}
-                  shareStatus={shareStatus}
-                  isSharing={isSharing}
-                  showShare={false}
+                  shareStatus={sharedFileStatus ? { shared: sharedFileStatus.shared } : { shared: false }}
+                  isSharing={isTogglingSharedFile}
+                  showShare={sharedFilesAvailable && activeIsMarkdownDocument}
+                  onToggleShare={handleToggleSharedFile}
+                  shareLabel="River"
+                  sharedLabel="River"
+                  shareTitle="Add to River (shared)"
+                  sharedTitle="Remove from River (shared)"
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathCopied={copyFeedbackLabel !== null}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                 />
+              )}
+              {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
+                <div
+                  aria-label="River viewers"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                    marginLeft: '4px',
+                    flexShrink: 0,
+                  }}
+                >
+                  {sharedFilePresenceUsers.slice(0, 4).map((user) => (
+                    <span
+                      key={user.userId}
+                      title={user.email ?? 'Viewing this River file'}
+                      style={{
+                        minWidth: '22px',
+                        height: '22px',
+                        padding: '0 5px',
+                        borderRadius: '999px',
+                        border: `1px solid ${theme.border}`,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: '10px',
+                        fontWeight: 700,
+                        color: theme.textSecondary,
+                        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+                      }}
+                    >
+                      {user.initials}
+                    </span>
+                  ))}
+                </div>
               )}
 
               {meetingToolbarVisible && (

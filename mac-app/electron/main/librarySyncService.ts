@@ -13,6 +13,7 @@ import crypto from 'crypto';
 import { AuthManager } from './authManager';
 import { fieldTheoryDir, libraryDir } from './fieldTheoryPaths';
 import { createLogger } from './logger';
+import { isSharedFilesPath, sharedFilesRoot } from './sharedFiles';
 
 const log = createLogger('LibrarySync');
 
@@ -139,6 +140,10 @@ function relativeMarkdownPath(rootDir: string, filePath: string): string | null 
   return relPath.split(path.sep).join('/');
 }
 
+export function shouldSkipPrivateLibrarySyncPath(filePath: string): boolean {
+  return isSharedFilesPath(filePath);
+}
+
 export function getLibrarySyncSourceRoots(): LibrarySyncSourceRoot[] {
   return [
     { dirPath: libraryDir(), sourcePrefix: '' },
@@ -190,6 +195,7 @@ function prefixedSourcePath(prefix: string, relPath: string): string {
 function walkMarkdownFiles(rootDir: string): string[] {
   const files: string[] = [];
   if (!fs.existsSync(rootDir)) return files;
+  const sharedRoot = sharedFilesRoot();
 
   function walk(currentDir: string): void {
     let entries: fs.Dirent[];
@@ -202,8 +208,10 @@ function walkMarkdownFiles(rootDir: string): string[] {
     for (const entry of entries) {
       const absPath = path.join(currentDir, entry.name);
       if (entry.isDirectory()) {
+        if (isSharedFilesPath(absPath) || absPath === sharedRoot) continue;
         walk(absPath);
       } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
+        if (shouldSkipPrivateLibrarySyncPath(absPath)) continue;
         files.push(absPath);
       }
     }

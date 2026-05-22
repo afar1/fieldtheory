@@ -98,6 +98,10 @@ interface ContentToolbarProps {
   isSharing?: boolean;
   onToggleShare?: () => void;
   showShare?: boolean;
+  shareLabel?: string;
+  sharedLabel?: string;
+  shareTitle?: string;
+  sharedTitle?: string;
 
   onCopyPath?: () => void | Promise<void>;
   copyPathCopied?: boolean;
@@ -460,6 +464,10 @@ export default function ContentToolbar({
   isSharing = false,
   onToggleShare,
   showShare = false,
+  shareLabel = 'Share',
+  sharedLabel = 'Shared',
+  shareTitle = 'Add to Shared',
+  sharedTitle = 'Remove from Shared',
   onCopyPath,
   copyPathCopied = false,
   copyPathTitle = 'Copy file path (⌘C)',
@@ -759,9 +767,9 @@ export default function ContentToolbar({
             justifyContent: 'center',
             height: '24px',
           }}
-          title={shareStatus?.shared ? 'Remove from Shared' : 'Add to Shared'}
+          title={shareStatus?.shared ? sharedTitle : shareTitle}
         >
-          {isSharing ? 'Sharing...' : shareStatus?.shared ? 'Shared' : 'Share'}
+          {isSharing ? 'Sharing...' : shareStatus?.shared ? sharedLabel : shareLabel}
         </button>
       )}
 

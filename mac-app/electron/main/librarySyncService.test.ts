@@ -8,6 +8,7 @@ import {
   getRowsToTombstoneForMissingLocalDocs,
   normalizeLibrarySourcePath,
   reconcilePendingTombstonesForMissingKnownDocs,
+  shouldSkipPrivateLibrarySyncPath,
   sourcePathForLibrarySyncSourceRoot,
   type LibraryDocumentRow,
   type LibrarySyncKnownDocument,
@@ -119,6 +120,11 @@ describe('librarySyncService path helpers', () => {
       { dirPath: path.join(fieldTheoryDir(), 'librarian', 'artifacts'), sourcePrefix: 'artifacts' },
       'README.md',
     )).toBe('artifacts/README.md');
+  });
+
+  it('excludes River shared cache files from private library sync', () => {
+    expect(shouldSkipPrivateLibrarySyncPath(path.join(libraryDir(), 'River (shared)', 'Plan AF.md'))).toBe(true);
+    expect(shouldSkipPrivateLibrarySyncPath(path.join(libraryDir(), 'scratchpad', 'Plan.md'))).toBe(false);
   });
 
   it('deduplicates local documents by client id and keeps the newer copy', () => {

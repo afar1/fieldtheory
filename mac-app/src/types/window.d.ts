@@ -1888,6 +1888,103 @@ interface LibrarianAPI {
   getConceptsIndex: () => Promise<ConceptsIndex | null>;
 }
 
+type SharedFileType = 'document' | 'command' | 'plan';
+
+interface SharedFileStatus {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+}
+
+interface SharedFileShareInput {
+  filePath: string;
+  title?: string;
+  content: string;
+  type?: SharedFileType;
+}
+
+interface SharedFileUpdateResult {
+  ok: boolean;
+  revision?: number;
+  cachePath?: string;
+  conflictPath?: string;
+  remoteContent?: string;
+  error?: string;
+}
+
+interface SharedFilePresenceUser {
+  userId: string;
+  email: string | null;
+  initials: string;
+}
+
+interface SharedFilesAvailability {
+  available: boolean;
+  hasTeamMembers: boolean;
+  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  currentTeamScopeUserId?: string | null;
+}
+
+interface SharedFilesAPI {
+  getAvailability: () => Promise<SharedFilesAvailability>;
+  getStatus: (filePath: string) => Promise<SharedFileStatus>;
+  share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
+  unshare: (filePath: string) => Promise<boolean>;
+  sync: () => Promise<{ written: number; removed: number; errors: string[] }>;
+  updateContent: (sharedId: string, content: string, expectedRevision: number) => Promise<SharedFileUpdateResult>;
+  setActivePresence: (sharedId: string | null) => Promise<SharedFilePresenceUser[]>;
+  onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void) => () => void;
+}
+
+type SharedTeamUnavailableReason =
+  | 'not_authenticated'
+  | 'no_team_members'
+  | 'pending_only'
+  | 'ambiguous_team_scope'
+  | 'lookup_failed';
+
+interface SharedTeamMember {
+  contactId: string;
+  userId: string | null;
+  email: string;
+  role: 'owner' | 'member';
+  teamScopeUserId: string;
+}
+
+interface SharedTeamInvite {
+  contactId: string;
+  ownerUserId: string;
+  contactUserId: string | null;
+  email: string;
+  direction: 'incoming' | 'outgoing';
+  createdAt: string | null;
+}
+
+interface SharedTeamState {
+  available: boolean;
+  currentTeamScopeUserId: string | null;
+  reason?: SharedTeamUnavailableReason;
+  isOwner: boolean;
+  members: SharedTeamMember[];
+  pendingIncoming: SharedTeamInvite[];
+  pendingOutgoing: SharedTeamInvite[];
+}
+
+interface SharedTeamMutationResult {
+  ok: boolean;
+  error?: string;
+}
+
+interface TeamAPI {
+  getState: () => Promise<SharedTeamState>;
+  inviteMember: (email: string) => Promise<SharedTeamMutationResult>;
+  respondToInvite: (contactId: string, accept: boolean) => Promise<SharedTeamMutationResult>;
+  removeMember: (contactId: string) => Promise<SharedTeamMutationResult>;
+  leaveTeam: () => Promise<SharedTeamMutationResult>;
+  onTeamChanged: (callback: () => void) => () => void;
+}
+
 declare global {
   /**
    * Result of testing a hotkey for conflicts.
@@ -2614,6 +2711,8 @@ declare global {
     commandsAPI?: CommandsAPI;
     themeAPI?: ThemeAPI;
     librarianAPI?: LibrarianAPI;
+    sharedFilesAPI?: SharedFilesAPI;
+    teamAPI?: TeamAPI;
     libraryAPI?: LibraryAPI;
     wikiAPI?: WikiAPI;
     markdownImagesAPI?: MarkdownImagesAPI;
