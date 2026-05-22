@@ -9,8 +9,10 @@ import {
   getMarkdownFormattingShortcut,
   getMarkdownListShortcutKind,
   getCollapsedSidebarAffordanceOpacity,
+  isFadedLineNumbersShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
+  isLineNumbersToggleShortcut,
   isMarkdownModeToggleShortcut,
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
@@ -109,6 +111,22 @@ describe('isImmersiveToggleShortcut', () => {
 
   it('rejects Cmd+Period so it can toggle markdown mode', () => {
     expect(isImmersiveToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(false);
+  });
+});
+
+describe('line number shortcuts', () => {
+  it('accepts Cmd+Shift+K for toggling line numbers', () => {
+    expect(isLineNumbersToggleShortcut(mkKey({ key: 'k', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isLineNumbersToggleShortcut(mkKey({ key: '˚', code: 'KeyK', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isLineNumbersToggleShortcut(mkKey({ key: 'k', metaKey: true }))).toBe(false);
+    expect(isLineNumbersToggleShortcut(mkKey({ key: 'k', metaKey: true, shiftKey: true, altKey: true }))).toBe(false);
+  });
+
+  it('accepts Cmd+Option+R for faded line numbers', () => {
+    expect(isFadedLineNumbersShortcut(mkKey({ key: 'r', metaKey: true, altKey: true }))).toBe(true);
+    expect(isFadedLineNumbersShortcut(mkKey({ key: '®', code: 'KeyR', metaKey: true, altKey: true }))).toBe(true);
+    expect(isFadedLineNumbersShortcut(mkKey({ key: 'r', metaKey: true }))).toBe(false);
+    expect(isFadedLineNumbersShortcut(mkKey({ key: 'r', metaKey: true, altKey: true, shiftKey: true }))).toBe(false);
   });
 });
 

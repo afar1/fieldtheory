@@ -334,6 +334,7 @@ interface LauncherCommandsAPI {
   getLauncherContext: () => Promise<{ fieldTheoryActive: boolean; targetApp?: ClipboardRunningApp | null }>;
   getActiveLibraryFileContext?: () => Promise<LauncherLibraryMoveSource | null>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
+  toggleActiveLibraryLineNumbers?: () => Promise<{ success: boolean; error?: string }>;
   createMeetingNote?: (title?: string) => Promise<LauncherMeetingActionResult>;
   startMeetingHere?: () => Promise<LauncherMeetingActionResult>;
   stopMeeting?: () => Promise<LauncherMeetingActionResult>;
@@ -2890,6 +2891,15 @@ function CommandLauncher() {
           if (!result.success) {
             showInvocationError('open-library-error', result.error, 'Open library failed');
           }
+          return;
+        }
+        case 'toggle-line-numbers': {
+          const result = await commandsAPI.toggleActiveLibraryLineNumbers?.();
+          if (!result?.success) {
+            showLauncherMessage(result?.error ?? 'Open Field Theory to toggle line numbers');
+            return;
+          }
+          closeForInvocation({ skipActivation: true });
           return;
         }
         case 'open-commands': {

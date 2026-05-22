@@ -1679,6 +1679,16 @@ export function buildBuiltInLauncherActions(
       actionId: 'open-library',
     },
     {
+      id: 'action-line-numbers',
+      type: 'action',
+      name: 'line numbers',
+      displayName: 'Toggle Line Numbers',
+      keywords: ['line numbers', 'line number', 'numbers', 'editor lines', 'markdown line numbers'],
+      hotkey: 'Shift+Command+K',
+      hotkeyDisplay: '⇧ ⌘ K',
+      actionId: 'toggle-line-numbers',
+    },
+    {
       id: 'action-view-bookmarks',
       type: 'action',
       name: 'bookmarks',

@@ -1,11 +1,11 @@
 /**
  * FeedbackManager - Handles user feedback to admin.
  *
- * Simplified from socialSync.ts - no DMs, no contacts, no realtime.
- * Just feedback submission, viewing, replies, and status management.
+ * Simplified from socialSync.ts - no DMs or contacts.
+ * Just feedback submission, viewing, replies, status management, and delivery.
  */
 
-import { SupabaseClient, Session } from '@supabase/supabase-js';
+import { RealtimeChannel, SupabaseClient, Session } from '@supabase/supabase-js';
 import { ClipboardManager, ClipboardItem as LocalClipboardItem } from './clipboardManager';
 import { AuthManager } from './authManager';
 import { EventEmitter } from 'events';
@@ -17,6 +17,7 @@ const FEEDBACK_IMAGE_BUCKET = 'feedback-images';
 const LEGACY_IMAGE_BUCKET = 'team-clipboard-images';
 const IMAGE_PATH_BUCKET_SEPARATOR = '::';
 const KNOWN_IMAGE_BUCKETS = new Set([FEEDBACK_IMAGE_BUCKET, LEGACY_IMAGE_BUCKET]);
+const FEEDBACK_POST_SEND_REALTIME_HOLD_MS = 5 * 60 * 1000;
 
 // =============================================================================
 // Types
@@ -120,11 +121,23 @@ export class FeedbackManager extends EventEmitter {
   private authManager: AuthManager;
   private profileCache: Map<string, UserProfile> = new Map();
   private warnedFeedbackBucketFallback = false;
+  private realtimeChannel: RealtimeChannel | null = null;
+  private realtimeConnected = false;
+  private pollingInterval: NodeJS.Timeout | null = null;
+  private lastPolledAt: string | null = null;
+  private readonly pollingIntervalMs = 3000;
+  private feedbackViewActive = false;
+  private postSendRealtimeUntil = 0;
+  private feedbackDeliveryModeTimer: NodeJS.Timeout | null = null;
+  private readonly boundHandleSessionChanged: (session: Session | null) => void;
 
   constructor(authManager: AuthManager, clipboardManager: ClipboardManager) {
     super();
     this.authManager = authManager;
     this.clipboardManager = clipboardManager;
+    this.boundHandleSessionChanged = this.handleSessionChanged.bind(this);
+
+    this.authManager.on?.('sessionChanged', this.boundHandleSessionChanged);
   }
 
   // ===========================================================================
@@ -132,15 +145,26 @@ export class FeedbackManager extends EventEmitter {
   // ===========================================================================
 
   private get supabase(): SupabaseClient | null {
-    return this.authManager.getSupabaseClient();
+    return this.authManager.getSupabaseClient?.() ?? null;
   }
 
   private get session(): Session | null {
-    return this.authManager.getSession();
+    return this.authManager.getSession?.() ?? null;
   }
 
   isAuthenticated(): boolean {
-    return this.authManager.isAuthenticated();
+    return this.authManager.isAuthenticated?.() ?? false;
+  }
+
+  private handleSessionChanged(session: Session | null): void {
+    if (session) {
+      this.refreshFeedbackDeliveryMode();
+      return;
+    }
+
+    this.teardownRealtimeSubscription();
+    this.stopPollingFallback();
+    this.clearFeedbackDeliveryModeTimer();
   }
 
   private getUserId(): string | null {
@@ -149,6 +173,170 @@ export class FeedbackManager extends EventEmitter {
 
   private getUserEmail(): string | null {
     return this.session?.user?.email || null;
+  }
+
+  setFeedbackRealtimeActive(active: boolean): void {
+    this.feedbackViewActive = active;
+    this.refreshFeedbackDeliveryMode();
+  }
+
+  private holdRealtimeAfterSuccessfulSend(): void {
+    this.postSendRealtimeUntil = Math.max(
+      this.postSendRealtimeUntil,
+      Date.now() + FEEDBACK_POST_SEND_REALTIME_HOLD_MS,
+    );
+    this.refreshFeedbackDeliveryMode();
+  }
+
+  private shouldKeepFeedbackDeliveryActive(): boolean {
+    return this.feedbackViewActive || Date.now() < this.postSendRealtimeUntil;
+  }
+
+  private refreshFeedbackDeliveryMode(): void {
+    this.clearFeedbackDeliveryModeTimer();
+
+    if (!this.isAuthenticated() || !this.shouldKeepFeedbackDeliveryActive()) {
+      this.teardownRealtimeSubscription();
+      this.stopPollingFallback();
+      return;
+    }
+
+    if (!this.realtimeChannel) {
+      this.setupRealtimeSubscription();
+    }
+    if (!this.realtimeConnected) {
+      this.startPollingFallback();
+    }
+    this.scheduleFeedbackDeliveryModeExpiry();
+  }
+
+  private scheduleFeedbackDeliveryModeExpiry(): void {
+    if (this.feedbackViewActive) return;
+
+    const remainingMs = this.postSendRealtimeUntil - Date.now();
+    if (remainingMs <= 0) return;
+
+    this.feedbackDeliveryModeTimer = setTimeout(() => {
+      this.postSendRealtimeUntil = 0;
+      this.refreshFeedbackDeliveryMode();
+    }, remainingMs);
+  }
+
+  private clearFeedbackDeliveryModeTimer(): void {
+    if (this.feedbackDeliveryModeTimer) {
+      clearTimeout(this.feedbackDeliveryModeTimer);
+      this.feedbackDeliveryModeTimer = null;
+    }
+  }
+
+  private setupRealtimeSubscription(): void {
+    if (!this.supabase || !this.session) return;
+
+    const userId = this.getUserId();
+    if (!userId) return;
+
+    this.teardownRealtimeSubscription();
+
+    this.realtimeChannel = this.supabase
+      .channel(`feedback-messages:${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'messages',
+          filter: `recipient_user_id=eq.${userId}`,
+        },
+        async (payload) => {
+          const row = payload.new as MessageRow;
+          if (row.type !== 'feedback') return;
+
+          const message = await this.rowToMessage(row);
+          this.lastPolledAt = row.created_at;
+          this.emit('messageReceived', message);
+        },
+      )
+      .subscribe((status, err) => {
+        if (err) {
+          log.error('Realtime subscription error:', err);
+        }
+
+        if (status === 'SUBSCRIBED') {
+          this.realtimeConnected = true;
+          this.stopPollingFallback();
+          return;
+        }
+
+        if (status === 'TIMED_OUT' || status === 'CHANNEL_ERROR') {
+          this.realtimeConnected = false;
+          this.startPollingFallback();
+          const retryMs = status === 'TIMED_OUT' ? 3000 : 5000;
+          setTimeout(() => {
+            if (this.isAuthenticated() && this.shouldKeepFeedbackDeliveryActive()) {
+              this.setupRealtimeSubscription();
+            }
+          }, retryMs);
+        }
+      });
+  }
+
+  private teardownRealtimeSubscription(): void {
+    if (this.realtimeChannel) {
+      this.supabase?.removeChannel(this.realtimeChannel);
+      this.realtimeChannel = null;
+    }
+    this.realtimeConnected = false;
+  }
+
+  private startPollingFallback(): void {
+    if (this.pollingInterval) return;
+
+    this.lastPolledAt ??= new Date().toISOString();
+    this.pollingInterval = setInterval(() => {
+      if (this.realtimeConnected) return;
+      this.pollForNewMessages().catch((err) => {
+        log.error('Polling error:', err);
+      });
+    }, this.pollingIntervalMs);
+  }
+
+  private stopPollingFallback(): void {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+  }
+
+  private async pollForNewMessages(): Promise<void> {
+    if (!this.isAuthenticated()) return;
+
+    const userId = this.getUserId();
+    if (!userId) return;
+
+    const since = this.lastPolledAt || new Date(0).toISOString();
+    const { data, error } = await this.supabase!
+      .from('messages')
+      .select('*')
+      .eq('recipient_user_id', userId)
+      .eq('type', 'feedback')
+      .gt('created_at', since)
+      .order('created_at', { ascending: true });
+
+    if (error) {
+      log.error('Polling failed:', error);
+      return;
+    }
+
+    const rows = (data ?? []) as MessageRow[];
+    if (rows.length === 0) return;
+
+    this.lastPolledAt = rows[rows.length - 1].created_at;
+    await this.prefetchProfiles(rows);
+
+    for (const row of rows) {
+      const message = await this.rowToMessage(row);
+      this.emit('messageReceived', message);
+    }
   }
 
   private encodeStoredImagePath(bucket: string, path: string): string {
@@ -504,6 +692,7 @@ export class FeedbackManager extends EventEmitter {
 
       await this.logActivity(data.id, 'created');
       log.info('Feedback submitted:', data.id);
+      this.holdRealtimeAfterSuccessfulSend();
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
       log.error('Failed to submit feedback:', err);
@@ -545,6 +734,7 @@ export class FeedbackManager extends EventEmitter {
 
       await this.logActivity(data.id, 'created');
       log.info('Text feedback submitted:', data.id);
+      this.holdRealtimeAfterSuccessfulSend();
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
       log.error('Failed to submit text feedback:', err);
@@ -600,6 +790,7 @@ export class FeedbackManager extends EventEmitter {
 
       await this.logActivity(data.id, 'created');
       log.info('Image feedback submitted:', data.id);
+      this.holdRealtimeAfterSuccessfulSend();
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
       log.error('Failed to submit image feedback:', err);
@@ -729,6 +920,7 @@ export class FeedbackManager extends EventEmitter {
       }
 
       await this.logActivity(parentMessageId, 'replied');
+      this.holdRealtimeAfterSuccessfulSend();
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
       log.error('Failed to send text reply:', err);
@@ -776,6 +968,7 @@ export class FeedbackManager extends EventEmitter {
       }
 
       await this.logActivity(parentMessageId, 'replied');
+      this.holdRealtimeAfterSuccessfulSend();
       return this.rowToMessage(data as MessageRow);
     } catch (err) {
       log.error('Failed to send image reply:', err);
@@ -933,6 +1126,10 @@ export class FeedbackManager extends EventEmitter {
   // ===========================================================================
 
   destroy(): void {
+    this.authManager.off?.('sessionChanged', this.boundHandleSessionChanged);
+    this.clearFeedbackDeliveryModeTimer();
+    this.teardownRealtimeSubscription();
+    this.stopPollingFallback();
     this.profileCache.clear();
     this.removeAllListeners();
   }

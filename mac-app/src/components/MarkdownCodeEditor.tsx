@@ -18,14 +18,23 @@ import {
   useMemo,
   useRef,
 } from 'react';
-import { EditorState, Compartment, Facet, RangeSetBuilder, Transaction, type Range } from '@codemirror/state';
+import {
+  EditorState,
+  Compartment,
+  Facet,
+  RangeSetBuilder,
+  Transaction,
+  type Range,
+} from '@codemirror/state';
 import {
   Decoration,
   type DecorationSet,
   EditorView,
+  GutterMarker,
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
+  gutterLineClass,
   keymap,
   highlightActiveLine,
 } from '@codemirror/view';
@@ -72,6 +81,7 @@ export const RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS = 'cm-rendered-markdown-
 export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-task-done';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR = 'data-ft-source-from';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
+export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
@@ -142,6 +152,7 @@ interface MarkdownCodeEditorProps {
   background?: string;
   caretColor?: string;
   selectionBackground?: string;
+  lineNumbersMode?: 'hidden' | 'visible' | 'faded';
   blinkCursor?: boolean;
   placeholder?: string;
   readOnly?: boolean;
@@ -220,6 +231,211 @@ export const checkedMarkdownTaskLineExtension = ViewPlugin.fromClass(
     decorations: (plugin) => plugin.decorations,
   },
 );
+
+const selectedLineNumberMarker = new class extends GutterMarker {
+  elementClass = MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS;
+};
+
+function parseCssPixels(value: string): number | null {
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function getMeasuredEditorLineHeight(view: EditorView): number {
+  const scroller = view.dom.querySelector<HTMLElement>('.cm-scroller');
+  const computed = getComputedStyle(scroller ?? view.scrollDOM);
+  const lineHeight = parseCssPixels(computed.lineHeight);
+  if (lineHeight !== null) return lineHeight;
+  const fontSize = parseCssPixels(computed.fontSize);
+  return fontSize !== null ? fontSize * 1.4 : 20;
+}
+
+export function countVisualLineRowsFromClientRects(
+  rects: readonly Pick<DOMRect, 'top' | 'width' | 'height'>[],
+  lineHeight: number,
+): number {
+  return getVisualLineRowTopsFromClientRects(rects, lineHeight).length;
+}
+
+function getVisualLineRowTopsFromClientRects(
+  rects: readonly Pick<DOMRect, 'top' | 'width' | 'height'>[],
+  lineHeight: number,
+): number[] {
+  const rowTops: number[] = [];
+  const topTolerance = Math.max(1, lineHeight / 2);
+  for (const rect of rects) {
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (rowTops.some((top) => Math.abs(top - rect.top) < topTolerance)) continue;
+    rowTops.push(rect.top);
+  }
+  return rowTops.sort((a, b) => a - b);
+}
+
+function getVisualLineRowTopsFromElement(element: HTMLElement, lineHeight: number): number[] {
+  const range = document.createRange();
+  range.selectNodeContents(element);
+  const rowTops = getVisualLineRowTopsFromClientRects(Array.from(range.getClientRects()), lineHeight);
+  range.detach();
+  return rowTops;
+}
+
+function getLineElementForBlock(
+  view: EditorView,
+  line: { from: number; to: number },
+  fallback: HTMLElement | undefined,
+): HTMLElement | undefined {
+  const lookupPosition = line.from < line.to ? line.from + 1 : line.from;
+  const domAtLine = view.domAtPos(lookupPosition);
+  const element = domAtLine.node instanceof HTMLElement ? domAtLine.node : domAtLine.node.parentElement;
+  return element?.closest<HTMLElement>('.cm-line') ?? fallback;
+}
+
+type VisualLineNumberOverlayRow = {
+  number: string;
+  top: number;
+  selected: boolean;
+};
+
+function isSourceLineSelected(state: EditorState, line: { from: number; to: number }): boolean {
+  return state.selection.ranges.some((range) => (
+    range.from <= line.to && range.to >= line.from && !(range.empty && range.from !== line.from)
+  ));
+}
+
+export function doesBrowserSelectionIntersectElement(selection: Selection | null, element: HTMLElement): boolean {
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) return false;
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    const range = selection.getRangeAt(index);
+    try {
+      if (range.intersectsNode(element)) return true;
+    } catch {
+      if (element.contains(range.commonAncestorContainer)) return true;
+    }
+  }
+  return false;
+}
+
+function isLineElementSelected(view: EditorView, lineElement: HTMLElement | undefined): boolean {
+  if (!lineElement) return false;
+  return doesBrowserSelectionIntersectElement(view.dom.ownerDocument.getSelection(), lineElement);
+}
+
+function buildVisualLineNumberOverlayRows(view: EditorView): { rows: VisualLineNumberOverlayRow[]; signature: string } {
+  const editorRect = view.dom.getBoundingClientRect();
+  const lineHeight = getMeasuredEditorLineHeight(view);
+  const blocks = view.viewportLineBlocks;
+  const lineElements = Array.from(view.contentDOM.querySelectorAll<HTMLElement>('.cm-line'));
+  let visualLineNumber = blocks.length > 0 ? view.state.doc.lineAt(blocks[0].from).number : 1;
+  const signatureParts: string[] = [];
+  const rows: VisualLineNumberOverlayRow[] = [];
+
+  for (let index = 0; index < blocks.length; index += 1) {
+    const block = blocks[index];
+    const line = view.state.doc.lineAt(block.from);
+    const lineElement = getLineElementForBlock(view, line, lineElements[index]);
+    const rangeTops = lineElement ? getVisualLineRowTopsFromElement(lineElement, lineHeight) : [];
+    const fallbackTop = view.documentTop + block.top;
+    const rowTops = rangeTops.length > 0 ? rangeTops : (line.text.trim() === '' ? [fallbackTop] : []);
+    if (rowTops.length === 0) {
+      signatureParts.push(`${line.from}:hidden`);
+      continue;
+    }
+    const selected = isSourceLineSelected(view.state, line) || isLineElementSelected(view, lineElement);
+    for (const top of rowTops) {
+      rows.push({
+        number: String(visualLineNumber),
+        top: top - editorRect.top,
+        selected,
+      });
+      visualLineNumber += 1;
+    }
+    signatureParts.push(`${line.from}:${selected ? 'selected' : 'plain'}:${rowTops.map((top) => Math.round(top - editorRect.top)).join(',')}`);
+  }
+
+  return {
+    rows,
+    signature: signatureParts.join('|'),
+  };
+}
+
+export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
+  class {
+    private readonly dom: HTMLElement;
+    private readonly view: EditorView;
+    private readonly handleSelectionChange: () => void;
+    private pendingMeasure = false;
+    private signature = '';
+
+    constructor(view: EditorView) {
+      this.view = view;
+      this.dom = document.createElement('div');
+      this.dom.className = 'cm-ft-lineNumberOverlay';
+      view.dom.appendChild(this.dom);
+      this.handleSelectionChange = () => this.scheduleMeasure(this.view);
+      view.dom.ownerDocument.addEventListener('selectionchange', this.handleSelectionChange);
+      this.scheduleMeasure(view);
+    }
+
+    update(update: ViewUpdate) {
+      if (update.docChanged || update.viewportChanged || update.geometryChanged || update.selectionSet) {
+        this.scheduleMeasure(update.view);
+      }
+    }
+
+    docViewUpdate(view: EditorView) {
+      this.scheduleMeasure(view);
+    }
+
+    destroy() {
+      this.view.dom.ownerDocument.removeEventListener('selectionchange', this.handleSelectionChange);
+      this.dom.remove();
+    }
+
+    private scheduleMeasure(view: EditorView): void {
+      if (this.pendingMeasure) return;
+      this.pendingMeasure = true;
+      view.requestMeasure({
+        read: (measuredView) => buildVisualLineNumberOverlayRows(measuredView),
+        write: (result, measuredView) => {
+          this.pendingMeasure = false;
+          if (result.signature === this.signature) return;
+          this.signature = result.signature;
+          this.render(result.rows, measuredView);
+        },
+      });
+    }
+
+    private render(rows: VisualLineNumberOverlayRow[], view: EditorView): void {
+      const fragment = view.dom.ownerDocument.createDocumentFragment();
+      for (const row of rows) {
+        const element = view.dom.ownerDocument.createElement('div');
+        element.className = row.selected
+          ? `cm-ft-lineNumberOverlayNumber ${MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS}`
+          : 'cm-ft-lineNumberOverlayNumber';
+        element.textContent = row.number;
+        element.style.top = `${row.top}px`;
+        fragment.appendChild(element);
+      }
+      this.dom.replaceChildren(fragment);
+    }
+  },
+);
+
+export const selectedLineNumberGutterExtension = gutterLineClass.compute(['selection'], (state) => {
+  const builder = new RangeSetBuilder<GutterMarker>();
+  let lastLineFrom = -1;
+  for (const range of state.selection.ranges) {
+    const fromLine = state.doc.lineAt(range.from);
+    const toLine = state.doc.lineAt(Math.max(range.from, range.to - (range.empty ? 0 : 1)));
+    for (let lineNumber = fromLine.number; lineNumber <= toLine.number; lineNumber += 1) {
+      const line = state.doc.line(lineNumber);
+      if (line.from <= lastLineFrom) continue;
+      lastLineFrom = line.from;
+      builder.add(line.from, line.from, selectedLineNumberMarker);
+    }
+  }
+  return builder.finish();
+});
 
 function renderedMarkdownSourceAttributes(from: number, to: number): Record<string, string> {
   return {
@@ -1095,6 +1311,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       background,
       caretColor,
       selectionBackground,
+      lineNumbersMode = 'hidden',
       blinkCursor = true,
       placeholder,
       readOnly = false,
@@ -1128,6 +1345,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const readOnlyCompartment = useRef(new Compartment()).current;
     const documentPathCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
+    const lineNumbersCompartment = useRef(new Compartment()).current;
     const scrollFpsSamplerRef = useScrollFpsSampler('markdown');
 
     useEffect(() => {
@@ -1169,6 +1387,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const editorTheme = useMemo(() => {
       const fontSizePx = typeof fontSize === 'number' ? `${fontSize}px` : String(fontSize);
       const lineHeightCss = typeof lineHeight === 'number' ? String(lineHeight) : String(lineHeight);
+      const fontSizeNumber = typeof fontSize === 'number' ? fontSize : Number.parseFloat(String(fontSize));
+      const lineHeightNumber = typeof lineHeight === 'number' ? lineHeight : Number.parseFloat(String(lineHeight));
+      const lineNumberRowHeight = Number.isFinite(fontSizeNumber) && Number.isFinite(lineHeightNumber)
+        ? `${fontSizeNumber * lineHeightNumber}px`
+        : lineHeightCss;
       const isRenderedPresentation = presentation === 'rendered';
       return EditorView.theme(
         {
@@ -1178,6 +1401,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             backgroundColor: background ?? 'transparent',
             fontFamily,
             fontSize: fontSizePx,
+            '--ft-line-number-row-height': lineNumberRowHeight,
           },
           '.cm-scroller': {
             fontFamily,
@@ -1219,8 +1443,39 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-activeLine': {
             backgroundColor: 'transparent',
           },
+          '.cm-ft-lineNumberOverlay': {
+            position: 'absolute',
+            left: '0',
+            top: '0',
+            width: '2.2em',
+            transform: 'translateX(calc(-100% - 0.65em))',
+            color: mutedColor ?? (theme.isDark ? 'rgba(255,255,255,0.4)' : 'rgba(17,17,17,0.36)'),
+            opacity: lineNumbersMode === 'faded' ? 0.5 : 0.82,
+            fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
+            fontSize: '0.78em',
+            pointerEvents: 'none',
+            zIndex: 2,
+          },
+          '.cm-ft-lineNumberOverlayNumber': {
+            position: 'absolute',
+            right: '0.55em',
+            height: 'var(--ft-line-number-row-height)',
+            lineHeight: 'var(--ft-line-number-row-height)',
+            textAlign: 'right',
+            fontVariantNumeric: 'tabular-nums',
+          },
           '.cm-gutters': {
             display: 'none',
+          },
+          '.cm-activeLineGutter': {
+            backgroundColor: 'transparent',
+            color,
+            opacity: lineNumbersMode === 'faded' ? 0.78 : 1,
+          },
+          [`.${MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS}`]: {
+            color: theme.isDark ? 'rgba(255,255,255,0.66)' : 'rgba(17,17,17,0.58)',
+            opacity: 1,
+            fontWeight: 500,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}`]: {
             color,
@@ -1386,6 +1641,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       h3Size,
       headingFontFamily,
       linkColor,
+      lineNumbersMode,
       lineHeight,
       mutedColor,
       paragraphSpacing,
@@ -1393,6 +1649,12 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       selectionBackground,
       theme.isDark,
     ]);
+
+    const lineNumbersExtension = useMemo(() => (
+      lineNumbersMode === 'hidden'
+        ? []
+        : [visualLineNumberOverlayExtension]
+    ), [lineNumbersMode]);
 
     // Mount once. Subsequent updates flow through compartments / dispatch.
     useLayoutEffect(() => {
@@ -1411,6 +1673,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           highlightActiveLine(),
           checkedMarkdownTaskLineExtension,
           EditorView.lineWrapping,
+          lineNumbersCompartment.of(lineNumbersExtension),
           cursorScrollMarginCompartment.of(EditorView.cursorScrollMargin.of(getMarkdownCodeEditorCursorScrollMargin(bottomRoomPxRef.current))),
           themeCompartment.of(editorTheme),
           readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
@@ -1537,14 +1800,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       dispatchMarkdownCodeEditorFileSwap(view, historyCompartment, value);
     }, [historyCompartment, value]);
 
-    useEffect(() => {
-      const view = viewRef.current;
-      if (!view) return;
-      view.dispatch({
-        effects: documentPathCompartment.reconfigure(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
-      });
-    }, [documentPath, documentPathCompartment]);
-
     // Reconfigure theme when style props or color scheme change.
     useEffect(() => {
       const view = viewRef.current;
@@ -1556,6 +1811,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         ],
       });
     }, [editorTheme, syntaxHighlightCompartment, theme.isDark, themeCompartment]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: lineNumbersCompartment.reconfigure(lineNumbersExtension),
+      });
+    }, [lineNumbersCompartment, lineNumbersExtension]);
 
     useEffect(() => {
       bottomRoomPxRef.current = bottomRoomPx;

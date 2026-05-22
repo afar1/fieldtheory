@@ -633,6 +633,7 @@ const SocialIPCChannels = {
   GET_FEEDBACK_REPLIES: 'social:getFeedbackReplies',
   UPDATE_FEEDBACK_STATUS: 'social:updateFeedbackStatus',
   GET_ACTIVITY_LOG: 'social:getActivityLog',
+  SET_FEEDBACK_REALTIME_ACTIVE: 'social:setFeedbackRealtimeActive',
   
   // Contact operations
   GET_CONTACTS: 'social:getContacts',
@@ -2663,6 +2664,11 @@ const socialAPI = {
   getActivityLog: async (feedbackId: string): Promise<ActivityLogEntry[]> => {
     return ipcRenderer.invoke(SocialIPCChannels.GET_ACTIVITY_LOG, feedbackId);
   },
+
+  // Tell the main process when feedback needs near-realtime delivery.
+  setFeedbackRealtimeActive: async (active: boolean): Promise<boolean> => {
+    return ipcRenderer.invoke(SocialIPCChannels.SET_FEEDBACK_REALTIME_ACTIVE, active);
+  },
   
   // =========================================================================
   // Contact Operations
@@ -3573,6 +3579,10 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:archiveActiveLibraryFile');
   },
 
+  toggleActiveLibraryLineNumbers: async (): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:toggleActiveLibraryLineNumbers');
+  },
+
   createMeetingNote: async (title?: string): Promise<MeetingActionResult> => {
     return ipcRenderer.invoke('meetings:create', title);
   },
@@ -3615,6 +3625,12 @@ const commandsAPI = {
     const handler = (_event: Electron.IpcRendererEvent, target: FieldTheoryMarkdownTarget) => callback(target);
     ipcRenderer.on('commands:openMarkdownFromLauncher', handler);
     return () => ipcRenderer.removeListener('commands:openMarkdownFromLauncher', handler);
+  },
+
+  onToggleLineNumbersFromLauncher: (callback: () => void): (() => void) => {
+    const handler = () => callback();
+    ipcRenderer.on('commands:toggleLineNumbersFromLauncher', handler);
+    return () => ipcRenderer.removeListener('commands:toggleLineNumbersFromLauncher', handler);
   },
 };
 
