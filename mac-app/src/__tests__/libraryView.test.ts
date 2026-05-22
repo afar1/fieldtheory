@@ -2029,6 +2029,7 @@ describe('getLibrarianTitleFontSize', () => {
     expect(getLibrarianTitleFontSize('Short note', 'rendered')).toBe(30);
     expect(getLibrarianTitleFontSize('A very long markdown title that needs to fit inside the available document width', 'rendered')).toBeLessThan(30);
     expect(getLibrarianTitleFontSize('A very long markdown title that needs to fit inside the available document width', 'markdown')).toBeLessThan(26);
+    expect(getLibrarianTitleFontSize('x'.repeat(96), 'rendered')).toBeGreaterThan(18);
   });
 });
 

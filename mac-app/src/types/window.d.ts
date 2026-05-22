@@ -1560,6 +1560,7 @@ interface CommandsAPI {
   onMeetingStatus?: (callback: (session: MeetingSession) => void) => () => void;
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
+  insertClipboardItemsAsMarkdown?: (ids: number[]) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
   onToggleLineNumbersFromLauncher?: (callback: () => void) => () => void;
 

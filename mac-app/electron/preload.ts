@@ -3621,6 +3621,10 @@ const commandsAPI = {
     return ipcRenderer.invoke('commands:insertMarkdownText', text);
   },
 
+  insertClipboardItemsAsMarkdown: async (ids: number[]): Promise<{ success: boolean; error?: string }> => {
+    return ipcRenderer.invoke('commands:insertClipboardItemsAsMarkdown', ids);
+  },
+
   onOpenMarkdownFromLauncher: (callback: (target: FieldTheoryMarkdownTarget) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, target: FieldTheoryMarkdownTarget) => callback(target);
     ipcRenderer.on('commands:openMarkdownFromLauncher', handler);

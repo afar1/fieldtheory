@@ -1969,7 +1969,8 @@ export function getLibrarianTitleFontSize(title: string, contentMode: MarkdownCo
   const base = contentMode === 'markdown' ? 26 : 30;
   const length = title.trim().length;
   if (length <= 48) return base;
-  return Math.max(18, Math.round((base - (length - 48) * 0.25) * 10) / 10);
+  if (length <= 96) return Math.max(18, Math.round((base - (length - 48) * 0.2) * 10) / 10);
+  return Math.max(16, Math.round((base - 9.6 - (length - 96) * 0.1) * 10) / 10);
 }
 
 function clampScrollRatio(ratio: number): number {
@@ -8047,6 +8048,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   aria-hidden="true"
                   contentEditable={false}
                   data-ft-rendered-bottom-scroll-space="library"
+                  onWheel={(event) => {
+                    if (!contentScrollRef.current) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    contentScrollRef.current.scrollBy({ top: event.deltaY, left: event.deltaX });
+                  }}
                   style={{ height: `${contentBottomScrollSpace}px`, flexShrink: 0 }}
                 />
               )}

@@ -712,9 +712,20 @@ export function getRenderedMarkdownListBodyStart(value: string, offset: number):
 }
 
 export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input: InputEvent): boolean {
-  if (input.inputType !== 'insertText' || !input.data || input.isComposing) return false;
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
+
+  if ((input.inputType === 'insertParagraph' || input.inputType === 'insertLineBreak') && !input.isComposing) {
+    const edit = getRenderedMarkdownFormattingBoundaryLineBreakEdit(view.state.doc.toString(), selection.from);
+    if (!edit) return false;
+    view.dispatch({
+      changes: { from: edit.insertAt, insert: '\n' },
+      selection: { anchor: edit.selection },
+    });
+    return true;
+  }
+
+  if (input.inputType !== 'insertText' || !input.data || input.isComposing) return false;
   const bodyStart = getRenderedMarkdownListBodyStart(view.state.doc.toString(), selection.from);
   if (bodyStart === null || bodyStart === selection.from) return false;
   view.dispatch({
@@ -722,6 +733,38 @@ export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input:
     selection: { anchor: bodyStart + input.data.length },
   });
   return true;
+}
+
+export function getRenderedMarkdownFormattingBoundaryLineBreakEdit(
+  value: string,
+  offset: number,
+): { insertAt: number; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const line = value.slice(lineStart, lineEnd);
+  const relativeCaret = caret - lineStart;
+  const patterns = [
+    /\*\*([^*\n]+)\*\*/g,
+    /(?<!\*)\*([^*\n]+)\*(?!\*)/g,
+    /~~([^~\n]+)~~/g,
+    /<u>([^<\n]+)<\/u>/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of line.matchAll(pattern)) {
+      if (match.index === undefined) continue;
+      const contentStart = match.index + match[0].indexOf(match[1]);
+      if (relativeCaret !== contentStart) continue;
+      return {
+        insertAt: lineStart + match.index,
+        selection: lineStart + match.index,
+      };
+    }
+  }
+
+  return null;
 }
 
 function shouldRevealRenderedMarkdownSource(state: EditorState, from: number, to: number): boolean {
@@ -1473,9 +1516,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             opacity: lineNumbersMode === 'faded' ? 0.78 : 1,
           },
           [`.${MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS}`]: {
-            color: theme.isDark ? 'rgba(255,255,255,0.66)' : 'rgba(17,17,17,0.58)',
+            color: theme.isDark ? 'rgba(255,255,255,0.84)' : 'rgba(17,17,17,0.82)',
             opacity: 1,
-            fontWeight: 500,
+            fontWeight: 600,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}`]: {
             color,
