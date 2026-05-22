@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Compartment, EditorSelection, EditorState, Transaction } from '@codemirror/state';
-import { EditorView } from '@codemirror/view';
+import { EditorView, lineNumbers } from '@codemirror/view';
 import { history, undo } from '@codemirror/commands';
 import {
   MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS,
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
+  MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS,
@@ -34,8 +35,11 @@ import {
   buildRenderedMarkdownEditorDecorations,
   buildRenderedMarkdownEditorDecorationsForRanges,
   checkedMarkdownTaskLineExtension,
+  countVisualLineRowsFromClientRects,
   createRenderedMarkdownEditorPresentationExtension,
+  doesBrowserSelectionIntersectElement,
   renderedMarkdownEditorPresentationExtension,
+  selectedLineNumberGutterExtension,
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
@@ -229,6 +233,55 @@ describe('MarkdownCodeEditor checked task decorations', () => {
     expect(lines[3].classList.contains(MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS)).toBe(false);
 
     view.destroy();
+    parent.remove();
+  });
+});
+
+describe('MarkdownCodeEditor line numbers', () => {
+  it('counts distinct wrapped visual rows from line client rects', () => {
+    expect(countVisualLineRowsFromClientRects([
+      { top: 10, width: 120, height: 20 },
+      { top: 10.4, width: 80, height: 20 },
+      { top: 31, width: 100, height: 20 },
+      { top: 52, width: 40, height: 20 },
+    ], 20)).toBe(3);
+  });
+
+  it('marks selected line numbers distinctly', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'alpha\nbeta\ngamma',
+        selection: EditorSelection.range(1, 10),
+        extensions: [lineNumbers(), selectedLineNumberGutterExtension],
+      }),
+      parent,
+    });
+
+    const selectedLineNumbers = parent.querySelectorAll(`.${MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS}`);
+    expect(selectedLineNumbers.length).toBeGreaterThanOrEqual(2);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('matches browser text selection for rendered line numbers', () => {
+    const parent = document.createElement('div');
+    const line = document.createElement('div');
+    line.textContent = 'Rendered line';
+    parent.appendChild(line);
+    document.body.appendChild(parent);
+
+    const selection = document.getSelection();
+    const range = document.createRange();
+    range.selectNodeContents(line);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+
+    expect(doesBrowserSelectionIntersectElement(selection, line)).toBe(true);
+
+    selection?.removeAllRanges();
     parent.remove();
   });
 });

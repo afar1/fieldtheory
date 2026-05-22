@@ -23,6 +23,7 @@ export const SocialIPCChannels = {
   GET_FEEDBACK_REPLIES: 'social:getFeedbackReplies',
   UPDATE_FEEDBACK_STATUS: 'social:updateFeedbackStatus',
   GET_ACTIVITY_LOG: 'social:getActivityLog',
+  SET_FEEDBACK_REALTIME_ACTIVE: 'social:setFeedbackRealtimeActive',
   
   // Contact operations
   GET_CONTACTS: 'social:getContacts',
@@ -42,4 +43,3 @@ export const SocialIPCChannels = {
   // Events
   MESSAGE_RECEIVED: 'social:messageReceived',
 } as const;
-

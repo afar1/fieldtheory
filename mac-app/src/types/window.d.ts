@@ -1011,6 +1011,7 @@ interface SocialAPI {
   getFeedbackReplies: (feedbackId: string) => Promise<SocialMessage[]>;
   updateFeedbackStatus: (feedbackId: string, status: 'open' | 'resolved' | 'archived') => Promise<boolean>;
   getActivityLog: (feedbackId: string) => Promise<ActivityLogEntry[]>;
+  setFeedbackRealtimeActive: (active: boolean) => Promise<boolean>;
   
   // Contact operations
   getContacts: () => Promise<SocialContact[]>;
@@ -1549,6 +1550,7 @@ interface CommandsAPI {
   getActiveLibraryFileContext?: () => Promise<ActiveLibraryFileContext | null>;
   setActiveLibraryFileContext?: (context: ActiveLibraryFileContext | null) => Promise<boolean>;
   archiveActiveLibraryFile?: () => Promise<{ success: boolean; error?: string }>;
+  toggleActiveLibraryLineNumbers?: () => Promise<{ success: boolean; error?: string }>;
   createMeetingNote?: (title?: string) => Promise<MeetingActionResult>;
   startMeetingHere?: () => Promise<MeetingActionResult>;
   stopMeeting?: () => Promise<MeetingActionResult>;
@@ -1559,6 +1561,7 @@ interface CommandsAPI {
   openFieldTheoryMarkdown?: (target: FieldTheoryMarkdownTarget) => Promise<{ success: boolean; error?: string }>;
   insertMarkdownText?: (text: string) => Promise<{ success: boolean; error?: string }>;
   onOpenMarkdownFromLauncher?: (callback: (target: FieldTheoryMarkdownTarget) => void) => () => void;
+  onToggleLineNumbersFromLauncher?: (callback: () => void) => () => void;
 
   // Mobile sync operations
   setMobileSync: (dirPath: string, enabled: boolean) => Promise<boolean>;

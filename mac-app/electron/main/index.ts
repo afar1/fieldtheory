@@ -7824,6 +7824,19 @@ function setupClipboardIPCHandlers(): void {
     }
   });
 
+  ipcMain.handle('commands:toggleActiveLibraryLineNumbers', (): { success: boolean; error?: string } => {
+    const window = clipboardHistoryWindow?.getWindow();
+    if (!window || window.isDestroyed()) return { success: false, error: 'Field Theory window is not available' };
+    if (!clipboardHistoryWindow?.isVisible()) {
+      clipboardHistoryWindow?.showLibrary(restoreClipboardHistoryBounds('library'));
+    } else {
+      clipboardHistoryWindow.focusExistingWindow();
+    }
+    commandLauncherWindow?.hide(true);
+    window.webContents.send('commands:toggleLineNumbersFromLauncher');
+    return { success: true };
+  });
+
   ipcMain.handle(CommandsIPCChannels.RUN_LOCAL_COMMAND, async (_event, rawRequest: unknown): Promise<LocalCommandRunResult> => {
     if (!commandsManager || !librarianManager) {
       emitLocalCommandStatus({
@@ -8754,6 +8767,21 @@ function setupClipboardIPCHandlers(): void {
   // Feedback IPC Handlers
   // =========================================================================
 
+  // Feedback-only mode still mounts the shared social view, which asks for the
+  // legacy DM/contact surfaces during initial load. Keep those paths inert.
+  ipcMain.handle(SocialIPCChannels.SEND_DM, async () => null);
+  ipcMain.handle(SocialIPCChannels.GET_CONVERSATIONS, async () => []);
+  ipcMain.handle(SocialIPCChannels.GET_DMS_WITH_USER, async () => []);
+  ipcMain.handle(SocialIPCChannels.HAS_UNREAD, async () => false);
+  ipcMain.handle(SocialIPCChannels.GET_CONTACTS, async () => []);
+  ipcMain.handle(SocialIPCChannels.ADD_FRIEND, async () => ({ success: false, error: 'DM contacts are not enabled.' }));
+  ipcMain.handle(SocialIPCChannels.SEARCH_CONTACTS, async () => []);
+  ipcMain.handle(SocialIPCChannels.GET_PENDING_INVITES, async () => []);
+  ipcMain.handle(SocialIPCChannels.RESPOND_TO_INVITE, async () => false);
+  ipcMain.handle(SocialIPCChannels.REMOVE_FRIEND, async () => false);
+  ipcMain.handle(SocialIPCChannels.GET_HOT_MIC, async () => false);
+  ipcMain.handle(SocialIPCChannels.SET_HOT_MIC, async () => false);
+
   // Send a text reply to feedback.
   ipcMain.handle(SocialIPCChannels.SEND_TEXT_DM, async (_event, recipientUserId: string, text: string, parentMessageId?: string) => {
     if (!feedbackManager || !parentMessageId) {
@@ -8870,6 +8898,15 @@ function setupClipboardIPCHandlers(): void {
       return [];
     }
     return await feedbackManager.getActivityLog(feedbackId);
+  });
+
+  // Keep realtime feedback delivery scoped to active feedback sessions.
+  ipcMain.handle(SocialIPCChannels.SET_FEEDBACK_REALTIME_ACTIVE, async (_event, active: boolean) => {
+    if (!feedbackManager) {
+      return false;
+    }
+    feedbackManager.setFeedbackRealtimeActive(active);
+    return true;
   });
 
   // Check if current user is admin.
@@ -10698,6 +10735,13 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize feedback manager for user feedback to admin.
   feedbackManager = new FeedbackManager(authManager, clipboardManager);
+  feedbackManager.on('messageReceived', (message) => {
+    BrowserWindow.getAllWindows().forEach((window) => {
+      if (!window.isDestroyed()) {
+        window.webContents.send(SocialIPCChannels.MESSAGE_RECEIVED, message);
+      }
+    });
+  });
 
   // Field Theory cloud sync is internal-only and disabled unless the hidden
   // local setting is on. Add a Supabase allowlist before enabling it outside dev.

@@ -30,6 +30,16 @@ export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEv
   return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
+export function isLineNumbersToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  const isK = e.key.toLowerCase() === 'k' || e.code === 'KeyK';
+  return isK && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
+}
+
+export function isFadedLineNumbersShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
+  const isR = e.key.toLowerCase() === 'r' || e.code === 'KeyR';
+  return isR && e.metaKey && e.altKey && !e.shiftKey && !e.ctrlKey;
+}
+
 export function isMarkdownTaskShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
   const isZeroKey = e.key === '0' || e.key === ')' || e.code === 'Digit0' || e.code === 'Numpad0';
   return isZeroKey && e.metaKey && e.shiftKey && !e.ctrlKey && !e.altKey;
@@ -126,6 +136,8 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
   { keys: 'Command+Enter', label: 'Toggle task checkbox line' },
   { keys: 'Command+Shift+0', label: 'Cycle task line' },
   { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+  { keys: 'Command+Shift+K', label: 'Toggle line numbers' },
+  { keys: 'Command+Option+R', label: 'Show faded line numbers' },
   { keys: 'Command+/', label: 'Toggle focus mode' },
   { keys: 'Command+,', label: 'Toggle sidebar' },
   { keys: 'Command+F', label: 'Find in file' },
@@ -146,6 +158,7 @@ export const RENDERED_EDIT_CLICK_MODE_STORAGE_KEY = 'fieldtheory-rendered-edit-c
 export const RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT = 'fieldtheory:rendered-edit-click-mode-changed';
 export const TEXT_CURSOR_BLINK_STORAGE_KEY = 'fieldtheory-text-cursor-blink';
 export const TEXT_CURSOR_BLINK_CHANGED_EVENT = 'fieldtheory:text-cursor-blink-changed';
+export const LINE_NUMBERS_STORAGE_KEY = 'fieldtheory-line-numbers';
 
 export function restoreRenderedEditClickMode(storage: Pick<Storage, 'getItem'>): RenderedEditClickMode {
   return storage.getItem(RENDERED_EDIT_CLICK_MODE_STORAGE_KEY) === 'click' ? 'click' : 'command-click';

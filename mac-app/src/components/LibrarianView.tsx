@@ -30,13 +30,16 @@ import { prefetchBookmarks } from '../services/bookmarksCache';
 import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureFlags';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
+  LINE_NUMBERS_STORAGE_KEY,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
   getMarkdownFormattingShortcut,
   getMarkdownListShortcutKind,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  isFadedLineNumbersShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
+  isLineNumbersToggleShortcut,
   isMarkdownModeToggleShortcut,
   isMarkdownTaskShortcut,
   isMarkdownTaskToggleShortcut,
@@ -2269,6 +2272,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     restoreLibrarianTodoMarker(localStorage)
   ));
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
+  const [lineNumbersMode, setLineNumbersMode] = useState<'hidden' | 'visible' | 'faded'>(() => {
+    const saved = localStorage.getItem(LINE_NUMBERS_STORAGE_KEY);
+    return saved === 'visible' || saved === 'faded' ? saved : 'hidden';
+  });
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
     if (!restoredSelection) return null;
     if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
@@ -3020,6 +3027,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     persistLibrarianTodoMarker(localStorage, todoMarker);
   }, [todoMarker]);
+
+  useEffect(() => {
+    localStorage.setItem(LINE_NUMBERS_STORAGE_KEY, lineNumbersMode);
+  }, [lineNumbersMode]);
 
   useEffect(() => {
     const syncTextCursorBlink = () => setBlinkTextCursor(restoreTextCursorBlink(localStorage));
@@ -4209,6 +4220,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
   }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
 
+  const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
+    setLineNumbersMode((current) => {
+      if (mode) return current === mode ? 'hidden' : mode;
+      return current === 'hidden' ? 'visible' : 'hidden';
+    });
+  }, []);
+
 	  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
 	    const completion = markdownWikiLinkCompletion;
 	    if (completion) {
@@ -4273,6 +4291,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       event.preventDefault();
       event.stopPropagation();
       toggleFocusChromeShortcut();
+      return true;
+    }
+
+    if (isLineNumbersToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('visible');
+      return true;
+    }
+
+    if (isFadedLineNumbersShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('faded');
       return true;
     }
 
@@ -4967,6 +4999,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    if (isLineNumbersToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('visible');
+      return true;
+    }
+
+    if (isFadedLineNumbersShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('faded');
+      return true;
+    }
+
     const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
     if (navigationDirection !== null) {
       event.preventDefault();
@@ -5149,6 +5195,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     navigateHistory,
     restoreMarkdownCodeEditorProgrammaticUndo,
     scheduleEditorSessionPersist,
+    toggleLineNumbers,
     toggleFocusChromeShortcut,
     unorderedListMarker,
   ]);
@@ -6173,6 +6220,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         toggleFocusChromeShortcut();
         return;
       }
+      if (isLineNumbersToggleShortcut(e)) {
+        e.preventDefault();
+        toggleLineNumbers('visible');
+        return;
+      }
+      if (isFadedLineNumbersShortcut(e)) {
+        e.preventDefault();
+        toggleLineNumbers('faded');
+        return;
+      }
       // Cmd+. - cycles the available markdown content modes.
       if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
@@ -6428,7 +6485,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
+
+  useEffect(() => {
+    if (!active) return;
+    const unsubscribe = window.commandsAPI?.onToggleLineNumbersFromLauncher?.(() => {
+      toggleLineNumbers('visible');
+    });
+    return () => unsubscribe?.();
+  }, [active, toggleLineNumbers]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -7534,6 +7599,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     color={(documentTextStyle.color as string) ?? theme.text}
                     background="transparent"
                     caretColor={theme.accent}
+                    lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
@@ -7699,6 +7765,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     paragraphSpacing={documentParagraphSpacing}
                     background="transparent"
                     caretColor={theme.accent}
+                    lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
                     placeholder="Rendered text editor"
                     documentPath={activeReading.path}
