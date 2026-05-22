@@ -6,6 +6,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ImmersiveToggle from './ImmersiveToggle';
+import { SidebarMarkdownIcon } from './SidebarIcons';
 
 // Icon sizes - 22% larger than the original 13px base
 const ICON_SIZE = 16; // ~22% larger than 13px
@@ -104,6 +105,12 @@ interface ContentToolbarProps {
 
 }
 
+export type ContentToolbarMaxwellItem = {
+  id: string;
+  title: string;
+  subtitle: string;
+};
+
 export function ContentToolbarFolderButton({
   onShowInFolder,
   style,
@@ -147,6 +154,267 @@ export function ContentToolbarFolderButton({
         <path d="M1 3.5A1.5 1.5 0 0 1 2.5 2h2.764c.958 0 1.76.56 2.311 1.184C7.985 3.648 8.48 4 9 4h4.5A1.5 1.5 0 0 1 15 5.5v7a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 1 12.5v-9zM2.5 3a.5.5 0 0 0-.5.5V6h12v-.5a.5.5 0 0 0-.5-.5H9c-.964 0-1.71-.629-2.174-1.154C6.374 3.334 5.82 3 5.264 3H2.5zM14 7H2v5.5a.5.5 0 0 0 .5.5h11a.5.5 0 0 0 .5-.5V7z" />
       </svg>
     </button>
+  );
+}
+
+export function ContentToolbarMaxwellButton({
+  items,
+  canAddCurrent,
+  currentItemId,
+  onAddCurrent,
+  onVisitItem,
+  onRunItem,
+  onRemoveItem,
+}: {
+  items: ContentToolbarMaxwellItem[];
+  canAddCurrent: boolean;
+  currentItemId?: string | null;
+  onAddCurrent?: () => void;
+  onVisitItem?: (id: string) => void;
+  onRunItem?: (id: string) => void;
+  onRemoveItem?: (id: string) => void;
+}) {
+  const { theme } = useTheme();
+  const [maxwellMenuOpen, setMaxwellMenuOpen] = useState(false);
+  const maxwellMenuRef = useRef<HTMLDivElement | null>(null);
+  const iconHoverBackground = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+  const iconActiveBackground = theme.isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)';
+  const sortedItems = [...items].sort((a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }));
+  const currentItemSaved = Boolean(currentItemId && items.some((item) => item.id === currentItemId));
+
+  useEffect(() => {
+    if (!maxwellMenuOpen) return;
+
+    const handlePointerDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && maxwellMenuRef.current?.contains(target)) return;
+      setMaxwellMenuOpen(false);
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMaxwellMenuOpen(false);
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    document.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [maxwellMenuOpen]);
+
+  return (
+    <div
+      ref={maxwellMenuRef}
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        marginLeft: '2px',
+        // @ts-ignore - toolbar buttons should receive clicks.
+        WebkitAppRegion: 'no-drag',
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setMaxwellMenuOpen((open) => !open)}
+        onMouseEnter={(event) => {
+          if (!maxwellMenuOpen) event.currentTarget.style.backgroundColor = iconHoverBackground;
+        }}
+        onMouseLeave={(event) => {
+          if (!maxwellMenuOpen) event.currentTarget.style.backgroundColor = 'transparent';
+        }}
+        title="Maxwell"
+        aria-label="Maxwell"
+        style={{
+          width: '24px',
+          height: '24px',
+          padding: 0,
+          color: maxwellMenuOpen ? (theme.isDark ? '#fff' : '#000') : theme.textSecondary,
+          backgroundColor: maxwellMenuOpen ? iconActiveBackground : 'transparent',
+          border: 'none',
+          borderRadius: '4px',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          lineHeight: 1,
+          transition: 'background-color 0.15s ease, color 0.15s ease',
+        }}
+      >
+        <img
+          src="/field-theory-icon-black.png"
+          alt=""
+          aria-hidden="true"
+          draggable={false}
+          style={{
+            width: '14px',
+            height: '14px',
+            display: 'block',
+            objectFit: 'contain',
+            opacity: maxwellMenuOpen ? 0.94 : 0.72,
+            filter: theme.isDark ? 'invert(1)' : 'none',
+          }}
+        />
+      </button>
+
+      {maxwellMenuOpen && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '28px',
+            right: 0,
+            zIndex: 21,
+            width: '260px',
+            padding: '6px',
+            borderRadius: '8px',
+            border: `1px solid ${theme.border}`,
+            backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
+            boxShadow: theme.isDark ? '0 12px 30px rgba(0,0,0,0.32)' : '0 12px 30px rgba(0,0,0,0.14)',
+            backdropFilter: 'blur(14px)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '4px',
+          }}
+        >
+          <div
+            style={{
+              padding: '2px 6px 5px',
+              color: theme.textSecondary,
+              fontSize: '10px',
+              fontWeight: 600,
+              textAlign: 'left',
+            }}
+          >
+            Maxwell Local Commands
+          </div>
+          {sortedItems.map((item) => (
+            <div
+              key={item.id}
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'auto 1fr auto auto',
+                gap: '4px',
+                alignItems: 'center',
+                padding: '4px',
+                borderRadius: '6px',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  onVisitItem?.(item.id);
+                  setMaxwellMenuOpen(false);
+                }}
+                title="Open saved Maxwell page"
+                aria-label={`Open ${item.title}`}
+                style={{
+                  width: '18px',
+                  height: '24px',
+                  padding: 0,
+                  color: theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <SidebarMarkdownIcon color={theme.textSecondary} />
+              </button>
+              <div
+                title={item.subtitle}
+                style={{
+                  minWidth: 0,
+                  padding: '3px 2px',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ fontSize: '11px', lineHeight: 1.25, color: theme.text, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {item.title}
+                </div>
+              </div>
+              <button
+                type="button"
+                title="Run this Maxwell page locally"
+                onClick={() => {
+                  onRunItem?.(item.id);
+                  setMaxwellMenuOpen(false);
+                }}
+                style={{
+                  height: '24px',
+                  padding: '0 8px',
+                  color: theme.textSecondary,
+                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  fontWeight: 600,
+                }}
+              >
+                Run
+              </button>
+              <button
+                type="button"
+                title="Remove from Maxwell"
+                aria-label={`Remove ${item.title} from Maxwell`}
+                onClick={() => {
+                  onRemoveItem?.(item.id);
+                }}
+                style={{
+                  width: '24px',
+                  height: '24px',
+                  padding: 0,
+                  color: theme.textSecondary,
+                  backgroundColor: 'transparent',
+                  border: 'none',
+                  borderRadius: '5px',
+                  cursor: 'pointer',
+                  fontSize: '13px',
+                  lineHeight: 1,
+                  opacity: 0.42,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {items.length === 0 && (
+            <div style={{ padding: '4px 8px 6px', color: theme.textSecondary, fontSize: '10px', fontStyle: 'italic', lineHeight: 1.35, textAlign: 'right' }}>
+              No saved Maxwell pages yet.
+            </div>
+          )}
+          <button
+            type="button"
+            disabled={!canAddCurrent}
+            onClick={() => {
+              if (currentItemSaved && currentItemId) {
+                onRemoveItem?.(currentItemId);
+              } else {
+                onAddCurrent?.();
+              }
+            }}
+            style={{
+              height: '28px',
+              alignSelf: 'flex-end',
+              padding: '0 9px',
+              color: theme.textSecondary,
+              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.06)' : 'rgba(0,0,0,0.04)',
+              border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}`,
+              borderRadius: '5px',
+              cursor: canAddCurrent ? 'pointer' : 'default',
+              opacity: canAddCurrent ? 1 : 0.5,
+              fontSize: '10px',
+              textAlign: 'right',
+            }}
+          >
+            {currentItemSaved ? 'remove current page from maxwell' : 'add current page to maxwell'}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

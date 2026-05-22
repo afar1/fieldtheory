@@ -7,7 +7,7 @@ import { useEffect, useLayoutEffect, useState, useRef, useCallback, useMemo, Fra
 import { useTheme } from '../contexts/ThemeContext';
 import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
-import ContentToolbar, { ContentToolbarFolderButton } from './ContentToolbar';
+import ContentToolbar, { ContentToolbarFolderButton, ContentToolbarMaxwellButton } from './ContentToolbar';
 import ContentModeToggleButton from './ContentModeToggleButton';
 import ImmersiveToggle from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
@@ -481,11 +481,24 @@ const ACTIVE_MARKDOWN_FILE_REFRESH_INTERVAL_MS = 750;
 const LIBRARIAN_AGENT_KICKOFF_ENABLED = false;
 export const LIBRARIAN_UNORDERED_LIST_MARKER_STORAGE_KEY = 'librarian-unordered-list-marker';
 export const LIBRARIAN_TODO_MARKER_STORAGE_KEY = 'librarian-todo-marker';
+export const LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY = 'librarian-maxwell-items';
 export const CARROT_LIST_MARKER = '›';
 const CARROT_LIST_SENTINEL = '\u2060';
 
 export type LibrarianUnorderedListMarker = 'dash' | 'carrot';
 export type LibrarianTodoMarker = 'circle' | 'square';
+export type LibrarianMaxwellItem = {
+  id: string;
+  type: 'wiki' | 'artifact' | 'external';
+  title: string;
+  path: string;
+  relPath?: string;
+};
+
+type MaxwellToolbarSelection = { start: number; end: number } | null;
+type MaxwellToolbarRunMode =
+  | { mode: 'document' }
+  | { mode: 'selection'; selection: { start: number; end: number } };
 
 export function isLibrarianUnorderedListMarker(value: unknown): value is LibrarianUnorderedListMarker {
   return value === 'dash' || value === 'carrot';
@@ -521,6 +534,47 @@ export function persistLibrarianTodoMarker(
   marker: LibrarianTodoMarker,
 ): void {
   storage.setItem(LIBRARIAN_TODO_MARKER_STORAGE_KEY, marker);
+}
+
+export function restoreLibrarianMaxwellItems(
+  storage: Pick<Storage, 'getItem'>,
+): LibrarianMaxwellItem[] {
+  try {
+    const raw = storage.getItem(LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((item): item is LibrarianMaxwellItem => (
+      item
+      && (item.type === 'wiki' || item.type === 'artifact' || item.type === 'external')
+      && typeof item.id === 'string'
+      && typeof item.title === 'string'
+      && typeof item.path === 'string'
+      && (item.relPath === undefined || typeof item.relPath === 'string')
+    ));
+  } catch {
+    return [];
+  }
+}
+
+export function persistLibrarianMaxwellItems(
+  storage: Pick<Storage, 'setItem'>,
+  items: LibrarianMaxwellItem[],
+): void {
+  storage.setItem(LIBRARIAN_MAXWELL_ITEMS_STORAGE_KEY, JSON.stringify(items));
+}
+
+export function getMaxwellToolbarRunMode(selection: MaxwellToolbarSelection): MaxwellToolbarRunMode {
+  if (!selection || selection.start === selection.end) {
+    return { mode: 'document' };
+  }
+  return {
+    mode: 'selection',
+    selection: {
+      start: Math.min(selection.start, selection.end),
+      end: Math.max(selection.start, selection.end),
+    },
+  };
 }
 
 type MarkdownTextEdit = {
@@ -2271,6 +2325,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [todoMarker, setTodoMarker] = useState<LibrarianTodoMarker>(() => (
     restoreLibrarianTodoMarker(localStorage)
   ));
+  const [maxwellItems, setMaxwellItems] = useState<LibrarianMaxwellItem[]>(() => (
+    restoreLibrarianMaxwellItems(localStorage)
+  ));
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
   const [lineNumbersMode, setLineNumbersMode] = useState<'hidden' | 'visible' | 'faded'>(() => {
     const saved = localStorage.getItem(LINE_NUMBERS_STORAGE_KEY);
@@ -3029,6 +3086,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [todoMarker]);
 
   useEffect(() => {
+    persistLibrarianMaxwellItems(localStorage, maxwellItems);
+  }, [maxwellItems]);
+
+  useEffect(() => {
     localStorage.setItem(LINE_NUMBERS_STORAGE_KEY, lineNumbersMode);
   }, [lineNumbersMode]);
 
@@ -3294,6 +3355,95 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
+  const activeMaxwellItem = useMemo<LibrarianMaxwellItem | null>(() => {
+    if (!activeReading || !activeReadingPath || !activeIsMarkdownDocument) return null;
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      return {
+        id: `wiki:${wikiSelectedRelPath}`,
+        type: 'wiki',
+        title: activeReading.title,
+        path: activeReadingPath,
+        relPath: wikiSelectedRelPath,
+      };
+    }
+    if (selectedItemType === 'artifact') {
+      return {
+        id: `artifact:${activeReadingPath}`,
+        type: 'artifact',
+        title: activeReading.title,
+        path: activeReadingPath,
+      };
+    }
+    if (selectedItemType === 'external') {
+      return {
+        id: `external:${activeReadingPath}`,
+        type: 'external',
+        title: activeReading.title,
+        path: activeReadingPath,
+      };
+    }
+    return null;
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, selectedItemType, wikiSelectedRelPath]);
+  const maxwellToolbarItems = useMemo(() => maxwellItems.map((item) => ({
+    id: item.id,
+    title: item.title,
+    subtitle: item.relPath ?? item.path,
+  })), [maxwellItems]);
+  const addActivePageToMaxwell = useCallback(() => {
+    if (!activeMaxwellItem) return;
+    setMaxwellItems((prev) => [
+      activeMaxwellItem,
+      ...prev.filter((item) => item.id !== activeMaxwellItem.id),
+    ].slice(0, 20));
+  }, [activeMaxwellItem]);
+  const removeMaxwellItem = useCallback((id: string) => {
+    setMaxwellItems((prev) => prev.filter((item) => item.id !== id));
+  }, []);
+  const visitMaxwellItem = useCallback((id: string) => {
+    const item = maxwellItems.find((candidate) => candidate.id === id);
+    if (!item) return;
+    void (async () => {
+      await flushCurrentEdit();
+      if (item.type === 'wiki' && item.relPath) {
+        openWikiPage(item.relPath);
+      } else if (item.type === 'artifact') {
+        selectArtifactPath(item.path);
+      } else {
+        await selectExternalFile(item.path);
+      }
+      setContentMode('rendered');
+    })();
+  }, [flushCurrentEdit, maxwellItems, openWikiPage, selectArtifactPath, selectExternalFile]);
+  const getActiveMaxwellSelection = useCallback((): MaxwellToolbarSelection => {
+    const editor = contentModeRef.current === 'markdown'
+      ? markdownCodeEditorRef.current
+      : renderedMarkdownEditorRef.current;
+    const selection = editor?.getSelectionRange() ?? null;
+    if (!selection) return null;
+    return { start: selection.start, end: selection.end };
+  }, []);
+  const runMaxwellItem = useCallback((id: string) => {
+    const item = maxwellItems.find((candidate) => candidate.id === id);
+    if (!item) return;
+    void (async () => {
+      let instruction: string | null = null;
+      if (item.type === 'wiki' && item.relPath) {
+        instruction = (await window.wikiAPI?.getPage(item.relPath))?.content ?? null;
+      } else if (item.type === 'artifact') {
+        instruction = (await window.librarianAPI?.getReading(item.path))?.content ?? null;
+      } else {
+        instruction = (await window.externalAPI?.open(item.path))?.content ?? null;
+      }
+      const trimmed = instruction?.trim();
+      if (!trimmed) return;
+      await window.commandsAPI?.runLocalCommand?.({
+        customInstruction: trimmed,
+        ...getMaxwellToolbarRunMode(getActiveMaxwellSelection()),
+      });
+    })().catch((err) => {
+      console.warn('[Librarian] Maxwell toolbar run failed:', err);
+    });
+  }, [getActiveMaxwellSelection, maxwellItems]);
   const activeReadingToolbarHasBreadcrumb = !focusChromeActive
     && (selectedItemType === 'wiki' || selectedItemType === 'external')
     && Boolean(activeReadingPath);
@@ -7238,6 +7388,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathCopied={copyFeedbackLabel !== null}
                   copyPathTitle="Copy selected text or file path (⌘C)"
+                />
+              )}
+
+              {focusToolbarControlsVisible && (
+                <ContentToolbarMaxwellButton
+                  items={maxwellToolbarItems}
+                  canAddCurrent={!!activeMaxwellItem}
+                  currentItemId={activeMaxwellItem?.id ?? null}
+                  onAddCurrent={addActivePageToMaxwell}
+                  onVisitItem={visitMaxwellItem}
+                  onRunItem={runMaxwellItem}
+                  onRemoveItem={removeMaxwellItem}
                 />
               )}
 
