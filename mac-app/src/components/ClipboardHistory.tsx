@@ -7,7 +7,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo, useLayoutEffect, Suspense } from 'react';
 import SettingsPanel from './SettingsPanel';
 import TodoView from './TodoView';
-import FeedbackView from './FeedbackView';
+import DMsView from './DMsView';
 import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
 import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
@@ -508,6 +508,7 @@ export default function ClipboardHistory() {
     title: string;
     mtime: number;
   } | null>(null);
+  const [librarySidebarToggleRequestKey, setLibrarySidebarToggleRequestKey] = useState(0);
   const [librarySelectedItemType, setLibrarySelectedItemType] = useState<LibrarianSelectedItemType>(null);
   const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
   const navSidebarToggleEnabled = isNavSidebarToggleEnabled({
@@ -732,6 +733,13 @@ export default function ClipboardHistory() {
   }, [openCommandPathInLibrary]);
   const selectTopNavView = useCallback((mode: TopNavMode) => {
     const previous = viewModeRef.current;
+    if (mode === 'librarian' && previous === 'librarian' && !showSettings) {
+      if (navSidebarCollapsed) {
+        setLibrarySidebarToggleRequestKey((key) => key + 1);
+      } else {
+        setNavSidebarCollapsed(true);
+      }
+    }
     if (previous !== mode || showSettings) {
       const startedAt = performance.now();
       const highlightAppliedAt = applyTopNavVisualMode(mode);
@@ -754,7 +762,7 @@ export default function ClipboardHistory() {
     setLibraryKeepsCurrentSizeKey(mode === 'librarian' && previous === 'clipboard');
     setViewMode(mode);
     setShowSettings(false);
-  }, [applyTopNavVisualMode, showSettings]);
+  }, [applyTopNavVisualMode, navSidebarCollapsed, showSettings]);
 
   // Tasks tab visibility - hidden by default, toggled with Shift+Cmd+T
   const [tasksTabEnabled, setTasksTabEnabled] = useState(false);
@@ -1372,9 +1380,8 @@ export default function ClipboardHistory() {
 
     checkUnread();
 
-    // Re-poll periodically and on window focus. The realtime IPC for
-    // `messageReceived` is not currently emitted by the main process, so
-    // without this the dot stays stuck on the value captured at mount.
+    // Re-poll periodically and on window focus so the dot still catches up if
+    // the realtime IPC event is missed while the window is hidden or suspended.
     const pollId = window.setInterval(checkUnread, 300_000);
     const onFocus = () => checkUnread();
     window.addEventListener('focus', onFocus);
@@ -4855,6 +4862,7 @@ export default function ClipboardHistory() {
             onActiveFileUpdatedChange={setLibraryActiveFileUpdated}
             preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
+            sidebarToggleRequestKey={librarySidebarToggleRequestKey}
           />
         </div>
       )}
@@ -4882,7 +4890,7 @@ export default function ClipboardHistory() {
       ) : viewMode === 'feedback' ? (
         // Feedback view - rendered inline for authenticated users, sign-in prompt for others
         sessionInitialized && authSession?.user?.email ? (
-          <FeedbackView onSwitchToClipboard={() => setViewMode('clipboard')} />
+          <DMsView feedbackOnly onSwitchToClipboard={() => setViewMode('clipboard')} />
         ) : sessionInitialized ? (
           <div style={{
             flex: 1,

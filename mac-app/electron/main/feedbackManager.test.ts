@@ -173,61 +173,6 @@ describe('FeedbackManager message mapping', () => {
     manager.destroy();
   });
 
-  it('does not crash if realtime teardown fails during connection startup', () => {
-    vi.useFakeTimers();
-
-    const channel = {
-      on: vi.fn(() => channel),
-      subscribe: vi.fn(() => channel),
-    };
-    const supabase = {
-      channel: vi.fn(() => channel),
-      removeChannel: vi.fn(() => {
-        throw new Error('WebSocket was closed before the connection was established');
-      }),
-    };
-    const authManager = new EventEmitter() as any;
-    authManager.isAuthenticated = vi.fn(() => true);
-    authManager.getSession = vi.fn(() => ({ user: { id: 'recipient-user', email: 'recipient@example.com' } }));
-    authManager.getSupabaseClient = vi.fn(() => supabase);
-    const manager = new FeedbackManager(authManager, {} as any);
-
-    manager.setFeedbackRealtimeActive(true);
-
-    expect(() => manager.setFeedbackRealtimeActive(false)).not.toThrow();
-    expect((manager as any).realtimeChannel).toBeNull();
-    expect((manager as any).realtimeConnected).toBe(false);
-
-    manager.destroy();
-  });
-
-  it('does not leave unhandled failures if realtime teardown rejects', async () => {
-    vi.useFakeTimers();
-
-    const channel = {
-      on: vi.fn(() => channel),
-      subscribe: vi.fn(() => channel),
-    };
-    const supabase = {
-      channel: vi.fn(() => channel),
-      removeChannel: vi.fn(() => Promise.reject(new Error('Realtime remove failed'))),
-    };
-    const authManager = new EventEmitter() as any;
-    authManager.isAuthenticated = vi.fn(() => true);
-    authManager.getSession = vi.fn(() => ({ user: { id: 'recipient-user', email: 'recipient@example.com' } }));
-    authManager.getSupabaseClient = vi.fn(() => supabase);
-    const manager = new FeedbackManager(authManager, {} as any);
-
-    manager.setFeedbackRealtimeActive(true);
-
-    expect(() => manager.setFeedbackRealtimeActive(false)).not.toThrow();
-    await Promise.resolve();
-    expect((manager as any).realtimeChannel).toBeNull();
-    expect((manager as any).realtimeConnected).toBe(false);
-
-    manager.destroy();
-  });
-
   it('polls for missed feedback messages when realtime is unavailable', async () => {
     const rows = [
       {

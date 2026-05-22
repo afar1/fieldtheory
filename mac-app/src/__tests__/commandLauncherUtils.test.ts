@@ -1835,6 +1835,7 @@ describe('SQUARES_ACTION_DEFS', () => {
       'active-window-screenshot', 'start-recording', 'super-paste', 'open-history',
       'open-library', 'view-bookmarks', 'save-current-website', 'move-current-library-file',
       'archive-current-library-file', 'undo-library-move', 'toggle-theme',
+      'toggle-line-numbers',
       'new-meeting-note', 'start-meeting-here', 'stop-meeting', 'summarize-meeting'];
     for (const id of builtInActionIds) {
       expect(SQUARES_ACTION_IDS.has(id)).toBe(false);
@@ -1906,6 +1907,17 @@ describe('buildBuiltInLauncherActions', () => {
       keywords: expect.arrayContaining(['commands', 'portable commands']),
     }));
     expect(actions.find((action) => action.actionId === 'open-commands')).toBeUndefined();
+  });
+
+  it('includes a line numbers action for the command launcher', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'toggle-line-numbers')).toEqual(expect.objectContaining({
+      name: 'line numbers',
+      displayName: 'Toggle Line Numbers',
+      hotkey: 'Shift+Command+K',
+      keywords: expect.arrayContaining(['line numbers', 'markdown line numbers']),
+    }));
   });
 
   it('includes move, archive, and undo move actions', () => {

@@ -167,6 +167,18 @@ export function getSidebarFolderHeaderPositionStyle(depth: number): React.CSSPro
   return depth === 0 ? { position: 'sticky', top: 0, zIndex: 3 } : {};
 }
 
+export function isSidebarFolderHeaderPinned(
+  scrollerTop: number,
+  headerTop: number,
+  folderTop: number,
+): boolean {
+  return headerTop <= scrollerTop + 1 && folderTop < scrollerTop - 1;
+}
+
+export function shouldShowSidebarPinnedFolderFade(depth: number, expanded: boolean, pinned: boolean): boolean {
+  return depth === 0 && expanded && pinned;
+}
+
 export function getSidebarDividerStyle(isDark: boolean): React.CSSProperties {
   return {
     border: 'none',
@@ -1456,6 +1468,7 @@ function WikiSidebar({
   const iconColorUndoStackRef = useRef<Record<string, number>[]>([]);
   const [scrollJumpTarget, setScrollJumpTarget] = useState<'top' | 'bottom' | null>(null);
   const [sidebarTopFadeVisible, setSidebarTopFadeVisible] = useState(false);
+  const [pinnedFolderFadeIds, setPinnedFolderFadeIds] = useState<Set<string>>(() => new Set());
   const [iconColorPicker, setIconColorPicker] = useState<{
     id: string;
     x: number;
@@ -2222,13 +2235,38 @@ function WikiSidebar({
     setSidebarTopFadeVisible(Boolean(scroller && scroller.scrollTop > 2));
   }, []);
 
+  const updatePinnedFolderFades = useCallback(() => {
+    const scroller = sidebarScrollRef.current;
+    const next = new Set<string>();
+    if (scroller) {
+      const scrollerTop = scroller.getBoundingClientRect().top;
+      for (const header of scroller.querySelectorAll<HTMLElement>('[data-library-sticky-folder-id]')) {
+        const id = header.dataset.libraryStickyFolderId;
+        const folder = header.closest<HTMLElement>('[data-library-dir-node="true"]');
+        if (!id || !folder) continue;
+        if (isSidebarFolderHeaderPinned(
+          scrollerTop,
+          header.getBoundingClientRect().top,
+          folder.getBoundingClientRect().top,
+        )) {
+          next.add(id);
+        }
+      }
+    }
+    setPinnedFolderFadeIds((current) => {
+      if (current.size === next.size && [...current].every((id) => next.has(id))) return current;
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     const id = requestAnimationFrame(() => {
       updateScrollJumpTarget();
       updateSidebarTopFade();
+      updatePinnedFolderFades();
     });
     return () => cancelAnimationFrame(id);
-  }, [filteredSidebarRoots, recent.length, searchQuery, updateScrollJumpTarget, updateSidebarTopFade]);
+  }, [expandedFolders, filteredSidebarRoots, recent.length, searchQuery, updatePinnedFolderFades, updateScrollJumpTarget, updateSidebarTopFade]);
 
   const jumpSidebar = useCallback((target: 'top' | 'bottom') => {
     const scroller = sidebarScrollRef.current;
@@ -2765,6 +2803,7 @@ function WikiSidebar({
         onScroll={() => {
           updateScrollJumpTarget();
           updateSidebarTopFade();
+          updatePinnedFolderFades();
         }}
         style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}
       >
@@ -2983,6 +3022,7 @@ function WikiSidebar({
           onContextMenu={openContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
+          pinnedFolderFadeIds={pinnedFolderFadeIds}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}
           onOpenIconColorPicker={openSidebarIconColorPicker}
@@ -3224,6 +3264,7 @@ function TreeNode({
   onContextMenu,
   onKeyboardScopeActive,
   pinnedItemIds,
+  pinnedFolderFadeIds,
   getSidebarIconColor,
   getSidebarIconColorIndex,
   onOpenIconColorPicker,
@@ -3258,6 +3299,7 @@ function TreeNode({
   onContextMenu: (event: React.MouseEvent, node: SidebarNode | null) => void;
   onKeyboardScopeActive?: () => void;
   pinnedItemIds: ReadonlySet<string>;
+  pinnedFolderFadeIds: ReadonlySet<string>;
   getSidebarIconColor: (id: string, fallbackColor: string) => string;
   getSidebarIconColorIndex: (id: string) => number | undefined;
   onOpenIconColorPicker: (id: string, event: React.MouseEvent<HTMLElement>) => void;
@@ -3320,6 +3362,7 @@ function TreeNode({
   const folderContextActive = contextActiveNodeId === node.id;
   const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : 'transparent';
   const stickyFolderBackgroundColor = depth === 0 ? theme.bg : folderBackgroundColor;
+  const showPinnedFolderFade = shouldShowSidebarPinnedFolderFade(depth, isExpanded, pinnedFolderFadeIds.has(node.id));
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
     const item = getLibraryDragData(dataTransfer);
     return canDropLibraryItem(item, nodeCreateLocation) ? item : null;
@@ -3331,6 +3374,7 @@ function TreeNode({
         <div
           className={`bm-folder-header${folderContextActive ? ' bm-folder-header-context' : ''}`}
           data-library-sidebar-row-id={node.id}
+          data-library-sticky-folder-id={depth === 0 ? node.id : undefined}
           draggable={canDragDir}
           onDragStart={(event) => {
             if (!canDragDir) {
@@ -3394,20 +3438,20 @@ function TreeNode({
             borderRadius: 0,
           }}
         >
-            {depth === 0 && isExpanded && (
-              <span
-                aria-hidden="true"
-                style={{
-                  position: 'absolute',
-                  left: 0,
-                  right: 0,
-                  bottom: '-18px',
-                  height: '18px',
-                  pointerEvents: 'none',
-                  background: `linear-gradient(to bottom, ${stickyFolderBackgroundColor} 0%, ${stickyFolderBackgroundColor}00 100%)`,
-                }}
-              />
-            )}
+          {showPinnedFolderFade && (
+            <span
+              aria-hidden="true"
+              style={{
+                position: 'absolute',
+                left: 0,
+                right: 0,
+                bottom: '-18px',
+                height: '18px',
+                pointerEvents: 'none',
+                background: `linear-gradient(to bottom, ${stickyFolderBackgroundColor} 0%, ${stickyFolderBackgroundColor}00 100%)`,
+              }}
+            />
+          )}
             <SidebarIconButton label={`Change color for ${node.label}`} onClick={(event) => onOpenIconColorPicker(node.id, event)}>
               <SidebarFolderIcon color={folderIconColor} />
             </SidebarIconButton>
@@ -3527,6 +3571,7 @@ function TreeNode({
           onContextMenu={onContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
+          pinnedFolderFadeIds={pinnedFolderFadeIds}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}
           onOpenIconColorPicker={onOpenIconColorPicker}
@@ -3616,6 +3661,7 @@ function TreeNode({
           onContextMenu={onContextMenu}
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
+          pinnedFolderFadeIds={pinnedFolderFadeIds}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}
           onOpenIconColorPicker={onOpenIconColorPicker}

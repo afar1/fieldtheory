@@ -758,7 +758,7 @@ export class CommandsManager extends EventEmitter {
       return {
         name: nameWithoutExt.toLowerCase(),
         filePath,
-        displayName: nameWithoutExt,
+        displayName,
         lastModified: stats.mtimeMs,
       };
     } catch (error) {
@@ -1390,7 +1390,7 @@ End of User Commands
       return {
         name: nameWithoutExt.toLowerCase(),
         filePath: safePath,
-        displayName: nameWithoutExt,
+        displayName,
         lastModified: stats.mtimeMs,
         content,
         documentVersion: readDocumentVersion(safePath),

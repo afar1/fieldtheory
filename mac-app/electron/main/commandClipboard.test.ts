@@ -228,7 +228,7 @@ describe('shouldUseNativeCommandFileTyping', () => {
     })).toBe(true);
   });
 
-  it('uses native typing for IDE text references so focused editor inputs receive the command', () => {
+  it('uses native typing for IDE text references so command prompts get a focused input check', () => {
     expect(shouldUseNativeCommandFileTyping({
       mode: 'text-reference',
       isTerminal: false,
