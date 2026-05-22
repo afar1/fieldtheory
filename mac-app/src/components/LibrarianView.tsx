@@ -32,11 +32,11 @@ import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   LINE_NUMBERS_STORAGE_KEY,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  isFadedLineNumbersShortcut,
   getMarkdownFormattingShortcut,
   getMarkdownListShortcutKind,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
-  isFadedLineNumbersShortcut,
   isImmersiveToggleShortcut,
   isKeyboardShortcutsHelpShortcut,
   isLineNumbersToggleShortcut,
@@ -2201,6 +2201,7 @@ interface LibrarianViewProps {
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
   sidebarCollapsed: boolean;
+  sidebarToggleRequestKey?: number;
 }
 
 type MarkdownRenderNode = {
@@ -2282,7 +2283,7 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -2400,6 +2401,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [sidebarTodoStateOverrides, setSidebarTodoStateOverrides] = useState<Record<string, MarkdownTodoState | null>>({});
   const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const collapsedSidebarHoverReveal = useCollapsedSidebarHoverReveal(setSidebarHoverExpanded);
+  useEffect(() => {
+    if (sidebarToggleRequestKey > 0 && sidebarCollapsed && !isFullScreen) {
+      setSidebarHoverExpanded((expanded) => !expanded);
+    }
+  }, [isFullScreen, sidebarCollapsed, sidebarToggleRequestKey]);
   const wikiCreationRef = useRef<WikiCreationController | null>(null);
   const wikiArchiveRef = useRef<WikiArchiveController | null>(null);
   const readerPaneRef = useRef<HTMLDivElement | null>(null);
@@ -2440,6 +2446,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const pendingScrollRatioRef = useRef<number | null>(null);
   const copyPathFeedbackTimerRef = useRef<number | null>(null);
   const markdownEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
+  const renderedEditUndoStackRef = useRef<MarkdownUndoSnapshot[]>([]);
 
   const activateSidebarKeyboard = useCallback(() => {
     sidebarKeyboardActiveRef.current = true;
@@ -3090,10 +3097,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [maxwellItems]);
 
   useEffect(() => {
-    localStorage.setItem(LINE_NUMBERS_STORAGE_KEY, lineNumbersMode);
-  }, [lineNumbersMode]);
-
-  useEffect(() => {
     const syncTextCursorBlink = () => setBlinkTextCursor(restoreTextCursorBlink(localStorage));
     window.addEventListener('storage', syncTextCursorBlink);
     window.addEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, syncTextCursorBlink);
@@ -3102,6 +3105,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       window.removeEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, syncTextCursorBlink);
     };
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem(LINE_NUMBERS_STORAGE_KEY, lineNumbersMode);
+  }, [lineNumbersMode]);
 
   // Check mute status on mount
   useEffect(() => {
@@ -4313,12 +4320,28 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activateRenderedTextEditing({ start: displaySourceBody.length, end: displaySourceBody.length });
   }, [activateRenderedTextEditing, activeReading, contentMode, deactivateSidebarKeyboard, displaySourceBody.length]);
 
+  const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
+    setLineNumbersMode((current) => {
+      if (mode) return current === mode ? 'hidden' : mode;
+      return current === 'hidden' ? 'visible' : 'hidden';
+    });
+  }, []);
+
   const applyRenderedEditorBody = useCallback((
     nextBody: string,
-    options: { selectionStart?: number | null; selectionEnd?: number | null } = {},
+    options: { selectionStart?: number | null; selectionEnd?: number | null; preserveUndo?: boolean } = {},
   ) => {
     if (!activeReading || contentMode !== 'rendered') return;
     const previousContent = activeReadingContentRef.current ?? activeReading.content;
+    if (!options.preserveUndo) {
+      const editor = renderedMarkdownEditorRef.current;
+      const selection = editor?.getSelectionRange() ?? { start: activeRenderedCaretOffsetRef.current ?? 0, end: activeRenderedCaretOffsetRef.current ?? 0 };
+      renderedEditUndoStackRef.current.push({
+        value: displaySourceBody,
+        selectionStart: selection.start,
+        selectionEnd: selection.end,
+      });
+    }
     const nextContent = replaceMarkdownBodyPreservingFrontmatter(previousContent, nextBody);
     const selectionStart = options.selectionStart ?? null;
     const selectionEnd = options.selectionEnd ?? selectionStart;
@@ -4331,6 +4354,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activeReading,
     applyRenderedContentLocalState,
     contentMode,
+    displaySourceBody,
     markWritingActive,
     requestRenderedContentSave,
   ]);
@@ -4340,6 +4364,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     applyRenderedEditorBody(nextBody, {
       selectionStart: selection?.start ?? null,
       selectionEnd: selection?.end ?? null,
+      preserveUndo: true,
     });
   }, [applyRenderedEditorBody]);
 
@@ -4370,12 +4395,21 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
   }, [applyRenderedEditorBody, displaySourceBody, focusRenderedEditor]);
 
-  const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
-    setLineNumbersMode((current) => {
-      if (mode) return current === mode ? 'hidden' : mode;
-      return current === 'hidden' ? 'visible' : 'hidden';
+  const restoreRenderedEditorProgrammaticUndo = useCallback((): boolean => {
+    const snapshot = renderedEditUndoStackRef.current.pop();
+    if (!snapshot) return false;
+    applyRenderedEditorBody(snapshot.value, {
+      selectionStart: snapshot.selectionStart,
+      selectionEnd: snapshot.selectionEnd,
+      preserveUndo: true,
     });
-  }, []);
+    pendingRenderedEditorSelectionRef.current = {
+      start: snapshot.selectionStart,
+      end: snapshot.selectionEnd,
+    };
+    focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+    return true;
+  }, [applyRenderedEditorBody, focusRenderedEditor]);
 
 	  const handleRenderedEditorKeyDown = useCallback((event: KeyboardEvent) => {
 	    const completion = markdownWikiLinkCompletion;
@@ -4458,12 +4492,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
+    if (isLineNumbersToggleShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('visible');
+      return true;
+    }
+
+    if (isFadedLineNumbersShortcut(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleLineNumbers('faded');
+      return true;
+    }
+
     const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
     if (navigationDirection !== null) {
       event.preventDefault();
       event.stopPropagation();
       if (navigationDirection !== 0) navigateHistory(navigationDirection);
       return true;
+    }
+
+    if (event.key.toLowerCase() === 'z' && event.metaKey && !event.shiftKey && !event.altKey && !event.ctrlKey) {
+      if (restoreRenderedEditorProgrammaticUndo()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
     }
 
     if (event.key === 'Escape') {
@@ -4546,7 +4602,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
     navigateHistory,
+    restoreRenderedEditorProgrammaticUndo,
     toggleFocusChromeShortcut,
+    toggleLineNumbers,
     unorderedListMarker,
   ]);
 
@@ -5149,20 +5207,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return true;
     }
 
-    if (isLineNumbersToggleShortcut(event)) {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleLineNumbers('visible');
-      return true;
-    }
-
-    if (isFadedLineNumbersShortcut(event)) {
-      event.preventDefault();
-      event.stopPropagation();
-      toggleLineNumbers('faded');
-      return true;
-    }
-
     const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
     if (navigationDirection !== null) {
       event.preventDefault();
@@ -5437,6 +5481,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     setMarkdownUrlPasteChoice(null);
     setMarkdownWikiLinkCompletion(null);
+    renderedEditUndoStackRef.current = [];
   }, [activeReading?.path, contentMode]);
 
   useEffect(() => {
@@ -5444,6 +5489,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const unsubscribe = window.librarianAPI?.onInsertMarkdownText(insertMarkdownText);
     return () => unsubscribe?.();
   }, [active, insertMarkdownText]);
+
+  useEffect(() => {
+    if (!active) return;
+    const unsubscribe = window.commandsAPI?.onToggleLineNumbersFromLauncher?.(() => {
+      toggleLineNumbers('visible');
+    });
+    return () => unsubscribe?.();
+  }, [active, toggleLineNumbers]);
 
   useEffect(() => {
     return () => window.librarianAPI?.setMarkdownEditorFocused(false);
@@ -6637,14 +6690,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, shortcutsHelpOpen]);
 
-  useEffect(() => {
-    if (!active) return;
-    const unsubscribe = window.commandsAPI?.onToggleLineNumbersFromLauncher?.(() => {
-      toggleLineNumbers('visible');
-    });
-    return () => unsubscribe?.();
-  }, [active, toggleLineNumbers]);
-
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
   useEffect(() => {
@@ -7311,6 +7356,58 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   }}
                   title={activeReading.path}
                 >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '1px', marginRight: '2px', flexShrink: 0 }}>
+                    <button
+                      type="button"
+                      onClick={() => navigateHistory(-1)}
+                      disabled={!canNavigateBack}
+                      title="Back"
+                      aria-label="Back"
+                      style={{
+                        width: '22px',
+                        height: '24px',
+                        padding: 0,
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: canNavigateBack ? 'pointer' : 'default',
+                        opacity: canNavigateBack ? 1 : 0.32,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M10.354 3.146a.5.5 0 0 1 0 .708L6.207 8l4.147 4.146a.5.5 0 0 1-.708.708l-4.5-4.5a.5.5 0 0 1 0-.708l4.5-4.5a.5.5 0 0 1 .708 0z" />
+                      </svg>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => navigateHistory(1)}
+                      disabled={!canNavigateForward}
+                      title="Forward"
+                      aria-label="Forward"
+                      style={{
+                        width: '22px',
+                        height: '24px',
+                        padding: 0,
+                        color: theme.textSecondary,
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: canNavigateForward ? 'pointer' : 'default',
+                        opacity: canNavigateForward ? 1 : 0.32,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <svg width="13" height="13" viewBox="0 0 16 16" fill="currentColor">
+                        <path d="M5.646 3.146a.5.5 0 0 0 0 .708L9.793 8l-4.147 4.146a.5.5 0 0 0 .708.708l4.5-4.5a.5.5 0 0 0 0-.708l-4.5-4.5a.5.5 0 0 0-.708 0z" />
+                      </svg>
+                    </button>
+                  </div>
                   {!focusChromeActive && (
                     <ContentToolbarFolderButton onShowInFolder={showActiveReadingInFolder} />
                   )}
@@ -7350,10 +7447,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   filePath={activeReading?.path || undefined}
                   isFullScreen={isFullScreen}
                   dragSpacer={!focusChromeActive}
-                  canNavigateBack={canNavigateBack}
-                  canNavigateForward={canNavigateForward}
-                  onNavigateBack={() => navigateHistory(-1)}
-                  onNavigateForward={() => navigateHistory(1)}
                   textSize={textSize}
                   onTextSizeChange={setTextSize}
                   showTextSize
@@ -7388,18 +7481,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathCopied={copyFeedbackLabel !== null}
                   copyPathTitle="Copy selected text or file path (⌘C)"
-                />
-              )}
-
-              {focusToolbarControlsVisible && (
-                <ContentToolbarMaxwellButton
-                  items={maxwellToolbarItems}
-                  canAddCurrent={!!activeMaxwellItem}
-                  currentItemId={activeMaxwellItem?.id ?? null}
-                  onAddCurrent={addActivePageToMaxwell}
-                  onVisitItem={visitMaxwellItem}
-                  onRunItem={runMaxwellItem}
-                  onRemoveItem={removeMaxwellItem}
                 />
               )}
 
@@ -7450,6 +7531,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     </svg>
                   )}
                 </button>
+              )}
+
+              {focusToolbarControlsVisible && (
+                <ContentToolbarMaxwellButton
+                  items={maxwellToolbarItems}
+                  canAddCurrent={!!activeMaxwellItem}
+                  currentItemId={activeMaxwellItem?.id ?? null}
+                  onAddCurrent={addActivePageToMaxwell}
+                  onVisitItem={visitMaxwellItem}
+                  onRunItem={runMaxwellItem}
+                  onRemoveItem={removeMaxwellItem}
+                />
               )}
 
               {/* Agent kickoff — opens a popup that dispatches the user's

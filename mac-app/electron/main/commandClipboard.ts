@@ -148,9 +148,9 @@ export function shouldUseNativeCommandFileTyping(input: {
   isTerminal: boolean;
   isIDE: boolean;
 }): boolean {
-  if (input.isTerminal) return true;
+  if (input.isTerminal || input.isIDE) return true;
   if (input.mode === 'markdown-content') return true;
-  return input.isIDE;
+  return false;
 }
 
 function formatCommandFileTextReference(source: CommandFilePasteSource): string {

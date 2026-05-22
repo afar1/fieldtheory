@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import LibrarianView, {
+  getMaxwellToolbarRunMode,
   getLibraryDocumentDefaultContentMode,
   getLibraryDocumentViewKind,
   getHtmlPreviewSrcDoc,
@@ -151,6 +152,7 @@ describe('LibrarianView render', () => {
         getCommands: vi.fn(async () => []),
         getCommandByPath: vi.fn(async () => null),
         onCommandsChanged: vi.fn(() => () => {}),
+        runLocalCommand: vi.fn(async () => ({ success: true })),
         setActiveLibraryFileContext: vi.fn(),
         startMeetingHere: vi.fn(async () => ({ success: true, session: null })),
         stopMeeting: vi.fn(async () => ({ success: true, session: null })),
@@ -676,7 +678,7 @@ describe('LibrarianView render', () => {
     });
   });
 
-  it('places Show in Finder before the library breadcrumb', async () => {
+  it('places navigation and Show in Finder before the library breadcrumb', async () => {
     const relPath = 'scratchpad/folder-toolbar-order';
     const page: WikiPage = {
       relPath,
@@ -694,9 +696,11 @@ describe('LibrarianView render', () => {
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const breadcrumb = await screen.findByText('scratchpad');
+    const backButton = screen.getByLabelText('Back');
     const folderButton = screen.getByLabelText('Show in Finder');
 
     expect(screen.getAllByLabelText('Show in Finder')).toHaveLength(1);
+    expect(Boolean(backButton.compareDocumentPosition(folderButton) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(Boolean(folderButton.compareDocumentPosition(breadcrumb) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
@@ -758,6 +762,80 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.commandsAPI!.stopMeeting).toHaveBeenCalled();
       expect(screen.getByRole('button', { name: 'Start meeting recording' })).toBeTruthy();
+    });
+  });
+
+  it('places Maxwell to the right of the meeting button and before the view mode toggle', async () => {
+    const relPath = 'scratchpad/maxwell-toolbar-order';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'maxwell-toolbar-order',
+      title: 'maxwell-toolbar-order',
+      lastUpdated: 1,
+      content: 'Toolbar order',
+      documentVersion: { mtimeMs: 1, size: 13, sha256: 'maxwell-toolbar-order-version' },
+    };
+
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const meetingButton = await screen.findByRole('button', { name: 'Start meeting recording' });
+    const maxwellButton = screen.getByRole('button', { name: 'Maxwell' });
+    const modeToggle = screen.getByRole('button', { name: 'Switch to Markdown source' });
+
+    expect(Boolean(meetingButton.compareDocumentPosition(maxwellButton) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(Boolean(maxwellButton.compareDocumentPosition(modeToggle) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+  });
+
+  it('adds the active wiki page to Maxwell and runs its content from the toolbar', async () => {
+    const relPath = 'Commands/maxwell-cleanup';
+    const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
+    const page: WikiPage = {
+      relPath,
+      absPath,
+      name: 'maxwell-cleanup',
+      title: 'Maxwell Cleanup',
+      lastUpdated: 1,
+      content: 'Tighten this document.',
+      documentVersion: { mtimeMs: 1, size: 22, sha256: 'maxwell-toolbar-version' },
+    };
+
+    mockStoredWikiSelection(relPath, { expandScratchpad: true });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const maxwellButton = await screen.findByRole('button', { name: 'Maxwell' });
+    fireEvent.click(maxwellButton);
+    fireEvent.click(screen.getByRole('button', { name: 'add current page to maxwell' }));
+
+    await waitFor(() => {
+      expect(window.localStorage.setItem).toHaveBeenCalledWith(
+        'librarian-maxwell-items',
+        expect.stringContaining('"title":"Maxwell Cleanup"'),
+      );
+    });
+
+    expect(await screen.findByText('Maxwell Cleanup')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Run' }));
+
+    await waitFor(() => {
+      expect(window.commandsAPI!.runLocalCommand).toHaveBeenCalledWith({
+        customInstruction: 'Tighten this document.',
+        mode: 'document',
+      });
+    });
+  });
+
+  it('uses selected content mode for Maxwell only when text is selected', () => {
+    expect(getMaxwellToolbarRunMode(null)).toEqual({ mode: 'document' });
+    expect(getMaxwellToolbarRunMode({ start: 4, end: 4 })).toEqual({ mode: 'document' });
+    expect(getMaxwellToolbarRunMode({ start: 12, end: 4 })).toEqual({
+      mode: 'selection',
+      selection: { start: 4, end: 12 },
     });
   });
 

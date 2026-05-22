@@ -104,6 +104,7 @@ import {
   getSidebarDividerStyle,
   getSidebarFolderFinderPath,
   getSidebarFolderHeaderPositionStyle,
+  isSidebarFolderHeaderPinned,
   getWikiSidebarExpansionIds,
   hasLibraryDragData,
   hideReadmeOnlyLibraryArtifactsFolder,
@@ -116,6 +117,7 @@ import {
   renamePinnedSidebarIds,
   renameLibraryRootRelPath,
   shouldCapScratchpadSidebarNode,
+  shouldShowSidebarPinnedFolderFade,
   shouldShowSidebarTodoStateBadge,
   splitArchivedSidebarNodes,
   splitPinnedRecentEntries,
@@ -2573,6 +2575,18 @@ describe('recursive sidebar tree helpers', () => {
   it('only makes top-level folder headers sticky in the left nav', () => {
     expect(getSidebarFolderHeaderPositionStyle(0)).toEqual({ position: 'sticky', top: 0, zIndex: 3 });
     expect(getSidebarFolderHeaderPositionStyle(1)).toEqual({});
+  });
+
+  it('only shows the folder fade after a top-level folder header is pinned', () => {
+    expect(isSidebarFolderHeaderPinned(0, 0, 0)).toBe(false);
+    expect(isSidebarFolderHeaderPinned(0, 24, 24)).toBe(false);
+    expect(isSidebarFolderHeaderPinned(0, 0, -24)).toBe(true);
+    expect(isSidebarFolderHeaderPinned(0, 18, -24)).toBe(false);
+
+    expect(shouldShowSidebarPinnedFolderFade(0, true, false)).toBe(false);
+    expect(shouldShowSidebarPinnedFolderFade(0, true, true)).toBe(true);
+    expect(shouldShowSidebarPinnedFolderFade(0, false, true)).toBe(false);
+    expect(shouldShowSidebarPinnedFolderFade(1, true, true)).toBe(false);
   });
 
   it('keeps sidebar dividers from shrinking away when the nav overflows', () => {
