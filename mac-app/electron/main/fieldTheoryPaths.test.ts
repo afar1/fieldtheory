@@ -10,6 +10,8 @@ import {
   ideasDir,
   legacyLibraryDir,
   libraryDir,
+  sharedFilesCacheDir,
+  sharedFilesRootDir,
 } from './fieldTheoryPaths';
 
 describe('Field Theory path contract', () => {
@@ -20,6 +22,8 @@ describe('Field Theory path contract', () => {
 
     expect(canonicalBookmarkDataDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'bookmarks'));
     expect(canonicalLibraryDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library'));
+    expect(sharedFilesRootDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'shared'));
+    expect(sharedFilesCacheDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'River (shared)'));
     expect(commandsDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'library', 'Commands'));
     expect(ideasDir(options)).toBe(path.join(homeDir, '.fieldtheory', 'ideas'));
   });
@@ -30,6 +34,8 @@ describe('Field Theory path contract', () => {
       env: {
         FT_DATA_DIR: '/tmp/ft-data',
         FT_LIBRARY_DIR: '/tmp/ft-library',
+        FT_SHARED_FILES_ROOT_DIR: '/tmp/ft-shared',
+        FT_SHARED_FILES_CACHE_DIR: '/tmp/ft-shared-cache',
         FT_COMMANDS_DIR: '/tmp/ft-commands',
         FT_IDEAS_DIR: '/tmp/ft-ideas',
       },
@@ -37,6 +43,8 @@ describe('Field Theory path contract', () => {
 
     expect(bookmarkDataDir(options)).toBe('/tmp/ft-data');
     expect(libraryDir(options)).toBe('/tmp/ft-library');
+    expect(sharedFilesRootDir(options)).toBe('/tmp/ft-shared');
+    expect(sharedFilesCacheDir(options)).toBe('/tmp/ft-shared-cache');
     expect(commandsDir(options)).toBe('/tmp/ft-commands');
     expect(ideasDir(options)).toBe('/tmp/ft-ideas');
   });
@@ -50,6 +58,7 @@ describe('Field Theory path contract', () => {
     };
 
     expect(commandsDir(options)).toBe(path.join('/tmp/ft-library', 'Commands'));
+    expect(sharedFilesCacheDir(options)).toBe(path.join('/tmp/ft-library', 'River (shared)'));
   });
 
   it('uses canonical bookmark data when neither bookmark data root exists', () => {

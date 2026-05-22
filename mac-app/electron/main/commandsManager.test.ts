@@ -32,6 +32,8 @@ describe('CommandsManager default internal commands', () => {
   let tempRoot: string;
   let manager: CommandsManager;
   let originalCommandsDir: string | undefined;
+  let originalSharedFilesCacheDir: string | undefined;
+  let originalSharedFilesDir: string | undefined;
 
   const mockUserDataManager = {
     isLoggedIn: () => true,
@@ -44,7 +46,11 @@ describe('CommandsManager default internal commands', () => {
   beforeEach(() => {
     tempRoot = mkdtempSync(join(tmpdir(), 'commands-manager-test-'));
     originalCommandsDir = process.env.FT_COMMANDS_DIR;
+    originalSharedFilesCacheDir = process.env.FT_SHARED_FILES_CACHE_DIR;
+    originalSharedFilesDir = process.env.FT_SHARED_FILES_DIR;
     process.env.FT_COMMANDS_DIR = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    process.env.FT_SHARED_FILES_CACHE_DIR = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    process.env.FT_SHARED_FILES_DIR = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
     mockApp.getPath.mockImplementation((name: string) => {
       if (name === 'userData') return join(tempRoot, 'app-data');
       if (name === 'home') return tempRoot;
@@ -59,6 +65,10 @@ describe('CommandsManager default internal commands', () => {
     await manager.onUserLoggedOut();
     if (originalCommandsDir === undefined) delete process.env.FT_COMMANDS_DIR;
     else process.env.FT_COMMANDS_DIR = originalCommandsDir;
+    if (originalSharedFilesCacheDir === undefined) delete process.env.FT_SHARED_FILES_CACHE_DIR;
+    else process.env.FT_SHARED_FILES_CACHE_DIR = originalSharedFilesCacheDir;
+    if (originalSharedFilesDir === undefined) delete process.env.FT_SHARED_FILES_DIR;
+    else process.env.FT_SHARED_FILES_DIR = originalSharedFilesDir;
     rmSync(tempRoot, { recursive: true, force: true });
     vi.clearAllMocks();
   });
@@ -184,6 +194,79 @@ describe('CommandsManager default internal commands', () => {
       'refactor',
       'review',
     ]);
+  });
+
+  it('indexes and invokes shared River commands from local cache type metadata', async () => {
+    const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    const commandPath = join(sharedRoot, 'daily-brief.md');
+    mkdirSync(sharedRoot, { recursive: true });
+    writeFileSync(commandPath, '---\nshared: true\nshared_id: "shared-daily-brief"\nshared_type: "command"\nshared_team: "Field Theory Team"\n---\n\nRiver brief body\n');
+
+    await manager.reinitializeForUser();
+
+    const command = manager.getCommand('daily-brief');
+    expect(command).toEqual(expect.objectContaining({
+      name: 'daily-brief',
+      displayName: 'daily-brief - River (shared)',
+      filePath: commandPath,
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sourceRootPath: sharedRoot,
+      sourceRelPath: 'daily-brief.md',
+    }));
+
+    const result = await manager.processTextWithCommands('please use the daily-brief command');
+    expect(result.commandsApplied).toEqual(['daily-brief']);
+    expect(result.processedText).toContain('River brief body');
+  });
+
+  it('prefers private commands over duplicate shared River commands', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const privatePath = join(defaultDir, 'duplicate.md');
+    const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    const sharedPath = join(sharedRoot, 'duplicate.md');
+    mkdirSync(defaultDir, { recursive: true });
+    mkdirSync(sharedRoot, { recursive: true });
+    writeFileSync(privatePath, 'Private command body\n');
+    writeFileSync(sharedPath, '---\nshared: true\nshared_id: "shared-duplicate"\nshared_type: "command"\n---\n\nShared command body\n');
+
+    await manager.reinitializeForUser();
+
+    const command = manager.getCommand('duplicate');
+    expect(command).toEqual(expect.objectContaining({
+      name: 'duplicate',
+      displayName: 'duplicate',
+      filePath: privatePath,
+      source: 'private',
+    }));
+
+    const result = await manager.processTextWithCommands('please use the duplicate command');
+    expect(result.commandsApplied).toEqual(['duplicate']);
+    expect(result.processedText).toContain('Private command body');
+    expect(result.processedText).not.toContain('Shared command body');
+  });
+
+  it('labels shared River commands from the Commands cache and excludes them from mobile sync', async () => {
+    const defaultDir = join(tempRoot, '.fieldtheory', 'library', 'Commands');
+    const sharedCommandsDir = join(tempRoot, '.fieldtheory', 'library', 'River (shared)', 'Commands');
+    const commandPath = join(sharedCommandsDir, 'standup.md');
+    mkdirSync(sharedCommandsDir, { recursive: true });
+    writeFileSync(commandPath, 'Shared standup body\n');
+
+    await manager.reinitializeForUser();
+    manager.setMobileSyncEnabled(defaultDir, true);
+
+    expect(manager.getCommand('standup')).toEqual(expect.objectContaining({
+      name: 'standup',
+      displayName: 'standup - River (shared)',
+      filePath: commandPath,
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sourceRelPath: 'Commands/standup.md',
+    }));
+
+    const syncableCommands = await manager.getCommandsForMobileSync();
+    expect(syncableCommands.map(command => command.name)).not.toContain('standup');
   });
 
   it('rejects command names that would write outside the selected directory', async () => {

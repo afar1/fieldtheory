@@ -1,0 +1,507 @@
+import fs from 'fs';
+import path from 'path';
+import crypto from 'crypto';
+import { EventEmitter } from 'events';
+import { AuthManager } from './authManager';
+import { libraryDir } from './fieldTheoryPaths';
+import { createLogger } from './logger';
+import { SharedTeamService, type SharedTeamState } from './sharedTeamService';
+import {
+  applySharedFileFrontmatter,
+  buildSharedCacheFileName,
+  buildSharedConflictFileName,
+  inferSharedFileType,
+  parseSharedFileFrontmatter,
+  sharedFilesRoot,
+  stripSharedFileFrontmatter,
+  type SharedFileType,
+} from './sharedFiles';
+
+const log = createLogger('SharedSync');
+const EMPTY_ACTIVE_SET = new Set<string>();
+
+function sha256(value: string): string {
+  return crypto.createHash('sha256').update(value).digest('hex');
+}
+
+function isInsidePath(parentPath: string, childPath: string): boolean {
+  const relativePath = path.relative(parentPath, childPath);
+  return relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath));
+}
+
+function ensureDir(dirPath: string): void {
+  if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function safeTitleFromPath(filePath: string): string {
+  return path.basename(filePath, path.extname(filePath)) || 'Untitled';
+}
+
+function authorInitialsFromSession(session: ReturnType<AuthManager['getSession']>): string {
+  const metadata = session?.user?.user_metadata as Record<string, unknown> | undefined;
+  const name = [metadata?.first_name, metadata?.last_name].filter((part) => typeof part === 'string' && part.trim()).join(' ');
+  const source = name || session?.user?.email || 'FT';
+  const words = source.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  if (words.length >= 2) return `${words[0][0]}${words[1][0]}`.toUpperCase();
+  return (words[0]?.slice(0, 2) || 'FT').toUpperCase();
+}
+
+function sourceKeyForFilePath(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  const root = libraryDir();
+  if (isInsidePath(root, resolved)) {
+    return path.relative(root, resolved).split(path.sep).join('/');
+  }
+  return `external/${sha256(resolved).slice(0, 16)}/${path.basename(resolved)}`;
+}
+
+export interface SharedFileStatus {
+  shared: boolean;
+  sharedId?: string;
+  revision?: number;
+  cachePath?: string;
+}
+
+export interface SharedFileShareInput {
+  filePath: string;
+  title?: string;
+  content: string;
+  type?: SharedFileType;
+}
+
+export interface SharedFileUpdateResult {
+  ok: boolean;
+  revision?: number;
+  cachePath?: string;
+  conflictPath?: string;
+  remoteContent?: string;
+  error?: string;
+}
+
+export interface SharedFilePresenceUser {
+  userId: string;
+  email: string | null;
+  initials: string;
+}
+
+export interface SharedFilesAvailability {
+  available: boolean;
+  hasTeamMembers: boolean;
+  reason?: 'not_authenticated' | 'no_team_members' | 'pending_only' | 'ambiguous_team_scope' | 'lookup_failed';
+  currentTeamScopeUserId?: string | null;
+}
+
+interface TeamDocumentRow {
+  id: string;
+  team_scope_user_id: string;
+  kind: 'document' | 'command';
+  path: string;
+  title: string;
+  content: string;
+  content_hash: string | null;
+  client_id: string;
+  client_created_at_ms: number;
+  created_by: string;
+  updated_by: string;
+  deleted_at: string | null;
+  created_at: string;
+  updated_at: string;
+  original_source_path?: string | null;
+  shared_name?: string | null;
+  author_initials?: string | null;
+  revision?: number | null;
+}
+
+function sharedKindForType(type: SharedFileType): 'document' | 'command' {
+  return type === 'command' ? 'command' : 'document';
+}
+
+function sharedPathForInput(input: SharedFileShareInput): string {
+  const type = input.type ?? inferSharedFileType({ filePath: input.filePath, content: input.content });
+  const sourceKey = sourceKeyForFilePath(input.filePath);
+  const prefix = type === 'command' ? 'Commands' : type === 'plan' ? 'Plans' : 'Docs';
+  return `${prefix}/${sourceKey.replace(/^external\//, '')}`;
+}
+
+export class SharedSyncService extends EventEmitter {
+  private authManager: AuthManager;
+  private sharedTeamService: SharedTeamService;
+  private presenceChannel: any | null = null;
+  private activePresenceSharedId: string | null = null;
+
+  constructor(authManager: AuthManager, sharedTeamService = new SharedTeamService(authManager)) {
+    super();
+    this.authManager = authManager;
+    this.sharedTeamService = sharedTeamService;
+  }
+
+  async setActivePresence(sharedId: string | null): Promise<SharedFilePresenceUser[]> {
+    await this.clearPresence();
+    if (!sharedId) return [];
+
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return [];
+
+    this.activePresenceSharedId = sharedId;
+    const channel = supabase.channel(`shared-file-presence:${sharedId}`, {
+      config: { presence: { key: session.user.id } },
+    });
+    this.presenceChannel = channel;
+
+    const emitPresence = () => {
+      const users = this.presenceUsersFromState(channel.presenceState(), session.user.id);
+      this.emit('presenceChanged', { sharedId, users });
+    };
+
+    channel.on('presence', { event: 'sync' }, emitPresence);
+    channel.subscribe(async (status: string) => {
+      if (status !== 'SUBSCRIBED') return;
+      await channel.track({
+        userId: session.user.id,
+        email: session.user.email ?? null,
+        initials: authorInitialsFromSession(session),
+        openedAt: Date.now(),
+      });
+      emitPresence();
+    });
+
+    return [];
+  }
+
+  async clearPresence(): Promise<void> {
+    const supabase = this.authManager.getSupabaseClient();
+    const channel = this.presenceChannel;
+    this.presenceChannel = null;
+    this.activePresenceSharedId = null;
+    if (!channel || !supabase) return;
+    try {
+      await channel.untrack();
+      await supabase.removeChannel(channel);
+    } catch {
+      // Presence cleanup should never block navigation or app shutdown.
+    }
+  }
+
+  private presenceUsersFromState(state: Record<string, Array<Record<string, unknown>>>, currentUserId?: string): SharedFilePresenceUser[] {
+    return Object.values(state).flatMap((entries) => entries.map((entry) => ({
+      userId: String(entry.userId ?? ''),
+      email: typeof entry.email === 'string' ? entry.email : null,
+      initials: typeof entry.initials === 'string' ? entry.initials : 'FT',
+    }))).filter((user) => user.userId && user.userId !== currentUserId);
+  }
+
+  async getAvailability(): Promise<SharedFilesAvailability> {
+    const teamState = await this.sharedTeamService.getTeamState();
+    const hasTeamMembers = teamState.available;
+    return {
+      available: teamState.available,
+      hasTeamMembers,
+      reason: teamState.available ? undefined : teamState.reason,
+      currentTeamScopeUserId: teamState.currentTeamScopeUserId,
+    };
+  }
+
+  private async getActiveTeamState(): Promise<SharedTeamState | null> {
+    const teamState = await this.sharedTeamService.getTeamState();
+    return teamState.available && teamState.currentTeamScopeUserId ? teamState : null;
+  }
+
+  async getShareStatus(filePath: string): Promise<SharedFileStatus> {
+    if (isInsidePath(sharedFilesRoot(), path.resolve(filePath)) && fs.existsSync(filePath)) {
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
+        if (parsed?.sharedId) {
+          return {
+            shared: true,
+            sharedId: parsed.sharedId,
+            revision: parsed.revision ?? 0,
+            cachePath: filePath,
+          };
+        }
+      } catch {
+        return { shared: false };
+      }
+    }
+
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { shared: false };
+    const teamState = await this.getActiveTeamState();
+    if (!teamState) return { shared: false };
+
+    const { data, error } = await supabase
+      .from('team_documents')
+      .select('id, revision, path, shared_name, author_initials, content, kind, team_scope_user_id, created_by, original_source_path')
+      .eq('team_scope_user_id', teamState.currentTeamScopeUserId)
+      .eq('created_by', session.user.id)
+      .eq('original_source_path', sourceKeyForFilePath(filePath))
+      .is('deleted_at', null)
+      .maybeSingle();
+
+    if (error || !data) return { shared: false };
+    const row = data as TeamDocumentRow;
+    return {
+      shared: true,
+      sharedId: row.id,
+      revision: row.revision ?? 0,
+      cachePath: this.cachePathForRow(row),
+    };
+  }
+
+  async shareFile(input: SharedFileShareInput): Promise<SharedFileStatus> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { shared: false };
+    const teamState = await this.getActiveTeamState();
+    if (!teamState?.currentTeamScopeUserId) return { shared: false };
+
+    const type = input.type ?? inferSharedFileType({ filePath: input.filePath, content: input.content });
+    const sourceKey = sourceKeyForFilePath(input.filePath);
+    const content = stripSharedFileFrontmatter(input.content);
+    const now = Date.now();
+    const title = input.title || safeTitleFromPath(input.filePath);
+    const authorInitials = authorInitialsFromSession(session);
+
+    const row = {
+      team_scope_user_id: teamState.currentTeamScopeUserId,
+      kind: sharedKindForType(type),
+      path: sharedPathForInput({ ...input, type }),
+      title,
+      content,
+      content_hash: sha256(content),
+      client_id: `shared-${sha256(`${session.user.id}:${sourceKey}`).slice(0, 32)}`,
+      client_created_at_ms: now,
+      created_by: session.user.id,
+      updated_by: session.user.id,
+      deleted_at: null,
+      original_source_path: sourceKey,
+      shared_name: title,
+      author_initials: authorInitials,
+      revision: 1,
+    };
+
+    const { data, error } = await supabase
+      .from('team_documents')
+      .upsert(row, { onConflict: 'team_scope_user_id,client_id' })
+      .select('*')
+      .single();
+
+    if (error || !data) {
+      log.error('Share file failed:', error);
+      return { shared: false };
+    }
+
+    const cachePath = this.writeRowToCache(data as TeamDocumentRow);
+    return { shared: true, sharedId: (data as TeamDocumentRow).id, revision: (data as TeamDocumentRow).revision ?? 1, cachePath };
+  }
+
+  async unshareFile(filePath: string): Promise<boolean> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return false;
+
+    const sharedId = this.sharedIdForCacheFile(filePath);
+    let query = supabase
+      .from('team_documents')
+      .update({ deleted_at: new Date().toISOString(), updated_by: session.user.id })
+      .eq('created_by', session.user.id);
+    query = sharedId
+      ? query.eq('id', sharedId)
+      : query.eq('original_source_path', sourceKeyForFilePath(filePath));
+
+    const { error } = await query.is('deleted_at', null);
+
+    if (error) {
+      log.error('Unshare file failed:', error);
+      return false;
+    }
+    return true;
+  }
+
+  async syncOnce(): Promise<{ written: number; removed: number; errors: string[] }> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    const result = { written: 0, removed: 0, errors: [] as string[] };
+    if (!supabase || !session?.user?.id) return result;
+    const teamState = await this.getActiveTeamState();
+    if (!teamState?.currentTeamScopeUserId) return result;
+
+    const { data, error } = await supabase
+      .from('team_documents')
+      .select('*')
+      .eq('team_scope_user_id', teamState.currentTeamScopeUserId)
+      .is('deleted_at', null);
+
+    if (error) {
+      result.errors.push(error.message);
+      return result;
+    }
+
+    const activeIds = new Set<string>();
+    for (const row of (data ?? []) as TeamDocumentRow[]) {
+      try {
+        this.writeRowToCache(row);
+        activeIds.add(row.id);
+        result.written++;
+      } catch (err) {
+        result.errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+    result.removed = this.removeStaleCacheFiles(activeIds);
+    return result;
+  }
+
+  async updateSharedContent(sharedId: string, content: string, expectedRevision: number): Promise<SharedFileUpdateResult> {
+    const supabase = this.authManager.getSupabaseClient();
+    const session = this.authManager.getSession();
+    if (!supabase || !session?.user?.id) return { ok: false, error: 'Not authenticated' };
+
+    const { data: current, error: fetchError } = await supabase
+      .from('team_documents')
+      .select('*')
+      .eq('id', sharedId)
+      .is('deleted_at', null)
+      .single();
+
+    if (fetchError || !current) return { ok: false, error: fetchError?.message ?? 'Shared file not found' };
+    const currentRow = current as TeamDocumentRow;
+    const remoteRevision = currentRow.revision ?? 0;
+    const cleanContent = stripSharedFileFrontmatter(content);
+    const cleanRemoteContent = stripSharedFileFrontmatter(currentRow.content);
+
+    if (remoteRevision > expectedRevision && cleanContent !== cleanRemoteContent) {
+      const conflictPath = this.writePrivateConflictCopy(currentRow, cleanContent);
+      const cachePath = this.writeRowToCache(currentRow);
+      return {
+        ok: false,
+        revision: remoteRevision,
+        cachePath,
+        conflictPath,
+        remoteContent: currentRow.content,
+        error: 'Remote revision changed before this edit synced',
+      };
+    }
+
+    const nextRevision = remoteRevision + 1;
+    const { data, error } = await supabase
+      .from('team_documents')
+      .update({
+        content: cleanContent,
+        content_hash: sha256(cleanContent),
+        revision: nextRevision,
+        updated_by: session.user.id,
+      })
+      .eq('id', sharedId)
+      .is('deleted_at', null)
+      .select('*')
+      .single();
+
+    if (error || !data) return { ok: false, error: error?.message ?? 'Shared update failed' };
+    const cachePath = this.writeRowToCache(data as TeamDocumentRow);
+    return { ok: true, revision: nextRevision, cachePath };
+  }
+
+  cachePathForRow(row: Pick<TeamDocumentRow, 'id' | 'title' | 'shared_name' | 'author_initials'>): string {
+    const root = sharedFilesRoot();
+    const existingPath = this.existingCachePathForRow(row.id);
+    if (existingPath) return existingPath;
+
+    const existing = fs.existsSync(root) ? fs.readdirSync(root) : [];
+    const existingForOtherRows = existing.filter((fileName) => {
+      const fullPath = path.join(root, fileName);
+      if (!fs.statSync(fullPath).isFile()) return true;
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(fullPath, 'utf-8'));
+        return parsed?.sharedId !== row.id;
+      } catch {
+        return true;
+      }
+    });
+    const fileName = buildSharedCacheFileName({
+      title: row.shared_name || row.title,
+      authorInitials: row.author_initials ?? undefined,
+      existingFileNames: existingForOtherRows,
+    });
+    return path.join(root, fileName);
+  }
+
+  private sharedIdForCacheFile(filePath: string): string | null {
+    const resolvedPath = path.resolve(filePath);
+    if (!isInsidePath(sharedFilesRoot(), resolvedPath) || !fs.existsSync(resolvedPath)) return null;
+    try {
+      return parseSharedFileFrontmatter(fs.readFileSync(resolvedPath, 'utf-8'))?.sharedId ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private existingCachePathForRow(sharedId: string): string | null {
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return null;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        if (parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'))?.sharedId === sharedId) {
+          return filePath;
+        }
+      } catch {
+        // Ignore unreadable cache files while choosing a path.
+      }
+    }
+    return null;
+  }
+
+  private writeRowToCache(row: TeamDocumentRow): string {
+    const root = sharedFilesRoot();
+    ensureDir(root);
+    const cachePath = this.cachePathForRow(row);
+    const type: SharedFileType = row.kind === 'command' ? 'command' : row.path.startsWith('Plans/') ? 'plan' : 'document';
+    const content = applySharedFileFrontmatter(stripSharedFileFrontmatter(row.content), {
+      sharedId: row.id,
+      teamId: row.team_scope_user_id,
+      teamName: 'Field Theory Team',
+      authorId: row.created_by,
+      authorInitials: row.author_initials ?? undefined,
+      type,
+      originalSourcePath: row.original_source_path ?? undefined,
+      revision: row.revision ?? 0,
+    });
+    fs.writeFileSync(cachePath, content, 'utf-8');
+    return cachePath;
+  }
+
+  private writePrivateConflictCopy(row: TeamDocumentRow, content: string): string {
+    const conflictDir = path.join(libraryDir(), 'Conflicts');
+    ensureDir(conflictDir);
+    const fileName = buildSharedConflictFileName({
+      fileName: `${row.shared_name || row.title}.md`,
+      authorInitials: row.author_initials ?? undefined,
+      date: new Date(),
+    });
+    const conflictPath = path.join(conflictDir, fileName);
+    fs.writeFileSync(conflictPath, stripSharedFileFrontmatter(content), 'utf-8');
+    return conflictPath;
+  }
+
+  private removeStaleCacheFiles(activeIds: Set<string> = EMPTY_ACTIVE_SET): number {
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return 0;
+    let removed = 0;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
+        if (parsed?.sharedId && !activeIds.has(parsed.sharedId)) {
+          fs.rmSync(filePath, { force: true });
+          removed++;
+        }
+      } catch {
+        // Leave unreadable files alone.
+      }
+    }
+    return removed;
+  }
+}

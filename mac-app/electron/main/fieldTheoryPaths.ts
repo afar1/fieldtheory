@@ -36,8 +36,24 @@ export function canonicalLibraryDir(options?: FieldTheoryPathOptions): string {
   return pathEnv(options).FT_LIBRARY_DIR ?? path.join(fieldTheoryDir(options), 'library');
 }
 
+function defaultSharedFilesCacheDir(options?: FieldTheoryPathOptions): string {
+  return path.join(canonicalLibraryDir(options), 'River (shared)');
+}
+
+export function sharedFilesRootDir(options?: FieldTheoryPathOptions): string {
+  return pathEnv(options).FT_SHARED_FILES_ROOT_DIR ?? path.join(fieldTheoryDir(options), 'shared');
+}
+
+export function sharedFilesCacheDir(options?: FieldTheoryPathOptions): string {
+  return pathEnv(options).FT_SHARED_FILES_CACHE_DIR ?? pathEnv(options).FT_SHARED_FILES_DIR ?? defaultSharedFilesCacheDir(options);
+}
+
 export function commandsDir(options?: FieldTheoryPathOptions): string {
   return pathEnv(options).FT_COMMANDS_DIR ?? path.join(canonicalLibraryDir(options), 'Commands');
+}
+
+export function sharedFilesDir(options?: FieldTheoryPathOptions): string {
+  return sharedFilesCacheDir(options);
 }
 
 export function ideasDir(options?: FieldTheoryPathOptions): string {

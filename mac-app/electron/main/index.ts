@@ -96,6 +96,8 @@ import { LocalLlmManager, isLocalLlmModelId, type LocalLlmModelId, type LocalLlm
 import { MaxwellRunManager, type MaxwellRunRecord } from './maxwellRunManager';
 import { MeetingManager, type MeetingFileContext, type MeetingSession } from './meetingManager';
 import { LibrarySyncService } from './librarySyncService';
+import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
+import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import {
   CommandsIPCChannels,
@@ -996,6 +998,8 @@ let activeMaxwellLocalRun: { runId: string; cancelled: boolean } | null = null;
 let localLlmInstallInFlight: Promise<{ success: boolean; error?: string; modelPath?: string; reusedExisting?: boolean }> | null = null;
 let commandSyncService: CommandSyncService | null = null;
 let librarySyncService: LibrarySyncService | null = null;
+let sharedTeamService: SharedTeamService | null = null;
+let sharedSyncService: SharedSyncService | null = null;
 let commandLauncherWindow: CommandLauncherWindow | null = null;
 let lastExternalCommandTargetApp: { bundleId: string; name: string } | null = null;
 type ActiveLibraryFileContext = {
@@ -1201,6 +1205,9 @@ function refreshFieldTheorySyncServices(): void {
   if (!canUseFieldTheorySync()) {
     librarySyncService?.dispose();
     librarySyncService = null;
+    void sharedSyncService?.clearPresence();
+    sharedSyncService = null;
+    sharedTeamService = null;
     commandSyncService?.destroy();
     commandSyncService = null;
     todoStore?.destroy();
@@ -1214,6 +1221,13 @@ function refreshFieldTheorySyncServices(): void {
   if (!librarySyncService && authManager) {
     librarySyncService = new LibrarySyncService(authManager);
   }
+  if (!sharedTeamService && authManager) {
+    sharedTeamService = new SharedTeamService(authManager);
+  }
+  if (!sharedSyncService && authManager) {
+    sharedSyncService = new SharedSyncService(authManager, sharedTeamService ?? undefined);
+    sharedSyncService.on('presenceChanged', broadcastSharedFilePresence);
+  }
   if (!todoStore && authManager) {
     todoStore = new TodoStore(authManager);
     todoStore.on('todosChanged', broadcastTodosChanged);
@@ -1224,7 +1238,33 @@ function scheduleLibrarySyncIfAllowed(): void {
   refreshFieldTheorySyncServices();
   if (canUseFieldTheorySync()) {
     librarySyncService?.scheduleSync();
+    void sharedSyncService?.syncOnce();
   }
+}
+
+function broadcastSharedFilePresence(payload: { sharedId: string; users: SharedFilePresenceUser[] }): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('sharedFiles:presenceChanged', payload);
+    }
+  });
+}
+
+function broadcastTeamChanged(): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('team:changed');
+    }
+  });
+}
+
+async function afterTeamMutation(result: Promise<SharedTeamMutationResult>): Promise<SharedTeamMutationResult> {
+  const resolved = await result;
+  if (resolved.ok) {
+    broadcastTeamChanged();
+    void sharedSyncService?.syncOnce();
+  }
+  return resolved;
 }
 
 function canWriteFieldTheoryContent(): boolean {
@@ -4482,6 +4522,103 @@ function setupLibrarianIPCHandlers(): void {
       threshold: status.threshold,
       didReset: status.didReset,
     };
+  });
+
+  // ===========================================================================
+  // Shared/River Files
+  // ===========================================================================
+
+  ipcMain.handle('sharedFiles:getAvailability', async () => {
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return { available: false, hasTeamMembers: false, reason: 'not_authenticated' };
+    return sharedSyncService.getAvailability();
+  });
+
+  ipcMain.handle('sharedFiles:getStatus', async (_event, filePath: string) => {
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return { shared: false };
+    return sharedSyncService.getShareStatus(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:share', async (_event, input: SharedFileShareInput) => {
+    if (!canWriteFieldTheoryContent()) return { shared: false };
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return { shared: false };
+    return sharedSyncService.shareFile(input);
+  });
+
+  ipcMain.handle('sharedFiles:unshare', async (_event, filePath: string): Promise<boolean> => {
+    if (!canWriteFieldTheoryContent()) return false;
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return false;
+    return sharedSyncService.unshareFile(filePath);
+  });
+
+  ipcMain.handle('sharedFiles:sync', async () => {
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return { written: 0, removed: 0, errors: [fieldTheorySyncDisabledError()] };
+    return sharedSyncService.syncOnce();
+  });
+
+  ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number) => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return { ok: false, error: fieldTheorySyncDisabledError() };
+    return sharedSyncService.updateSharedContent(sharedId, content, expectedRevision);
+  });
+
+  ipcMain.handle('sharedFiles:setActivePresence', async (_event, sharedId: string | null) => {
+    refreshFieldTheorySyncServices();
+    if (!sharedSyncService || !canUseFieldTheorySync()) return [];
+    return sharedSyncService.setActivePresence(sharedId);
+  });
+
+  // ===========================================================================
+  // Team Membership
+  // ===========================================================================
+
+  ipcMain.handle('team:getState', async () => {
+    refreshFieldTheorySyncServices();
+    if (!sharedTeamService || !canUseFieldTheorySync()) {
+      return {
+        available: false,
+        currentTeamScopeUserId: null,
+        reason: 'not_authenticated',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      };
+    }
+    return sharedTeamService.getTeamState();
+  });
+
+  ipcMain.handle('team:inviteMember', async (_event, email: string): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    refreshFieldTheorySyncServices();
+    if (!sharedTeamService || !canUseFieldTheorySync()) return { ok: false, error: fieldTheorySyncDisabledError() };
+    return afterTeamMutation(sharedTeamService.inviteMember(email));
+  });
+
+  ipcMain.handle('team:respondToInvite', async (_event, contactId: string, accept: boolean): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    refreshFieldTheorySyncServices();
+    if (!sharedTeamService || !canUseFieldTheorySync()) return { ok: false, error: fieldTheorySyncDisabledError() };
+    return afterTeamMutation(sharedTeamService.respondToInvite(contactId, accept));
+  });
+
+  ipcMain.handle('team:removeMember', async (_event, contactId: string): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    refreshFieldTheorySyncServices();
+    if (!sharedTeamService || !canUseFieldTheorySync()) return { ok: false, error: fieldTheorySyncDisabledError() };
+    return afterTeamMutation(sharedTeamService.removeMember(contactId));
+  });
+
+  ipcMain.handle('team:leaveTeam', async (): Promise<SharedTeamMutationResult> => {
+    if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
+    refreshFieldTheorySyncServices();
+    if (!sharedTeamService || !canUseFieldTheorySync()) return { ok: false, error: fieldTheorySyncDisabledError() };
+    return afterTeamMutation(sharedTeamService.leaveTeam());
   });
 
   // ===========================================================================
@@ -12133,6 +12270,7 @@ if (!gotTheLock) {
     }
 
     librarySyncService?.dispose();
+    void sharedSyncService?.clearPresence();
     commandSyncService?.destroy();
     todoStore?.destroy();
     localLlmManager?.stop();

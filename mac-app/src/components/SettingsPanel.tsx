@@ -16,18 +16,22 @@ import LauncherSettings from './LauncherSettings';
 import ClaudeSettings from './ClaudeSettings';
 import LibrarianSettings from './LibrarianSettings';
 import LocalModelSettings from './LocalModelSettings';
+import TeamSettings from './TeamSettings';
 import UserStatsPanel from './UserStatsPanel';
 import { supabase } from '../supabaseClient';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { accentPresets, AccentPreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
+import { buildTeamSettingsState } from '../utils/teamSettingsState';
 import { getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  persistSharedFileToggleHotkey,
   persistTextCursorBlink,
+  restoreSharedFileToggleHotkey,
   restoreTextCursorBlink,
 } from '../utils/editorShortcuts';
 
@@ -43,12 +47,15 @@ type SettingsSection =
   | 'commands'
   | 'sounds'
   | 'stats'
+  | 'team'
   | 'terminal-commands'
   | 'hot-mic'
   | 'rectangle';
 
 type FieldTheoryWindowMode = 'panel' | 'app';
 type SettingsStyles = Record<string, CSSProperties>;
+type TeamServiceState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getState']>>;
+type TeamMutationResult = Awaited<ReturnType<NonNullable<Window['teamAPI']>['inviteMember']>>;
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -64,6 +71,7 @@ type HotkeyCapture =
   | 'superPaste'
   | 'commandLauncher'
   | 'scratchpad'
+  | 'sharedFileToggle'
   | 'hotMic'
   | null;
 
@@ -78,6 +86,7 @@ const SECTION_LABELS: Record<SettingsSection, string> = {
   'commands': 'Portable Commands',
   'sounds': 'Sounds',
   'stats': 'Stats',
+  'team': 'Team',
   'terminal-commands': 'Allowlist',
   'hot-mic': 'Hot Mic',
   'rectangle': 'Window Management',
@@ -94,6 +103,7 @@ const SECTION_GLYPHS: Record<SettingsSection, string> = {
   'commands': '/',
   'sounds': '♪',
   'stats': '▥',
+  'team': '◎',
   'terminal-commands': '/',
   'hot-mic': '⚇',
   'rectangle': '▣',
@@ -110,6 +120,7 @@ const SECTION_DESCRIPTIONS: Record<SettingsSection, string> = {
   'commands': 'Markdown command files Field Theory loads from disk.',
   'sounds': 'Sound cues for recording and app events.',
   'stats': 'Usage metrics from this installation.',
+  'team': 'Invite teammates and manage River membership.',
   'terminal-commands': 'Terminal command allowlist rules.',
   'hot-mic': 'Always-listening voice controls and hotkey behavior.',
   'rectangle': 'Window actions, tiling, and spoken window commands.',
@@ -129,6 +140,7 @@ const SECTIONS_ORDER: SettingsSection[] = [
   'commands', // Portable Commands
   'sounds',
   'stats',
+  'team',
   'rectangle', // Window Management
 ];
 
@@ -196,6 +208,7 @@ const LIBRARY_LOCAL_SHORTCUT_LABELS = [
   'Toggle focus mode',
   'Toggle sidebar',
   'Toggle rendered/markdown',
+  'Toggle River sharing',
 ] as const;
 
 const LIBRARY_LOCAL_SHORTCUTS = LIBRARY_LOCAL_SHORTCUT_LABELS.map((label) => {
@@ -480,6 +493,11 @@ export default function SettingsPanel({
   const [superPasteHotkey, setSuperPasteHotkey] = useState('Command+Shift+V');
   const [commandLauncherHotkey, setCommandLauncherHotkey] = useState('Command+Shift+K');
   const [scratchpadHotkey, setScratchpadHotkey] = useState('Control+Option+Command+Space');
+  const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
+  const [sharedFileToggleHotkey, setSharedFileToggleHotkey] = useState(() => restoreSharedFileToggleHotkey(localStorage));
+  const [teamServiceState, setTeamServiceState] = useState<TeamServiceState | null>(null);
+  const [teamLoading, setTeamLoading] = useState(false);
+  const [teamError, setTeamError] = useState<string | null>(null);
 
   // Transcription hotkey configuration
   const [transcriptionHotkey, setTranscriptionHotkey] = useState('Option+/');
@@ -493,6 +511,40 @@ export default function SettingsPanel({
 
   const [initialAuthLoading, setInitialAuthLoading] = useState(true);
   const [authLoading, setAuthLoading] = useState(false);
+
+  const loadSharedFilesAvailability = useCallback(async () => {
+    const availability = await window.sharedFilesAPI?.getAvailability?.();
+    setSharedFilesAvailable(availability?.available === true);
+  }, []);
+
+  const loadTeamState = useCallback(async () => {
+    if (!window.teamAPI?.getState) return;
+    setTeamLoading(true);
+    try {
+      const nextState = await window.teamAPI.getState();
+      setTeamServiceState(nextState);
+      setTeamError(null);
+    } catch {
+      setTeamError('Could not load team settings.');
+    } finally {
+      setTeamLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadSharedFilesAvailability().catch(() => {
+      if (!cancelled) setSharedFilesAvailable(false);
+    });
+    const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
+      void loadSharedFilesAvailability();
+      void loadTeamState();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, [loadSharedFilesAvailability, loadTeamState]);
 
   const {
     session,
@@ -874,6 +926,25 @@ export default function SettingsPanel({
     }
   }, [authSessionInitialized]);
 
+  useEffect(() => {
+    if (!session?.user?.id) {
+      setTeamServiceState(null);
+      setTeamError(null);
+      return;
+    }
+    void loadTeamState();
+  }, [loadTeamState, session?.user?.id]);
+
+  useEffect(() => {
+    if (selectedSection !== 'team' || !session?.user?.id) return;
+    void loadTeamState();
+    const interval = window.setInterval(() => {
+      void loadTeamState();
+      void loadSharedFilesAvailability();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [loadSharedFilesAvailability, loadTeamState, selectedSection, session?.user?.id]);
+
   // Fetch callsign when session changes
   useEffect(() => {
     if (!session?.user?.id || !supabase) {
@@ -1216,6 +1287,18 @@ export default function SettingsPanel({
     }
   }, []);
 
+  const handleSetSharedFileToggleHotkey = useCallback((hotkeyString: string) => {
+    setCapturingHotkey(null);
+    setHotkeyError(null);
+    if (isModifierOnly(hotkeyString)) {
+      setHotkeyError('Please include a non-modifier key (e.g., ⇧⌥⌘ + key).');
+      return;
+    }
+    persistSharedFileToggleHotkey(localStorage, hotkeyString);
+    setSharedFileToggleHotkey(hotkeyString);
+    window.dispatchEvent(new Event('fieldtheory:shared-file-toggle-hotkey-changed'));
+  }, []);
+
   // Handler for setting Hot Mic hotkey
   const handleSetHotMicHotkey = useCallback(async (hotkeyString: string) => {
     setCapturingHotkey(null);
@@ -1363,6 +1446,8 @@ export default function SettingsPanel({
           handleSetCommandLauncherHotkey(hotkeyString);
         } else if (capturingHotkey === 'scratchpad') {
           handleSetScratchpadHotkey(hotkeyString);
+        } else if (capturingHotkey === 'sharedFileToggle') {
+          handleSetSharedFileToggleHotkey(hotkeyString);
         } else if (capturingHotkey === 'hotMic') {
           handleSetHotMicHotkey(hotkeyString);
         }
@@ -1371,7 +1456,35 @@ export default function SettingsPanel({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetHotMicHotkey]);
+  }, [capturingHotkey, handleSetScreenshotHotkey, handleSetHistoryHotkey, handleSetFullScreenHotkey, handleSetActiveWindowHotkey, handleSetContinuousContextHotkey, handleSetTranscriptionHotkey, handleSetSecondaryTranscriptionHotkey, handleSetAbandonHotkey, handleSetSuperPasteHotkey, handleSetCommandLauncherHotkey, handleSetScratchpadHotkey, handleSetSharedFileToggleHotkey, handleSetHotMicHotkey]);
+
+  const handleTeamMutation = useCallback(async (mutation: () => Promise<TeamMutationResult | undefined> | undefined): Promise<boolean> => {
+    setTeamError(null);
+    const result = await mutation();
+    if (!result) {
+      setTeamError('Team settings are unavailable in this window.');
+      return false;
+    }
+    if (result && !result.ok) {
+      setTeamError(result.error ?? 'Team update failed.');
+      return false;
+    }
+    await loadTeamState();
+    await loadSharedFilesAvailability();
+    return true;
+  }, [loadSharedFilesAvailability, loadTeamState]);
+
+  const teamSettingsState = buildTeamSettingsState({
+    loading: teamLoading,
+    error: teamError,
+    teamState: teamServiceState,
+    currentUser: {
+      id: session?.user?.id,
+      email: session?.user?.email,
+      displayName: session?.user?.user_metadata?.full_name as string | undefined,
+      initials: callsign,
+    },
+  });
 
   return (
     <div style={styles.settingsLayout}>
@@ -1912,6 +2025,29 @@ export default function SettingsPanel({
           </div>
         </div>
 
+        {sharedFilesAvailable && (
+          <div style={styles.row}>
+            <span style={styles.rowLabel}>
+              River Sharing
+              <span style={{ marginLeft: '8px', fontSize: '10px', color: theme.textSecondary }}>
+                (toggle active file sharing)
+              </span>
+            </span>
+            <div style={styles.rowControls}>
+              <button
+                onClick={() => { setCapturingHotkey('sharedFileToggle'); setHotkeyError(null); }}
+                disabled={capturingHotkey !== null}
+                style={{ ...styles.btn, ...(capturingHotkey === 'sharedFileToggle' ? styles.btnActive : {}) }}
+              >
+                {capturingHotkey === 'sharedFileToggle' ? 'Press keys...' : sharedFileToggleHotkey}
+              </button>
+              {capturingHotkey === 'sharedFileToggle' && (
+                <button onClick={() => { setCapturingHotkey(null); setHotkeyError(null); }} style={styles.btnGhost}>Cancel</button>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* Hot Mic */}
         <div style={styles.row}>
           <span style={styles.rowLabel}>Toggle Hot Mic</span>
@@ -2181,6 +2317,19 @@ export default function SettingsPanel({
       {selectedSection === 'stats' && (
       <div style={styles.sectionStack}>
         <UserStatsPanel />
+      </div>
+      )}
+
+      {/* Team Section */}
+      {selectedSection === 'team' && (
+      <div style={styles.sectionStack}>
+        <TeamSettings
+          state={teamSettingsState}
+          onInviteMember={(email) => handleTeamMutation(() => window.teamAPI?.inviteMember(email))}
+          onRespondToInvite={(contactId, accept) => handleTeamMutation(() => window.teamAPI?.respondToInvite(contactId, accept))}
+          onRemoveMember={(contactId) => handleTeamMutation(() => window.teamAPI?.removeMember(contactId))}
+          onLeaveTeam={() => handleTeamMutation(() => window.teamAPI?.leaveTeam())}
+        />
       </div>
       )}
 

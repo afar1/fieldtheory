@@ -2,10 +2,13 @@ import { afterEach, describe, it, expect } from 'vitest';
 import {
   COLLAPSED_SIDEBAR_AFFORDANCE_PROXIMITY_WIDTH,
   COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
+  DEFAULT_SHARED_FILE_TOGGLE_HOTKEY,
   RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
+  SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
   TEXT_CURSOR_BLINK_STORAGE_KEY,
   isCommandDeleteShortcut,
   isCommandFindShortcut,
+  isHotkeyEvent,
   getMarkdownFormattingShortcut,
   getMarkdownListShortcutKind,
   getCollapsedSidebarAffordanceOpacity,
@@ -18,11 +21,14 @@ import {
   isMarkdownTaskToggleShortcut,
   isNavSidebarToggleEnabled,
   isSearchFocusShortcut,
+  isSharedFileToggleShortcut,
   isSidebarToggleShortcut,
   isThemeToggleShortcut,
   LIBRARIAN_KEYBOARD_SHORTCUTS,
+  persistSharedFileToggleHotkey,
   persistRenderedEditClickMode,
   persistTextCursorBlink,
+  restoreSharedFileToggleHotkey,
   restoreRenderedEditClickMode,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
@@ -255,6 +261,7 @@ describe('shortcut reference rows', () => {
         { keys: 'Command+/', label: 'Toggle focus mode' },
         { keys: 'Command+,', label: 'Toggle sidebar' },
         { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+        { keys: 'Command+Shift+S', label: 'Toggle River sharing' },
         { keys: 'Command+B / I / U', label: 'Bold, italic, or underline selection' },
       ])
     );
@@ -322,6 +329,31 @@ describe('isThemeToggleShortcut', () => {
 
   it('rejects Shift+Cmd+D so it does not collide with debug console', () => {
     expect(isThemeToggleShortcut(mkKey({ key: 'D', code: 'KeyD', metaKey: true, shiftKey: true }))).toBe(false);
+  });
+});
+
+describe('shared file toggle shortcut', () => {
+  it('accepts Command+Shift+S by default without matching Command+S', () => {
+    expect(isSharedFileToggleShortcut(mkKey({ key: 'S', code: 'KeyS', metaKey: true, shiftKey: true }))).toBe(true);
+    expect(isSharedFileToggleShortcut(mkKey({ key: 's', code: 'KeyS', metaKey: true }))).toBe(false);
+  });
+
+  it('supports a custom hotkey string', () => {
+    expect(isHotkeyEvent(mkKey({ key: 'R', code: 'KeyR', metaKey: true, shiftKey: true }), 'Command+Shift+R')).toBe(true);
+    expect(isHotkeyEvent(mkKey({ key: 'R', code: 'KeyR', metaKey: true, shiftKey: true }), 'Command+Shift+S')).toBe(false);
+  });
+
+  it('restores and persists the configurable River shortcut', () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+
+    expect(restoreSharedFileToggleHotkey(storage)).toBe(DEFAULT_SHARED_FILE_TOGGLE_HOTKEY);
+    persistSharedFileToggleHotkey(storage, 'Command+Shift+R');
+    expect(store.get(SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY)).toBe('Command+Shift+R');
+    expect(restoreSharedFileToggleHotkey(storage)).toBe('Command+Shift+R');
   });
 });
 
