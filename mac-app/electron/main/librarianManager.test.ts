@@ -229,6 +229,8 @@ describe('wiki tree visibility helpers', () => {
   it('hides dot and underscore prefixed folders from the visible wiki tree', () => {
     expect(isHiddenWikiFolderName('_transcripts')).toBe(true);
     expect(isHiddenWikiFolderName('.system')).toBe(true);
+    expect(isHiddenWikiFolderName('.assets')).toBe(true);
+    expect(isHiddenWikiFolderName('Brief.assets')).toBe(true);
     expect(isHiddenWikiFolderName('debates')).toBe(false);
   });
 });
@@ -250,6 +252,8 @@ describe('recursive wiki tree scan', () => {
     fs.mkdirSync(path.join(root, 'entries', 'nested'), { recursive: true });
     fs.mkdirSync(path.join(root, 'empty'), { recursive: true });
     fs.mkdirSync(path.join(root, '_drafts'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'Field theory fn.assets'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'entries', 'Teams in Field theory.assets'), { recursive: true });
     fs.writeFileSync(path.join(root, 'entries', 'zeta.md'), '# Zeta\n');
     fs.writeFileSync(path.join(root, 'entries', 'alpha.md'), '# Alpha\n');
     fs.writeFileSync(path.join(root, 'entries', 'nested', 'beta.md'), '# Beta\n');

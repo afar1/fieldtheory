@@ -4015,8 +4015,8 @@ const sharedFilesAPI = {
     ipcRenderer.invoke('sharedFiles:unshare', filePath),
   sync: (): Promise<{ written: number; removed: number; errors: string[] }> =>
     ipcRenderer.invoke('sharedFiles:sync'),
-  updateContent: (sharedId: string, content: string, expectedRevision: number): Promise<SharedFileUpdateResult> =>
-    ipcRenderer.invoke('sharedFiles:updateContent', sharedId, content, expectedRevision),
+  updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null): Promise<SharedFileUpdateResult> =>
+    ipcRenderer.invoke('sharedFiles:updateContent', sharedId, content, expectedRevision, documentPath),
   setActivePresence: (sharedId: string | null): Promise<SharedFilePresenceUser[]> =>
     ipcRenderer.invoke('sharedFiles:setActivePresence', sharedId),
   onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void): (() => void) => {

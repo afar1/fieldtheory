@@ -2377,6 +2377,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     sharedId: string;
     content: string;
     expectedRevision: number;
+    documentPath: string | null;
   } | null>(null);
   const sharedContentSyncTimerRef = useRef<number | null>(null);
   const sharedContentSyncInFlightRef = useRef(false);
@@ -3029,6 +3030,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         pending.sharedId,
         pending.content,
         expectedRevision,
+        pending.documentPath,
       );
       if (sharedResult?.revision !== undefined) {
         setSharedFileStatus((prev) => {
@@ -3062,6 +3064,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       sharedId: status.sharedId,
       content,
       expectedRevision: status.revision ?? 0,
+      documentPath: activeReadingPathRef.current,
     };
     if (sharedContentSyncTimerRef.current !== null) {
       window.clearTimeout(sharedContentSyncTimerRef.current);

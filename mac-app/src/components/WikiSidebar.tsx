@@ -8,6 +8,7 @@ import {
   SIDEBAR_ICON_TEXT_GAP,
   SIDEBAR_LIGHT_ICON_COLOR,
   SIDEBAR_LIGHT_TEXT_COLOR,
+  SidebarArchiveIcon,
   SidebarBookmarkIcon,
   SidebarFolderIcon,
   SidebarMarkdownIcon,
@@ -3748,22 +3749,35 @@ function TreeNode({
             setArchiveExpanded((expanded) => !expanded);
           }}
           style={{
-            minHeight: '24px',
+            minHeight: LIBRARY_SIDEBAR_ROW_MIN_HEIGHT,
             boxSizing: 'border-box',
-            padding: `4px ${LIBRARY_SIDEBAR_EDGE_PADDING}px 4px ${24 + depth * LIBRARY_SIDEBAR_DEPTH_INDENT}px`,
-            fontSize: '10px',
+            padding: `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${LIBRARY_SIDEBAR_EDGE_PADDING + (depth + 1) * LIBRARY_SIDEBAR_DEPTH_INDENT}px`,
+            fontSize: '12px',
             lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
             color: theme.textSecondary,
             cursor: 'pointer',
+            borderLeft: '2px solid transparent',
             opacity: 0.72,
             display: 'flex',
             alignItems: 'center',
-            gap: '5px',
+            gap: SIDEBAR_ICON_TEXT_GAP,
           }}
           onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
           onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
         >
-          <SidebarChevron expanded={archiveExpanded} color="currentColor" size={9} opacity={0.75} />
+          <span
+            aria-hidden="true"
+            style={{
+              flex: '0 0 14px',
+              width: '14px',
+              height: '14px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <SidebarArchiveIcon color="currentColor" />
+          </span>
           <span>{archiveExpanded ? 'Hide archive' : `Archive (${archivedNodes.length})`}</span>
         </div>
       )}
@@ -4237,14 +4251,12 @@ function FileItem({
     ? `0 ${horizontalPadding}px 0 ${leftPadding}px`
     : `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${horizontalPadding}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${leftPadding}px`;
   const showTodoStateBadge = shouldShowSidebarTodoStateBadge(item, isCollapsing);
-  const sharedAuthorLabel = item.sharedRiverCallsign
-    ?? (item.sharedOriginalSourcePath ? item.sharedAuthorCallsign : undefined);
-  const sharedAuthorTitle = item.sharedRiverCallsign
-    ? `Shared to River by ${item.sharedRiverCallsign}`
-    : sharedAuthorLabel
-      ? `Shared by ${sharedAuthorLabel}`
-      : undefined;
-  const hasInlineFileMeta = Boolean(sharedAuthorLabel || isPinned || showTodoStateBadge || item.hasUnread);
+  const showOwnRiverShare = Boolean(item.sharedRiverCallsign);
+  const sharedAuthorLabel = !showOwnRiverShare && item.sharedOriginalSourcePath
+    ? item.sharedAuthorCallsign
+    : undefined;
+  const sharedAuthorTitle = sharedAuthorLabel ? `Shared by ${sharedAuthorLabel}` : undefined;
+  const hasInlineFileMeta = Boolean(showOwnRiverShare || sharedAuthorLabel || isPinned || showTodoStateBadge || item.hasUnread);
 
   return (
     <div
@@ -4306,6 +4318,8 @@ function FileItem({
         alignItems: 'center',
         gap: SIDEBAR_ICON_TEXT_GAP,
         minHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
+        width: '100%',
+        minWidth: 0,
       }}>
         {renaming ? (
           <input
@@ -4402,10 +4416,8 @@ function FileItem({
             {sharedAuthorLabel && sharedAuthorTitle && (
               <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
             )}
-            {isPinned && (
-              <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
-                <SidebarPinIcon />
-              </span>
+            {showOwnRiverShare && (
+              <SidebarRiverShareIndicator theme={theme} />
             )}
             {showTodoStateBadge && (
               <span
@@ -4442,6 +4454,14 @@ function FileItem({
                   flexShrink: 0,
                 }}
               />
+            )}
+            {isPinned && (
+              <>
+                <span aria-hidden="true" style={{ flex: '1 1 auto', minWidth: '8px' }} />
+                <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
+                  <SidebarPinIcon />
+                </span>
+              </>
             )}
           </>
         )}
@@ -4594,20 +4614,45 @@ function SidebarSharedAuthorChip({
       title={title}
       style={{
         flexShrink: 0,
-        padding: '0 5px',
+        padding: '0 4px',
         borderRadius: '999px',
-        fontSize: '8px',
-        lineHeight: '12px',
-        color: theme.isDark ? '#d4d4d4' : '#525252',
-        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
-        border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)'}`,
-        maxWidth: '75px',
+        fontSize: '7px',
+        lineHeight: '10px',
+        color: theme.isDark ? 'rgba(212,212,212,0.82)' : 'rgba(82,82,82,0.82)',
+        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.045)' : 'rgba(0,0,0,0.035)',
+        border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)'}`,
+        maxWidth: '64px',
         overflow: 'hidden',
         textOverflow: 'ellipsis',
         whiteSpace: 'nowrap',
       }}
     >
       {label}
+    </span>
+  );
+}
+
+function SidebarRiverShareIndicator({
+  theme,
+}: {
+  theme: ReturnType<typeof useTheme>['theme'];
+}) {
+  const color = theme.isDark ? '#d4d4d4' : '#525252';
+  return (
+    <span
+      aria-label="Shared to River"
+      title="Shared to River"
+      style={{
+        flex: '0 0 14px',
+        width: '14px',
+        height: '14px',
+        display: 'inline-flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color,
+      }}
+    >
+      <SidebarRiverIcon color="currentColor" style={{ opacity: 0.58 }} />
     </span>
   );
 }

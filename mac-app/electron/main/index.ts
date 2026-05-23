@@ -142,7 +142,7 @@ import {
 import { RecentManager, type RecentEntry } from './recentManager';
 import type { BookmarksManager, BookmarksSnapshot } from './bookmarksManager';
 import { getLocalImageContentType, isAllowedLocalImagePath, localImagePathFromProtocolUrl } from './localImageProtocol';
-import { copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
+import { consolidateMarkdownAssetsForLibraryRoot, copyImageForMarkdownDocument, deleteUnusedCopiedMarkdownImages, makeMarkdownImagesPortable } from './portableMarkdownImages';
 import { getActiveBrowserPage } from './browserPageLocator';
 import {
   COMMAND_CLIPBOARD_RESTORE_DELAY_MS,
@@ -1003,6 +1003,7 @@ let quotaManager: QuotaManager | null = null;
 let accountStatusManager: AccountStatusManager | null = null;
 let diagnosticsCollector: DiagnosticsCollector | null = null;
 let librarianManager: LibrarianManager | null = null;
+let markdownAssetsConsolidated = false;
 let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
 let taggedDocsManager: TaggedDocsManager | null = null;
@@ -3451,6 +3452,10 @@ function setupThemeIPCHandlers(): void {
  * Set up IPC handlers for Librarian (reading collection) functionality.
  */
 function setupLibrarianIPCHandlers(): void {
+  const currentLibraryRootPaths = (): string[] => (
+    librarianManager?.getLibraryRoots().map((root) => root.path) ?? []
+  );
+
   // Get all readings (metadata only, for sidebar)
   ipcMain.handle('librarian:getReadings', (): ReadingMeta[] => {
     if (!librarianManager) {
@@ -3764,7 +3769,7 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return null;
     }
-    return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image');
+    return copyImageForMarkdownDocument(documentPath, imagePath, alt || 'Image', { libraryRoots: currentLibraryRootPaths() });
   });
 
   ipcMain.handle('markdownImages:makeImagesPortable', (_event, documentPath: string, content: string) => {
@@ -3772,7 +3777,7 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return { content, copied: 0, rewritten: 0, missing: 0 };
     }
-    return makeMarkdownImagesPortable(documentPath, content);
+    return makeMarkdownImagesPortable(documentPath, content, { libraryRoots: currentLibraryRootPaths() });
   });
 
   ipcMain.handle('markdownImages:deleteUnusedCopiedImages', (_event, documentPath: string, removedMarkdown: string, remainingContent: string) => {
@@ -3780,7 +3785,7 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return { deleted: 0, skipped: 0, missing: 0 };
     }
-    return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent);
+    return deleteUnusedCopiedMarkdownImages(documentPath, removedMarkdown, remainingContent, { libraryRoots: currentLibraryRootPaths() });
   });
 
   ipcMain.handle(
@@ -4728,11 +4733,11 @@ function setupLibrarianIPCHandlers(): void {
     return result;
   });
 
-  ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number) => {
+  ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => {
     if (!canWriteFieldTheoryContent()) return { ok: false, error: 'Read-only account mode' };
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return { ok: false, error: sharedFeaturesDisabledError() };
-    return sharedSyncService.updateSharedContent(sharedId, content, expectedRevision);
+    return sharedSyncService.updateSharedContent(sharedId, content, expectedRevision, documentPath);
   });
 
   ipcMain.handle('sharedFiles:setActivePresence', async (_event, sharedId: string | null) => {
@@ -10202,6 +10207,19 @@ async function initTranscriberSystem(): Promise<void> {
   // Initialize librarian manager for watching markdown reading files.
   const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
   librarianManager = new LibrarianManager();
+  if (!markdownAssetsConsolidated) {
+    markdownAssetsConsolidated = true;
+    setImmediate(() => {
+      if (!librarianManager || !canWriteFieldTheoryContent()) return;
+      let changed = false;
+      for (const root of librarianManager.getLibraryRoots()) {
+        const result = consolidateMarkdownAssetsForLibraryRoot(root.path);
+        if (result.filesRewritten > 0 || result.deleted > 0 || result.oldFoldersRemoved > 0) changed = true;
+        if (result.errors.length > 0) log.warn('Markdown asset consolidation had errors for %s: %j', root.path, result.errors);
+      }
+      if (changed) librarianManager.emit('library:changed');
+    });
+  }
   recentManager = new RecentManager();
 
   // Initialize bookmarks manager for reading synced X bookmarks.

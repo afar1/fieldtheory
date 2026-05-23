@@ -1424,7 +1424,7 @@ export function defaultScratchpadNameWithTime(date: Date): string {
 }
 
 export function isHiddenWikiFolderName(name: string): boolean {
-  return name.startsWith('.') || name.startsWith('_');
+  return name.startsWith('.') || name.startsWith('_') || /\.assets$/i.test(name);
 }
 
 export function isHiddenWikiFileName(name: string): boolean {
@@ -2885,7 +2885,7 @@ export class LibrarianManager extends EventEmitter {
 
     const nodes: WikiNode[] = [];
     for (const entry of entries) {
-      if (entry.name.startsWith('.') || entry.name.startsWith('_')) continue;
+      if (entry.isDirectory() ? isHiddenWikiFolderName(entry.name) : isHiddenWikiFileName(entry.name)) continue;
 
       const absPath = path.join(currentDir, entry.name);
       let stats: fs.Stats;
