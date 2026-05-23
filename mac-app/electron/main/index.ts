@@ -99,6 +99,7 @@ import { LibrarySyncService } from './librarySyncService';
 import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInput } from './sharedSyncService';
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
+import { resolveStartupReadiness } from './startupReadinessPolicy';
 import {
   CommandsIPCChannels,
   type LauncherAppInfo,
@@ -12067,8 +12068,9 @@ if (!gotTheLock) {
       });
     }
     
-    // Permission and model check at startup - always verify all requirements are met.
-    // If any permission is missing or model not downloaded, show onboarding regardless of previous completion state.
+    // Permission and model check at startup.
+    // Returning users with saved local setup should still load their current app
+    // surface; experimental builds can have fresh macOS permission state.
     const prefs = preferencesManager?.get();
     const micStatus = systemPreferences.getMediaAccessStatus('microphone');
     const accessibilityStatus = systemPreferences.isTrustedAccessibilityClient(false);
@@ -12086,25 +12088,35 @@ if (!gotTheLock) {
       (authManager?.hasEverBeenAuthenticated() ?? false) ||
       (userDataManager?.isLoggedIn() ?? false);
 
-    // All three permissions, model download, and a known local account are
-    // required for full local app functionality.
-    const isFullyReady =
+    const hasAllPermissions =
       micStatus === 'granted' &&
       accessibilityStatus &&
-      screenStatus === 'granted' &&
-      modelDownloaded &&
-      canUseLocalAccount;
+      screenStatus === 'granted';
+    const startupReadiness = resolveStartupReadiness({
+      onboardingComplete: prefs?.onboardingComplete === true,
+      hasAllPermissions,
+      modelReady: modelDownloaded,
+      canUseLocalAccount,
+    });
 
-    if (isFullyReady) {
-      // All requirements met - mark onboarding complete and allow app access
+    if (startupReadiness.showApp) {
+      // All requirements met, or this is a returning local user. Mark only
+      // fully ready users complete so incomplete onboarding is preserved for
+      // genuinely new users.
       if (!prefs?.onboardingComplete || prefs?.onboardingStep !== undefined) {
-        await preferencesManager?.save({ onboardingComplete: true, onboardingStep: undefined });
+        if (startupReadiness.fullyReady) {
+          await preferencesManager?.save({ onboardingComplete: true, onboardingStep: undefined });
+        }
       }
       if (onboardingWindow) {
         onboardingWindow.close();
         onboardingWindow = null;
       }
-      registerHotkeysAfterOnboarding();
+      if (hasAllPermissions) {
+        registerHotkeysAfterOnboarding();
+      } else {
+        getHotkeyManager().unregisterAll();
+      }
       showClipboardHistoryOnStartup();
       startupMark('startup-decision-complete');
       maybeExitStartupBenchmark('startup-decision-complete');
@@ -12125,11 +12137,6 @@ if (!gotTheLock) {
 
       // Determine the correct starting step based on what's missing
       // If only auth is missing (all permissions + model OK), start at account phase (step 2)
-      const hasAllPermissions =
-        micStatus === 'granted' &&
-        accessibilityStatus &&
-        screenStatus === 'granted';
-
       const hasAllPermissionsAndModel = hasAllPermissions && modelDownloaded;
 
       let startStep: number;
@@ -12167,10 +12174,20 @@ if (!gotTheLock) {
 
       const hasAllPermissions = mic === 'granted' && accessibility && screen === 'granted';
 
-      // Check if permissions are revoked
+      const canUseLocalAccountNow =
+        authenticated ||
+        hasEverAuthenticated ||
+        (userDataManager?.isLoggedIn() ?? false);
+
+      // Check if permissions are revoked. Returning users keep the app surface;
+      // permission-dependent features can prompt from inside the app.
       if (!hasAllPermissions) {
         // Unregister all hotkeys - they shouldn't work without permissions
         getHotkeyManager().unregisterAll();
+
+        if (canUseLocalAccountNow) {
+          return;
+        }
 
         // Reset onboarding state
         await preferencesManager?.save({ onboardingComplete: false });
