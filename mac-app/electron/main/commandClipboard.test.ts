@@ -12,6 +12,7 @@ import {
   clipboardMatchesCommandPayload,
   formatCommandFilePasteText,
   restoreClipboardSnapshot,
+  resolveCommandFilePasteDelivery,
   resolveCommandFilePasteMode,
   shouldUseNativeCommandLauncherClipboardTextPaste,
   shouldUseNativeCommandFileTyping,
@@ -229,12 +230,12 @@ describe('shouldUseNativeCommandFileTyping', () => {
     })).toBe(true);
   });
 
-  it('uses native typing for IDE text references so command prompts get a focused input check', () => {
+  it('skips native typing for IDE text references so target inputs keep normal paste focus', () => {
     expect(shouldUseNativeCommandFileTyping({
       mode: 'text-reference',
       isTerminal: false,
       isIDE: true,
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it('keeps native typing available for markdown content targets', () => {
@@ -243,6 +244,32 @@ describe('shouldUseNativeCommandFileTyping', () => {
       isTerminal: false,
       isIDE: false,
     })).toBe(true);
+  });
+});
+
+describe('resolveCommandFilePasteDelivery', () => {
+  it('uses normal paste for IDE command-file references so typing can continue afterward', () => {
+    expect(resolveCommandFilePasteDelivery({
+      mode: 'text-reference',
+      isTerminal: false,
+      isIDE: true,
+    })).toBe('clipboard-paste');
+  });
+
+  it('keeps terminals on native-helper delivery for command-file references', () => {
+    expect(resolveCommandFilePasteDelivery({
+      mode: 'text-reference',
+      isTerminal: true,
+      isIDE: false,
+    })).toBe('native-helper');
+  });
+
+  it('keeps rich composer markdown content on native-helper delivery', () => {
+    expect(resolveCommandFilePasteDelivery({
+      mode: 'markdown-content',
+      isTerminal: false,
+      isIDE: false,
+    })).toBe('native-helper');
   });
 });
 
