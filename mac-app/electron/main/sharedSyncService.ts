@@ -326,6 +326,7 @@ export class SharedSyncService extends EventEmitter {
     if (!supabase || !session?.user?.id) return result;
     const teamState = await this.getActiveTeamState();
     if (!teamState?.currentTeamScopeUserId) return result;
+    ensureDir(sharedFilesRoot());
 
     const { data, error } = await supabase
       .from('team_documents')

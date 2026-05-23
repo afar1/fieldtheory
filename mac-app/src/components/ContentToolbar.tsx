@@ -12,6 +12,7 @@ import { SidebarMarkdownIcon } from './SidebarIcons';
 const ICON_SIZE = 16; // ~22% larger than 13px
 const ICON_SIZE_SMALL = 13; // Standard size for less prominent icons
 const COPY_PATH_FEEDBACK_MS = 1600;
+const FIELD_THEORY_ICON_URL = `${import.meta.env.BASE_URL}field-theory-icon-black.png`;
 
 const TEXT_SIZE_OPTIONS: Array<{
   id: 'small' | 'normal' | 'large';
@@ -227,8 +228,8 @@ export function ContentToolbarMaxwellButton({
         onMouseLeave={(event) => {
           if (!maxwellMenuOpen) event.currentTarget.style.backgroundColor = 'transparent';
         }}
-        title="Maxwell"
-        aria-label="Maxwell"
+        title="Field Theory"
+        aria-label="Field Theory"
         style={{
           width: '24px',
           height: '24px',
@@ -246,7 +247,7 @@ export function ContentToolbarMaxwellButton({
         }}
       >
         <img
-          src="/field-theory-icon-black.png"
+          src={FIELD_THEORY_ICON_URL}
           alt=""
           aria-hidden="true"
           draggable={false}
@@ -289,7 +290,7 @@ export function ContentToolbarMaxwellButton({
               textAlign: 'left',
             }}
           >
-            Maxwell Local Commands
+            Field Theory Local Commands
           </div>
           {sortedItems.map((item) => (
             <div
@@ -309,7 +310,7 @@ export function ContentToolbarMaxwellButton({
                   onVisitItem?.(item.id);
                   setMaxwellMenuOpen(false);
                 }}
-                title="Open saved Maxwell page"
+                title="Open saved Field Theory page"
                 aria-label={`Open ${item.title}`}
                 style={{
                   width: '18px',
@@ -341,7 +342,7 @@ export function ContentToolbarMaxwellButton({
               </div>
               <button
                 type="button"
-                title="Run this Maxwell page locally"
+                title="Run this Field Theory page locally"
                 onClick={() => {
                   onRunItem?.(item.id);
                   setMaxwellMenuOpen(false);
@@ -362,8 +363,8 @@ export function ContentToolbarMaxwellButton({
               </button>
               <button
                 type="button"
-                title="Remove from Maxwell"
-                aria-label={`Remove ${item.title} from Maxwell`}
+                title="Remove from Field Theory"
+                aria-label={`Remove ${item.title} from Field Theory`}
                 onClick={() => {
                   onRemoveItem?.(item.id);
                 }}
@@ -387,7 +388,7 @@ export function ContentToolbarMaxwellButton({
           ))}
           {items.length === 0 && (
             <div style={{ padding: '4px 8px 6px', color: theme.textSecondary, fontSize: '10px', fontStyle: 'italic', lineHeight: 1.35, textAlign: 'right' }}>
-              No saved Maxwell pages yet.
+              No saved Field Theory pages yet.
             </div>
           )}
           <button
@@ -414,7 +415,7 @@ export function ContentToolbarMaxwellButton({
               textAlign: 'right',
             }}
           >
-            {currentItemSaved ? 'remove current page from maxwell' : 'add current page to maxwell'}
+            {currentItemSaved ? 'remove current page from Field Theory' : 'add current page to Field Theory'}
           </button>
         </div>
       )}

@@ -56,6 +56,7 @@ type FieldTheoryWindowMode = 'panel' | 'app';
 type SettingsStyles = Record<string, CSSProperties>;
 type TeamServiceState = Awaited<ReturnType<NonNullable<Window['teamAPI']>['getState']>>;
 type TeamMutationResult = Awaited<ReturnType<NonNullable<Window['teamAPI']>['inviteMember']>>;
+const TEAM_SETTINGS_BACKGROUND_REFRESH_MS = 30000;
 
 // Hotkey capture state - only one hotkey can be captured at a time
 type HotkeyCapture =
@@ -517,9 +518,10 @@ export default function SettingsPanel({
     setSharedFilesAvailable(availability?.available === true);
   }, []);
 
-  const loadTeamState = useCallback(async () => {
+  const loadTeamState = useCallback(async (options: { showLoading?: boolean } = {}) => {
     if (!window.teamAPI?.getState) return;
-    setTeamLoading(true);
+    const showLoading = options.showLoading ?? true;
+    if (showLoading) setTeamLoading(true);
     try {
       const nextState = await window.teamAPI.getState();
       setTeamServiceState(nextState);
@@ -527,7 +529,7 @@ export default function SettingsPanel({
     } catch {
       setTeamError('Could not load team settings.');
     } finally {
-      setTeamLoading(false);
+      if (showLoading) setTeamLoading(false);
     }
   }, []);
 
@@ -939,9 +941,9 @@ export default function SettingsPanel({
     if (selectedSection !== 'team' || !session?.user?.id) return;
     void loadTeamState();
     const interval = window.setInterval(() => {
-      void loadTeamState();
+      void loadTeamState({ showLoading: false });
       void loadSharedFilesAvailability();
-    }, 5000);
+    }, TEAM_SETTINGS_BACKGROUND_REFRESH_MS);
     return () => window.clearInterval(interval);
   }, [loadSharedFilesAvailability, loadTeamState, selectedSection, session?.user?.id]);
 
