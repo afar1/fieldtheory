@@ -3,6 +3,7 @@ import { clipboard, type NativeImage } from 'electron';
 export const COMMAND_CLIPBOARD_RESTORE_DELAY_MS = 1500;
 
 export type CommandFilePasteMode = 'text-reference' | 'markdown-content';
+export type CommandFilePasteDelivery = 'native-helper' | 'clipboard-paste';
 
 export type CommandFilePasteSource =
   | { kind: 'command'; name: string; filePath: string }
@@ -148,9 +149,17 @@ export function shouldUseNativeCommandFileTyping(input: {
   isTerminal: boolean;
   isIDE: boolean;
 }): boolean {
-  if (input.isTerminal || input.isIDE) return true;
+  if (input.isTerminal) return true;
   if (input.mode === 'markdown-content') return true;
   return false;
+}
+
+export function resolveCommandFilePasteDelivery(input: {
+  mode: CommandFilePasteMode;
+  isTerminal: boolean;
+  isIDE: boolean;
+}): CommandFilePasteDelivery {
+  return shouldUseNativeCommandFileTyping(input) ? 'native-helper' : 'clipboard-paste';
 }
 
 export function shouldUseNativeCommandLauncherClipboardTextPaste(input: {

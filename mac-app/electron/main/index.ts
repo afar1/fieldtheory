@@ -151,9 +151,9 @@ import {
   captureClipboardSnapshot,
   clipboardMatchesCommandPayload,
   formatCommandFilePasteText,
+  resolveCommandFilePasteDelivery,
   resolveCommandFilePasteMode,
   shouldUseNativeCommandLauncherClipboardTextPaste,
-  shouldUseNativeCommandFileTyping,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
   type ClipboardSnapshot,
@@ -8922,7 +8922,8 @@ function setupClipboardIPCHandlers(): void {
 
         let pasted = false;
         let fallbackRan = false;
-        if (shouldUseNativeCommandFileTyping({ mode: pasteMode, isTerminal, isIDE })) {
+        const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
+        if (pasteDelivery === 'native-helper') {
           pasted = await typeTextFromCommandLauncher(targetApp, handoffText, 'invoke-handoff');
         } else {
           appendCommandLauncherTrace('invoke-handoff-native-type-skipped', {
@@ -8930,6 +8931,7 @@ function setupClipboardIPCHandlers(): void {
             targetBundleId: targetApp.bundleId,
             targetName: targetApp.name,
             contentMode: pasteMode,
+            delivery: pasteDelivery,
           });
         }
         if (!pasted) {
@@ -9035,7 +9037,8 @@ function setupClipboardIPCHandlers(): void {
           });
 
           let pasted = false;
-          if (shouldUseNativeCommandFileTyping({ mode: pasteMode, isTerminal, isIDE })) {
+          const pasteDelivery = resolveCommandFilePasteDelivery({ mode: pasteMode, isTerminal, isIDE });
+          if (pasteDelivery === 'native-helper') {
             pasted = await typeTextFromCommandLauncher(targetApp, commandText, 'invoke-command');
           } else {
             appendCommandLauncherTrace('invoke-command-native-type-skipped', {
@@ -9043,6 +9046,7 @@ function setupClipboardIPCHandlers(): void {
               targetBundleId: targetApp.bundleId,
               targetName: targetApp.name,
               contentMode: pasteMode,
+              delivery: pasteDelivery,
             });
           }
           if (!pasted) {
