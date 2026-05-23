@@ -13,6 +13,7 @@ import {
   formatCommandFilePasteText,
   restoreClipboardSnapshot,
   resolveCommandFilePasteMode,
+  shouldUseNativeCommandLauncherClipboardTextPaste,
   shouldUseNativeCommandFileTyping,
   waitForCommandClipboardPasteRead,
   type CommandClipboard,
@@ -242,6 +243,22 @@ describe('shouldUseNativeCommandFileTyping', () => {
       isTerminal: false,
       isIDE: false,
     })).toBe(true);
+  });
+});
+
+describe('shouldUseNativeCommandLauncherClipboardTextPaste', () => {
+  it('uses native typing for command launcher clipboard text pastes', () => {
+    expect(shouldUseNativeCommandLauncherClipboardTextPaste({
+      commandLauncherPaste: true,
+      hasTextContent: true,
+    })).toBe(true);
+  });
+
+  it('keeps non-text clipboard launcher pastes on the regular paste path', () => {
+    expect(shouldUseNativeCommandLauncherClipboardTextPaste({
+      commandLauncherPaste: true,
+      hasTextContent: false,
+    })).toBe(false);
   });
 });
 

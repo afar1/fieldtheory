@@ -119,7 +119,6 @@ import {
   removeWikiRelPathFromTree,
   renamePinnedSidebarIds,
   renameLibraryRootRelPath,
-  shouldCapScratchpadSidebarNode,
   shouldShowSidebarPinnedFolderFade,
   shouldShowSidebarTodoStateBadge,
   splitArchivedSidebarNodes,
@@ -133,6 +132,10 @@ import {
   wikiTreeHasRelPath,
   type LibrarySidebarNode,
 } from '../components/WikiSidebar';
+import {
+  parseMarkdownContentEditedAt,
+  stampMarkdownContentEditIfBodyChanged,
+} from '../../electron/shared/markdownFrontmatter';
 
 afterEach(() => {
   clearLibraryDragData();
@@ -215,6 +218,17 @@ Body text here.`;
     expect(setMarkdownTodoState('---\ntags: [work]\ntodo: true\ntodo_state: done\n---\n# Task\n', null)).toBe('---\ntags: [work]\n---\n\n# Task\n');
   });
 
+  it('stamps content edit time only when markdown body changes', () => {
+    const previous = '---\ntodo: true\n---\n# Task\n';
+    const frontmatterOnly = '---\ntodo: false\n---\n# Task\n';
+    const bodyEdit = '---\ntodo: true\n---\n# Task\n\nBody\n';
+
+    expect(stampMarkdownContentEditIfBodyChanged(previous, frontmatterOnly, 1234)).toBe(frontmatterOnly);
+    const stamped = stampMarkdownContentEditIfBodyChanged(previous, bodyEdit, 1234);
+    expect(parseMarkdownContentEditedAt(stamped)).toBe(1234);
+    expect(splitFrontmatter(stamped).body).toBe('# Task\n\nBody\n');
+  });
+
   it('cycles todo state from none to open to done to none', () => {
     const open = cycleMarkdownTodoState('# Task\n');
     expect(open.state).toBe('open');
@@ -278,13 +292,13 @@ Body text here.`;
 });
 
 describe('shouldHandleMarkdownTodoTabShortcut', () => {
-  it('uses Tab and Shift+Tab for wiki and external markdown files', () => {
+  it('uses Option+Tab and Shift+Option+Tab for wiki and external markdown files', () => {
     expect(shouldHandleMarkdownTodoTabShortcut({
       key: 'Tab',
       shiftKey: false,
       metaKey: false,
       ctrlKey: false,
-      altKey: false,
+      altKey: true,
       selectedItemType: 'wiki',
     })).toBe(true);
     expect(shouldHandleMarkdownTodoTabShortcut({
@@ -292,7 +306,7 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
       shiftKey: false,
       metaKey: false,
       ctrlKey: false,
-      altKey: false,
+      altKey: true,
       selectedItemType: 'external',
     })).toBe(true);
     expect(shouldHandleMarkdownTodoTabShortcut({
@@ -300,18 +314,26 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
       shiftKey: true,
       metaKey: false,
       ctrlKey: false,
-      altKey: false,
+      altKey: true,
       selectedItemType: 'wiki',
     })).toBe(true);
   });
 
-  it('ignores command-modified Tab and non-markdown selections', () => {
+  it('ignores plain Tab, command-modified Option+Tab, and non-markdown selections', () => {
+    expect(shouldHandleMarkdownTodoTabShortcut({
+      key: 'Tab',
+      shiftKey: false,
+      metaKey: false,
+      ctrlKey: false,
+      altKey: false,
+      selectedItemType: 'wiki',
+    })).toBe(false);
     expect(shouldHandleMarkdownTodoTabShortcut({
       key: 'Tab',
       shiftKey: true,
       metaKey: true,
       ctrlKey: false,
-      altKey: false,
+      altKey: true,
       selectedItemType: 'wiki',
     })).toBe(false);
     expect(shouldHandleMarkdownTodoTabShortcut({
@@ -319,7 +341,7 @@ describe('shouldHandleMarkdownTodoTabShortcut', () => {
       shiftKey: false,
       metaKey: false,
       ctrlKey: false,
-      altKey: false,
+      altKey: true,
       selectedItemType: 'artifact',
     })).toBe(false);
   });
@@ -3071,16 +3093,6 @@ describe('recursive sidebar tree helpers', () => {
       '/wiki::scratchpad',
       '/wiki::scratchpad/meetings',
     ]);
-  });
-
-  it('caps scratchpad until the user explicitly expands it', () => {
-    const scratchpadChildren = Array.from({ length: 21 }, (_, index) => file(`scratchpad/note-${index}`, index));
-    const scratchpad = dir('scratchpad', scratchpadChildren);
-
-    expect(shouldCapScratchpadSidebarNode(scratchpad, false, false)).toBe(true);
-    expect(shouldCapScratchpadSidebarNode(scratchpad, false, true)).toBe(false);
-    expect(shouldCapScratchpadSidebarNode(scratchpad, true, false)).toBe(false);
-    expect(shouldCapScratchpadSidebarNode(dir('entries', scratchpadChildren), false, false)).toBe(false);
   });
 
   it('patches builtin wiki roots by relPath even when root paths differ', () => {

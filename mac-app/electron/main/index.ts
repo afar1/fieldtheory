@@ -63,7 +63,7 @@ import {
   obscureHomePath,
   orderStackItemsForPaste,
 } from './clipboardManager';
-import { getHotkeyManager, KNOWN_CONFLICT_APPS } from './hotkeyManager';
+import { getHotkeyManager, HOTKEY_CONFIGS, KNOWN_CONFLICT_APPS } from './hotkeyManager';
 import {
   setSupabaseUrl as setEngineerSupabaseUrl,
 } from './promptEngineer';
@@ -133,7 +133,7 @@ import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasMa
 import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
-import { setMarkdownArchivedState } from '../shared/markdownFrontmatter';
+import { setMarkdownArchivedState, stampMarkdownContentEditIfBodyChanged } from '../shared/markdownFrontmatter';
 import {
   FIELD_THEORY_URL_SCHEME,
   fieldTheoryProtocolClientArgs,
@@ -152,6 +152,7 @@ import {
   clipboardMatchesCommandPayload,
   formatCommandFilePasteText,
   resolveCommandFilePasteMode,
+  shouldUseNativeCommandLauncherClipboardTextPaste,
   shouldUseNativeCommandFileTyping,
   restoreClipboardSnapshot,
   waitForCommandClipboardPasteRead,
@@ -731,7 +732,8 @@ function findRunningAppForBundleId(bundleId: string): { bundleId: string; name: 
 
 async function pasteClipboardFromCommandLauncher(
   targetBundleId: string,
-  reason: string
+  reason: string,
+  textContent?: string,
 ): Promise<boolean> {
   const targetApp = findRunningAppForBundleId(targetBundleId);
   if (!targetApp) {
@@ -744,6 +746,19 @@ async function pasteClipboardFromCommandLauncher(
 
   return runWithCommandLauncherExternalInvocation(async () => {
     clipboardHistoryWindow?.hideAfterPaste(reason);
+    if (shouldUseNativeCommandLauncherClipboardTextPaste({
+      commandLauncherPaste: true,
+      hasTextContent: Boolean(textContent),
+    })) {
+      const typed = await typeTextFromCommandLauncher(targetApp, textContent!, 'invoke-command');
+      if (typed) return true;
+      appendCommandLauncherTrace('command-launcher-clipboard-native-type-fallback', {
+        reason,
+        targetBundleId,
+        targetName: targetApp.name,
+        textLength: textContent!.length,
+      });
+    }
     return activateAndPasteFromCommandLauncher(targetApp, {
       clipboardTrace: readCommandPasteClipboardTrace,
     });
@@ -1019,6 +1034,7 @@ let lastScratchpadOpenAt = 0;
 let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
+let globalImproveInFlight = false;
 
 async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
   if (!userDataManager) {
@@ -1172,6 +1188,130 @@ async function ensureLocalImproveCommand(): Promise<PortableCommand | null> {
   if (!defaultDir) return null;
   const created = commandsManager.createCommand(defaultDir, 'improve', DEFAULT_IMPROVE_COMMAND_CONTENT);
   return created ? commandsManager.getCommand(created.name) : commandsManager.getCommand('improve');
+}
+
+async function copySelectedTextFromFrontmostApp(): Promise<{ text: string; targetApp: { bundleId: string; name: string } | null }> {
+  const target = nativeHelper?.getFrontmostApp() ?? null;
+  const targetApp = target?.bundleId
+    ? { bundleId: target.bundleId, name: target.name ?? target.bundleId }
+    : null;
+
+  try {
+    await execFileAsync('osascript', ['-e', 'tell application "System Events" to keystroke "c" using command down'], { timeout: 3000 });
+  } catch (error) {
+    log.warn('Global improve could not copy selected text:', error);
+    return { text: '', targetApp };
+  }
+  await new Promise(resolve => setTimeout(resolve, 80));
+  return { text: clipboard.readText().trim(), targetApp };
+}
+
+async function pasteTextToGlobalImproveTarget(text: string, targetApp: { bundleId: string; name: string } | null): Promise<boolean> {
+  if (!text) return false;
+  clipboard.writeText(text);
+  clipboardManager?.syncClipboardHash();
+  return activateAndPaste(targetApp, {
+    clipboardTrace: () => ({ textLength: clipboard.readText().length }),
+  });
+}
+
+async function runGlobalImproveSelection(): Promise<void> {
+  if (globalImproveInFlight) return;
+  globalImproveInFlight = true;
+  try {
+    if (!commandsManager) {
+      cursorStatusManager?.showNoTargetError('Maxwell is not ready');
+      return;
+    }
+    const { text, targetApp } = await copySelectedTextFromFrontmostApp();
+    if (!text) {
+      cursorStatusManager?.showNoTargetError('Select text to improve');
+      return;
+    }
+
+    const command = await ensureLocalImproveCommand();
+    if (!command) {
+      cursorStatusManager?.showNoTargetError('Improve command not found');
+      return;
+    }
+    const loaded = await commandsManager.loadCommandContent(command);
+    if (!loaded) {
+      cursorStatusManager?.showNoTargetError('Improve command could not be loaded');
+      return;
+    }
+
+    emitLocalCommandStatus({
+      status: 'running',
+      message: 'Improving selected text locally...',
+      commandName: loaded.name,
+      mode: 'selection',
+      phase: 'generating',
+    });
+
+    const localManager = getLocalLlmManager();
+    const replacement = await localManager.runSelectionCommand({
+      commandName: loaded.name,
+      commandContent: loaded.content,
+      targetTitle: targetApp?.name ?? 'Selected text',
+      targetPath: targetApp?.bundleId ?? 'global-selection',
+      targetContent: text,
+      selectedText: text,
+      memorySnapshot: readMaxwellMemorySnapshot(true),
+    }, {
+      onProgress: (event) => {
+        emitLocalCommandStatus({
+          status: 'running',
+          message: event.message,
+          detail: compactLocalCommandDetail(event.detail),
+          eventKind: event.kind,
+          commandName: loaded.name,
+          mode: 'selection',
+          phase: event.phase ?? 'generating',
+        });
+      },
+    });
+
+    const pasted = await pasteTextToGlobalImproveTarget(replacement, targetApp);
+    if (!pasted) {
+      cursorStatusManager?.showNoTargetError('Improved text copied; paste failed');
+      emitLocalCommandStatus({
+        status: 'error',
+        message: 'Improved text copied; paste failed',
+        commandName: loaded.name,
+        mode: 'selection',
+        error: 'Paste failed',
+      });
+      return;
+    }
+
+    const changeSummary = summarizeLocalCommandChange(text, replacement);
+    await quotaManager?.updateUsage('portable_commands', 1);
+    metricsManager?.recordCommandExecuted();
+    emitLocalCommandStatus({
+      status: 'success',
+      message: 'Improved selected text',
+      detail: changeSummary.detail,
+      eventKind: 'file_change',
+      commandName: loaded.name,
+      mode: 'selection',
+      phase: 'done',
+      changedLines: changeSummary.changedLines,
+      changedBytes: changeSummary.changedBytes,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Global improve failed';
+    log.error('Global improve failed:', error);
+    cursorStatusManager?.showNoTargetError(message);
+    emitLocalCommandStatus({
+      status: 'error',
+      message,
+      commandName: 'improve',
+      mode: 'selection',
+      error: message,
+    });
+  } finally {
+    globalImproveInFlight = false;
+  }
 }
 
 function broadcastTodosChanged(todos: Todo[]): void {
@@ -2185,6 +2325,9 @@ function registerHotkeysAfterOnboarding(): void {
 
   const prefs = preferencesManager.get();
   const hotkeys = clipboardManager.getHotkeys();
+  getHotkeyManager().register('globalImprove', HOTKEY_CONFIGS.globalImprove.defaultKey, () => {
+    void runGlobalImproveSelection();
+  });
 
   // Register clipboard hotkeys (screenshot, full screen, active window)
   clipboardManager.registerScreenshotHotkey(async () => {
@@ -3605,7 +3748,11 @@ function setupLibrarianIPCHandlers(): void {
     try {
       const canonical = fs.realpathSync(absPath);
       if (!isLibraryTextDocumentPath(canonical)) return { ok: false, reason: 'not-found' };
-      return writeTextFileWithConflictGuard(canonical, content, expectedVersion);
+      const previousContent = fs.readFileSync(canonical, 'utf-8');
+      const nextContent = isAllowedMarkdownExt(canonical)
+        ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
+        : content;
+      return writeTextFileWithConflictGuard(canonical, nextContent, expectedVersion);
     } catch (error) {
       log.error(`external:save failed for ${absPath}:`, error);
       return { ok: false, reason: 'error' };
@@ -5848,6 +5995,7 @@ function setupClipboardIPCHandlers(): void {
 
       // Check if target needs file paths instead of image buffers.
       const shouldPasteImageAsPath = isTerminalApp(effectiveBundleId) || isIDEWithTerminal(effectiveBundleId);
+      let commandLauncherTextContent: string | undefined;
 
       // Put content on clipboard first.
       // Use optimized hash methods to avoid expensive clipboard reads after write.
@@ -5883,6 +6031,7 @@ function setupClipboardIPCHandlers(): void {
         }
 
         clipboard.writeText(textContent);
+        commandLauncherTextContent = textContent;
         // Set hash directly from the text we just wrote (avoids clipboard read)
         clipboardManager.setClipboardHashFromText(textContent);
       } else if (item.imageData) {
@@ -5919,7 +6068,7 @@ function setupClipboardIPCHandlers(): void {
       const useCommandLauncherPaste = Boolean(targetBundleId && commandLauncherWindow?.isShowingOrVisible());
 
       if (useCommandLauncherPaste && targetBundleId) {
-        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-item-command-launcher');
+        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-item-command-launcher', commandLauncherTextContent);
         if (!pasted) {
           cursorStatusManager?.showNoTargetError('Clipboard paste failed');
         }
@@ -6207,7 +6356,7 @@ function setupClipboardIPCHandlers(): void {
       const useCommandLauncherPaste = Boolean(targetBundleId && commandLauncherWindow?.isShowingOrVisible());
 
       if (useCommandLauncherPaste && targetBundleId) {
-        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-text-command-launcher');
+        const pasted = await pasteClipboardFromCommandLauncher(targetBundleId, 'paste-text-command-launcher', text);
         if (!pasted) {
           cursorStatusManager?.showNoTargetError('Clipboard paste failed');
         }

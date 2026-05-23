@@ -69,7 +69,6 @@ const LIBRARY_SIDEBAR_EDGE_PADDING = 12;
 const LIBRARY_SIDEBAR_FADE_WIDTH = 28;
 const LIBRARY_SIDEBAR_HOVER_FADE_WIDTH = 44;
 const LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE = 56;
-const SCRATCHPAD_COLLAPSED_ITEM_LIMIT = 20;
 const RECENT_SIDEBAR_ITEM_LIMIT = 7;
 const RECENT_ROW_MOVE_ANIMATION_MS = 180;
 const RECENT_ROW_MOVE_ANIMATION_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
@@ -388,6 +387,7 @@ export interface WikiArchiveController {
   undoArchive: () => Promise<boolean>;
   cycleSelectedTodoState: (direction: 'forward' | 'backward') => Promise<boolean>;
   deleteSelectedItems: () => boolean;
+  renameFocusedItem: (itemId?: string | null) => boolean;
 }
 
 interface WikiSidebarProps {
@@ -1147,16 +1147,16 @@ function collectSidebarItems(nodes: SidebarNode[], includeArchived = true): Unif
   });
 }
 
-export function shouldCapScratchpadSidebarNode(
-  node: SidebarNode,
-  isSearching: boolean,
-  scratchpadExpanded: boolean,
-): boolean {
-  return node.kind === 'dir'
-    && node.name === SCRATCHPAD_FOLDER_NAME
-    && !isSearching
-    && !scratchpadExpanded
-    && node.children.length > SCRATCHPAD_COLLAPSED_ITEM_LIMIT;
+function isRiverSharedItem(item: UnifiedItem): boolean {
+  return Boolean(item.sharedRiverCallsign || item.sharedOriginalSourcePath);
+}
+
+function isRiverShareableItem(item: UnifiedItem): boolean {
+  return (item.type === 'wiki' || item.type === 'external') && Boolean(item.absPath);
+}
+
+function collectRiverShareableItems(node: Extract<SidebarNode, { kind: 'dir' }>): UnifiedItem[] {
+  return collectSidebarItems(node.children).filter(isRiverShareableItem);
 }
 
 export function collectSidebarSiblingItems(
@@ -1548,6 +1548,8 @@ function WikiSidebar({
   const selectedFileIdsRef = useRef<Set<string>>(selectedFileIds);
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [collapsingFileIds, setCollapsingFileIds] = useState<Set<string>>(() => new Set());
+  const [sharedFilesAvailable, setSharedFilesAvailable] = useState(false);
+  const [riverTogglingDirIds, setRiverTogglingDirIds] = useState<Set<string>>(() => new Set());
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollJumpElementRef = useRef<HTMLElement | null>(null);
@@ -1785,6 +1787,21 @@ function WikiSidebar({
   }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, pruneDeletedWikiPage]);
 
   useEffect(() => {
+    if (!active) return;
+    let cancelled = false;
+    void window.sharedFilesAPI?.getAvailability?.()
+      .then((availability) => {
+        if (!cancelled) setSharedFilesAvailable(availability?.available === true);
+      })
+      .catch(() => {
+        if (!cancelled) setSharedFilesAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [active]);
+
+  useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
   }, [expandedFolders]);
 
@@ -1956,6 +1973,45 @@ function WikiSidebar({
       }, 0);
     }
   }, [libraryRoots, onSelectItem, reloadTreeAndExpandLocation]);
+
+  const toggleRiverDirectory = useCallback(async (node: Extract<SidebarNode, { kind: 'dir' }>) => {
+    const items = collectRiverShareableItems(node);
+    if (!items.length || !window.sharedFilesAPI) return;
+
+    const allShared = items.every(isRiverSharedItem);
+    const targets = allShared ? items : items.filter((item) => !isRiverSharedItem(item));
+    if (!targets.length) return;
+
+    setRiverTogglingDirIds((prev) => new Set(prev).add(node.id));
+    try {
+      for (const item of targets) {
+        if (!item.absPath) continue;
+        if (allShared) {
+          await window.sharedFilesAPI.unshare(item.absPath);
+          continue;
+        }
+
+        const content = item.type === 'wiki' && item.relPath
+          ? (await window.wikiAPI?.getPage(item.relPath))?.content ?? null
+          : (await window.externalAPI?.open(item.absPath))?.content ?? null;
+        if (content === null) continue;
+
+        await window.sharedFilesAPI.share({
+          filePath: item.absPath,
+          title: item.title,
+          content,
+        });
+      }
+      window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+      await loadTree('river:directory-toggle');
+    } finally {
+      setRiverTogglingDirIds((prev) => {
+        const next = new Set(prev);
+        next.delete(node.id);
+        return next;
+      });
+    }
+  }, [loadTree]);
 
   const beginCreateFile = useCallback((target?: LibraryCreateTarget) => {
     const location = resolveCreateTarget(target, SCRATCHPAD_FOLDER_NAME);
@@ -2176,13 +2232,14 @@ function WikiSidebar({
     const previousTops = sidebarRowTopsRef.current;
     const nextTops = new Map<string, number>();
     const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    const suppressMoveAnimation = collapsingFileIds.size > 0;
 
     for (const node of root.querySelectorAll<HTMLElement>('[data-library-sidebar-row-id]')) {
       const rowId = node.dataset.librarySidebarRowId;
       if (!rowId) continue;
       const currentTop = node.offsetTop;
       nextTops.set(rowId, currentTop);
-      if (reduceMotion || typeof node.animate !== 'function') continue;
+      if (suppressMoveAnimation || reduceMotion || typeof node.animate !== 'function') continue;
 
       const previousTop = previousTops.get(rowId);
       if (previousTop === undefined) continue;
@@ -2535,12 +2592,12 @@ function WikiSidebar({
     setSelectionAnchorId(null);
     setCollapsingFileIds(movedIds);
     await waitForSidebarCollapseAnimation();
-    if (fallbackItem) onSelectItem(fallbackItem);
     try {
       await loadTree('selected-files-archived');
     } finally {
       setCollapsingFileIds(new Set());
     }
+    if (fallbackItem) onSelectItem(fallbackItem);
     return true;
   }, [getNextVisibleItemAfterMove, loadTree, onSelectItem, saveMarkdownItem, selectedId, updateSelectedFileIds]);
 
@@ -2604,6 +2661,10 @@ function WikiSidebar({
     let deletedExternal = false;
     let deletedArtifact = false;
     const deletedWikiRelPaths: string[] = [];
+    const deletedIds = new Set(targets.map((target) => target.id));
+    const fallbackItem = selectedId && deletedIds.has(selectedId)
+      ? getNextVisibleItemAfterMove(deletedIds)
+      : null;
 
     for (const target of targets) {
       if (target.type === 'wiki') {
@@ -2634,7 +2695,8 @@ function WikiSidebar({
     if (deletedArtifact) await loadArtifacts();
     updateSelectedFileIds(new Set());
     setSelectionAnchorId(null);
-  }, [loadArtifacts, loadTree, onDeletedItem, updateSelectedFileIds]);
+    if (fallbackItem) onSelectItem(fallbackItem);
+  }, [getNextVisibleItemAfterMove, loadArtifacts, loadTree, onDeletedItem, onSelectItem, selectedId, updateSelectedFileIds]);
 
   const deleteSelectedItems = useCallback((): boolean => {
     const targets = getExplicitSelectedItems().filter((item) => item.type === 'wiki' || item.type === 'external' || item.type === 'artifact');
@@ -2665,6 +2727,15 @@ function WikiSidebar({
     return true;
   }, [allFlatItems, onKeyboardScopeActive, selectedId, updateSelectedFileIds]);
 
+  const renameFocusedItem = useCallback((itemId?: string | null): boolean => {
+    const targetId = itemId ?? selectedId;
+    const target = allFlatItems.find((item) => item.id === targetId);
+    if (target?.type !== 'wiki' || !target.relPath) return false;
+    onKeyboardScopeActive?.();
+    setRenameRequestId(target.id);
+    return true;
+  }, [allFlatItems, onKeyboardScopeActive, selectedId]);
+
   useEffect(() => {
     if (!archiveControllerRef) return;
     archiveControllerRef.current = {
@@ -2676,9 +2747,10 @@ function WikiSidebar({
       undoArchive,
       cycleSelectedTodoState,
       deleteSelectedItems,
+      renameFocusedItem,
     };
     return () => { archiveControllerRef.current = null; };
-  }, [archiveControllerRef, cycleSelectedTodoState, deleteSelectedItems, getActionItems, toggleFocusedSelection, toggleSelectedArchive, undoArchive]);
+  }, [archiveControllerRef, cycleSelectedTodoState, deleteSelectedItems, getActionItems, renameFocusedItem, toggleFocusedSelection, toggleSelectedArchive, undoArchive]);
 
   const addFolderFromPath = useCallback(async () => {
     closeContextMenu();
@@ -2888,8 +2960,10 @@ function WikiSidebar({
       style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', position: 'relative' }}
     >
         <style>{`
-          .bm-folder-header:hover .bm-new-file-btn { opacity: 0.7; }
-          .bm-new-file-btn:hover { opacity: 1 !important; }
+          .bm-folder-header:hover .bm-new-file-btn,
+          .bm-folder-header:hover .bm-river-folder-btn { opacity: 0.7; }
+          .bm-new-file-btn:hover,
+          .bm-river-folder-btn:hover { opacity: 1 !important; }
           .bm-file-row:not(.bm-file-row-selected):hover,
           .bm-file-row-context:not(.bm-file-row-selected) {
             background-color: ${getLibrarySidebarFileHoverBg(theme.isDark)};
@@ -3134,6 +3208,9 @@ function WikiSidebar({
                   onKeyboardScopeActive={onKeyboardScopeActive}
                   pinnedItemIds={pinnedItemIds}
                   pinnedFolderFadeIds={pinnedFolderFadeIds}
+                  sharedFilesAvailable={sharedFilesAvailable}
+                  riverTogglingDirIds={riverTogglingDirIds}
+                  onToggleRiverDirectory={toggleRiverDirectory}
                   getSidebarIconColor={getSidebarIconColor}
                   getSidebarIconColorIndex={getSidebarIconColorIndex}
                   onOpenIconColorPicker={openSidebarIconColorPicker}
@@ -3187,6 +3264,9 @@ function WikiSidebar({
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
           pinnedFolderFadeIds={pinnedFolderFadeIds}
+          sharedFilesAvailable={sharedFilesAvailable}
+          riverTogglingDirIds={riverTogglingDirIds}
+          onToggleRiverDirectory={toggleRiverDirectory}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}
           onOpenIconColorPicker={openSidebarIconColorPicker}
@@ -3429,6 +3509,9 @@ function TreeNode({
   onKeyboardScopeActive,
   pinnedItemIds,
   pinnedFolderFadeIds,
+  sharedFilesAvailable,
+  riverTogglingDirIds,
+  onToggleRiverDirectory,
   getSidebarIconColor,
   getSidebarIconColorIndex,
   onOpenIconColorPicker,
@@ -3464,12 +3547,14 @@ function TreeNode({
   onKeyboardScopeActive?: () => void;
   pinnedItemIds: ReadonlySet<string>;
   pinnedFolderFadeIds: ReadonlySet<string>;
+  sharedFilesAvailable: boolean;
+  riverTogglingDirIds: ReadonlySet<string>;
+  onToggleRiverDirectory: (node: Extract<SidebarNode, { kind: 'dir' }>) => void;
   getSidebarIconColor: (id: string, fallbackColor: string) => string;
   getSidebarIconColorIndex: (id: string) => number | undefined;
   onOpenIconColorPicker: (id: string, event: React.MouseEvent<HTMLElement>) => void;
   inheritedIconColorIndex?: number;
 }) {
-  const [scratchpadExpanded, setScratchpadExpanded] = useState(false);
   const [archiveExpanded, setArchiveExpanded] = useState(false);
 
   if (node.kind === 'file') {
@@ -3509,13 +3594,15 @@ function TreeNode({
   const nodeCreateLocation = getSidebarNodeCreateLocation(node);
   const canDragDir = node.canDeleteDir && !(node.builtin && LIBRARY_DEFAULT_FOLDER_ID_SET.has(node.relPath));
   const isDropTarget = dropTargetId === node.id;
-  const normalNode = normalNodes === node.children ? node : { ...node, children: normalNodes };
-  const shouldCapScratchpad = shouldCapScratchpadSidebarNode(normalNode, isSearching, scratchpadExpanded);
-  const visibleChildren = shouldCapScratchpad ? normalNodes.slice(0, SCRATCHPAD_COLLAPSED_ITEM_LIMIT) : normalNodes;
-  const hiddenScratchpadCount = normalNodes.length - visibleChildren.length;
+  const visibleChildren = normalNodes;
+  const riverShareableItems = sharedFilesAvailable && node.name !== RIVER_SHARED_FOLDER_NAME
+    ? collectRiverShareableItems(node)
+    : [];
+  const canToggleRiverDirectory = riverShareableItems.length > 0;
+  const riverDirectoryShared = canToggleRiverDirectory && riverShareableItems.some(isRiverSharedItem);
+  const riverDirectoryToggling = riverTogglingDirIds.has(node.id);
   const showChildGuide = isExpanded && (
     visibleChildren.length > 0 ||
-    hiddenScratchpadCount > 0 ||
     archivedNodes.length > 0
   );
   const dropBg = theme.isDark ? 'rgba(59,130,246,0.18)' : 'rgba(59,130,246,0.12)';
@@ -3668,6 +3755,49 @@ function TreeNode({
                 </svg>
               </button>
             )}
+            {canToggleRiverDirectory && (
+              <button
+                className="bm-river-folder-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!riverDirectoryToggling) onToggleRiverDirectory(node);
+                }}
+                title={riverDirectoryShared ? 'Remove folder from River' : 'Add folder to River'}
+                aria-label={riverDirectoryShared ? `Remove ${node.label} from River` : `Add ${node.label} to River`}
+                disabled={riverDirectoryToggling}
+                style={{
+                  width: '18px',
+                  height: '18px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  padding: 0,
+                  background: riverDirectoryShared
+                    ? (theme.isDark ? 'rgba(96,165,250,0.20)' : 'rgba(59,130,246,0.14)')
+                    : 'transparent',
+                  border: riverDirectoryShared
+                    ? `1px solid ${theme.isDark ? 'rgba(147,197,253,0.42)' : 'rgba(37,99,235,0.30)'}`
+                    : 'none',
+                  borderRadius: '4px',
+                  color: riverDirectoryShared ? '#3b82f6' : theme.textSecondary,
+                  cursor: riverDirectoryToggling ? 'default' : 'pointer',
+                  opacity: riverDirectoryShared ? 1 : 0,
+                  transition: 'opacity 0.12s ease, background 0.12s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = riverDirectoryShared
+                    ? (theme.isDark ? 'rgba(96,165,250,0.26)' : 'rgba(59,130,246,0.20)')
+                    : (theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)');
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = riverDirectoryShared
+                    ? (theme.isDark ? 'rgba(96,165,250,0.20)' : 'rgba(59,130,246,0.14)')
+                    : 'transparent';
+                }}
+              >
+                <SidebarRiverIcon color="currentColor" />
+              </button>
+            )}
             {pinnedItemIds.has(node.id) && (
               <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
                 <SidebarPinIcon />
@@ -3736,37 +3866,15 @@ function TreeNode({
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
           pinnedFolderFadeIds={pinnedFolderFadeIds}
+          sharedFilesAvailable={sharedFilesAvailable}
+          riverTogglingDirIds={riverTogglingDirIds}
+          onToggleRiverDirectory={onToggleRiverDirectory}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}
           onOpenIconColorPicker={onOpenIconColorPicker}
           inheritedIconColorIndex={folderIconColorIndex}
         />
       ))}
-      {isExpanded && hiddenScratchpadCount > 0 && (
-        <div
-          onClick={(event) => {
-            event.stopPropagation();
-            setScratchpadExpanded(true);
-          }}
-          style={{
-            minHeight: '24px',
-            boxSizing: 'border-box',
-            padding: `4px ${LIBRARY_SIDEBAR_EDGE_PADDING}px 4px ${24 + depth * LIBRARY_SIDEBAR_DEPTH_INDENT}px`,
-            fontSize: '10px',
-            fontStyle: 'italic',
-            lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-            color: theme.textSecondary,
-            cursor: 'pointer',
-            opacity: 0.52,
-            display: 'flex',
-            alignItems: 'center',
-          }}
-          onMouseEnter={(event) => { event.currentTarget.style.backgroundColor = theme.hoverBg; }}
-          onMouseLeave={(event) => { event.currentTarget.style.backgroundColor = 'transparent'; }}
-        >
-          Show more ({hiddenScratchpadCount})
-        </div>
-      )}
       {isExpanded && archivedNodes.length > 0 && (
         <div
           onClick={(event) => {
@@ -3826,6 +3934,9 @@ function TreeNode({
           onKeyboardScopeActive={onKeyboardScopeActive}
           pinnedItemIds={pinnedItemIds}
           pinnedFolderFadeIds={pinnedFolderFadeIds}
+          sharedFilesAvailable={sharedFilesAvailable}
+          riverTogglingDirIds={riverTogglingDirIds}
+          onToggleRiverDirectory={onToggleRiverDirectory}
           getSidebarIconColor={getSidebarIconColor}
           getSidebarIconColorIndex={getSidebarIconColorIndex}
           onOpenIconColorPicker={onOpenIconColorPicker}
@@ -4270,6 +4381,7 @@ function FileItem({
     : sharedAuthorLabel
       ? `Shared by ${sharedAuthorLabel}`
       : undefined;
+  const hasInlineFileMeta = Boolean(sharedAuthorLabel || isPinned || showTodoStateBadge || item.hasUnread);
 
   return (
     <div
@@ -4412,7 +4524,7 @@ function FileItem({
               fontWeight: 400,
               color: sidebarTextColor,
               lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-              ...(sharedAuthorLabel
+              ...(hasInlineFileMeta
                 ? {
                   flex: '0 1 auto',
                   minWidth: 0,
@@ -4425,10 +4537,7 @@ function FileItem({
               {item.title}
             </div>
             {sharedAuthorLabel && sharedAuthorTitle && (
-              <>
-                <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
-                <span aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />
-              </>
+              <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
             )}
             {isPinned && (
               <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>

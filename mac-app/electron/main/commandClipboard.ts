@@ -153,6 +153,13 @@ export function shouldUseNativeCommandFileTyping(input: {
   return false;
 }
 
+export function shouldUseNativeCommandLauncherClipboardTextPaste(input: {
+  commandLauncherPaste: boolean;
+  hasTextContent: boolean;
+}): boolean {
+  return input.commandLauncherPaste && input.hasTextContent;
+}
+
 function formatCommandFileTextReference(source: CommandFilePasteSource): string {
   if (source.kind === 'command') {
     return `[${source.name}.md]\n${source.filePath} `;
