@@ -426,7 +426,7 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
   return input.key === 'Tab'
     && !input.metaKey
     && !input.ctrlKey
-    && !input.altKey
+    && input.altKey
     && (input.selectedItemType === 'wiki' || input.selectedItemType === 'external');
 }
 
@@ -6982,7 +6982,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
       if (
         sidebarKeyboardActiveRef.current
-        && e.key === 'Enter'
+        && e.key === 'Tab'
         && !e.metaKey
         && !e.shiftKey
         && !e.ctrlKey
@@ -6990,6 +6990,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       ) {
         e.preventDefault();
         focusActiveFileBodyAtEnd();
+        return;
+      }
+
+      if (
+        sidebarKeyboardActiveRef.current
+        && e.key === 'Enter'
+        && !e.metaKey
+        && !e.shiftKey
+        && !e.ctrlKey
+        && !e.altKey
+        && wikiArchiveRef.current?.renameFocusedItem(selectedItemIdRef.current)
+      ) {
+        e.preventDefault();
         return;
       }
 
@@ -7815,7 +7828,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   shareTitle="Add to River (shared)"
                   sharedTitle="Remove from River (shared)"
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
-                  copyPathCopied={copyFeedbackLabel !== null}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                 />
               )}

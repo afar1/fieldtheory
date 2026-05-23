@@ -72,6 +72,40 @@ export function parseMarkdownArchivedState(content: string): boolean {
   return getMarkdownArchivedState(parseMarkdownFrontmatter(content).meta);
 }
 
+export function parseMarkdownContentEditedAt(content: string): number | null {
+  const value = parseMarkdownFrontmatter(content).meta.content_edited_at;
+  if (!value) return null;
+  const numeric = Number.parseInt(value, 10);
+  if (Number.isFinite(numeric) && numeric > 0) return numeric;
+  const parsedDate = Date.parse(value);
+  return Number.isFinite(parsedDate) ? parsedDate : null;
+}
+
+export function setMarkdownContentEditedAt(content: string, timestamp = Date.now()): string {
+  const parsed = parseMarkdownFrontmatter(content);
+  const body = parsed.raw === null ? content : parsed.body;
+  const frontmatterLines = parsed.raw?.trim()
+    ? parsed.lines.filter((line) => !/^\s*content_edited_at\s*:/i.test(line))
+    : [];
+  const nextLines = [
+    ...frontmatterLines,
+    ...(frontmatterLines.length > 0 ? [''] : []),
+    `content_edited_at: ${Math.max(0, Math.floor(timestamp))}`,
+  ];
+  return `---\n${nextLines.join('\n')}\n---\n\n${body}`;
+}
+
+export function stampMarkdownContentEditIfBodyChanged(
+  previousContent: string,
+  nextContent: string,
+  timestamp = Date.now(),
+): string {
+  const previousBody = parseMarkdownFrontmatter(previousContent).body;
+  const nextBody = parseMarkdownFrontmatter(nextContent).body;
+  if (previousBody === nextBody) return nextContent;
+  return setMarkdownContentEditedAt(nextContent, timestamp);
+}
+
 export function setMarkdownTodoState(content: string, nextState: MarkdownTodoState | null): string {
   const parsed = parseMarkdownFrontmatter(content);
   const body = parsed.raw === null ? content : parsed.body;

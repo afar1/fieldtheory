@@ -37,6 +37,7 @@ import {
   type WikiNode,
 } from './librarianManager';
 import { readDocumentVersion } from './documentSaveGuard';
+import { parseMarkdownContentEditedAt, parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
 
 const tempDirs: string[] = [];
 
@@ -299,6 +300,22 @@ describe('recursive wiki tree scan', () => {
     ]);
   });
 
+  it('uses content edit metadata for wiki file sort timestamps', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'scratchpad'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'scratchpad', 'note.md'), '---\ncontent_edited_at: 1234\narchived: true\n---\n# Note\n');
+
+    const tree = scan(root);
+    const scratchpad = tree.find((node) => node.kind === 'dir' && node.name === 'scratchpad');
+    expect(scratchpad?.kind).toBe('dir');
+    if (scratchpad?.kind !== 'dir') return;
+    const note = scratchpad.children[0];
+    expect(note.kind).toBe('file');
+    if (note.kind !== 'file') return;
+    expect(note.lastUpdated).toBe(1234);
+    expect(note.archived).toBe(true);
+  });
+
   it('uses shared frontmatter title and full callsign for River cache nodes', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
@@ -429,7 +446,9 @@ describe('recursive wiki tree scan', () => {
     manager.emit = emit;
 
     expect(manager.saveWikiPage('entries/note', '# New title\n')).toEqual(expect.objectContaining({ ok: true }));
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
+    const saved = fs.readFileSync(filePath, 'utf-8');
+    expect(parseMarkdownFrontmatter(saved).body).toBe('# New title\n');
+    expect(parseMarkdownContentEditedAt(saved)).toBeGreaterThan(0);
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
 
@@ -448,7 +467,9 @@ describe('recursive wiki tree scan', () => {
     manager.emit = emit;
 
     expect(manager.saveWikiPage('entries/note', '# New title\n')).toEqual(expect.objectContaining({ ok: true }));
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('# New title\n');
+    const saved = fs.readFileSync(filePath, 'utf-8');
+    expect(parseMarkdownFrontmatter(saved).body).toBe('# New title\n');
+    expect(parseMarkdownContentEditedAt(saved)).toBeGreaterThan(0);
     expect(fs.existsSync(path.join(root, 'entries', 'note.md'))).toBe(false);
     expect(emit).toHaveBeenCalledWith('wiki:changed');
   });
@@ -883,7 +904,9 @@ describe('recursive wiki tree scan', () => {
     expect(fs.readFileSync(outsidePath, 'utf-8')).toBe('# Outside\n');
 
     expect(manager.saveReading(readingPath, '# Changed\n')).toEqual(expect.objectContaining({ ok: true }));
-    expect(fs.readFileSync(readingPath, 'utf-8')).toBe('# Changed\n');
+    const saved = fs.readFileSync(readingPath, 'utf-8');
+    expect(parseMarkdownFrontmatter(saved).body).toBe('# Changed\n');
+    expect(parseMarkdownContentEditedAt(saved)).toBeGreaterThan(0);
     expect(manager.cache.has(readingPath)).toBe(true);
     expect(emit).toHaveBeenCalledWith('reading-updated', expect.objectContaining({ path: readingPath, title: 'Changed' }));
   });

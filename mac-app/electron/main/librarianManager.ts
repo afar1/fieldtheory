@@ -22,7 +22,9 @@ import {
 import {
   parseMarkdownFrontmatter,
   parseMarkdownArchivedState,
+  parseMarkdownContentEditedAt,
   parseMarkdownTodoState,
+  stampMarkdownContentEditIfBodyChanged,
   type MarkdownTodoState,
 } from '../shared/markdownFrontmatter';
 
@@ -1643,7 +1645,9 @@ export type WikiNode =
   | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
-type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign'>;
+type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign'> & {
+  contentEditedAt?: number;
+};
 
 export interface LibraryRoot {
   path: string;
@@ -2628,6 +2632,7 @@ export class LibrarianManager extends EventEmitter {
       archived: parseMarkdownArchivedState(content) || undefined,
       sharedOriginalSourcePath: frontmatter.shared_original_source_path,
       sharedAuthorCallsign: frontmatter.shared_author_callsign,
+      contentEditedAt: parseMarkdownContentEditedAt(content) ?? undefined,
     };
   }
 
@@ -2920,7 +2925,7 @@ export class LibrarianManager extends EventEmitter {
         absPath,
         name,
         title: metadata.title,
-        lastUpdated: Math.floor(stats.mtimeMs),
+        lastUpdated: metadata.contentEditedAt ?? Math.floor(stats.mtimeMs),
         documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
         archived: metadata.archived,
@@ -3480,7 +3485,11 @@ export class LibrarianManager extends EventEmitter {
     const absPath = this.resolveWikiPageWritePath(relPath);
     if (!absPath) return { ok: false, reason: 'not-found' };
     try {
-      const result = writeTextFileWithConflictGuard(absPath, content, expectedVersion);
+      const previousContent = fs.existsSync(absPath) ? fs.readFileSync(absPath, 'utf-8') : '';
+      const nextContent = isMarkdownDocumentPath(absPath)
+        ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
+        : content;
+      const result = writeTextFileWithConflictGuard(absPath, nextContent, expectedVersion);
       if (!result.ok) return result;
       this.emit('wiki:changed');
       return result;
@@ -3816,7 +3825,11 @@ export class LibrarianManager extends EventEmitter {
     if (!normalizedPath) return { ok: false, reason: 'not-found' };
 
     try {
-      const result = writeTextFileWithConflictGuard(normalizedPath, content, expectedVersion);
+      const previousContent = fs.existsSync(normalizedPath) ? fs.readFileSync(normalizedPath, 'utf-8') : '';
+      const nextContent = isMarkdownDocumentPath(normalizedPath)
+        ? stampMarkdownContentEditIfBodyChanged(previousContent, content)
+        : content;
+      const result = writeTextFileWithConflictGuard(normalizedPath, nextContent, expectedVersion);
       if (!result.ok) return result;
 
       // Re-parse metadata since content may have changed title/context
