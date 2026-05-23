@@ -98,6 +98,7 @@ import LinkedDocumentsSection from './LinkedDocumentsSection';
 import ImagePreviewOverlay from './ImagePreviewOverlay';
 import ScrollDiagnosticsHUD from './ScrollDiagnosticsHUD';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
+import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import '../utils/scrollDiagnostics.bootstrap';
 import {
   coerceMarkdownContentMode,
@@ -2371,6 +2372,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Populated when there's unsaved content pending — call to flush the
   // pending debounced save synchronously (Esc, Cmd+S, switching files).
   const flushSaveRef = useRef<(() => Promise<void>) | null>(null);
+  const sharedContentSyncRef = useRef<{
+    sharedId: string;
+    content: string;
+    expectedRevision: number;
+  } | null>(null);
+  const sharedContentSyncTimerRef = useRef<number | null>(null);
+  const sharedContentSyncInFlightRef = useRef(false);
+  const sharedFileStatusRef = useRef<SharedFileStatus | null>(null);
+  const sharedFileStatusPathRef = useRef<string | null>(null);
   // Tracks what's actually on disk. activeReading.content goes stale after
   // the first save (we intentionally don't re-fetch to preserve the
   // editor's undo stack), so comparing against it would miss the
@@ -2497,6 +2507,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const pendingRenderedEditorSelectionRef = useRef<{ start: number; end: number } | null>(null);
 
   const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
+  const sampleRenderedEditorInteraction = useInteractionFpsSampler('rendered-editor-input');
   const setContentScrollRef = useCallback(
     (el: HTMLDivElement | null) => {
       contentScrollRef.current = el;
@@ -2549,9 +2560,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     let cancelled = false;
-    const loadAvailability = () => window.sharedFilesAPI?.getAvailability?.().then((availability) => {
-      if (!cancelled) setSharedFilesAvailable(availability?.available === true);
-    });
+    const loadAvailability = async () => {
+      const availability = await window.sharedFilesAPI?.getAvailability?.();
+      const available = availability?.available === true;
+      if (!cancelled) setSharedFilesAvailable(available);
+      if (available) {
+        void window.sharedFilesAPI?.sync?.().catch((error) => {
+          console.warn('[Librarian] River startup sync failed:', error);
+        });
+      }
+    };
     void loadAvailability();
     const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
       void loadAvailability();
@@ -2590,6 +2608,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
   ));
+  const renderedEditorDebugEnabledRef = useRef(renderedEditorDebugEnabled);
   const renderedEditingActiveRef = useRef(renderedEditingActive);
   const contentModeRef = useRef(contentMode);
   const editContentRef = useRef(editContent);
@@ -2597,7 +2616,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     contentModeRef.current = contentMode;
     editContentRef.current = editContent;
     renderedEditingActiveRef.current = renderedEditingActive;
-  }, [contentMode, editContent, renderedEditingActive]);
+    renderedEditorDebugEnabledRef.current = renderedEditorDebugEnabled;
+  }, [contentMode, editContent, renderedEditingActive, renderedEditorDebugEnabled]);
   const getRenderedCursorDebugState = useCallback((label = 'cursor'): Record<string, unknown> => {
     const root = renderedContentRef.current;
     const editor = renderedMarkdownEditorRef.current;
@@ -2773,7 +2793,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       editorCursor: getEditorCursorDebugState('state'),
     };
   }, [getEditorCursorDebugState, getRenderedCursorDebugState]);
-  const recordRenderedEditorDebug = useCallback((stage: string, details: Record<string, unknown> = {}) => {
+  const recordRenderedEditorDebug = useCallback((
+    stage: string,
+    details: Record<string, unknown> | (() => Record<string, unknown>) = {},
+  ) => {
+    if (!renderedEditorDebugEnabledRef.current) return null;
     const entry: RenderedEditorDebugEntry = {
       timestamp: Date.now(),
       stage,
@@ -2781,7 +2805,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       contentMode: contentModeRef.current,
       editingActive: renderedEditingActiveRef.current,
       scrollTop: contentScrollRef.current?.scrollTop ?? null,
-      details,
+      details: typeof details === 'function' ? details() : details,
     };
     renderedEditorDebugEntriesRef.current = [...renderedEditorDebugEntriesRef.current, entry].slice(-RENDERED_EDITOR_DEBUG_ENTRY_LIMIT);
     const api = (window as Window & { ftDebugRenderedEditor?: RenderedEditorDebugApi }).ftDebugRenderedEditor;
@@ -2802,16 +2826,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (editorCursorSettleTimerRef.current !== null) {
       window.clearTimeout(editorCursorSettleTimerRef.current);
     }
-    recordRenderedEditorDebug('editor-cursor-observed', {
+    recordRenderedEditorDebug('editor-cursor-observed', () => ({
       reason,
       cursor: getEditorCursorDebugState(`${reason}-observed`, markdownSnapshot),
-    });
+    }));
     editorCursorSettleTimerRef.current = window.setTimeout(() => {
       editorCursorSettleTimerRef.current = null;
-      recordRenderedEditorDebug('editor-cursor-settled', {
+      recordRenderedEditorDebug('editor-cursor-settled', () => ({
         reason,
         cursor: getEditorCursorDebugState(`${reason}-settled`),
-      });
+      }));
     }, 650);
   }, [getEditorCursorDebugState, recordRenderedEditorDebug]);
   useEffect(() => () => {
@@ -2824,6 +2848,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const isEnabled = () => localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
     const setEnabled = (enabled: boolean) => {
       localStorage.setItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY, enabled ? 'true' : 'false');
+      renderedEditorDebugEnabledRef.current = enabled;
       setRenderedEditorDebugEnabled(enabled);
     };
     const api: RenderedEditorDebugApi = {
@@ -2878,19 +2903,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [getEditorCursorDebugState, getMarkdownCursorDebugState, getRenderedCursorDebugState, getRenderedEditorDebugState, recordRenderedEditorDebug]);
   useEffect(() => {
     const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
-      const debugEnabled = localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
-      if (!debugEnabled && !renderedEditingActiveRef.current) return;
+      if (!renderedEditorDebugEnabledRef.current) return;
       const beforeScrollTop = contentScrollRef.current?.scrollTop ?? null;
-      recordRenderedEditorDebug('document-keydown-capture', {
+      recordRenderedEditorDebug('document-keydown-capture', () => ({
         key: event.key,
         code: event.code,
         defaultPrevented: event.defaultPrevented,
         target: getElementDebugSummary(event.target instanceof Element ? event.target : null),
         state: getRenderedEditorDebugState(),
-      });
+      }));
       window.setTimeout(() => {
         const afterScrollTop = contentScrollRef.current?.scrollTop ?? null;
-        recordRenderedEditorDebug('document-keydown-after-default', {
+        recordRenderedEditorDebug('document-keydown-after-default', () => ({
           key: event.key,
           code: event.code,
           defaultPrevented: event.defaultPrevented,
@@ -2900,7 +2924,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             ? afterScrollTop - beforeScrollTop
             : null,
           state: getRenderedEditorDebugState(),
-        });
+        }));
       }, 0);
     };
     window.addEventListener('keydown', handleDocumentKeyDownCapture, true);
@@ -2975,6 +2999,79 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const markWritingActive = useCallback(() => {
     if (isFocusedWritingMode) setWritingChromeHidden(true);
   }, [isFocusedWritingMode]);
+
+  useEffect(() => {
+    sharedFileStatusRef.current = sharedFileStatus;
+  }, [sharedFileStatus]);
+
+  const runSharedContentSync = useCallback(async () => {
+    if (sharedContentSyncInFlightRef.current) return;
+    const pending = sharedContentSyncRef.current;
+    if (!pending) return;
+
+    sharedContentSyncRef.current = null;
+    sharedContentSyncInFlightRef.current = true;
+    let shouldRetryPending = false;
+    const currentStatus = sharedFileStatusRef.current;
+    const expectedRevision = currentStatus?.sharedId === pending.sharedId
+      ? currentStatus.revision ?? pending.expectedRevision
+      : pending.expectedRevision;
+
+    try {
+      const sharedResult = await window.sharedFilesAPI?.updateContent(
+        pending.sharedId,
+        pending.content,
+        expectedRevision,
+      );
+      if (sharedResult?.revision !== undefined) {
+        setSharedFileStatus((prev) => {
+          if (!prev || prev.sharedId !== pending.sharedId) return prev;
+          return { ...prev, revision: sharedResult.revision, cachePath: sharedResult.cachePath ?? prev.cachePath };
+        });
+      }
+      if (sharedResult?.conflictPath) {
+        console.warn('[Librarian] River edit saved as private conflict copy:', sharedResult.conflictPath);
+      }
+    } catch (error) {
+      shouldRetryPending = true;
+      console.warn('[Librarian] River background sync failed:', error);
+    } finally {
+      if (shouldRetryPending && !sharedContentSyncRef.current) {
+        sharedContentSyncRef.current = pending;
+      }
+      sharedContentSyncInFlightRef.current = false;
+      if (sharedContentSyncRef.current && sharedContentSyncTimerRef.current === null) {
+        sharedContentSyncTimerRef.current = window.setTimeout(() => {
+          sharedContentSyncTimerRef.current = null;
+          void runSharedContentSync();
+        }, 1200);
+      }
+    }
+  }, []);
+
+  const scheduleSharedContentSync = useCallback((status: SharedFileStatus | null | undefined, content: string) => {
+    if (!status?.shared || !status.sharedId) return;
+    sharedContentSyncRef.current = {
+      sharedId: status.sharedId,
+      content,
+      expectedRevision: status.revision ?? 0,
+    };
+    if (sharedContentSyncTimerRef.current !== null) {
+      window.clearTimeout(sharedContentSyncTimerRef.current);
+    }
+    sharedContentSyncTimerRef.current = window.setTimeout(() => {
+      sharedContentSyncTimerRef.current = null;
+      void runSharedContentSync();
+    }, 1200);
+  }, [runSharedContentSync]);
+
+  useEffect(() => () => {
+    if (sharedContentSyncTimerRef.current !== null) {
+      window.clearTimeout(sharedContentSyncTimerRef.current);
+      sharedContentSyncTimerRef.current = null;
+    }
+    sharedContentSyncRef.current = null;
+  }, []);
 
   const setMarkdownEditorFades = useCallback((next: { top: boolean; bottom: boolean }) => {
     const current = markdownEditorEdgeFadesRef.current;
@@ -4255,6 +4352,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const targetType = selectedItemType;
     const targetPath = activeReading.path;
     const targetTitle = activeReading.title;
+    const targetSharedFileStatus = sharedFileStatus;
     const deferReactState = contentModeRef.current === 'rendered'
       && renderedEditingActiveRef.current
       && activeReadingPathRef.current === targetPath;
@@ -4294,6 +4392,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }
       if (!isDocumentSaveOk(result)) throw new Error('save failed');
       const nextVersion = getDocumentSaveVersion(result);
+      const currentSharedFileStatus = sharedFileStatusPathRef.current === targetPath
+        ? sharedFileStatusRef.current
+        : targetSharedFileStatus;
+      scheduleSharedContentSync(currentSharedFileStatus, normalizedContent);
       if (deferReactState) {
         rememberSavedDocumentContent(targetPath, normalizedContent, nextVersion);
         flushPendingCopiedImageDeletes(targetPath, normalizedContent);
@@ -4322,7 +4424,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } finally {
       renderedSaveInFlightRef.current = Math.max(0, renderedSaveInFlightRef.current - 1);
     }
-  }, [activeReading, applySavedDocumentState, flushPendingCopiedImageDeletes, getRenderedCursorDebugState, recordRenderedEditorDebug, rememberSavedDocumentContent, resolveSaveConflict, selectedItemType, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, flushPendingCopiedImageDeletes, getRenderedCursorDebugState, recordRenderedEditorDebug, rememberSavedDocumentContent, resolveSaveConflict, scheduleSharedContentSync, selectedItemType, sharedFileStatus, wikiSelectedRelPath]);
 
   const applyRenderedContentLocalState = useCallback((
     nextContent: string,
@@ -4331,14 +4433,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const normalizedContent = removeEmptyMarkdownCommentPlaceholders(nextContent);
     const activePath = activeReadingPathRef.current;
     const shouldUpdateReactState = options.updateReactState !== false;
-    recordRenderedEditorDebug('local-content-state-apply', {
+    recordRenderedEditorDebug('local-content-state-apply', () => ({
       targetType: selectedItemType,
       activePath,
       nextLength: normalizedContent.length,
       updateRenderedDisplayContent: options.updateRenderedDisplayContent === true,
       updateReactState: shouldUpdateReactState,
       cursorBeforeApply: getRenderedCursorDebugState('local-content-state-before-apply'),
-    });
+    }));
     if (activePath) {
       latestRenderedContentRef.current = { path: activePath, content: normalizedContent };
       if (options.updateRenderedDisplayContent) {
@@ -4376,11 +4478,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     pendingRenderedSaveRef.current = () => {
       void saveRenderedContent(nextContent);
     };
-    recordRenderedEditorDebug('save-scheduled', {
+    recordRenderedEditorDebug('save-scheduled', () => ({
       contentLength: nextContent.length,
       delayMs: 400,
       cursor: getRenderedCursorDebugState('save-scheduled'),
-    });
+    }));
     renderedSaveTimerRef.current = window.setTimeout(() => {
       renderedSaveTimerRef.current = null;
       const pending = pendingRenderedSaveRef.current;
@@ -4471,13 +4573,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ]);
 
   const handleRenderedEditorChange = useCallback((nextBody: string) => {
+    sampleRenderedEditorInteraction();
     const selection = renderedMarkdownEditorRef.current?.getSelectionRange() ?? null;
     applyRenderedEditorBody(nextBody, {
       selectionStart: selection?.start ?? null,
       selectionEnd: selection?.end ?? null,
       preserveUndo: true,
     });
-  }, [applyRenderedEditorBody]);
+  }, [applyRenderedEditorBody, sampleRenderedEditorInteraction]);
 
   const applyRenderedWikiLinkSuggestion = useCallback((
     suggestion: MarkdownWikiLinkSuggestion,
@@ -4618,10 +4721,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
 
     const navigationDirection = getLibrarianBracketNavigationDirection(event, { canNavigateBack, canNavigateForward });
-    if (navigationDirection !== null) {
+    if (navigationDirection !== null && navigationDirection !== 0) {
       event.preventDefault();
       event.stopPropagation();
-      if (navigationDirection !== 0) navigateHistory(navigationDirection);
+      navigateHistory(navigationDirection);
       return true;
     }
 
@@ -5116,11 +5219,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   ) => {
     const reason = snapshot.docChanged ? 'markdown-input' : 'markdown-selection';
     latestMarkdownCursorSnapshotRef.current = { ...snapshot, timestamp: Date.now(), stage: reason };
-    recordRenderedEditorDebug('markdown-cursor-change', {
+    recordRenderedEditorDebug('markdown-cursor-change', () => ({
       reason,
       cursor: getMarkdownCursorDebugState(reason, snapshot),
       editorCursor: getEditorCursorDebugState(reason, snapshot),
-    });
+    }));
     scheduleEditorCursorSettledDebug(reason, snapshot);
     updateMarkdownCodeEditorWikiLinkCompletion(snapshot);
   }, [
@@ -5726,22 +5829,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
         if (!isDocumentSaveOk(result)) throw new Error('save failed');
         applySavedDocumentState(targetType, targetReadingPath, portableContent, getDocumentSaveVersion(result), targetTitle);
-        if (targetSharedFileStatus?.shared && targetSharedFileStatus.sharedId) {
-          const sharedResult = await window.sharedFilesAPI?.updateContent(
-            targetSharedFileStatus.sharedId,
-            portableContent,
-            targetSharedFileStatus.revision ?? 0,
-          );
-          if (sharedResult?.revision !== undefined) {
-            setSharedFileStatus((prev) => {
-              if (!prev || prev.sharedId !== targetSharedFileStatus.sharedId) return prev;
-              return { ...prev, revision: sharedResult.revision, cachePath: sharedResult.cachePath ?? prev.cachePath };
-            });
-          }
-          if (sharedResult?.conflictPath) {
-            console.warn('[Librarian] River edit saved as private conflict copy:', sharedResult.conflictPath);
-          }
-        }
+        const currentSharedFileStatus = sharedFileStatusPathRef.current === targetReadingPath
+          ? sharedFileStatusRef.current
+          : targetSharedFileStatus;
+        scheduleSharedContentSync(currentSharedFileStatus, portableContent);
         setSaveStatus('saved');
       } catch {
         setSaveStatus('idle');
@@ -5754,7 +5845,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     flushSaveRef.current = doSave;
     const timer = setTimeout(() => { void doSave(); }, 400);
     return () => clearTimeout(timer);
-  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, selectedItemType, sharedFileStatus, wikiSelectedRelPath]);
+  }, [activeReading, applySavedDocumentState, contentMode, editContent, resolveSaveConflict, scheduleSharedContentSync, selectedItemType, sharedFileStatus, wikiSelectedRelPath]);
 
   // Keep the internal save state from staying in "saved" after auto-save settles.
   // 2.5s is long enough to notice when clicking away to another file without
@@ -6467,11 +6558,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     let cancelled = false;
     async function loadSharedFileStatus() {
       if (!sharedFilesAvailable || !activeReadingPath || !activeIsMarkdownDocument) {
+        sharedFileStatusPathRef.current = null;
         setSharedFileStatus(null);
         return;
       }
       const status = await window.sharedFilesAPI?.getStatus(activeReadingPath);
-      if (!cancelled) setSharedFileStatus(status ?? { shared: false });
+      if (!cancelled) {
+        const nextStatus = status ?? { shared: false };
+        sharedFileStatusPathRef.current = activeReadingPath;
+        sharedFileStatusRef.current = nextStatus;
+        setSharedFileStatus(nextStatus);
+      }
     }
     void loadSharedFileStatus();
     return () => {
@@ -6746,9 +6843,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
       // Cmd+[ / Cmd+] - match the toolbar back and forward controls.
       const navigationDirection = getLibrarianBracketNavigationDirection(e, { canNavigateBack, canNavigateForward });
-      if (navigationDirection !== null) {
+      if (navigationDirection !== null && navigationDirection !== 0) {
         e.preventDefault();
-        if (navigationDirection !== 0) navigateHistory(navigationDirection);
+        navigateHistory(navigationDirection);
         return;
       }
 

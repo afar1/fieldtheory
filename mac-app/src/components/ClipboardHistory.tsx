@@ -70,8 +70,14 @@ import { smartTruncateText, detectColor } from '../utils/textUtils';
 import {
   FIELD_THEORY_VIEW_STORAGE_KEY,
   SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY,
+  getAppBracketNavigationDirection,
+  getAppNavigationSurface,
+  popAppBackHistory,
+  popAppForwardHistory,
   persistClipboardSurface,
+  pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  type AppNavigationSurface,
 } from '../utils/clipboardHistoryRestore';
 import {
   buildClipboardItemsMarkdown,
@@ -114,6 +120,46 @@ type FooterLocalCommandStatus = {
 };
 
 const LOCAL_COMMAND_ACTIVITY_FRAMES = ['|', '/', '-', '\\'] as const;
+
+function FooterFpsCounter({ active, color }: { active: boolean; color: string }) {
+  const [fps, setFps] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (!active) {
+      setFps(null);
+      return;
+    }
+
+    let rafId = 0;
+    let frameCount = 0;
+    let sampleStart = performance.now();
+
+    const sample = (now: number) => {
+      frameCount += 1;
+      if (now - sampleStart >= 500) {
+        const nextFps = Math.round((frameCount * 1000) / (now - sampleStart));
+        setFps((previous) => previous === nextFps ? previous : nextFps);
+        frameCount = 0;
+        sampleStart = now;
+      }
+      rafId = requestAnimationFrame(sample);
+    };
+
+    rafId = requestAnimationFrame(sample);
+    return () => cancelAnimationFrame(rafId);
+  }, [active]);
+
+  if (fps === null) return null;
+
+  return (
+    <span
+      title="Renderer frames per second"
+      style={{ color, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', opacity: 0.72 }}
+    >
+      {fps}fps
+    </span>
+  );
+}
 
 function formatFooterLocalCommandStatus(status: FooterLocalCommandStatus, activityFrame?: string): string {
   const detail = compactFooterStatusDetail(status.detail);
@@ -522,11 +568,64 @@ export default function ClipboardHistory() {
   });
   const topNavPaintTraceRef = useRef<TopNavPaintTrace | null>(null);
   const viewModeRef = useRef(viewMode);
+  const appNavigationSurfaceRef = useRef<AppNavigationSurface>(getAppNavigationSurface({ viewMode, showSettings }));
+  const appBackHistoryRef = useRef<AppNavigationSurface[]>([]);
+  const appForwardHistoryRef = useRef<AppNavigationSurface[]>([]);
+  const appHistoryNavigationRef = useRef(false);
   const previousSizeViewModeRef = useRef(viewMode);
   const [libraryKeepsCurrentSizeKey, setLibraryKeepsCurrentSizeKey] = useState(false);
   useEffect(() => {
     viewModeRef.current = viewMode;
   }, [viewMode]);
+  useEffect(() => {
+    const nextSurface = getAppNavigationSurface({ viewMode, showSettings });
+    const previousSurface = appNavigationSurfaceRef.current;
+    if (appHistoryNavigationRef.current) {
+      appHistoryNavigationRef.current = false;
+      appNavigationSurfaceRef.current = nextSurface;
+      return;
+    }
+
+    appBackHistoryRef.current = pushAppNavigationHistory(
+      appBackHistoryRef.current,
+      previousSurface,
+      nextSurface,
+    );
+    if (previousSurface !== nextSurface) {
+      appForwardHistoryRef.current = [];
+    }
+    appNavigationSurfaceRef.current = nextSurface;
+  }, [showSettings, viewMode]);
+  const applyAppNavigationSurface = useCallback((surface: AppNavigationSurface) => {
+    appHistoryNavigationRef.current = true;
+    if (surface === 'settings') {
+      setShowSettings(true);
+      return;
+    }
+
+    setShowSettings(false);
+    setViewMode(surface);
+  }, []);
+  const navigateAppHistory = useCallback((direction: -1 | 1): boolean => {
+    const current = appNavigationSurfaceRef.current;
+    const result = direction < 0
+      ? popAppBackHistory({
+        backHistory: appBackHistoryRef.current,
+        forwardHistory: appForwardHistoryRef.current,
+        current,
+      })
+      : popAppForwardHistory({
+        backHistory: appBackHistoryRef.current,
+        forwardHistory: appForwardHistoryRef.current,
+        current,
+      });
+
+    if (!result.target) return false;
+    appBackHistoryRef.current = result.backHistory;
+    appForwardHistoryRef.current = result.forwardHistory;
+    applyAppNavigationSurface(result.target);
+    return true;
+  }, [applyAppNavigationSurface]);
   const applyTopNavVisualMode = useCallback((mode: TopNavMode): number => {
     const appliedAt = performance.now();
     document.querySelectorAll<HTMLElement>('[data-top-nav-mode]').forEach((button) => {
@@ -594,30 +693,6 @@ export default function ClipboardHistory() {
   const focusChromeIconOpacity = focusChromeOverlayActive ? FOCUS_CHROME_ICON_OPACITY : 0;
   const showFocusChromeIcon = focusChromeOverlayActive;
   const footerChromeHidden = bookmarksCanvasChromeActive || (focusChromeOverlayActive && !footerChromeInteractive);
-  const [footerFps, setFooterFps] = useState<number | null>(null);
-  useEffect(() => {
-    if (!isWindowVisible || footerChromeHidden) {
-      setFooterFps(null);
-      return;
-    }
-
-    let rafId = 0;
-    let frameCount = 0;
-    let sampleStart = performance.now();
-
-    const sample = (now: number) => {
-      frameCount += 1;
-      if (now - sampleStart >= 500) {
-        setFooterFps(Math.round((frameCount * 1000) / (now - sampleStart)));
-        frameCount = 0;
-        sampleStart = now;
-      }
-      rafId = requestAnimationFrame(sample);
-    };
-
-    rafId = requestAnimationFrame(sample);
-    return () => cancelAnimationFrame(rafId);
-  }, [footerChromeHidden, isWindowVisible]);
   const enableGlobalFocusChrome = useCallback(() => {
     if (focusChromePreviousSidebarCollapsedRef.current === null) {
       focusChromePreviousSidebarCollapsedRef.current = navSidebarCollapsed;
@@ -2814,6 +2889,13 @@ export default function ClipboardHistory() {
 
       // Let Cmd+H pass through to menu for app hiding.
       if (key === 'h' && hasMeta) return;
+
+      const appNavigationDirection = getAppBracketNavigationDirection(e);
+      if (appNavigationDirection !== null && navigateAppHistory(appNavigationDirection)) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       
       // Prevent default for navigation keys.
       if (key === 'ArrowDown' || key === 'ArrowUp' || key === 'Enter' || key === 'Escape' || 
@@ -7441,14 +7523,7 @@ export default function ClipboardHistory() {
                   )
                 ) : (
                   <>
-                    {footerFps !== null && (
-                      <span
-                        title="Renderer frames per second"
-                        style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', opacity: 0.72 }}
-                      >
-                        {footerFps}fps
-                      </span>
-                    )}
+                    <FooterFpsCounter active={isWindowVisible && !footerChromeHidden} color={theme.textSecondary} />
                     {userCallsign && (
                       <span style={{ color: theme.textSecondary, fontSize: '9px', fontFamily: 'ui-monospace, SFMono-Regular, monospace', letterSpacing: '0.5px' }}>
                         {userCallsign}

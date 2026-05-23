@@ -397,6 +397,35 @@ export interface LauncherVisibleItem {
   type?: string;
   name: string;
   displayName: string;
+  hotkeyDisplay?: string;
+  timeAgo?: string;
+}
+
+export function areLauncherVisibleItemsSameOrder(
+  current: readonly LauncherVisibleItem[],
+  next: readonly LauncherVisibleItem[],
+): boolean {
+  if (current === next) return true;
+  if (current.length !== next.length) return false;
+  return current.every((item, index) => (
+    item.id === next[index]?.id
+      && item.type === next[index]?.type
+      && item.name === next[index]?.name
+      && item.displayName === next[index]?.displayName
+      && item.hotkeyDisplay === next[index]?.hotkeyDisplay
+      && item.timeAgo === next[index]?.timeAgo
+  ));
+}
+
+export const LAUNCHER_FILTER_TRACE_MIN_ELAPSED_MS = 8;
+
+export function shouldTraceLauncherRendererEvent(
+  event: string,
+  details: Record<string, unknown> = {},
+): boolean {
+  if (event !== 'filter-results') return true;
+  const elapsedMs = details.elapsedMs;
+  return typeof elapsedMs !== 'number' || elapsedMs >= LAUNCHER_FILTER_TRACE_MIN_ELAPSED_MS;
 }
 
 export interface LauncherAuthorNamespaceCandidate extends LauncherVisibleItem {
