@@ -194,6 +194,8 @@ interface Preferences {
   clipboardHistoryBoundsByView?: ClipboardHistoryBoundsByView;
   /** Last active size profile, so reopen starts at the same view size. */
   clipboardHistoryLastSizeKey?: ClipboardHistorySizeKey;
+  /** Last bounds for standalone Library document windows. */
+  libraryDocumentWindowBounds?: ClipboardHistoryBounds;
 
   // Onboarding state - tracks whether user has completed first-run setup.
   onboardingComplete?: boolean;

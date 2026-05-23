@@ -1855,20 +1855,21 @@ export class ClipboardHistoryWindow {
       const script = `
         set appList to ""
         tell application "System Events"
-          set visibleApps to every application process whose visible is true
-          repeat with appProc in visibleApps
+          repeat with appProc in application processes
             try
-              set appBundleId to bundle identifier of appProc
-              set appName to name of appProc
-              if appBundleId is not missing value then
-                set appList to appList & appBundleId & "|" & appName & "\\n"
+              if visible of appProc is true then
+                set appBundleId to bundle identifier of appProc
+                set appName to name of appProc
+                if appBundleId is not missing value then
+                  set appList to appList & appBundleId & "|" & appName & "\\n"
+                end if
               end if
             end try
           end repeat
         end tell
         return appList
       `;
-      const { stdout } = await execAsync(`osascript -e '${script}'`);
+      const { stdout } = await execFileAsync('osascript', ['-e', script]);
       
       const apps: RunningApp[] = [];
       const lines = stdout.trim().split('\n').filter(line => line.includes('|'));

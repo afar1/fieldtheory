@@ -6,6 +6,7 @@ import LibrarianView, {
   getLibraryDocumentViewKind,
   getHtmlPreviewSrcDoc,
   getLocalFileUrl,
+  resolveCurrentWikiCreateFolder,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -62,6 +63,325 @@ describe('LibrarianView render', () => {
     expect(getHtmlPreviewSrcDoc('<head><title>x</title></head>', '/tmp/Field Theory/report.html')).toContain(
       '<head><base href="file:///tmp/Field%20Theory/"><title>x</title>',
     );
+  });
+
+  it('resolves new wiki pages to the current folder or scratchpad', () => {
+    expect(resolveCurrentWikiCreateFolder('wiki', 'projects/notes/plan')).toBe('projects/notes');
+    expect(resolveCurrentWikiCreateFolder('wiki', 'loose-note')).toBe('scratchpad');
+    expect(resolveCurrentWikiCreateFolder('artifact', null)).toBe('scratchpad');
+  });
+
+  it('opens a command-clicked sidebar file in a document window and clears the source selection', async () => {
+    const relPath = 'scratchpad/popout-note';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `${testLibraryRootPath}/${relPath}.md`,
+          name: 'popout-note',
+          title: 'Popout Note',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'popout-note',
+      title: 'Popout Note',
+      lastUpdated: 1,
+      content: 'Popout body',
+      documentVersion: { mtimeMs: 1, size: 11, sha256: 'popout' },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const row = await screen.findByText('Popout Note');
+    fireEvent.click(row);
+    await screen.findByText('Popout body');
+
+    fireEvent.click(row, { metaKey: true });
+
+    await waitFor(() => {
+      expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: relPath, contentMode: 'rendered', sidebarCollapsed: true });
+    });
+    expect(await screen.findByText('Select a page')).toBeTruthy();
+  });
+
+  it('keeps an initial wiki target from being replaced by the default artifact', async () => {
+    const relPath = 'scratchpad/right-click-target';
+    vi.mocked(window.librarianAPI!.getReadings).mockResolvedValue([{
+      path: '/tmp/library/first-artifact.md',
+      title: 'first-artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+    }]);
+    vi.mocked(window.librarianAPI!.getReading).mockResolvedValue({
+      path: '/tmp/library/first-artifact.md',
+      title: 'first-artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 0,
+      content: 'Wrong artifact body',
+      documentVersion: { mtimeMs: 1, size: 19, sha256: 'artifact' },
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'right-click-target',
+      title: 'Right Click Target',
+      lastUpdated: 1,
+      content: 'Correct wiki body',
+      documentVersion: { mtimeMs: 1, size: 17, sha256: 'wiki' },
+    });
+
+    const { rerender } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    expect(await screen.findByText('Correct wiki body')).toBeTruthy();
+    await waitFor(() => {
+      expect(window.librarianAPI!.getReadings).toHaveBeenCalled();
+    });
+    rerender(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={null}
+      />
+    );
+    expect(screen.queryByText('Wrong artifact body')).toBeNull();
+    expect(screen.getByText('Correct wiki body')).toBeTruthy();
+  });
+
+  it('shows the active file title in the toolbar after scrolling the document', async () => {
+    const relPath = 'scratchpad/scrolled-title';
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'scrolled-title',
+      title: 'Scrolled Title',
+      lastUpdated: 1,
+      content: Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join('\n\n'),
+      documentVersion: { mtimeMs: 1, size: 300, sha256: 'scrolled-title' },
+    });
+
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('line 1');
+    expect(container.querySelector('[data-ft-active-document-scrolled-title="true"]')).toBeNull();
+    const scrollEl = container.querySelector('[data-ft-librarian-content-scroll="true"]') as HTMLDivElement;
+    Object.defineProperty(scrollEl, 'scrollTop', { configurable: true, value: 48 });
+    Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, value: 1200 });
+    Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, value: 600 });
+
+    fireEvent.scroll(scrollEl);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-ft-active-document-scrolled-title="true"]')?.textContent).toBe('Scrolled Title');
+    });
+    expect(container.querySelector('[data-ft-active-document-identity="true"]')?.textContent).toContain('scratchpad');
+  });
+
+  it('keeps the scrolled file title visible in fullscreen focus chrome', async () => {
+    const relPath = 'scratchpad/fullscreen-scrolled-title';
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'fullscreen-scrolled-title',
+      title: 'Fullscreen Scrolled Title',
+      lastUpdated: 1,
+      content: Array.from({ length: 40 }, (_, index) => `fullscreen line ${index + 1}`).join('\n\n'),
+      documentVersion: { mtimeMs: 1, size: 400, sha256: 'fullscreen-scrolled-title' },
+    });
+
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+        focusChromeEnabled
+      />
+    );
+
+    await screen.findByText('fullscreen line 1');
+    const scrollEl = container.querySelector('[data-ft-librarian-content-scroll="true"]') as HTMLDivElement;
+    Object.defineProperty(scrollEl, 'scrollTop', { configurable: true, value: 48 });
+    Object.defineProperty(scrollEl, 'scrollHeight', { configurable: true, value: 1200 });
+    Object.defineProperty(scrollEl, 'clientHeight', { configurable: true, value: 600 });
+
+    fireEvent.scroll(scrollEl);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-ft-active-document-scrolled-title="true"]')?.textContent).toBe('Fullscreen Scrolled Title');
+    });
+    expect(container.querySelector('[data-ft-active-document-identity="true"]')?.textContent).toContain('scratchpad');
+    const topFade = container.querySelector('[data-ft-reader-top-fade="true"]') as HTMLElement;
+    expect(topFade.style.top).toBe('0px');
+    expect(topFade.style.height).toBe('30px');
+    expect(topFade.style.opacity).toBe('0.72');
+  });
+
+  it('keeps the source selection when a document window fails to open', async () => {
+    const relPath = 'scratchpad/popout-failure';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.openDocumentWindow).mockResolvedValue({ success: false, error: 'failed' });
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `${testLibraryRootPath}/${relPath}.md`,
+          name: 'popout-failure',
+          title: 'Popout Failure',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath,
+      absPath: `${testLibraryRootPath}/${relPath}.md`,
+      name: 'popout-failure',
+      title: 'Popout Failure',
+      lastUpdated: 1,
+      content: 'Still selected',
+      documentVersion: { mtimeMs: 1, size: 14, sha256: 'failure' },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const row = await screen.findByText('Popout Failure');
+    fireEvent.click(row);
+    await screen.findByText('Still selected');
+
+    fireEvent.click(row, { metaKey: true });
+
+    await waitFor(() => {
+      expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: relPath, contentMode: 'rendered', sidebarCollapsed: true });
+    });
+    expect(screen.getByText('Still selected')).toBeTruthy();
+    expect(screen.queryByText('Select a page')).toBeNull();
+  });
+
+  it('offers a sidebar context menu action for opening a file in a document window', async () => {
+    const relPath = 'scratchpad/context-popout';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [{
+          kind: 'file' as const,
+          relPath,
+          absPath: `${testLibraryRootPath}/${relPath}.md`,
+          name: 'context-popout',
+          title: 'Context Popout',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const row = await screen.findByText('Context Popout');
+    fireEvent.contextMenu(row);
+    fireEvent.click(await screen.findByRole('button', { name: 'Open in New Window' }));
+
+    await waitFor(() => {
+      expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: relPath, contentMode: 'rendered' });
+    });
+  });
+
+  it('creates a command-shift-n page in the current wiki folder as a document window', async () => {
+    const selectedRelPath = 'projects/current-note';
+    const createdRelPath = 'projects/new-page';
+    mockStoredWikiSelection(selectedRelPath);
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'projects',
+        relPath: 'projects',
+        children: [{
+          kind: 'file' as const,
+          relPath: selectedRelPath,
+          absPath: `${testLibraryRootPath}/${selectedRelPath}.md`,
+          name: 'current-note',
+          title: 'Current Note',
+          lastUpdated: 1,
+        }],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue({
+      relPath: selectedRelPath,
+      absPath: `${testLibraryRootPath}/${selectedRelPath}.md`,
+      name: 'current-note',
+      title: 'Current Note',
+      lastUpdated: 1,
+      content: 'Current body',
+      documentVersion: { mtimeMs: 1, size: 12, sha256: 'current' },
+    });
+    vi.mocked(window.wikiAPI!.createFileWithDefaultTitle).mockResolvedValue({
+      relPath: createdRelPath,
+      absPath: `${testLibraryRootPath}/${createdRelPath}.md`,
+      name: 'new-page',
+      title: 'New Page',
+      lastUpdated: 2,
+      content: '',
+      documentVersion: { mtimeMs: 2, size: 0, sha256: 'new' },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await screen.findByText('Current body');
+    fireEvent.keyDown(window, { key: 'n', metaKey: true, shiftKey: true });
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.createFileWithDefaultTitle).toHaveBeenCalledWith('projects');
+      expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: createdRelPath, contentMode: 'rendered' });
+    });
+    expect(await screen.findByText('Select a page')).toBeTruthy();
   });
 
   function pasteText(target: HTMLElement, text: string): void {
@@ -139,6 +459,7 @@ describe('LibrarianView render', () => {
         getPage: vi.fn(async () => null),
         save: vi.fn(async () => null),
         createFile: vi.fn(async () => null),
+        createFileWithDefaultTitle: vi.fn(async () => null),
         deletePage: vi.fn(async () => false),
         onPageChanged: vi.fn(() => () => {}),
         onPageDeleted: vi.fn(() => () => {}),
@@ -165,6 +486,7 @@ describe('LibrarianView render', () => {
       value: {
         getRoots: vi.fn(async () => []),
         getHiddenFolders: vi.fn(async () => []),
+        openDocumentWindow: vi.fn(async () => ({ success: true })),
         onRootsChanged: vi.fn(() => () => {}),
         onItemRenamed: vi.fn(() => () => {}),
       },
@@ -220,6 +542,26 @@ describe('LibrarianView render', () => {
     const sidebarPane = container.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement | null;
     expect(sidebarPane?.style.width).not.toBe('0px');
     expect(container.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]')).toBeNull();
+  });
+
+  it('keeps a popped-out initial target sidebar collapsed while the document loads', async () => {
+    const relPath = 'scratchpad/initial-popout';
+    window.wikiAPI!.getPage = vi.fn((): Promise<WikiPage | null> => new Promise(() => {}));
+
+    const { container } = render(
+      <LibrarianView
+        sidebarCollapsed
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await waitFor(() => {
+      expect(window.wikiAPI?.getPage).toHaveBeenCalledWith(relPath);
+    });
+    const sidebarPane = container.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement | null;
+    expect(sidebarPane?.style.width).toBe('0px');
+    expect(container.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]')).toBeTruthy();
   });
 
   it('shows pinned recent docs only in Recents and without pin buttons', async () => {

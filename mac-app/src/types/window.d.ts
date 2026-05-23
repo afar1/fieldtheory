@@ -2132,6 +2132,7 @@ declare global {
     deleteDir: (rootPath: string, dirRelPath: string) => Promise<boolean>;
     moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string) => Promise<string | null>;
     pickFolder: () => Promise<string | null>;
+    openDocumentWindow: (target: LibraryDocumentWindowTarget) => Promise<{ success: boolean; error?: string }>;
     onRootsChanged: (callback: () => void) => () => void;
     onItemRenamed: (callback: (event: LibraryRenameEvent) => void) => () => void;
   }
@@ -2221,6 +2222,13 @@ declare global {
     listBatches: () => Promise<PossibleIdeaBatchSummary[]>;
     getBatch: (batchId?: string) => Promise<PossibleIdeaBatch | null>;
   }
+
+  type LibraryDocumentWindowTarget = {
+    kind: 'wiki' | 'artifact' | 'external';
+    path: string;
+    contentMode?: 'rendered' | 'markdown' | 'typedown';
+    sidebarCollapsed?: boolean;
+  };
 
   interface WikiAPI {
     getTree: () => Promise<WikiFolder[]>;

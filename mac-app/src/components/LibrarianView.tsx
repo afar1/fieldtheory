@@ -2020,6 +2020,16 @@ export function resolveWikiCreateFolder(
   return 'entries';
 }
 
+export function resolveCurrentWikiCreateFolder(
+  selectedItemType: LibrarianSelectedItemType,
+  wikiSelectedRelPath: string | null
+): string {
+  if (selectedItemType !== 'wiki' || !wikiSelectedRelPath?.includes('/')) {
+    return 'scratchpad';
+  }
+  return wikiSelectedRelPath.split('/').slice(0, -1).join('/') || 'scratchpad';
+}
+
 export function formatBreadcrumb(
   itemType: 'wiki' | 'external',
   reading: { path: string; title: string } | null,
@@ -2357,11 +2367,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
+  const hadInitialOpenTargetRef = useRef(Boolean(initialOpenTarget));
+  const initialSelection = hadInitialOpenTargetRef.current ? null : restoredSelection;
   const restoredEditorSession = useMemo(() => restoreLibrarianEditorSession(localStorage), []);
   const restoredEditorSessionRef = useRef<LibrarianEditorSession | null>(restoredEditorSession);
 
   const [readings, setReadings] = useState<ReadingMeta[]>([]);
-  const [selectedPath, setSelectedPath] = useState<string | null>(() => restoredSelection?.type === 'artifact' ? restoredSelection.path : null);
+  const [selectedPath, setSelectedPath] = useState<string | null>(() => initialSelection?.type === 'artifact' ? initialSelection.path : null);
   const [selectedReading, setSelectedReading] = useState<Reading | null>(null);
   const [loading, setLoading] = useState(true);
   const [setupComplete, setSetupComplete] = useState<boolean | null>(null); // null = loading
@@ -2416,17 +2428,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return saved === 'visible' || saved === 'faded' ? saved : 'hidden';
   });
   const [selectedItemId, setSelectedItemId] = useState<string | null>(() => {
-    if (!restoredSelection) return null;
-    if (restoredSelection.type === 'wiki') return `wiki:${restoredSelection.relPath}`;
-    if (restoredSelection.type === 'artifact') return `artifact:${restoredSelection.path}`;
-    if (restoredSelection.type === 'ember') return EMBER_ITEM_ID;
+    if (!initialSelection) return null;
+    if (initialSelection.type === 'wiki') return `wiki:${initialSelection.relPath}`;
+    if (initialSelection.type === 'artifact') return `artifact:${initialSelection.path}`;
+    if (initialSelection.type === 'ember') return EMBER_ITEM_ID;
     return BOOKMARKS_ITEM_ID;
   });
   const selectedItemIdRef = useRef<string | null>(selectedItemId);
-  const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => restoredSelection?.type ?? null);
+  const [selectedItemType, setSelectedItemType] = useState<LibrarianSelectedItemType>(() => initialSelection?.type ?? null);
   const selectedItemUsesLegacyImmersive = selectedItemType === 'bookmarks';
   const [isFullScreen, setIsFullScreen] = useState(() => (
-    restoredSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
+    initialSelection?.type === 'bookmarks' ? initialFullScreen ?? false : false
   ));
   const [uncontrolledFocusImmersive, setUncontrolledFocusImmersive] = useState(false);
   const focusImmersive = focusChromeEnabled ?? uncontrolledFocusImmersive;
@@ -3104,9 +3116,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   // Lazy keep-alive: once the user has visited Bookmarks, the pane stays mounted
   // (hidden via CSS) so its DOM pool, snapshot cache, scroll/camera state, and
   // search input persist across sidebar switches.
-  const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => restoredSelection?.type === 'bookmarks');
-  const [emberEverShown, setEmberEverShown] = useState<boolean>(() => restoredSelection?.type === 'ember');
-  const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => restoredSelection?.type === 'wiki' ? restoredSelection.relPath : null);
+  const [bookmarksEverShown, setBookmarksEverShown] = useState<boolean>(() => initialSelection?.type === 'bookmarks');
+  const [emberEverShown, setEmberEverShown] = useState<boolean>(() => initialSelection?.type === 'ember');
+  const [wikiSelectedRelPath, setWikiSelectedRelPath] = useState<string | null>(() => initialSelection?.type === 'wiki' ? initialSelection.relPath : null);
   const [wikiSelectedPage, setWikiSelectedPage] = useState<Reading | null>(null);
   // Local agent kickoff modal — opened by the toolbar agent button. Dispatches
   // the user's locally-installed Claude Code or Codex CLI against the active
@@ -3562,6 +3574,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeIsMarkdownDocument = activeDocumentKind === 'markdown';
   const activeIsHtmlDocument = activeDocumentKind === 'html';
   const activeIsSourceOnlyDocument = activeDocumentKind === 'css';
+  const sidebarHidden = isFullScreen;
   const latestRenderedContent = latestRenderedContentRef.current;
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
@@ -3595,6 +3608,43 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
     return null;
   }, [activeIsMarkdownDocument, activeReading, activeReadingPath, selectedItemType, wikiSelectedRelPath]);
+  const showSelectPageState = useCallback(() => {
+    setSelectedItemId(null);
+    setSelectedItemType(null);
+    setSelectedPath(null);
+    setSelectedReading(null);
+    setWikiSelectedRelPath(null);
+    setWikiSelectedPage(null);
+    setExternalOpenFile(null);
+    setShareStatus(null);
+    setLinkCopied(false);
+    setMarkdownUrlPasteChoice(null);
+    setMarkdownWikiLinkCompletion(null);
+  }, []);
+  const openDocumentTargetInWindow = useCallback((
+    target: { kind: 'wiki' | 'artifact' | 'external'; path: string; contentMode?: MarkdownContentMode; sidebarCollapsed?: boolean },
+    clearSource = true
+  ) => {
+    void (async () => {
+      await flushCurrentEdit();
+      const result = await window.libraryAPI?.openDocumentWindow?.(target);
+      if (clearSource && result?.success) showSelectPageState();
+    })();
+  }, [flushCurrentEdit, showSelectPageState]);
+  const openActiveDocumentInWindow = useCallback(() => {
+    if (!activeReadingPath) return;
+    if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
+      openDocumentTargetInWindow({ kind: 'wiki', path: wikiSelectedRelPath, contentMode });
+      return;
+    }
+    if (selectedItemType === 'artifact') {
+      openDocumentTargetInWindow({ kind: 'artifact', path: activeReadingPath, contentMode });
+      return;
+    }
+    if (selectedItemType === 'external') {
+      openDocumentTargetInWindow({ kind: 'external', path: activeReadingPath, contentMode });
+    }
+  }, [activeReadingPath, contentMode, openDocumentTargetInWindow, selectedItemType, wikiSelectedRelPath]);
   const maxwellToolbarItems = useMemo(() => maxwellItems.map((item) => ({
     id: item.id,
     title: item.title,
@@ -4153,18 +4203,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [activeReading, selectedItemType, updateSelectedSidebarTodoState]);
 
   const clearSelectedLibraryItem = useCallback(() => {
-    setSelectedItemId(null);
-    setSelectedItemType(null);
-    setSelectedPath(null);
-    setSelectedReading(null);
-    setWikiSelectedRelPath(null);
-    setWikiSelectedPage(null);
-    setExternalOpenFile(null);
-    setShareStatus(null);
-    setLinkCopied(false);
-    setMarkdownUrlPasteChoice(null);
-    setMarkdownWikiLinkCompletion(null);
-  }, []);
+    showSelectPageState();
+  }, [showSelectPageState]);
 
   const getEditorSessionTarget = useCallback((): Pick<LibrarianEditorSession, 'itemType' | 'itemPath'> | null => {
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -4196,6 +4236,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     || (contentMode === 'markdown' && markdownDocumentTopFade)
   );
   const topFadeActive = !!activeReading && readerTopFadeVisible;
+  const activeReadingToolbarIdentityVisible = activeReadingToolbarHasBreadcrumb || topFadeActive;
+  const activeReadingToolbarIdentityPinned = topFadeActive && focusChromeActive;
+  const activeReadingBreadcrumbLabel = selectedItemType === 'wiki' || selectedItemType === 'external'
+    ? formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)
+    : selectedItemType === 'artifact'
+      ? 'Artifact'
+      : '';
 
   const markdownDisplay = useMemo(() => {
     if (!activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
@@ -5968,6 +6015,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [openPageForTitleEdit]);
 
+  const createDefaultWikiFileInFolder = useCallback(async (folderRelPath: string, openInNewWindow: boolean) => {
+    const page = await window.wikiAPI?.createFileWithDefaultTitle(folderRelPath);
+    if (!page) return false;
+    dispatchLocalWikiAdded(page);
+    if (openInNewWindow) {
+      openDocumentTargetInWindow({ kind: 'wiki', path: page.relPath, contentMode: 'rendered' });
+      return true;
+    }
+    openPageForTitleEdit(page);
+    return true;
+  }, [openDocumentTargetInWindow, openPageForTitleEdit]);
+
   const handleCreateDir = useCallback(async (location: LibraryCreateLocation) => {
     if (!location.relPath.trim()) return false;
     if (!location.builtin) {
@@ -6021,6 +6080,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       onAutoPopArtifactSuperseded?.();
     }
   }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
+
+  const handleOpenSidebarItemInWindow = useCallback((item: UnifiedItem, options: { sidebarCollapsed?: boolean } = {}) => {
+    if (item.type === 'wiki' && item.relPath) {
+      openDocumentTargetInWindow({ kind: 'wiki', path: item.relPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed });
+    } else if (item.type === 'artifact') {
+      openDocumentTargetInWindow({ kind: 'artifact', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed });
+    } else if (item.type === 'external') {
+      openDocumentTargetInWindow({ kind: 'external', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed });
+    }
+  }, [openDocumentTargetInWindow]);
 
   const openEmberPerson = useCallback((relPath: string) => {
     openWikiPage(relPath);
@@ -6526,13 +6595,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         setReadings(result);
         const preferredArtifactPath =
           initialReadingPath ??
-          (restoredSelection?.type === 'artifact' ? restoredSelection.path : null);
+          (initialSelection?.type === 'artifact' ? initialSelection.path : null);
 
         if (preferredArtifactPath && result.some((reading) => reading.path === preferredArtifactPath)) {
           selectArtifactPath(preferredArtifactPath);
-        } else if (result.length > 0 && !restoredSelection) {
+        } else if (result.length > 0 && !initialSelection && !hadInitialOpenTargetRef.current) {
           // Only default to the first artifact on a fresh session. Any
-          // restoredSelection (wiki, bookmarks, or an artifact that's since
+          // restored/initial selection (wiki, bookmarks, or an artifact that's since
           // been deleted) takes precedence and should not be clobbered.
           selectArtifactPath(result[0].path);
         }
@@ -6540,7 +6609,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setLoading(false);
     }
     loadReadings();
-  }, [initialReadingPath, restoredSelection, selectArtifactPath]);
+  }, [initialReadingPath, initialSelection, selectArtifactPath]);
 
   // Handle setup wizard completion
   const handleSetupComplete = useCallback(async () => {
@@ -6820,20 +6889,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         }
       }
 
-      // Cmd+N - create new file (inline input in sidebar)
+      // Cmd+N - create new file in the current wiki directory.
       if (e.key === 'n' && e.metaKey && !e.shiftKey) {
         e.preventDefault();
-        const folder = selectedItemType === 'wiki'
-          ? resolveWikiCreateFolder('', selectedItemType, wikiSelectedRelPath)
-          : undefined;
+        const folder = resolveCurrentWikiCreateFolder(selectedItemType, wikiSelectedRelPath);
         wikiCreationRef.current?.beginCreateFile(folder);
         return;
       }
 
-      // Cmd+Shift+N - create new directory (inline input in sidebar)
+      // Cmd+Shift+N - create a default page in the current wiki directory and pop it out.
       if (e.key === 'n' && e.metaKey && e.shiftKey) {
         e.preventDefault();
-        wikiCreationRef.current?.beginCreateDir();
+        const folder = resolveCurrentWikiCreateFolder(selectedItemType, wikiSelectedRelPath);
+        void createDefaultWikiFileInFolder(folder, true);
         return;
       }
 
@@ -7035,7 +7103,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -7261,7 +7329,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   };
 
-  const sidebarForcedVisibleForEmptySelection = !activeReading && !isFullScreen;
+  const sidebarForcedVisibleForEmptySelection = !initialOpenTarget && !activeReading && !isFullScreen;
   const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen && !sidebarForcedVisibleForEmptySelection;
   const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisibleForEmptySelection;
   const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -7463,7 +7531,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       }}
     >
       <ScrollDiagnosticsHUD />
-      {sidebarCollapsed && !isFullScreen && !sidebarTemporarilyExpanded && !sidebarForcedVisibleForEmptySelection && (
+      {sidebarCollapsed && !sidebarHidden && !sidebarTemporarilyExpanded && !sidebarForcedVisibleForEmptySelection && (
         <div
           aria-hidden="true"
           data-fieldtheory-collapsed-sidebar-hover-strip="true"
@@ -7499,7 +7567,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         style={{
           width: sidebarVisible ? `${sidebarWidth}px` : '0px',
           minWidth: sidebarVisible ? `${sidebarWidth}px` : '0px',
-          display: isFullScreen ? 'none' : 'block',
+          display: sidebarHidden ? 'none' : 'block',
           overflow: 'hidden',
           userSelect: isResizing ? 'none' : 'auto',
           flexShrink: 0,
@@ -7535,6 +7603,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             searchInputRef={searchInputRef}
             creationControllerRef={wikiCreationRef}
             archiveControllerRef={wikiArchiveRef}
+            onOpenItemInNewWindow={handleOpenSidebarItemInWindow}
             onSidebarItemContentChanged={handleSidebarItemContentChanged}
             onDeletedItem={handleDeletedLibraryItem}
             onKeyboardScopeActive={activateSidebarKeyboard}
@@ -7552,7 +7621,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           borderRight: sidebarVisible ? `1px solid ${theme.border}` : '0 solid transparent',
           transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
-          display: isFullScreen ? 'none' : 'block',
+          display: sidebarHidden ? 'none' : 'block',
           pointerEvents: sidebarVisible ? 'auto' : 'none',
         }}
         onMouseEnter={(e) => {
@@ -7651,7 +7720,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               alignItems: 'center',
               justifyContent: 'center',
               padding: isFullScreen ? '8px 16px 4px 16px' : '8px 20px',
-              backgroundColor: focusChromeActive ? 'transparent' : theme.bg,
+              backgroundColor: focusChromeActive && !activeReadingToolbarIdentityPinned ? 'transparent' : theme.bg,
               flexShrink: 0,
               position: focusChromeActive ? 'absolute' : 'relative',
               top: focusChromeActive ? 0 : undefined,
@@ -7686,7 +7755,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   >←</button>
                 </div>
               )}
-              {activeReadingToolbarHasBreadcrumb && activeReading && (
+              {activeReadingToolbarIdentityVisible && activeReading && (
                 <div
                   style={{
                     display: 'flex',
@@ -7694,8 +7763,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     gap: '6px',
                     minWidth: 0,
                     flexShrink: 1,
-                    opacity: focusChromeScopedItemOpacity,
-                    pointerEvents: focusChromeScopedItemVisible ? 'auto' : 'none',
+                    opacity: activeReadingToolbarIdentityPinned ? 1 : focusChromeScopedItemOpacity,
+                    pointerEvents: activeReadingToolbarIdentityPinned || focusChromeScopedItemVisible ? 'auto' : 'none',
                     transition: 'opacity 90ms linear',
                     // @ts-ignore - opt the breadcrumb out of the drag region so
                     // clicks on the External chip's title tooltip land.
@@ -7759,6 +7828,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     <ContentToolbarFolderButton onShowInFolder={showActiveReadingInFolder} />
                   )}
                   <span
+                    data-ft-active-document-identity="true"
                     style={{
                       fontSize: '11px',
                       color: theme.textSecondary,
@@ -7766,9 +7836,30 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       textOverflow: 'ellipsis',
                       whiteSpace: 'nowrap',
                       fontFamily: 'system-ui, sans-serif',
+                      minWidth: 0,
                     }}
                   >
-                    {formatBreadcrumb(selectedItemType, activeReading, wikiSelectedRelPath)}
+                    {topFadeActive ? (
+                      <>
+                        <span
+                          data-ft-active-document-scrolled-title="true"
+                          style={{
+                            color: theme.text,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {activeReading.title}
+                        </span>
+                        {activeReadingBreadcrumbLabel && (
+                          <span style={{ color: theme.textSecondary }}>
+                            {' · '}
+                            {activeReadingBreadcrumbLabel}
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      activeReadingBreadcrumbLabel
+                    )}
                   </span>
                   {selectedItemType === 'external' && (
                     <span
@@ -7819,7 +7910,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onDelete={handleDelete}
                   showDelete
                   onShowInFolder={activeReadingPath ? showActiveReadingInFolder : undefined}
-                  showFolder={!activeReadingToolbarHasBreadcrumb}
+                  showFolder={!activeReadingToolbarIdentityVisible}
                   onCopy={shareStatus?.shared ? copyShareLink : undefined}
                   showCopy={!!shareStatus?.shared}
                   shareStatus={sharedFileStatus ? { shared: sharedFileStatus.shared } : { shared: false }}
@@ -7834,6 +7925,46 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   copyPathTitle="Copy selected text or file path (⌘C)"
                 />
               )}
+              {focusToolbarControlsVisible && activeReadingPath
+                && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external')
+                && (
+                  <button
+                    type="button"
+                    onClick={openActiveDocumentInWindow}
+                    title="Open in New Window"
+                    aria-label="Open in New Window"
+                    style={{
+                      height: '24px',
+                      width: '24px',
+                      padding: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '5px',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      // @ts-ignore - opt out of the drag region so the click lands.
+                      WebkitAppRegion: 'no-drag',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                      e.currentTarget.style.color = theme.text;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                      e.currentTarget.style.color = theme.textSecondary;
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M6 3H3.75C3.06 3 2.5 3.56 2.5 4.25v8C2.5 12.94 3.06 13.5 3.75 13.5h8c.69 0 1.25-.56 1.25-1.25V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M9 2.5h4.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M8.5 7.5 13.25 2.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                )}
               {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
                 <div
                   aria-label="River viewers"
@@ -8125,6 +8256,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         >
         <div
           ref={setContentScrollRef}
+          data-ft-librarian-content-scroll="true"
           onScroll={(e) => {
             if (contentMode !== 'markdown') updateRenderedDocumentTopFade(e.currentTarget);
           }}
@@ -8602,6 +8734,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </div>
         <div
           aria-hidden="true"
+          data-ft-reader-top-fade="true"
           style={{
             position: 'absolute',
             top: 0,

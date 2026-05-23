@@ -234,7 +234,7 @@ describe('Library sidebar collapse availability', () => {
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',
       showSettings: false,
-      librarianImmersive: false,
+      librarianImmersive: true,
     })).toBe(true);
     expect(isNavSidebarToggleEnabled({
       viewMode: 'librarian',

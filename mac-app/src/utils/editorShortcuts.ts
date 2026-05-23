@@ -82,7 +82,6 @@ export function isNavSidebarToggleEnabled(input: {
   if (input.showSettings) return false;
   if (input.viewMode === 'commands') return true;
   if (input.viewMode !== 'librarian') return false;
-  if (input.librarianImmersive) return false;
   return true;
 }
 

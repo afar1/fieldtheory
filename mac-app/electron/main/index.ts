@@ -34,6 +34,11 @@ import {
   ModelSize,
 } from './modelManager';
 import { ClipboardHistoryWindow } from './clipboardHistoryWindow';
+import {
+  LibraryDocumentWindowManager,
+  persistableLibraryDocumentWindowBounds,
+  type LibraryDocumentWindowTarget,
+} from './documentWindow';
 import { getClipboardHistoryActivationPreflightSkipReason } from './clipboardHistoryActivationPolicy';
 import { isFieldTheorySuperPasteBundleId, shouldRouteSuperPasteToLibrarian } from './superPasteRouting';
 import { FeedbackManager } from './feedbackManager';
@@ -990,6 +995,7 @@ let transcriberManager: TranscriberManager | null = null;
 let preferencesManager: PreferencesManager | null = null;
 let clipboardManager: ClipboardManager | null = null;
 let clipboardHistoryWindow: ClipboardHistoryWindow | null = null;
+let libraryDocumentWindowManager: LibraryDocumentWindowManager | null = null;
 let authManager: AuthManager | null = null;
 let userDataManager: UserDataManager | null = null;
 let feedbackManager: FeedbackManager | null = null;
@@ -3150,6 +3156,55 @@ function initClipboardHistoryWindow(): ClipboardHistoryWindow {
   });
 
   return window;
+}
+
+function getLibraryDocumentWindowManager(): LibraryDocumentWindowManager {
+  if (!libraryDocumentWindowManager) {
+    libraryDocumentWindowManager = new LibraryDocumentWindowManager(
+      () => preferencesManager?.get().libraryDocumentWindowBounds,
+      (bounds) => {
+        preferencesManager?.save({
+          libraryDocumentWindowBounds: persistableLibraryDocumentWindowBounds(bounds),
+        }).catch((error) => {
+          log.error('Failed to save Library document window bounds:', error);
+        });
+      },
+    );
+  }
+  return libraryDocumentWindowManager;
+}
+
+function normalizeLibraryDocumentWindowTarget(target: Partial<LibraryDocumentWindowTarget> | null | undefined): LibraryDocumentWindowTarget | null {
+  if (!target || typeof target.path !== 'string' || !target.path.trim()) return null;
+  const pathValue = target.path.trim();
+  const contentMode = target.contentMode === 'markdown' || target.contentMode === 'typedown' || target.contentMode === 'rendered'
+    ? target.contentMode
+    : undefined;
+  const sidebarCollapsed = target.sidebarCollapsed === true ? true : undefined;
+
+  if (target.kind === 'wiki') {
+    return librarianManager?.getWikiPage(pathValue)
+      ? { kind: 'wiki', path: pathValue, contentMode, sidebarCollapsed }
+      : null;
+  }
+
+  if (target.kind === 'artifact') {
+    return librarianManager?.getReading(pathValue)
+      ? { kind: 'artifact', path: pathValue, contentMode, sidebarCollapsed }
+      : null;
+  }
+
+  if (target.kind === 'external') {
+    try {
+      const canonical = fs.realpathSync(pathValue);
+      if (!isLibraryTextDocumentPath(canonical)) return null;
+      return { kind: 'external', path: canonical, contentMode, sidebarCollapsed };
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function getFieldTheoryWindowMode(): FieldTheoryWindowMode {
@@ -6446,7 +6501,14 @@ function setupClipboardIPCHandlers(): void {
     return clipboardHistoryWindow.pasteToApp(bundleId);
   });
 
-  ipcMain.on('clipboard:closeWindow', async () => {
+  ipcMain.on('clipboard:closeWindow', async (event) => {
+    const senderWindow = BrowserWindow.fromWebContents(event.sender);
+    const mainClipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+    if (senderWindow && senderWindow !== mainClipboardWindow) {
+      senderWindow.close();
+      return;
+    }
+
     // Avoid app.hide() here: that compositor path can destabilize transparent
     // overlay corners. Hide only the window, then explicitly restore focus.
     if (clipboardHistoryWindow) {
@@ -6502,6 +6564,13 @@ function setupClipboardIPCHandlers(): void {
   ipcMain.on('clipboard-history:setSizeKey', (_event, key: string) => {
     if (!isClipboardHistorySizeKey(key)) return;
     clipboardHistoryWindow?.setSizeKey(key);
+  });
+
+  ipcMain.handle('library:openDocumentWindow', (_event, target: Partial<LibraryDocumentWindowTarget>): { success: boolean; error?: string } => {
+    const normalized = normalizeLibraryDocumentWindowTarget(target);
+    if (!normalized) return { success: false, error: 'Invalid document window target' };
+    getLibraryDocumentWindowManager().open(normalized);
+    return { success: true };
   });
 
   // Stack operations for prompt stacking feature
@@ -12476,6 +12545,8 @@ if (!gotTheLock) {
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.destroy();
     }
+
+    libraryDocumentWindowManager?.destroy();
 
     librarySyncService?.dispose();
     void sharedSyncService?.clearPresence();

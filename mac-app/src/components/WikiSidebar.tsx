@@ -394,6 +394,7 @@ export interface WikiArchiveController {
 interface WikiSidebarProps {
   active?: boolean;
   onSelectItem: (item: UnifiedItem) => void;
+  onOpenItemInNewWindow?: (item: UnifiedItem, options?: { sidebarCollapsed?: boolean }) => void;
   selectedId: string | null;
   selectedKeyboardActive?: boolean;
   todoStateOverrides?: Record<string, SidebarTodoStateOverride | undefined>;
@@ -420,6 +421,10 @@ type SidebarArchiveUndo = {
     previousArchived: boolean;
   }>;
 };
+
+function canOpenSidebarItemInNewWindow(item: UnifiedItem | null | undefined): item is UnifiedItem & { type: 'wiki' | 'artifact' | 'external' } {
+  return item?.type === 'wiki' || item?.type === 'artifact' || item?.type === 'external';
+}
 
 function isArchivableSidebarItem(item: UnifiedItem | null | undefined): item is ArchivableSidebarItem {
   return item?.type === 'wiki' || item?.type === 'external';
@@ -1440,6 +1445,7 @@ function rootToSidebarNode(
 function WikiSidebar({
   active = true,
   onSelectItem,
+  onOpenItemInNewWindow,
   selectedId,
   selectedKeyboardActive = false,
   todoStateOverrides = EMPTY_TODO_STATE_OVERRIDES,
@@ -2199,7 +2205,11 @@ function WikiSidebar({
 
   const selectSidebarFileItem = useCallback((item: UnifiedItem, event: React.MouseEvent) => {
     onKeyboardScopeActive?.();
-    const toggleSelection = event.metaKey || event.ctrlKey;
+    if (event.metaKey && !event.shiftKey && !event.ctrlKey && !event.altKey && onOpenItemInNewWindow && canOpenSidebarItemInNewWindow(item)) {
+      onOpenItemInNewWindow(item, { sidebarCollapsed: true });
+      return;
+    }
+    const toggleSelection = event.ctrlKey;
     if (event.shiftKey && selectionAnchorId) {
       const anchorIndex = flatItems.findIndex((entry) => entry.id === selectionAnchorId);
       const itemIndex = flatItems.findIndex((entry) => entry.id === item.id);
@@ -2226,7 +2236,7 @@ function WikiSidebar({
     updateSelectedFileIds(new Set());
     setSelectionAnchorId(item.id);
     onSelectItem(item);
-  }, [flatItems, onKeyboardScopeActive, onSelectItem, selectedFileIds, selectionAnchorId, updateSelectedFileIds]);
+  }, [flatItems, onKeyboardScopeActive, onOpenItemInNewWindow, onSelectItem, selectedFileIds, selectionAnchorId, updateSelectedFileIds]);
 
   const getNextVisibleItemAfterMove = useCallback((targetIds: ReadonlySet<string>): UnifiedItem | null => {
     const findFallback = (sourceItems: UnifiedItem[]): UnifiedItem | null => {
@@ -2417,6 +2427,7 @@ function WikiSidebar({
   const contextHideDirLabel = contextHideBookmarks ? 'Hide Bookmarks' : contextDefaultFolderId ? 'Hide folder' : contextUserFolderId ? 'Remove from FT' : null;
   const canDeleteContextDir = !!contextDir?.canDeleteDir;
   const canDeleteContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'artifact' || contextFile?.type === 'external';
+  const canOpenContextFileInNewWindow = !!onOpenItemInNewWindow && canOpenSidebarItemInNewWindow(contextFile);
   const contextFolderFinderPath = getSidebarFolderFinderPath(contextDir);
   const canRenameContextFile = contextFile?.type === 'wiki' && !!contextFile.relPath;
   const canArchiveContextFile = contextFile?.type === 'wiki' || contextFile?.type === 'external';
@@ -3210,6 +3221,7 @@ function WikiSidebar({
           canRemoveRoot={!!contextDir?.canRemoveRoot}
           canShowFolderInFinder={!!contextFolderFinderPath}
           canRenameFile={canRenameContextFile}
+          canOpenFileInNewWindow={canOpenContextFileInNewWindow}
           archiveFileLabel={archiveContextFileLabel}
           canCopyFilePath={!!contextFile && contextFile.type !== 'bookmarks'}
           canShowFileInFinder={!!contextFileFinderPath}
@@ -3231,6 +3243,10 @@ function WikiSidebar({
           onAddFolder={addFolderFromPath}
           onShowFolderInFinder={showContextFolderInFinder}
           onRenameFile={renameContextFile}
+          onOpenFileInNewWindow={() => {
+            closeContextMenu();
+            if (contextFile) onOpenItemInNewWindow?.(contextFile);
+          }}
           onToggleArchiveFile={toggleContextFileArchived}
           onToggleMultiArchive={() => {
             closeContextMenu();
@@ -3524,7 +3540,8 @@ function TreeNode({
   const folderIconColor = getLibrarySidebarIconColor(folderIconColorIndex, sidebarIconColor);
   const sidebarTextColor = theme.isDark ? SIDEBAR_DARK_TEXT_COLOR : SIDEBAR_LIGHT_TEXT_COLOR;
   const folderContextActive = contextActiveNodeId === node.id;
-  const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? theme.hoverBg : 'transparent';
+  const folderHoverBg = getLibrarySidebarFileHoverBg(theme.isDark);
+  const folderBackgroundColor = isDropTarget ? dropBg : folderContextActive ? folderHoverBg : 'transparent';
   const stickyFolderBackgroundColor = depth === 0 ? theme.bg : folderBackgroundColor;
   const showPinnedFolderFade = shouldShowSidebarPinnedFolderFade(depth, isExpanded, pinnedFolderFadeIds.has(node.id));
   const getDroppableDragItem = (dataTransfer: DataTransfer): LibraryDragItem | null => {
@@ -3582,7 +3599,7 @@ function TreeNode({
           }}
           onClick={() => toggleFolder(node.id)}
           onContextMenu={(event) => onContextMenu(event, node)}
-          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : theme.hoverBg)}
+          onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = isDropTarget ? dropBg : folderHoverBg)}
           onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = stickyFolderBackgroundColor)}
           style={{
             ...getSidebarFolderHeaderPositionStyle(depth),
@@ -3926,6 +3943,7 @@ function LibraryContextMenu({
   canRemoveRoot,
   canShowFolderInFinder,
   canRenameFile,
+  canOpenFileInNewWindow,
   archiveFileLabel,
   canCopyFilePath,
   canShowFileInFinder,
@@ -3939,6 +3957,7 @@ function LibraryContextMenu({
   onAddFolder,
   onShowFolderInFinder,
   onRenameFile,
+  onOpenFileInNewWindow,
   onToggleArchiveFile,
   onToggleMultiArchive,
   onMarkSelectedTodo,
@@ -3961,6 +3980,7 @@ function LibraryContextMenu({
   canRemoveRoot: boolean;
   canShowFolderInFinder: boolean;
   canRenameFile: boolean;
+  canOpenFileInNewWindow: boolean;
   archiveFileLabel: string | null;
   canCopyFilePath: boolean;
   canShowFileInFinder: boolean;
@@ -3974,6 +3994,7 @@ function LibraryContextMenu({
   onAddFolder: () => void;
   onShowFolderInFinder: () => void;
   onRenameFile: () => void;
+  onOpenFileInNewWindow: () => void;
   onToggleArchiveFile: () => void;
   onToggleMultiArchive: () => void;
   onMarkSelectedTodo: (state: SidebarTodoState | null) => void;
@@ -4103,6 +4124,9 @@ function LibraryContextMenu({
       )}
       {canRenameFile && (
         <button style={itemStyle} onClick={onRenameFile} onMouseEnter={setHover} onMouseLeave={clearHover}>Rename</button>
+      )}
+      {canOpenFileInNewWindow && (
+        <button style={itemStyle} onClick={onOpenFileInNewWindow} onMouseEnter={setHover} onMouseLeave={clearHover}>Open in New Window</button>
       )}
       {archiveFileLabel && (
         <button style={itemStyle} onClick={onToggleArchiveFile} onMouseEnter={setHover} onMouseLeave={clearHover}>{archiveFileLabel}</button>

@@ -94,12 +94,26 @@ type FieldTheoryMarkdownTarget = {
   kind: 'wiki' | 'artifact' | 'command' | 'external' | 'bookmarks' | 'library' | 'commands' | 'clipboard';
   path: string;
   contentMode?: 'rendered' | 'markdown' | 'typedown';
+  sidebarCollapsed?: boolean;
   selectionStart?: number;
   selectionEnd?: number;
   clipboardItemId?: number;
   clipboardStackId?: string;
   clipboardSearch?: string;
 };
+
+function getDocumentWindowInitialTarget(location: Pick<Location, 'search'>): FieldTheoryMarkdownTarget | null {
+  const params = new URLSearchParams(location.search);
+  if (params.get('documentWindow') !== '1') return null;
+  const kind = params.get('kind');
+  const path = params.get('path');
+  if (!path || (kind !== 'wiki' && kind !== 'artifact' && kind !== 'external')) return null;
+  const contentModeParam = params.get('contentMode');
+  const contentMode = contentModeParam === 'markdown' || contentModeParam === 'typedown' || contentModeParam === 'rendered'
+    ? contentModeParam
+    : 'rendered';
+  return { kind, path, contentMode, sidebarCollapsed: params.get('sidebarCollapsed') === '1' };
+}
 
 type TopNavMode = 'clipboard' | 'librarian' | 'possible';
 
@@ -436,6 +450,11 @@ const StackImageThumbnail = React.memo(function StackImageThumbnail({
  * ClipboardHistory component - Alfred-style popup for clipboard history.
  */
 export default function ClipboardHistory() {
+  const documentWindowInitialTarget = getDocumentWindowInitialTarget(window.location);
+  return <ClipboardHistoryApp initialLibraryOpenTarget={documentWindowInitialTarget} />;
+}
+
+function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibraryOpenTarget?: FieldTheoryMarkdownTarget | null }) {
   const { theme, toggleDarkMode } = useTheme();
   const scratchpadHotkeyRef = useRef('');
   const [isVisible, setIsVisible] = useState(false);
@@ -509,7 +528,7 @@ export default function ClipboardHistory() {
   const [showSettings, setShowSettings] = useState(false);
   const [settingsSection, setSettingsSection] = useState<string | undefined>(undefined);
 
-  const [viewMode, setViewMode] = useState<ViewMode>(() => resolveClipboardRestoreState(localStorage).viewMode);
+  const [viewMode, setViewMode] = useState<ViewMode>(() => initialLibraryOpenTarget ? 'librarian' : resolveClipboardRestoreState(localStorage).viewMode);
   const [librarianEverRendered, setLibrarianEverRendered] = useState(() => viewMode === 'librarian');
 
   const [editingSketchItem, setEditingSketchItem] = useState<ClipboardItem | null>(null);
@@ -538,15 +557,20 @@ export default function ClipboardHistory() {
 
   // Librarian legacy immersive mode. Kept for Bookmarks; normal Library docs use focus chrome.
   const [librarianImmersive, setLibrarianImmersive] = useState(
-    () => shouldRestoreLibrarianImmersive(localStorage)
+    () => initialLibraryOpenTarget ? false : shouldRestoreLibrarianImmersive(localStorage)
   );
   // Sidebar collapse state lives here so the footer toggle can drive it
   // regardless of which view is currently active. Shared between Library and
   // Commands views so the toggle has consistent behavior.
   const [navSidebarCollapsed, setNavSidebarCollapsed] = useState<boolean>(
-    () => localStorage.getItem('librarian-sidebar-collapsed') === '1'
+    () => initialLibraryOpenTarget?.sidebarCollapsed === true || localStorage.getItem('librarian-sidebar-collapsed') === '1'
   );
+  const skipInitialSidebarCollapsedPersistRef = useRef(initialLibraryOpenTarget?.sidebarCollapsed === true);
   useEffect(() => {
+    if (skipInitialSidebarCollapsedPersistRef.current) {
+      skipInitialSidebarCollapsedPersistRef.current = false;
+      return;
+    }
     localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
   }, [navSidebarCollapsed]);
   const [libraryActiveFileUpdated, setLibraryActiveFileUpdated] = useState<{
@@ -663,7 +687,7 @@ export default function ClipboardHistory() {
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
-  const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(null);
+  const [pendingLibraryOpenTarget, setPendingLibraryOpenTarget] = useState<FieldTheoryMarkdownTarget | null>(initialLibraryOpenTarget);
   // Path of an artifact the librarian auto-popped that the user hasn't navigated
   // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);

@@ -9,6 +9,8 @@ import {
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS,
+  RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS,
+  RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_EMPHASIS_CLASS,
@@ -17,6 +19,7 @@ import {
   RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS,
+  RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR,
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
@@ -513,6 +516,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS}`)).toHaveLength(2);
     expect(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS}`)).toHaveLength(2);
     expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS}`)?.textContent).toBe('const value = `literal`;');
+    expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS}`)?.classList.contains(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS)).toBe(true);
     expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS}`)?.textContent).toContain('quoted thought');
     expect(parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS}`)?.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe('28');
 
@@ -520,6 +524,42 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     expect(listMarkers.map((marker) => marker.textContent)).toEqual(['•', '2.']);
     expect(listMarkers[0].getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)).toBe('0');
     expect(listMarkers[0].getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)).toBe('2');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('marks rendered code block edges and standalone image lines as block rows', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: [
+          'Paragraph before',
+          '',
+          '![Diagram](<file:///tmp/diagram.png>)',
+          '',
+          '```',
+          'first line',
+          'second line',
+          '```',
+          '',
+          'Paragraph after',
+        ].join('\n'),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const imageLine = parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS}`);
+    const codeLines = Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS}`));
+    expect(imageLine?.textContent).toBe('Diagram');
+    expect(imageLine?.querySelector(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`)).not.toBeNull();
+    expect(codeLines).toHaveLength(2);
+    expect(codeLines[0].classList.contains(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS)).toBe(true);
+    expect(codeLines[0].classList.contains(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS)).toBe(false);
+    expect(codeLines[1].classList.contains(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS)).toBe(false);
+    expect(codeLines[1].classList.contains(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS)).toBe(true);
 
     view.destroy();
     parent.remove();
@@ -905,7 +945,7 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       if (typeof value.spec.class === 'string') classes.push(value.spec.class);
     });
 
-    expect(classes).toContain(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS);
+    expect(classes.some((className) => className.split(' ').includes(RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS))).toBe(true);
   });
 });
 
