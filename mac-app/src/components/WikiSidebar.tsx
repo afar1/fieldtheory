@@ -12,6 +12,7 @@ import {
   SidebarFolderIcon,
   SidebarMarkdownIcon,
   SidebarRecentIcon,
+  SidebarRiverIcon,
 } from './SidebarIcons';
 import { setMarkdownArchivedState, setMarkdownTodoState } from '../../electron/shared/markdownFrontmatter';
 
@@ -29,12 +30,17 @@ interface UnifiedItem {
   timestamp: number;
   todoState?: SidebarTodoState;
   archived?: boolean;
+  sharedOriginalSourcePath?: string;
+  sharedAuthorCallsign?: string;
+  sharedRiverCallsign?: string;
   taggedDocId?: string;
   hasUnread?: boolean;
 }
 
 export const BOOKMARKS_ITEM_ID = 'bookmarks:root';
 export const BOOKMARKS_SHORTCUT_FOLDER_ID = 'bookmarks-shortcut';
+const RIVER_SHARED_FOLDER_NAME = 'River (shared)';
+const RIVER_SHORTCUT_LABEL = 'River';
 export const EMBER_ITEM_ID = 'ember:root';
 export const SCRATCHPAD_FOLDER_NAME = 'scratchpad';
 const POSSIBLE_TOP_NAV_AVAILABLE = false;
@@ -75,6 +81,7 @@ const LIBRARY_NEW_DOC_LOCATION_STORAGE_KEY = 'library-new-doc-location';
 const LOCAL_WIKI_RENAMED_EVENT = 'fieldtheory:wiki-renamed-local';
 const LOCAL_WIKI_ADDED_EVENT = 'fieldtheory:wiki-added-local';
 const LOCAL_WIKI_DELETED_EVENT = 'fieldtheory:wiki-deleted-local';
+const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const LIBRARY_SIDEBAR_ICON_COLOR_PALETTE = [
   '#8a8a8a',
   '#b45309',
@@ -882,6 +889,83 @@ export function orderTopLevelSidebarNodes(
   return sortSidebarNodes(nodes, 'alpha', pinnedItemIds, iconColorIndices, iconColorOrder);
 }
 
+export function splitRiverShortcutNode(
+  nodes: SidebarNode[],
+): { riverShortcutNode: Extract<SidebarNode, { kind: 'dir' }> | null; visibleRoots: SidebarNode[] } {
+  const riverNodes = nodes.filter((node): node is Extract<SidebarNode, { kind: 'dir' }> => (
+    node.kind === 'dir'
+    && (node.name === RIVER_SHARED_FOLDER_NAME || node.label === RIVER_SHARED_FOLDER_NAME)
+  ));
+  if (riverNodes.length === 0) return { riverShortcutNode: null, visibleRoots: nodes };
+
+  const riverShortcutNode = riverNodes.reduce((best, node) => (
+    countSidebarItems(node.children) > countSidebarItems(best.children) ? node : best
+  ));
+  const riverIds = new Set(riverNodes.map((node) => node.id));
+  return {
+    riverShortcutNode,
+    visibleRoots: nodes.filter((node) => !riverIds.has(node.id)),
+  };
+}
+
+export function normalizeRiverSharedSourcePath(sourcePath: string | undefined): string | null {
+  const normalized = sourcePath?.trim().replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  if (!normalized) return null;
+  return normalized.replace(/\.(?:md|markdown)$/i, '').toLowerCase();
+}
+
+export function collectRiverSharedSourceCallsigns(
+  nodes: readonly SidebarNode[],
+): Map<string, string> {
+  const callsignBySource = new Map<string, string>();
+  const visitRiverChild = (node: SidebarNode) => {
+    if (node.kind === 'file') {
+      const sourceKey = normalizeRiverSharedSourcePath(node.item.sharedOriginalSourcePath);
+      const callsign = node.item.sharedAuthorCallsign?.trim();
+      if (sourceKey && callsign) callsignBySource.set(sourceKey, callsign);
+      return;
+    }
+    node.children.forEach(visitRiverChild);
+  };
+
+  for (const node of nodes) {
+    if (
+      node.kind === 'dir'
+      && (node.name === RIVER_SHARED_FOLDER_NAME || node.label === RIVER_SHARED_FOLDER_NAME)
+    ) {
+      node.children.forEach(visitRiverChild);
+    }
+  }
+
+  return callsignBySource;
+}
+
+export function annotateRiverSharedItems(
+  nodes: readonly SidebarNode[],
+  callsignBySource: ReadonlyMap<string, string>,
+): SidebarNode[] {
+  return nodes.map((node) => {
+    if (node.kind === 'file') {
+      const sourceKey = normalizeRiverSharedSourcePath(node.item.relPath);
+      const callsign = sourceKey ? callsignBySource.get(sourceKey) : undefined;
+      if (!callsign || node.item.sharedRiverCallsign === callsign) return node;
+      return {
+        ...node,
+        item: {
+          ...node.item,
+          sharedRiverCallsign: callsign,
+        },
+      };
+    }
+
+    if (node.name === RIVER_SHARED_FOLDER_NAME || node.label === RIVER_SHARED_FOLDER_NAME) return node;
+    return {
+      ...node,
+      children: annotateRiverSharedItems(node.children, callsignBySource),
+    };
+  });
+}
+
 export function applyPinnedSidebarOrder(
   nodes: SidebarNode[],
   sortMode: SortMode,
@@ -1225,6 +1309,8 @@ function wikiNodeToSidebarNode(
         timestamp: node.lastUpdated,
         todoState: node.todoState,
         archived: node.archived,
+        sharedOriginalSourcePath: node.sharedOriginalSourcePath,
+        sharedAuthorCallsign: node.sharedAuthorCallsign,
         taggedDocId: taggedDoc?.ulid,
         hasUnread: taggedDoc?.unread ?? false,
       },
@@ -1666,6 +1752,10 @@ function WikiSidebar({
     });
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
+    const onLocalRiverChanged = () => {
+      loadTree('river:changed-local');
+    };
+    window.addEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
     const onFocus = () => {
       loadTree('focus');
@@ -1689,6 +1779,7 @@ function WikiSidebar({
       unsubRenamedReading?.();
       unsubRecent?.();
       unsubTaggedDocs?.();
+      window.removeEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
       window.removeEventListener('focus', onFocus);
     };
   }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, pruneDeletedWikiPage]);
@@ -1983,9 +2074,17 @@ function WikiSidebar({
     [sidebarRoots, todoStateOverrides],
   );
 
+  const sidebarRootsWithRiverSharedIndicators = useMemo(
+    () => annotateRiverSharedItems(
+      sidebarRootsWithTodoOverrides,
+      collectRiverSharedSourceCallsigns(sidebarRootsWithTodoOverrides),
+    ),
+    [sidebarRootsWithTodoOverrides],
+  );
+
   const filteredSidebarRoots = useMemo(
-    () => filterSidebarNodes(sidebarRootsWithTodoOverrides, searchQuery),
-    [sidebarRootsWithTodoOverrides, searchQuery]
+    () => filterSidebarNodes(sidebarRootsWithRiverSharedIndicators, searchQuery),
+    [sidebarRootsWithRiverSharedIndicators, searchQuery]
   );
   const filteredRecentEntries = useMemo(() => filterStaleRecent(recent, wikiTree), [recent, wikiTree]);
   const revealRecentEntryInTree = useCallback((entry: RecentEntry) => {
@@ -2018,9 +2117,15 @@ function WikiSidebar({
     });
   }, [libraryRoots, onSelectItem]);
   const isSearching = searchQuery.trim().length > 0;
+  const { riverShortcutNode, visibleRoots: sidebarRootsWithoutPinnedRiver } = useMemo(
+    () => isSearching
+      ? { riverShortcutNode: null, visibleRoots: filteredSidebarRoots }
+      : splitRiverShortcutNode(filteredSidebarRoots),
+    [filteredSidebarRoots, isSearching],
+  );
   const visibleSidebarRoots = useMemo(
-    () => filteredSidebarRoots.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
-    [filteredSidebarRoots]
+    () => sidebarRootsWithoutPinnedRiver.filter((node) => node.id !== BOOKMARKS_ITEM_ID),
+    [sidebarRootsWithoutPinnedRiver]
   );
   const bookmarksActionNode = useMemo(() => {
     const node = filteredSidebarRoots.find((item) => item.id === BOOKMARKS_ITEM_ID);
@@ -2334,7 +2439,8 @@ function WikiSidebar({
     ? (multiContextArchivableItems.every((item) => item.archived) ? 'Unarchive selected' : 'Archive selected')
     : null;
   const contextFileFinderPath = contextFile?.type !== 'bookmarks' ? contextFile?.absPath : undefined;
-  const contextPinTargetId = contextDir?.id ?? (contextFile?.type !== 'bookmarks' ? contextFile?.id : null);
+  const contextDirIsRiverShortcut = contextDir?.name === RIVER_SHARED_FOLDER_NAME || contextDir?.label === RIVER_SHARED_FOLDER_NAME;
+  const contextPinTargetId = contextDirIsRiverShortcut ? null : contextDir?.id ?? (contextFile?.type !== 'bookmarks' ? contextFile?.id : null);
   const contextPinLabel = contextPinTargetId
     ? `${pinnedItemIds.has(contextPinTargetId) ? 'Unpin' : 'Pin'} ${contextDir ? 'folder' : 'doc'}`
     : null;
@@ -2978,6 +3084,64 @@ function WikiSidebar({
               if (bookmarksActionNode) openContextMenu(event, bookmarksActionNode);
             }}
           />
+          {riverShortcutNode && (
+            <>
+              <SidebarShortcutRow
+                icon={<SidebarRiverIcon color={getSidebarIconColor(riverShortcutNode.id, theme.isDark ? SIDEBAR_DARK_ICON_COLOR : SIDEBAR_LIGHT_ICON_COLOR)} />}
+                title={RIVER_SHORTCUT_LABEL}
+                titleAttr={riverShortcutNode.label}
+                count={countSidebarItems(riverShortcutNode.children)}
+                isSelected={selectedId === riverShortcutNode.id}
+                theme={theme}
+                indent={LIBRARY_SIDEBAR_EDGE_PADDING}
+                fontWeight={500}
+                rowId={riverShortcutNode.id}
+                trailing={<SidebarPeopleChipIcon color={theme.textSecondary} />}
+                onIconClick={(event) => openSidebarIconColorPicker(riverShortcutNode.id, event)}
+                onOpen={() => toggleFolder(riverShortcutNode.id)}
+                onContextMenu={(event) => openContextMenu(event, riverShortcutNode)}
+              />
+              {expandedFolders.has(riverShortcutNode.id) && riverShortcutNode.children.map((child) => (
+                <TreeNode
+                  key={child.id}
+                  node={child}
+                  depth={1}
+                  isSearching={isSearching}
+                  expandedFolders={expandedFolders}
+                  toggleFolder={toggleFolder}
+                  creating={creating}
+                  newName={newName}
+                  setNewName={setNewName}
+                  createInputRef={createInputRef}
+                  submitCreate={submitCreate}
+                  cancelCreate={cancelCreate}
+                  beginCreateFile={beginCreateFile}
+                  selectedId={selectedId}
+                  selectedKeyboardActive={selectedKeyboardActive}
+                  selectedItemRef={selectedItemRef}
+                  dropTargetId={dropTargetId}
+                  setDropTargetId={setDropTargetId}
+                  onMoveLibraryItem={moveLibraryItem}
+                  theme={theme}
+                  onSelectItem={selectSidebarFileItem}
+                  onToggleItemSelection={toggleSidebarItemSelection}
+                  selectedFileIds={selectedFileIds}
+                  collapsingFileIds={collapsingFileIds}
+                  contextActiveNodeId={contextActiveNodeId}
+                  renameRequestId={renameRequestId}
+                  onRenameRequestConsumed={() => setRenameRequestId(null)}
+                  onContextMenu={openContextMenu}
+                  onKeyboardScopeActive={onKeyboardScopeActive}
+                  pinnedItemIds={pinnedItemIds}
+                  pinnedFolderFadeIds={pinnedFolderFadeIds}
+                  getSidebarIconColor={getSidebarIconColor}
+                  getSidebarIconColorIndex={getSidebarIconColorIndex}
+                  onOpenIconColorPicker={openSidebarIconColorPicker}
+                  inheritedIconColorIndex={getSidebarIconColorIndex(riverShortcutNode.id)}
+                />
+              ))}
+            </>
+          )}
           <SidebarDivider theme={theme} />
         </>
       )}
@@ -4099,6 +4263,13 @@ function FileItem({
     ? `0 ${horizontalPadding}px 0 ${leftPadding}px`
     : `${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${horizontalPadding}px ${LIBRARY_SIDEBAR_ROW_PADDING_Y} ${leftPadding}px`;
   const showTodoStateBadge = shouldShowSidebarTodoStateBadge(item, isCollapsing);
+  const sharedAuthorLabel = item.sharedRiverCallsign
+    ?? (item.sharedOriginalSourcePath ? item.sharedAuthorCallsign : undefined);
+  const sharedAuthorTitle = item.sharedRiverCallsign
+    ? `Shared to River by ${item.sharedRiverCallsign}`
+    : sharedAuthorLabel
+      ? `Shared by ${sharedAuthorLabel}`
+      : undefined;
 
   return (
     <div
@@ -4241,10 +4412,24 @@ function FileItem({
               fontWeight: 400,
               color: sidebarTextColor,
               lineHeight: LIBRARY_SIDEBAR_ROW_LINE_HEIGHT,
-              ...librarySidebarFadeTextStyle(canShowInFinder ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH),
+              ...(sharedAuthorLabel
+                ? {
+                  flex: '0 1 auto',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                }
+                : librarySidebarFadeTextStyle(canShowInFinder ? LIBRARY_SIDEBAR_HOVER_FADE_WIDTH : LIBRARY_SIDEBAR_FADE_WIDTH)),
             }}>
               {item.title}
             </div>
+            {sharedAuthorLabel && sharedAuthorTitle && (
+              <>
+                <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
+                <span aria-hidden="true" style={{ flex: 1, minWidth: 0 }} />
+              </>
+            )}
             {isPinned && (
               <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
                 <SidebarPinIcon />
@@ -4419,6 +4604,64 @@ function SidebarPinIcon() {
     >
       <path d="M5.5 2.5h5l-1 4 2.5 2.5v1H9.1L8 14l-1.1-4H4V9l2.5-2.5-1-4Z" />
     </svg>
+  );
+}
+
+function SidebarSharedAuthorChip({
+  label,
+  theme,
+  title,
+}: {
+  label: string;
+  theme: ReturnType<typeof useTheme>['theme'];
+  title: string;
+}) {
+  return (
+    <span
+      aria-label={title}
+      title={title}
+      style={{
+        flexShrink: 0,
+        padding: '0 5px',
+        borderRadius: '999px',
+        fontSize: '8px',
+        lineHeight: '12px',
+        color: theme.isDark ? '#d4d4d4' : '#525252',
+        backgroundColor: theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.06)',
+        border: `1px solid ${theme.isDark ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)'}`,
+        maxWidth: '75px',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+function SidebarPeopleChipIcon({ color }: { color: string }) {
+  return (
+    <span
+      title="Shared River"
+      aria-label="Shared River"
+      style={{ color, opacity: 0.62, flexShrink: 0, display: 'inline-flex', alignItems: 'center' }}
+    >
+      <svg width="16" height="14" viewBox="0 0 18 16" fill="none" aria-hidden="true">
+        <path
+          d="M6.75 7.25a2.45 2.45 0 1 0 0-4.9 2.45 2.45 0 0 0 0 4.9zM2.55 13.15c.55-2.45 2.05-3.7 4.2-3.7s3.65 1.25 4.2 3.7"
+          stroke="currentColor"
+          strokeWidth="1.25"
+          strokeLinecap="round"
+        />
+        <path
+          d="M11.6 7.05a2.05 2.05 0 1 0 0-4.1M12.85 9.55c1.35.35 2.25 1.45 2.6 3.25"
+          stroke="currentColor"
+          strokeWidth="1.25"
+          strokeLinecap="round"
+        />
+      </svg>
+    </span>
   );
 }
 
@@ -4930,6 +5173,7 @@ function SidebarShortcutRow({
   indent = 10,
   fontWeight = 400,
   rowId,
+  trailing,
   onIconClick,
   onOpen,
   onContextMenu,
@@ -4946,6 +5190,7 @@ function SidebarShortcutRow({
   indent?: number;
   fontWeight?: React.CSSProperties['fontWeight'];
   rowId?: string;
+  trailing?: React.ReactNode;
   onIconClick?: (event: React.MouseEvent<HTMLElement>) => void;
   onOpen: () => void;
   onContextMenu?: (event: React.MouseEvent) => void;
@@ -4992,6 +5237,7 @@ function SidebarShortcutRow({
       ) : icon}
       <span style={titleStyle}>{title}</span>
       {count !== undefined && <SidebarCountPill count={count} theme={theme} />}
+      {trailing}
       {meta && (
         <button
           type="button"

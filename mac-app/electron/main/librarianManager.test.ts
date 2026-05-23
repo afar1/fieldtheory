@@ -299,6 +299,36 @@ describe('recursive wiki tree scan', () => {
     ]);
   });
 
+  it('uses shared frontmatter title and full callsign for River cache nodes', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'River (shared)', 'plain AM.md'), [
+      '---',
+      'title: plain',
+      'shared: true',
+      'shared_id: shared-1',
+      'shared_type: command',
+      'shared_original_source_path: Commands/plain.md',
+      'shared_author_initials: AM',
+      'shared_author_callsign: afar',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const tree = scan(root);
+    const river = tree.find((node) => node.kind === 'dir' && node.name === 'River (shared)');
+    expect(river?.kind).toBe('dir');
+    if (river?.kind !== 'dir') return;
+    const shared = river.children[0];
+    expect(shared.kind).toBe('file');
+    if (shared.kind !== 'file') return;
+    expect(shared.name).toBe('plain AM');
+    expect(shared.title).toBe('plain');
+    expect(shared.sharedOriginalSourcePath).toBe('Commands/plain.md');
+    expect(shared.sharedAuthorCallsign).toBe('afar');
+  });
+
   it('includes .markdown files in the library tree', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });

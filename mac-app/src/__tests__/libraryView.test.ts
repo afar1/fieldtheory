@@ -81,8 +81,10 @@ import {
   addPageToLibraryRoot,
   addWikiPageToLibraryRoots,
   addWikiPageToTree,
+  annotateRiverSharedItems,
   applyPinnedSidebarOrder,
   applyTodoStateOverrideToItem,
+  collectRiverSharedSourceCallsigns,
   ensureScratchpadNodePresent,
   ensureScratchpadPinned,
   filterHiddenDefaultSidebarNodes,
@@ -110,6 +112,7 @@ import {
   hideReadmeOnlyLibraryArtifactsFolder,
   libraryRootsHaveBuiltinRelPath,
   normalizeLibrarySidebarIconColorOrder,
+  normalizeRiverSharedSourcePath,
   orderTopLevelSidebarNodes,
   reorderLibrarySidebarIconColorOrder,
   removeWikiRelPathFromLibraryRoots,
@@ -121,6 +124,7 @@ import {
   shouldShowSidebarTodoStateBadge,
   splitArchivedSidebarNodes,
   splitPinnedRecentEntries,
+  splitRiverShortcutNode,
   splitRecent,
   sortSidebarNodes,
   setLibraryDragData,
@@ -2531,6 +2535,91 @@ describe('recursive sidebar tree helpers', () => {
       'Plans',
       'Scratchpad',
     ]);
+  });
+
+  it('keeps pinned folders ahead of unpinned top-level folders', () => {
+    const result = orderTopLevelSidebarNodes([
+      dir('scratchpad'),
+      dir('Plans'),
+    ], 'alpha', new Set(['/wiki::Plans']));
+
+    expect(result.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Plans',
+      'Scratchpad',
+    ]);
+  });
+
+  it('separates River from visible top-level roots for shortcut rendering', () => {
+    const river = dir('River (shared)', [file('Shared note', 10)]);
+    const result = splitRiverShortcutNode([
+      dir('scratchpad'),
+      river,
+      dir('Plans'),
+    ]);
+
+    expect(result.riverShortcutNode?.id).toBe('/wiki::River (shared)');
+    expect(result.riverShortcutNode?.label).toBe('River (shared)');
+    expect(result.visibleRoots.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Scratchpad',
+      'Plans',
+    ]);
+  });
+
+  it('uses the populated River folder when duplicate River roots are present', () => {
+    const emptyRiver = { ...dir('River (shared)', []), id: '/external::River (shared)' };
+    const populatedRiver = dir('River (shared)', [file('Shared note', 10)]);
+    const result = splitRiverShortcutNode([
+      emptyRiver,
+      dir('scratchpad'),
+      populatedRiver,
+    ]);
+
+    expect(result.riverShortcutNode?.id).toBe('/wiki::River (shared)');
+    expect(result.riverShortcutNode?.children).toHaveLength(1);
+    expect(result.visibleRoots.map((node) => node.kind === 'dir' ? node.label : node.item.title)).toEqual([
+      'Scratchpad',
+    ]);
+  });
+
+  it('normalizes River shared source paths without changing document titles', () => {
+    expect(normalizeRiverSharedSourcePath('Commands/brief.md')).toBe('commands/brief');
+    const localBrief = file('brief', 10);
+    const sharedBrief = file('brief AM', 20);
+    if (localBrief.kind !== 'file' || sharedBrief.kind !== 'file') throw new Error('expected file nodes');
+    localBrief.item.relPath = 'Commands/brief';
+    sharedBrief.item.sharedOriginalSourcePath = 'Commands/brief.md';
+    sharedBrief.item.sharedAuthorCallsign = 'afar';
+
+    const annotated = annotateRiverSharedItems([
+      dir('Commands', [localBrief]),
+      dir('River (shared)', [sharedBrief]),
+    ], collectRiverSharedSourceCallsigns([
+      dir('River (shared)', [sharedBrief]),
+    ]));
+    const commands = annotated[0];
+    if (commands.kind !== 'dir') throw new Error('expected commands dir');
+    const item = commands.children[0];
+    if (item.kind !== 'file') throw new Error('expected local brief file');
+
+    expect(item.item.title).toBe('brief');
+    expect(item.item.sharedRiverCallsign).toBe('afar');
+  });
+
+  it('does not mark local River shares from initials-only cache metadata', () => {
+    const localBrief = file('brief', 10);
+    const sharedBrief = file('brief AM', 20);
+    if (localBrief.kind !== 'file' || sharedBrief.kind !== 'file') throw new Error('expected file nodes');
+    localBrief.item.relPath = 'Commands/brief';
+    sharedBrief.item.sharedOriginalSourcePath = 'Commands/brief.md';
+
+    const callsigns = collectRiverSharedSourceCallsigns([dir('River (shared)', [sharedBrief])]);
+    const annotated = annotateRiverSharedItems([dir('Commands', [localBrief])], callsigns);
+    const commands = annotated[0];
+    if (commands.kind !== 'dir') throw new Error('expected commands dir');
+    const item = commands.children[0];
+    if (item.kind !== 'file') throw new Error('expected local brief file');
+
+    expect(item.item.sharedRiverCallsign).toBeUndefined();
   });
 
   it('applies pinned ordering recursively to folders and docs', () => {

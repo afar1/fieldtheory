@@ -65,6 +65,46 @@ describe('SharedSyncService cache behavior', () => {
       { field: 'id', value: 'shared-1' },
       { field: 'deleted_at', value: null },
     ]);
+    expect(fs.existsSync(cachePath)).toBe(false);
+  });
+
+  it('removes a River cache file immediately when unsharing the original source file', async () => {
+    const supabase = {
+      from: () => ({
+        update: () => ({
+          eq() {
+            return this;
+          },
+          async is() {
+            return { error: null };
+          },
+        }),
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const root = sharedFilesRoot();
+    fs.mkdirSync(root, { recursive: true });
+    const sourcePath = path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'Commands', 'brief.md');
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.writeFileSync(sourcePath, '# brief\n');
+    const cachePath = path.join(root, 'brief AM.md');
+    fs.writeFileSync(cachePath, [
+      '---',
+      'shared: true',
+      'shared_id: "shared-1"',
+      'shared_type: "command"',
+      'shared_original_source_path: "Commands/brief.md"',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    await expect(new SharedSyncService(authManager).unshareFile(sourcePath)).resolves.toBe(true);
+
+    expect(fs.existsSync(cachePath)).toBe(false);
   });
 
   it('reuses the existing cache file for a shared row', () => {
@@ -167,6 +207,75 @@ describe('SharedSyncService cache behavior', () => {
     expect(fs.existsSync(sharedFilesRoot())).toBe(true);
   });
 
+  it('fills a missing current-user callsign while syncing cached River rows', async () => {
+    const supabase = {
+      from(table: string) {
+        if (table === 'profiles') {
+          return {
+            select() { return this; },
+            eq() { return this; },
+            async maybeSingle() {
+              return { data: { callsign: 'afar' }, error: null };
+            },
+          };
+        }
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async is() {
+            return {
+              data: [{
+                id: 'shared-1',
+                team_scope_user_id: 'user-1',
+                kind: 'command',
+                path: 'Commands/Commands/brief.md',
+                title: 'brief',
+                content: 'Body\n',
+                content_hash: null,
+                client_id: 'shared-client',
+                client_created_at_ms: 1,
+                created_by: 'user-1',
+                updated_by: 'user-1',
+                deleted_at: null,
+                created_at: '2026-01-01T00:00:00Z',
+                updated_at: '2026-01-01T00:00:00Z',
+                original_source_path: 'Commands/brief.md',
+                shared_name: 'brief',
+                author_initials: 'AM',
+                author_callsign: null,
+                revision: 1,
+              }],
+              error: null,
+            };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 1,
+      removed: 0,
+      errors: [],
+    });
+
+    const cachePath = path.join(sharedFilesRoot(), 'brief AM.md');
+    expect(fs.readFileSync(cachePath, 'utf-8')).toContain('shared_author_callsign: "afar"');
+  });
+
   it('does not create a shared row for solo users', async () => {
     const fromCalls: string[] = [];
     const supabase = {
@@ -258,6 +367,115 @@ describe('SharedSyncService cache behavior', () => {
       team_scope_user_id: 'owner-1',
       created_by: 'user-2',
       updated_by: 'user-2',
+    });
+  });
+
+  it('uses the full profile callsign when sharing a file', async () => {
+    let upsertedRow: Record<string, unknown> | null = null;
+    const supabase = {
+      from(table: string) {
+        if (table === 'profiles') {
+          return {
+            select() { return this; },
+            eq() { return this; },
+            async maybeSingle() {
+              return { data: { callsign: 'afar' }, error: null };
+            },
+          };
+        }
+        return {
+          upsert(row: Record<string, unknown>) {
+            upsertedRow = row;
+            return {
+              select() {
+                return {
+                  async single() {
+                    return {
+                      data: {
+                        id: 'shared-1',
+                        created_at: '2026-01-01T00:00:00Z',
+                        updated_at: '2026-01-01T00:00:00Z',
+                        ...row,
+                      },
+                      error: null,
+                    };
+                  },
+                };
+              },
+            };
+          },
+        };
+      },
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    const status = await new SharedSyncService(authManager, teamService as unknown as SharedTeamService).shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+    });
+
+    expect(status.shared).toBe(true);
+    expect(upsertedRow).toMatchObject({ author_callsign: 'afar' });
+    expect(fs.readFileSync(status.cachePath ?? '', 'utf-8')).toContain('shared_author_callsign: "afar"');
+  });
+
+  it('returns the database error when sharing is blocked', async () => {
+    const supabase = {
+      from: () => ({
+        upsert() {
+          return {
+            select() {
+              return {
+                async single() {
+                  return {
+                    data: null,
+                    error: { message: 'new row violates row-level security policy for table "team_documents"' },
+                  };
+                },
+              };
+            },
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).shareFile({
+      filePath: path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'scratchpad', 'Note.md'),
+      title: 'Note',
+      content: 'Body\n',
+      type: 'document',
+    })).resolves.toEqual({
+      shared: false,
+      error: 'new row violates row-level security policy for table "team_documents"',
     });
   });
 

@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type CSSProperties } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import ImmersiveToggle from './ImmersiveToggle';
-import { SidebarMarkdownIcon } from './SidebarIcons';
+import { SidebarMarkdownIcon, SidebarRiverIcon } from './SidebarIcons';
 
 // Icon sizes - 22% larger than the original 13px base
 const ICON_SIZE = 16; // ~22% larger than 13px
@@ -465,8 +465,6 @@ export default function ContentToolbar({
   isSharing = false,
   onToggleShare,
   showShare = false,
-  shareLabel = 'Share',
-  sharedLabel = 'Shared',
   shareTitle = 'Add to Shared',
   sharedTitle = 'Remove from Shared',
   onCopyPath,
@@ -480,6 +478,8 @@ export default function ContentToolbar({
   const [typographyMenuOpen, setTypographyMenuOpen] = useState(false);
   const typographyMenuRef = useRef<HTMLDivElement | null>(null);
   const copyPathLocalTimerRef = useRef<number | null>(null);
+  const riverShareActive = shareStatus?.shared === true;
+  const riverShareColor = riverShareActive ? '#2563eb' : theme.textSecondary;
 
   // Handle copy with feedback
   const handleCopy = () => {
@@ -755,11 +755,15 @@ export default function ContentToolbar({
           onClick={onToggleShare}
           disabled={isSharing}
           style={{
-            padding: '3px 8px',
+            padding: '3px 6px',
             fontSize: '11px',
-            color: shareStatus?.shared ? theme.accent : theme.textSecondary,
-            backgroundColor: 'transparent',
-            border: 'none',
+            color: riverShareColor,
+            backgroundColor: riverShareActive
+              ? (theme.isDark ? 'rgba(37,99,235,0.20)' : 'rgba(37,99,235,0.12)')
+              : 'transparent',
+            border: `1px solid ${riverShareActive
+              ? (theme.isDark ? 'rgba(96,165,250,0.36)' : 'rgba(37,99,235,0.28)')
+              : 'transparent'}`,
             borderRadius: '4px',
             cursor: isSharing ? 'default' : 'pointer',
             opacity: isSharing ? 0.6 : 1,
@@ -767,10 +771,15 @@ export default function ContentToolbar({
             alignItems: 'center',
             justifyContent: 'center',
             height: '24px',
+            minWidth: '24px',
           }}
           title={shareStatus?.shared ? sharedTitle : shareTitle}
+          aria-label={shareStatus?.shared ? sharedTitle : shareTitle}
         >
-          {isSharing ? 'Sharing...' : shareStatus?.shared ? sharedLabel : shareLabel}
+          <SidebarRiverIcon
+            color={riverShareColor}
+            style={{ opacity: isSharing ? 0.35 : riverShareActive ? 1 : 0.48 }}
+          />
         </button>
       )}
 

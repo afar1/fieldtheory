@@ -5,6 +5,8 @@ export interface AgentImproveContext {
   content: string;
   filePath?: string | null;
   title?: string | null;
+  selectionStart?: number;
+  selectionEnd?: number;
 }
 
 function textareaSelection(textarea: HTMLTextAreaElement): string {
@@ -30,6 +32,8 @@ export function getAgentImproveContext(doc: Document = document): AgentImproveCo
         content: textareaSelection(active),
         filePath: active.dataset.ftAgentFilePath || null,
         title: active.dataset.ftAgentTitle || null,
+        selectionStart: active.selectionStart,
+        selectionEnd: active.selectionEnd,
       };
     }
 

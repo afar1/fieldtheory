@@ -66,6 +66,26 @@ export function SidebarFolderIcon({ color, style }: { color: string; style?: CSS
   );
 }
 
+export function SidebarRiverIcon({ color, style }: { color: string; style?: CSSProperties }) {
+  return (
+    <svg
+      width={SIDEBAR_ICON_SIZE}
+      height={SIDEBAR_ICON_SIZE}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      style={iconStyle(color, style)}
+    >
+      <path
+        d="M2.5 5.25c1.55-1.15 3.05-1.15 4.5 0s2.95 1.15 4.5 0M2.5 8c1.55-1.15 3.05-1.15 4.5 0s2.95 1.15 4.5 0M2.5 10.75c1.55-1.15 3.05-1.15 4.5 0s2.95 1.15 4.5 0"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 export function SidebarRecentIcon({ color, style }: { color: string; style?: CSSProperties }) {
   return (
     <svg

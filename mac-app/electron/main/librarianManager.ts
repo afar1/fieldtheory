@@ -20,6 +20,7 @@ import {
   stripMarkdownFileExtension,
 } from './pathSafety';
 import {
+  parseMarkdownFrontmatter,
   parseMarkdownArchivedState,
   parseMarkdownTodoState,
   type MarkdownTodoState,
@@ -1624,6 +1625,8 @@ export interface WikiPageMeta {
   documentKind?: 'markdown' | 'html' | 'css';
   todoState?: MarkdownTodoState;
   archived?: boolean;
+  sharedOriginalSourcePath?: string;
+  sharedAuthorCallsign?: string;
 }
 
 export interface WikiPage extends WikiPageMeta {
@@ -1637,8 +1640,10 @@ export interface WikiFolder {
 }
 
 export type WikiNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
   | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
+
+type WikiFileMetadata = Pick<WikiPageMeta, 'title' | 'todoState' | 'archived' | 'sharedOriginalSourcePath' | 'sharedAuthorCallsign'>;
 
 export interface LibraryRoot {
   path: string;
@@ -2612,15 +2617,21 @@ export class LibrarianManager extends EventEmitter {
   private wikiWatcher: chokidar.FSWatcher | null = null;
   private wikiWatcherPending = false;
 
-  private parseWikiMetadata(content: string, filePath: string): { title: string; todoState?: MarkdownTodoState; archived?: boolean } {
+  private parseWikiMetadata(content: string, filePath: string): WikiFileMetadata {
+    const frontmatter = parseMarkdownFrontmatter(content).meta;
+    const sharedTitle = frontmatter.shared === 'true' && frontmatter.title.trim()
+      ? frontmatter.title.trim()
+      : undefined;
     return {
-      title: stripMarkdownFileExtension(path.basename(filePath)),
+      title: sharedTitle ?? stripMarkdownFileExtension(path.basename(filePath)),
       todoState: parseMarkdownTodoState(content) ?? undefined,
       archived: parseMarkdownArchivedState(content) || undefined,
+      sharedOriginalSourcePath: frontmatter.shared_original_source_path,
+      sharedAuthorCallsign: frontmatter.shared_author_callsign,
     };
   }
 
-  private parseWikiFileMetadata(filePath: string): { title: string; todoState?: MarkdownTodoState; archived?: boolean } {
+  private parseWikiFileMetadata(filePath: string): WikiFileMetadata {
     if (!isMarkdownDocumentPath(filePath)) {
       return { title: path.basename(filePath) };
     }
@@ -2913,6 +2924,8 @@ export class LibrarianManager extends EventEmitter {
         documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
         archived: metadata.archived,
+        sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+        sharedAuthorCallsign: metadata.sharedAuthorCallsign,
       });
     }
 
@@ -2935,6 +2948,8 @@ export class LibrarianManager extends EventEmitter {
           documentKind: node.documentKind,
           todoState: node.todoState,
           archived: node.archived,
+          sharedOriginalSourcePath: node.sharedOriginalSourcePath,
+          sharedAuthorCallsign: node.sharedAuthorCallsign,
         }];
       }
       return this.flattenWikiFiles(node.children);
@@ -2970,6 +2985,8 @@ export class LibrarianManager extends EventEmitter {
         documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
         archived: metadata.archived,
+        sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+        sharedAuthorCallsign: metadata.sharedAuthorCallsign,
       };
     } catch {
       return null;

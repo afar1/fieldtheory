@@ -1895,6 +1895,7 @@ interface SharedFileStatus {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
 }
 
 interface SharedFileShareInput {
@@ -2042,6 +2043,8 @@ declare global {
     documentKind?: 'markdown' | 'html' | 'css';
     todoState?: MarkdownTodoState;
     archived?: boolean;
+    sharedOriginalSourcePath?: string;
+    sharedAuthorCallsign?: string;
   }
 
   interface WikiPage extends WikiPageMeta {
@@ -2055,7 +2058,7 @@ declare global {
   }
 
   type WikiNode =
-    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean }
+    | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: MarkdownTodoState; archived?: boolean; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
     | { kind: 'dir'; name: string; relPath: string; children: WikiNode[] };
 
   interface LibraryRoot {

@@ -46,6 +46,34 @@ function authorInitialsFromSession(session: ReturnType<AuthManager['getSession']
   return (words[0]?.slice(0, 2) || 'FT').toUpperCase();
 }
 
+function authorCallsignFromSession(session: ReturnType<AuthManager['getSession']>): string | null {
+  const metadata = session?.user?.user_metadata as Record<string, unknown> | undefined;
+  const callsign = metadata?.callsign;
+  return typeof callsign === 'string' && callsign.trim() ? callsign.trim() : null;
+}
+
+async function authorCallsignForSession(
+  supabase: ReturnType<AuthManager['getSupabaseClient']>,
+  session: ReturnType<AuthManager['getSession']>,
+): Promise<string | null> {
+  const metadataCallsign = authorCallsignFromSession(session);
+  if (metadataCallsign) return metadataCallsign;
+  if (!supabase || !session?.user?.id) return null;
+
+  try {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('callsign')
+      .eq('id', session.user.id)
+      .maybeSingle();
+    if (error || !data) return null;
+    const callsign = (data as { callsign?: unknown }).callsign;
+    return typeof callsign === 'string' && callsign.trim() ? callsign.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 function sourceKeyForFilePath(filePath: string): string {
   const resolved = path.resolve(filePath);
   const root = libraryDir();
@@ -60,6 +88,7 @@ export interface SharedFileStatus {
   sharedId?: string;
   revision?: number;
   cachePath?: string;
+  error?: string;
 }
 
 export interface SharedFileShareInput {
@@ -109,6 +138,7 @@ interface TeamDocumentRow {
   original_source_path?: string | null;
   shared_name?: string | null;
   author_initials?: string | null;
+  author_callsign?: string | null;
   revision?: number | null;
 }
 
@@ -262,6 +292,7 @@ export class SharedSyncService extends EventEmitter {
     const now = Date.now();
     const title = input.title || safeTitleFromPath(input.filePath);
     const authorInitials = authorInitialsFromSession(session);
+    const authorCallsign = await authorCallsignForSession(supabase, session);
 
     const row = {
       team_scope_user_id: teamState.currentTeamScopeUserId,
@@ -278,22 +309,24 @@ export class SharedSyncService extends EventEmitter {
       original_source_path: sourceKey,
       shared_name: title,
       author_initials: authorInitials,
+      author_callsign: authorCallsign,
       revision: 1,
     };
 
     const { data, error } = await supabase
       .from('team_documents')
       .upsert(row, { onConflict: 'team_scope_user_id,client_id' })
-      .select('*')
+      .select('id, team_scope_user_id, kind, path, title, content_hash, client_id, client_created_at_ms, created_by, updated_by, deleted_at, created_at, updated_at, original_source_path, shared_name, author_initials, author_callsign, revision')
       .single();
 
     if (error || !data) {
       log.error('Share file failed:', error);
-      return { shared: false };
+      return { shared: false, error: error?.message ?? 'Share file failed' };
     }
 
-    const cachePath = this.writeRowToCache(data as TeamDocumentRow);
-    return { shared: true, sharedId: (data as TeamDocumentRow).id, revision: (data as TeamDocumentRow).revision ?? 1, cachePath };
+    const savedRow = { ...row, ...(data as Omit<TeamDocumentRow, 'content'>), content } as TeamDocumentRow;
+    const cachePath = this.writeRowToCache(savedRow);
+    return { shared: true, sharedId: savedRow.id, revision: savedRow.revision ?? 1, cachePath };
   }
 
   async unshareFile(filePath: string): Promise<boolean> {
@@ -302,6 +335,7 @@ export class SharedSyncService extends EventEmitter {
     if (!supabase || !session?.user?.id) return false;
 
     const sharedId = this.sharedIdForCacheFile(filePath);
+    const originalSourcePath = sharedId ? this.originalSourcePathForCacheFile(filePath) : sourceKeyForFilePath(filePath);
     let query = supabase
       .from('team_documents')
       .update({ deleted_at: new Date().toISOString(), updated_by: session.user.id })
@@ -316,6 +350,7 @@ export class SharedSyncService extends EventEmitter {
       log.error('Unshare file failed:', error);
       return false;
     }
+    this.removeCacheFilesForSharedReference({ sharedId, originalSourcePath });
     return true;
   }
 
@@ -340,9 +375,16 @@ export class SharedSyncService extends EventEmitter {
     }
 
     const activeIds = new Set<string>();
+    let currentUserCallsign: Promise<string | null> | null = null;
     for (const row of (data ?? []) as TeamDocumentRow[]) {
       try {
-        this.writeRowToCache(row);
+        let cacheRow = row;
+        if (!row.author_callsign && row.created_by === session.user.id) {
+          currentUserCallsign ??= authorCallsignForSession(supabase, session);
+          const callsign = await currentUserCallsign;
+          if (callsign) cacheRow = { ...row, author_callsign: callsign };
+        }
+        this.writeRowToCache(cacheRow);
         activeIds.add(row.id);
         result.written++;
       } catch (err) {
@@ -437,6 +479,45 @@ export class SharedSyncService extends EventEmitter {
     }
   }
 
+  private originalSourcePathForCacheFile(filePath: string): string | null {
+    const resolvedPath = path.resolve(filePath);
+    if (!isInsidePath(sharedFilesRoot(), resolvedPath) || !fs.existsSync(resolvedPath)) return null;
+    try {
+      return parseSharedFileFrontmatter(fs.readFileSync(resolvedPath, 'utf-8'))?.originalSourcePath ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private removeCacheFilesForSharedReference({
+    sharedId,
+    originalSourcePath,
+  }: {
+    sharedId?: string | null;
+    originalSourcePath?: string | null;
+  }): number {
+    const root = sharedFilesRoot();
+    if (!fs.existsSync(root)) return 0;
+    let removed = 0;
+    for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) continue;
+      const filePath = path.join(root, entry.name);
+      try {
+        const parsed = parseSharedFileFrontmatter(fs.readFileSync(filePath, 'utf-8'));
+        if (
+          (sharedId && parsed?.sharedId === sharedId)
+          || (originalSourcePath && parsed?.originalSourcePath === originalSourcePath)
+        ) {
+          fs.rmSync(filePath, { force: true });
+          removed++;
+        }
+      } catch {
+        // Ignore unreadable cache files while removing a known share.
+      }
+    }
+    return removed;
+  }
+
   private existingCachePathForRow(sharedId: string): string | null {
     const root = sharedFilesRoot();
     if (!fs.existsSync(root)) return null;
@@ -465,6 +546,7 @@ export class SharedSyncService extends EventEmitter {
       teamName: 'Field Theory Team',
       authorId: row.created_by,
       authorInitials: row.author_initials ?? undefined,
+      authorCallsign: row.author_callsign ?? undefined,
       type,
       originalSourcePath: row.original_source_path ?? undefined,
       revision: row.revision ?? 0,
