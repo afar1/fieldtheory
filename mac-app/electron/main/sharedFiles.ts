@@ -38,6 +38,7 @@ export interface SharedFileFrontmatter {
   authorId?: string;
   authorName?: string;
   authorInitials?: string;
+  authorCallsign?: string;
   type: SharedFileType;
   originalSourcePath?: string;
   revision?: number;
@@ -278,6 +279,7 @@ export function serializeSharedFileFrontmatter(meta: SharedFileFrontmatter): str
   if (meta.authorId) lines.push(`shared_author_id: ${quoteYamlScalar(meta.authorId)}`);
   if (meta.authorName) lines.push(`shared_author: ${quoteYamlScalar(meta.authorName)}`);
   if (meta.authorInitials) lines.push(`shared_author_initials: ${quoteYamlScalar(normalizeInitials(meta.authorInitials))}`);
+  if (meta.authorCallsign) lines.push(`shared_author_callsign: ${quoteYamlScalar(meta.authorCallsign.trim())}`);
   if (meta.originalSourcePath) lines.push(`shared_original_source_path: ${quoteYamlScalar(meta.originalSourcePath)}`);
   if (typeof meta.revision === 'number') lines.push(`shared_revision: ${Math.max(0, Math.floor(meta.revision))}`);
   return lines;
@@ -299,6 +301,7 @@ export function parseSharedFileFrontmatter(content: string): SharedFileFrontmatt
     authorId: parsed.meta.shared_author_id,
     authorName: parsed.meta.shared_author,
     authorInitials: parsed.meta.shared_author_initials,
+    authorCallsign: parsed.meta.shared_author_callsign,
     originalSourcePath: parsed.meta.shared_original_source_path,
     revision: Number.isFinite(revision) ? revision : undefined,
   };

@@ -140,6 +140,7 @@ export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'emb
 type LibrarianCommandsAPI = NonNullable<Window['commandsAPI']>;
 type MeetingToolbarSession = NonNullable<Awaited<ReturnType<NonNullable<LibrarianCommandsAPI['getActiveMeeting']>>>>;
 const COPY_PATH_FEEDBACK_MS = 1600;
+const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const MEETING_TOOLBAR_ACTIVE_STATUSES = new Set(['starting', 'recording', 'transcribing', 'summarizing']);
 
 function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | undefined): session is MeetingToolbarSession {
@@ -2565,9 +2566,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       const available = availability?.available === true;
       if (!cancelled) setSharedFilesAvailable(available);
       if (available) {
-        void window.sharedFilesAPI?.sync?.().catch((error) => {
-          console.warn('[Librarian] River startup sync failed:', error);
-        });
+        void window.sharedFilesAPI?.sync?.()
+          .then((result) => {
+            if (result && (result.written > 0 || result.removed > 0)) {
+              window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+            }
+          })
+          .catch((error) => {
+            console.warn('[Librarian] River startup sync failed:', error);
+          });
       }
     };
     void loadAvailability();
@@ -5442,15 +5449,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (event.key.toLowerCase() === 'i' && event.metaKey && event.shiftKey && !event.altKey && !event.ctrlKey) {
       event.preventDefault();
       event.stopPropagation();
-      const run = window.commandsAPI?.runLocalCommand?.({
-        commandName: 'improve',
-        mode: 'selection',
-        selection: {
-          start: selection.start,
-          end: selection.end,
-        },
-      });
-      void run?.catch(() => {});
+      void (async () => {
+        await flushCurrentEdit();
+        await window.commandsAPI?.runLocalCommand?.({
+          commandName: 'improve',
+          mode: 'selection',
+          selection: {
+            start: selection.start,
+            end: selection.end,
+          },
+        });
+      })().catch(() => {});
       return true;
     }
 
@@ -5607,6 +5616,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     exitEditMode,
     canNavigateBack,
     canNavigateForward,
+    flushCurrentEdit,
     markdownWikiLinkCompletion,
     markdownWikiLinkSuggestionIndex,
     markdownWikiLinkSuggestions,
@@ -6118,40 +6128,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     }
   }, [selectedPath, selectedReading, shareStatus?.shared]);
 
-  const handleToggleSharedFile = useCallback(async () => {
-    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
-
-    setIsTogglingSharedFile(true);
-    try {
-      await flushCurrentEdit();
-      if (sharedFileStatus?.shared) {
-        const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
-        if (success) setSharedFileStatus({ shared: false });
-        return;
-      }
-
-      const content = activeReadingContentRef.current ?? activeReading.content;
-      const status = await window.sharedFilesAPI?.share({
-        filePath: activeReadingPath,
-        title: activeReading.title,
-        content,
-        type: inferSharedFileTypeForActiveReading(activeReadingPath),
-      });
-      setSharedFileStatus(status ?? { shared: false });
-    } catch (err) {
-      console.error('[Librarian] River sharing error:', err);
-    } finally {
-      setIsTogglingSharedFile(false);
-    }
-  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
-
-  const copyShareLink = useCallback(async () => {
-    if (!shareStatus?.url) return;
-    await navigator.clipboard.writeText(shareStatus.url);
-    setLinkCopied(true);
-    setTimeout(() => setLinkCopied(false), 2000);
-  }, [shareStatus?.url]);
-
   const flashCopyFeedback = useCallback((label: string) => {
     setCopyFeedbackLabel(label);
     if (copyPathFeedbackTimerRef.current !== null) {
@@ -6162,6 +6138,54 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       copyPathFeedbackTimerRef.current = null;
     }, COPY_PATH_FEEDBACK_MS);
   }, []);
+
+  const handleToggleSharedFile = useCallback(async () => {
+    if (!sharedFilesAvailable || !activeReading || !activeReadingPath || !activeIsMarkdownDocument) return;
+
+    setIsTogglingSharedFile(true);
+    try {
+      await flushCurrentEdit();
+      if (sharedFileStatus?.shared) {
+        const success = await window.sharedFilesAPI?.unshare(activeReadingPath);
+        if (success) {
+          setSharedFileStatus({ shared: false });
+          window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+          flashCopyFeedback('Removed from River');
+        } else {
+          flashCopyFeedback('River remove failed');
+        }
+        return;
+      }
+
+      const content = activeReadingContentRef.current ?? activeReading.content;
+      const status = await window.sharedFilesAPI?.share({
+        filePath: activeReadingPath,
+        title: activeReading.title,
+        content,
+        type: inferSharedFileTypeForActiveReading(activeReadingPath),
+      });
+      const nextStatus = status ?? { shared: false, error: 'River share failed' };
+      setSharedFileStatus(nextStatus);
+      if (nextStatus.shared) {
+        window.dispatchEvent(new Event(LOCAL_RIVER_CHANGED_EVENT));
+        flashCopyFeedback('Added to River');
+      } else {
+        flashCopyFeedback(nextStatus.error ?? 'River share failed');
+      }
+    } catch (err) {
+      console.error('[Librarian] River sharing error:', err);
+      flashCopyFeedback('River share failed');
+    } finally {
+      setIsTogglingSharedFile(false);
+    }
+  }, [activeIsMarkdownDocument, activeReading, activeReadingPath, flashCopyFeedback, flushCurrentEdit, sharedFileStatus?.shared, sharedFilesAvailable]);
+
+  const copyShareLink = useCallback(async () => {
+    if (!shareStatus?.url) return;
+    await navigator.clipboard.writeText(shareStatus.url);
+    setLinkCopied(true);
+    setTimeout(() => setLinkCopied(false), 2000);
+  }, [shareStatus?.url]);
 
   const getRenderedSelectionText = useCallback((): string => {
     const root = renderedContentRef.current;

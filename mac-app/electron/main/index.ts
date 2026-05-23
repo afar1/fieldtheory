@@ -905,7 +905,7 @@ function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
   // Production fallback - anon key is public by design, protected by RLS.
   return {
     supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
-    supabaseAnonKey: 'FIELD_THEORY_SUPABASE_ANON_KEY',
+    supabaseAnonKey: 'REDACTED_JWT',
   };
 }
 
@@ -4559,20 +4559,26 @@ function setupLibrarianIPCHandlers(): void {
     if (!canWriteFieldTheoryContent()) return { shared: false };
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return { shared: false };
-    return sharedSyncService.shareFile(input);
+    const result = await sharedSyncService.shareFile(input);
+    if (result.shared) librarianManager?.emit('library:changed');
+    return result;
   });
 
   ipcMain.handle('sharedFiles:unshare', async (_event, filePath: string): Promise<boolean> => {
     if (!canWriteFieldTheoryContent()) return false;
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return false;
-    return sharedSyncService.unshareFile(filePath);
+    const result = await sharedSyncService.unshareFile(filePath);
+    if (result) librarianManager?.emit('library:changed');
+    return result;
   });
 
   ipcMain.handle('sharedFiles:sync', async () => {
     refreshFieldTheorySyncServices();
     if (!sharedSyncService || !canUseSharedFeatures()) return { written: 0, removed: 0, errors: [sharedFeaturesDisabledError()] };
-    return sharedSyncService.syncOnce();
+    const result = await sharedSyncService.syncOnce();
+    if (result.written > 0 || result.removed > 0) librarianManager?.emit('library:changed');
+    return result;
   });
 
   ipcMain.handle('sharedFiles:updateContent', async (_event, sharedId: string, content: string, expectedRevision: number) => {

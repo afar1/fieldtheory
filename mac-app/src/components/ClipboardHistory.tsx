@@ -2773,18 +2773,27 @@ export default function ClipboardHistory() {
     try {
       const activeContext = await window.commandsAPI.getActiveLibraryFileContext?.();
       if (!activeContext && context?.filePath) {
+        const normalizedPath = context.filePath.replace(/\\/g, '/');
+        const slashIndex = normalizedPath.lastIndexOf('/');
+        const rootPath = slashIndex > 0 ? normalizedPath.slice(0, slashIndex) : normalizedPath;
+        const relPath = slashIndex >= 0 ? normalizedPath.slice(slashIndex + 1) : normalizedPath;
         await window.commandsAPI.setActiveLibraryFileContext?.({
           type: 'external',
-          rootPath: '',
-          relPath: context.filePath,
+          rootPath,
+          relPath,
           filePath: context.filePath,
           title: context.title ?? context.filePath.split('/').pop() ?? 'Document',
         });
       }
+      const selection = typeof context?.selectionStart === 'number' && typeof context.selectionEnd === 'number'
+        ? { start: context.selectionStart, end: context.selectionEnd }
+        : selectedText.trim()
+          ? { text: selectedText }
+          : null;
       await window.commandsAPI.runLocalCommand({
         commandName: 'improve',
         mode: 'selection',
-        selection: selectedText.trim() ? { text: selectedText } : null,
+        selection,
       });
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Local improve failed';
