@@ -16,6 +16,7 @@ interface MockSupabaseOptions {
   contacts?: MockContactRow[];
   profileUserId?: string | null;
   existingOwnedContact?: Pick<MockContactRow, 'id' | 'relationship_type' | 'status'> | null;
+  mutationReturnsNoRows?: boolean;
   error?: { message: string } | null;
 }
 
@@ -34,7 +35,12 @@ function makeAuthManager(options: MockSupabaseOptions = {}) {
       eq(...args: unknown[]) { record(table, 'eq', args); return this; },
       or(...args: unknown[]) { record(table, 'or', args); return this; },
       ilike(...args: unknown[]) { record(table, 'ilike', args); return this; },
-      maybeSingle: vi.fn(async () => ({ data: options.profileUserId ? { id: options.profileUserId } : null, error: null })),
+      maybeSingle: vi.fn(async () => ({
+        data: table === 'profiles'
+          ? (options.profileUserId ? { id: options.profileUserId } : null)
+          : (options.mutationReturnsNoRows ? null : { id: 'contact-1' }),
+        error: null,
+      })),
       single: vi.fn(async () => ({ data: null, error: options.error ?? null })),
     };
   }
@@ -271,6 +277,16 @@ describe('SharedTeamService', () => {
     expect(calls).toContainEqual({ table: 'contacts', method: 'eq', args: ['id', 'contact-1'] });
     expect(calls).toContainEqual({ table: 'contacts', method: 'eq', args: ['relationship_type', 'team'] });
     expect(calls).toContainEqual({ table: 'contacts', method: 'eq', args: ['status', 'pending'] });
+    expect(calls).toContainEqual({ table: 'contacts', method: 'select', args: ['id'] });
+  });
+
+  it('returns an error when accepting an invite updates no rows', async () => {
+    const { authManager } = makeAuthManager({ mutationReturnsNoRows: true });
+
+    await expect(new SharedTeamService(authManager).respondToInvite('contact-1', true)).resolves.toEqual({
+      ok: false,
+      error: 'Invite response failed because no invite row was updated',
+    });
   });
 
   it('declines an incoming team invite as the invited user', async () => {
