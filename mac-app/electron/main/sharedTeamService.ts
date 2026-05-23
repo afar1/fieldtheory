@@ -327,6 +327,16 @@ export class SharedTeamService {
 
     const [currentTeamScopeUserId] = Array.from(teamScopeUserIds);
     if (!currentTeamScopeUserId) {
+      if (pendingOutgoing.length) {
+        return {
+          available: true,
+          currentTeamScopeUserId: userId,
+          isOwner: true,
+          members,
+          pendingIncoming,
+          pendingOutgoing,
+        };
+      }
       return {
         available: false,
         currentTeamScopeUserId: null,

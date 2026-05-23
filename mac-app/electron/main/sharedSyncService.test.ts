@@ -108,6 +108,65 @@ describe('SharedSyncService cache behavior', () => {
     });
   });
 
+  it('makes River available for owners with a pending outgoing team invite', async () => {
+    const authManager = {
+      getSupabaseClient: () => ({}),
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [{ contactId: 'contact-1', ownerUserId: 'user-1', contactUserId: 'user-2', email: 'jamie@example.com', direction: 'outgoing' }],
+      }),
+    };
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).getAvailability()).resolves.toEqual({
+      available: true,
+      hasTeamMembers: true,
+      reason: undefined,
+      currentTeamScopeUserId: 'user-1',
+    });
+  });
+
+  it('creates the River cache directory when a team scope is active', async () => {
+    const supabase = {
+      from: () => ({
+        select() { return this; },
+        eq() { return this; },
+        async is() {
+          return { data: [], error: null };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-1', email: 'af@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'user-1',
+        isOwner: true,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+
+    expect(fs.existsSync(sharedFilesRoot())).toBe(false);
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).syncOnce()).resolves.toEqual({
+      written: 0,
+      removed: 0,
+      errors: [],
+    });
+    expect(fs.existsSync(sharedFilesRoot())).toBe(true);
+  });
+
   it('does not create a shared row for solo users', async () => {
     const fromCalls: string[] = [];
     const supabase = {

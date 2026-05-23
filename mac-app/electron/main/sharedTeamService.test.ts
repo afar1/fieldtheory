@@ -100,7 +100,7 @@ describe('SharedTeamService', () => {
     });
   });
 
-  it('keeps pending outgoing invites separate from team availability', async () => {
+  it('lets owners populate River while the first team invite is pending', async () => {
     const { authManager } = makeAuthManager({
       contacts: [{
         id: 'contact-1',
@@ -115,9 +115,10 @@ describe('SharedTeamService', () => {
 
     const state = await new SharedTeamService(authManager).getTeamState();
 
-    expect(state.available).toBe(false);
-    expect(state.currentTeamScopeUserId).toBeNull();
-    expect(state.reason).toBe('pending_only');
+    expect(state.available).toBe(true);
+    expect(state.currentTeamScopeUserId).toBe('user-1');
+    expect(state.isOwner).toBe(true);
+    expect(state.reason).toBeUndefined();
     expect(state.pendingOutgoing).toEqual([{
       contactId: 'contact-1',
       ownerUserId: 'user-1',
