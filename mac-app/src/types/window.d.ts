@@ -1933,7 +1933,7 @@ interface SharedFilesAPI {
   share: (input: SharedFileShareInput) => Promise<SharedFileStatus>;
   unshare: (filePath: string) => Promise<boolean>;
   sync: () => Promise<{ written: number; removed: number; errors: string[] }>;
-  updateContent: (sharedId: string, content: string, expectedRevision: number) => Promise<SharedFileUpdateResult>;
+  updateContent: (sharedId: string, content: string, expectedRevision: number, documentPath?: string | null) => Promise<SharedFileUpdateResult>;
   setActivePresence: (sharedId: string | null) => Promise<SharedFilePresenceUser[]>;
   onPresenceChanged: (callback: (payload: { sharedId: string; users: SharedFilePresenceUser[] }) => void) => () => void;
 }

@@ -1185,7 +1185,7 @@ describe('LibrarianView render', () => {
     expect(updateContent).not.toHaveBeenCalled();
 
     await waitFor(() => {
-      expect(updateContent).toHaveBeenCalledWith('shared-1', 'local first!', 1);
+      expect(updateContent).toHaveBeenCalledWith('shared-1', 'local first!', 1, page.absPath);
     }, { timeout: 2600 });
   });
 
@@ -1276,8 +1276,8 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(updateContent).toHaveBeenCalledTimes(2);
     }, { timeout: 3800 });
-    expect(updateContent).toHaveBeenNthCalledWith(1, 'shared-1', 'retry local first!', 1);
-    expect(updateContent).toHaveBeenNthCalledWith(2, 'shared-1', 'retry local first!', 1);
+    expect(updateContent).toHaveBeenNthCalledWith(1, 'shared-1', 'retry local first!', 1, page.absPath);
+    expect(updateContent).toHaveBeenNthCalledWith(2, 'shared-1', 'retry local first!', 1, page.absPath);
     warnSpy.mockRestore();
   });
 

@@ -1857,11 +1857,13 @@ export class ClipboardHistoryWindow {
         tell application "System Events"
           set visibleApps to every application process whose visible is true
           repeat with appProc in visibleApps
-            set appBundleId to bundle identifier of appProc
-            set appName to name of appProc
-            if appBundleId is not missing value then
-              set appList to appList & appBundleId & "|" & appName & "\\n"
-            end if
+            try
+              set appBundleId to bundle identifier of appProc
+              set appName to name of appProc
+              if appBundleId is not missing value then
+                set appList to appList & appBundleId & "|" & appName & "\\n"
+              end if
+            end try
           end repeat
         end tell
         return appList

@@ -370,6 +370,154 @@ describe('SharedSyncService cache behavior', () => {
     });
   });
 
+  it('uploads only image assets referenced by the shared file content', async () => {
+    let upsertedRow: Record<string, unknown> | null = null;
+    const supabase = {
+      from: () => ({
+        upsert(row: Record<string, unknown>) {
+          upsertedRow = row;
+          return {
+            select() {
+              return {
+                async single() {
+                  return {
+                    data: {
+                      id: 'shared-1',
+                      created_at: '2026-01-01T00:00:00Z',
+                      updated_at: '2026-01-01T00:00:00Z',
+                      ...row,
+                    },
+                    error: null,
+                  };
+                },
+              };
+            },
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const teamService = {
+      getTeamState: async () => ({
+        available: true,
+        currentTeamScopeUserId: 'owner-1',
+        isOwner: false,
+        members: [],
+        pendingIncoming: [],
+        pendingOutgoing: [],
+      }),
+    };
+    const sourcePath = path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'Commands', 'Note.md');
+    const assetsDir = path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, '.assets');
+    fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(assetsDir, 'used.png'), Buffer.from([1, 2, 3]));
+    fs.writeFileSync(path.join(assetsDir, 'unused.png'), Buffer.from([4, 5, 6]));
+
+    await expect(new SharedSyncService(authManager, teamService as unknown as SharedTeamService).shareFile({
+      filePath: sourcePath,
+      title: 'Note',
+      content: 'Body\n![Used](<../.assets/used.png>)\n',
+      type: 'document',
+    })).resolves.toMatchObject({ shared: true, sharedId: 'shared-1' });
+
+    expect(upsertedRow).not.toBeNull();
+    const sharedContent = String((upsertedRow as unknown as Record<string, unknown>).content ?? '');
+    expect(sharedContent).toContain('data:image/png;base64,AQID');
+    expect(sharedContent).not.toContain('BAUG');
+    expect(sharedContent).not.toContain('unused.png');
+  });
+
+  it('uploads only newly referenced image assets when updating shared content', async () => {
+    let updatedRow: Record<string, unknown> | null = null;
+    const currentRow = {
+      id: 'shared-1',
+      team_scope_user_id: 'owner-1',
+      kind: 'document',
+      path: 'Commands/Note.md',
+      title: 'Note',
+      content: 'Old body\n',
+      content_hash: null,
+      client_id: 'shared-client',
+      client_created_at_ms: 1,
+      created_by: 'user-2',
+      updated_by: 'user-2',
+      deleted_at: null,
+      created_at: '2026-01-01T00:00:00Z',
+      updated_at: '2026-01-01T00:00:00Z',
+      original_source_path: 'Commands/Note.md',
+      shared_name: 'Note',
+      author_initials: 'JS',
+      author_callsign: null,
+      revision: 1,
+    };
+    const supabase = {
+      from: () => ({
+        select() {
+          return {
+            eq() {
+              return {
+                is() {
+                  return {
+                    async single() {
+                      return { data: currentRow, error: null };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+        update(row: Record<string, unknown>) {
+          updatedRow = row;
+          return {
+            eq() {
+              return {
+                is() {
+                  return {
+                    select() {
+                      return {
+                        async single() {
+                          return { data: { ...currentRow, ...row }, error: null };
+                        },
+                      };
+                    },
+                  };
+                },
+              };
+            },
+          };
+        },
+      }),
+    };
+    const authManager = {
+      getSupabaseClient: () => supabase,
+      getSession: () => ({ user: { id: 'user-2', email: 'js@example.com', user_metadata: {} } }),
+    } as unknown as AuthManager;
+    const documentPath = path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, 'Commands', 'Note.md');
+    const assetsDir = path.join(process.env.FT_LIBRARY_DIR ?? tempRoot, '.assets');
+    fs.mkdirSync(path.dirname(documentPath), { recursive: true });
+    fs.mkdirSync(assetsDir, { recursive: true });
+    fs.writeFileSync(path.join(assetsDir, 'new.png'), Buffer.from([7, 8, 9]));
+    fs.writeFileSync(path.join(assetsDir, 'old-unused.png'), Buffer.from([1, 1, 1]));
+
+    await expect(new SharedSyncService(authManager).updateSharedContent(
+      'shared-1',
+      'Updated\n![New](<../.assets/new.png>)\n',
+      1,
+      documentPath,
+    )).resolves.toMatchObject({ ok: true, revision: 2 });
+
+    expect(updatedRow).not.toBeNull();
+    const uploadedContent = String((updatedRow as unknown as Record<string, unknown>).content ?? '');
+    expect(uploadedContent).toContain('data:image/png;base64,BwgJ');
+    expect(uploadedContent).not.toContain('AQEB');
+    expect(uploadedContent).not.toContain('old-unused.png');
+  });
+
   it('uses the full profile callsign when sharing a file', async () => {
     let upsertedRow: Record<string, unknown> | null = null;
     const supabase = {

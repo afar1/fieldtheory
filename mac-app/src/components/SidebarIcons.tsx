@@ -133,3 +133,29 @@ export function SidebarBookmarkIcon({ color, style }: { color: string; style?: C
     </svg>
   );
 }
+
+export function SidebarArchiveIcon({ color, style }: { color: string; style?: CSSProperties }) {
+  return (
+    <svg
+      width={SIDEBAR_ICON_SIZE}
+      height={SIDEBAR_ICON_SIZE}
+      viewBox="0 0 16 16"
+      fill="none"
+      aria-hidden="true"
+      style={iconStyle(color, style)}
+    >
+      <path
+        d="M4.25 5.5h8.5v7h-8.5v-7zM3.75 3.5h9.5v2h-9.5v-2z"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M6.85 7.75h3.3"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}

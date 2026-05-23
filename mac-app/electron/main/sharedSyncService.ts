@@ -16,6 +16,7 @@ import {
   stripSharedFileFrontmatter,
   type SharedFileType,
 } from './sharedFiles';
+import { makeMarkdownImagesPortable, makeMarkdownImagesSharePortable } from './portableMarkdownImages';
 
 const log = createLogger('SharedSync');
 const EMPTY_ACTIVE_SET = new Set<string>();
@@ -31,6 +32,12 @@ function isInsidePath(parentPath: string, childPath: string): boolean {
 
 function ensureDir(dirPath: string): void {
   if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+}
+
+function contentForSharedTransport(filePath: string, content: string): string {
+  const options = { libraryRoots: [libraryDir()] };
+  const localPortable = makeMarkdownImagesPortable(filePath, stripSharedFileFrontmatter(content), options);
+  return makeMarkdownImagesSharePortable(filePath, localPortable.content, options).content;
 }
 
 function safeTitleFromPath(filePath: string): string {
@@ -288,7 +295,7 @@ export class SharedSyncService extends EventEmitter {
 
     const type = input.type ?? inferSharedFileType({ filePath: input.filePath, content: input.content });
     const sourceKey = sourceKeyForFilePath(input.filePath);
-    const content = stripSharedFileFrontmatter(input.content);
+    const content = contentForSharedTransport(input.filePath, input.content);
     const now = Date.now();
     const title = input.title || safeTitleFromPath(input.filePath);
     const authorInitials = authorInitialsFromSession(session);
@@ -395,7 +402,7 @@ export class SharedSyncService extends EventEmitter {
     return result;
   }
 
-  async updateSharedContent(sharedId: string, content: string, expectedRevision: number): Promise<SharedFileUpdateResult> {
+  async updateSharedContent(sharedId: string, content: string, expectedRevision: number, documentPath?: string | null): Promise<SharedFileUpdateResult> {
     const supabase = this.authManager.getSupabaseClient();
     const session = this.authManager.getSession();
     if (!supabase || !session?.user?.id) return { ok: false, error: 'Not authenticated' };
@@ -410,7 +417,9 @@ export class SharedSyncService extends EventEmitter {
     if (fetchError || !current) return { ok: false, error: fetchError?.message ?? 'Shared file not found' };
     const currentRow = current as TeamDocumentRow;
     const remoteRevision = currentRow.revision ?? 0;
-    const cleanContent = stripSharedFileFrontmatter(content);
+    const cleanContent = documentPath
+      ? contentForSharedTransport(documentPath, content)
+      : stripSharedFileFrontmatter(content);
     const cleanRemoteContent = stripSharedFileFrontmatter(currentRow.content);
 
     if (remoteRevision > expectedRevision && cleanContent !== cleanRemoteContent) {
@@ -540,7 +549,12 @@ export class SharedSyncService extends EventEmitter {
     ensureDir(root);
     const cachePath = this.cachePathForRow(row);
     const type: SharedFileType = row.kind === 'command' ? 'command' : row.path.startsWith('Plans/') ? 'plan' : 'document';
-    const content = applySharedFileFrontmatter(stripSharedFileFrontmatter(row.content), {
+    const portableContent = makeMarkdownImagesPortable(
+      path.join(sharedFilesRoot(), `${row.shared_name || row.title}.md`),
+      stripSharedFileFrontmatter(row.content),
+      { libraryRoots: [libraryDir()] },
+    ).content;
+    const content = applySharedFileFrontmatter(portableContent, {
       sharedId: row.id,
       teamId: row.team_scope_user_id,
       teamName: 'Field Theory Team',
