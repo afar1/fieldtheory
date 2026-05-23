@@ -11,7 +11,10 @@
  * `App.tsx`). The core module stays import-safe for tests and workers.
  */
 import {
+  clearScrollDiagnosticsSamples,
+  getScrollDiagnosticsBudgetViolations,
   getScrollDiagnosticsSnapshot,
+  getScrollDiagnosticsValidationReport,
   isScrollDiagnosticsEnabled,
   loadEnabledFromStorage,
   onScrollDiagnosticsEnabledChange,
@@ -46,15 +49,17 @@ export function bootstrapScrollDiagnostics(): void {
   if (typeof window === 'undefined') return;
 
   const storage = window.localStorage;
-  if (storage && loadEnabledFromStorage(storage)) {
-    setScrollDiagnosticsEnabled(true);
-  }
-
   onScrollDiagnosticsEnabledChange((enabled) => {
     if (storage) persistEnabledToStorage(storage, enabled);
     if (enabled) startLongTaskObserver();
     else stopLongTaskObserver();
   });
+
+  if (storage && loadEnabledFromStorage(storage)) {
+    setScrollDiagnosticsEnabled(true);
+  } else if (isScrollDiagnosticsEnabled()) {
+    startLongTaskObserver();
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   (window as any).ftDebugScroll = {
@@ -62,6 +67,9 @@ export function bootstrapScrollDiagnostics(): void {
     disable: () => setScrollDiagnosticsEnabled(false),
     isEnabled: isScrollDiagnosticsEnabled,
     snapshot: getScrollDiagnosticsSnapshot,
+    violations: getScrollDiagnosticsBudgetViolations,
+    report: getScrollDiagnosticsValidationReport,
+    clear: clearScrollDiagnosticsSamples,
   };
 }
 

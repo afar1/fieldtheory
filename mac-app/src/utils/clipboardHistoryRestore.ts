@@ -3,6 +3,7 @@ import type { ViewMode } from '../types/clipboard';
 export const FIELD_THEORY_VIEW_STORAGE_KEY = 'fieldTheoryView';
 export const FIELD_THEORY_LAST_SURFACE_STORAGE_KEY = 'fieldTheoryLastSurface';
 export const SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY = 'shouldShowFieldsOnOpen';
+export const APP_NAVIGATION_HISTORY_LIMIT = 30;
 
 const RESTORABLE_VIEW_MODES = new Set<ViewMode>([
   'clipboard',
@@ -19,6 +20,8 @@ export interface ClipboardRestoreState {
   viewMode: ViewMode;
   showSettings: boolean;
 }
+
+export type AppNavigationSurface = ViewMode | 'settings';
 
 export function isRestorableViewMode(value: string | null): value is ViewMode {
   return value !== null && RESTORABLE_VIEW_MODES.has(value as ViewMode);
@@ -74,4 +77,60 @@ export function persistClipboardSurface(
   if (state.viewMode !== 'sketch') {
     storage.setItem(FIELD_THEORY_LAST_SURFACE_STORAGE_KEY, state.viewMode);
   }
+}
+
+export function getAppNavigationSurface(state: { viewMode: ViewMode; showSettings: boolean }): AppNavigationSurface {
+  return state.showSettings ? 'settings' : state.viewMode;
+}
+
+export function getAppBracketNavigationDirection(event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): -1 | 1 | null {
+  if (!event.metaKey || event.shiftKey || event.altKey || event.ctrlKey) return null;
+  if (event.key === '[' || event.code === 'BracketLeft') return -1;
+  if (event.key === ']' || event.code === 'BracketRight') return 1;
+  return null;
+}
+
+export function pushAppNavigationHistory(
+  backHistory: AppNavigationSurface[],
+  current: AppNavigationSurface,
+  next: AppNavigationSurface,
+): AppNavigationSurface[] {
+  if (current === next) return backHistory;
+  return [...backHistory, current].slice(-APP_NAVIGATION_HISTORY_LIMIT);
+}
+
+export function popAppBackHistory(input: {
+  backHistory: AppNavigationSurface[];
+  forwardHistory: AppNavigationSurface[];
+  current: AppNavigationSurface;
+}): {
+  target: AppNavigationSurface | null;
+  backHistory: AppNavigationSurface[];
+  forwardHistory: AppNavigationSurface[];
+} {
+  const target = input.backHistory[input.backHistory.length - 1] ?? null;
+  if (!target) return { ...input, target: null };
+  return {
+    target,
+    backHistory: input.backHistory.slice(0, -1),
+    forwardHistory: [input.current, ...input.forwardHistory].slice(0, APP_NAVIGATION_HISTORY_LIMIT),
+  };
+}
+
+export function popAppForwardHistory(input: {
+  backHistory: AppNavigationSurface[];
+  forwardHistory: AppNavigationSurface[];
+  current: AppNavigationSurface;
+}): {
+  target: AppNavigationSurface | null;
+  backHistory: AppNavigationSurface[];
+  forwardHistory: AppNavigationSurface[];
+} {
+  const [target = null, ...restForward] = input.forwardHistory;
+  if (!target) return { ...input, target: null };
+  return {
+    target,
+    backHistory: [...input.backHistory, input.current].slice(-APP_NAVIGATION_HISTORY_LIMIT),
+    forwardHistory: restForward,
+  };
 }

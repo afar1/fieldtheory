@@ -830,7 +830,7 @@ describe('LibrarianView render', () => {
     });
   });
 
-  it('places Maxwell to the right of the meeting button and before the view mode toggle', async () => {
+  it('places Field Theory commands to the right of the meeting button and before the view mode toggle', async () => {
     const relPath = 'scratchpad/maxwell-toolbar-order';
     const page: WikiPage = {
       relPath,
@@ -848,14 +848,14 @@ describe('LibrarianView render', () => {
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
     const meetingButton = await screen.findByRole('button', { name: 'Start meeting recording' });
-    const maxwellButton = screen.getByRole('button', { name: 'Maxwell' });
+    const maxwellButton = screen.getByRole('button', { name: 'Field Theory' });
     const modeToggle = screen.getByRole('button', { name: 'Switch to Markdown source' });
 
     expect(Boolean(meetingButton.compareDocumentPosition(maxwellButton) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(Boolean(maxwellButton.compareDocumentPosition(modeToggle) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
   });
 
-  it('adds the active wiki page to Maxwell and runs its content from the toolbar', async () => {
+  it('adds the active wiki page to Field Theory commands and runs its content from the toolbar', async () => {
     const relPath = 'Commands/maxwell-cleanup';
     const absPath = `/Users/afar/.fieldtheory/library/${relPath}.md`;
     const page: WikiPage = {
@@ -873,9 +873,9 @@ describe('LibrarianView render', () => {
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
-    const maxwellButton = await screen.findByRole('button', { name: 'Maxwell' });
+    const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     fireEvent.click(maxwellButton);
-    fireEvent.click(screen.getByRole('button', { name: 'add current page to maxwell' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add current page to Field Theory' }));
 
     await waitFor(() => {
       expect(window.localStorage.setItem).toHaveBeenCalledWith(
@@ -1054,6 +1054,232 @@ describe('LibrarianView render', () => {
 	    expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
 	    expect(renderedInput.textContent).toContain('hello world!');
 	  });
+
+  it('does not append rendered editor debug entries while debug is disabled', async () => {
+    const relPath = 'scratchpad/rendered-debug-disabled-test';
+    const content = 'hello world';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-debug-disabled-test',
+      title: 'rendered-debug-disabled-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'debug-disabled-version' },
+    };
+    const appendRenderedEditorDebug = vi.fn(async () => ({ ok: true, path: '/tmp/rendered-debug.log' }));
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'debug-disabled-saved-version' },
+    });
+    Object.defineProperty(window, 'diagnosticsAPI', {
+      configurable: true,
+      value: {
+        getDiagnostics: vi.fn(async () => ({})),
+        getDiagnosticsMarkdown: vi.fn(async () => ''),
+        appendRenderedEditorDebug,
+        getRenderedEditorDebugLogPath: vi.fn(async () => '/tmp/rendered-debug.log'),
+        clearRenderedEditorDebugLog: vi.fn(async () => ({ ok: true, path: '/tmp/rendered-debug.log' })),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('hello world');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello world');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'hello world!',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+    expect(appendRenderedEditorDebug).not.toHaveBeenCalled();
+  });
+
+  it('keeps River sync in the background after a rendered editor save', async () => {
+    const relPath = 'scratchpad/rendered-shared-background-sync-test';
+    const content = 'local first';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-shared-background-sync-test',
+      title: 'rendered-shared-background-sync-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-shared-version' },
+    };
+    const updateContent = vi.fn(async () => ({ ok: true, revision: 2 }));
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'rendered-shared-saved-version' },
+    });
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: true, sharedId: 'shared-1', revision: 1 })),
+        updateContent,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('local first');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    await waitFor(() => {
+      expect(window.sharedFilesAPI!.setActivePresence).toHaveBeenCalledWith('shared-1');
+    });
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('local first');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'local first!',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+    expect(updateContent).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(updateContent).toHaveBeenCalledWith('shared-1', 'local first!', 1);
+    }, { timeout: 2600 });
+  });
+
+  it('syncs River once when shared files become available', async () => {
+    const sync = vi.fn(async () => ({ written: 0, removed: 0, errors: [] }));
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        sync,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => {
+      expect(sync).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('retries River background sync after a failed rendered editor save sync', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const relPath = 'scratchpad/rendered-shared-background-sync-retry-test';
+    const content = 'retry local first';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-shared-background-sync-retry-test',
+      title: 'rendered-shared-background-sync-retry-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-shared-retry-version' },
+    };
+    const updateContent = vi.fn()
+      .mockRejectedValueOnce(new Error('network down'))
+      .mockResolvedValueOnce({ ok: true, revision: 2 });
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'rendered-shared-retry-saved-version' },
+    });
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: true, sharedId: 'shared-1', revision: 1 })),
+        updateContent,
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('retry local first');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('retry local first');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'retry local first!',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+
+    await waitFor(() => {
+      expect(updateContent).toHaveBeenCalledTimes(2);
+    }, { timeout: 3800 });
+    expect(updateContent).toHaveBeenNthCalledWith(1, 'shared-1', 'retry local first!', 1);
+    expect(updateContent).toHaveBeenNthCalledWith(2, 'shared-1', 'retry local first!', 1);
+    warnSpy.mockRestore();
+  });
 
 	  it('pastes markdown text into rendered mode as rendered document structure', async () => {
 	    const relPath = 'scratchpad/rendered-markdown-paste-test';

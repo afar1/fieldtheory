@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  getAppBracketNavigationDirection,
+  getAppNavigationSurface,
   FIELD_THEORY_LAST_SURFACE_STORAGE_KEY,
   FIELD_THEORY_VIEW_STORAGE_KEY,
+  popAppBackHistory,
+  popAppForwardHistory,
   SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY,
   persistClipboardSurface,
+  pushAppNavigationHistory,
   resolveClipboardRestoreState,
 } from '../utils/clipboardHistoryRestore';
 
@@ -99,5 +104,41 @@ describe('clipboardHistoryRestore', () => {
 
     expect(storage.state[FIELD_THEORY_VIEW_STORAGE_KEY]).toBe('librarian');
     expect(storage.state[FIELD_THEORY_LAST_SURFACE_STORAGE_KEY]).toBe('settings');
+  });
+
+  it('resolves the app navigation surface from view state', () => {
+    expect(getAppNavigationSurface({ viewMode: 'clipboard', showSettings: false })).toBe('clipboard');
+    expect(getAppNavigationSurface({ viewMode: 'librarian', showSettings: true })).toBe('settings');
+  });
+
+  it('recognizes plain Command bracket navigation only', () => {
+    expect(getAppBracketNavigationDirection({ key: '[', code: 'BracketLeft', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe(-1);
+    expect(getAppBracketNavigationDirection({ key: ']', code: 'BracketRight', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe(1);
+    expect(getAppBracketNavigationDirection({ key: 'å', code: 'BracketLeft', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe(-1);
+    expect(getAppBracketNavigationDirection({ key: '[', code: 'BracketLeft', metaKey: true, shiftKey: true, altKey: false, ctrlKey: false })).toBeNull();
+    expect(getAppBracketNavigationDirection({ key: '[', code: 'BracketLeft', metaKey: false, shiftKey: false, altKey: false, ctrlKey: false })).toBeNull();
+  });
+
+  it('tracks app-level back and forward surfaces', () => {
+    const backHistory = pushAppNavigationHistory([], 'librarian', 'clipboard');
+    expect(backHistory).toEqual(['librarian']);
+
+    const back = popAppBackHistory({
+      backHistory,
+      forwardHistory: [],
+      current: 'clipboard',
+    });
+    expect(back.target).toBe('librarian');
+    expect(back.backHistory).toEqual([]);
+    expect(back.forwardHistory).toEqual(['clipboard']);
+
+    const forward = popAppForwardHistory({
+      backHistory: back.backHistory,
+      forwardHistory: back.forwardHistory,
+      current: 'librarian',
+    });
+    expect(forward.target).toBe('clipboard');
+    expect(forward.backHistory).toEqual(['librarian']);
+    expect(forward.forwardHistory).toEqual([]);
   });
 });

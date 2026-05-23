@@ -23,6 +23,7 @@ import {
   Compartment,
   Facet,
   RangeSetBuilder,
+  Text,
   Transaction,
   type Range,
 } from '@codemirror/state';
@@ -49,6 +50,7 @@ import {
 import { tags as t } from '@lezer/highlight';
 import { useTheme } from '../contexts/ThemeContext';
 import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
+import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
 
@@ -1279,29 +1281,34 @@ export function getMarkdownCodeEditorSourcePosition(
   value: string,
   offset: number,
 ): MarkdownCodeEditorSourcePosition {
-  const clampedOffset = Math.max(0, Math.min(value.length, offset));
-  const line = value.slice(0, clampedOffset).split('\n').length;
-  const previousLineBreak = clampedOffset === 0 ? -1 : value.lastIndexOf('\n', clampedOffset - 1);
-  const lineStart = previousLineBreak + 1;
-  const lineEndIndex = value.indexOf('\n', clampedOffset);
-  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  return getMarkdownCodeEditorSourcePositionFromDoc(Text.of(value.split('\n')), offset);
+}
+
+function getMarkdownCodeEditorSourcePositionFromDoc(
+  doc: Text,
+  offset: number,
+): MarkdownCodeEditorSourcePosition {
+  const clampedOffset = Math.max(0, Math.min(doc.length, offset));
+  const line = doc.lineAt(clampedOffset);
+  const lineStart = line.from;
+  const lineEnd = line.to;
   return {
     offset: clampedOffset,
-    line,
+    line: line.number,
     column: clampedOffset - lineStart + 1,
     lineStart,
     lineEnd,
     lineLength: lineEnd - lineStart,
-    before: value.slice(Math.max(lineStart, clampedOffset - 40), clampedOffset),
-    after: value.slice(clampedOffset, Math.min(lineEnd, clampedOffset + 40)),
+    before: doc.sliceString(Math.max(lineStart, clampedOffset - 40), clampedOffset),
+    after: doc.sliceString(clampedOffset, Math.min(lineEnd, clampedOffset + 40)),
   };
 }
 
 export function getMarkdownCodeEditorSelectionSnapshot(
   view: EditorView,
-  input: { docChanged?: boolean; inputType?: string; inputData?: string | null } = {},
+  input: { docChanged?: boolean; inputType?: string; inputData?: string | null; value?: string } = {},
 ): MarkdownCodeEditorSelectionSnapshot {
-  const value = view.state.doc.toString();
+  const value = input.value ?? view.state.doc.toString();
   const selection = view.state.selection.main;
   return {
     value,
@@ -1310,9 +1317,9 @@ export function getMarkdownCodeEditorSelectionSnapshot(
     selectionAnchor: selection.anchor,
     selectionHead: selection.head,
     isCollapsed: selection.empty,
-    selectionStartSource: getMarkdownCodeEditorSourcePosition(value, selection.from),
-    selectionEndSource: getMarkdownCodeEditorSourcePosition(value, selection.to),
-    selectionHeadSource: getMarkdownCodeEditorSourcePosition(value, selection.head),
+    selectionStartSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.from),
+    selectionEndSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.to),
+    selectionHeadSource: getMarkdownCodeEditorSourcePositionFromDoc(view.state.doc, selection.head),
     caretPosition: getCodeEditorCaretPosition(view, selection.head),
     caretRect: getCodeEditorCaretRect(view, selection.head),
     scroll: {
@@ -1410,6 +1417,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const onBlurRef = useRef(props.onBlur);
     const onSelectionChangeRef = useRef(props.onSelectionChange);
     const onScrollRef = useRef(onScroll);
+    const sampleMarkdownInputInteraction = useInteractionFpsSampler('markdown-editor-input');
     const lastBeforeInputRef = useRef<{ inputType: string; data: string | null } | null>(null);
     const lastAppliedValueRef = useRef(value);
     const themeCompartment = useRef(new Compartment()).current;
@@ -1752,7 +1760,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !isMarkdownCodeEditorFileSwapUpdate(update)) {
+              sampleMarkdownInputInteraction();
               const next = update.state.doc.toString();
+              lastAppliedValueRef.current = next;
               onChangeRef.current?.(next);
             }
             if (update.docChanged || update.selectionSet) {
@@ -1762,6 +1772,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
                 docChanged: update.docChanged,
                 inputType: input?.inputType,
                 inputData: input?.data,
+                value: lastAppliedValueRef.current,
               }));
             }
           }),

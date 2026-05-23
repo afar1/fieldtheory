@@ -6,6 +6,7 @@ const TRACE_FILE_NAME = 'command-launcher-trace.log';
 const MAX_TRACE_FILE_BYTES = 512 * 1024;
 
 let preparedTracePath: string | null = null;
+let appendQueue: Promise<void> = Promise.resolve();
 
 function resolveTracePath(): string | null {
   try {
@@ -69,9 +70,10 @@ export function appendCommandLauncherTrace(
   const normalized = normalizeValue(details) as Record<string, unknown>;
   const suffix = Object.keys(normalized).length > 0 ? ` ${JSON.stringify(normalized)}` : '';
 
-  try {
-    fs.appendFileSync(tracePath, `${new Date().toISOString()} ${event}${suffix}\n`, 'utf-8');
-  } catch {
-    // Ignore trace write failures. These logs are diagnostic-only.
-  }
+  const line = `${new Date().toISOString()} ${event}${suffix}\n`;
+  appendQueue = appendQueue
+    .then(() => fs.promises.appendFile(tracePath, line, 'utf-8'))
+    .catch(() => {
+      // Ignore trace write failures. These logs are diagnostic-only.
+    });
 }

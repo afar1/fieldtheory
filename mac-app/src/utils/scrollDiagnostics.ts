@@ -19,13 +19,65 @@ export interface ScrollFrameRecord {
   timestamp: number;
 }
 
+export interface InteractionFrameRecord {
+  source: string;
+  fps: number;
+  longestFrameMs: number;
+  durationMs: number;
+  frameCount: number;
+  timestamp: number;
+}
+
 export interface ScrollDiagnosticsSnapshot {
   enabled: boolean;
   scrollByLastSource: Record<string, ScrollFrameRecord>;
+  interactionByLastSource: Record<string, InteractionFrameRecord>;
   longTasks: { duration: number; startTime: number }[];
 }
 
+export interface ScrollDiagnosticsBudgetViolation {
+  kind: 'scroll' | 'interaction';
+  source: string;
+  fps: number;
+  targetFps: number;
+  allowedDropFps: number;
+  longestFrameMs: number;
+  durationMs: number;
+  timestamp: number;
+}
+
+export interface ScrollDiagnosticsValidationReport {
+  pass: boolean;
+  targetFps: number;
+  allowedDropFps: number;
+  firstSampleTimestamp: number | null;
+  lastSampleTimestamp: number | null;
+  sampleSpanMs: number | null;
+  longTaskCount: number;
+  longTaskTotalMs: number;
+  longestLongTaskMs: number;
+  requiredScrollSources: string[];
+  sampledScrollSources: string[];
+  missingScrollSources: string[];
+  requiredInteractionSources: string[];
+  sampledInteractionSources: string[];
+  missingInteractionSources: string[];
+  violations: ScrollDiagnosticsBudgetViolation[];
+}
+
 export const SCROLL_DIAGNOSTICS_STORAGE_KEY = 'ft-debug-scroll';
+export const SCROLL_DIAGNOSTICS_TARGET_FPS = 120;
+export const SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS = 1;
+export const SCROLL_DIAGNOSTICS_REQUIRED_SCROLL_SOURCES = [
+  'markdown',
+  'rendered',
+] as const;
+export const SCROLL_DIAGNOSTICS_REQUIRED_INTERACTION_SOURCES = [
+  'launcher-input',
+  'markdown-editor-input',
+  'rendered-editor-input',
+] as const;
+const SCROLL_DIAGNOSTICS_WARNING_DROP_FPS = 10;
 const LONG_TASK_HISTORY = 16;
 
 const listeners = new Set<(snap: ScrollDiagnosticsSnapshot) => void>();
@@ -33,6 +85,7 @@ const listeners = new Set<(snap: ScrollDiagnosticsSnapshot) => void>();
 let state: ScrollDiagnosticsSnapshot = {
   enabled: false,
   scrollByLastSource: {},
+  interactionByLastSource: {},
   longTasks: [],
 };
 
@@ -109,6 +162,110 @@ export function recordScrollFrame(record: Omit<ScrollFrameRecord, 'timestamp'>):
   emit();
 }
 
+export function recordInteractionFrame(record: Omit<InteractionFrameRecord, 'timestamp'>): void {
+  if (!state.enabled) return;
+  const next: InteractionFrameRecord = { ...record, timestamp: performance.now() };
+  state = {
+    ...state,
+    interactionByLastSource: { ...state.interactionByLastSource, [record.source]: next },
+  };
+  emit();
+}
+
+export function getScrollDiagnosticsFpsLevel(fps: number): 'muted' | 'ok' | 'warning' | 'bad' {
+  if (fps === 0) return 'muted';
+  if (fps >= SCROLL_DIAGNOSTICS_TARGET_FPS - SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS) return 'ok';
+  if (fps >= SCROLL_DIAGNOSTICS_TARGET_FPS - SCROLL_DIAGNOSTICS_WARNING_DROP_FPS) return 'warning';
+  return 'bad';
+}
+
+export function getScrollDiagnosticsBudgetViolations(
+  snapshot: ScrollDiagnosticsSnapshot = state,
+): ScrollDiagnosticsBudgetViolation[] {
+  const floor = SCROLL_DIAGNOSTICS_TARGET_FPS - SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS;
+  const violations: ScrollDiagnosticsBudgetViolation[] = [];
+  const collect = (
+    kind: ScrollDiagnosticsBudgetViolation['kind'],
+    records: Record<string, ScrollFrameRecord | InteractionFrameRecord>,
+  ) => {
+    for (const record of Object.values(records)) {
+      if (record.fps === 0 || record.fps >= floor) continue;
+      violations.push({
+        kind,
+        source: record.source,
+        fps: record.fps,
+        targetFps: SCROLL_DIAGNOSTICS_TARGET_FPS,
+        allowedDropFps: SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS,
+        longestFrameMs: record.longestFrameMs,
+        durationMs: record.durationMs,
+        timestamp: record.timestamp,
+      });
+    }
+  };
+  collect('scroll', snapshot.scrollByLastSource);
+  collect('interaction', snapshot.interactionByLastSource);
+  return violations.sort((a, b) => a.fps - b.fps || b.timestamp - a.timestamp);
+}
+
+export function getScrollDiagnosticsValidationReport(
+  snapshot: ScrollDiagnosticsSnapshot = state,
+  requiredInteractionSources: readonly string[] = SCROLL_DIAGNOSTICS_REQUIRED_INTERACTION_SOURCES,
+  requiredScrollSources: readonly string[] = SCROLL_DIAGNOSTICS_REQUIRED_SCROLL_SOURCES,
+): ScrollDiagnosticsValidationReport {
+  const sampledScrollSources = Object.keys(snapshot.scrollByLastSource).sort();
+  const sampledScrollSourceSet = new Set(sampledScrollSources);
+  const missingScrollSources = requiredScrollSources
+    .filter(source => !sampledScrollSourceSet.has(source));
+  const sampledInteractionSources = Object.keys(snapshot.interactionByLastSource).sort();
+  const sampledInteractionSourceSet = new Set(sampledInteractionSources);
+  const missingInteractionSources = requiredInteractionSources
+    .filter(source => !sampledInteractionSourceSet.has(source));
+  const violations = getScrollDiagnosticsBudgetViolations(snapshot);
+  const sampleTimestamps = [
+    ...Object.values(snapshot.scrollByLastSource).map(record => record.timestamp),
+    ...Object.values(snapshot.interactionByLastSource).map(record => record.timestamp),
+    ...snapshot.longTasks.map(task => task.startTime),
+  ];
+  const firstSampleTimestamp = sampleTimestamps.length > 0 ? Math.min(...sampleTimestamps) : null;
+  const lastSampleTimestamp = sampleTimestamps.length > 0 ? Math.max(...sampleTimestamps) : null;
+  const longTaskCount = snapshot.longTasks.length;
+  const longTaskTotalMs = snapshot.longTasks.reduce((sum, task) => sum + task.duration, 0);
+  const longestLongTaskMs = snapshot.longTasks.reduce((max, task) => Math.max(max, task.duration), 0);
+  return {
+    pass: missingScrollSources.length === 0
+      && missingInteractionSources.length === 0
+      && violations.length === 0
+      && longTaskCount === 0,
+    targetFps: SCROLL_DIAGNOSTICS_TARGET_FPS,
+    allowedDropFps: SCROLL_DIAGNOSTICS_ALLOWED_DROP_FPS,
+    firstSampleTimestamp,
+    lastSampleTimestamp,
+    sampleSpanMs: firstSampleTimestamp !== null && lastSampleTimestamp !== null
+      ? lastSampleTimestamp - firstSampleTimestamp
+      : null,
+    longTaskCount,
+    longTaskTotalMs,
+    longestLongTaskMs,
+    requiredScrollSources: [...requiredScrollSources],
+    sampledScrollSources,
+    missingScrollSources,
+    requiredInteractionSources: [...requiredInteractionSources],
+    sampledInteractionSources,
+    missingInteractionSources,
+    violations,
+  };
+}
+
+export function clearScrollDiagnosticsSamples(): void {
+  state = {
+    ...state,
+    scrollByLastSource: {},
+    interactionByLastSource: {},
+    longTasks: [],
+  };
+  emit();
+}
+
 export function getScrollDiagnosticsSnapshot(): ScrollDiagnosticsSnapshot {
   return state;
 }
@@ -121,6 +278,7 @@ export function resetScrollDiagnosticsForTest(): void {
   state = {
     enabled: false,
     scrollByLastSource: {},
+    interactionByLastSource: {},
     longTasks: [],
   };
   listeners.clear();

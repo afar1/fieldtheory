@@ -37,6 +37,7 @@ import {
   getLauncherUsageScore,
   getLauncherStatusText,
   areLauncherRootSearchEnabledKindsEqual,
+  areLauncherVisibleItemsSameOrder,
   getGeneratedBookmarkTaxonomyPathInfo,
   handleFromLauncherLabel,
   isGeneratedBookmarkTaxonomyPath,
@@ -56,10 +57,63 @@ import {
   shouldOfferLocalInstructionFallback,
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
+  shouldTraceLauncherRendererEvent,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
 } from '../commandLauncherUtils';
+
+describe('launcher visible result equality', () => {
+  it('treats identical visible rows in the same order as unchanged', () => {
+    const current = [
+      { id: 'one', type: 'command', name: 'one', displayName: 'One' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two' },
+    ];
+    const next = [
+      { id: 'one', type: 'command', name: 'one', displayName: 'One' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two' },
+    ];
+
+    expect(areLauncherVisibleItemsSameOrder(current, next)).toBe(true);
+  });
+
+  it('detects reordered, type-changed, or label-changed visible results', () => {
+    const current = [
+      { id: 'one', type: 'command', name: 'one', displayName: 'One', hotkeyDisplay: '⌘ 1' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two', timeAgo: '1m ago' },
+    ];
+
+    expect(areLauncherVisibleItemsSameOrder(current, [
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two' },
+      { id: 'one', type: 'command', name: 'one', displayName: 'One' },
+    ])).toBe(false);
+    expect(areLauncherVisibleItemsSameOrder(current, [
+      { id: 'one', type: 'action', name: 'one', displayName: 'One' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two' },
+    ])).toBe(false);
+    expect(areLauncherVisibleItemsSameOrder(current, [
+      { id: 'one', type: 'command', name: 'one', displayName: 'One Updated' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two' },
+    ])).toBe(false);
+    expect(areLauncherVisibleItemsSameOrder(current, [
+      { id: 'one', type: 'command', name: 'one', displayName: 'One', hotkeyDisplay: '⌘ 2' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two', timeAgo: '1m ago' },
+    ])).toBe(false);
+    expect(areLauncherVisibleItemsSameOrder(current, [
+      { id: 'one', type: 'command', name: 'one', displayName: 'One', hotkeyDisplay: '⌘ 1' },
+      { id: 'two', type: 'wiki-page', name: 'two', displayName: 'Two', timeAgo: '2m ago' },
+    ])).toBe(false);
+  });
+});
+
+describe('launcher renderer tracing', () => {
+  it('skips fast filter result traces but keeps slow and non-filter traces', () => {
+    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5 })).toBe(false);
+    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 8 })).toBe(true);
+    expect(shouldTraceLauncherRendererEvent('filter-results')).toBe(true);
+    expect(shouldTraceLauncherRendererEvent('invoke-item', { elapsedMs: 2.5 })).toBe(true);
+  });
+});
 
 describe('formatHotkeyDisplay', () => {
   it('converts modifier names to symbols', () => {
