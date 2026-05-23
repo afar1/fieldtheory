@@ -4256,6 +4256,7 @@ function FileItem({
     ? item.sharedAuthorCallsign
     : undefined;
   const sharedAuthorTitle = sharedAuthorLabel ? `Shared by ${sharedAuthorLabel}` : undefined;
+  const hasRightAlignedFileMeta = showOwnRiverShare || isPinned;
   const hasInlineFileMeta = Boolean(showOwnRiverShare || sharedAuthorLabel || isPinned || showTodoStateBadge || item.hasUnread);
 
   return (
@@ -4416,9 +4417,6 @@ function FileItem({
             {sharedAuthorLabel && sharedAuthorTitle && (
               <SidebarSharedAuthorChip label={sharedAuthorLabel} theme={theme} title={sharedAuthorTitle} />
             )}
-            {showOwnRiverShare && (
-              <SidebarRiverShareIndicator theme={theme} />
-            )}
             {showTodoStateBadge && (
               <span
                 aria-label={item.todoState === 'done' ? 'done task note' : 'open task note'}
@@ -4455,13 +4453,16 @@ function FileItem({
                 }}
               />
             )}
+            {hasRightAlignedFileMeta && (
+              <span aria-hidden="true" style={{ flex: '1 1 auto', minWidth: '8px' }} />
+            )}
+            {showOwnRiverShare && (
+              <SidebarRiverShareIndicator theme={theme} />
+            )}
             {isPinned && (
-              <>
-                <span aria-hidden="true" style={{ flex: '1 1 auto', minWidth: '8px' }} />
-                <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
-                  <SidebarPinIcon />
-                </span>
-              </>
+              <span title="Pinned" aria-label="Pinned" style={{ color: theme.textSecondary, opacity: 0.56, flexShrink: 0 }}>
+                <SidebarPinIcon />
+              </span>
             )}
           </>
         )}
