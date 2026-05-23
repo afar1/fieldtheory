@@ -70,7 +70,10 @@ export const RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS = 'cm-rendered-markdown-image'
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_CAPTION_CLASS = 'cm-rendered-markdown-image-caption';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR = 'data-cm-rendered-markdown-image-src';
 export const RENDERED_MARKDOWN_EDITOR_IMAGE_ALT_ATTR = 'data-cm-rendered-markdown-image-alt';
+export const RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS = 'cm-rendered-markdown-image-line';
 export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS = 'cm-rendered-markdown-code-block';
+export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS = 'cm-rendered-markdown-code-block-start';
+export const RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS = 'cm-rendered-markdown-code-block-end';
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS = 'cm-rendered-markdown-code-fence';
 export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS = 'cm-rendered-markdown-code-fence-marker';
 export const RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS = 'cm-rendered-markdown-list-line';
@@ -1086,8 +1089,23 @@ function pushRenderedMarkdownEditorLineDecorations(
   }
 
   if (codeFenceMarker !== null) {
-    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS }).range(line.from));
+    const previousText = lineNumber > 1 ? state.doc.line(lineNumber - 1).text : '';
+    const nextText = lineNumber < state.doc.lines ? state.doc.line(lineNumber + 1).text : '';
+    const isAdjacentFence = (value: string): boolean => {
+      const adjacentFenceMatch = /^(`{3,}|~{3,})/.exec(value);
+      return adjacentFenceMatch?.[1][0] === codeFenceMarker;
+    };
+    const classes = [
+      RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS,
+      isAdjacentFence(previousText) ? RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS : '',
+      isAdjacentFence(nextText) ? RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS : '',
+    ].filter(Boolean).join(' ');
+    decorations.push(Decoration.line({ class: classes }).range(line.from));
     return codeFenceMarker;
+  }
+
+  if (/^\s*!\[[^\]\n]*\]\((<[^>\n]+>|[^)\n]*)\)\s*$/.test(text)) {
+    decorations.push(Decoration.line({ class: RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS }).range(line.from));
   }
 
   if (headingMatch) {
@@ -1602,13 +1620,28 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             width: '0',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS}`]: {
-            borderRadius: '4px',
+            borderRadius: '0',
             backgroundColor: theme.isDark ? 'rgba(255,255,255,0.065)' : 'rgba(0,0,0,0.045)',
-            padding: '0.24em 0.65em',
+            padding: '0 0.65em',
+            paddingBottom: '0',
             fontFamily: "'SF Mono', Menlo, Monaco, Consolas, monospace",
             fontSize: '0.9em',
-            lineHeight: 1.55,
+            lineHeight: lineHeightCss,
             whiteSpace: 'pre-wrap',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS}`]: {
+            borderTopLeftRadius: '4px',
+            borderTopRightRadius: '4px',
+            paddingTop: '0.24em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS}`]: {
+            borderBottomLeftRadius: '4px',
+            borderBottomRightRadius: '4px',
+            paddingBottom: '0.24em',
+          },
+          [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS}`]: {
+            paddingTop: `calc(${paragraphSpacing ?? '0.78em'} * 0.18)`,
+            paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.34)`,
           },
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_FENCE_CLASS}`]: {
             height: '0',
@@ -1678,7 +1711,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             gap: '0.25em',
             width: '100%',
             maxWidth: '100%',
-            margin: '0.12em 0',
+            margin: '0',
             verticalAlign: 'top',
             cursor: 'zoom-in',
           },

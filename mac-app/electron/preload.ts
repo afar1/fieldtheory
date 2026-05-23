@@ -3210,6 +3210,13 @@ type FieldTheoryMarkdownTarget = {
   clipboardSearch?: string;
 };
 
+type LibraryDocumentWindowTarget = {
+  kind: 'wiki' | 'artifact' | 'external';
+  path: string;
+  contentMode?: 'rendered' | 'markdown' | 'typedown';
+  sidebarCollapsed?: boolean;
+};
+
 type ActiveLibraryFileContext = {
   type: 'wiki' | 'external';
   rootPath: string;
@@ -4525,6 +4532,8 @@ const libraryAPI = {
   moveItem: (rootPath: string, kind: 'file' | 'dir', sourceRelPath: string, targetDirRelPath: string, targetRootPath?: string): Promise<string | null> =>
     ipcRenderer.invoke('library:moveItem', rootPath, kind, sourceRelPath, targetDirRelPath, targetRootPath),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('library:pickFolder'),
+  openDocumentWindow: (target: LibraryDocumentWindowTarget): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('library:openDocumentWindow', target),
   onRootsChanged: (callback: () => void): (() => void) => {
     const handler = () => callback();
     ipcRenderer.on('library:changed', handler);
