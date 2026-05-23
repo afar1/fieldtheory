@@ -140,7 +140,7 @@ export class SharedTeamService {
       }
 
       if (existing?.id) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('contacts')
           .update({
             contact_user_id: existingUser?.id ?? null,
@@ -148,9 +148,12 @@ export class SharedTeamService {
             status: 'pending',
           })
           .eq('id', existing.id)
-          .eq('owner_user_id', userId);
+          .eq('owner_user_id', userId)
+          .select('id')
+          .maybeSingle();
 
         if (error) return { ok: false, error: error.message ?? 'Invite failed' };
+        if (!data) return { ok: false, error: 'Invite failed because no contact row was updated' };
         return { ok: true };
       }
 
@@ -202,8 +205,9 @@ export class SharedTeamService {
           .eq('status', 'pending')
           .or(targetFilter);
 
-      const { error } = await query;
+      const { data, error } = await query.select('id').maybeSingle();
       if (error) return { ok: false, error: error.message ?? 'Invite response failed' };
+      if (!data) return { ok: false, error: 'Invite response failed because no invite row was updated' };
       return { ok: true };
     } catch (err) {
       log.warn('Team invite response failed:', err);
@@ -220,14 +224,17 @@ export class SharedTeamService {
     if (!contactId) return { ok: false, error: 'Member is required' };
 
     try {
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('contacts')
         .delete()
         .eq('id', contactId)
         .eq('relationship_type', 'team')
-        .eq('owner_user_id', userId);
+        .eq('owner_user_id', userId)
+        .select('id')
+        .maybeSingle();
 
       if (error) return { ok: false, error: error.message ?? 'Remove member failed' };
+      if (!data) return { ok: false, error: 'Remove member failed because no team row was removed' };
       return { ok: true };
     } catch (err) {
       log.warn('Remove team member failed:', err);
@@ -248,14 +255,17 @@ export class SharedTeamService {
         ? `contact_user_id.eq.${userId},contact_email.ilike.${userEmail}`
         : `contact_user_id.eq.${userId}`;
 
-      const { error } = await supabase
+      const { data, error } = await supabase
         .from('contacts')
         .delete()
         .eq('relationship_type', 'team')
         .eq('status', 'accepted')
-        .or(targetFilter);
+        .or(targetFilter)
+        .select('id')
+        .maybeSingle();
 
       if (error) return { ok: false, error: error.message ?? 'Leave team failed' };
+      if (!data) return { ok: false, error: 'Leave team failed because no team row was removed' };
       return { ok: true };
     } catch (err) {
       log.warn('Leave team failed:', err);
