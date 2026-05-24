@@ -1,5 +1,7 @@
 import { useTheme } from '../contexts/ThemeContext';
 
+export const FOCUS_TOOLBAR_BUTTON_WIDTH = 30;
+
 interface ImmersiveToggleProps {
   isFullScreen: boolean;
   onToggle: () => void;
@@ -21,6 +23,9 @@ export default function ImmersiveToggle({ isFullScreen, onToggle, title }: Immer
       title={title ?? (isFullScreen ? 'Exit immersive view' : 'Enter immersive view')}
       aria-label={isFullScreen ? 'Exit immersive view' : 'Enter immersive view'}
       style={{
+        width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+        boxSizing: 'border-box',
+        justifyContent: 'center',
         padding: '4px 8px',
         fontSize: '11px',
         color: theme.textSecondary,

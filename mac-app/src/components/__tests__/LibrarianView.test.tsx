@@ -118,6 +118,84 @@ describe('LibrarianView render', () => {
     expect(await screen.findByText('Select a page')).toBeTruthy();
   });
 
+  it('keeps the current source document when command-clicking a different sidebar file into a document window', async () => {
+    const currentRelPath = 'scratchpad/current-note';
+    const popoutRelPath = 'scratchpad/other-note';
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [
+          {
+            kind: 'file' as const,
+            relPath: currentRelPath,
+            absPath: `${testLibraryRootPath}/${currentRelPath}.md`,
+            name: 'current-note',
+            title: 'Current Note',
+            lastUpdated: 1,
+          },
+          {
+            kind: 'file' as const,
+            relPath: popoutRelPath,
+            absPath: `${testLibraryRootPath}/${popoutRelPath}.md`,
+            name: 'other-note',
+            title: 'Other Note',
+            lastUpdated: 2,
+          },
+        ],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (relPath) => {
+      if (relPath === currentRelPath) {
+        return {
+          relPath: currentRelPath,
+          absPath: `${testLibraryRootPath}/${currentRelPath}.md`,
+          name: 'current-note',
+          title: 'Current Note',
+          lastUpdated: 1,
+          content: 'Current body',
+          documentVersion: { mtimeMs: 1, size: 12, sha256: 'current' },
+        };
+      }
+      if (relPath === popoutRelPath) {
+        return {
+          relPath: popoutRelPath,
+          absPath: `${testLibraryRootPath}/${popoutRelPath}.md`,
+          name: 'other-note',
+          title: 'Other Note',
+          lastUpdated: 2,
+          content: 'Other body',
+          documentVersion: { mtimeMs: 2, size: 10, sha256: 'other' },
+        };
+      }
+      return null;
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: currentRelPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Current body');
+    fireEvent.click(await screen.findByText('Other Note'), { metaKey: true });
+
+    await waitFor(() => {
+      expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: popoutRelPath, contentMode: 'rendered', sidebarCollapsed: true });
+    });
+    expect(screen.getByText('Current body')).toBeTruthy();
+    expect(screen.queryByText('Select a page')).toBeNull();
+  });
+
   it('keeps an initial wiki target from being replaced by the default artifact', async () => {
     const relPath = 'scratchpad/right-click-target';
     vi.mocked(window.librarianAPI!.getReadings).mockResolvedValue([{
@@ -914,6 +992,170 @@ describe('LibrarianView render', () => {
       expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
       expect(screen.queryByLabelText('Switch to rendered view')).toBeNull();
     });
+  });
+
+  it('places the document pop-out button immediately before the markdown mode button', async () => {
+    const relPath = 'scratchpad/popout-toolbar-order-test';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'popout-toolbar-order-test',
+      title: 'popout-toolbar-order-test',
+      lastUpdated: 1,
+      content: 'Toolbar order body',
+      documentVersion: { mtimeMs: 1, size: 18, sha256: 'toolbar-order' },
+    };
+
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability: vi.fn(async () => ({ available: true, hasTeamMembers: true })),
+        getStatus: vi.fn(async () => ({ shared: false })),
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+
+    render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: relPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Toolbar order body');
+    const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
+    const popOutButton = screen.getByRole('button', { name: 'Open in New Window' });
+    const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
+    const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
+    expect(riverButton.nextElementSibling).toBe(popOutButton);
+    expect(popOutButton.nextElementSibling).toBe(markdownButton);
+    expect(popOutButton.style.width).toBe(focusButton.style.width);
+    expect(markdownButton.style.width).toBe(focusButton.style.width);
+  });
+
+  it('resets rendered document scroll when selecting a different sidebar file', async () => {
+    const firstRelPath = 'scratchpad/scroll-first';
+    const secondRelPath = 'scratchpad/scroll-second';
+    const firstPage: WikiPage = {
+      relPath: firstRelPath,
+      absPath: `/Users/afar/.fieldtheory/library/${firstRelPath}.md`,
+      name: 'scroll-first',
+      title: 'Scroll First',
+      lastUpdated: 1,
+      content: 'First body',
+      documentVersion: { mtimeMs: 1, size: 10, sha256: 'scroll-first' },
+    };
+    const secondPage: WikiPage = {
+      relPath: secondRelPath,
+      absPath: `/Users/afar/.fieldtheory/library/${secondRelPath}.md`,
+      name: 'scroll-second',
+      title: 'Scroll Second',
+      lastUpdated: 2,
+      content: 'Second body',
+      documentVersion: { mtimeMs: 2, size: 11, sha256: 'scroll-second' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'wiki-expanded-folders' ? expandedScratchpadFolders : null
+    ));
+    vi.mocked(window.libraryAPI!.getRoots).mockResolvedValue([{
+      path: testLibraryRootPath,
+      label: 'Library',
+      builtin: true,
+      tree: [{
+        kind: 'dir' as const,
+        name: 'scratchpad',
+        relPath: 'scratchpad',
+        children: [
+          {
+            kind: 'file' as const,
+            relPath: firstRelPath,
+            absPath: firstPage.absPath,
+            name: firstPage.name,
+            title: firstPage.title,
+            lastUpdated: firstPage.lastUpdated,
+          },
+          {
+            kind: 'file' as const,
+            relPath: secondRelPath,
+            absPath: secondPage.absPath,
+            name: secondPage.name,
+            title: secondPage.title,
+            lastUpdated: secondPage.lastUpdated,
+          },
+        ],
+      }],
+    }]);
+    vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (relPath) => (
+      relPath === firstRelPath ? firstPage : relPath === secondRelPath ? secondPage : null
+    ));
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    fireEvent.click(await screen.findByText('Scroll First'));
+    await screen.findByText('First body');
+    const scrollEl = container.querySelector('[data-ft-librarian-content-scroll="true"]') as HTMLDivElement;
+    scrollEl.scrollTop = 180;
+    fireEvent.scroll(scrollEl);
+
+    fireEvent.click(await screen.findByText('Scroll Second'));
+
+    await screen.findByText('Second body');
+    expect(scrollEl.scrollTop).toBe(0);
+  });
+
+  it('resets rendered document scroll when opening a command launcher target', async () => {
+    const firstRelPath = 'scratchpad/command-scroll-first';
+    const secondRelPath = 'scratchpad/command-scroll-second';
+    const firstPage: WikiPage = {
+      relPath: firstRelPath,
+      absPath: `/Users/afar/.fieldtheory/library/${firstRelPath}.md`,
+      name: 'command-scroll-first',
+      title: 'Command Scroll First',
+      lastUpdated: 1,
+      content: 'Command first body',
+      documentVersion: { mtimeMs: 1, size: 18, sha256: 'command-scroll-first' },
+    };
+    const secondPage: WikiPage = {
+      relPath: secondRelPath,
+      absPath: `/Users/afar/.fieldtheory/library/${secondRelPath}.md`,
+      name: 'command-scroll-second',
+      title: 'Command Scroll Second',
+      lastUpdated: 2,
+      content: 'Command second body',
+      documentVersion: { mtimeMs: 2, size: 19, sha256: 'command-scroll-second' },
+    };
+
+    vi.mocked(window.wikiAPI!.getPage).mockImplementation(async (relPath) => (
+      relPath === firstRelPath ? firstPage : relPath === secondRelPath ? secondPage : null
+    ));
+
+    const { container, rerender } = render(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: firstRelPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Command first body');
+    const scrollEl = container.querySelector('[data-ft-librarian-content-scroll="true"]') as HTMLDivElement;
+    scrollEl.scrollTop = 220;
+    fireEvent.scroll(scrollEl);
+
+    rerender(
+      <LibrarianView
+        sidebarCollapsed={false}
+        onSwitchToClipboard={vi.fn()}
+        initialOpenTarget={{ kind: 'wiki', path: secondRelPath, contentMode: 'rendered' }}
+      />
+    );
+
+    await screen.findByText('Command second body');
+    expect(scrollEl.scrollTop).toBe(0);
   });
 
   it('keeps the cursor at the end of inserted recording text in markdown source', async () => {
