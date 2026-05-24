@@ -9,9 +9,10 @@ import { useDeleteConfirmation } from '../hooks/useDeleteConfirmation';
 import { fonts } from '../design/tokens';
 import ContentToolbar, { ContentToolbarFolderButton, ContentToolbarMaxwellButton } from './ContentToolbar';
 import ContentModeToggleButton from './ContentModeToggleButton';
-import ImmersiveToggle from './ImmersiveToggle';
+import ImmersiveToggle, { FOCUS_TOOLBAR_BUTTON_WIDTH } from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
+import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
 import WikiSidebar, {
   BOOKMARKS_ITEM_ID,
@@ -3579,6 +3580,17 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
+  useLayoutEffect(() => {
+    pendingScrollRatioRef.current = null;
+    if (contentScrollRef.current) {
+      contentScrollRef.current.scrollTop = 0;
+      updateRenderedDocumentTopFade(contentScrollRef.current);
+    }
+    if (markdownCodeEditorRef.current) {
+      markdownCodeEditorRef.current.scrollTop = 0;
+      updateMarkdownEditorFades(markdownCodeEditorRef.current);
+    }
+  }, [activeReadingPath, updateMarkdownEditorFades, updateRenderedDocumentTopFade]);
   const activeMaxwellItem = useMemo<LibrarianMaxwellItem | null>(() => {
     if (!activeReading || !activeReadingPath || !activeIsMarkdownDocument) return null;
     if (selectedItemType === 'wiki' && wikiSelectedRelPath) {
@@ -3645,6 +3657,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       openDocumentTargetInWindow({ kind: 'external', path: activeReadingPath, contentMode });
     }
   }, [activeReadingPath, contentMode, openDocumentTargetInWindow, selectedItemType, wikiSelectedRelPath]);
+  const isSidebarItemActiveDocument = useCallback((item: UnifiedItem): boolean => {
+    if (item.type === 'wiki') return selectedItemType === 'wiki' && item.relPath === wikiSelectedRelPath;
+    if (item.type === 'artifact') return selectedItemType === 'artifact' && item.absPath === activeReadingPath;
+    if (item.type === 'external') return selectedItemType === 'external' && item.absPath === activeReadingPath;
+    return false;
+  }, [activeReadingPath, selectedItemType, wikiSelectedRelPath]);
   const maxwellToolbarItems = useMemo(() => maxwellItems.map((item) => ({
     id: item.id,
     title: item.title,
@@ -6082,14 +6100,15 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [flushCurrentEdit, openWikiPage, selectArtifactPath, selectExternalFile, autoPopArtifactPath, onAutoPopArtifactSuperseded]);
 
   const handleOpenSidebarItemInWindow = useCallback((item: UnifiedItem, options: { sidebarCollapsed?: boolean } = {}) => {
+    const clearSource = isSidebarItemActiveDocument(item);
     if (item.type === 'wiki' && item.relPath) {
-      openDocumentTargetInWindow({ kind: 'wiki', path: item.relPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed });
+      openDocumentTargetInWindow({ kind: 'wiki', path: item.relPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed }, clearSource);
     } else if (item.type === 'artifact') {
-      openDocumentTargetInWindow({ kind: 'artifact', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed });
+      openDocumentTargetInWindow({ kind: 'artifact', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed }, clearSource);
     } else if (item.type === 'external') {
-      openDocumentTargetInWindow({ kind: 'external', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed });
+      openDocumentTargetInWindow({ kind: 'external', path: item.absPath, contentMode: 'rendered', sidebarCollapsed: options.sidebarCollapsed }, clearSource);
     }
-  }, [openDocumentTargetInWindow]);
+  }, [isSidebarItemActiveDocument, openDocumentTargetInWindow]);
 
   const openEmberPerson = useCallback((relPath: string) => {
     openWikiPage(relPath);
@@ -7329,7 +7348,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     );
   };
 
-  const sidebarForcedVisibleForEmptySelection = !initialOpenTarget && !activeReading && !isFullScreen;
+  const sidebarForcedVisibleForEmptySelection = !hadInitialOpenTargetRef.current && !activeReading && !isFullScreen;
   const sidebarTemporarilyExpanded = sidebarCollapsed && sidebarHoverExpanded && !isFullScreen && !sidebarForcedVisibleForEmptySelection;
   const sidebarVisible = !sidebarCollapsed || sidebarTemporarilyExpanded || sidebarForcedVisibleForEmptySelection;
   const handleCollapsedSidebarSurfaceMouseDownCapture = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
@@ -7913,58 +7932,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   showFolder={!activeReadingToolbarIdentityVisible}
                   onCopy={shareStatus?.shared ? copyShareLink : undefined}
                   showCopy={!!shareStatus?.shared}
-                  shareStatus={sharedFileStatus ? { shared: sharedFileStatus.shared } : { shared: false }}
-                  isSharing={isTogglingSharedFile}
-                  showShare={sharedFilesAvailable && activeIsMarkdownDocument}
-                  onToggleShare={handleToggleSharedFile}
-                  shareLabel="River"
-                  sharedLabel="River"
-                  shareTitle="Add to River (shared)"
-                  sharedTitle="Remove from River (shared)"
                   onCopyPath={activeReading?.path ? copyActiveReadingTextOrPath : undefined}
                   copyPathTitle="Copy selected text or file path (⌘C)"
                 />
               )}
-              {focusToolbarControlsVisible && activeReadingPath
-                && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external')
-                && (
-                  <button
-                    type="button"
-                    onClick={openActiveDocumentInWindow}
-                    title="Open in New Window"
-                    aria-label="Open in New Window"
-                    style={{
-                      height: '24px',
-                      width: '24px',
-                      padding: 0,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      color: theme.textSecondary,
-                      backgroundColor: 'transparent',
-                      border: `1px solid ${theme.border}`,
-                      borderRadius: '5px',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                      // @ts-ignore - opt out of the drag region so the click lands.
-                      WebkitAppRegion: 'no-drag',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
-                      e.currentTarget.style.color = theme.text;
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                      e.currentTarget.style.color = theme.textSecondary;
-                    }}
-                  >
-                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                      <path d="M6 3H3.75C3.06 3 2.5 3.56 2.5 4.25v8C2.5 12.94 3.06 13.5 3.75 13.5h8c.69 0 1.25-.56 1.25-1.25V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M9 2.5h4.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                      <path d="M8.5 7.5 13.25 2.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </button>
-                )}
               {sharedFileStatus?.shared && sharedFilePresenceUsers.length > 0 && (
                 <div
                   aria-label="River viewers"
@@ -8207,6 +8178,83 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               )}
 
               {/* Content mode toggle - raw markdown / rendered view */}
+              {focusToolbarControlsVisible && sharedFilesAvailable && activeIsMarkdownDocument && (
+                <button
+                  type="button"
+                  onClick={handleToggleSharedFile}
+                  disabled={isTogglingSharedFile}
+                  style={{
+                    height: '24px',
+                    minWidth: '24px',
+                    padding: '3px 6px',
+                    fontSize: '11px',
+                    color: sharedFileStatus?.shared ? '#2563eb' : theme.textSecondary,
+                    backgroundColor: sharedFileStatus?.shared
+                      ? (theme.isDark ? 'rgba(37,99,235,0.20)' : 'rgba(37,99,235,0.12)')
+                      : 'transparent',
+                    border: `1px solid ${sharedFileStatus?.shared
+                      ? (theme.isDark ? 'rgba(96,165,250,0.36)' : 'rgba(37,99,235,0.28)')
+                      : 'transparent'}`,
+                    borderRadius: '4px',
+                    cursor: isTogglingSharedFile ? 'default' : 'pointer',
+                    opacity: isTogglingSharedFile ? 0.6 : 1,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    // @ts-ignore - opt out of the drag region so the click lands.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                  title={sharedFileStatus?.shared ? 'Remove from River (shared)' : 'Add to River (shared)'}
+                  aria-label={sharedFileStatus?.shared ? 'Remove from River (shared)' : 'Add to River (shared)'}
+                >
+                  <SidebarRiverIcon
+                    color={sharedFileStatus?.shared ? '#2563eb' : theme.textSecondary}
+                    style={{ opacity: isTogglingSharedFile ? 0.35 : sharedFileStatus?.shared ? 1 : 0.48 }}
+                  />
+                </button>
+              )}
+              {focusToolbarControlsVisible && activeReadingPath
+                && (selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external')
+                && (
+                  <button
+                    type="button"
+                    onClick={openActiveDocumentInWindow}
+                    title="Open in New Window"
+                    aria-label="Open in New Window"
+                    style={{
+                      height: '24px',
+                      width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                      boxSizing: 'border-box',
+                      padding: 0,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      color: theme.textSecondary,
+                      backgroundColor: 'transparent',
+                      border: `1px solid ${theme.border}`,
+                      borderRadius: '5px',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      // @ts-ignore - opt out of the drag region so the click lands.
+                      WebkitAppRegion: 'no-drag',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                      e.currentTarget.style.color = theme.text;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                      e.currentTarget.style.color = theme.textSecondary;
+                    }}
+                  >
+                    <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                      <path d="M6 3H3.75C3.06 3 2.5 3.56 2.5 4.25v8C2.5 12.94 3.06 13.5 3.75 13.5h8c.69 0 1.25-.56 1.25-1.25V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M9 2.5h4.5V7" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="M8.5 7.5 13.25 2.75" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </button>
+                )}
               {focusToolbarControlsVisible && (
                 <ContentModeToggleButton
                   mode={contentMode}

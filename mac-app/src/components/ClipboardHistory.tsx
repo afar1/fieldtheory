@@ -95,6 +95,7 @@ type FieldTheoryMarkdownTarget = {
   path: string;
   contentMode?: 'rendered' | 'markdown' | 'typedown';
   sidebarCollapsed?: boolean;
+  focusChrome?: boolean;
   selectionStart?: number;
   selectionEnd?: number;
   clipboardItemId?: number;
@@ -112,7 +113,13 @@ function getDocumentWindowInitialTarget(location: Pick<Location, 'search'>): Fie
   const contentMode = contentModeParam === 'markdown' || contentModeParam === 'typedown' || contentModeParam === 'rendered'
     ? contentModeParam
     : 'rendered';
-  return { kind, path, contentMode, sidebarCollapsed: params.get('sidebarCollapsed') === '1' };
+  return {
+    kind,
+    path,
+    contentMode,
+    sidebarCollapsed: params.get('sidebarCollapsed') === '1',
+    focusChrome: params.get('focusChrome') === '1',
+  };
 }
 
 type TopNavMode = 'clipboard' | 'librarian' | 'possible';
@@ -563,9 +570,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   // regardless of which view is currently active. Shared between Library and
   // Commands views so the toggle has consistent behavior.
   const [navSidebarCollapsed, setNavSidebarCollapsed] = useState<boolean>(
-    () => initialLibraryOpenTarget?.sidebarCollapsed === true || localStorage.getItem('librarian-sidebar-collapsed') === '1'
+    () => initialLibraryOpenTarget?.focusChrome === true
+      || initialLibraryOpenTarget?.sidebarCollapsed === true
+      || localStorage.getItem('librarian-sidebar-collapsed') === '1'
   );
-  const skipInitialSidebarCollapsedPersistRef = useRef(initialLibraryOpenTarget?.sidebarCollapsed === true);
+  const skipInitialSidebarCollapsedPersistRef = useRef(
+    initialLibraryOpenTarget?.focusChrome === true || initialLibraryOpenTarget?.sidebarCollapsed === true
+  );
   useEffect(() => {
     if (skipInitialSidebarCollapsedPersistRef.current) {
       skipInitialSidebarCollapsedPersistRef.current = false;
@@ -692,12 +703,14 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   // away from yet. While this is set, Escape can dismiss the popup-style window.
   const [autoPopArtifactPath, setAutoPopArtifactPath] = useState<string | null>(null);
   const [focusChromeChildActive, setFocusChromeChildActive] = useState(false);
-  const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = useState(false);
+  const [focusChromeGlobalEnabled, setFocusChromeGlobalEnabledState] = useState(
+    () => initialLibraryOpenTarget?.focusChrome === true
+  );
   const [focusChromeGroupOpacity, setFocusChromeGroupOpacity] = useState(0);
   const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
-  const focusChromeGlobalEnabledRef = useRef(false);
+  const focusChromeGlobalEnabledRef = useRef(initialLibraryOpenTarget?.focusChrome === true);
   const focusChromePreviousSidebarCollapsedRef = useRef<boolean | null>(null);
   const setFocusChromeGlobalEnabled = useCallback((enabled: boolean) => {
     focusChromeGlobalEnabledRef.current = enabled;

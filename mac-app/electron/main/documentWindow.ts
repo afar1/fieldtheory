@@ -135,6 +135,7 @@ export class LibraryDocumentWindowManager {
       documentWindow: '1',
       kind: target.kind,
       path: target.path,
+      focusChrome: '1',
     });
     if (target.contentMode) query.set('contentMode', target.contentMode);
     if (target.sidebarCollapsed) query.set('sidebarCollapsed', '1');

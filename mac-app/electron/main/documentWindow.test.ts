@@ -105,6 +105,12 @@ describe('LibraryDocumentWindowManager', () => {
     manager.open({ kind: 'wiki', path: 'scratchpad/diagram-notes', contentMode: 'rendered' });
 
     expect(testState.browserWindowInstances).toHaveLength(2);
+    expect(testState.browserWindowInstances[0].loadFile).toHaveBeenCalledWith(
+      '/tmp/fieldtheory/dist/clipboard-history.html',
+      expect.objectContaining({
+        query: expect.objectContaining({ focusChrome: '1' }),
+      }),
+    );
     expect(testState.browserWindowInstances[1].getBounds().x).toBeGreaterThan(testState.browserWindowInstances[0].getBounds().x);
     expect(testState.browserWindowInstances[1].getBounds().y).toBeGreaterThan(testState.browserWindowInstances[0].getBounds().y);
   });

@@ -1,5 +1,6 @@
 import { useTheme } from '../contexts/ThemeContext';
 import { getNextMarkdownContentMode, type MarkdownContentMode } from '../utils/markdownContentMode';
+import { FOCUS_TOOLBAR_BUTTON_WIDTH } from './ImmersiveToggle';
 
 export type ContentModeToggleButtonMode = MarkdownContentMode;
 
@@ -54,6 +55,9 @@ export default function ContentModeToggleButton({
       aria-label={label}
       aria-pressed={mode !== 'rendered'}
       style={{
+        width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+        boxSizing: 'border-box',
+        justifyContent: 'center',
         padding: '4px 8px',
         fontSize: '11px',
         color: theme.textSecondary,
