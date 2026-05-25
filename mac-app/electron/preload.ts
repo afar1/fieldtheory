@@ -2980,8 +2980,6 @@ const CommandsIPCChannels = {
   GET_COMMAND_DIRECTORIES: 'commands:getCommandDirectories',
   REFRESH_COMMANDS: 'commands:refreshCommands',
   GET_COMMAND_CONTENT: 'commands:getCommandContent',
-  LIST_LAUNCHER_APPS: 'commands:listLauncherApps',
-  LAUNCH_APP: 'commands:launchApp',
   GET_LAUNCHER_FILE_ICON: 'commands:getLauncherFileIcon',
   SEARCH_LAUNCHER_FILES: 'commands:searchLauncherFiles',
   OPEN_LAUNCHER_FILE: 'commands:openLauncherFile',
@@ -3035,14 +3033,6 @@ type PortableCommandDirectoryInfo = {
   rootPath: string;
   directoryPath: string;
   directoryRelPath: string;
-  lastModified: number;
-};
-
-type LauncherAppInfo = {
-  name: string;
-  displayName: string;
-  appPath: string;
-  bundleId?: string;
   lastModified: number;
 };
 
@@ -3388,14 +3378,6 @@ const commandsAPI = {
   // Invoke a command by name (paste file or reference to target app).
   invokeCommand: async (commandName: string): Promise<{ success: boolean; error?: string }> => {
     return ipcRenderer.invoke('commands:invoke', commandName);
-  },
-
-  listLauncherApps: async (): Promise<LauncherAppInfo[]> => {
-    return ipcRenderer.invoke(CommandsIPCChannels.LIST_LAUNCHER_APPS);
-  },
-
-  launchApp: async (appPath: string): Promise<{ success: boolean; error?: string }> => {
-    return ipcRenderer.invoke(CommandsIPCChannels.LAUNCH_APP, appPath);
   },
 
   getLauncherFileIcon: async (filePath: string): Promise<LauncherFileIconResult> => {
@@ -5189,7 +5171,7 @@ type CodexTerminalSessionSummary = {
   id: string;
   title: string;
   cwd: string;
-  engine: 'pty' | 'nativeGhostty';
+  engine: 'pty';
   createdAt: string;
   exitedAt: string | null;
   exitCode: number | null;
@@ -5228,39 +5210,8 @@ type CodexTerminalAttachResult = {
   error?: string;
 };
 
-type CodexTerminalGhosttyStatus = {
-  status: 'ready' | 'missing-source' | 'missing-header' | 'missing-library' | 'missing-license';
-  sourceDir: string | null;
-  includeDir: string | null;
-  vtHeaderPath: string | null;
-  embeddingHeaderPath: string | null;
-  kitFrameworkPath: string | null;
-  kitMacosHeaderDir: string | null;
-  kitMacosLibraryPath: string | null;
-  libraryPath: string | null;
-  licensePath: string | null;
-  warnings: string[];
-};
-
-type CodexTerminalNativeGhosttyHostStatus = {
-  ok: boolean;
-  modulePath: string | null;
-  error?: string;
-};
-
-type CodexTerminalNativeGhosttyResult = {
-  ok: boolean;
-  error?: string;
-};
-
-type CodexTerminalNativeGhosttySnapshot = {
-  ok: boolean;
-  text?: string;
-  error?: string;
-};
-
 const codexTerminalAPI = {
-  create: async (input?: { cwd?: string; title?: string; cols?: number; rows?: number; nativeGhostty?: boolean }): Promise<CodexTerminalSessionSummary> => {
+  create: async (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean }): Promise<CodexTerminalSessionSummary> => {
     return ipcRenderer.invoke('codexTerminal:create', input);
   },
   list: async (): Promise<CodexTerminalSessionSummary[]> => {
@@ -5281,32 +5232,14 @@ const codexTerminalAPI = {
   rename: async (id: string, title: string): Promise<boolean> => {
     return ipcRenderer.invoke('codexTerminal:rename', id, title);
   },
-  ghosttyStatus: async (): Promise<CodexTerminalGhosttyStatus> => {
-    return ipcRenderer.invoke('codexTerminal:ghosttyStatus');
+  readClipboardText: async (): Promise<string> => {
+    return ipcRenderer.invoke('codexTerminal:readClipboardText');
   },
-  nativeGhosttyHostStatus: async (): Promise<CodexTerminalNativeGhosttyHostStatus> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttyHostStatus');
+  writeClipboardText: async (text: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:writeClipboardText', text);
   },
-  nativeGhosttyAttach: async (input: { id: string; x: number; y: number; width: number; height: number; cwd?: string; command?: string }): Promise<CodexTerminalNativeGhosttyResult> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttyAttach', input);
-  },
-  nativeGhosttyUpdateFrame: async (input: { id: string; x: number; y: number; width: number; height: number }): Promise<CodexTerminalNativeGhosttyResult> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttyUpdateFrame', input);
-  },
-  nativeGhosttySendText: async (id: string, text: string): Promise<CodexTerminalNativeGhosttyResult> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttySendText', { id, text });
-  },
-  nativeGhosttySendKey: async (input: { id: string; action: 'press' | 'release' | 'repeat'; keyCode: number; text?: string; unshiftedCodepoint?: number; shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean; caps?: boolean }): Promise<CodexTerminalNativeGhosttyResult> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttySendKey', input);
-  },
-  nativeGhosttySnapshot: async (id: string): Promise<CodexTerminalNativeGhosttySnapshot> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttySnapshot', id);
-  },
-  nativeGhosttyDetach: async (id: string): Promise<CodexTerminalNativeGhosttyResult> => {
-    return ipcRenderer.invoke('codexTerminal:nativeGhosttyDetach', id);
-  },
-  attachPageContext: async (id: string, context: CodexTerminalPageContext): Promise<CodexTerminalAttachResult> => {
-    return ipcRenderer.invoke('codexTerminal:attachPageContext', id, context);
+  attachPageContext: async (id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }): Promise<CodexTerminalAttachResult> => {
+    return ipcRenderer.invoke('codexTerminal:attachPageContext', id, context, options);
   },
   onData: (callback: (event: { id: string; data: string }) => void): (() => void) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; data: string }) => callback(payload);

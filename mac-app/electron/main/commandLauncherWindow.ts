@@ -498,6 +498,7 @@ export class CommandLauncherWindow {
     appendCommandLauncherTrace('create-window-start');
     const initialTheme = this.getInitialThemeOptions();
     this.window = new BrowserWindow({
+      title: 'Field Theory Command Launcher',
       width: this.WINDOW_WIDTH,
       height: this.WINDOW_HEIGHT_COLLAPSED,
       frame: false,
@@ -605,6 +606,7 @@ export class CommandLauncherWindow {
     appendCommandLauncherTrace('preview-create-window-start');
     const initialTheme = this.getInitialThemeOptions();
     this.previewWindow = new BrowserWindow({
+      title: 'Field Theory Command Preview',
       width: this.PREVIEW_WINDOW_WIDTH,
       height: this.PREVIEW_WINDOW_MAX_HEIGHT,
       frame: false,

@@ -13,7 +13,7 @@ import {
   SettingsToggle,
 } from './settings/SettingsPrimitives';
 
-const ACTIVE_LAUNCHER_ROOT_KINDS: LauncherRootSearchKind[] = ['app', 'file'];
+const ACTIVE_LAUNCHER_ROOT_KINDS: LauncherRootSearchKind[] = ['file'];
 
 export default function LauncherSettings() {
   const { theme } = useTheme();
@@ -64,7 +64,7 @@ export default function LauncherSettings() {
               key={kind}
               theme={theme}
               label={LAUNCHER_ROOT_SEARCH_KIND_LABELS[kind]}
-              hint={kind === 'app' ? 'Installed applications in launcher root search.' : 'Indexed files in launcher root search.'}
+              hint="Indexed files in launcher root search."
               last={index === ACTIVE_LAUNCHER_ROOT_KINDS.length - 1}
               control={(
                 <SettingsToggle

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { WebLinksAddon } from '@xterm/addon-web-links';
 import '@xterm/xterm/css/xterm.css';
 import { useTheme, type Theme } from '../contexts/ThemeContext';
 
@@ -10,137 +11,33 @@ type CodexTerminalPageContext = Parameters<NonNullable<Window['codexTerminalAPI'
 interface CodexTerminalPanelProps {
   visible: boolean;
   pageContext: CodexTerminalPageContext | null;
+  onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
   onVisibleChange: (visible: boolean) => void;
 }
 
-type DockSide = 'bottom' | 'right';
+export type CodexTerminalDockSide = 'bottom' | 'right';
 const CODEX_TERMINAL_DOCK_STORAGE_KEY = 'fieldtheory.codexTerminal.dockSide';
 const CODEX_TERMINAL_ACTIVE_SESSION_STORAGE_KEY = 'fieldtheory.codexTerminal.activeSessionId';
 const CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY = 'fieldtheory.codexTerminal.bottomHeight';
 const CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY = 'fieldtheory.codexTerminal.rightWidth';
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
-const CODEX_TERMINAL_NEW_CWD_STORAGE_KEY = 'fieldtheory.codexTerminal.newSessionCwd';
-const CODEX_TERMINAL_CWD_HISTORY_STORAGE_KEY = 'fieldtheory.codexTerminal.cwdHistory';
+const DEFAULT_BOTTOM_HEIGHT = 320;
+const DEFAULT_RIGHT_WIDTH = 520;
 const MIN_BOTTOM_HEIGHT = 220;
 const MIN_RIGHT_WIDTH = 360;
 const MAX_BOTTOM_HEIGHT_RATIO = 0.72;
 const MAX_RIGHT_WIDTH_RATIO = 0.68;
-const MAX_CWD_HISTORY = 12;
+const TERMINAL_GUTTER_TOP = 12;
+const TERMINAL_GUTTER_RIGHT = 28;
+const TERMINAL_GUTTER_BOTTOM = 40;
+const TERMINAL_GUTTER_LEFT = 14;
+const TERMINAL_SCROLLBAR_LANE = 14;
 const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 
 interface TerminalHandle {
   term: Terminal;
   fit: FitAddon;
 }
-
-interface NativeGhosttyFrame {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
-type NativeGhosttyMode = 'checking' | 'available' | 'unavailable';
-type NativeGhosttyKeyInput = Parameters<NonNullable<Window['codexTerminalAPI']>['nativeGhosttySendKey']>[0];
-
-const MAC_KEY_CODES: Record<string, number> = {
-  KeyA: 0x00,
-  KeyS: 0x01,
-  KeyD: 0x02,
-  KeyF: 0x03,
-  KeyH: 0x04,
-  KeyG: 0x05,
-  KeyZ: 0x06,
-  KeyX: 0x07,
-  KeyC: 0x08,
-  KeyV: 0x09,
-  KeyB: 0x0B,
-  KeyQ: 0x0C,
-  KeyW: 0x0D,
-  KeyE: 0x0E,
-  KeyR: 0x0F,
-  KeyY: 0x10,
-  KeyT: 0x11,
-  Digit1: 0x12,
-  Digit2: 0x13,
-  Digit3: 0x14,
-  Digit4: 0x15,
-  Digit6: 0x16,
-  Digit5: 0x17,
-  Equal: 0x18,
-  Digit9: 0x19,
-  Digit7: 0x1A,
-  Minus: 0x1B,
-  Digit8: 0x1C,
-  Digit0: 0x1D,
-  BracketRight: 0x1E,
-  KeyO: 0x1F,
-  KeyU: 0x20,
-  BracketLeft: 0x21,
-  KeyI: 0x22,
-  KeyP: 0x23,
-  Enter: 0x24,
-  KeyL: 0x25,
-  KeyJ: 0x26,
-  Quote: 0x27,
-  KeyK: 0x28,
-  Semicolon: 0x29,
-  Backslash: 0x2A,
-  Comma: 0x2B,
-  Slash: 0x2C,
-  KeyN: 0x2D,
-  KeyM: 0x2E,
-  Period: 0x2F,
-  Tab: 0x30,
-  Space: 0x31,
-  Backquote: 0x32,
-  Backspace: 0x33,
-  Escape: 0x35,
-  NumpadDecimal: 0x41,
-  NumpadMultiply: 0x43,
-  NumpadAdd: 0x45,
-  NumLock: 0x47,
-  NumpadDivide: 0x4B,
-  NumpadEnter: 0x4C,
-  NumpadSubtract: 0x4E,
-  NumpadEqual: 0x51,
-  Numpad0: 0x52,
-  Numpad1: 0x53,
-  Numpad2: 0x54,
-  Numpad3: 0x55,
-  Numpad4: 0x56,
-  Numpad5: 0x57,
-  Numpad6: 0x58,
-  Numpad7: 0x59,
-  Numpad8: 0x5B,
-  Numpad9: 0x5C,
-  F5: 0x60,
-  F6: 0x61,
-  F7: 0x62,
-  F3: 0x63,
-  F8: 0x64,
-  F9: 0x65,
-  F11: 0x67,
-  F13: 0x69,
-  F16: 0x6A,
-  F14: 0x6B,
-  F10: 0x6D,
-  F12: 0x6F,
-  F15: 0x71,
-  Help: 0x72,
-  Home: 0x73,
-  PageUp: 0x74,
-  Delete: 0x75,
-  F4: 0x76,
-  End: 0x77,
-  F2: 0x78,
-  PageDown: 0x79,
-  F1: 0x7A,
-  ArrowLeft: 0x7B,
-  ArrowRight: 0x7C,
-  ArrowDown: 0x7D,
-  ArrowUp: 0x7E,
-};
 
 export function mergeCodexTerminalSessions(
   current: CodexTerminalSessionSummary[],
@@ -151,62 +48,17 @@ export function mergeCodexTerminalSessions(
   return Array.from(byId.values());
 }
 
-export function mergeCodexTerminalCwdHistory(current: string[], incoming: string[]): string[] {
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const cwd of [...incoming, ...current]) {
-    const trimmed = cwd.trim();
-    if (!trimmed || seen.has(trimmed)) continue;
-    seen.add(trimmed);
-    merged.push(trimmed);
-    if (merged.length >= MAX_CWD_HISTORY) break;
+export function nativeTerminalNavigationSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): string | null {
+  if (event.ctrlKey || event.shiftKey) return null;
+  if (event.metaKey && !event.altKey) {
+    if (event.key === 'ArrowLeft') return '\x01';
+    if (event.key === 'ArrowRight') return '\x05';
   }
-  return merged;
-}
-
-export function rectToNativeGhosttyFrame(
-  rect: Pick<DOMRect, 'left' | 'bottom' | 'width' | 'height'>,
-  viewportHeight: number,
-): NativeGhosttyFrame {
-  return {
-    x: Math.round(rect.left),
-    y: Math.round(viewportHeight - rect.bottom),
-    width: Math.max(1, Math.round(rect.width)),
-    height: Math.max(1, Math.round(rect.height)),
-  };
-}
-
-export function nativeGhosttyKeyInputForEvent(
-  id: string,
-  event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'altKey' | 'ctrlKey' | 'shiftKey' | 'repeat' | 'getModifierState'>,
-  action: 'press' | 'release' = 'press',
-): NativeGhosttyKeyInput | null {
-  if (event.metaKey) return null;
-  const keyCode = MAC_KEY_CODES[event.code];
-  if (keyCode === undefined && event.key.length !== 1) return null;
-  const text = event.key.length === 1 ? event.key : '';
-  const unshifted = text.length === 1 ? text.toLowerCase().codePointAt(0) ?? 0 : 0;
-  return {
-    id,
-    action: action === 'press' && event.repeat ? 'repeat' : action,
-    keyCode: keyCode ?? 0,
-    text,
-    unshiftedCodepoint: unshifted,
-    shift: event.shiftKey,
-    ctrl: event.ctrlKey,
-    alt: event.altKey,
-    meta: event.metaKey,
-    caps: event.getModifierState('CapsLock'),
-  };
-}
-
-function readStoredStringList(key: string): string[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(key) ?? '[]');
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
-  } catch {
-    return [];
+  if (event.altKey && !event.metaKey) {
+    if (event.key === 'ArrowLeft') return '\x1bb';
+    if (event.key === 'ArrowRight') return '\x1bf';
   }
+  return null;
 }
 
 function pathBasename(input: string): string {
@@ -216,7 +68,7 @@ function pathBasename(input: string): string {
 
 function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
   return {
-    background: isDark ? '#101113' : '#f7f5f0',
+    background: isDark ? '#101113' : '#fbf9f4',
     foreground: isDark ? '#e8e3d8' : '#1f2328',
     cursor: '#10b981',
     selectionBackground: isDark ? '#2f4a43' : '#cfe9df',
@@ -238,56 +90,60 @@ function readStoredNumber(key: string, fallback: number): number {
   return Number.isFinite(value) ? value : fallback;
 }
 
-export default function CodexTerminalPanel({ visible, pageContext, onVisibleChange }: CodexTerminalPanelProps) {
+function isEditableEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
+}
+
+function clampBottomHeight(value: number): number {
+  const max = Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_RATIO);
+  return Math.max(MIN_BOTTOM_HEIGHT, Math.min(max, value));
+}
+
+function clampRightWidth(value: number): number {
+  const max = Math.floor(window.innerWidth * MAX_RIGHT_WIDTH_RATIO);
+  return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
+}
+
+export default function CodexTerminalPanel({ visible, pageContext, onDockSideChange, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
-  const [dockSide, setDockSide] = useState<DockSide>(() => (
+  const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
   const [sessions, setSessions] = useState<CodexTerminalSessionSummary[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => (
     localStorage.getItem(CODEX_TERMINAL_ACTIVE_SESSION_STORAGE_KEY) || null
   ));
-  const [bottomHeight, setBottomHeight] = useState(() => readStoredNumber(CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY, 300));
-  const [rightWidth, setRightWidth] = useState(() => readStoredNumber(CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY, 460));
-  const [newSessionCwd, setNewSessionCwd] = useState(() => localStorage.getItem(CODEX_TERMINAL_NEW_CWD_STORAGE_KEY) ?? '');
-  const [cwdHistory, setCwdHistory] = useState(() => readStoredStringList(CODEX_TERMINAL_CWD_HISTORY_STORAGE_KEY));
+  const [bottomHeight, setBottomHeight] = useState(() => clampBottomHeight(readStoredNumber(CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY, DEFAULT_BOTTOM_HEIGHT)));
+  const [rightWidth, setRightWidth] = useState(() => clampRightWidth(readStoredNumber(CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY, DEFAULT_RIGHT_WIDTH)));
   const [editingTitle, setEditingTitle] = useState('');
-  const [attachStatus, setAttachStatus] = useState<string | null>(null);
-  const [nativeGhosttyMode, setNativeGhosttyMode] = useState<NativeGhosttyMode>('checking');
-  const [nativeGhosttyError, setNativeGhosttyError] = useState<string | null>(null);
-  const [nativeSessions, setNativeSessions] = useState<CodexTerminalSessionSummary[]>([]);
-  const [nativeReplayText, setNativeReplayText] = useState('');
+  const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
+  const [isResizing, setIsResizing] = useState(false);
   const panelRef = useRef<HTMLDivElement | null>(null);
-  const terminalViewportRef = useRef<HTMLDivElement | null>(null);
-  const nativeInputRef = useRef<HTMLDivElement | null>(null);
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
-  const nativeGhosttyAttachedRef = useRef(new Set<string>());
+  const autoAttachedContextRef = useRef(new Set<string>());
   const liveContextUpdateRef = useRef<number | null>(null);
 
-  const usingNativeGhostty = nativeGhosttyMode === 'available';
+  const updateDockSide = useCallback((nextDockSide: CodexTerminalDockSide) => {
+    setDockSide(nextDockSide);
+    onDockSideChange?.(nextDockSide);
+  }, [onDockSideChange]);
   const activeSession = useMemo(
-    () => {
-      const list = usingNativeGhostty ? nativeSessions : sessions;
-      return list.find((session) => session.id === activeSessionId) ?? list[0] ?? null;
-    },
-    [activeSessionId, nativeSessions, sessions, usingNativeGhostty],
+    () => sessions.find((session) => session.id === activeSessionId) ?? sessions[0] ?? null,
+    [activeSessionId, sessions],
   );
-  const visibleSessions = usingNativeGhostty ? nativeSessions : sessions;
+  const visibleSessions = sessions;
 
   const refreshSessions = useCallback(async () => {
     const next = await window.codexTerminalAPI?.list();
     if (!next) return;
-    const nextPtySessions = next.filter((session) => session.engine !== 'nativeGhostty');
-    const nextNativeSessions = next.filter((session) => session.engine === 'nativeGhostty');
-    const preferredSessions = nativeGhosttyMode === 'available' ? nextNativeSessions : nextPtySessions;
-    setSessions(nextPtySessions);
-    setNativeSessions(nextNativeSessions);
-    setCwdHistory((current) => mergeCodexTerminalCwdHistory(current, next.map((session) => session.cwd)));
-    setActiveSessionId((current) => current && preferredSessions.some((session) => session.id === current)
+    setSessions(next);
+    setActiveSessionId((current) => current && next.some((session) => session.id === current)
       ? current
-      : preferredSessions[0]?.id ?? null);
-  }, [nativeGhosttyMode]);
+      : next[0]?.id ?? null);
+  }, []);
 
   const fitActiveTerminal = useCallback(() => {
     if (!activeSessionId) return;
@@ -301,29 +157,23 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
     }
   }, [activeSessionId]);
 
-  const createSession = useCallback(async (input?: { cwd?: string; title?: string }) => {
-    const cwd = input?.cwd ?? (newSessionCwd.trim() || undefined);
-    if (nativeGhosttyMode === 'available') {
-      const session = await window.codexTerminalAPI?.create({
-        title: input?.title ?? `Codex ${nativeSessions.length + 1}`,
-        cwd: cwd ?? activeSession?.cwd,
-        nativeGhostty: true,
-      });
-      if (!session) return;
-      setNativeSessions((current) => mergeCodexTerminalSessions(current, [session]));
-      setCwdHistory((current) => mergeCodexTerminalCwdHistory(current, [session.cwd]));
-      setActiveSessionId(session.id);
-      return;
-    }
+  const focusActiveTerminal = useCallback(() => {
+    if (!activeSessionId) return;
+    const handle = terminalHandlesRef.current.get(activeSessionId);
+    handle?.term.focus();
+  }, [activeSessionId]);
+
+  const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean }) => {
     const session = await window.codexTerminalAPI?.create({
       title: input?.title ?? `Codex ${sessions.length + 1}`,
-      cwd,
+      cwd: input?.cwd,
+      auto: input?.auto,
     });
     if (!session) return;
     setSessions((current) => mergeCodexTerminalSessions(current, [session]));
-    setCwdHistory((current) => mergeCodexTerminalCwdHistory(current, [session.cwd]));
     setActiveSessionId(session.id);
-  }, [activeSession?.cwd, nativeGhosttyMode, nativeSessions.length, newSessionCwd, sessions.length]);
+    window.setTimeout(() => terminalHandlesRef.current.get(session.id)?.term.focus(), 80);
+  }, [sessions.length]);
 
   useEffect(() => {
     void refreshSessions();
@@ -354,52 +204,14 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
   }, [rightWidth]);
 
   useEffect(() => {
-    localStorage.setItem(CODEX_TERMINAL_NEW_CWD_STORAGE_KEY, newSessionCwd);
-  }, [newSessionCwd]);
-
-  useEffect(() => {
-    localStorage.setItem(CODEX_TERMINAL_CWD_HISTORY_STORAGE_KEY, JSON.stringify(cwdHistory));
-  }, [cwdHistory]);
-
-  useEffect(() => {
     setEditingTitle(activeSession?.title ?? '');
   }, [activeSession?.id, activeSession?.title]);
 
   useEffect(() => {
-    if (!usingNativeGhostty || !activeSession?.restored) {
-      setNativeReplayText('');
-      return;
+    if (visible && sessions.length === 0) {
+      void createSession({ auto: true });
     }
-    let cancelled = false;
-    void window.codexTerminalAPI?.getBuffer(activeSession.id).then((buffer) => {
-      if (!cancelled) setNativeReplayText(buffer ?? '');
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeSession?.id, activeSession?.restored, usingNativeGhostty]);
-
-  useEffect(() => {
-    if (visible && nativeGhosttyMode === 'available' && nativeSessions.length === 0) {
-      void createSession();
-      return;
-    }
-    if (visible && nativeGhosttyMode === 'unavailable' && sessions.length === 0) {
-      void createSession();
-    }
-  }, [createSession, nativeGhosttyMode, nativeSessions.length, sessions.length, visible]);
-
-  useEffect(() => {
-    let cancelled = false;
-    void window.codexTerminalAPI?.nativeGhosttyHostStatus().then((status) => {
-      if (cancelled) return;
-      setNativeGhosttyMode(status?.ok ? 'available' : 'unavailable');
-      setNativeGhosttyError(status?.ok ? null : status?.error ?? 'Ghostty native host bridge is unavailable.');
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [createSession, sessions.length, visible]);
 
   useEffect(() => {
     const offData = window.codexTerminalAPI?.onData(({ id, data }) => {
@@ -416,28 +228,33 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
       setSessions((current) => current.map((item) => item.id === session.id ? session : item));
     });
     const offSessionsChanged = window.codexTerminalAPI?.onSessionsChanged((nextSessions) => {
-      const nextPtySessions = nextSessions.filter((session) => session.engine !== 'nativeGhostty');
-      const nextNativeSessions = nextSessions.filter((session) => session.engine === 'nativeGhostty');
-      const preferredSessions = nativeGhosttyMode === 'available' ? nextNativeSessions : nextPtySessions;
-      setSessions(nextPtySessions);
-      setNativeSessions(nextNativeSessions);
-      setCwdHistory((current) => mergeCodexTerminalCwdHistory(current, nextSessions.map((session) => session.cwd)));
-      setActiveSessionId((current) => current && preferredSessions.some((session) => session.id === current)
+      setSessions(nextSessions);
+      setActiveSessionId((current) => current && nextSessions.some((session) => session.id === current)
         ? current
-        : preferredSessions[0]?.id ?? null);
+        : nextSessions[0]?.id ?? null);
     });
     return () => {
       offData?.();
       offExit?.();
       offSessionsChanged?.();
     };
-  }, [nativeGhosttyMode]);
+  }, []);
 
   useEffect(() => {
-    const handleResize = () => fitActiveTerminal();
+    const handleResize = () => {
+      setBottomHeight((current) => clampBottomHeight(current));
+      setRightWidth((current) => clampRightWidth(current));
+      fitActiveTerminal();
+    };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, [fitActiveTerminal]);
+
+  useEffect(() => {
+    for (const handle of terminalHandlesRef.current.values()) {
+      handle.term.options.theme = terminalTheme(theme.isDark);
+    }
+  }, [theme.isDark]);
 
   useEffect(() => {
     const timer = window.setTimeout(fitActiveTerminal, 60);
@@ -445,18 +262,47 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
   }, [dockSide, fitActiveTerminal, visible]);
 
   useEffect(() => {
+    if (!visible) return;
+    const timer = window.setTimeout(() => {
+      fitActiveTerminal();
+      focusActiveTerminal();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [activeSessionId, fitActiveTerminal, focusActiveTerminal, visible]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (!visible || !event.metaKey || event.key.toLowerCase() !== 't') return;
-      event.preventDefault();
-      void createSession();
+      if (!visible || !event.metaKey) return;
+      if (event.key.toLowerCase() === 'c' && activeSessionId) {
+        const selection = terminalHandlesRef.current.get(activeSessionId)?.term.getSelection() ?? '';
+        if (selection) {
+          event.preventDefault();
+          event.stopPropagation();
+          void window.codexTerminalAPI?.writeClipboardText(selection);
+          return;
+        }
+      }
+      if (event.key.toLowerCase() === 'v' && activeSessionId && !isEditableEventTarget(event.target)) {
+        event.preventDefault();
+        event.stopPropagation();
+        void window.codexTerminalAPI?.readClipboardText().then((text) => {
+          if (text) void window.codexTerminalAPI?.input(activeSessionId, text);
+        });
+        return;
+      }
+      if (event.key.toLowerCase() === 't') {
+        event.preventDefault();
+        void createSession();
+      }
     };
     window.addEventListener('keydown', handleKeyDown, true);
     return () => window.removeEventListener('keydown', handleKeyDown, true);
-  }, [createSession, usingNativeGhostty, visible]);
+  }, [activeSessionId, createSession, visible]);
 
   const setTerminalHost = useCallback((sessionId: string, element: HTMLDivElement | null) => {
-    if (nativeGhosttyMode === 'available' || !element || terminalHandlesRef.current.has(sessionId)) return;
+    if (!element || terminalHandlesRef.current.has(sessionId)) return;
     const fit = new FitAddon();
+    const webLinks = new WebLinksAddon();
     const term = new Terminal({
       cursorBlink: true,
       convertEol: true,
@@ -467,8 +313,17 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
       theme: terminalTheme(theme.isDark),
     });
     term.loadAddon(fit);
+    term.loadAddon(webLinks);
     term.open(element);
     terminalHandlesRef.current.set(sessionId, { term, fit });
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== 'keydown') return true;
+      const sequence = nativeTerminalNavigationSequence(event);
+      if (!sequence) return true;
+      event.preventDefault();
+      void window.codexTerminalAPI?.input(sessionId, sequence);
+      return false;
+    });
     void window.codexTerminalAPI?.getBuffer(sessionId).then((buffer) => {
       if (buffer && terminalHandlesRef.current.get(sessionId)?.term === term) {
         term.write(buffer);
@@ -485,96 +340,36 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
     window.setTimeout(() => {
       fit.fit();
       void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
+      if (sessionId === activeSessionId) term.focus();
     }, 30);
-  }, [nativeGhosttyMode, theme.isDark]);
-
-  const currentNativeGhosttyFrame = useCallback((): NativeGhosttyFrame | null => {
-    const element = terminalViewportRef.current;
-    if (!element) return null;
-    const rect = element.getBoundingClientRect();
-    if (rect.width < 20 || rect.height < 20) return null;
-    return rectToNativeGhosttyFrame(rect, window.innerHeight);
-  }, []);
-
-  const updateNativeGhosttyFrame = useCallback(async () => {
-    if (!activeSessionId || !nativeGhosttyAttachedRef.current.has(activeSessionId)) return;
-    const frame = currentNativeGhosttyFrame();
-    if (!frame) return;
-    await window.codexTerminalAPI?.nativeGhosttyUpdateFrame({ id: activeSessionId, ...frame });
-  }, [activeSessionId, currentNativeGhosttyFrame]);
-
-  const snapshotNativeGhostty = useCallback((sessionId: string) => {
-    if (!nativeGhosttyAttachedRef.current.has(sessionId)) return;
-    void window.codexTerminalAPI?.nativeGhosttySnapshot(sessionId);
-  }, []);
-
-  useEffect(() => {
-    if (nativeGhosttyMode !== 'available') return;
-    const handleResize = () => void updateNativeGhosttyFrame();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, [nativeGhosttyMode, updateNativeGhosttyFrame]);
-
-  useEffect(() => {
-    if (!visible || nativeGhosttyMode !== 'available') {
-      for (const id of nativeGhosttyAttachedRef.current) void window.codexTerminalAPI?.nativeGhosttyDetach(id);
-      nativeGhosttyAttachedRef.current.clear();
-      return;
-    }
-    if (!activeSession) return;
-    if (activeSession.restored || activeSession.exitedAt) return;
-
-    let cancelled = false;
-    const attach = () => {
-      const frame = currentNativeGhosttyFrame();
-      if (!frame) return;
-      const cwd = activeSession?.cwd ?? (newSessionCwd.trim() || undefined);
-      void window.codexTerminalAPI?.nativeGhosttyAttach({ id: activeSession.id, ...frame, cwd, command: 'codex' }).then((result) => {
-        if (cancelled) return;
-        if (result?.ok) {
-          nativeGhosttyAttachedRef.current.add(activeSession.id);
-          nativeInputRef.current?.focus();
-        }
-        if (!result?.ok) {
-          setNativeGhosttyMode('unavailable');
-          setNativeGhosttyError(result?.error ?? 'Ghostty native surface did not attach.');
-        }
-      });
-    };
-
-    const frame = window.requestAnimationFrame(attach);
-    return () => {
-      cancelled = true;
-      window.cancelAnimationFrame(frame);
-    };
-  }, [activeSession, currentNativeGhosttyFrame, nativeGhosttyMode, newSessionCwd, visible]);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => void updateNativeGhosttyFrame(), 30);
-    return () => window.clearTimeout(timer);
-  }, [bottomHeight, dockSide, rightWidth, updateNativeGhosttyFrame]);
-
-  useEffect(() => () => {
-    for (const id of nativeGhosttyAttachedRef.current) void window.codexTerminalAPI?.nativeGhosttyDetach(id);
-    nativeGhosttyAttachedRef.current.clear();
-  }, []);
+  }, [activeSessionId, theme.isDark]);
 
   const closeSession = useCallback(async (sessionId: string) => {
-    if (usingNativeGhostty) {
-      await window.codexTerminalAPI?.nativeGhosttySnapshot(sessionId);
-      await window.codexTerminalAPI?.nativeGhosttyDetach(sessionId);
-      nativeGhosttyAttachedRef.current.delete(sessionId);
-      await window.codexTerminalAPI?.kill(sessionId);
-      await refreshSessions();
-      return;
-    }
+    const remainingSessions = sessions.filter((session) => session.id !== sessionId);
     await window.codexTerminalAPI?.kill(sessionId);
     const handle = terminalHandlesRef.current.get(sessionId);
     handle?.term.dispose();
     terminalHandlesRef.current.delete(sessionId);
     pendingDataRef.current.delete(sessionId);
+    if (remainingSessions.length === 0) {
+      setActiveSessionId(null);
+      onVisibleChange(false);
+    } else if (activeSessionId === sessionId) {
+      setActiveSessionId(remainingSessions[0].id);
+    }
     await refreshSessions();
-  }, [refreshSessions, usingNativeGhostty]);
+  }, [activeSessionId, onVisibleChange, refreshSessions, sessions]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!visible || !event.metaKey || event.key.toLowerCase() !== 'w' || !activeSession) return;
+      event.preventDefault();
+      event.stopPropagation();
+      void closeSession(activeSession.id);
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [activeSession, closeSession, visible]);
 
   const restartSession = useCallback(async (session: CodexTerminalSessionSummary) => {
     await createSession({ cwd: session.cwd, title: session.title });
@@ -588,27 +383,31 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
     if (didRename) await refreshSessions();
   }, [activeSession, editingTitle, refreshSessions]);
 
-  const attachCurrentPage = useCallback(async () => {
-    if (!pageContext) return;
-    if (!activeSession) return;
+  useEffect(() => {
+    if (!visible || !pageContext || !activeSession) return;
     if (activeSession.restored || activeSession.exitedAt) return;
-    const result = await window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext);
-    if (!result?.ok) {
-      setAttachStatus(result?.error ?? 'Could not attach page context.');
-      return;
-    }
-    if (usingNativeGhostty && result.prompt) {
-      const sent = await window.codexTerminalAPI?.nativeGhosttySendText(activeSession.id, result.prompt);
-      if (!sent?.ok) {
-        setAttachStatus(sent?.error ?? 'Attached page, but could not send context prompt to Ghostty.');
+    const sourcePath = pageContext.path || 'unknown';
+    const hasLiveAttachment = activeSession.attachedContexts.some((context) => context.sourcePath === sourcePath);
+    if (hasLiveAttachment) return;
+    const autoAttachKey = `${activeSession.id}:${sourcePath}`;
+    if (autoAttachedContextRef.current.has(autoAttachKey)) return;
+    autoAttachedContextRef.current.add(autoAttachKey);
+
+    let cancelled = false;
+    void window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext, { notifyTerminal: false }).then(async (result) => {
+      if (cancelled) return;
+      if (!result?.ok) {
+        autoAttachedContextRef.current.delete(autoAttachKey);
+        setTerminalStatus(result?.error ?? 'Could not update current document context.');
         return;
       }
-      window.setTimeout(() => snapshotNativeGhostty(activeSession.id), 1200);
-    }
-    setAttachStatus(`Attached live context ${result.filePath}`);
-    await refreshSessions();
-    window.setTimeout(() => setAttachStatus(null), 3600);
-  }, [activeSession, pageContext, refreshSessions, snapshotNativeGhostty, usingNativeGhostty]);
+      await refreshSessions();
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSession, pageContext, refreshSessions, visible]);
 
   useEffect(() => {
     if (liveContextUpdateRef.current !== null) {
@@ -621,9 +420,9 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
 
     liveContextUpdateRef.current = window.setTimeout(() => {
       liveContextUpdateRef.current = null;
-      void window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext).then((result) => {
+      void window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext, { notifyTerminal: false }).then((result) => {
         if (!result?.ok) {
-          setAttachStatus(result?.error ?? 'Could not refresh live context.');
+          setTerminalStatus(result?.error ?? 'Could not refresh current document context.');
         }
       });
     }, LIVE_CONTEXT_UPDATE_DELAY_MS);
@@ -636,39 +435,27 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
     };
   }, [activeSession, pageContext]);
 
-  const handleNativeGhosttyKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!activeSession) return;
-    if (activeSession.restored || activeSession.exitedAt) return;
-    const input = nativeGhosttyKeyInputForEvent(activeSession.id, event.nativeEvent, 'press');
-    if (!input) return;
-    event.preventDefault();
-    void window.codexTerminalAPI?.nativeGhosttySendKey(input);
-    window.setTimeout(() => snapshotNativeGhostty(activeSession.id), 300);
-  }, [activeSession, snapshotNativeGhostty]);
-
-  const handleNativeGhosttyKeyUp = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (!activeSession) return;
-    if (activeSession.restored || activeSession.exitedAt) return;
-    const input = nativeGhosttyKeyInputForEvent(activeSession.id, event.nativeEvent, 'release');
-    if (!input) return;
-    event.preventDefault();
-    void window.codexTerminalAPI?.nativeGhosttySendKey(input);
-  }, [activeSession]);
-
   const panelSize: CSSProperties = dockSide === 'bottom'
     ? { height: `${bottomHeight}px`, minHeight: `${MIN_BOTTOM_HEIGHT}px`, width: '100%' }
-    : { position: 'absolute', top: 0, right: 0, bottom: 0, width: `${rightWidth}px`, minWidth: `${MIN_RIGHT_WIDTH}px`, zIndex: 18 };
-  const attachedContexts = activeSession?.attachedContexts ?? [];
-  const activeStatus = usingNativeGhostty
-    ? activeSession?.restored ? 'Replaying' : activeSession?.exitedAt ? 'Exited' : activeSession ? 'Ghostty' : 'Idle'
-    : activeSession?.restored ? 'Replaying' : activeSession?.exitedAt ? 'Exited' : activeSession ? 'Running' : 'Idle';
+    : { height: '100%', width: `${rightWidth}px`, minWidth: `${MIN_RIGHT_WIDTH}px` };
+  const activeCwd = activeSession?.cwd ?? '';
+  const terminalBackground = theme.isDark ? '#101113' : '#fbf9f4';
+  const terminalChrome = theme.isDark ? '#15181e' : '#f5f4f2';
+  const terminalBorder = theme.isDark ? '#2a2d35' : '#e3e0db';
+  const terminalSoftBorder = theme.isDark ? '#242832' : '#e3e0db';
+  const terminalMutedText = theme.isDark ? '#8a8f99' : '#6b6b6b';
 
   const startResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
+    setIsResizing(true);
     const startX = event.clientX;
     const startY = event.clientY;
     const startBottomHeight = bottomHeight;
     const startRightWidth = rightWidth;
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
+    document.body.style.cursor = dockSide === 'bottom' ? 'row-resize' : 'col-resize';
+    document.body.style.userSelect = 'none';
     const onMove = (moveEvent: MouseEvent) => {
       if (dockSide === 'bottom') {
         const max = Math.floor(window.innerHeight * MAX_BOTTOM_HEIGHT_RATIO);
@@ -681,49 +468,69 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
     const onUp = () => {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
+      setIsResizing(false);
       window.setTimeout(fitActiveTerminal, 20);
-      window.setTimeout(() => void updateNativeGhosttyFrame(), 20);
     };
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
-  }, [bottomHeight, dockSide, fitActiveTerminal, rightWidth, updateNativeGhosttyFrame]);
+  }, [bottomHeight, dockSide, fitActiveTerminal, rightWidth]);
 
   return (
     <div
       ref={panelRef}
       style={{
         ...panelSize,
+        position: 'relative',
         display: visible ? 'flex' : 'none',
         flexDirection: 'column',
         flexShrink: 0,
         minWidth: 0,
         minHeight: 0,
-        backgroundColor: theme.isDark ? '#101113' : '#f7f5f0',
-        borderTop: dockSide === 'bottom' ? `1px solid ${theme.border}` : undefined,
-        borderLeft: dockSide === 'right' ? `1px solid ${theme.border}` : undefined,
-        boxShadow: theme.isDark ? '0 -12px 28px rgba(0,0,0,0.22)' : '0 -12px 28px rgba(0,0,0,0.08)',
+        backgroundColor: terminalBackground,
+        borderTop: dockSide === 'bottom' ? `1px solid ${terminalBorder}` : undefined,
+        borderLeft: dockSide === 'right' ? `1px solid ${terminalBorder}` : undefined,
+        boxShadow: theme.isDark ? '0 -12px 32px rgba(0,0,0,0.26)' : '0 -12px 28px rgba(0,0,0,0.08)',
       }}
     >
       <div
         onMouseDown={startResize}
+        title={dockSide === 'bottom' ? 'Resize terminal height' : 'Resize terminal width'}
         style={{
           position: 'absolute',
-          top: dockSide === 'bottom' ? '-4px' : 0,
-          left: dockSide === 'right' ? '-4px' : 0,
-          width: dockSide === 'right' ? '7px' : '100%',
-          height: dockSide === 'bottom' ? '7px' : '100%',
+          top: dockSide === 'bottom' ? '-5px' : 0,
+          left: dockSide === 'right' ? '-5px' : 0,
+          width: dockSide === 'right' ? '9px' : '100%',
+          height: dockSide === 'bottom' ? '9px' : '100%',
           cursor: dockSide === 'bottom' ? 'row-resize' : 'col-resize',
-          zIndex: 2,
+          zIndex: 4,
+          background: isResizing
+            ? (theme.isDark ? 'rgba(16,185,129,0.18)' : 'rgba(16,185,129,0.14)')
+            : 'transparent',
         }}
       />
       <div
         style={{
-          height: '34px',
+          position: 'absolute',
+          top: dockSide === 'bottom' ? 0 : undefined,
+          left: dockSide === 'right' ? 0 : undefined,
+          width: dockSide === 'right' ? '1px' : '100%',
+          height: dockSide === 'bottom' ? '1px' : '100%',
+          backgroundColor: isResizing ? '#10b981' : terminalSoftBorder,
+          pointerEvents: 'none',
+          zIndex: 3,
+        }}
+      />
+      <div
+        style={{
+          height: '36px',
           display: 'flex',
           alignItems: 'center',
-          gap: '6px',
-          padding: '0 8px',
-          borderBottom: `1px solid ${theme.border}`,
+          gap: '7px',
+          padding: '0 10px',
+          borderBottom: `1px solid ${terminalSoftBorder}`,
+          backgroundColor: terminalChrome,
           flexShrink: 0,
           overflowX: 'auto',
           overflowY: 'hidden',
@@ -732,37 +539,78 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
         {visibleSessions.map((session) => {
           const active = session.id === activeSession?.id;
           return (
-            <button
+            <div
               key={session.id}
-              type="button"
-              onClick={() => setActiveSessionId(session.id)}
               style={{
                 height: '24px',
-                maxWidth: '150px',
+                maxWidth: '168px',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: '6px',
-                padding: '0 8px',
-                borderRadius: '5px',
-                border: `1px solid ${active ? 'rgba(16,185,129,0.42)' : 'transparent'}`,
-                backgroundColor: active
-                  ? (theme.isDark ? 'rgba(16,185,129,0.16)' : 'rgba(16,185,129,0.12)')
-                  : 'transparent',
-                color: active ? theme.text : theme.textSecondary,
-                cursor: 'pointer',
-                fontSize: '11px',
-                fontWeight: 600,
-                flexShrink: 0,
                 overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
+                borderRadius: '6px',
+                border: `1px solid ${active ? (theme.isDark ? '#2f5f4b' : 'rgba(16,185,129,0.42)') : terminalSoftBorder}`,
+                backgroundColor: active
+                  ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)')
+                  : (theme.isDark ? '#171b22' : 'transparent'),
+                color: active ? theme.text : theme.textSecondary,
+                flexShrink: 0,
               }}
               title={`${session.title} — ${session.cwd}`}
             >
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: session.exitedAt ? '#6b7280' : '#10b981', flexShrink: 0 }} />
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{session.title}</span>
-              <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis' }}>{pathBasename(session.cwd)}</span>
-            </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveSessionId(session.id);
+                  window.setTimeout(() => terminalHandlesRef.current.get(session.id)?.term.focus(), 30);
+                }}
+                style={{
+                  height: '100%',
+                  minWidth: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '0 7px',
+                  border: 0,
+                  backgroundColor: 'transparent',
+                  color: 'inherit',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  overflow: 'hidden',
+                }}
+              >
+                <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: session.exitedAt ? '#6b7280' : '#10b981', flexShrink: 0 }} />
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{session.title}</span>
+                <span style={{ color: theme.textSecondary, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{pathBasename(session.cwd)}</span>
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void closeSession(session.id);
+                }}
+                title="Close session"
+                style={{
+                  width: '14px',
+                  height: '14px',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  marginRight: '5px',
+                  padding: 0,
+                  border: 0,
+                  borderRadius: '4px',
+                  backgroundColor: 'transparent',
+                  color: terminalMutedText,
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  lineHeight: 1,
+                  flexShrink: 0,
+                }}
+              >
+                ×
+              </button>
+            </div>
           );
         })}
         <button type="button" onClick={() => void createSession()} title="New Codex terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0 }}>
@@ -782,9 +630,9 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
               width: dockSide === 'right' ? '92px' : '140px',
               height: '24px',
               flexShrink: 0,
-              border: `1px solid ${theme.border}`,
-              borderRadius: '5px',
-              backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)',
+              border: `1px solid ${terminalSoftBorder}`,
+              borderRadius: '6px',
+              backgroundColor: theme.isDark ? '#171b22' : 'rgba(0,0,0,0.035)',
               color: theme.text,
               fontSize: '11px',
               fontWeight: 600,
@@ -793,171 +641,63 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
             }}
           />
         )}
-        <span
-          title={activeSession?.transcriptPath}
-          style={{
-            color: activeSession?.exitedAt ? theme.textSecondary : '#10b981',
-            fontSize: '11px',
-            fontWeight: 600,
-            whiteSpace: 'nowrap',
-            flexShrink: 0,
-          }}
-        >
-          {activeStatus}
-        </span>
         <div style={{ flex: 1, minWidth: '12px' }} />
-        {attachStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{attachStatus}</span>}
-        {attachedContexts.length > 0 && (
-          <span
-            title={attachedContexts.map((context) => `${context.title} — ${context.sourcePath}`).join('\n')}
-            style={{
-              color: theme.textSecondary,
-              fontSize: '11px',
-              whiteSpace: 'nowrap',
-            }}
-          >
-            {attachedContexts.length} live page{attachedContexts.length === 1 ? '' : 's'}
-          </span>
-        )}
-        <input
-          list="codex-terminal-cwd-history"
-          value={newSessionCwd}
-          onChange={(event) => setNewSessionCwd(event.target.value)}
-          placeholder={activeSession?.cwd ?? 'Working directory'}
-          title={activeSession ? `Active cwd: ${activeSession.cwd}` : 'Working directory for new Codex terminals'}
-          style={{
-            width: dockSide === 'right' ? '132px' : '220px',
-            height: '24px',
-            minWidth: 0,
-            border: `1px solid ${theme.border}`,
-            borderRadius: '5px',
-            backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)',
-            color: theme.textSecondary,
-            fontSize: '11px',
-            padding: '0 7px',
-            outline: 'none',
-            flexShrink: 0,
-          }}
-        />
-        <datalist id="codex-terminal-cwd-history">
-          {cwdHistory.map((cwd) => <option key={cwd} value={cwd}>{cwd}</option>)}
-        </datalist>
-        {activeSession && (
-          <button type="button" onClick={() => setNewSessionCwd(activeSession.cwd)} title="Use active session cwd for new terminals" style={toolbarButtonStyle(theme)}>
-            Cwd
-          </button>
-        )}
-        <button type="button" onClick={() => void attachCurrentPage()} disabled={!pageContext || !activeSession || Boolean(activeSession.exitedAt) || Boolean(activeSession.restored)} title="Attach current Field Theory page as live context" style={toolbarButtonStyle(theme)}>
-          Attach Page
-        </button>
+        {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{terminalStatus}</span>}
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
           <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active Codex terminal" style={toolbarButtonStyle(theme)}>
             Restart
           </button>
         )}
-        <button type="button" onClick={() => setDockSide(dockSide === 'bottom' ? 'right' : 'bottom')} title="Move terminal panel" style={toolbarButtonStyle(theme)}>
-          {dockSide === 'bottom' ? 'Right' : 'Bottom'}
+        <button
+          type="button"
+          aria-label={dockSide === 'bottom' ? 'Dock terminal right' : 'Dock terminal bottom'}
+          onClick={() => updateDockSide(dockSide === 'bottom' ? 'right' : 'bottom')}
+          title={dockSide === 'bottom' ? 'Dock terminal right' : 'Dock terminal bottom'}
+          style={toolbarButtonStyle(theme)}
+        >
+          {dockSide === 'bottom' ? '▐' : '▁'}
         </button>
-        {activeSession && (
-          <button type="button" onClick={() => void closeSession(activeSession.id)} title="Close active Codex terminal" style={toolbarButtonStyle(theme)}>
-            Close
-          </button>
-        )}
         <button type="button" onClick={() => onVisibleChange(false)} title="Hide terminal panel" style={toolbarButtonStyle(theme)}>
           Hide
         </button>
       </div>
-      {attachedContexts.length > 0 && (
-        <div
-          style={{
-            display: 'flex',
-            gap: '6px',
-            alignItems: 'center',
-            padding: '6px 8px',
-            borderBottom: `1px solid ${theme.border}`,
-            overflowX: 'auto',
-            flexShrink: 0,
-          }}
-        >
-          {attachedContexts.slice(-8).map((context) => (
-            <span
-              key={`${context.filePath}:${context.attachedAt}`}
-              title={`${context.title}\n${context.sourcePath}\n${context.filePath}`}
-              style={{
-                maxWidth: '220px',
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                border: `1px solid ${theme.border}`,
-                borderRadius: '5px',
-                padding: '2px 7px',
-                color: theme.textSecondary,
-                backgroundColor: theme.isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)',
-                fontSize: '11px',
-                flexShrink: 0,
-              }}
-            >
-              {context.title}
-            </span>
-          ))}
-        </div>
-      )}
-      <div ref={terminalViewportRef} style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
-        {nativeGhosttyMode === 'checking' && (
-          <div style={{ color: theme.textSecondary, fontSize: '12px', padding: '12px' }}>
-            Checking Ghostty...
-          </div>
-        )}
-        {usingNativeGhostty && (
-          <div
-            ref={nativeInputRef}
-            tabIndex={0}
-            title="Native Ghostty terminal surface"
-            onClick={() => nativeInputRef.current?.focus()}
-            onKeyDown={handleNativeGhosttyKeyDown}
-            onKeyUp={handleNativeGhosttyKeyUp}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              backgroundColor: theme.isDark ? '#101113' : '#f7f5f0',
-              outline: 'none',
-            }}
-          />
-        )}
-        {usingNativeGhostty && activeSession?.restored && (
-          <pre
-            style={{
-              position: 'absolute',
-              inset: 0,
-              margin: 0,
-              padding: '10px 12px',
-              overflow: 'auto',
-              whiteSpace: 'pre-wrap',
-              wordBreak: 'break-word',
-              color: theme.text,
-              backgroundColor: theme.isDark ? '#101113' : '#f7f5f0',
-              fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
-              fontSize: '12px',
-              lineHeight: 1.35,
-            }}
-          >
-            {nativeReplayText || 'No saved Ghostty snapshot for this session.'}
-          </pre>
-        )}
-        {nativeGhosttyMode === 'unavailable' && nativeGhosttyError && sessions.length === 0 && (
-          <div style={{ color: theme.textSecondary, fontSize: '12px', padding: '12px' }}>
-            {nativeGhosttyError}
-          </div>
-        )}
-        {nativeGhosttyMode === 'unavailable' && sessions.map((session) => (
+      <div
+        style={{
+          height: '32px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '9px',
+          padding: '0 12px',
+          borderBottom: `1px solid ${terminalSoftBorder}`,
+          backgroundColor: terminalChrome,
+          color: terminalMutedText,
+          flexShrink: 0,
+          overflow: 'hidden',
+          fontSize: '11px',
+          fontWeight: 600,
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
+          {activeCwd || '~/dev/fieldtheory'}
+        </span>
+        <div style={{ flex: 1, minWidth: '8px' }} />
+      </div>
+      <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
+        <style>
+          {`.codex-terminal-host .xterm .xterm-viewport { right: -${TERMINAL_SCROLLBAR_LANE}px; scrollbar-gutter: stable; }`}
+        </style>
+        {sessions.map((session) => (
           <div
             key={session.id}
+            className="codex-terminal-host"
             ref={(element) => setTerminalHost(session.id, element)}
             style={{
               position: 'absolute',
-              inset: 0,
+              top: `${TERMINAL_GUTTER_TOP}px`,
+              right: `${TERMINAL_GUTTER_RIGHT}px`,
+              bottom: `${TERMINAL_GUTTER_BOTTOM}px`,
+              left: `${TERMINAL_GUTTER_LEFT}px`,
               display: session.id === activeSession?.id ? 'block' : 'none',
-              padding: '8px',
             }}
           />
         ))}

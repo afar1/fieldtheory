@@ -16,10 +16,8 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   buildCommandDirectoriesForLauncher,
-  buildLauncherAppItems,
   buildLauncherFileItems,
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
-  getLauncherAppSearchQuery,
   getLauncherFileSearchQuery,
   getLauncherInvocationVisibilityPolicy,
   isLauncherRootSearchKindEnabled,
@@ -50,7 +48,6 @@ import {
   resolveLauncherDirectoryNamespace,
   resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
-  shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherLibraryMarkdownItem,
   shouldIncludeLauncherRecentFile,
   shouldExitLauncherClipboardSearch,
@@ -58,6 +55,8 @@ import {
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
   shouldTraceLauncherRendererEvent,
+  scoreLauncherText,
+  warmLauncherSearchableItemCache,
   SQUARES_ACTION_DEFS,
   SQUARES_ACTION_IDS,
   DEFAULT_SQUARES_HOTKEYS,
@@ -109,6 +108,9 @@ describe('launcher visible result equality', () => {
 describe('launcher renderer tracing', () => {
   it('skips fast filter result traces but keeps slow and non-filter traces', () => {
     expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5 })).toBe(false);
+    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 1 })).toBe(true);
+    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 2 })).toBe(true);
+    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 3 })).toBe(false);
     expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 8 })).toBe(true);
     expect(shouldTraceLauncherRendererEvent('filter-results')).toBe(true);
     expect(shouldTraceLauncherRendererEvent('invoke-item', { elapsedMs: 2.5 })).toBe(true);
@@ -391,11 +393,11 @@ describe('balanceLauncherNormalModeMatches', () => {
 
     expect(results.map(result => result.id)).toEqual([
       'command',
+      'action',
       'recent-page',
       'library-page',
       'bookmark-post',
       'bookmark-author',
-      'action',
     ]);
   });
 
@@ -410,18 +412,6 @@ describe('balanceLauncherNormalModeMatches', () => {
       'older-command',
       'recent-command-twin',
       'wiki-page',
-    ]);
-  });
-
-  it('keeps command matches ahead of app matches while typing', () => {
-    const results = balanceLauncherNormalModeMatches([
-      { item: item('newer-app', 'app', undefined, 300), score: 1000 },
-      { item: item('older-command', 'command', undefined, 100), score: 800 },
-    ]);
-
-    expect(results.map(result => result.id)).toEqual([
-      'older-command',
-      'newer-app',
     ]);
   });
 
@@ -461,37 +451,6 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
   });
 
-  it('keeps app matches ahead of newer recent files', () => {
-    const results = balanceLauncherNormalModeMatches([
-      { item: item('recent-safari-note', 'recent-file', 300), score: 1000 },
-      { item: item('safari-app', 'app', undefined, 100), score: 800 },
-      { item: item('wiki-safari-page', 'wiki-page', undefined, 200), score: 900 },
-    ]);
-
-    expect(results.map(result => result.id)).toEqual([
-      'safari-app',
-      'recent-safari-note',
-      'wiki-safari-page',
-    ]);
-  });
-
-  it('caps app matches when an app result budget is supplied', () => {
-    const results = balanceLauncherNormalModeMatches([
-      { item: item('safari-app', 'app', undefined, 500), score: 1000 },
-      { item: item('slack-app', 'app', undefined, 400), score: 990 },
-      { item: item('settings-app', 'app', undefined, 300), score: 980 },
-      { item: item('search-command', 'command', undefined, 200), score: 700 },
-      { item: item('scratchpad-note', 'wiki-page', undefined, 100), score: 690 },
-    ], { maxAppResults: 2 });
-
-    expect(results.map(result => result.id)).toEqual([
-      'search-command',
-      'safari-app',
-      'slack-app',
-      'scratchpad-note',
-    ]);
-  });
-
   it('uses score when matching rows do not have recency', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('wiki-clipboard', 'wiki-page'), score: 1000 },
@@ -500,9 +459,9 @@ describe('balanceLauncherNormalModeMatches', () => {
     ]);
 
     expect(results.map(result => result.id)).toEqual([
+      'open-clipboard-history',
       'wiki-clipboard',
       'artifact-clipboard',
-      'open-clipboard-history',
     ]);
   });
 
@@ -530,13 +489,36 @@ describe('balanceLauncherNormalModeMatches', () => {
     );
   });
 
-  it('orders single-section command matches by newest file first', () => {
+  it('orders single-section command matches by strongest match first', () => {
     const results = balanceLauncherNormalModeMatches([
       { item: item('older-command', 'command', undefined, 100), score: 1000 },
       { item: item('newer-command', 'command', undefined, 200), score: 900 },
     ]);
 
-    expect(results.map(result => result.id)).toEqual(['newer-command', 'older-command']);
+    expect(results.map(result => result.id)).toEqual(['older-command', 'newer-command']);
+  });
+
+  it('keeps an exact typed command ahead of fuzzy command matches', () => {
+    const results = filterLauncherNormalModeItems([
+      {
+        id: 'cmd-inspect',
+        type: 'command' as const,
+        name: 'inspect',
+        displayName: 'Inspect',
+        keywords: ['inspect'],
+        lastUpdated: 100,
+      },
+      {
+        id: 'cmd-inspection-brief',
+        type: 'command' as const,
+        name: 'inspection-brief',
+        displayName: 'Inspection Brief',
+        keywords: ['inspection', 'brief'],
+        lastUpdated: 300,
+      },
+    ], 'inspect');
+
+    expect(results.map(result => result.id)).toEqual(['cmd-inspect', 'cmd-inspection-brief']);
   });
 
   it('keeps pinned command matches ahead of newer unpinned command matches', () => {
@@ -569,6 +551,104 @@ describe('balanceLauncherNormalModeMatches', () => {
     expect(results.map(result => result.id)).toEqual(
       Array.from({ length: LAUNCHER_NORMAL_MODE_MAX_RESULTS }, (_, index) => `recent-${LAUNCHER_NORMAL_MODE_MAX_RESULTS + 4 - index}`),
     );
+  });
+});
+
+describe('scoreLauncherText', () => {
+  it('scores token prefixes across launcher separators', () => {
+    expect(scoreLauncherText('River Shared Brief', 'sha')).toBeGreaterThan(scoreLauncherText('River Shared Brief', 'rsb'));
+    expect(scoreLauncherText('Library/River/shared brief.md', 'riv')).toBeGreaterThan(0);
+    expect(scoreLauncherText('Library_River.shared-brief', 'sha')).toBeGreaterThan(0);
+  });
+
+  it('does not fuzzy-match two-character queries', () => {
+    expect(scoreLauncherText('River Shared Brief', 'rs')).toBe(0);
+    expect(scoreLauncherText('River Shared Brief', 'br')).toBeGreaterThan(0);
+  });
+});
+
+describe('warmLauncherSearchableItemCache', () => {
+  it('returns the next warm index for bounded chunks', () => {
+    const items = Array.from({ length: 5 }, (_, index) => ({
+      id: `item-${index}`,
+      type: 'wiki-page',
+      name: `Item ${index}`,
+      displayName: `Item ${index}`,
+      keywords: [`keyword-${index}`],
+    }));
+
+    expect(warmLauncherSearchableItemCache(items, 0, 2)).toBe(2);
+    expect(warmLauncherSearchableItemCache(items, 2, 2)).toBe(4);
+    expect(warmLauncherSearchableItemCache(items, 4, 2)).toBe(5);
+  });
+});
+
+describe('filterLauncherNormalModeItems', () => {
+  it('keeps fuzzy matching for commands but not bulk markdown rows', () => {
+    const results = filterLauncherNormalModeItems([
+      {
+        id: 'command-alpha-beta',
+        type: 'command',
+        name: 'alpha beta',
+        displayName: 'Alpha Beta',
+        keywords: [],
+      },
+      {
+        id: 'wiki-alpha-beta',
+        type: 'wiki-page',
+        name: 'alpha beta',
+        displayName: 'Alpha Beta',
+        keywords: [],
+      },
+    ], 'abt');
+
+    expect(results.map(result => result.id)).toEqual(['command-alpha-beta']);
+  });
+
+  it('skips unpinned bulk markdown rows for one- and two-character queries', () => {
+    const results = filterLauncherNormalModeItems([
+      {
+        id: 'command-brief',
+        type: 'command',
+        name: 'brief',
+        displayName: 'Brief',
+        keywords: [],
+      },
+      {
+        id: 'wiki-brief',
+        type: 'wiki-page',
+        name: 'brief',
+        displayName: 'Brief',
+        keywords: [],
+      },
+      {
+        id: 'pinned-wiki-brief',
+        type: 'wiki-page',
+        name: 'brief pinned',
+        displayName: 'Brief Pinned',
+        keywords: [],
+        isPinned: true,
+      },
+    ], 'b');
+
+    expect(results.map(result => result.id)).toEqual(['command-brief', 'pinned-wiki-brief']);
+
+    expect(filterLauncherNormalModeItems([
+      {
+        id: 'command-brief',
+        type: 'command',
+        name: 'brief',
+        displayName: 'Brief',
+        keywords: [],
+      },
+      {
+        id: 'wiki-brief',
+        type: 'wiki-page',
+        name: 'brief',
+        displayName: 'Brief',
+        keywords: [],
+      },
+    ], 'br').map(result => result.id)).toEqual(['command-brief']);
   });
 });
 
@@ -710,87 +790,9 @@ describe('flattenLibraryRootsForLauncher', () => {
   });
 });
 
-describe('buildLauncherAppItems', () => {
-  it('builds app rows as root-search items with path and bundle keywords', () => {
-    const [item] = buildLauncherAppItems([
-      {
-        name: 'Safari',
-        displayName: 'Safari',
-        appPath: '/Applications/Safari.app',
-        bundleId: 'com.apple.Safari',
-        lastModified: 123,
-      },
-    ]);
-
-    expect(item).toEqual(expect.objectContaining({
-      id: 'app-/Applications/Safari.app',
-      type: 'app',
-      rootSearchKind: 'app',
-      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.app,
-      appPath: '/Applications/Safari.app',
-      bundleId: 'com.apple.Safari',
-      hotkeyDisplay: 'app',
-      lastUpdated: 123,
-    }));
-    expect(item.keywords).toEqual(expect.arrayContaining(['Safari', 'com.apple.Safari', '/Applications/Safari.app', 'Applications']));
-  });
-
-  it('detects explicit app searches without taking over normal app-name queries', () => {
-    expect(getLauncherAppSearchQuery('app safari')).toBe('safari');
-    expect(getLauncherAppSearchQuery('apps: terminal')).toBe('terminal');
-    expect(getLauncherAppSearchQuery('app')).toBeNull();
-    expect(getLauncherAppSearchQuery('app store')).toBe('store');
-  });
-
-  it('keeps normal app search focused on used apps and strong matches', () => {
-    const [safari, consoleApp, obscureUtility] = buildLauncherAppItems([
-      {
-        name: 'Safari',
-        displayName: 'Safari',
-        appPath: '/Applications/Safari.app',
-        bundleId: 'com.apple.Safari',
-        lastModified: 123,
-      },
-      {
-        name: 'Console',
-        displayName: 'Console',
-        appPath: '/System/Applications/Utilities/Console.app',
-        bundleId: 'com.apple.Console',
-        lastModified: 123,
-      },
-      {
-        name: 'Obscure Helper',
-        displayName: 'Obscure Helper',
-        appPath: '/Applications/Utilities/Obscure Helper.app',
-        bundleId: 'com.example.obscure-helper',
-        lastModified: 123,
-      },
-    ]);
-
-    expect(shouldIncludeLauncherAppInNormalSearch({ app: safari, query: 'sa' })).toBe(true);
-    expect(shouldIncludeLauncherAppInNormalSearch({ app: consoleApp, query: 'co' })).toBe(false);
-    expect(shouldIncludeLauncherAppInNormalSearch({ app: consoleApp, query: 'con' })).toBe(true);
-    expect(shouldIncludeLauncherAppInNormalSearch({
-      app: obscureUtility,
-      query: 'ob',
-      usage: { count: 2, lastUsedAt: 123 },
-    })).toBe(true);
-    expect(shouldIncludeLauncherAppInNormalSearch({
-      app: obscureUtility,
-      query: 'oh',
-      usage: { count: 2, lastUsedAt: 123 },
-    })).toBe(true);
-    expect(shouldIncludeLauncherAppInNormalSearch({ app: obscureUtility, query: 'oh' })).toBe(false);
-    expect(shouldIncludeLauncherAppInNormalSearch({
-      app: obscureUtility,
-      query: 'zz',
-      usage: { count: 2, lastUsedAt: 123 },
-    })).toBe(false);
-  });
-
+describe('launcher root search labels', () => {
   it('names the future root-search categories explicitly', () => {
     expect(Object.keys(LAUNCHER_ROOT_SEARCH_KIND_LABELS).sort()).toEqual([
-      'app',
       'calculator',
       'calendar',
       'contact',
@@ -810,12 +812,7 @@ describe('buildLauncherAppItems', () => {
 });
 
 describe('getLauncherNativeIconPathForItem', () => {
-  it('prefers app paths, then file paths, then directory paths for native launcher icons', () => {
-    expect(getLauncherNativeIconPathForItem({
-      appPath: '/Applications/Safari.app',
-      filePath: '/Users/tester/Notes.md',
-      directoryPath: '/Users/tester',
-    })).toBe('/Applications/Safari.app');
+  it('prefers file paths, then directory paths for native launcher icons', () => {
     expect(getLauncherNativeIconPathForItem({
       filePath: '/Users/tester/Notes.md',
       directoryPath: '/Users/tester',
@@ -830,14 +827,12 @@ describe('getLauncherNativeIconPathForItem', () => {
 describe('launcher root search settings', () => {
   it('normalizes missing and partial root-search kind settings', () => {
     expect(normalizeLauncherRootSearchEnabledKinds(null)).toEqual(DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS);
-    expect(normalizeLauncherRootSearchEnabledKinds({ app: false, file: true, contact: true })).toEqual({
+    expect(normalizeLauncherRootSearchEnabledKinds({ file: false, contact: true })).toEqual({
       ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
-      app: false,
-      file: true,
+      file: false,
       contact: true,
     });
-    expect(isLauncherRootSearchKindEnabled({ app: false }, 'app')).toBe(false);
-    expect(isLauncherRootSearchKindEnabled({ app: false }, 'file')).toBe(true);
+    expect(isLauncherRootSearchKindEnabled({ file: false }, 'file')).toBe(false);
   });
 
   it('compares normalized root-search settings so reloads can avoid render loops', () => {
@@ -846,12 +841,12 @@ describe('launcher root search settings', () => {
       normalizeLauncherRootSearchEnabledKinds(null),
     )).toBe(true);
     expect(areLauncherRootSearchEnabledKindsEqual(
-      { app: true },
-      { app: true, file: true },
+      { file: true },
+      { file: true },
     )).toBe(true);
     expect(areLauncherRootSearchEnabledKindsEqual(
-      { app: true },
-      { app: false },
+      { file: true },
+      { file: false },
     )).toBe(false);
   });
 });
@@ -1908,6 +1903,16 @@ describe('buildBuiltInLauncherActions', () => {
     }
   });
 
+  it('labels horizontal window spreading as a two-word action', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+
+    expect(actions.find((action) => action.actionId === 'horizontalSpread')).toEqual(expect.objectContaining({
+      name: 'spread horizontal',
+      displayName: 'Spread Horizontal',
+      keywords: expect.arrayContaining(['horizontal', 'spread horizontal']),
+    }));
+  });
+
   it('keeps Squares actions visible even when portable command visibility is disabled', () => {
     const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true, DEFAULT_SQUARES_HOTKEYS, false);
 
@@ -2029,5 +2034,50 @@ describe('buildBuiltInLauncherActions', () => {
       fieldTheoryActive: true,
       hasActiveLibraryFileContext: true,
     })).toBe(false);
+  });
+
+  it('prioritizes action second words in normal launcher results', () => {
+    const actions = buildBuiltInLauncherActions(DEFAULT_LAUNCHER_HOTKEYS, true);
+    const results = filterLauncherNormalModeItems(actions, 'horizontal');
+
+    expect(results[0]).toEqual(expect.objectContaining({
+      actionId: 'horizontalSpread',
+      displayName: 'Spread Horizontal',
+    }));
+  });
+
+  it('gives actions command-adjacent relevance when rows have no recency', () => {
+    const items = [
+      {
+        id: 'command-toggle-lines',
+        type: 'command' as const,
+        name: 'toggle lines',
+        displayName: 'Toggle Lines',
+        keywords: ['toggle lines'],
+      },
+      {
+        id: 'action-toggle-theme',
+        type: 'action' as const,
+        name: 'toggle theme',
+        displayName: 'Toggle Theme',
+        keywords: ['toggle theme'],
+        actionId: 'toggle-theme',
+      },
+      {
+        id: 'wiki-toggle',
+        type: 'wiki-page' as const,
+        name: 'toggle note',
+        displayName: 'Toggle Note',
+        keywords: ['toggle note'],
+      },
+    ];
+
+    const results = filterLauncherNormalModeItems(items, 'toggle');
+
+    expect(results.map(item => item.id)).toEqual([
+      'command-toggle-lines',
+      'action-toggle-theme',
+      'wiki-toggle',
+    ]);
   });
 });

@@ -127,7 +127,6 @@ export interface LauncherLibraryMarkdownItem {
 }
 
 export type LauncherRootSearchKind =
-  | 'app'
   | 'system-setting'
   | 'contact'
   | 'file'
@@ -144,7 +143,6 @@ export type LauncherRootSearchKind =
   | 'terminal-command';
 
 export const LAUNCHER_ROOT_SEARCH_KIND_LABELS: Record<LauncherRootSearchKind, string> = {
-  app: 'App',
   'system-setting': 'Setting',
   contact: 'Contact',
   file: 'File',
@@ -162,7 +160,6 @@ export const LAUNCHER_ROOT_SEARCH_KIND_LABELS: Record<LauncherRootSearchKind, st
 };
 
 export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSearchKind, boolean> = {
-  app: true,
   'system-setting': false,
   contact: false,
   file: true,
@@ -178,8 +175,6 @@ export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSear
   'system-command': false,
   'terminal-command': false,
 };
-
-export const LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT = 4;
 
 export type LauncherRootSearchEnabledKinds = Partial<Record<LauncherRootSearchKind, boolean>>;
 
@@ -211,35 +206,7 @@ export function areLauncherRootSearchEnabledKindsEqual(
     .every(kind => left[kind] === right[kind]);
 }
 
-export interface LauncherAppSource {
-  name: string;
-  displayName: string;
-  appPath: string;
-  bundleId?: string;
-  lastModified: number;
-}
-
-export interface LauncherAppItem extends LauncherSearchableItem, LauncherNormalModeItem {
-  id: string;
-  type: 'app';
-  rootSearchKind: 'app';
-  rootSearchLabel: string;
-  appPath: string;
-  bundleId?: string;
-  lastUpdated?: number;
-  hotkeyDisplay: string;
-}
-
-export interface LauncherAppVisibilityItem {
-  type?: string;
-  name: string;
-  displayName: string;
-  appPath?: string;
-  bundleId?: string;
-}
-
 export interface LauncherNativeIconPathCandidate {
-  appPath?: string;
   filePath?: string;
   directoryPath?: string;
 }
@@ -424,6 +391,8 @@ export function shouldTraceLauncherRendererEvent(
   details: Record<string, unknown> = {},
 ): boolean {
   if (event !== 'filter-results') return true;
+  const queryLength = details.queryLength;
+  if (typeof queryLength === 'number' && queryLength > 0 && queryLength <= 2) return true;
   const elapsedMs = details.elapsedMs;
   return typeof elapsedMs !== 'number' || elapsedMs >= LAUNCHER_FILTER_TRACE_MIN_ELAPSED_MS;
 }
@@ -508,7 +477,6 @@ export interface ScoredLauncherNormalModeItem<T extends LauncherNormalModeItem> 
 
 export interface LauncherNormalModeBalanceOptions {
   maxResults?: number;
-  maxAppResults?: number;
 }
 
 export interface LauncherDirectoryNamespace {
@@ -519,8 +487,66 @@ export interface LauncherDirectoryNamespace {
 
 export const LAUNCHER_NORMAL_MODE_MAX_RESULTS = 20;
 
+interface NormalizedLauncherSearchableItem {
+  sourceName: string;
+  sourceDisplayName: string;
+  sourceKeywords: string[];
+  name: string;
+  displayName: string;
+  keywords: string[];
+  searchText: string;
+}
+
+const normalizedLauncherSearchableItems = new WeakMap<LauncherSearchableItem, NormalizedLauncherSearchableItem>();
+
+function normalizeLauncherSearchText(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? '';
+}
+
+function getNormalizedLauncherSearchableItem(item: LauncherSearchableItem): NormalizedLauncherSearchableItem {
+  const cached = normalizedLauncherSearchableItems.get(item);
+  if (
+    cached
+    && cached.sourceName === item.name
+    && cached.sourceDisplayName === item.displayName
+    && cached.sourceKeywords === item.keywords
+  ) {
+    return cached;
+  }
+
+  const normalized = {
+    sourceName: item.name,
+    sourceDisplayName: item.displayName,
+    sourceKeywords: item.keywords,
+    name: normalizeLauncherSearchText(item.name),
+    displayName: normalizeLauncherSearchText(item.displayName),
+    keywords: item.keywords.map(keyword => normalizeLauncherSearchText(keyword)),
+    searchText: '',
+  };
+  normalized.searchText = [
+    normalized.name,
+    normalized.displayName,
+    ...normalized.keywords,
+  ].filter(Boolean).join(' ');
+  normalizedLauncherSearchableItems.set(item, normalized);
+  return normalized;
+}
+
+export function warmLauncherSearchableItemCache(
+  items: LauncherSearchableItem[],
+  startIndex = 0,
+  maxItems = items.length,
+): number {
+  const endIndex = Math.min(items.length, startIndex + Math.max(0, maxItems));
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const item = items[index];
+    getNormalizedLauncherSearchableItem(item);
+  }
+  return endIndex;
+}
+
 function fuzzySubsequenceScore(text: string, query: string): number {
-  if (query.length < 2) return 0;
+  if (query.length < 3) return 0;
   let queryIndex = 0;
   let firstMatch = -1;
   let lastMatch = -1;
@@ -538,36 +564,58 @@ function fuzzySubsequenceScore(text: string, query: string): number {
   return Math.max(40, 220 - firstMatch * 4 - gapPenalty * 8 - (text.length - query.length));
 }
 
-export function scoreLauncherText(rawText: string | undefined, query: string): number {
-  const text = rawText?.trim().toLowerCase();
+function hasLauncherTokenPrefix(text: string, query: string): boolean {
+  if (text.startsWith(query)) return true;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char !== ' ' && char !== '/' && char !== '.' && char !== '_' && char !== '-') continue;
+    if (text.startsWith(query, index + 1)) return true;
+  }
+  return false;
+}
+
+function scoreNormalizedLauncherText(text: string, query: string, allowFuzzy = true): number {
   if (!text || !query) return 0;
   if (text === query) return 1000;
   if (text.startsWith(query)) return 850 - Math.min(120, text.length - query.length);
-  if (text.split(/[\s/._-]+/).some(part => part.startsWith(query))) return 760 - Math.min(120, text.length - query.length);
+  if (hasLauncherTokenPrefix(text, query)) return 760 - Math.min(120, text.length - query.length);
   const containsIndex = text.indexOf(query);
   if (containsIndex >= 0) return 600 - Math.min(180, containsIndex * 5);
+  if (!allowFuzzy) return 0;
   return fuzzySubsequenceScore(text, query);
 }
 
+export function scoreLauncherText(rawText: string | undefined, query: string): number {
+  return scoreNormalizedLauncherText(normalizeLauncherSearchText(rawText), query);
+}
+
 export function scoreLauncherSearchableItem<T extends LauncherSearchableItem & LauncherNormalModeItem>(item: T, query: string): number {
-  const candidateScores = [
-    scoreLauncherText(item.name, query),
-    scoreLauncherText(item.displayName, query) - 20,
-    ...item.keywords.map(keyword => scoreLauncherText(keyword, query) - 70),
-  ];
-  const textScore = Math.max(0, ...candidateScores);
+  const allowFuzzy = item.type !== 'wiki-page' && item.type !== 'markdown-file' && item.type !== 'recent-file';
+  if (query.length < 3 && (item.type === 'wiki-page' || item.type === 'markdown-file') && !item.isPinned) return 0;
+
+  const searchableItem = getNormalizedLauncherSearchableItem(item);
+  if (!allowFuzzy && !searchableItem.searchText.includes(query)) return 0;
+
+  let textScore = Math.max(
+    0,
+    scoreNormalizedLauncherText(searchableItem.name, query, allowFuzzy),
+    scoreNormalizedLauncherText(searchableItem.displayName, query, allowFuzzy) - 20,
+  );
+  for (const keyword of searchableItem.keywords) {
+    const keywordScore = scoreNormalizedLauncherText(keyword, query, allowFuzzy) - 70;
+    if (keywordScore > textScore) textScore = keywordScore;
+  }
   if (textScore <= 0) return 0;
 
   let typeScore = 0;
   if (item.type === 'directory') typeScore += 35;
   if (item.type === 'source') typeScore += 30;
   if (item.type === 'command') typeScore += 20;
-  if (item.type === 'app') typeScore += 18;
+  if (item.type === 'action') typeScore += 19;
   if (item.type === 'file') typeScore += 16;
   if (item.type === 'bookmark-author') typeScore += 15;
   if (item.type === 'bookmark-facet') typeScore += 15;
   if (item.type === 'recent-file') typeScore += 12;
-  if (item.type === 'action') typeScore += 10;
   if (item.type === 'handoff') typeScore += 3;
 
   return textScore + typeScore;
@@ -590,9 +638,9 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   b: ScoredLauncherNormalModeItem<T>,
 ): number {
   const launcherTypePriority = (item: LauncherNormalModeItem): number => {
-    if (item.type === 'command') return 3;
+    if (item.type === 'command') return 4;
+    if (item.type === 'action') return 3;
     if (item.type === 'directory') return 2;
-    if (item.type === 'app') return 1;
     return 0;
   };
   const aTypePriority = launcherTypePriority(a.item);
@@ -601,6 +649,10 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
 
   const pinnedDelta = Number(Boolean(b.item.isPinned)) - Number(Boolean(a.item.isPinned));
   if (pinnedDelta !== 0) return pinnedDelta;
+
+  if (a.item.type === 'command' && b.item.type === 'command' && a.score !== b.score) {
+    return b.score - a.score;
+  }
 
   if ((a.item.type === 'directory' || b.item.type === 'directory') && a.score !== b.score) {
     return b.score - a.score;
@@ -613,27 +665,42 @@ function compareScoredLauncherMatches<T extends LauncherNormalModeItem>(
   return 0;
 }
 
+function insertScoredLauncherMatch<T extends LauncherNormalModeItem>(
+  bestMatches: ScoredLauncherNormalModeItem<T>[],
+  match: ScoredLauncherNormalModeItem<T>,
+  maxResults: number,
+): void {
+  if (match.score <= 0 || maxResults <= 0) return;
+
+  let insertIndex = 0;
+  while (
+    insertIndex < bestMatches.length
+    && compareScoredLauncherMatches(match, bestMatches[insertIndex]) >= 0
+  ) {
+    insertIndex += 1;
+  }
+
+  if (insertIndex >= maxResults) return;
+  bestMatches.splice(insertIndex, 0, match);
+  if (bestMatches.length > maxResults) {
+    bestMatches.pop();
+  }
+}
+
 export function balanceLauncherNormalModeMatches<T extends LauncherNormalModeItem>(
   matches: ScoredLauncherNormalModeItem<T>[],
   options: LauncherNormalModeBalanceOptions = {},
 ): T[] {
   const maxResults = options.maxResults ?? LAUNCHER_NORMAL_MODE_MAX_RESULTS;
-  const maxAppResults = options.maxAppResults ?? maxResults;
-  const results: T[] = [];
-  let appResultCount = 0;
+  if (maxResults <= 0) return [];
 
-  for (const { item } of matches
-    .filter(match => match.score > 0)
-    .sort(compareScoredLauncherMatches)) {
-    if (item.type === 'app') {
-      if (appResultCount >= maxAppResults) continue;
-      appResultCount += 1;
-    }
-    results.push(item);
-    if (results.length >= maxResults) break;
+  const bestMatches: ScoredLauncherNormalModeItem<T>[] = [];
+
+  for (const match of matches) {
+    insertScoredLauncherMatch(bestMatches, match, maxResults);
   }
 
-  return results;
+  return bestMatches.map(({ item }) => item);
 }
 
 interface LauncherCommandFileFilterInput {
@@ -950,110 +1017,8 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
   return items.sort(compareLauncherItemsByRecency);
 }
 
-export function buildLauncherAppItems(apps: LauncherAppSource[]): LauncherAppItem[] {
-  return apps.map((appInfo): LauncherAppItem => {
-    const pathParts = appInfo.appPath.split(/[\\/]/).filter(Boolean);
-    const appNameParts = appInfo.name.split(/[\s._-]+/).filter(Boolean);
-    return {
-      id: `app-${appInfo.appPath}`,
-      type: 'app',
-      rootSearchKind: 'app',
-      rootSearchLabel: LAUNCHER_ROOT_SEARCH_KIND_LABELS.app,
-      name: appInfo.name,
-      displayName: appInfo.displayName,
-      keywords: [
-        appInfo.name,
-        appInfo.displayName,
-        appInfo.bundleId ?? '',
-        appInfo.appPath,
-        ...appNameParts,
-        ...pathParts,
-      ].filter(Boolean),
-      appPath: appInfo.appPath,
-      bundleId: appInfo.bundleId,
-      lastUpdated: Number.isFinite(appInfo.lastModified) ? appInfo.lastModified : undefined,
-      hotkeyDisplay: 'app',
-    };
-  });
-}
-
-export function getLauncherAppSearchQuery(query: string): string | null {
-  const match = query.match(/^apps?(?::|\s+)(.*)$/i);
-  return match ? match[1].trim() : null;
-}
-
-function normalizeLauncherAppText(value: string | undefined): string {
-  return (value ?? '').trim().toLowerCase();
-}
-
-function getLauncherAppTextParts(app: LauncherAppVisibilityItem): string[] {
-  return [
-    ...normalizeLauncherAppText(app.name).split(/[\s._-]+/),
-    ...normalizeLauncherAppText(app.displayName).split(/[\s._-]+/),
-  ].filter(Boolean);
-}
-
-function getLauncherAppMatchKind(
-  app: LauncherAppVisibilityItem,
-  query: string,
-): 'none' | 'fuzzy' | 'contains' | 'token-prefix' | 'prefix' | 'exact' {
-  const q = normalizeLauncherAppText(query);
-  if (!q) return 'none';
-  const names = [
-    normalizeLauncherAppText(app.name),
-    normalizeLauncherAppText(app.displayName),
-  ].filter(Boolean);
-  if (names.some(name => name === q)) return 'exact';
-  if (names.some(name => name.startsWith(q))) return 'prefix';
-  if (getLauncherAppTextParts(app).some(part => part.startsWith(q))) return 'token-prefix';
-  if (names.some(name => name.includes(q))) return 'contains';
-  if (q.length >= 2 && names.some((name) => {
-    let queryIndex = 0;
-    for (const character of name) {
-      if (character !== q[queryIndex]) continue;
-      queryIndex += 1;
-      if (queryIndex === q.length) return true;
-    }
-    return false;
-  })) return 'fuzzy';
-  return 'none';
-}
-
-function isLauncherHighValueAppLocation(appPath: string | undefined): boolean {
-  const normalizedPath = appPath?.replace(/\\/g, '/') ?? '';
-  return /^\/Applications\/[^/]+\.app$/i.test(normalizedPath)
-    || /^\/Users\/[^/]+\/Applications\/[^/]+\.app$/i.test(normalizedPath)
-    || /^\/System\/Applications\/[^/]+\.app$/i.test(normalizedPath);
-}
-
-function isLauncherLowValueAppLocation(appPath: string | undefined): boolean {
-  const normalizedPath = appPath?.replace(/\\/g, '/') ?? '';
-  return /\/Utilities\/[^/]+\.app$/i.test(normalizedPath)
-    || /\.app\/.+\.app$/i.test(normalizedPath)
-    || !isLauncherHighValueAppLocation(normalizedPath);
-}
-
-export function shouldIncludeLauncherAppInNormalSearch(input: {
-  app: LauncherAppVisibilityItem;
-  query: string;
-  usage?: { count: number; lastUsedAt: number };
-}): boolean {
-  const q = normalizeLauncherAppText(input.query);
-  const matchKind = getLauncherAppMatchKind(input.app, q);
-  if (matchKind === 'none') return false;
-  if (input.usage && input.usage.count > 0) return true;
-  if (matchKind === 'exact') return true;
-
-  const lowValueLocation = isLauncherLowValueAppLocation(input.app.appPath);
-  if (matchKind === 'prefix') return q.length >= (lowValueLocation ? 3 : 2);
-  if (matchKind === 'token-prefix') return q.length >= (lowValueLocation ? 4 : 2);
-  if (matchKind === 'contains') return q.length >= 4 && !lowValueLocation;
-  if (matchKind === 'fuzzy') return false;
-  return false;
-}
-
 export function getLauncherNativeIconPathForItem(item: LauncherNativeIconPathCandidate | undefined | null): string | null {
-  return item?.appPath || item?.filePath || item?.directoryPath || null;
+  return item?.filePath || item?.directoryPath || null;
 }
 
 function launcherParentPathLabel(filePath: string): string {
@@ -1173,15 +1138,18 @@ export function filterLauncherNormalModeItems<T extends LauncherSearchableItem &
 ): T[] {
   const q = query.trim().toLowerCase();
   if (!q) return [];
+  const maxResults = options.maxResults ?? LAUNCHER_NORMAL_MODE_MAX_RESULTS;
+  if (maxResults <= 0) return [];
+  const bestMatches: ScoredLauncherNormalModeItem<T>[] = [];
 
-  const scoredMatches = items.map((item) => {
+  for (const item of items) {
     const baseScore = scoreLauncherSearchableItem(item, q);
-    return { item, baseScore, score: baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore) };
-  }).filter(({ item, score, baseScore }) => (
-    score > 0 && (options.includeItem?.(item, score, baseScore) ?? true)
-  ));
+    const score = baseScore + getLauncherUsageScore(item, q, usageByItemId, baseScore);
+    if (score <= 0 || !(options.includeItem?.(item, score, baseScore) ?? true)) continue;
+    insertScoredLauncherMatch(bestMatches, { item, score }, maxResults);
+  }
 
-  return balanceLauncherNormalModeMatches(scoredMatches, options);
+  return bestMatches.map(({ item }) => item);
 }
 
 export function resolveLauncherNormalModeQueryMatch<T extends LauncherSearchableItem & LauncherNormalModeItem & LauncherUsageScoreItem>(
@@ -1793,7 +1761,7 @@ export function buildBuiltInLauncherActions(
 export const SQUARES_ACTION_DEFS = [
   { actionId: 'grid', name: 'grid windows', displayName: 'Grid Windows', keywords: ['grid', 'tile', 'arrange'] },
   { actionId: 'focus', name: 'focus mode', displayName: 'Focus Mode', keywords: ['focus', 'hide others', 'distraction'] },
-  { actionId: 'horizontalSpread', name: 'horizontal', displayName: 'Horizontal', keywords: ['horizontal', 'side by side', 'split'] },
+  { actionId: 'horizontalSpread', name: 'spread horizontal', displayName: 'Spread Horizontal', keywords: ['horizontal', 'spread horizontal', 'side by side', 'split'] },
   { actionId: 'verticalSpread', name: 'stack windows', displayName: 'Stack Windows', keywords: ['vertical', 'stack', 'top bottom'] },
   { actionId: 'cascade', name: 'cascade windows', displayName: 'Cascade Windows', keywords: ['cascade', 'overlap', 'stagger'] },
   { actionId: 'leftHalf', name: 'snap left', displayName: 'Snap Left', keywords: ['snap left', 'half', 'split'] },

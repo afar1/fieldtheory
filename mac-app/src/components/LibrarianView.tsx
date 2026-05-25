@@ -11,7 +11,7 @@ import ContentToolbar, { ContentToolbarFolderButton, ContentToolbarMaxwellButton
 import ContentModeToggleButton from './ContentModeToggleButton';
 import ImmersiveToggle, { FOCUS_TOOLBAR_BUTTON_WIDTH } from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
-import CodexTerminalPanel from './CodexTerminalPanel';
+import CodexTerminalPanel, { type CodexTerminalDockSide } from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
@@ -146,6 +146,7 @@ const COPY_PATH_FEEDBACK_MS = 1600;
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const MEETING_TOOLBAR_ACTIVE_STATUSES = new Set(['starting', 'recording', 'transcribing', 'summarizing']);
 const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
+const CODEX_TERMINAL_DOCK_STORAGE_KEY = 'fieldtheory.codexTerminal.dockSide';
 
 function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | undefined): session is MeetingToolbarSession {
   return !!session && MEETING_TOOLBAR_ACTIVE_STATUSES.has(session.status);
@@ -2630,6 +2631,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [contentMode, setContentMode] = useState<MarkdownContentMode>('rendered');
   const [codexTerminalVisible, setCodexTerminalVisible] = useState(() => (
     localStorage.getItem(CODEX_TERMINAL_VISIBLE_STORAGE_KEY) === 'true'
+  ));
+  const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
+    localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
@@ -7685,7 +7689,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         style={{
           flex: 1,
           display: 'flex',
-          flexDirection: 'column',
+          flexDirection: codexTerminalVisible && codexTerminalDockSide === 'right' ? 'row' : 'column',
           overflow: 'hidden',
           minHeight: 0, // Required for flex child to shrink below content size
           position: 'relative',
@@ -7697,6 +7701,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               flex: 1,
               display: selectedItemType === 'bookmarks' ? 'flex' : 'none',
               flexDirection: 'column',
+              minWidth: 0,
               minHeight: 0,
             }}
           >
@@ -7715,6 +7720,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               flex: 1,
               display: selectedItemType === 'ember' ? 'flex' : 'none',
               flexDirection: 'column',
+              minWidth: 0,
               minHeight: 0,
             }}
           >
@@ -7725,7 +7731,18 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             />
           </div>
         )}
-        {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (<Fragment>
+        {selectedItemType !== 'bookmarks' && selectedItemType !== 'ember' && (
+        <div
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            minWidth: 0,
+            minHeight: 0,
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
         {/* Top draggable region - captures clicks at very top of frameless window */}
         <div
           style={{
@@ -8278,38 +8295,6 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   </button>
                 )}
               {focusToolbarControlsVisible && (
-                <button
-                  type="button"
-                  onClick={() => setCodexTerminalVisible((current) => !current)}
-                  title={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
-                  aria-label={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
-                  style={{
-                    height: '24px',
-                    minWidth: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
-                    boxSizing: 'border-box',
-                    padding: '0 7px',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    color: codexTerminalVisible ? '#10b981' : theme.textSecondary,
-                    backgroundColor: codexTerminalVisible
-                      ? (theme.isDark ? 'rgba(16,185,129,0.14)' : 'rgba(16,185,129,0.10)')
-                      : 'transparent',
-                    border: `1px solid ${codexTerminalVisible ? 'rgba(16,185,129,0.36)' : theme.border}`,
-                    borderRadius: '5px',
-                    cursor: 'pointer',
-                    flexShrink: 0,
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    letterSpacing: 0,
-                    // @ts-ignore - opt out of the drag region so the click lands.
-                    WebkitAppRegion: 'no-drag',
-                  }}
-                >
-                  Codex
-                </button>
-              )}
-              {focusToolbarControlsVisible && (
                 <ContentModeToggleButton
                   mode={contentMode}
                   disabled={activeIsSourceOnlyDocument}
@@ -8325,6 +8310,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   }}
                   typedownEnabled={activeIsMarkdownDocument && FEATURE_TYPEDOWN_ENABLED}
                 />
+              )}
+              {focusToolbarControlsVisible && (
+                <button
+                  type="button"
+                  onClick={() => setCodexTerminalVisible((current) => !current)}
+                  title={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
+                  aria-label={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
+                  style={{
+                    height: '24px',
+                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    boxSizing: 'border-box',
+                    padding: 0,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: codexTerminalVisible ? '#10b981' : theme.textSecondary,
+                    backgroundColor: codexTerminalVisible
+                      ? (theme.isDark ? 'rgba(16,185,129,0.14)' : 'rgba(16,185,129,0.10)')
+                      : 'transparent',
+                    border: `1px solid ${codexTerminalVisible ? 'rgba(16,185,129,0.36)' : theme.border}`,
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    // @ts-ignore - opt out of the drag region so the click lands.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                >
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <path d="M2.75 4.25c0-.83.67-1.5 1.5-1.5h7.5c.83 0 1.5.67 1.5 1.5v7.5c0 .83-.67 1.5-1.5 1.5h-7.5c-.83 0-1.5-.67-1.5-1.5v-7.5Z" stroke="currentColor" strokeWidth="1.35" />
+                    <path d="m5.25 6 2 2-2 2M8.25 10.25h2.5" stroke="currentColor" strokeWidth="1.35" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
               )}
 
               {/* Immersive/fullscreen toggle sits to the right of the mode
@@ -8855,11 +8872,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
         />
         </div>
-        </Fragment>
+        </div>
         )}
         <CodexTerminalPanel
           visible={codexTerminalVisible}
           pageContext={codexTerminalPageContext}
+          onDockSideChange={setCodexTerminalDockSide}
           onVisibleChange={setCodexTerminalVisible}
         />
       </div>

@@ -14,14 +14,8 @@ export const CodexTerminalIPCChannels = {
   RESIZE: 'codexTerminal:resize',
   KILL: 'codexTerminal:kill',
   RENAME: 'codexTerminal:rename',
-  GHOSTTY_STATUS: 'codexTerminal:ghosttyStatus',
-  NATIVE_GHOSTTY_HOST_STATUS: 'codexTerminal:nativeGhosttyHostStatus',
-  NATIVE_GHOSTTY_ATTACH: 'codexTerminal:nativeGhosttyAttach',
-  NATIVE_GHOSTTY_UPDATE_FRAME: 'codexTerminal:nativeGhosttyUpdateFrame',
-  NATIVE_GHOSTTY_SEND_TEXT: 'codexTerminal:nativeGhosttySendText',
-  NATIVE_GHOSTTY_SEND_KEY: 'codexTerminal:nativeGhosttySendKey',
-  NATIVE_GHOSTTY_SNAPSHOT: 'codexTerminal:nativeGhosttySnapshot',
-  NATIVE_GHOSTTY_DETACH: 'codexTerminal:nativeGhosttyDetach',
+  READ_CLIPBOARD_TEXT: 'codexTerminal:readClipboardText',
+  WRITE_CLIPBOARD_TEXT: 'codexTerminal:writeClipboardText',
   ATTACH_PAGE_CONTEXT: 'codexTerminal:attachPageContext',
   DATA: 'codexTerminal:data',
   EXIT: 'codexTerminal:exit',
@@ -32,7 +26,7 @@ export interface CodexTerminalSessionSummary {
   id: string;
   title: string;
   cwd: string;
-  engine: 'pty' | 'nativeGhostty';
+  engine: 'pty';
   createdAt: string;
   exitedAt: string | null;
   exitCode: number | null;
@@ -196,13 +190,17 @@ export class CodexTerminalManager {
     this.loadPersistedSessions();
   }
 
-  createSession(input: { cwd?: string; title?: string; cols?: number; rows?: number; nativeGhostty?: boolean } = {}): CodexTerminalSessionSummary {
+  createSession(input: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean } = {}): CodexTerminalSessionSummary {
+    if (input.auto) {
+      const existing = Array.from(this.sessions.values()).find((session) => !session.exitedAt && session.process);
+      if (existing) return this.toSummary(existing);
+    }
     const id = crypto.randomUUID();
     const cwd = input.cwd && isDirectory(input.cwd) ? input.cwd : this.defaultCwd;
     const title = input.title?.trim() || `Codex ${this.sessions.size + 1}`;
     const createdAt = new Date().toISOString();
     const transcriptPath = path.join(this.transcriptDirPath, `${id}.ansi`);
-    const child = input.nativeGhostty ? null : this.spawnPty(process.env.SHELL || '/bin/zsh', ['-l', '-c', CODEX_COMMAND], {
+    const child = this.spawnPty(process.env.SHELL || '/bin/zsh', ['-l'], {
       name: 'xterm-256color',
       cols: input.cols ?? 100,
       rows: input.rows ?? 28,
@@ -219,7 +217,7 @@ export class CodexTerminalManager {
       id,
       title,
       cwd,
-      engine: input.nativeGhostty ? 'nativeGhostty' : 'pty',
+      engine: 'pty',
       createdAt,
       exitedAt: null,
       exitCode: null,
@@ -233,8 +231,6 @@ export class CodexTerminalManager {
     fs.mkdirSync(this.transcriptDirPath, { recursive: true });
     fs.writeFileSync(transcriptPath, '', 'utf8');
     this.persistSessionState();
-
-    if (!child) return this.toSummary(session);
 
     child.onData((data) => {
       session.outputBuffer = this.appendToBuffer(session.outputBuffer, data);
@@ -251,6 +247,7 @@ export class CodexTerminalManager {
       this.persistSessionState();
       broadcast(CodexTerminalIPCChannels.EXIT, this.toSummary(session));
     });
+    child.write(`${CODEX_COMMAND}\r`);
 
     return this.toSummary(session);
   }
@@ -297,21 +294,10 @@ export class CodexTerminalManager {
     return true;
   }
 
-  persistNativeSnapshot(id: string, text: string): boolean {
-    const session = this.sessions.get(id);
-    if (!session || session.engine !== 'nativeGhostty') return false;
-    const snapshot = text.trimEnd();
-    session.outputBuffer = this.appendToBuffer('', snapshot);
-    fs.mkdirSync(this.transcriptDirPath, { recursive: true });
-    fs.writeFileSync(session.transcriptPath, snapshot ? `${snapshot}\n` : '', 'utf8');
-    this.persistSessionState();
-    return true;
-  }
-
-  attachPageContext(id: string, context: CodexTerminalPageContext): { ok: boolean; filePath?: string; prompt?: string; error?: string } {
+  attachPageContext(id: string, context: CodexTerminalPageContext, options: { notifyTerminal?: boolean } = {}): { ok: boolean; filePath?: string; prompt?: string; error?: string } {
     const session = this.sessions.get(id);
     if (!session || session.exitedAt) return { ok: false, error: 'Codex terminal session is not running.' };
-    if (!session.process && session.engine !== 'nativeGhostty') return { ok: false, error: 'Codex terminal session is not running.' };
+    if (!session.process) return { ok: false, error: 'Codex terminal session is not running.' };
     const filePath = writePageContextBundle(this.contextDirPath, session.id, context);
     const gitInfo = resolveGitInfo(session.cwd);
     const existingContextIndex = session.attachedContexts.findIndex((attached) => attached.sourcePath === (context.path || 'unknown'));
@@ -341,11 +327,16 @@ export class CodexTerminalManager {
       this.appendProvenance(attachedContext);
     }
     this.persistSessionState();
-    const prompt = existingContext ? undefined : [
-      `This terminal is attached to the live Field Theory context at: ${filePath}`,
-      'Check that manifest for the current document, selection, recent changes, and included pages.',
+    const shouldNotifyTerminal = options.notifyTerminal !== false && !existingContext;
+    const prompt = shouldNotifyTerminal ? [
+      `Field Theory attached live document context for: ${context.title || 'Field Theory Page'}`,
+      `Source: ${context.path || 'unknown'}`,
+      `Manifest: ${filePath}`,
+      'Do not summarize or explain the attached context just because it exists.',
+      'A short acknowledgement like "I am aware of this file" is enough unless the user asks for details.',
+      'Read the manifest or content files only when the user asks something that needs document details.',
       '',
-    ].join('\n') + '\r';
+    ].join('\n') + '\r' : undefined;
     if (prompt) session.process?.write(prompt);
     return { ok: true, filePath, prompt };
   }
@@ -395,22 +386,7 @@ export class CodexTerminalManager {
     try {
       const parsed = JSON.parse(fs.readFileSync(this.sessionStateFilePath, 'utf8')) as CodexTerminalSessionSummary[];
       if (!Array.isArray(parsed)) return;
-      for (const summary of parsed.slice(-MAX_PERSISTED_SESSIONS)) {
-        if (!summary.id || !summary.cwd || !summary.transcriptPath) continue;
-        const outputBuffer = fs.existsSync(summary.transcriptPath)
-          ? this.appendToBuffer('', fs.readFileSync(summary.transcriptPath, 'utf8'))
-          : '';
-        this.sessions.set(summary.id, {
-          ...summary,
-          engine: summary.engine ?? 'pty',
-          exitedAt: summary.exitedAt ?? new Date().toISOString(),
-          exitCode: summary.exitCode ?? null,
-          restored: true,
-          attachedContexts: Array.isArray(summary.attachedContexts) ? summary.attachedContexts : [],
-          process: null,
-          outputBuffer,
-        });
-      }
+      if (parsed.length > 0) this.persistSessionState();
     } catch {
       // No previous Codex terminal session state.
     }

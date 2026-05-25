@@ -107,7 +107,6 @@ import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type
 import { resolveStartupReadiness } from './startupReadinessPolicy';
 import {
   CommandsIPCChannels,
-  type LauncherAppInfo,
   type LauncherFileIconResult,
   type LauncherFileSearchResult,
   type LauncherSettings,
@@ -174,8 +173,6 @@ import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WIND
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
 import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
-import { probeGhosttyIntegration } from './ghosttyIntegration';
-import { loadNativeGhosttyHost } from './nativeGhosttyHost';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -5216,7 +5213,7 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.uninstallCodexReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
   });
 
-  ipcMain.handle(CodexTerminalIPCChannels.CREATE, (_event, input?: { cwd?: string; title?: string; cols?: number; rows?: number; nativeGhostty?: boolean }) => {
+  ipcMain.handle(CodexTerminalIPCChannels.CREATE, (_event, input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean }) => {
     const manager = getCodexTerminalManager();
     const session = manager.createSession(input);
     broadcastCodexTerminalSessions(manager);
@@ -5257,122 +5254,18 @@ function setupLibrarianIPCHandlers(): void {
     return didRename;
   });
 
-  ipcMain.handle(CodexTerminalIPCChannels.GHOSTTY_STATUS, () => {
-    return probeGhosttyIntegration();
+  ipcMain.handle(CodexTerminalIPCChannels.READ_CLIPBOARD_TEXT, (): string => {
+    return clipboard.readText();
   });
 
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_HOST_STATUS, () => {
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    return {
-      ok: result.ok,
-      modulePath: result.modulePath,
-      error: result.error,
-    };
+  ipcMain.handle(CodexTerminalIPCChannels.WRITE_CLIPBOARD_TEXT, (_event, text: string): boolean => {
+    clipboard.writeText(text);
+    return true;
   });
 
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_ATTACH, (event, input?: { id?: string; x?: number; y?: number; width?: number; height?: number; cwd?: string; command?: string }) => {
-    const window = BrowserWindow.fromWebContents(event.sender);
-    if (!window) return { ok: false, error: 'No Field Theory window is available.' };
-    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    if (!result.ok || !result.host) {
-      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
-    }
-    const cwd = input?.cwd && fs.existsSync(input.cwd) ? input.cwd : resolveDefaultCodexTerminalCwd();
-    const didAttach = result.host.attachGhostty(
-      input.id,
-      window.getNativeWindowHandle(),
-      input?.x ?? 0,
-      input?.y ?? 0,
-      input?.width ?? 800,
-      input?.height ?? 400,
-      cwd,
-      input?.command || 'codex',
-    );
-    return { ok: didAttach, error: didAttach ? undefined : 'Ghostty native surface did not attach.' };
-  });
-
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_UPDATE_FRAME, (_event, input?: { id?: string; x?: number; y?: number; width?: number; height?: number }) => {
-    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    if (!result.ok || !result.host) {
-      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
-    }
-    const didUpdate = result.host.updateFrame(
-      input.id,
-      input?.x ?? 0,
-      input?.y ?? 0,
-      input?.width ?? 800,
-      input?.height ?? 400,
-    );
-    return { ok: didUpdate, error: didUpdate ? undefined : 'Ghostty native surface did not resize.' };
-  });
-
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_SEND_TEXT, (_event, input?: { id?: string; text?: string }) => {
-    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    if (!result.ok || !result.host) {
-      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
-    }
-    const didSend = result.host.sendText(input.id, input.text ?? '');
-    return { ok: didSend, error: didSend ? undefined : 'Ghostty native surface did not accept input.' };
-  });
-
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_SEND_KEY, (_event, input?: {
-    id?: string;
-    action?: string;
-    keyCode?: number;
-    text?: string;
-    unshiftedCodepoint?: number;
-    shift?: boolean;
-    ctrl?: boolean;
-    alt?: boolean;
-    meta?: boolean;
-    caps?: boolean;
-  }) => {
-    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    if (!result.ok || !result.host) {
-      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
-    }
-    const didSend = result.host.sendKey(
-      input.id,
-      input.action === 'release' || input.action === 'repeat' ? input.action : 'press',
-      input.keyCode ?? 0,
-      input.text ?? '',
-      input.unshiftedCodepoint ?? 0,
-      input.shift === true,
-      input.ctrl === true,
-      input.alt === true,
-      input.meta === true,
-      input.caps === true,
-    );
-    return { ok: didSend, error: didSend ? undefined : 'Ghostty native surface did not accept key input.' };
-  });
-
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_SNAPSHOT, (_event, id?: string) => {
-    if (!id) return { ok: false, error: 'No native Ghostty session id was provided.' };
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    if (!result.ok || !result.host) {
-      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
-    }
-    const text = result.host.readText(id);
-    getCodexTerminalManager().persistNativeSnapshot(id, text);
-    return { ok: true, text };
-  });
-
-  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_DETACH, (_event, id?: string) => {
-    if (!id) return { ok: false, error: 'No native Ghostty session id was provided.' };
-    const result = loadNativeGhosttyHost(app.getAppPath());
-    if (!result.ok || !result.host) {
-      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
-    }
-    return { ok: result.host.detach(id) };
-  });
-
-  ipcMain.handle(CodexTerminalIPCChannels.ATTACH_PAGE_CONTEXT, (_event, id: string, context: CodexTerminalPageContext) => {
+  ipcMain.handle(CodexTerminalIPCChannels.ATTACH_PAGE_CONTEXT, (_event, id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }) => {
     const manager = getCodexTerminalManager();
-    const result = manager.attachPageContext(id, context);
+    const result = manager.attachPageContext(id, context, options);
     if (result.ok) {
       broadcastCodexTerminalSessions(manager);
     }
@@ -5475,7 +5368,12 @@ function setupSquaresIPCHandlers(): void {
   ipcMain.handle(
     SquaresIPCChannels.EXECUTE_ACTION,
     async (_event, action: SquaresAction, source?: SquaresActionSource) => {
-      return squaresManager?.executeAction(action, { source }) ?? false;
+      const includeFieldTheoryWindows = source === 'command-launcher'
+        && (commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false);
+      return squaresManager?.executeAction(action, {
+        source,
+        includeFieldTheoryWindows,
+      }) ?? false;
     }
   );
 
@@ -8081,19 +7979,6 @@ function setupClipboardIPCHandlers(): void {
       filePath: cmd.filePath,
       lastModified: cmd.lastModified,
     }));
-  });
-
-  ipcMain.handle(CommandsIPCChannels.LIST_LAUNCHER_APPS, async (): Promise<LauncherAppInfo[]> => {
-    const { listLauncherApps } = require('./launcherApps') as typeof import('./launcherApps');
-    return listLauncherApps();
-  });
-
-  ipcMain.handle(CommandsIPCChannels.LAUNCH_APP, async (_event, appPath: string): Promise<{ success: boolean; error?: string }> => {
-    const { launchLauncherApp } = require('./launcherApps') as typeof import('./launcherApps');
-    return launchLauncherApp(appPath, {
-      beforeLaunch: () => commandLauncherWindow?.hide(true),
-      openPath: (resolvedPath) => shell.openPath(resolvedPath),
-    });
   });
 
   ipcMain.handle(CommandsIPCChannels.GET_LAUNCHER_FILE_ICON, async (_event, filePath: string): Promise<LauncherFileIconResult> => {

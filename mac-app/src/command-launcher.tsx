@@ -33,15 +33,12 @@ import {
   buildBookmarkAuthorLauncherItems,
   buildBookmarkPostLauncherItems,
   buildCommandDirectoriesForLauncher,
-  buildLauncherAppItems,
   buildLauncherFileItems,
-  LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
   LAUNCHER_NORMAL_MODE_MAX_RESULTS,
   DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
   balanceLauncherNormalModeMatches,
   compareLauncherItemsByRecency,
   dedupeLauncherPersonItems,
-  getLauncherAppSearchQuery,
   getLauncherClipboardSearchInputState,
   getLauncherFileSearchQuery,
   getLauncherFieldTheoryMarkdownTarget,
@@ -67,7 +64,6 @@ import {
   resolveLauncherDirectoryNamespace,
   resolveLauncherFieldTheoryOpenTarget,
   shouldHandleLauncherPreviewShortcut,
-  shouldIncludeLauncherAppInNormalSearch,
   shouldIncludeLauncherLibraryMarkdownItem,
   shouldIncludeLauncherRecentFile,
   shouldExitLauncherClipboardSearch,
@@ -75,6 +71,7 @@ import {
   shouldPastePortableCommand,
   shouldReturnLauncherSelectionToInput,
   shouldTraceLauncherRendererEvent,
+  warmLauncherSearchableItemCache,
   scoreLauncherSearchableItem,
   type LauncherFieldTheoryMarkdownTarget,
   type LauncherHotkeyMap,
@@ -128,14 +125,6 @@ interface PortableCommandDirectoryInfo {
   lastModified: number;
 }
 
-interface LauncherAppInfo {
-  name: string;
-  displayName: string;
-  appPath: string;
-  bundleId?: string;
-  lastModified: number;
-}
-
 interface LauncherFileInfo {
   name: string;
   displayName: string;
@@ -167,9 +156,9 @@ interface HandoffInfo {
   lastModified: number;
 }
 
-type LauncherSourceId = 'wiki' | 'artifact' | 'bookmarks';
+type LauncherSourceId = 'wiki' | 'artifact' | 'bookmarks' | 'actions';
 
-type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'app' | 'file' | 'clipboard-item' | 'clipboard-stack';
+type LauncherItemType = 'command' | 'local-command' | 'local-instruction' | 'source' | 'action' | 'handoff' | 'recent-file' | 'wiki-page' | 'markdown-file' | 'artifact' | 'bookmark-author' | 'bookmark' | 'bookmark-facet' | 'directory' | 'file' | 'clipboard-item' | 'clipboard-stack';
 
 interface LauncherRecentEntry {
   kind: 'wiki' | 'external';
@@ -250,8 +239,6 @@ interface LauncherItem {
   // For root search rows
   rootSearchKind?: LauncherRootSearchKind;
   rootSearchLabel?: string;
-  appPath?: string;
-  bundleId?: string;
   isDirectory?: boolean;
   // For local model command runs
   localCommandName?: string;
@@ -324,7 +311,7 @@ function writeLauncherUsageMap(next: LauncherUsageMap): void {
   } catch {}
 }
 
-const NAMESPACE_PREFIXES = ['wiki', 'artifact'] as const;
+const NAMESPACE_PREFIXES = ['wiki', 'artifact', 'actions'] as const;
 type NamespacePrefix = typeof NAMESPACE_PREFIXES[number];
 type FieldTheoryMarkdownTarget = LauncherFieldTheoryMarkdownTarget;
 
@@ -338,8 +325,6 @@ interface LauncherCommandsAPI {
   getHandoffContent: (filePath: string) => Promise<{ name: string; content: string; filePath: string } | null>;
   getMarkdownPreview: (filePath: string) => Promise<MarkdownPreview | null>;
   invokeCommand: (name: string) => Promise<{ success: boolean; error?: string }>;
-  listLauncherApps: () => Promise<LauncherAppInfo[]>;
-  launchApp: (appPath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherFileIcon: (filePath: string) => Promise<LauncherFileIconResult>;
   searchLauncherFiles: (query: string) => Promise<LauncherFileSearchResult>;
   openLauncherFile: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -448,6 +433,21 @@ function traceLauncher(event: string, details: Record<string, unknown> = {}) {
   commandsAPI.launcherTrace?.(event, details);
 }
 
+function getLauncherElapsedMs(startedAt: number): number {
+  return Math.round((performance.now() - startedAt) * 10) / 10;
+}
+
+function traceLauncherLoad(
+  event: string,
+  startedAt: number,
+  details: Record<string, unknown> = {},
+): void {
+  traceLauncher(event, {
+    ...details,
+    elapsedMs: getLauncherElapsedMs(startedAt),
+  });
+}
+
 function describeLauncherItem(item: LauncherItem | undefined): Record<string, unknown> | null {
   if (!item) return null;
   return {
@@ -486,7 +486,6 @@ function launcherItemTypeLabel(item: LauncherItem): string {
     case 'local-command': return 'Local';
     case 'local-instruction': return 'Local';
     case 'source': return 'Source';
-    case 'app': return item.rootSearchLabel ?? 'App';
     case 'file': return item.rootSearchLabel ?? 'File';
     case 'action': return 'Action';
     case 'recent-file': return 'Recent';
@@ -528,6 +527,10 @@ function getClipboardPreviewTitle(item: LauncherItem): string {
 const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
 const LAUNCHER_COLLAPSED_HEIGHT = 52;
 const LAUNCHER_MAX_LIST_HEIGHT = 378;
+const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
+const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
+const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS = 50;
+const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE = 400;
 const COMMAND_LAUNCHER_RADIUS = 16;
 
 // =============================================================================
@@ -758,7 +761,6 @@ function CommandLauncher() {
   const [commands, setCommands] = useState<PortableCommandInfo[]>([]);
   const [commandDirectories, setCommandDirectories] = useState<PortableCommandDirectoryInfo[]>([]);
   const [handoffs, setHandoffs] = useState<HandoffInfo[]>([]);
-  const [launcherApps, setLauncherApps] = useState<LauncherAppInfo[]>([]);
   const [launcherFiles, setLauncherFiles] = useState<LauncherFileInfo[]>([]);
   const [launcherFileSearchLoading, setLauncherFileSearchLoading] = useState(false);
   const [clipboardItems, setClipboardItems] = useState<ClipboardItem[]>([]);
@@ -815,10 +817,13 @@ function CommandLauncher() {
   const activeWebPageRequestRef = useRef(0);
   const previewWindowWasOpenRef = useRef(false);
   const previewRequestRef = useRef(0);
+  const launcherFirstInputTracedRef = useRef(false);
   const lastPreviewWindowPayloadKeyRef = useRef<string | null>(null);
   const launcherIconPendingPathsRef = useRef(new Set<string>());
   const launcherIconDataBatchRef = useRef<Record<string, string | null>>({});
   const launcherIconDataFlushFrameRef = useRef<number | null>(null);
+  const launcherSearchCacheWarmTimeoutRef = useRef<number | null>(null);
+  const launcherSearchCacheWarmIndexRef = useRef(0);
   const manualPreviewRef = useRef(false);
   const hasNavigatedRef = useRef(false); // Track if user has used arrow keys
   const hasExplicitSelectionRef = useRef(false);
@@ -827,6 +832,7 @@ function CommandLauncher() {
   const clipboardSearchRequestRef = useRef(0);
   const clipboardStackHydrationRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
+  const launcherBackgroundRefreshTimeoutRef = useRef<number | null>(null);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const launcherClosingForInvocationRef = useRef(false);
@@ -895,6 +901,13 @@ function CommandLauncher() {
   }, [resizeLauncher]);
 
   const handleQueryChange = useCallback((nextQuery: string) => {
+    if (!launcherFirstInputTracedRef.current) {
+      launcherFirstInputTracedRef.current = true;
+      traceLauncher('first-input', {
+        queryLength: nextQuery.length,
+        launcherDataLoading,
+      });
+    }
     sampleLauncherInputInteraction();
     setCommittedItemId(null);
     const next = getLauncherClipboardSearchInputState({
@@ -903,7 +916,7 @@ function CommandLauncher() {
     });
     setClipboardSearchActive(next.active);
     setQuery(next.query);
-  }, [clipboardSearchActive, sampleLauncherInputInteraction]);
+  }, [clipboardSearchActive, launcherDataLoading, sampleLauncherInputInteraction]);
 
   const focusLauncherInput = useCallback(() => {
     inputRef.current?.focus();
@@ -914,36 +927,37 @@ function CommandLauncher() {
 
   // Load commands from the filesystem.
   const loadCommands = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const [cmds, directories] = await Promise.all([
         commandsAPI.getCommands(),
         commandsAPI.getCommandDirectories(),
       ]);
-      setCommands(cmds || []);
-      setCommandDirectories(directories || []);
+      const nextCommands = cmds || [];
+      const nextDirectories = directories || [];
+      setCommands(nextCommands);
+      setCommandDirectories(nextDirectories);
+      traceLauncherLoad('load-commands', startedAt, {
+        commandCount: nextCommands.length,
+        directoryCount: nextDirectories.length,
+      });
     } catch (err) {
+      traceLauncherLoad('load-commands', startedAt, { success: false });
       console.error('[CommandLauncher] Failed to load commands:', err);
     }
   }, []);
 
-  const loadLauncherApps = useCallback(async () => {
-    try {
-      const apps = await commandsAPI.listLauncherApps();
-      setLauncherApps(apps || []);
-    } catch (err) {
-      console.error('[CommandLauncher] Failed to load apps:', err);
-      setLauncherApps([]);
-    }
-  }, []);
-
   const loadLauncherSettings = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const settings = await commandsAPI.getLauncherSettings();
       const normalized = normalizeLauncherRootSearchEnabledKinds(settings?.rootSearchEnabledKinds as LauncherRootSearchEnabledKinds);
       setLauncherRootSearchEnabledKinds(prev => (
         areLauncherRootSearchEnabledKindsEqual(prev, normalized) ? prev : normalized
       ));
+      traceLauncherLoad('load-launcher-settings', startedAt);
     } catch (err) {
+      traceLauncherLoad('load-launcher-settings', startedAt, { success: false });
       console.error('[CommandLauncher] Failed to load launcher settings:', err);
       setLauncherRootSearchEnabledKinds(prev => (
         areLauncherRootSearchEnabledKindsEqual(prev, DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS)
@@ -955,30 +969,50 @@ function CommandLauncher() {
 
   const warmLauncherFileIndex = useCallback(async () => {
     if (!isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file')) return;
+    const startedAt = performance.now();
     try {
-      await commandsAPI.warmLauncherFileIndex();
+      const result = await commandsAPI.warmLauncherFileIndex();
+      traceLauncherLoad('warm-file-index', startedAt, { started: Boolean(result?.started) });
     } catch (err) {
+      traceLauncherLoad('warm-file-index', startedAt, { success: false });
       console.error('[CommandLauncher] Failed to warm file index:', err);
     }
   }, [launcherRootSearchEnabledKinds]);
 
   const loadLibraryMarkdown = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const roots = await libraryAPI?.getRoots();
       if (roots) {
-        setLibraryMarkdownItems(flattenLibraryRootsForLauncher(roots));
-        setDirectoryItems(flattenLibraryDirectoriesForLauncher(roots));
-        setBookmarkFacetItems(flattenBookmarkTaxonomyRootsForLauncher(roots));
+        const nextLibraryItems = flattenLibraryRootsForLauncher(roots);
+        const nextDirectoryItems = flattenLibraryDirectoriesForLauncher(roots);
+        const nextBookmarkFacetItems = flattenBookmarkTaxonomyRootsForLauncher(roots);
+        setLibraryMarkdownItems(nextLibraryItems);
+        setDirectoryItems(nextDirectoryItems);
+        setBookmarkFacetItems(nextBookmarkFacetItems);
+        traceLauncherLoad('load-library-markdown', startedAt, {
+          rootCount: roots.length,
+          itemCount: nextLibraryItems.length,
+          directoryCount: nextDirectoryItems.length,
+          bookmarkFacetCount: nextBookmarkFacetItems.length,
+        });
         return;
       }
-    } catch {}
+      traceLauncherLoad('load-library-markdown', startedAt, { rootCount: 0 });
+    } catch {
+      traceLauncherLoad('load-library-markdown', startedAt, { success: false });
+    }
   }, []);
 
   const loadArtifacts = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const readings = await window.librarianAPI?.getReadings();
-      if (!readings) return;
-      setArtifactReadings(readings.map(r => ({
+      if (!readings) {
+        traceLauncherLoad('load-artifacts', startedAt, { itemCount: 0 });
+        return;
+      }
+      const nextReadings = readings.map(r => ({
         id: `artifact-${r.path}`,
         type: 'artifact' as const,
         name: r.title,
@@ -986,27 +1020,41 @@ function CommandLauncher() {
         keywords: [r.title, r.context ?? '', ...r.title.split(/\s+/)].filter(Boolean),
         filePath: r.path,
         lastUpdated: r.mtime,
-      })));
-    } catch {}
+      }));
+      setArtifactReadings(nextReadings);
+      traceLauncherLoad('load-artifacts', startedAt, { itemCount: nextReadings.length });
+    } catch {
+      traceLauncherLoad('load-artifacts', startedAt, { success: false });
+    }
   }, []);
 
   const loadRecentEntries = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const entries = await recentAPI?.list();
-      setRecentEntries((entries ?? []).slice().sort((a, b) => b.lastOpenedAt - a.lastOpenedAt));
+      const nextEntries = (entries ?? []).slice().sort((a, b) => b.lastOpenedAt - a.lastOpenedAt);
+      setRecentEntries(nextEntries);
+      traceLauncherLoad('load-recents', startedAt, { itemCount: nextEntries.length });
     } catch {
       setRecentEntries([]);
+      traceLauncherLoad('load-recents', startedAt, { success: false });
     }
   }, []);
 
   const loadBookmarkAuthors = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const authors = await bookmarksAPI?.getAuthors();
-      setBookmarkAuthorItems(buildBookmarkAuthorLauncherItems(authors ?? []));
-    } catch {}
+      const nextAuthors = buildBookmarkAuthorLauncherItems(authors ?? []);
+      setBookmarkAuthorItems(nextAuthors);
+      traceLauncherLoad('load-bookmark-authors', startedAt, { itemCount: nextAuthors.length });
+    } catch {
+      traceLauncherLoad('load-bookmark-authors', startedAt, { success: false });
+    }
   }, []);
 
   const loadBookmarkPosts = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const snapshot = await bookmarksAPI?.getAll();
       const bookmarks = (snapshot?.bookmarks ?? [])
@@ -1016,26 +1064,38 @@ function CommandLauncher() {
           return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
         });
       setBookmarkPosts(bookmarks);
-      setBookmarkPostItems(buildBookmarkPostLauncherItems(bookmarks));
+      const nextBookmarkPosts = buildBookmarkPostLauncherItems(bookmarks);
+      setBookmarkPostItems(nextBookmarkPosts);
+      traceLauncherLoad('load-bookmark-posts', startedAt, {
+        bookmarkCount: bookmarks.length,
+        itemCount: nextBookmarkPosts.length,
+      });
     } catch {
       setBookmarkPosts([]);
       setBookmarkPostItems([]);
+      traceLauncherLoad('load-bookmark-posts', startedAt, { success: false });
     }
   }, []);
 
   const loadActiveWebPage = useCallback(async () => {
     const requestId = ++activeWebPageRequestRef.current;
+    const startedAt = performance.now();
     try {
       const result = await bookmarksAPI?.getActiveWebPage?.();
       if (requestId !== activeWebPageRequestRef.current) return;
       setActiveWebPage(result?.success && result.page ? result.page : null);
+      traceLauncherLoad('load-active-web-page', startedAt, {
+        hasPage: Boolean(result?.success && result.page),
+      });
     } catch {
       if (requestId !== activeWebPageRequestRef.current) return;
       setActiveWebPage(null);
+      traceLauncherLoad('load-active-web-page', startedAt, { success: false });
     }
   }, []);
 
   const refreshLauncherContext = useCallback(async () => {
+    const startedAt = performance.now();
     const activeLibraryFilePromise = commandsAPI.getActiveLibraryFileContext
       ? commandsAPI.getActiveLibraryFileContext().catch(() => null)
       : Promise.resolve(null);
@@ -1044,6 +1104,10 @@ function CommandLauncher() {
       activeLibraryFilePromise,
     ]);
     setLauncherContext({
+      fieldTheoryActive: Boolean(context?.fieldTheoryActive),
+      hasActiveLibraryFileContext: Boolean(activeLibraryFile?.filePath),
+    });
+    traceLauncherLoad('refresh-launcher-context', startedAt, {
       fieldTheoryActive: Boolean(context?.fieldTheoryActive),
       hasActiveLibraryFileContext: Boolean(activeLibraryFile?.filePath),
     });
@@ -1083,16 +1147,21 @@ function CommandLauncher() {
 
   // Load handoffs from global Field Theory directory.
   const loadHandoffs = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const hoffs = await commandsAPI.getHandoffs();
-      setHandoffs(hoffs || []);
+      const nextHandoffs = hoffs || [];
+      setHandoffs(nextHandoffs);
+      traceLauncherLoad('load-handoffs', startedAt, { itemCount: nextHandoffs.length });
     } catch (err) {
+      traceLauncherLoad('load-handoffs', startedAt, { success: false });
       console.error('[CommandLauncher] Failed to load handoffs:', err);
     }
   }, []);
 
   // Load hotkeys from preferences.
   const loadHotkeys = useCallback(async () => {
+    const startedAt = performance.now();
     try {
       const [clipboardHotkeys, transcriptionHotkey, sqHotkeys, sqConfig] = await Promise.all([
         clipboardAPI.getHotkeys?.() ?? {},
@@ -1114,10 +1183,82 @@ function CommandLauncher() {
         setSquaresHotkeys({ ...DEFAULT_SQUARES_HOTKEYS, ...sqHotkeys });
       }
       setShowSquaresInCommandLauncher(normalizeSquaresConfig(sqConfig).showInCommandLauncher);
+      traceLauncherLoad('load-hotkeys', startedAt, {
+        hasClipboardHotkeys: Boolean(clipboardHotkeys),
+        showSquaresInCommandLauncher: normalizeSquaresConfig(sqConfig).showInCommandLauncher,
+      });
     } catch (err) {
+      traceLauncherLoad('load-hotkeys', startedAt, { success: false });
       console.error('[CommandLauncher] Failed to load hotkeys:', err);
     }
   }, []);
+
+  const loadLauncherBackgroundData = useCallback(async () => {
+    const startedAt = performance.now();
+    const results = await Promise.allSettled([
+      warmLauncherFileIndex(),
+      loadLibraryMarkdown(),
+      loadArtifacts(),
+      loadBookmarkAuthors(),
+      loadBookmarkPosts(),
+      loadActiveWebPage(),
+    ]);
+    traceLauncherLoad('load-launcher-background-data', startedAt, {
+      rejectedCount: results.filter(result => result.status === 'rejected').length,
+    });
+  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
+
+  const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
+    const includeBackground = options.includeBackground ?? true;
+    const requestId = ++launcherDataRequestRef.current;
+    const startedAt = performance.now();
+    setLauncherDataLoading(true);
+    const results = await Promise.allSettled([
+      loadCommands(),
+      loadLauncherSettings(),
+      loadHandoffs(),
+      loadHotkeys(),
+      loadRecentEntries(),
+      refreshLauncherContext(),
+    ]);
+    if (requestId === launcherDataRequestRef.current) {
+      setLauncherDataLoading(false);
+      traceLauncherLoad('load-launcher-data', startedAt, {
+        includeBackground,
+        rejectedCount: results.filter(result => result.status === 'rejected').length,
+      });
+    }
+    if (includeBackground && requestId === launcherDataRequestRef.current) {
+      void loadLauncherBackgroundData();
+    }
+  }, [loadCommands, loadHandoffs, loadHotkeys, loadLauncherBackgroundData, loadLauncherSettings, loadRecentEntries, refreshLauncherContext]);
+
+  const scheduleLauncherBackgroundRefresh = useCallback(() => {
+    if (launcherBackgroundRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
+    }
+
+    const runBackgroundRefresh = () => {
+      if ((inputRef.current?.value ?? '').trim()) {
+        traceLauncher('background-refresh-deferred-for-input', {
+          delayMs: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+        });
+        launcherBackgroundRefreshTimeoutRef.current = window.setTimeout(
+          runBackgroundRefresh,
+          LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+        );
+        return;
+      }
+
+      launcherBackgroundRefreshTimeoutRef.current = null;
+      void loadLauncherBackgroundData();
+    };
+
+    launcherBackgroundRefreshTimeoutRef.current = window.setTimeout(
+      runBackgroundRefresh,
+      LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+    );
+  }, [loadLauncherBackgroundData]);
 
   const fetchClipboardStackItemsById = useCallback(async (stackIds: string[]): Promise<Record<string, ClipboardItem[]>> => {
     const queryItemsByStackId = clipboardAPI.queryItemsByStackId;
@@ -1144,29 +1285,6 @@ function CommandLauncher() {
 
     return fetchedStacks;
   }, []);
-
-  const loadLauncherData = useCallback(async () => {
-    const requestId = ++launcherDataRequestRef.current;
-    setLauncherDataLoading(true);
-    await Promise.allSettled([
-      loadCommands(),
-      loadLauncherApps(),
-      loadLauncherSettings(),
-      warmLauncherFileIndex(),
-      loadHandoffs(),
-      loadHotkeys(),
-      loadLibraryMarkdown(),
-      loadArtifacts(),
-      loadRecentEntries(),
-      loadBookmarkAuthors(),
-      loadBookmarkPosts(),
-      loadActiveWebPage(),
-      refreshLauncherContext(),
-    ]);
-    if (requestId === launcherDataRequestRef.current) {
-      setLauncherDataLoading(false);
-    }
-  }, [loadCommands, loadLauncherApps, loadLauncherSettings, warmLauncherFileIndex, loadHandoffs, loadHotkeys, loadLibraryMarkdown, loadArtifacts, loadRecentEntries, loadBookmarkAuthors, loadBookmarkPosts, loadActiveWebPage, refreshLauncherContext]);
 
   const clearLauncherSessionState = useCallback(() => {
     authorNamespaceRef.current = null;
@@ -1216,7 +1334,8 @@ function CommandLauncher() {
     // Set initial height immediately to prevent layout shift
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
 
-    void loadLauncherData();
+    void loadLauncherData({ includeBackground: false });
+    scheduleLauncherBackgroundRefresh();
 
     // Load current Field Theory theme preference and keep this separate window in sync.
     themeAPI.getTheme().then(applyTheme).catch(() => {});
@@ -1225,6 +1344,8 @@ function CommandLauncher() {
     // Listen for reset events (when window is shown).
     // Reload commands and handoffs each time to pick up newly added ones without restart.
     const handleReset = (payload?: LauncherResetPayload) => {
+      const resetStartedAt = performance.now();
+      launcherFirstInputTracedRef.current = false;
       if (typeof payload?.isDarkMode === 'boolean') {
         applyTheme(payload.isDarkMode);
       }
@@ -1243,7 +1364,12 @@ function CommandLauncher() {
       });
       resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
       focusLauncherInput();
-      void loadLauncherData();
+      traceLauncherLoad('launcher-reset', resetStartedAt, {
+        hadEarlyTypedQuery: Boolean(earlyTypedQuery),
+        generation: payload?.generation ?? null,
+      });
+      void loadLauncherData({ includeBackground: false });
+      scheduleLauncherBackgroundRefresh();
       void themeAPI.getTheme()
         .then(dark => applyTheme(dark ?? payload?.isDarkMode ?? false))
         .catch(() => applyTheme(payload?.isDarkMode ?? themeAPI.initialTheme ?? false));
@@ -1278,6 +1404,10 @@ function CommandLauncher() {
       loadRecentEntries();
     });
     return () => {
+      if (launcherBackgroundRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
+        launcherBackgroundRefreshTimeoutRef.current = null;
+      }
       unsubscribe();
       unsubscribeFocusInput?.();
       unsubscribeTheme?.();
@@ -1287,7 +1417,7 @@ function CommandLauncher() {
       unsubscribeLibraryRoots?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher]);
+  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
 
   useEffect(() => {
     const handleBlur = () => {
@@ -1302,6 +1432,10 @@ function CommandLauncher() {
   }, [prepareLauncherForNextOpen]);
 
   useEffect(() => () => {
+    if (launcherSearchCacheWarmTimeoutRef.current !== null) {
+      window.clearTimeout(launcherSearchCacheWarmTimeoutRef.current);
+      launcherSearchCacheWarmTimeoutRef.current = null;
+    }
     if (resizeFrameRef.current !== null) {
       window.cancelAnimationFrame(resizeFrameRef.current);
     }
@@ -1385,12 +1519,16 @@ function CommandLauncher() {
       keywords: ['artifact', 'artifacts', 'readings'],
       hotkeyDisplay: 'source',
     },
+    {
+      id: 'source-actions',
+      type: 'source' as const,
+      sourceId: 'actions' as const,
+      name: 'actions',
+      displayName: 'Actions',
+      keywords: ['actions', 'action', 'controls', 'control', 'window controls'],
+      hotkeyDisplay: 'source',
+    },
   ]), []);
-
-  const appItems = useMemo((): LauncherItem[] => {
-    if (!isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'app')) return [];
-    return buildLauncherAppItems(launcherApps);
-  }, [launcherApps, launcherRootSearchEnabledKinds]);
 
   const fileItems = useMemo((): LauncherItem[] => buildLauncherFileItems(launcherFiles), [launcherFiles]);
 
@@ -1436,20 +1574,19 @@ function CommandLauncher() {
     });
   }, [commandFilePaths, libraryMarkdownItems, recentEntries]);
 
-  // Build all items (commands + actions + handoffs).
-  const allItems = useMemo(() => {
-    const handoffItems: LauncherItem[] = handoffs.map(h => ({
-      id: `handoff-${h.name}`,
-      type: 'handoff' as const,
-      name: h.name,
-      displayName: h.displayName,
-      keywords: [h.name, h.displayName, 'handoff', 'session', ...h.displayName.split('-')],
-      filePath: h.filePath,
-      lastUpdated: h.lastModified,
-      timeAgo: formatTimeAgo(h.lastModified),
-    }));
+  const handoffItems = useMemo((): LauncherItem[] => handoffs.map(h => ({
+    id: `handoff-${h.name}`,
+    type: 'handoff' as const,
+    name: h.name,
+    displayName: h.displayName,
+    keywords: [h.name, h.displayName, 'handoff', 'session', ...h.displayName.split('-')],
+    filePath: h.filePath,
+    lastUpdated: h.lastModified,
+    timeAgo: formatTimeAgo(h.lastModified),
+  })), [handoffs]);
 
-    const actionItems = buildBuiltInLauncherActions(hotkeys, isDarkMode ?? false, squaresHotkeys, showSquaresInCommandLauncher)
+  const actionItems = useMemo((): LauncherItem[] => (
+    buildBuiltInLauncherActions(hotkeys, isDarkMode ?? false, squaresHotkeys, showSquaresInCommandLauncher)
       .map((item) => {
         if (item.actionId === 'undo-library-move' && lastLibraryMove) {
           return {
@@ -1463,23 +1600,110 @@ function CommandLauncher() {
           displayName: `Save to Markdown: ${compactLauncherUrl(activeWebPage.url)}`,
           keywords: [...item.keywords, activeWebPage.url, activeWebPage.title, activeWebPage.appName].filter(Boolean),
         };
-      });
+      })
+  ), [activeWebPage, hotkeys, isDarkMode, lastLibraryMove, showSquaresInCommandLauncher, squaresHotkeys]);
 
+  // Build all items (commands + actions + handoffs).
+  const allItems = useMemo(() => {
     return [
       ...commandItems,
       ...commandDirectoryItems,
       ...directoryItems,
       ...libraryMarkdownSearchItems,
-      ...appItems,
       ...sourceItems,
       ...recentFileItems,
       ...handoffItems,
       ...actionItems,
     ];
-  }, [appItems, commandItems, commandDirectoryItems, directoryItems, handoffs, hotkeys, squaresHotkeys, showSquaresInCommandLauncher, isDarkMode, libraryMarkdownSearchItems, sourceItems, recentFileItems, activeWebPage, lastLibraryMove]);
+  }, [actionItems, commandItems, commandDirectoryItems, directoryItems, handoffItems, libraryMarkdownSearchItems, sourceItems, recentFileItems]);
 
-	  const appSearchQuery = useMemo(() => getLauncherAppSearchQuery(query), [query]);
-	  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
+  useEffect(() => {
+    let idleHandle: number | null = null;
+    let cancelled = false;
+    const scheduleIdle = window.requestIdleCallback
+      ? (callback: IdleRequestCallback) => {
+        idleHandle = window.requestIdleCallback(callback, { timeout: 500 });
+      }
+      : (callback: IdleRequestCallback) => {
+        launcherSearchCacheWarmTimeoutRef.current = window.setTimeout(() => {
+          callback({
+            didTimeout: true,
+            timeRemaining: () => 0,
+          });
+        }, LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS);
+      };
+    const cancelIdle = () => {
+      if (idleHandle !== null) {
+        window.cancelIdleCallback?.(idleHandle);
+        idleHandle = null;
+      }
+    };
+    const clearWarmTimeout = () => {
+      if (launcherSearchCacheWarmTimeoutRef.current !== null) {
+        window.clearTimeout(launcherSearchCacheWarmTimeoutRef.current);
+        launcherSearchCacheWarmTimeoutRef.current = null;
+      }
+    };
+
+    cancelIdle();
+    clearWarmTimeout();
+    launcherSearchCacheWarmIndexRef.current = 0;
+    if (allItems.length === 0) return;
+    const startedAt = performance.now();
+
+    const warmSearchCache = () => {
+      if (cancelled) return;
+      if ((inputRef.current?.value ?? '').trim()) {
+        traceLauncher('search-cache-warm-deferred-for-input', {
+          itemCount: allItems.length,
+          warmedCount: launcherSearchCacheWarmIndexRef.current,
+          delayMs: LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS,
+        });
+        launcherSearchCacheWarmTimeoutRef.current = window.setTimeout(
+          warmSearchCache,
+          LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS,
+        );
+        return;
+      }
+
+      const chunkStartedAt = performance.now();
+      const startIndex = launcherSearchCacheWarmIndexRef.current;
+      launcherSearchCacheWarmIndexRef.current = warmLauncherSearchableItemCache(
+        allItems,
+        startIndex,
+        LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE,
+      );
+      traceLauncherLoad('warm-search-cache-chunk', chunkStartedAt, {
+        itemCount: allItems.length,
+        startIndex,
+        endIndex: launcherSearchCacheWarmIndexRef.current,
+        chunkSize: LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE,
+      });
+      if (launcherSearchCacheWarmIndexRef.current < allItems.length) {
+        scheduleIdle(warmSearchCache);
+        return;
+      }
+
+      traceLauncherLoad('warm-search-cache', startedAt, {
+        itemCount: allItems.length,
+        chunkSize: LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE,
+      });
+      launcherSearchCacheWarmTimeoutRef.current = null;
+    };
+
+    launcherSearchCacheWarmTimeoutRef.current = window.setTimeout(
+      warmSearchCache,
+      LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS,
+    );
+
+    return () => {
+      cancelled = true;
+      cancelIdle();
+      clearWarmTimeout();
+    };
+  }, [allItems]);
+
+  const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
   const clipboardSearchQuery = clipboardSearchActive ? query : null;
   const fileSearchEnabled = isLauncherRootSearchKindEnabled(launcherRootSearchEnabledKinds, 'file');
 
@@ -1722,16 +1946,7 @@ function CommandLauncher() {
   }, [launcherContext.fieldTheoryActive, launcherContext.hasActiveLibraryFileContext]);
 
   const getNormalModeMatches = useCallback((rawQuery: string): LauncherItem[] => {
-    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(allItems, rawQuery, usageByItemId, {
-      maxAppResults: LAUNCHER_NORMAL_MODE_APP_RESULT_LIMIT,
-      includeItem: (item) => (
-        item.type !== 'app' || shouldIncludeLauncherAppInNormalSearch({
-          app: item,
-          query: rawQuery.trim().toLowerCase(),
-          usage: usageByItemId[item.id],
-        })
-      ),
-    }));
+    return dedupeLauncherPersonItems(filterLauncherNormalModeItems(allItems, rawQuery, usageByItemId));
   }, [allItems, usageByItemId]);
 
   const visibleLauncherIconPaths = useMemo(() => {
@@ -1777,6 +1992,7 @@ function CommandLauncher() {
 
   const loadClipboardLauncherResults = useCallback(async (search: string): Promise<void> => {
     const requestId = ++clipboardSearchRequestRef.current;
+    const startedAt = performance.now();
     setClipboardSearchLoading(true);
     const options: ClipboardQueryOptions = {
       limit: 50,
@@ -1795,12 +2011,21 @@ function CommandLauncher() {
       setClipboardHydratedStackItemsById({});
       setClipboardItems(items ?? []);
       setClipboardStacks(stacks ?? []);
+      traceLauncherLoad('load-clipboard-results', startedAt, {
+        queryLength: search.length,
+        itemCount: items?.length ?? 0,
+        stackCount: stacks?.length ?? 0,
+      });
     } catch (error) {
       if (requestId !== clipboardSearchRequestRef.current) return;
       console.error('[CommandLauncher] Failed to load clipboard results:', error);
       setClipboardItems([]);
       setClipboardStacks([]);
       setClipboardHydratedStackItemsById({});
+      traceLauncherLoad('load-clipboard-results', startedAt, {
+        queryLength: search.length,
+        success: false,
+      });
     } finally {
       if (requestId !== clipboardSearchRequestRef.current) return;
       setClipboardSearchLoading(false);
@@ -1873,11 +2098,18 @@ function CommandLauncher() {
     let cancelled = false;
     let pollTimeoutId: number | null = null;
     const runSearch = () => {
+      const searchStartedAt = performance.now();
       void commandsAPI.searchLauncherFiles(fileSearchQuery)
         .then((result) => {
           if (cancelled || requestId !== launcherFileSearchRequestRef.current) return;
           setLauncherFiles(result.files || []);
           setLauncherFileSearchLoading(result.indexing);
+          traceLauncherLoad('search-launcher-files', searchStartedAt, {
+            queryLength: fileSearchQuery.length,
+            resultCount: result.files?.length ?? 0,
+            indexing: result.indexing,
+            indexedAt: result.indexedAt ?? null,
+          });
           if (result.indexing) {
             pollTimeoutId = window.setTimeout(runSearch, 250);
           }
@@ -1887,6 +2119,10 @@ function CommandLauncher() {
           if (cancelled || requestId !== launcherFileSearchRequestRef.current) return;
           setLauncherFiles([]);
           setLauncherFileSearchLoading(false);
+          traceLauncherLoad('search-launcher-files', searchStartedAt, {
+            queryLength: fileSearchQuery.length,
+            success: false,
+          });
         });
     };
     const timeoutId = window.setTimeout(runSearch, 80);
@@ -1903,12 +2139,18 @@ function CommandLauncher() {
       if (Object.prototype.hasOwnProperty.call(launcherIconDataByPath, filePath)) continue;
       if (launcherIconPendingPathsRef.current.has(filePath)) continue;
       launcherIconPendingPathsRef.current.add(filePath);
+      const iconStartedAt = performance.now();
       void commandsAPI.getLauncherFileIcon(filePath)
         .then((result) => {
           queueLauncherIconData(filePath, result.success ? (result.iconDataUrl ?? null) : null);
+          traceLauncherLoad('load-launcher-file-icon', iconStartedAt, {
+            success: result.success,
+            hasIconDataUrl: Boolean(result.iconDataUrl),
+          });
         })
         .catch(() => {
           queueLauncherIconData(filePath, null);
+          traceLauncherLoad('load-launcher-file-icon', iconStartedAt, { success: false });
         })
         .finally(() => {
           launcherIconPendingPathsRef.current.delete(filePath);
@@ -1996,18 +2238,6 @@ function CommandLauncher() {
       applyFilteredResults(results);
       selectIndex(0);
       resizeForResults(results.length, fileSearchQuery.length > 0 || launcherFileSearchLoading);
-      return;
-    }
-
-    if (appSearchQuery !== null) {
-      const appQuery = appSearchQuery.toLowerCase();
-      const results = balanceLauncherNormalModeMatches(appItems.map(item => {
-        const baseScore = scoreLauncherSearchableItem(item, appQuery);
-        return { item, score: baseScore + getLauncherUsageScore(item, appQuery, usageByItemId, baseScore) };
-      }).filter(({ score }) => score > 0));
-      applyFilteredResults(results);
-      selectIndex(0);
-      resizeForResults(results.length, appSearchQuery.length > 0);
       return;
     }
 
@@ -2103,7 +2333,11 @@ function CommandLauncher() {
     }
 
     if (namespacePrefix) {
-      const pool = namespacePrefix === 'wiki' ? [...directoryItems, ...libraryMarkdownSearchItems] : artifactReadings;
+      const pool = namespacePrefix === 'wiki'
+        ? [...directoryItems, ...libraryMarkdownSearchItems]
+        : namespacePrefix === 'actions'
+          ? actionItems
+          : artifactReadings;
       const results = dedupeLauncherPersonItems(filterLauncherNamespaceItems(pool, q));
       applyFilteredResults(results.slice(0, 20));
       selectIndex(0);
@@ -2139,10 +2373,20 @@ function CommandLauncher() {
       resultCount: results.length,
       usedLocalInstructionFallback: Boolean(fallback),
       totalResultCount: balancedMatches.length,
+      allItemCount: allItems.length,
+      commandItemCount: commandItems.length,
+      actionItemCount: actionItems.length,
+      libraryMarkdownItemCount: libraryMarkdownSearchItems.length,
+      artifactItemCount: artifactReadings.length,
+      bookmarkAuthorItemCount: bookmarkAuthorItems.length,
+      bookmarkFacetItemCount: bookmarkFacetItems.length,
+      bookmarkPostItemCount: bookmarkPostItems.length,
+      recentFileItemCount: recentFileItems.length,
+      fileItemCount: fileItems.length,
       launcherDataLoading,
       elapsedMs: Math.round((performance.now() - filterStartedAt) * 10) / 10,
     });
-  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, appSearchQuery, appItems, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches, applyFilteredResults]);
+  }, [committedItemId, namespacePrefix, directoryNamespace, authorNamespace, bookmarkNamespace, moveSource, query, allItems, isHelpQuery, fileSearchQuery, fileSearchEnabled, fileItems, launcherFileSearchLoading, clipboardSearchQuery, clipboardLauncherItems, clipboardSearchLoading, directoryItems, libraryMarkdownSearchItems, artifactReadings, actionItems, commandItems, authorBookmarkItems, bookmarkAuthorItems, bookmarkFacetItems, bookmarkNamespaceItems, bookmarkPostItems, recentFileItems, localInstructionFallbackForQuery, resizeLauncher, selectIndex, launcherDataLoading, getNormalModeMatches, applyFilteredResults]);
 
   // Reset navigation flag when filtered results change.
   useEffect(() => {
@@ -2436,7 +2680,7 @@ function CommandLauncher() {
         return;
       }
       prepareLauncherForNextOpen();
-      commandsAPI.launcherClose({ skipActivation: true, generation: launcherGenerationRef.current });
+      commandsAPI.launcherClose({ generation: launcherGenerationRef.current });
     } else if (shouldExitLauncherClipboardSearch({ active: clipboardSearchActive, query, key: e.key })) {
       e.preventDefault();
       setClipboardSearchActive(false);
@@ -2976,20 +3220,6 @@ function CommandLauncher() {
         await commandsAPI.invokeHandoff(item.filePath);
       }
       closeForInvocation({ skipActivation: true });
-    } else if (item.type === 'app') {
-      if (!item.appPath) {
-        showInvocationError('launch-app-missing-path', 'App path missing', 'Launch failed');
-        return;
-      }
-      const result = await commandsAPI.launchApp(item.appPath).catch((error) => ({
-        success: false,
-        error: error instanceof Error ? error.message : 'Launch failed',
-      }));
-      if (!result.success) {
-        showInvocationError('launch-app-error', result.error, 'Launch failed');
-        return;
-      }
-      closeForInvocation({ skipActivation: true });
     } else if (item.type === 'file') {
       if (!item.filePath) {
         showInvocationError('open-file-missing-path', 'File path missing', 'Open failed');
@@ -3299,11 +3529,7 @@ function CommandLauncher() {
 
     const iconPath = getLauncherNativeIconPathForItem(item);
     const iconDataUrl = iconPath ? launcherIconDataByPath[iconPath] : null;
-    const fallbackIcon = item.type === 'bookmark' || item.actionId === 'view-bookmarks'
-      ? 'X'
-      : item.type === 'app'
-        ? (item.displayName.trim()[0] ?? item.name.trim()[0] ?? '').toUpperCase()
-        : '';
+    const fallbackIcon = item.type === 'bookmark' || item.actionId === 'view-bookmarks' ? 'X' : '';
     return (
       <span style={styles.itemIconSlot} aria-hidden="true">
         {iconDataUrl ? <img src={iconDataUrl} alt="" style={styles.itemIcon} /> : (
@@ -3349,7 +3575,7 @@ function CommandLauncher() {
           className="command-launcher-input"
           type="text"
           name="field-theory-command-launcher-query"
-          placeholder="Search apps, markdown, commands, bookmarks, or ' files"
+          placeholder="Search markdown, commands, bookmarks, or ' files"
           aria-label={namespaceLabel ? `${namespaceLabel} search` : 'Command search'}
           autoComplete="off"
           autoCorrect="off"
