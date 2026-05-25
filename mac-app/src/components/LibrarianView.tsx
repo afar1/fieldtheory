@@ -11,6 +11,7 @@ import ContentToolbar, { ContentToolbarFolderButton, ContentToolbarMaxwellButton
 import ContentModeToggleButton from './ContentModeToggleButton';
 import ImmersiveToggle, { FOCUS_TOOLBAR_BUTTON_WIDTH } from './ImmersiveToggle';
 import AgentKickoffModal from './AgentKickoffModal';
+import CodexTerminalPanel from './CodexTerminalPanel';
 import LibrarianSetupWizard from './LibrarianSetupWizard';
 import { SidebarRiverIcon } from './SidebarIcons';
 import { useCollapsedSidebarHoverReveal } from '../hooks/useCollapsedSidebarHoverReveal';
@@ -138,11 +139,13 @@ type FieldTheoryMarkdownTarget = {
 };
 
 export type LibrarianSelectedItemType = 'wiki' | 'artifact' | 'bookmarks' | 'ember' | 'external' | null;
+type CodexTerminalPageContextInput = Parameters<NonNullable<Window['codexTerminalAPI']>['attachPageContext']>[1];
 type LibrarianCommandsAPI = NonNullable<Window['commandsAPI']>;
 type MeetingToolbarSession = NonNullable<Awaited<ReturnType<NonNullable<LibrarianCommandsAPI['getActiveMeeting']>>>>;
 const COPY_PATH_FEEDBACK_MS = 1600;
 const LOCAL_RIVER_CHANGED_EVENT = 'fieldtheory:river-changed-local';
 const MEETING_TOOLBAR_ACTIVE_STATUSES = new Set(['starting', 'recording', 'transcribing', 'summarizing']);
+const CODEX_TERMINAL_VISIBLE_STORAGE_KEY = 'fieldtheory.codexTerminal.visible';
 
 function isMeetingToolbarActiveSession(session: MeetingToolbarSession | null | undefined): session is MeetingToolbarSession {
   return !!session && MEETING_TOOLBAR_ACTIVE_STATUSES.has(session.status);
@@ -2625,6 +2628,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   // Content mode: rendered prose, markdown source, or gated Typedown spike.
   const [contentMode, setContentMode] = useState<MarkdownContentMode>('rendered');
+  const [codexTerminalVisible, setCodexTerminalVisible] = useState(() => (
+    localStorage.getItem(CODEX_TERMINAL_VISIBLE_STORAGE_KEY) === 'true'
+  ));
   const [renderedEditingActive, setRenderedEditingActive] = useState(false);
   const [renderedEditorDebugEnabled, setRenderedEditorDebugEnabled] = useState(() => (
     localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true'
@@ -3580,6 +3586,22 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const activeReadingContent = activeReadingPath && latestRenderedContent?.path === activeReadingPath
     ? latestRenderedContent.content
     : activeReading?.content ?? null;
+  const codexTerminalPageContext = useMemo<CodexTerminalPageContextInput | null>(() => {
+    if (!activeReading) return null;
+    const kind: CodexTerminalPageContextInput['kind'] =
+      selectedItemType === 'wiki' || selectedItemType === 'artifact' || selectedItemType === 'external'
+        ? selectedItemType
+        : 'unknown';
+    const selectionText = window.getSelection()?.toString().trim() || undefined;
+    return {
+      title: activeReading.title,
+      path: activeReading.path,
+      kind,
+      contentMode,
+      content: contentMode === 'markdown' ? editContent : activeReadingContent ?? activeReading.content,
+      selectionText,
+    };
+  }, [activeReading, activeReadingContent, contentMode, editContent, selectedItemType]);
   useLayoutEffect(() => {
     pendingScrollRatioRef.current = null;
     if (contentScrollRef.current) {
@@ -8256,6 +8278,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   </button>
                 )}
               {focusToolbarControlsVisible && (
+                <button
+                  type="button"
+                  onClick={() => setCodexTerminalVisible((current) => !current)}
+                  title={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
+                  aria-label={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
+                  style={{
+                    height: '24px',
+                    minWidth: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    boxSizing: 'border-box',
+                    padding: '0 7px',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: codexTerminalVisible ? '#10b981' : theme.textSecondary,
+                    backgroundColor: codexTerminalVisible
+                      ? (theme.isDark ? 'rgba(16,185,129,0.14)' : 'rgba(16,185,129,0.10)')
+                      : 'transparent',
+                    border: `1px solid ${codexTerminalVisible ? 'rgba(16,185,129,0.36)' : theme.border}`,
+                    borderRadius: '5px',
+                    cursor: 'pointer',
+                    flexShrink: 0,
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    letterSpacing: 0,
+                    // @ts-ignore - opt out of the drag region so the click lands.
+                    WebkitAppRegion: 'no-drag',
+                  }}
+                >
+                  Codex
+                </button>
+              )}
+              {focusToolbarControlsVisible && (
                 <ContentModeToggleButton
                   mode={contentMode}
                   disabled={activeIsSourceOnlyDocument}
@@ -8803,6 +8857,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         </div>
         </Fragment>
         )}
+        <CodexTerminalPanel
+          visible={codexTerminalVisible}
+          pageContext={codexTerminalPageContext}
+          onVisibleChange={setCodexTerminalVisible}
+        />
       </div>
 
       {shortcutsHelpOpen && (

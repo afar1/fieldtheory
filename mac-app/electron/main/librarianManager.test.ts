@@ -1340,6 +1340,47 @@ describe('librarian user data', () => {
     expect(invalidateWikiTreeCache).toHaveBeenCalledTimes(1);
     expect(invalidateLibraryRootsCache).toHaveBeenCalledTimes(1);
   });
+
+  it('repairs stale root settings before answering setup status', () => {
+    const rootDir = makeTempDir();
+    const userDir = path.join(rootDir, 'users', 'current-user');
+    fs.mkdirSync(userDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(userDir, 'librarian-settings.json'),
+      JSON.stringify({ librarianSetupComplete: true }),
+      'utf-8',
+    );
+
+    const loadIndex = vi.fn();
+    const invalidateWikiTreeCache = vi.fn();
+    const invalidateLibraryRootsCache = vi.fn();
+    const manager = Object.create(LibrarianManager.prototype) as {
+      userDataManager: unknown;
+      settingsPath: string;
+      indexPath: string;
+      settings: unknown;
+      isSetupComplete: LibrarianManager['isSetupComplete'];
+      loadIndex: typeof loadIndex;
+      invalidateWikiTreeCache: typeof invalidateWikiTreeCache;
+      invalidateLibraryRootsCache: typeof invalidateLibraryRootsCache;
+    };
+    manager.userDataManager = {
+      isLoggedIn: () => true,
+      getUserDataPath: (subpath?: string) => subpath ? path.join(userDir, subpath) : userDir,
+    };
+    manager.settingsPath = path.join(rootDir, 'librarian-settings.json');
+    manager.indexPath = path.join(rootDir, 'librarian-index.json');
+    manager.settings = { librarianSetupComplete: false };
+    manager.loadIndex = loadIndex;
+    manager.invalidateWikiTreeCache = invalidateWikiTreeCache;
+    manager.invalidateLibraryRootsCache = invalidateLibraryRootsCache;
+
+    expect(manager.isSetupComplete()).toBe(true);
+    expect(manager.settingsPath).toBe(path.join(userDir, 'librarian-settings.json'));
+    expect(loadIndex).toHaveBeenCalledTimes(1);
+    expect(invalidateWikiTreeCache).toHaveBeenCalledTimes(1);
+    expect(invalidateLibraryRootsCache).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('library roots', () => {
