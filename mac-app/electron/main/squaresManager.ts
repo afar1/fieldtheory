@@ -18,12 +18,13 @@ import {
   ScreenInfo,
   WindowSnapshot,
   SquaresAction,
-  SquaresActionSource,
+  SquaresActionOptions,
   SquaresConfig,
   SquaresHotkeys,
   DEFAULT_SQUARES_CONFIG,
   DEFAULT_SQUARES_HOTKEYS,
 } from './types/squares';
+import type { NativeWindowInfo } from './types/audio';
 
 const log = createLogger('Squares');
 const execAsync = promisify(exec);
@@ -31,12 +32,23 @@ const execAsync = promisify(exec);
 // Maximum time we'll wait for an AppleScript to complete.
 const APPLESCRIPT_TIMEOUT_MS = 5000;
 
-// Field Theory bundle IDs - we skip these when listing/managing windows.
-const FIELD_THEORY_BUNDLE_IDS = [
+// Field Theory bundle IDs are skipped by default, and included only for
+// launcher-triggered window management while Field Theory was already active.
+const FIELD_THEORY_BUNDLE_IDS = new Set([
   'com.fieldtheory.app',
   'com.fieldtheory.experimental',
   'com.github.Electron',
-];
+]);
+const FIELD_THEORY_UTILITY_WINDOW_TITLES = new Set([
+  'field theory command launcher',
+  'field theory command preview',
+]);
+const FIELD_THEORY_MANAGEABLE_MIN_WIDTH = 600;
+const FIELD_THEORY_MANAGEABLE_MIN_HEIGHT = 500;
+
+type WindowDiscoveryOptions = {
+  includeFieldTheoryWindows?: boolean;
+};
 
 const VALID_SQUARES_VOICE_ACTIONS = new Set<SquaresAction>([
   'leftHalf',
@@ -231,16 +243,17 @@ export class SquaresManager extends EventEmitter {
 
   /**
    * Get all visible windows using the native Swift helper.
-   * Filters out Field Theory windows and non-standard windows.
+   * Filters out Field Theory windows by default and skips utility overlays
+   * when Field Theory windows are explicitly included.
    */
-  async getWindows(): Promise<WindowInfo[]> {
+  async getWindows(options: WindowDiscoveryOptions = {}): Promise<WindowInfo[]> {
     if (process.platform !== 'darwin') return [];
 
     try {
       const nativeWindows = await this.nativeHelper.getWindowList();
 
       return nativeWindows
-        .filter(w => !FIELD_THEORY_BUNDLE_IDS.includes(w.ownerBundleId))
+        .filter(w => this.shouldIncludeNativeWindow(w, options))
         .map(w => ({
           windowId: w.windowId,
           ownerName: w.ownerName,
@@ -255,6 +268,22 @@ export class SquaresManager extends EventEmitter {
       log.error('Failed to get windows:', err);
       return [];
     }
+  }
+
+  private shouldIncludeNativeWindow(window: NativeWindowInfo, options: WindowDiscoveryOptions): boolean {
+    if (!this.isFieldTheoryWindow(window)) return true;
+    return options.includeFieldTheoryWindows === true && this.isManageableFieldTheoryWindow(window);
+  }
+
+  private isFieldTheoryWindow(window: Pick<NativeWindowInfo, 'ownerBundleId'>): boolean {
+    return FIELD_THEORY_BUNDLE_IDS.has(window.ownerBundleId.toLowerCase());
+  }
+
+  private isManageableFieldTheoryWindow(window: NativeWindowInfo): boolean {
+    const title = window.title.trim().toLowerCase();
+    if (FIELD_THEORY_UTILITY_WINDOW_TITLES.has(title)) return false;
+    return window.width >= FIELD_THEORY_MANAGEABLE_MIN_WIDTH
+      && window.height >= FIELD_THEORY_MANAGEABLE_MIN_HEIGHT;
   }
 
   /**
@@ -445,8 +474,8 @@ export class SquaresManager extends EventEmitter {
    * Get the frontmost (active) window info.
    * Uses the cached frontmost app from nativeHelper (updated on app switch, no IPC).
    */
-  private async getFrontmostWindow(): Promise<WindowInfo | null> {
-    const windows = await this.getWindows();
+  private async getFrontmostWindow(options: WindowDiscoveryOptions = {}): Promise<WindowInfo | null> {
+    const windows = await this.getWindows(options);
     if (windows.length === 0) {
       log.info('getFrontmostWindow: getWindows() returned empty');
       return null;
@@ -479,8 +508,8 @@ export class SquaresManager extends EventEmitter {
   /**
    * Get all windows belonging to the frontmost app.
    */
-  private async getFrontmostAppWindows(): Promise<WindowInfo[]> {
-    const windows = await this.getWindows();
+  private async getFrontmostAppWindows(options: WindowDiscoveryOptions = {}): Promise<WindowInfo[]> {
+    const windows = await this.getWindows(options);
     if (windows.length === 0) return [];
 
     // Use cached frontmost app info (match by bundleId for uniqueness).
@@ -847,9 +876,12 @@ export class SquaresManager extends EventEmitter {
    */
   async executeAction(
     action: SquaresAction,
-    options: { source?: SquaresActionSource } = {}
+    options: SquaresActionOptions = {}
   ): Promise<boolean> {
     const source = options.source ?? 'default';
+    const windowDiscoveryOptions = {
+      includeFieldTheoryWindows: options.includeFieldTheoryWindows === true,
+    };
     const canRunFromLauncher = source === 'command-launcher' && this.config.showInCommandLauncher;
 
     if (!this.config.enabled && !canRunFromLauncher) {
@@ -873,11 +905,11 @@ export class SquaresManager extends EventEmitter {
           break;
 
         case 'grid':
-          success = await this.executeGridAction();
+          success = await this.executeGridAction(windowDiscoveryOptions);
           break;
 
         case 'focus':
-          success = await this.executeFocusAction();
+          success = await this.executeFocusAction(windowDiscoveryOptions);
           break;
 
         case 'minimize':
@@ -901,19 +933,19 @@ export class SquaresManager extends EventEmitter {
           break;
 
         case 'horizontalSpread':
-          success = await this.executeSpreadAction('horizontal');
+          success = await this.executeSpreadAction('horizontal', windowDiscoveryOptions);
           break;
 
         case 'verticalSpread':
-          success = await this.executeSpreadAction('vertical');
+          success = await this.executeSpreadAction('vertical', windowDiscoveryOptions);
           break;
 
         case 'cascade':
-          success = await this.executeCascadeAction();
+          success = await this.executeCascadeAction(windowDiscoveryOptions);
           break;
 
         default:
-          success = await this.executeSingleWindowAction(action);
+          success = await this.executeSingleWindowAction(action, windowDiscoveryOptions);
           break;
       }
 
@@ -933,12 +965,12 @@ export class SquaresManager extends EventEmitter {
   /**
    * Execute a single-window action (halves, quarters, thirds, maximize, center).
    */
-  private async executeSingleWindowAction(action: SquaresAction): Promise<boolean> {
-    let frontWindow = await this.getFrontmostWindow();
+  private async executeSingleWindowAction(action: SquaresAction, options: WindowDiscoveryOptions = {}): Promise<boolean> {
+    let frontWindow = await this.getFrontmostWindow(options);
     if (!frontWindow) {
       // Retry once — JXA/AppleScript can transiently fail under load
       await new Promise(r => setTimeout(r, 100));
-      frontWindow = await this.getFrontmostWindow();
+      frontWindow = await this.getFrontmostWindow(options);
     }
     if (!frontWindow) {
       log.info('No frontmost window found (after retry)');
@@ -959,8 +991,8 @@ export class SquaresManager extends EventEmitter {
   /**
    * Execute grid action - tile the current app's windows into a grid.
    */
-  private async executeGridAction(): Promise<boolean> {
-    const windows = await this.getFrontmostAppWindows();
+  private async executeGridAction(options: WindowDiscoveryOptions = {}): Promise<boolean> {
+    const windows = await this.getFrontmostAppWindows(options);
     if (windows.length === 0) return false;
 
     const targetScreen = this.getTargetScreenForAppWindows(windows);
@@ -986,9 +1018,9 @@ export class SquaresManager extends EventEmitter {
   /**
    * Execute focus action - hide all windows except frontmost, center it.
    */
-  private async executeFocusAction(): Promise<boolean> {
-    const allWindows = await this.getWindows();
-    const frontWindow = await this.getFrontmostWindow();
+  private async executeFocusAction(options: WindowDiscoveryOptions = {}): Promise<boolean> {
+    const allWindows = await this.getWindows(options);
+    const frontWindow = await this.getFrontmostWindow(options);
     if (!frontWindow) return false;
 
     // Save ALL windows for undo (so we can unhide + unminimize them).
@@ -1000,7 +1032,7 @@ export class SquaresManager extends EventEmitter {
     // Hide other windows of the same app (keep only the frontmost).
     // Move them off-screen via AX API — works on all windows including terminals
     // that don't expose the miniaturized property. Undo restores their saved positions.
-    const appWindows = await this.getFrontmostAppWindows();
+    const appWindows = await this.getFrontmostAppWindows(options);
     const otherWindows = appWindows.filter(w => w.windowId !== frontWindow.windowId);
     if (otherWindows.length > 0) {
       const offScreenMoves = otherWindows.map(w => ({
@@ -1090,15 +1122,15 @@ export class SquaresManager extends EventEmitter {
   /**
    * Execute horizontal or vertical spread for the current app's windows.
    */
-  private async executeSpreadAction(direction: 'horizontal' | 'vertical'): Promise<boolean> {
-    const appWindows = await this.getFrontmostAppWindows();
+  private async executeSpreadAction(direction: 'horizontal' | 'vertical', options: WindowDiscoveryOptions = {}): Promise<boolean> {
+    const appWindows = await this.getFrontmostAppWindows(options);
     if (appWindows.length === 0) return false;
 
     const hideOthers = direction === 'horizontal' && this.config.horizontalHideOthers;
 
     if (hideOthers) {
       // Save ALL windows (like focus) so undo can unhide + restore positions.
-      const allWindows = await this.getWindows();
+      const allWindows = await this.getWindows(options);
       this.saveHistory(allWindows, 'focus');
       await this.hideOtherApps(appWindows[0].ownerPID);
     } else {
@@ -1125,8 +1157,8 @@ export class SquaresManager extends EventEmitter {
   /**
    * Execute cascade layout for the current app's windows.
    */
-  private async executeCascadeAction(): Promise<boolean> {
-    const appWindows = await this.getFrontmostAppWindows();
+  private async executeCascadeAction(options: WindowDiscoveryOptions = {}): Promise<boolean> {
+    const appWindows = await this.getFrontmostAppWindows(options);
     if (appWindows.length === 0) return false;
 
     const targetScreen = this.getTargetScreenForAppWindows(appWindows);

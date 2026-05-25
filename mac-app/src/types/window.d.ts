@@ -1434,14 +1434,6 @@ interface MeetingActionResult {
   summaryError?: string;
 }
 
-interface LauncherAppInfo {
-  name: string;
-  displayName: string;
-  appPath: string;
-  bundleId?: string;
-  lastModified: number;
-}
-
 interface LauncherFileInfo {
   name: string;
   displayName: string;
@@ -1520,8 +1512,6 @@ interface CommandsAPI {
 
   // Command launcher (Cmd+Shift+K)
   invokeCommand?: (commandName: string) => Promise<{ success: boolean; error?: string }>;
-  listLauncherApps?: () => Promise<LauncherAppInfo[]>;
-  launchApp?: (appPath: string) => Promise<{ success: boolean; error?: string }>;
   getLauncherFileIcon?: (filePath: string) => Promise<LauncherFileIconResult>;
   searchLauncherFiles?: (query: string) => Promise<LauncherFileSearchResult>;
   openLauncherFile?: (filePath: string) => Promise<{ success: boolean; error?: string }>;
@@ -2762,7 +2752,7 @@ interface CodexTerminalSessionSummary {
   id: string;
   title: string;
   cwd: string;
-  engine: 'pty' | 'nativeGhostty';
+  engine: 'pty';
   createdAt: string;
   exitedAt: string | null;
   exitCode: number | null;
@@ -2787,37 +2777,6 @@ interface CodexTerminalAttachResult {
   error?: string;
 }
 
-interface CodexTerminalGhosttyStatus {
-  status: 'ready' | 'missing-source' | 'missing-header' | 'missing-library' | 'missing-license';
-  sourceDir: string | null;
-  includeDir: string | null;
-  vtHeaderPath: string | null;
-  embeddingHeaderPath: string | null;
-  kitFrameworkPath: string | null;
-  kitMacosHeaderDir: string | null;
-  kitMacosLibraryPath: string | null;
-  libraryPath: string | null;
-  licensePath: string | null;
-  warnings: string[];
-}
-
-interface CodexTerminalNativeGhosttyHostStatus {
-  ok: boolean;
-  modulePath: string | null;
-  error?: string;
-}
-
-interface CodexTerminalNativeGhosttyResult {
-  ok: boolean;
-  error?: string;
-}
-
-interface CodexTerminalNativeGhosttySnapshot {
-  ok: boolean;
-  text?: string;
-  error?: string;
-}
-
 interface CodexTerminalAttachedContext {
   sessionId: string;
   sessionTitle: string;
@@ -2833,22 +2792,16 @@ interface CodexTerminalAttachedContext {
 }
 
 interface CodexTerminalAPI {
-  create: (input?: { cwd?: string; title?: string; cols?: number; rows?: number; nativeGhostty?: boolean }) => Promise<CodexTerminalSessionSummary>;
+  create: (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean }) => Promise<CodexTerminalSessionSummary>;
   list: () => Promise<CodexTerminalSessionSummary[]>;
   getBuffer: (id: string) => Promise<string | null>;
   input: (id: string, data: string) => Promise<boolean>;
   resize: (id: string, cols: number, rows: number) => Promise<boolean>;
   kill: (id: string) => Promise<boolean>;
   rename: (id: string, title: string) => Promise<boolean>;
-  ghosttyStatus: () => Promise<CodexTerminalGhosttyStatus>;
-  nativeGhosttyHostStatus: () => Promise<CodexTerminalNativeGhosttyHostStatus>;
-  nativeGhosttyAttach: (input: { id: string; x: number; y: number; width: number; height: number; cwd?: string; command?: string }) => Promise<CodexTerminalNativeGhosttyResult>;
-  nativeGhosttyUpdateFrame: (input: { id: string; x: number; y: number; width: number; height: number }) => Promise<CodexTerminalNativeGhosttyResult>;
-  nativeGhosttySendText: (id: string, text: string) => Promise<CodexTerminalNativeGhosttyResult>;
-  nativeGhosttySendKey: (input: { id: string; action: 'press' | 'release' | 'repeat'; keyCode: number; text?: string; unshiftedCodepoint?: number; shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean; caps?: boolean }) => Promise<CodexTerminalNativeGhosttyResult>;
-  nativeGhosttySnapshot: (id: string) => Promise<CodexTerminalNativeGhosttySnapshot>;
-  nativeGhosttyDetach: (id: string) => Promise<CodexTerminalNativeGhosttyResult>;
-  attachPageContext: (id: string, context: CodexTerminalPageContext) => Promise<CodexTerminalAttachResult>;
+  readClipboardText: () => Promise<string>;
+  writeClipboardText: (text: string) => Promise<boolean>;
+  attachPageContext: (id: string, context: CodexTerminalPageContext, options?: { notifyTerminal?: boolean }) => Promise<CodexTerminalAttachResult>;
   onData: (callback: (event: { id: string; data: string }) => void) => () => void;
   onExit: (callback: (session: CodexTerminalSessionSummary) => void) => () => void;
   onSessionsChanged: (callback: (sessions: CodexTerminalSessionSummary[]) => void) => () => void;

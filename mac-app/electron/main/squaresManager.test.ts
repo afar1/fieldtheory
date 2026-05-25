@@ -24,7 +24,7 @@ vi.mock('./logger', () => ({
 
 import { SquaresManager, resolveHeight } from './squaresManager';
 
-function createManager(configOverrides: Record<string, any> = {}): SquaresManager {
+function createManager(configOverrides: Record<string, any> = {}, nativeHelper: Record<string, any> = {}): SquaresManager {
   const preferences = {
     getPreference: vi.fn((key: string) => {
       if (key === 'squaresConfig') return configOverrides;
@@ -32,7 +32,7 @@ function createManager(configOverrides: Record<string, any> = {}): SquaresManage
     }),
     save: vi.fn(async () => undefined),
   };
-  return new SquaresManager(preferences as any, {} as any);
+  return new SquaresManager(preferences as any, nativeHelper as any);
 }
 
 describe('SquaresManager keyboard shortcuts', () => {
@@ -185,5 +185,83 @@ describe('SquaresManager command launcher execution', () => {
 
     expect(result).toBe(false);
     expect(executeGridAction).not.toHaveBeenCalled();
+  });
+
+  it('passes the Field Theory window opt-in to launcher-triggered actions', async () => {
+    const manager = createManager({ enabled: false, showInCommandLauncher: true });
+    const executeSpreadAction = vi.spyOn(manager as any, 'executeSpreadAction').mockResolvedValue(true);
+
+    const result = await manager.executeAction('horizontalSpread', {
+      source: 'command-launcher',
+      includeFieldTheoryWindows: true,
+    });
+
+    expect(result).toBe(true);
+    expect(executeSpreadAction).toHaveBeenCalledWith('horizontal', { includeFieldTheoryWindows: true });
+  });
+});
+
+describe('SquaresManager Field Theory window discovery', () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const nativeWindows = [
+    {
+      windowId: 1,
+      ownerName: 'Field Theory',
+      ownerPID: 100,
+      ownerBundleId: 'com.fieldtheory.app',
+      title: 'Weekend Brief',
+      x: 0,
+      y: 0,
+      width: 900,
+      height: 700,
+      layer: 0,
+    },
+    {
+      windowId: 2,
+      ownerName: 'Field Theory',
+      ownerPID: 100,
+      ownerBundleId: 'com.fieldtheory.app',
+      title: 'Field Theory Command Launcher',
+      x: 100,
+      y: 100,
+      width: 520,
+      height: 52,
+      layer: 0,
+    },
+    {
+      windowId: 3,
+      ownerName: 'Safari',
+      ownerPID: 200,
+      ownerBundleId: 'com.apple.Safari',
+      title: 'Safari',
+      x: 20,
+      y: 20,
+      width: 1000,
+      height: 800,
+      layer: 0,
+    },
+  ];
+
+  it('excludes Field Theory windows by default', async () => {
+    const manager = createManager({}, {
+      getWindowList: vi.fn(async () => nativeWindows),
+    });
+
+    const windows = await manager.getWindows();
+
+    expect(windows.map(w => w.title)).toEqual(['Safari']);
+  });
+
+  it('includes normal Field Theory windows when opted in but excludes launcher utilities', async () => {
+    const manager = createManager({}, {
+      getWindowList: vi.fn(async () => nativeWindows),
+    });
+
+    const windows = await manager.getWindows({ includeFieldTheoryWindows: true });
+
+    expect(windows.map(w => w.title)).toEqual(['Weekend Brief', 'Safari']);
   });
 });

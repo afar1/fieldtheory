@@ -87,10 +87,9 @@ describe('pickSavedBoundsByKey', () => {
 describe('normalizeLauncherRootSearchEnabledKinds', () => {
   it('keeps launcher root search settings explicit and defaulted', () => {
     expect(normalizeLauncherRootSearchEnabledKinds(undefined)).toEqual(DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS);
-    expect(normalizeLauncherRootSearchEnabledKinds({ app: false, file: true, contact: true })).toEqual({
+    expect(normalizeLauncherRootSearchEnabledKinds({ file: false, contact: true })).toEqual({
       ...DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS,
-      app: false,
-      file: true,
+      file: false,
       contact: true,
     });
   });

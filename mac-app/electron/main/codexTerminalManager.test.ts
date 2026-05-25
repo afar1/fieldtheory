@@ -94,7 +94,7 @@ describe('CodexTerminalManager', () => {
     }
   });
 
-  it('loads persisted sessions as replay-only sessions with transcript buffer', () => {
+  it('prunes persisted sessions on startup so old terminal tabs do not reopen', () => {
     const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
     const contextDirPath = join(libraryDir, 'Codex Context');
     const transcriptDirPath = join(contextDirPath, 'transcripts');
@@ -125,42 +125,68 @@ describe('CodexTerminalManager', () => {
       });
 
       expect(spawnPty).not.toHaveBeenCalled();
-      expect(manager.listSessions()).toMatchObject([
-        { id: 'saved', title: 'Saved Codex', restored: true, exitedAt: '2026-05-25T00:01:00.000Z' },
-      ]);
-      expect(manager.getBuffer('saved')).toBe('old output');
+      expect(manager.listSessions()).toEqual([]);
+      expect(JSON.parse(readFileSync(sessionStateFilePath, 'utf8'))).toEqual([]);
       expect(manager.writeInput('saved', 'nope')).toBe(false);
     } finally {
       rmSync(libraryDir, { recursive: true, force: true });
     }
   });
 
-  it('creates native Ghostty sessions as durable metadata without spawning a PTY', () => {
+  it('prunes persisted native terminal sessions on startup', () => {
     const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
-    const sessionStateFilePath = join(libraryDir, 'Codex Context', 'session-state.json');
-    const { manager, spawnPty } = createManager(1024, {
-      contextDirPath: join(libraryDir, 'Codex Context'),
-      sessionStateFilePath,
-    });
+    const contextDirPath = join(libraryDir, 'Codex Context');
+    const transcriptDirPath = join(contextDirPath, 'transcripts');
+    const sessionStateFilePath = join(contextDirPath, 'session-state.json');
+    mkdirSync(transcriptDirPath, { recursive: true });
+    const transcriptPath = join(transcriptDirPath, 'native.ansi');
+    writeFileSync(transcriptPath, 'old native output', 'utf8');
+    writeFileSync(sessionStateFilePath, JSON.stringify([
+      {
+        id: 'old-native',
+        title: 'Old Native',
+        cwd: process.cwd(),
+        engine: 'nativeGhostty',
+        createdAt: '2026-05-25T00:00:00.000Z',
+        exitedAt: null,
+        exitCode: null,
+        restored: false,
+        transcriptPath,
+        attachedContexts: [],
+      },
+    ]), 'utf8');
 
     try {
-      const session = manager.createSession({ nativeGhostty: true, title: 'Native Ghostty' });
+      const { manager, spawnPty } = createManager(1024, {
+        contextDirPath,
+        transcriptDirPath,
+        sessionStateFilePath,
+      });
 
       expect(spawnPty).not.toHaveBeenCalled();
-      expect(session).toMatchObject({
-        title: 'Native Ghostty',
-        engine: 'nativeGhostty',
-        restored: false,
-        exitedAt: null,
-      });
-      expect(manager.writeInput(session.id, 'no pty')).toBe(false);
-      expect(JSON.parse(readFileSync(sessionStateFilePath, 'utf8'))[0]).toMatchObject({
-        id: session.id,
-        engine: 'nativeGhostty',
-      });
+      expect(manager.listSessions()).toEqual([]);
+      expect(JSON.parse(readFileSync(sessionStateFilePath, 'utf8'))).toEqual([]);
     } finally {
       rmSync(libraryDir, { recursive: true, force: true });
     }
+  });
+
+  it('reuses an active session for automatic startup creation', () => {
+    const { manager, spawnPty } = createManager();
+    const first = manager.createSession({ auto: true });
+    const second = manager.createSession({ auto: true });
+
+    expect(second.id).toBe(first.id);
+    expect(spawnPty).toHaveBeenCalledTimes(1);
+    expect(manager.listSessions()).toHaveLength(1);
+  });
+
+  it('starts Codex inside a login shell so interrupting Codex leaves the shell alive', () => {
+    const { manager, ptys, spawnPty } = createManager();
+    manager.createSession();
+
+    expect((spawnPty as any).mock.calls[0]?.[1]).toEqual(['-l']);
+    expect(ptys[0].written[0]).toBe('codex\r');
   });
 
   it('keeps only the bounded tail of terminal output', () => {
@@ -209,8 +235,10 @@ describe('CodexTerminalManager', () => {
       expect(manager.listSessions()[0].attachedContexts[0].sessionCwd).toBe(process.cwd());
       expect(manager.listSessions()[0].attachedContexts[0].filePath).toBe(result.filePath);
       expect(manager.listSessions()[0].restored).toBe(false);
-      expect(ptys[0].written.at(-1)).toContain(`live Field Theory context at: ${result.filePath}`);
-      expect(ptys[0].written.at(-1)).toContain('current document, selection, recent changes, and included pages');
+      expect(ptys[0].written.at(-1)).toContain('Field Theory attached live document context for: Panel idea');
+      expect(ptys[0].written.at(-1)).toContain(`Manifest: ${result.filePath}`);
+      expect(ptys[0].written.at(-1)).toContain('Do not summarize or explain the attached context just because it exists.');
+      expect(ptys[0].written.at(-1)).toContain('Read the manifest or content files only when the user asks something that needs document details.');
 
       const updatedResult = manager.attachPageContext(session.id, {
         title: 'Panel idea',
@@ -224,7 +252,7 @@ describe('CodexTerminalManager', () => {
       expect(updatedResult.prompt).toBeUndefined();
       expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
-      expect(ptys[0].written).toHaveLength(1);
+      expect(ptys[0].written).toHaveLength(2);
     } finally {
       if (previousLibraryDir === undefined) {
         delete process.env.FT_LIBRARY_DIR;
@@ -241,7 +269,7 @@ describe('CodexTerminalManager', () => {
     const { manager } = createManager(1024, {
       contextDirPath,
     });
-    const session = manager.createSession({ nativeGhostty: true });
+    const session = manager.createSession();
 
     try {
       const result = manager.attachPageContext(session.id, {
@@ -278,64 +306,30 @@ describe('CodexTerminalManager', () => {
     }
   });
 
-  it('attaches page context to native Ghostty sessions without requiring a PTY', () => {
+  it('updates page context silently when terminal notification is disabled', () => {
     const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
-    const provenanceFilePath = join(libraryDir, 'Codex Context', 'session-provenance.json');
+    const contextDirPath = join(libraryDir, 'Codex Context');
     const { manager, ptys } = createManager(1024, {
-      provenanceFilePath,
-      contextDirPath: join(libraryDir, 'Codex Context'),
+      contextDirPath,
     });
-    const session = manager.createSession({ nativeGhostty: true, title: 'Native Context' });
+    const session = manager.createSession();
 
     try {
       const result = manager.attachPageContext(session.id, {
-        title: 'Native note',
-        path: 'wiki://native-note',
+        title: 'Silent note',
+        path: 'wiki://silent-note',
         kind: 'wiki',
         contentMode: 'markdown',
-        content: 'Use this with native Ghostty.',
-      });
+        content: 'Quiet context.',
+      }, { notifyTerminal: false });
 
-      expect(ptys).toHaveLength(0);
       expect(result.ok).toBe(true);
-      expect(result.filePath).toBe(join(libraryDir, 'Codex Context', 'sessions', session.id, 'context.json'));
-      expect(result.prompt).toContain(`live Field Theory context at: ${result.filePath}`);
-      expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
-      expect(JSON.parse(readFileSync(provenanceFilePath, 'utf8'))[0]).toMatchObject({
-        sessionId: session.id,
-        sessionTitle: 'Native Context',
-        launchedCommand: 'codex',
-        filePath: result.filePath,
-        sourcePath: 'wiki://native-note',
-      });
+      expect(result.prompt).toBeUndefined();
+      expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Quiet context.');
+      expect(ptys[0].written).toEqual(['codex\r']);
     } finally {
       rmSync(libraryDir, { recursive: true, force: true });
     }
-  });
-
-  it('persists native Ghostty text snapshots to the transcript path', () => {
-    const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
-    const { manager } = createManager(1024, {
-      contextDirPath: join(libraryDir, 'Codex Context'),
-      transcriptDirPath: join(libraryDir, 'Codex Context', 'transcripts'),
-      sessionStateFilePath: join(libraryDir, 'Codex Context', 'session-state.json'),
-    });
-    const session = manager.createSession({ nativeGhostty: true });
-
-    try {
-      expect(manager.persistNativeSnapshot(session.id, 'native ghostty screen\n')).toBe(true);
-      expect(readFileSync(session.transcriptPath, 'utf8')).toBe('native ghostty screen\n');
-      expect(manager.getBuffer(session.id)).toBe('native ghostty screen');
-    } finally {
-      rmSync(libraryDir, { recursive: true, force: true });
-    }
-  });
-
-  it('does not persist native snapshots onto PTY sessions', () => {
-    const { manager } = createManager();
-    const session = manager.createSession();
-
-    expect(manager.persistNativeSnapshot(session.id, 'wrong engine')).toBe(false);
   });
 
   it('persists attached context provenance to the Field Theory Library', () => {

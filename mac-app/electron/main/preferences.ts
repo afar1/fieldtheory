@@ -51,7 +51,6 @@ export interface ClipboardHistoryBounds {
 export type ClipboardHistorySizeKey = 'fields' | 'library' | 'canvas' | 'draw';
 export type FieldTheoryWindowMode = 'panel' | 'app';
 export const LAUNCHER_ROOT_SEARCH_KINDS = [
-  'app',
   'system-setting',
   'contact',
   'file',
@@ -66,7 +65,6 @@ export const LAUNCHER_ROOT_SEARCH_KINDS = [
 export type LauncherRootSearchKind = typeof LAUNCHER_ROOT_SEARCH_KINDS[number];
 export type LauncherRootSearchEnabledKinds = Partial<Record<LauncherRootSearchKind, boolean>>;
 export const DEFAULT_LAUNCHER_ROOT_SEARCH_ENABLED_KINDS: Record<LauncherRootSearchKind, boolean> = {
-  app: true,
   'system-setting': false,
   contact: false,
   file: true,

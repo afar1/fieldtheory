@@ -20,8 +20,6 @@ export const CommandsIPCChannels = {
 
   // Direct invocation (from command launcher)
   INVOKE_COMMAND: 'commands:invoke',
-  LIST_LAUNCHER_APPS: 'commands:listLauncherApps',
-  LAUNCH_APP: 'commands:launchApp',
   GET_LAUNCHER_FILE_ICON: 'commands:getLauncherFileIcon',
   SEARCH_LAUNCHER_FILES: 'commands:searchLauncherFiles',
   OPEN_LAUNCHER_FILE: 'commands:openLauncherFile',
@@ -83,14 +81,6 @@ export interface PortableCommandDirectoryInfo {
   rootPath: string;
   directoryPath: string;
   directoryRelPath: string;
-  lastModified: number;
-}
-
-export interface LauncherAppInfo {
-  name: string;
-  displayName: string;
-  appPath: string;
-  bundleId?: string;
   lastModified: number;
 }
 
