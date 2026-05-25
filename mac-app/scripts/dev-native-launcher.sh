@@ -8,6 +8,7 @@ cd "$APP_DIR"
 
 npm run build:electron --silent
 npm run build:native --silent
+npm run build:ghostty-host --silent
 ./node_modules/.bin/wait-on tcp:5173
 
 ELECTRON_PATH="$APP_DIR/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"

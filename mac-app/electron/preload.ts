@@ -5185,6 +5185,147 @@ const hotMicAPI = {
 };
 contextBridge.exposeInMainWorld('hotMicAPI', hotMicAPI);
 
+type CodexTerminalSessionSummary = {
+  id: string;
+  title: string;
+  cwd: string;
+  engine: 'pty' | 'nativeGhostty';
+  createdAt: string;
+  exitedAt: string | null;
+  exitCode: number | null;
+  restored: boolean;
+  transcriptPath: string;
+  attachedContexts: CodexTerminalAttachedContext[];
+};
+
+type CodexTerminalAttachedContext = {
+  sessionId: string;
+  sessionTitle: string;
+  sessionCwd: string;
+  launchedCommand: string;
+  repoPath: string | null;
+  gitBranch: string | null;
+  filePath: string;
+  title: string;
+  sourcePath: string;
+  kind: CodexTerminalPageContext['kind'];
+  attachedAt: string;
+};
+
+type CodexTerminalPageContext = {
+  title: string;
+  path: string;
+  kind: 'wiki' | 'artifact' | 'external' | 'unknown';
+  contentMode: string;
+  content: string;
+  selectionText?: string;
+};
+
+type CodexTerminalAttachResult = {
+  ok: boolean;
+  filePath?: string;
+  prompt?: string;
+  error?: string;
+};
+
+type CodexTerminalGhosttyStatus = {
+  status: 'ready' | 'missing-source' | 'missing-header' | 'missing-library' | 'missing-license';
+  sourceDir: string | null;
+  includeDir: string | null;
+  vtHeaderPath: string | null;
+  embeddingHeaderPath: string | null;
+  kitFrameworkPath: string | null;
+  kitMacosHeaderDir: string | null;
+  kitMacosLibraryPath: string | null;
+  libraryPath: string | null;
+  licensePath: string | null;
+  warnings: string[];
+};
+
+type CodexTerminalNativeGhosttyHostStatus = {
+  ok: boolean;
+  modulePath: string | null;
+  error?: string;
+};
+
+type CodexTerminalNativeGhosttyResult = {
+  ok: boolean;
+  error?: string;
+};
+
+type CodexTerminalNativeGhosttySnapshot = {
+  ok: boolean;
+  text?: string;
+  error?: string;
+};
+
+const codexTerminalAPI = {
+  create: async (input?: { cwd?: string; title?: string; cols?: number; rows?: number; nativeGhostty?: boolean }): Promise<CodexTerminalSessionSummary> => {
+    return ipcRenderer.invoke('codexTerminal:create', input);
+  },
+  list: async (): Promise<CodexTerminalSessionSummary[]> => {
+    return ipcRenderer.invoke('codexTerminal:list');
+  },
+  getBuffer: async (id: string): Promise<string | null> => {
+    return ipcRenderer.invoke('codexTerminal:getBuffer', id);
+  },
+  input: async (id: string, data: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:input', id, data);
+  },
+  resize: async (id: string, cols: number, rows: number): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:resize', id, cols, rows);
+  },
+  kill: async (id: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:kill', id);
+  },
+  rename: async (id: string, title: string): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:rename', id, title);
+  },
+  ghosttyStatus: async (): Promise<CodexTerminalGhosttyStatus> => {
+    return ipcRenderer.invoke('codexTerminal:ghosttyStatus');
+  },
+  nativeGhosttyHostStatus: async (): Promise<CodexTerminalNativeGhosttyHostStatus> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttyHostStatus');
+  },
+  nativeGhosttyAttach: async (input: { id: string; x: number; y: number; width: number; height: number; cwd?: string; command?: string }): Promise<CodexTerminalNativeGhosttyResult> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttyAttach', input);
+  },
+  nativeGhosttyUpdateFrame: async (input: { id: string; x: number; y: number; width: number; height: number }): Promise<CodexTerminalNativeGhosttyResult> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttyUpdateFrame', input);
+  },
+  nativeGhosttySendText: async (id: string, text: string): Promise<CodexTerminalNativeGhosttyResult> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttySendText', { id, text });
+  },
+  nativeGhosttySendKey: async (input: { id: string; action: 'press' | 'release' | 'repeat'; keyCode: number; text?: string; unshiftedCodepoint?: number; shift?: boolean; ctrl?: boolean; alt?: boolean; meta?: boolean; caps?: boolean }): Promise<CodexTerminalNativeGhosttyResult> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttySendKey', input);
+  },
+  nativeGhosttySnapshot: async (id: string): Promise<CodexTerminalNativeGhosttySnapshot> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttySnapshot', id);
+  },
+  nativeGhosttyDetach: async (id: string): Promise<CodexTerminalNativeGhosttyResult> => {
+    return ipcRenderer.invoke('codexTerminal:nativeGhosttyDetach', id);
+  },
+  attachPageContext: async (id: string, context: CodexTerminalPageContext): Promise<CodexTerminalAttachResult> => {
+    return ipcRenderer.invoke('codexTerminal:attachPageContext', id, context);
+  },
+  onData: (callback: (event: { id: string; data: string }) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: { id: string; data: string }) => callback(payload);
+    ipcRenderer.on('codexTerminal:data', handler);
+    return () => ipcRenderer.removeListener('codexTerminal:data', handler);
+  },
+  onExit: (callback: (session: CodexTerminalSessionSummary) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, session: CodexTerminalSessionSummary) => callback(session);
+    ipcRenderer.on('codexTerminal:exit', handler);
+    return () => ipcRenderer.removeListener('codexTerminal:exit', handler);
+  },
+  onSessionsChanged: (callback: (sessions: CodexTerminalSessionSummary[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, sessions: CodexTerminalSessionSummary[]) => callback(sessions);
+    ipcRenderer.on('codexTerminal:sessionsChanged', handler);
+    return () => ipcRenderer.removeListener('codexTerminal:sessionsChanged', handler);
+  },
+};
+contextBridge.exposeInMainWorld('codexTerminalAPI', codexTerminalAPI);
+
 // =============================================================================
 // Auto-subscribe to auth debug events for DevTools visibility
 // =============================================================================
@@ -5257,6 +5398,7 @@ declare global {
     teamAPI: TeamAPI;
     metricsAPI: MetricsAPI;
     squaresAPI: SquaresAPIType;
+    codexTerminalAPI: typeof codexTerminalAPI;
     scenarioAPI: ScenarioAPI;
     stripeConfig: {
       paymentLink: string;

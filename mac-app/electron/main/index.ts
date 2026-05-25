@@ -173,6 +173,9 @@ import { HotMicManager, KNOWN_TERMINALS } from './hotMicManager';
 import { HOT_MIC_DEFAULTS, HOT_MIC_DEFAULT_SYSTEM_COMMANDS, HOT_MIC_DEFAULT_WINDOW_COMMANDS } from './hotMicDefaults';
 import { detectSSHSession, scpToRemote, SSHTarget } from './sshDetector';
 import { SquaresManager } from './squaresManager';
+import { CodexTerminalIPCChannels, CodexTerminalManager, type CodexTerminalPageContext } from './codexTerminalManager';
+import { probeGhosttyIntegration } from './ghosttyIntegration';
+import { loadNativeGhosttyHost } from './nativeGhosttyHost';
 
 import { SquaresIPCChannels, SquaresAction, SquaresActionSource } from './types/squares';
 import { GazeTrackingManager } from './gaze/gazeTrackingManager';
@@ -1037,6 +1040,7 @@ let metricsManager: MetricsManager | null = null;
 let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
+let codexTerminalManager: CodexTerminalManager | null = null;
 let lastScratchpadOpenAt = 0;
 let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
@@ -1458,6 +1462,32 @@ function getMaxwellRunManager(): MaxwellRunManager {
     : path.join(app.getPath('userData'), 'maxwell.db');
   maxwellRunManager.setDatabasePath(dbPath);
   return maxwellRunManager;
+}
+
+function resolveDefaultCodexTerminalCwd(): string {
+  const cwd = process.cwd();
+  if (path.basename(cwd) === 'mac-app') {
+    const parent = path.dirname(cwd);
+    if (fs.existsSync(path.join(parent, '.git'))) return parent;
+  }
+  return fs.existsSync(cwd) ? cwd : os.homedir();
+}
+
+function getCodexTerminalManager(): CodexTerminalManager {
+  if (!codexTerminalManager) {
+    codexTerminalManager = new CodexTerminalManager({
+      defaultCwd: resolveDefaultCodexTerminalCwd(),
+    });
+  }
+  return codexTerminalManager;
+}
+
+function broadcastCodexTerminalSessions(manager = getCodexTerminalManager()): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send(CodexTerminalIPCChannels.SESSIONS_CHANGED, manager.listSessions());
+    }
+  });
 }
 
 function broadcastMeetingStatus(status: MeetingSession): void {
@@ -5095,7 +5125,10 @@ function setupLibrarianIPCHandlers(): void {
 
   // Get figures directory path for permissions
   ipcMain.handle('claude:getFiguresPath', (): string => {
-    return path.join(app.getPath('userData'), 'figures');
+    return clipboardManager?.getFiguresPath()
+      ?? (userDataManager?.isLoggedIn()
+        ? userDataManager.getUserDataPath('figures')
+        : path.join(app.getPath('userData'), 'figures'));
   });
 
   // Get available permission profiles
@@ -5181,6 +5214,169 @@ function setupLibrarianIPCHandlers(): void {
   // Uninstall Codex read permission hook
   ipcMain.handle('codex:uninstallReadPermissionHook', (): { success: boolean; message: string } => {
     return librarianManager?.uninstallCodexReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.CREATE, (_event, input?: { cwd?: string; title?: string; cols?: number; rows?: number; nativeGhostty?: boolean }) => {
+    const manager = getCodexTerminalManager();
+    const session = manager.createSession(input);
+    broadcastCodexTerminalSessions(manager);
+    return session;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.LIST, () => {
+    return getCodexTerminalManager().listSessions();
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.GET_BUFFER, (_event, id: string): string | null => {
+    return getCodexTerminalManager().getBuffer(id);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.INPUT, (_event, id: string, data: string): boolean => {
+    return getCodexTerminalManager().writeInput(id, data);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.RESIZE, (_event, id: string, cols: number, rows: number): boolean => {
+    return getCodexTerminalManager().resize(id, cols, rows);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.KILL, (_event, id: string): boolean => {
+    const manager = getCodexTerminalManager();
+    const didKill = manager.kill(id);
+    if (didKill) {
+      broadcastCodexTerminalSessions(manager);
+    }
+    return didKill;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.RENAME, (_event, id: string, title: string): boolean => {
+    const manager = getCodexTerminalManager();
+    const didRename = manager.rename(id, title);
+    if (didRename) {
+      broadcastCodexTerminalSessions(manager);
+    }
+    return didRename;
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.GHOSTTY_STATUS, () => {
+    return probeGhosttyIntegration();
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_HOST_STATUS, () => {
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    return {
+      ok: result.ok,
+      modulePath: result.modulePath,
+      error: result.error,
+    };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_ATTACH, (event, input?: { id?: string; x?: number; y?: number; width?: number; height?: number; cwd?: string; command?: string }) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window) return { ok: false, error: 'No Field Theory window is available.' };
+    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    if (!result.ok || !result.host) {
+      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
+    }
+    const cwd = input?.cwd && fs.existsSync(input.cwd) ? input.cwd : resolveDefaultCodexTerminalCwd();
+    const didAttach = result.host.attachGhostty(
+      input.id,
+      window.getNativeWindowHandle(),
+      input?.x ?? 0,
+      input?.y ?? 0,
+      input?.width ?? 800,
+      input?.height ?? 400,
+      cwd,
+      input?.command || 'codex',
+    );
+    return { ok: didAttach, error: didAttach ? undefined : 'Ghostty native surface did not attach.' };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_UPDATE_FRAME, (_event, input?: { id?: string; x?: number; y?: number; width?: number; height?: number }) => {
+    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    if (!result.ok || !result.host) {
+      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
+    }
+    const didUpdate = result.host.updateFrame(
+      input.id,
+      input?.x ?? 0,
+      input?.y ?? 0,
+      input?.width ?? 800,
+      input?.height ?? 400,
+    );
+    return { ok: didUpdate, error: didUpdate ? undefined : 'Ghostty native surface did not resize.' };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_SEND_TEXT, (_event, input?: { id?: string; text?: string }) => {
+    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    if (!result.ok || !result.host) {
+      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
+    }
+    const didSend = result.host.sendText(input.id, input.text ?? '');
+    return { ok: didSend, error: didSend ? undefined : 'Ghostty native surface did not accept input.' };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_SEND_KEY, (_event, input?: {
+    id?: string;
+    action?: string;
+    keyCode?: number;
+    text?: string;
+    unshiftedCodepoint?: number;
+    shift?: boolean;
+    ctrl?: boolean;
+    alt?: boolean;
+    meta?: boolean;
+    caps?: boolean;
+  }) => {
+    if (!input?.id) return { ok: false, error: 'No native Ghostty session id was provided.' };
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    if (!result.ok || !result.host) {
+      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
+    }
+    const didSend = result.host.sendKey(
+      input.id,
+      input.action === 'release' || input.action === 'repeat' ? input.action : 'press',
+      input.keyCode ?? 0,
+      input.text ?? '',
+      input.unshiftedCodepoint ?? 0,
+      input.shift === true,
+      input.ctrl === true,
+      input.alt === true,
+      input.meta === true,
+      input.caps === true,
+    );
+    return { ok: didSend, error: didSend ? undefined : 'Ghostty native surface did not accept key input.' };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_SNAPSHOT, (_event, id?: string) => {
+    if (!id) return { ok: false, error: 'No native Ghostty session id was provided.' };
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    if (!result.ok || !result.host) {
+      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
+    }
+    const text = result.host.readText(id);
+    getCodexTerminalManager().persistNativeSnapshot(id, text);
+    return { ok: true, text };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.NATIVE_GHOSTTY_DETACH, (_event, id?: string) => {
+    if (!id) return { ok: false, error: 'No native Ghostty session id was provided.' };
+    const result = loadNativeGhosttyHost(app.getAppPath());
+    if (!result.ok || !result.host) {
+      return { ok: false, error: result.error ?? 'Ghostty native host bridge is unavailable.' };
+    }
+    return { ok: result.host.detach(id) };
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.ATTACH_PAGE_CONTEXT, (_event, id: string, context: CodexTerminalPageContext) => {
+    const manager = getCodexTerminalManager();
+    const result = manager.attachPageContext(id, context);
+    if (result.ok) {
+      broadcastCodexTerminalSessions(manager);
+    }
+    return result;
   });
 
   // ===========================================================================
@@ -6819,6 +7015,9 @@ function setupClipboardIPCHandlers(): void {
 
     // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
+
+    // Clean up embedded Codex terminals.
+    codexTerminalManager?.destroy();
 
     const fs = require('fs');
     for (const tempFile of dragTempFiles) {

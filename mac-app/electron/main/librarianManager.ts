@@ -1842,6 +1842,19 @@ export class LibrarianManager extends EventEmitter {
     }
   }
 
+  private ensureUserScopedSettingsLoaded(): void {
+    if (!this.userDataManager?.isLoggedIn()) return;
+
+    const expectedSettingsPath = this.userDataManager.getUserDataPath('librarian-settings.json');
+    if (this.settingsPath === expectedSettingsPath) return;
+
+    this.updatePathsForUser();
+    this.settings = this.loadSettings();
+    this.loadIndex();
+    this.invalidateWikiTreeCache();
+    this.invalidateLibraryRootsCache();
+  }
+
   /**
    * Get the central librarian directory (user-specific).
    */
@@ -4023,6 +4036,7 @@ export class LibrarianManager extends EventEmitter {
    * Check if Librarian setup wizard has been completed.
    */
   isSetupComplete(): boolean {
+    this.ensureUserScopedSettingsLoaded();
     return this.settings.librarianSetupComplete === true;
   }
 
@@ -4030,6 +4044,7 @@ export class LibrarianManager extends EventEmitter {
    * Mark Librarian setup as complete.
    */
   setSetupComplete(complete: boolean): void {
+    this.ensureUserScopedSettingsLoaded();
     this.settings.librarianSetupComplete = complete;
     this.saveSettings();
   }
@@ -5236,14 +5251,10 @@ After writing, update the job file in ~/.fieldtheory/librarian/jobs/ setting "st
    * This allows Claude to read figures from Field Theory's app data directory.
    */
   private getScreenshotPermission(): string {
-    const figuresPath = path.join(
-      os.homedir(),
-      'Library',
-      'Application Support',
-      'fieldtheory-mac',
-      'figures',
-      '*'
-    );
+    const figuresDir = this.userDataManager?.isLoggedIn()
+      ? this.userDataManager.getUserDataPath('figures')
+      : path.join(app.getPath('userData'), 'figures');
+    const figuresPath = path.join(figuresDir, '*');
     return `Read(${figuresPath})`;
   }
 
