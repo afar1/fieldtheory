@@ -110,35 +110,49 @@ function isDirectory(candidate: string): boolean {
   }
 }
 
-function writePageContextFile(contextDirPath: string, context: CodexTerminalPageContext): string {
-  const dir = contextDirPath;
+function writePageContextBundle(contextDirPath: string, sessionId: string, context: CodexTerminalPageContext): string {
+  const dir = path.join(contextDirPath, 'sessions', sessionId);
+  const manifestPath = path.join(dir, 'context.json');
+  const activePath = path.join(dir, 'active.md');
+  const selectionPath = path.join(dir, 'selection.md');
+  const recentPath = path.join(dir, 'recent.md');
+  const updatedAt = new Date().toISOString();
+  const selectionText = context.selectionText?.trim() ?? '';
+
   fs.mkdirSync(dir, { recursive: true });
-  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const safeTitle = (context.title || 'Field Theory Page')
-    .replace(/[^\w\s.-]/g, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .slice(0, 80) || 'Field Theory Page';
-  const filePath = path.join(dir, `${stamp} ${safeTitle}.md`);
-  const selectionBlock = context.selectionText?.trim()
-    ? `\n**Selected Text**\n\n${context.selectionText.trim()}\n`
-    : '';
-  const body = [
-    `**${context.title || 'Field Theory Page'}**`,
-    '',
-    `*Captured for Codex: ${new Date().toISOString()}*`,
-    '',
-    `- Source path: \`${context.path || 'unknown'}\``,
-    `- Source kind: \`${context.kind}\``,
-    `- Content mode: \`${context.contentMode || 'unknown'}\``,
-    selectionBlock,
-    '**Page Content**',
-    '',
-    context.content || '',
-    '',
-  ].join('\n');
-  fs.writeFileSync(filePath, body, 'utf8');
-  return filePath;
+  fs.writeFileSync(activePath, context.content || '', 'utf8');
+  if (!fs.existsSync(recentPath)) {
+    fs.writeFileSync(recentPath, '', 'utf8');
+  }
+  if (selectionText) {
+    fs.writeFileSync(selectionPath, selectionText, 'utf8');
+  } else if (fs.existsSync(selectionPath)) {
+    fs.rmSync(selectionPath);
+  }
+
+  const manifest = {
+    version: 1,
+    updatedAt,
+    activeDocument: {
+      title: context.title || 'Field Theory Page',
+      path: context.path || 'unknown',
+      kind: context.kind,
+      contentMode: context.contentMode || 'unknown',
+      contentHash: crypto.createHash('sha256').update(context.content || '').digest('hex'),
+      contentPath: activePath,
+    },
+    selection: selectionText
+      ? {
+          textPath: selectionPath,
+          preview: selectionText.slice(0, 240),
+        }
+      : null,
+    recent: [],
+    includedPages: [],
+  };
+
+  fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  return manifestPath;
 }
 
 function resolveGitInfo(cwd: string): { repoPath: string | null; gitBranch: string | null } {
@@ -298,8 +312,10 @@ export class CodexTerminalManager {
     const session = this.sessions.get(id);
     if (!session || session.exitedAt) return { ok: false, error: 'Codex terminal session is not running.' };
     if (!session.process && session.engine !== 'nativeGhostty') return { ok: false, error: 'Codex terminal session is not running.' };
-    const filePath = writePageContextFile(this.contextDirPath, context);
+    const filePath = writePageContextBundle(this.contextDirPath, session.id, context);
     const gitInfo = resolveGitInfo(session.cwd);
+    const existingContextIndex = session.attachedContexts.findIndex((attached) => attached.sourcePath === (context.path || 'unknown'));
+    const existingContext = existingContextIndex >= 0 ? session.attachedContexts[existingContextIndex] : null;
     const attachedContext = {
       sessionId: session.id,
       sessionTitle: session.title,
@@ -311,16 +327,26 @@ export class CodexTerminalManager {
       title: context.title || 'Field Theory Page',
       sourcePath: context.path || 'unknown',
       kind: context.kind,
-      attachedAt: new Date().toISOString(),
+      attachedAt: existingContext?.attachedAt ?? new Date().toISOString(),
     };
-    session.attachedContexts = [
-      ...session.attachedContexts,
-      attachedContext,
-    ];
-    this.appendProvenance(attachedContext);
+    if (existingContextIndex >= 0) {
+      session.attachedContexts = session.attachedContexts.map((current, index) => (
+        index === existingContextIndex ? attachedContext : current
+      ));
+    } else {
+      session.attachedContexts = [
+        ...session.attachedContexts,
+        attachedContext,
+      ];
+      this.appendProvenance(attachedContext);
+    }
     this.persistSessionState();
-    const prompt = `Please include this Field Theory page as context: ${filePath}\r`;
-    session.process?.write(prompt);
+    const prompt = existingContext ? undefined : [
+      `This terminal is attached to the live Field Theory context at: ${filePath}`,
+      'Check that manifest for the current document, selection, recent changes, and included pages.',
+      '',
+    ].join('\n') + '\r';
+    if (prompt) session.process?.write(prompt);
     return { ok: true, filePath, prompt };
   }
 

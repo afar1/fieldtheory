@@ -26,6 +26,7 @@ const MIN_RIGHT_WIDTH = 360;
 const MAX_BOTTOM_HEIGHT_RATIO = 0.72;
 const MAX_RIGHT_WIDTH_RATIO = 0.68;
 const MAX_CWD_HISTORY = 12;
+const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 
 interface TerminalHandle {
   term: Terminal;
@@ -262,6 +263,7 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
   const nativeGhosttyAttachedRef = useRef(new Set<string>());
+  const liveContextUpdateRef = useRef<number | null>(null);
 
   const usingNativeGhostty = nativeGhosttyMode === 'available';
   const activeSession = useMemo(
@@ -603,10 +605,36 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
       }
       window.setTimeout(() => snapshotNativeGhostty(activeSession.id), 1200);
     }
-    setAttachStatus(`Attached ${result.filePath}`);
+    setAttachStatus(`Attached live context ${result.filePath}`);
     await refreshSessions();
     window.setTimeout(() => setAttachStatus(null), 3600);
   }, [activeSession, pageContext, refreshSessions, snapshotNativeGhostty, usingNativeGhostty]);
+
+  useEffect(() => {
+    if (liveContextUpdateRef.current !== null) {
+      window.clearTimeout(liveContextUpdateRef.current);
+      liveContextUpdateRef.current = null;
+    }
+    if (!pageContext || !activeSession || activeSession.restored || activeSession.exitedAt) return;
+    const hasLiveAttachment = activeSession.attachedContexts.some((context) => context.sourcePath === pageContext.path);
+    if (!hasLiveAttachment) return;
+
+    liveContextUpdateRef.current = window.setTimeout(() => {
+      liveContextUpdateRef.current = null;
+      void window.codexTerminalAPI?.attachPageContext(activeSession.id, pageContext).then((result) => {
+        if (!result?.ok) {
+          setAttachStatus(result?.error ?? 'Could not refresh live context.');
+        }
+      });
+    }, LIVE_CONTEXT_UPDATE_DELAY_MS);
+
+    return () => {
+      if (liveContextUpdateRef.current !== null) {
+        window.clearTimeout(liveContextUpdateRef.current);
+        liveContextUpdateRef.current = null;
+      }
+    };
+  }, [activeSession, pageContext]);
 
   const handleNativeGhosttyKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (!activeSession) return;
@@ -788,7 +816,7 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
               whiteSpace: 'nowrap',
             }}
           >
-            {attachedContexts.length} page{attachedContexts.length === 1 ? '' : 's'}
+            {attachedContexts.length} live page{attachedContexts.length === 1 ? '' : 's'}
           </span>
         )}
         <input
@@ -819,8 +847,8 @@ export default function CodexTerminalPanel({ visible, pageContext, onVisibleChan
             Cwd
           </button>
         )}
-        <button type="button" onClick={() => void attachCurrentPage()} disabled={!pageContext || !activeSession || Boolean(activeSession.exitedAt) || Boolean(activeSession.restored)} title="Include current Field Theory page" style={toolbarButtonStyle(theme)}>
-          Include Page
+        <button type="button" onClick={() => void attachCurrentPage()} disabled={!pageContext || !activeSession || Boolean(activeSession.exitedAt) || Boolean(activeSession.restored)} title="Attach current Field Theory page as live context" style={toolbarButtonStyle(theme)}>
+          Attach Page
         </button>
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
           <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active Codex terminal" style={toolbarButtonStyle(theme)}>

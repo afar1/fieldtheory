@@ -190,17 +190,90 @@ describe('CodexTerminalManager', () => {
       });
 
       expect(result.ok).toBe(true);
-      expect(result.filePath).toContain('Codex Context');
+      expect(result.filePath).toBe(join(libraryDir, 'Codex Context', 'sessions', session.id, 'context.json'));
+      expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'), 'utf8')).toBe('Use Codex here.');
+      expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'recent.md'), 'utf8')).toBe('');
+      expect(JSON.parse(readFileSync(result.filePath!, 'utf8'))).toMatchObject({
+        activeDocument: {
+          title: 'Panel idea',
+          path: '/tmp/panel.md',
+          kind: 'external',
+          contentMode: 'rendered',
+          contentPath: join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'),
+        },
+        selection: null,
+        recent: [],
+        includedPages: [],
+      });
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
       expect(manager.listSessions()[0].attachedContexts[0].sessionCwd).toBe(process.cwd());
+      expect(manager.listSessions()[0].attachedContexts[0].filePath).toBe(result.filePath);
       expect(manager.listSessions()[0].restored).toBe(false);
-      expect(ptys[0].written.at(-1)).toContain('Please include this Field Theory page as context:');
+      expect(ptys[0].written.at(-1)).toContain(`live Field Theory context at: ${result.filePath}`);
+      expect(ptys[0].written.at(-1)).toContain('current document, selection, recent changes, and included pages');
+
+      const updatedResult = manager.attachPageContext(session.id, {
+        title: 'Panel idea',
+        path: '/tmp/panel.md',
+        kind: 'external',
+        contentMode: 'rendered',
+        content: 'Updated live context.',
+      });
+
+      expect(updatedResult.filePath).toBe(result.filePath);
+      expect(updatedResult.prompt).toBeUndefined();
+      expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
+      expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
+      expect(ptys[0].written).toHaveLength(1);
     } finally {
       if (previousLibraryDir === undefined) {
         delete process.env.FT_LIBRARY_DIR;
       } else {
         process.env.FT_LIBRARY_DIR = previousLibraryDir;
       }
+      rmSync(libraryDir, { recursive: true, force: true });
+    }
+  });
+
+  it('writes selected page text beside the session context manifest', () => {
+    const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
+    const contextDirPath = join(libraryDir, 'Codex Context');
+    const { manager } = createManager(1024, {
+      contextDirPath,
+    });
+    const session = manager.createSession({ nativeGhostty: true });
+
+    try {
+      const result = manager.attachPageContext(session.id, {
+        title: 'Selection note',
+        path: 'wiki://selection-note',
+        kind: 'wiki',
+        contentMode: 'markdown',
+        content: 'Full page text.',
+        selectionText: 'Selected paragraph.',
+      });
+      const selectionPath = join(contextDirPath, 'sessions', session.id, 'selection.md');
+      const manifest = JSON.parse(readFileSync(result.filePath!, 'utf8'));
+
+      expect(result.ok).toBe(true);
+      expect(readFileSync(selectionPath, 'utf8')).toBe('Selected paragraph.');
+      expect(manifest.selection).toMatchObject({
+        textPath: selectionPath,
+        preview: 'Selected paragraph.',
+      });
+
+      const updatedResult = manager.attachPageContext(session.id, {
+        title: 'Selection note',
+        path: 'wiki://selection-note',
+        kind: 'wiki',
+        contentMode: 'markdown',
+        content: 'Updated full page text.',
+      });
+
+      expect(updatedResult.filePath).toBe(result.filePath);
+      expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated full page text.');
+      expect(existsSync(selectionPath)).toBe(false);
+    } finally {
       rmSync(libraryDir, { recursive: true, force: true });
     }
   });
@@ -225,13 +298,14 @@ describe('CodexTerminalManager', () => {
 
       expect(ptys).toHaveLength(0);
       expect(result.ok).toBe(true);
-      expect(result.filePath).toContain('Codex Context');
-      expect(result.prompt).toContain('Please include this Field Theory page as context:');
+      expect(result.filePath).toBe(join(libraryDir, 'Codex Context', 'sessions', session.id, 'context.json'));
+      expect(result.prompt).toContain(`live Field Theory context at: ${result.filePath}`);
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
       expect(JSON.parse(readFileSync(provenanceFilePath, 'utf8'))[0]).toMatchObject({
         sessionId: session.id,
         sessionTitle: 'Native Context',
         launchedCommand: 'codex',
+        filePath: result.filePath,
         sourcePath: 'wiki://native-note',
       });
     } finally {
@@ -295,6 +369,7 @@ describe('CodexTerminalManager', () => {
           launchedCommand: 'codex',
           repoPath: repoDir,
           gitBranch: 'codex-panel',
+          filePath: join(libraryDir, 'Codex Context', 'sessions', session.id, 'context.json'),
           sourcePath: 'wiki://durable-note',
           title: 'Durable note',
         },
