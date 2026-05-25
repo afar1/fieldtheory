@@ -149,7 +149,6 @@ export function shouldUseNativeCommandFileTyping(input: {
   isTerminal: boolean;
   isIDE: boolean;
 }): boolean {
-  if (input.isTerminal) return true;
   if (input.mode === 'markdown-content') return true;
   return false;
 }
