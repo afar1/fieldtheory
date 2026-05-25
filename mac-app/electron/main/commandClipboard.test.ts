@@ -222,12 +222,12 @@ describe('resolveCommandFilePasteMode', () => {
 });
 
 describe('shouldUseNativeCommandFileTyping', () => {
-  it('keeps native typing for terminal text references', () => {
+  it('skips native typing for terminal text references so target inputs keep normal paste focus', () => {
     expect(shouldUseNativeCommandFileTyping({
       mode: 'text-reference',
       isTerminal: true,
       isIDE: false,
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it('skips native typing for IDE text references so target inputs keep normal paste focus', () => {
@@ -256,12 +256,12 @@ describe('resolveCommandFilePasteDelivery', () => {
     })).toBe('clipboard-paste');
   });
 
-  it('keeps terminals on native-helper delivery for command-file references', () => {
+  it('uses normal paste for terminal command-file references so typing can continue afterward', () => {
     expect(resolveCommandFilePasteDelivery({
       mode: 'text-reference',
       isTerminal: true,
       isIDE: false,
-    })).toBe('native-helper');
+    })).toBe('clipboard-paste');
   });
 
   it('keeps rich composer markdown content on native-helper delivery', () => {
