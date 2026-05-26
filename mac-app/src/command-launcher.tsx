@@ -1398,7 +1398,7 @@ function CommandLauncher() {
         .catch(() => setCommandDirectories([]));
     });
     const unsubscribeLibraryRoots = libraryAPI?.onRootsChanged?.(() => {
-      void loadLibraryMarkdown();
+      scheduleLauncherBackgroundRefresh();
     });
     const unsubscribeRecent = recentAPI?.onChanged?.(() => {
       loadRecentEntries();
