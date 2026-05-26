@@ -110,7 +110,7 @@ describe('launcher renderer tracing', () => {
     expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5 })).toBe(false);
     expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 1 })).toBe(true);
     expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 2 })).toBe(true);
-    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 3 })).toBe(true);
+    expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 2.5, queryLength: 3 })).toBe(false);
     expect(shouldTraceLauncherRendererEvent('filter-results', { elapsedMs: 8 })).toBe(true);
     expect(shouldTraceLauncherRendererEvent('filter-results')).toBe(true);
     expect(shouldTraceLauncherRendererEvent('invoke-item', { elapsedMs: 2.5 })).toBe(true);
@@ -605,7 +605,7 @@ describe('filterLauncherNormalModeItems', () => {
     expect(results.map(result => result.id)).toEqual(['command-alpha-beta']);
   });
 
-  it('skips unpinned bulk markdown rows for one-, two-, and three-character queries', () => {
+  it('skips unpinned bulk markdown rows for one- and two-character queries', () => {
     const results = filterLauncherNormalModeItems([
       {
         id: 'command-brief',
@@ -649,23 +649,6 @@ describe('filterLauncherNormalModeItems', () => {
         keywords: [],
       },
     ], 'br').map(result => result.id)).toEqual(['command-brief']);
-
-    expect(filterLauncherNormalModeItems([
-      {
-        id: 'command-brief',
-        type: 'command',
-        name: 'brief',
-        displayName: 'Brief',
-        keywords: [],
-      },
-      {
-        id: 'wiki-brief',
-        type: 'wiki-page',
-        name: 'brief',
-        displayName: 'Brief',
-        keywords: [],
-      },
-    ], 'bri').map(result => result.id)).toEqual(['command-brief']);
   });
 });
 
