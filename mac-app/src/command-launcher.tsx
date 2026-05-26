@@ -528,7 +528,6 @@ const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
 const LAUNCHER_COLLAPSED_HEIGHT = 52;
 const LAUNCHER_MAX_LIST_HEIGHT = 378;
 const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
-const LAUNCHER_RESET_REFRESH_DELAY_MS = 1200;
 const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS = 50;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE = 400;
@@ -833,15 +832,7 @@ function CommandLauncher() {
   const clipboardSearchRequestRef = useRef(0);
   const clipboardStackHydrationRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
-  const launcherActiveRef = useRef(false);
-  const launcherDataRefreshTimeoutRef = useRef<number | null>(null);
-  const launcherDataRefreshInFlightRef = useRef(false);
-  const launcherDataRefreshQueuedRef = useRef(false);
   const launcherBackgroundRefreshTimeoutRef = useRef<number | null>(null);
-  const launcherBackgroundRefreshInFlightRef = useRef(false);
-  const libraryMarkdownRefreshTimeoutRef = useRef<number | null>(null);
-  const libraryMarkdownRefreshInFlightRef = useRef(false);
-  const libraryMarkdownRefreshQueuedRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const launcherClosingForInvocationRef = useRef(false);
@@ -1203,36 +1194,25 @@ function CommandLauncher() {
   }, []);
 
   const loadLauncherBackgroundData = useCallback(async () => {
-    if (launcherBackgroundRefreshInFlightRef.current) {
-      traceLauncher('background-refresh-skipped-in-flight');
-      return;
-    }
-
-    launcherBackgroundRefreshInFlightRef.current = true;
     const startedAt = performance.now();
-    try {
-      const results = await Promise.allSettled([
-        warmLauncherFileIndex(),
-        loadLibraryMarkdown(),
-        loadArtifacts(),
-        loadBookmarkAuthors(),
-        loadBookmarkPosts(),
-        loadActiveWebPage(),
-      ]);
-      traceLauncherLoad('load-launcher-background-data', startedAt, {
-        rejectedCount: results.filter(result => result.status === 'rejected').length,
-      });
-    } finally {
-      launcherBackgroundRefreshInFlightRef.current = false;
-    }
+    const results = await Promise.allSettled([
+      warmLauncherFileIndex(),
+      loadLibraryMarkdown(),
+      loadArtifacts(),
+      loadBookmarkAuthors(),
+      loadBookmarkPosts(),
+      loadActiveWebPage(),
+    ]);
+    traceLauncherLoad('load-launcher-background-data', startedAt, {
+      rejectedCount: results.filter(result => result.status === 'rejected').length,
+    });
   }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
 
-  const loadLauncherData = useCallback(async (options: { includeBackground?: boolean; showLoading?: boolean } = {}) => {
+  const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
     const includeBackground = options.includeBackground ?? true;
-    const showLoading = options.showLoading ?? true;
     const requestId = ++launcherDataRequestRef.current;
     const startedAt = performance.now();
-    if (showLoading) setLauncherDataLoading(true);
+    setLauncherDataLoading(true);
     const results = await Promise.allSettled([
       loadCommands(),
       loadLauncherSettings(),
@@ -1242,10 +1222,9 @@ function CommandLauncher() {
       refreshLauncherContext(),
     ]);
     if (requestId === launcherDataRequestRef.current) {
-      if (showLoading) setLauncherDataLoading(false);
+      setLauncherDataLoading(false);
       traceLauncherLoad('load-launcher-data', startedAt, {
         includeBackground,
-        showLoading,
         rejectedCount: results.filter(result => result.status === 'rejected').length,
       });
     }
@@ -1260,12 +1239,6 @@ function CommandLauncher() {
     }
 
     const runBackgroundRefresh = () => {
-      if (!launcherActiveRef.current) {
-        traceLauncher('background-refresh-skipped-hidden');
-        launcherBackgroundRefreshTimeoutRef.current = null;
-        return;
-      }
-
       if ((inputRef.current?.value ?? '').trim()) {
         traceLauncher('background-refresh-deferred-for-input', {
           delayMs: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
@@ -1286,96 +1259,6 @@ function CommandLauncher() {
       LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
     );
   }, [loadLauncherBackgroundData]);
-
-  const scheduleLauncherDataRefresh = useCallback(() => {
-    if (launcherDataRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(launcherDataRefreshTimeoutRef.current);
-    }
-
-    const runLauncherDataRefresh = () => {
-      if (!launcherActiveRef.current) {
-        traceLauncher('launcher-data-refresh-skipped-hidden');
-        launcherDataRefreshTimeoutRef.current = null;
-        return;
-      }
-
-      if ((inputRef.current?.value ?? '').trim()) {
-        traceLauncher('launcher-data-refresh-deferred-for-input', {
-          delayMs: LAUNCHER_RESET_REFRESH_DELAY_MS,
-        });
-        launcherDataRefreshTimeoutRef.current = window.setTimeout(
-          runLauncherDataRefresh,
-          LAUNCHER_RESET_REFRESH_DELAY_MS,
-        );
-        return;
-      }
-
-      if (launcherDataRefreshInFlightRef.current) {
-        launcherDataRefreshQueuedRef.current = true;
-        traceLauncher('launcher-data-refresh-queued-in-flight');
-        return;
-      }
-
-      launcherDataRefreshTimeoutRef.current = null;
-      launcherDataRefreshInFlightRef.current = true;
-      void loadLauncherData({ includeBackground: false, showLoading: false }).finally(() => {
-        launcherDataRefreshInFlightRef.current = false;
-        if (!launcherDataRefreshQueuedRef.current) return;
-        launcherDataRefreshQueuedRef.current = false;
-        scheduleLauncherDataRefresh();
-      });
-    };
-
-    launcherDataRefreshTimeoutRef.current = window.setTimeout(
-      runLauncherDataRefresh,
-      LAUNCHER_RESET_REFRESH_DELAY_MS,
-    );
-  }, [loadLauncherData]);
-
-  const scheduleLibraryMarkdownRefresh = useCallback(() => {
-    if (libraryMarkdownRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(libraryMarkdownRefreshTimeoutRef.current);
-    }
-
-    const runLibraryMarkdownRefresh = () => {
-      if (!launcherActiveRef.current) {
-        traceLauncher('library-markdown-refresh-skipped-hidden');
-        libraryMarkdownRefreshTimeoutRef.current = null;
-        return;
-      }
-
-      if ((inputRef.current?.value ?? '').trim()) {
-        traceLauncher('library-markdown-refresh-deferred-for-input', {
-          delayMs: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
-        });
-        libraryMarkdownRefreshTimeoutRef.current = window.setTimeout(
-          runLibraryMarkdownRefresh,
-          LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
-        );
-        return;
-      }
-
-      if (libraryMarkdownRefreshInFlightRef.current) {
-        libraryMarkdownRefreshQueuedRef.current = true;
-        traceLauncher('library-markdown-refresh-queued-in-flight');
-        return;
-      }
-
-      libraryMarkdownRefreshTimeoutRef.current = null;
-      libraryMarkdownRefreshInFlightRef.current = true;
-      void loadLibraryMarkdown().finally(() => {
-        libraryMarkdownRefreshInFlightRef.current = false;
-        if (!libraryMarkdownRefreshQueuedRef.current) return;
-        libraryMarkdownRefreshQueuedRef.current = false;
-        scheduleLibraryMarkdownRefresh();
-      });
-    };
-
-    libraryMarkdownRefreshTimeoutRef.current = window.setTimeout(
-      runLibraryMarkdownRefresh,
-      LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
-    );
-  }, [loadLibraryMarkdown]);
 
   const fetchClipboardStackItemsById = useCallback(async (stackIds: string[]): Promise<Record<string, ClipboardItem[]>> => {
     const queryItemsByStackId = clipboardAPI.queryItemsByStackId;
@@ -1435,19 +1318,6 @@ function CommandLauncher() {
 
   const prepareLauncherForNextOpen = useCallback((options: { revealWhenReady?: boolean } = {}) => {
     const revealWhenReady = options.revealWhenReady ?? true;
-    launcherActiveRef.current = false;
-    if (launcherDataRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(launcherDataRefreshTimeoutRef.current);
-      launcherDataRefreshTimeoutRef.current = null;
-    }
-    if (launcherBackgroundRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
-      launcherBackgroundRefreshTimeoutRef.current = null;
-    }
-    if (libraryMarkdownRefreshTimeoutRef.current !== null) {
-      window.clearTimeout(libraryMarkdownRefreshTimeoutRef.current);
-      libraryMarkdownRefreshTimeoutRef.current = null;
-    }
     flushSync(() => {
       setLauncherSessionReady(false);
       clearLauncherSessionState();
@@ -1476,19 +1346,6 @@ function CommandLauncher() {
     const handleReset = (payload?: LauncherResetPayload) => {
       const resetStartedAt = performance.now();
       launcherFirstInputTracedRef.current = false;
-      launcherActiveRef.current = true;
-      if (launcherDataRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(launcherDataRefreshTimeoutRef.current);
-        launcherDataRefreshTimeoutRef.current = null;
-      }
-      if (launcherBackgroundRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
-        launcherBackgroundRefreshTimeoutRef.current = null;
-      }
-      if (libraryMarkdownRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(libraryMarkdownRefreshTimeoutRef.current);
-        libraryMarkdownRefreshTimeoutRef.current = null;
-      }
       if (typeof payload?.isDarkMode === 'boolean') {
         applyTheme(payload.isDarkMode);
       }
@@ -1511,7 +1368,7 @@ function CommandLauncher() {
         hadEarlyTypedQuery: Boolean(earlyTypedQuery),
         generation: payload?.generation ?? null,
       });
-      scheduleLauncherDataRefresh();
+      void loadLauncherData({ includeBackground: false });
       scheduleLauncherBackgroundRefresh();
       void themeAPI.getTheme()
         .then(dark => applyTheme(dark ?? payload?.isDarkMode ?? false))
@@ -1541,7 +1398,7 @@ function CommandLauncher() {
         .catch(() => setCommandDirectories([]));
     });
     const unsubscribeLibraryRoots = libraryAPI?.onRootsChanged?.(() => {
-      scheduleLibraryMarkdownRefresh();
+      void loadLibraryMarkdown();
     });
     const unsubscribeRecent = recentAPI?.onChanged?.(() => {
       loadRecentEntries();
@@ -1550,14 +1407,6 @@ function CommandLauncher() {
       if (launcherBackgroundRefreshTimeoutRef.current !== null) {
         window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
         launcherBackgroundRefreshTimeoutRef.current = null;
-      }
-      if (launcherDataRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(launcherDataRefreshTimeoutRef.current);
-        launcherDataRefreshTimeoutRef.current = null;
-      }
-      if (libraryMarkdownRefreshTimeoutRef.current !== null) {
-        window.clearTimeout(libraryMarkdownRefreshTimeoutRef.current);
-        libraryMarkdownRefreshTimeoutRef.current = null;
       }
       unsubscribe();
       unsubscribeFocusInput?.();
@@ -1568,7 +1417,7 @@ function CommandLauncher() {
       unsubscribeLibraryRoots?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, resizeLauncher, scheduleLauncherBackgroundRefresh, scheduleLauncherDataRefresh, scheduleLibraryMarkdownRefresh]);
+  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
 
   useEffect(() => {
     const handleBlur = () => {

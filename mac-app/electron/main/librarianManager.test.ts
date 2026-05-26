@@ -36,6 +36,7 @@ import {
   type ReadingMeta,
   type WikiNode,
 } from './librarianManager';
+import { hasExistingLibraryContent, inferLibrarianSetupComplete } from './librarianSetupState';
 import { readDocumentVersion } from './documentSaveGuard';
 import { parseMarkdownContentEditedAt, parseMarkdownFrontmatter } from '../shared/markdownFrontmatter';
 
@@ -1380,6 +1381,39 @@ describe('librarian user data', () => {
     expect(loadIndex).toHaveBeenCalledTimes(1);
     expect(invalidateWikiTreeCache).toHaveBeenCalledTimes(1);
     expect(invalidateLibraryRootsCache).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('librarian setup inference', () => {
+  it('treats saved setup completion as complete without scanning content', () => {
+    const rootDir = makeTempDir();
+    const settingsPath = path.join(rootDir, 'librarian-settings.json');
+    const libraryPath = path.join(rootDir, 'Library');
+    fs.writeFileSync(settingsPath, JSON.stringify({ librarianSetupComplete: true }), 'utf-8');
+
+    expect(inferLibrarianSetupComplete({ settingsPath, libraryPath })).toBe(true);
+  });
+
+  it('treats existing visible library documents as setup completion', () => {
+    const rootDir = makeTempDir();
+    const libraryPath = path.join(rootDir, 'Library');
+    fs.mkdirSync(path.join(libraryPath, 'Plans'), { recursive: true });
+    fs.writeFileSync(path.join(libraryPath, 'Plans', 'launch-plan.md'), '# Launch plan\n', 'utf-8');
+
+    expect(hasExistingLibraryContent(libraryPath)).toBe(true);
+    expect(inferLibrarianSetupComplete({ libraryPath })).toBe(true);
+  });
+
+  it('does not count app-seeded readmes or hidden asset folders as setup content', () => {
+    const rootDir = makeTempDir();
+    const libraryPath = path.join(rootDir, 'Library');
+    fs.mkdirSync(path.join(libraryPath, 'scratchpad'), { recursive: true });
+    fs.mkdirSync(path.join(libraryPath, '.assets'), { recursive: true });
+    fs.writeFileSync(path.join(libraryPath, 'scratchpad', 'README.md'), '# Scratchpad\n', 'utf-8');
+    fs.writeFileSync(path.join(libraryPath, '.assets', 'hidden.md'), '# Hidden\n', 'utf-8');
+
+    expect(hasExistingLibraryContent(libraryPath)).toBe(false);
+    expect(inferLibrarianSetupComplete({ libraryPath })).toBe(false);
   });
 });
 
