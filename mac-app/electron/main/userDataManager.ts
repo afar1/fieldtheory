@@ -29,6 +29,27 @@ import { createLogger } from './logger';
 
 const log = createLogger('UserData');
 
+function getStoredSessionUserId(userDataPath: string): string | null {
+  const sessionPath = path.join(userDataPath, 'supabase-session.json');
+  try {
+    if (!fs.existsSync(sessionPath)) return null;
+
+    const diskData = fs.readJsonSync(sessionPath) as Record<string, unknown>;
+    for (const value of Object.values(diskData)) {
+      if (typeof value !== 'string') continue;
+
+      const parsed = JSON.parse(value) as { user?: { id?: unknown } };
+      if (typeof parsed.user?.id === 'string' && parsed.user.id.trim().length > 0) {
+        return parsed.user.id;
+      }
+    }
+  } catch (err) {
+    log.warn('Failed to restore user from stored session:', err);
+  }
+
+  return null;
+}
+
 export class UserDataManager extends EventEmitter {
   private currentCallsign: string | null = null;
   private baseUserDataPath: string;
@@ -187,6 +208,13 @@ export class UserDataManager extends EventEmitter {
       }
     } catch {
       // No saved user or invalid file
+    }
+
+    const sessionUserId = getStoredSessionUserId(this.baseUserDataPath);
+    if (sessionUserId) {
+      await this.setCurrentUser(sessionUserId);
+      await this.migrateExistingData(sessionUserId);
+      return sessionUserId;
     }
 
     return null;
