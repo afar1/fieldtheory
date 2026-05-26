@@ -131,6 +131,7 @@ import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId } f
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
+import { inferLibrarianSetupComplete } from './librarianSetupState';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
@@ -1053,12 +1054,11 @@ async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
   return userDataManager;
 }
 
-function ensureLibrarianManager(): LibrarianManager {
-  if (!librarianManager) {
-    const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
-    librarianManager = new LibrarianManager();
-  }
-  return librarianManager;
+function inferCurrentLibrarianSetupComplete(): boolean {
+  const settingsPath = userDataManager?.isLoggedIn()
+    ? userDataManager.getUserDataPath('librarian-settings.json')
+    : path.join(app.getPath('userData'), 'librarian-settings.json');
+  return inferLibrarianSetupComplete({ settingsPath, libraryPath: libraryDir() });
 }
 
 const LAUNCHER_FILE_ICON_CACHE_LIMIT = 512;
@@ -4385,7 +4385,7 @@ function setupLibrarianIPCHandlers(): void {
 
   // Check if setup wizard is complete
   ipcMain.handle('librarian:isSetupComplete', (): boolean => {
-    return librarianManager?.isSetupComplete() ?? false;
+    return librarianManager?.isSetupComplete() ?? inferCurrentLibrarianSetupComplete();
   });
 
   // Mark setup wizard as complete
@@ -10370,18 +10370,19 @@ async function initTranscriberSystem(): Promise<void> {
   accountStatusManager = new AccountStatusManager();
 
   // Initialize librarian manager for watching markdown reading files.
-  const activeLibrarianManager = ensureLibrarianManager();
+  const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
+  librarianManager = new LibrarianManager();
   if (!markdownAssetsConsolidated) {
     markdownAssetsConsolidated = true;
     setImmediate(() => {
-      if (!canWriteFieldTheoryContent()) return;
+      if (!librarianManager || !canWriteFieldTheoryContent()) return;
       let changed = false;
-      for (const root of activeLibrarianManager.getLibraryRoots()) {
+      for (const root of librarianManager.getLibraryRoots()) {
         const result = consolidateMarkdownAssetsForLibraryRoot(root.path);
         if (result.filesRewritten > 0 || result.deleted > 0 || result.oldFoldersRemoved > 0) changed = true;
         if (result.errors.length > 0) log.warn('Markdown asset consolidation had errors for %s: %j', root.path, result.errors);
       }
-      if (changed) activeLibrarianManager.emit('library:changed');
+      if (changed) librarianManager.emit('library:changed');
     });
   }
   recentManager = new RecentManager();
@@ -10391,13 +10392,13 @@ async function initTranscriberSystem(): Promise<void> {
   bookmarksManager = new BookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
-  activeLibrarianManager.on('reading-added', async (reading: Reading) => {
+  librarianManager.on('reading-added', async (reading: Reading) => {
 
     // Record librarian artifact created metric
     metricsManager?.recordLibrarianArtifactCreated();
 
     // Reset prompt counter - new artifact means fresh start
-    activeLibrarianManager.resetCounter();
+    librarianManager!.resetCounter();
 
     // Broadcast to all windows (updates reading lists)
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -10407,7 +10408,7 @@ async function initTranscriberSystem(): Promise<void> {
     });
 
     // Check if muted for today - halts interruption even if existing sessions create artifacts
-    const isMuted = activeLibrarianManager.isMutedForToday();
+    const isMuted = librarianManager!.isMutedForToday();
     if (isMuted) {
       return;
     }
@@ -10422,8 +10423,8 @@ async function initTranscriberSystem(): Promise<void> {
     }
 
     // Auto-show the window if enabled
-    if (activeLibrarianManager.isAutoShowEnabled()) {
-      const shouldStealFocus = activeLibrarianManager.doesAutoShowStealFocus();
+    if (librarianManager!.isAutoShowEnabled()) {
+      const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
       pendingAutoOpenReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
@@ -10451,7 +10452,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Broadcast reading-updated events to all windows
-  activeLibrarianManager.on('reading-updated', (reading: ReadingMeta) => {
+  librarianManager.on('reading-updated', (reading: ReadingMeta) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingUpdated', reading);
@@ -10459,7 +10460,7 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  activeLibrarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
+  librarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
     traceLibraryRename('broadcast-reading-renamed', {
       traceId: event.traceId,
       oldPath: event.oldPath,
@@ -10474,7 +10475,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Broadcast reading-removed events to all windows
-  activeLibrarianManager.on('reading-removed', (filePath: string) => {
+  librarianManager.on('reading-removed', (filePath: string) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingRemoved', filePath);
@@ -11542,11 +11543,6 @@ if (!gotTheLock) {
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();
     const restoredUserDataManager = await ensureUserDataManagerRestored();
-    const restoredLibrarianManager = ensureLibrarianManager();
-    restoredLibrarianManager.setUserDataManager(restoredUserDataManager);
-    if (restoredUserDataManager.isLoggedIn()) {
-      await restoredLibrarianManager.reinitializeForUser();
-    }
 
     if (!preferencesManager) {
       preferencesManager = new PreferencesManager();

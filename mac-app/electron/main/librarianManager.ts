@@ -7,6 +7,7 @@ import * as chokidar from 'chokidar';
 import { UserDataManager } from './userDataManager';
 import { createLogger } from './logger';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
+import { hasExistingLibraryContent } from './librarianSetupState';
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import {
   existingPathInsideRoots,
@@ -4037,7 +4038,7 @@ export class LibrarianManager extends EventEmitter {
    */
   isSetupComplete(): boolean {
     this.ensureUserScopedSettingsLoaded();
-    return this.settings.librarianSetupComplete === true;
+    return this.settings.librarianSetupComplete === true || hasExistingLibraryContent(this.wikiDir);
   }
 
   /**
