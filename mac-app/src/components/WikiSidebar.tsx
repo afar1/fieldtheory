@@ -73,6 +73,7 @@ const LIBRARY_SIDEBAR_SCROLL_JUMP_EDGE_DISTANCE = 56;
 const RECENT_SIDEBAR_ITEM_LIMIT = 7;
 const RECENT_ROW_MOVE_ANIMATION_MS = 180;
 const RECENT_ROW_MOVE_ANIMATION_EASING = 'cubic-bezier(0.2, 0, 0, 1)';
+const LIBRARY_SIDEBAR_REFRESH_DELAY_MS = 250;
 const EMPTY_TODO_STATE_OVERRIDES: Record<string, SidebarTodoStateOverride | undefined> = {};
 const LIBRARY_PINNED_ITEM_IDS_STORAGE_KEY = 'library-pinned-item-ids';
 const LIBRARY_ICON_COLOR_STORAGE_KEY = 'library-sidebar-icon-color-indices';
@@ -1544,6 +1545,9 @@ function WikiSidebar({
   const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
   const [collapsingFileIds, setCollapsingFileIds] = useState<Set<string>>(() => new Set());
   const deletedWikiRelPathsRef = useRef<Set<string>>(new Set());
+  const loadTreeRefreshTimeoutRef = useRef<number | null>(null);
+  const loadTreeRefreshInFlightRef = useRef(false);
+  const loadTreeRefreshQueuedReasonRef = useRef<string | null>(null);
   const sidebarScrollRef = useRef<HTMLDivElement | null>(null);
   const scrollJumpElementRef = useRef<HTMLElement | null>(null);
   const iconColorUndoStackRef = useRef<Record<string, number>[]>([]);
@@ -1638,6 +1642,36 @@ function WikiSidebar({
     return nextRoots;
   }, []);
 
+  const scheduleLoadTree = useCallback((reason: string) => {
+    loadTreeRefreshQueuedReasonRef.current = reason;
+    if (loadTreeRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(loadTreeRefreshTimeoutRef.current);
+    }
+
+    const run = () => {
+      const nextReason = loadTreeRefreshQueuedReasonRef.current ?? reason;
+      loadTreeRefreshQueuedReasonRef.current = null;
+      loadTreeRefreshTimeoutRef.current = null;
+
+      if (loadTreeRefreshInFlightRef.current) {
+        loadTreeRefreshQueuedReasonRef.current = nextReason;
+        traceLibrarySidebar('sidebar-loadTree-queued-in-flight', { reason: nextReason });
+        return;
+      }
+
+      loadTreeRefreshInFlightRef.current = true;
+      void loadTree(nextReason).finally(() => {
+        loadTreeRefreshInFlightRef.current = false;
+        const queuedReason = loadTreeRefreshQueuedReasonRef.current;
+        if (!queuedReason) return;
+        loadTreeRefreshQueuedReasonRef.current = null;
+        scheduleLoadTree(queuedReason);
+      });
+    };
+
+    loadTreeRefreshTimeoutRef.current = window.setTimeout(run, LIBRARY_SIDEBAR_REFRESH_DELAY_MS);
+  }, [loadTree]);
+
   const loadArtifacts = useCallback(async () => {
     const result = await window.librarianAPI?.getReadings();
     if (result) setArtifacts(result);
@@ -1661,7 +1695,7 @@ function WikiSidebar({
     loadTaggedDocs();
     const unsubWiki = window.wikiAPI?.onPageChanged(() => {
       traceLibrarySidebar('sidebar-wiki-changed-received');
-      loadTree('wiki:changed');
+      scheduleLoadTree('wiki:changed');
     });
     const unsubDeletedWiki = window.wikiAPI?.onPageDeleted((relPath) => pruneDeletedWikiPage(relPath));
     const unsubRenamedWiki = window.wikiAPI?.onPageRenamed?.((event) => {
@@ -1719,7 +1753,7 @@ function WikiSidebar({
     window.addEventListener(LOCAL_WIKI_DELETED_EVENT, onLocalWikiDeleted);
     const unsubLibrary = window.libraryAPI?.onRootsChanged(() => {
       traceLibrarySidebar('sidebar-library-changed-received');
-      loadTree('library:changed');
+      scheduleLoadTree('library:changed');
     });
     const unsubRenamedLibrary = window.libraryAPI?.onItemRenamed?.((event) => {
       if (event.builtin) return;
@@ -1748,12 +1782,12 @@ function WikiSidebar({
     const unsubRecent = window.recentAPI?.onChanged(() => loadRecent());
     const unsubTaggedDocs = window.taggedDocsAPI?.onUpdated(() => loadTaggedDocs());
     const onLocalRiverChanged = () => {
-      loadTree('river:changed-local');
+      scheduleLoadTree('river:changed-local');
     };
     window.addEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
     // Backstop for missed FSEvents (sleep/wake, bg writes): reload on focus.
     const onFocus = () => {
-      loadTree('focus');
+      scheduleLoadTree('focus');
       loadArtifacts();
       loadRecent();
       loadTaggedDocs();
@@ -1776,8 +1810,12 @@ function WikiSidebar({
       unsubTaggedDocs?.();
       window.removeEventListener(LOCAL_RIVER_CHANGED_EVENT, onLocalRiverChanged);
       window.removeEventListener('focus', onFocus);
+      if (loadTreeRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(loadTreeRefreshTimeoutRef.current);
+        loadTreeRefreshTimeoutRef.current = null;
+      }
     };
-  }, [active, loadTree, loadArtifacts, loadRecent, loadTaggedDocs, pruneDeletedWikiPage]);
+  }, [active, loadTree, scheduleLoadTree, loadArtifacts, loadRecent, loadTaggedDocs, pruneDeletedWikiPage]);
 
   useEffect(() => {
     localStorage.setItem('wiki-expanded-folders', JSON.stringify([...expandedFolders]));
