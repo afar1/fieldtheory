@@ -392,7 +392,7 @@ export function shouldTraceLauncherRendererEvent(
 ): boolean {
   if (event !== 'filter-results') return true;
   const queryLength = details.queryLength;
-  if (typeof queryLength === 'number' && queryLength > 0 && queryLength <= 2) return true;
+  if (typeof queryLength === 'number' && queryLength > 0 && queryLength <= 3) return true;
   const elapsedMs = details.elapsedMs;
   return typeof elapsedMs !== 'number' || elapsedMs >= LAUNCHER_FILTER_TRACE_MIN_ELAPSED_MS;
 }
@@ -591,7 +591,7 @@ export function scoreLauncherText(rawText: string | undefined, query: string): n
 
 export function scoreLauncherSearchableItem<T extends LauncherSearchableItem & LauncherNormalModeItem>(item: T, query: string): number {
   const allowFuzzy = item.type !== 'wiki-page' && item.type !== 'markdown-file' && item.type !== 'recent-file';
-  if (query.length < 3 && (item.type === 'wiki-page' || item.type === 'markdown-file') && !item.isPinned) return 0;
+  if (query.length <= 3 && (item.type === 'wiki-page' || item.type === 'markdown-file') && !item.isPinned) return 0;
 
   const searchableItem = getNormalizedLauncherSearchableItem(item);
   if (!allowFuzzy && !searchableItem.searchText.includes(query)) return 0;
