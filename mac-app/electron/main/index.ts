@@ -1053,6 +1053,14 @@ async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
   return userDataManager;
 }
 
+function ensureLibrarianManager(): LibrarianManager {
+  if (!librarianManager) {
+    const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
+    librarianManager = new LibrarianManager();
+  }
+  return librarianManager;
+}
+
 const LAUNCHER_FILE_ICON_CACHE_LIMIT = 512;
 const launcherFileIconCache = new Map<string, string | null>();
 
@@ -10362,19 +10370,18 @@ async function initTranscriberSystem(): Promise<void> {
   accountStatusManager = new AccountStatusManager();
 
   // Initialize librarian manager for watching markdown reading files.
-  const { LibrarianManager } = require('./librarianManager') as typeof import('./librarianManager');
-  librarianManager = new LibrarianManager();
+  const activeLibrarianManager = ensureLibrarianManager();
   if (!markdownAssetsConsolidated) {
     markdownAssetsConsolidated = true;
     setImmediate(() => {
-      if (!librarianManager || !canWriteFieldTheoryContent()) return;
+      if (!canWriteFieldTheoryContent()) return;
       let changed = false;
-      for (const root of librarianManager.getLibraryRoots()) {
+      for (const root of activeLibrarianManager.getLibraryRoots()) {
         const result = consolidateMarkdownAssetsForLibraryRoot(root.path);
         if (result.filesRewritten > 0 || result.deleted > 0 || result.oldFoldersRemoved > 0) changed = true;
         if (result.errors.length > 0) log.warn('Markdown asset consolidation had errors for %s: %j', root.path, result.errors);
       }
-      if (changed) librarianManager.emit('library:changed');
+      if (changed) activeLibrarianManager.emit('library:changed');
     });
   }
   recentManager = new RecentManager();
@@ -10384,13 +10391,13 @@ async function initTranscriberSystem(): Promise<void> {
   bookmarksManager = new BookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
-  librarianManager.on('reading-added', async (reading: Reading) => {
+  activeLibrarianManager.on('reading-added', async (reading: Reading) => {
 
     // Record librarian artifact created metric
     metricsManager?.recordLibrarianArtifactCreated();
 
     // Reset prompt counter - new artifact means fresh start
-    librarianManager!.resetCounter();
+    activeLibrarianManager.resetCounter();
 
     // Broadcast to all windows (updates reading lists)
     BrowserWindow.getAllWindows().forEach((window) => {
@@ -10400,7 +10407,7 @@ async function initTranscriberSystem(): Promise<void> {
     });
 
     // Check if muted for today - halts interruption even if existing sessions create artifacts
-    const isMuted = librarianManager!.isMutedForToday();
+    const isMuted = activeLibrarianManager.isMutedForToday();
     if (isMuted) {
       return;
     }
@@ -10415,8 +10422,8 @@ async function initTranscriberSystem(): Promise<void> {
     }
 
     // Auto-show the window if enabled
-    if (librarianManager!.isAutoShowEnabled()) {
-      const shouldStealFocus = librarianManager!.doesAutoShowStealFocus();
+    if (activeLibrarianManager.isAutoShowEnabled()) {
+      const shouldStealFocus = activeLibrarianManager.doesAutoShowStealFocus();
       pendingAutoOpenReading = reading.path;
       if (!clipboardHistoryWindow) {
         clipboardHistoryWindow = initClipboardHistoryWindow();
@@ -10444,7 +10451,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Broadcast reading-updated events to all windows
-  librarianManager.on('reading-updated', (reading: ReadingMeta) => {
+  activeLibrarianManager.on('reading-updated', (reading: ReadingMeta) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingUpdated', reading);
@@ -10452,7 +10459,7 @@ async function initTranscriberSystem(): Promise<void> {
     });
   });
 
-  librarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
+  activeLibrarianManager.on('reading-renamed', (event: ReadingRenameEvent) => {
     traceLibraryRename('broadcast-reading-renamed', {
       traceId: event.traceId,
       oldPath: event.oldPath,
@@ -10467,7 +10474,7 @@ async function initTranscriberSystem(): Promise<void> {
   });
 
   // Broadcast reading-removed events to all windows
-  librarianManager.on('reading-removed', (filePath: string) => {
+  activeLibrarianManager.on('reading-removed', (filePath: string) => {
     BrowserWindow.getAllWindows().forEach((window) => {
       if (!window.isDestroyed()) {
         window.webContents.send('librarian:readingRemoved', filePath);
@@ -11535,6 +11542,11 @@ if (!gotTheLock) {
     // Migrate data from legacy app directories (littleai-mac, Oscar) if needed.
     migrateFromLegacyPaths();
     const restoredUserDataManager = await ensureUserDataManagerRestored();
+    const restoredLibrarianManager = ensureLibrarianManager();
+    restoredLibrarianManager.setUserDataManager(restoredUserDataManager);
+    if (restoredUserDataManager.isLoggedIn()) {
+      await restoredLibrarianManager.reinitializeForUser();
+    }
 
     if (!preferencesManager) {
       preferencesManager = new PreferencesManager();
