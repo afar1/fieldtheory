@@ -833,6 +833,10 @@ function CommandLauncher() {
   const clipboardStackHydrationRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
   const launcherBackgroundRefreshTimeoutRef = useRef<number | null>(null);
+  const launcherBackgroundRefreshInFlightRef = useRef(false);
+  const libraryMarkdownRefreshTimeoutRef = useRef<number | null>(null);
+  const libraryMarkdownRefreshInFlightRef = useRef(false);
+  const libraryMarkdownRefreshQueuedRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const launcherClosingForInvocationRef = useRef(false);
@@ -1194,18 +1198,28 @@ function CommandLauncher() {
   }, []);
 
   const loadLauncherBackgroundData = useCallback(async () => {
+    if (launcherBackgroundRefreshInFlightRef.current) {
+      traceLauncher('background-refresh-skipped-in-flight');
+      return;
+    }
+
+    launcherBackgroundRefreshInFlightRef.current = true;
     const startedAt = performance.now();
-    const results = await Promise.allSettled([
-      warmLauncherFileIndex(),
-      loadLibraryMarkdown(),
-      loadArtifacts(),
-      loadBookmarkAuthors(),
-      loadBookmarkPosts(),
-      loadActiveWebPage(),
-    ]);
-    traceLauncherLoad('load-launcher-background-data', startedAt, {
-      rejectedCount: results.filter(result => result.status === 'rejected').length,
-    });
+    try {
+      const results = await Promise.allSettled([
+        warmLauncherFileIndex(),
+        loadLibraryMarkdown(),
+        loadArtifacts(),
+        loadBookmarkAuthors(),
+        loadBookmarkPosts(),
+        loadActiveWebPage(),
+      ]);
+      traceLauncherLoad('load-launcher-background-data', startedAt, {
+        rejectedCount: results.filter(result => result.status === 'rejected').length,
+      });
+    } finally {
+      launcherBackgroundRefreshInFlightRef.current = false;
+    }
   }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
 
   const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
@@ -1259,6 +1273,45 @@ function CommandLauncher() {
       LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
     );
   }, [loadLauncherBackgroundData]);
+
+  const scheduleLibraryMarkdownRefresh = useCallback(() => {
+    if (libraryMarkdownRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(libraryMarkdownRefreshTimeoutRef.current);
+    }
+
+    const runLibraryMarkdownRefresh = () => {
+      if ((inputRef.current?.value ?? '').trim()) {
+        traceLauncher('library-markdown-refresh-deferred-for-input', {
+          delayMs: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+        });
+        libraryMarkdownRefreshTimeoutRef.current = window.setTimeout(
+          runLibraryMarkdownRefresh,
+          LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+        );
+        return;
+      }
+
+      if (libraryMarkdownRefreshInFlightRef.current) {
+        libraryMarkdownRefreshQueuedRef.current = true;
+        traceLauncher('library-markdown-refresh-queued-in-flight');
+        return;
+      }
+
+      libraryMarkdownRefreshTimeoutRef.current = null;
+      libraryMarkdownRefreshInFlightRef.current = true;
+      void loadLibraryMarkdown().finally(() => {
+        libraryMarkdownRefreshInFlightRef.current = false;
+        if (!libraryMarkdownRefreshQueuedRef.current) return;
+        libraryMarkdownRefreshQueuedRef.current = false;
+        scheduleLibraryMarkdownRefresh();
+      });
+    };
+
+    libraryMarkdownRefreshTimeoutRef.current = window.setTimeout(
+      runLibraryMarkdownRefresh,
+      LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
+    );
+  }, [loadLibraryMarkdown]);
 
   const fetchClipboardStackItemsById = useCallback(async (stackIds: string[]): Promise<Record<string, ClipboardItem[]>> => {
     const queryItemsByStackId = clipboardAPI.queryItemsByStackId;
@@ -1398,7 +1451,7 @@ function CommandLauncher() {
         .catch(() => setCommandDirectories([]));
     });
     const unsubscribeLibraryRoots = libraryAPI?.onRootsChanged?.(() => {
-      scheduleLauncherBackgroundRefresh();
+      scheduleLibraryMarkdownRefresh();
     });
     const unsubscribeRecent = recentAPI?.onChanged?.(() => {
       loadRecentEntries();
@@ -1407,6 +1460,10 @@ function CommandLauncher() {
       if (launcherBackgroundRefreshTimeoutRef.current !== null) {
         window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
         launcherBackgroundRefreshTimeoutRef.current = null;
+      }
+      if (libraryMarkdownRefreshTimeoutRef.current !== null) {
+        window.clearTimeout(libraryMarkdownRefreshTimeoutRef.current);
+        libraryMarkdownRefreshTimeoutRef.current = null;
       }
       unsubscribe();
       unsubscribeFocusInput?.();
@@ -1417,7 +1474,7 @@ function CommandLauncher() {
       unsubscribeLibraryRoots?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
+  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, resizeLauncher, scheduleLauncherBackgroundRefresh, scheduleLibraryMarkdownRefresh]);
 
   useEffect(() => {
     const handleBlur = () => {
