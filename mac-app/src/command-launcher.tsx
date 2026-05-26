@@ -528,6 +528,7 @@ const DEFAULT_HOTKEYS = DEFAULT_LAUNCHER_HOTKEYS;
 const LAUNCHER_COLLAPSED_HEIGHT = 52;
 const LAUNCHER_MAX_LIST_HEIGHT = 378;
 const LAUNCHER_BACKGROUND_REFRESH_DELAY_MS = 600;
+const LAUNCHER_ICON_LOAD_DELAY_MS = 120;
 const LAUNCHER_SEARCH_CACHE_WARM_DELAY_MS = 900;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_DELAY_MS = 50;
 const LAUNCHER_SEARCH_CACHE_WARM_CHUNK_SIZE = 400;
@@ -792,6 +793,7 @@ function CommandLauncher() {
   const [bookmarkPosts, setBookmarkPosts] = useState<Bookmark[]>([]);
   const [activeWebPage, setActiveWebPage] = useState<ActiveWebPage | null>(null);
   const [launcherDataLoading, setLauncherDataLoading] = useState(true);
+  const [launcherActive, setLauncherActive] = useState(false);
   const [launcherSessionReady, setLauncherSessionReady] = useState(false);
   const [launcherContext, setLauncherContext] = useState<LauncherContextState>({
     fieldTheoryActive: false,
@@ -822,6 +824,7 @@ function CommandLauncher() {
   const launcherIconPendingPathsRef = useRef(new Set<string>());
   const launcherIconDataBatchRef = useRef<Record<string, string | null>>({});
   const launcherIconDataFlushFrameRef = useRef<number | null>(null);
+  const launcherIconLoadTimeoutRef = useRef<number | null>(null);
   const launcherSearchCacheWarmTimeoutRef = useRef<number | null>(null);
   const launcherSearchCacheWarmIndexRef = useRef(0);
   const manualPreviewRef = useRef(false);
@@ -832,7 +835,9 @@ function CommandLauncher() {
   const clipboardSearchRequestRef = useRef(0);
   const clipboardStackHydrationRequestRef = useRef(0);
   const launcherGenerationRef = useRef(0);
+  const launcherActiveRef = useRef(false);
   const launcherBackgroundRefreshTimeoutRef = useRef<number | null>(null);
+  const launcherBackgroundRefreshInFlightRef = useRef(false);
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const launcherClosingForInvocationRef = useRef(false);
@@ -853,6 +858,10 @@ function CommandLauncher() {
   const applyTheme = useCallback((dark: boolean) => {
     setIsDarkMode(dark);
   }, []);
+
+  useEffect(() => {
+    launcherActiveRef.current = launcherActive;
+  }, [launcherActive]);
 
   const noteItemUsage = useCallback((itemId: string) => {
     setUsageByItemId((prev) => {
@@ -1194,19 +1203,30 @@ function CommandLauncher() {
   }, []);
 
   const loadLauncherBackgroundData = useCallback(async () => {
+    if (launcherBackgroundRefreshInFlightRef.current) {
+      traceLauncher('background-refresh-skipped-in-flight');
+      return;
+    }
+
+    launcherBackgroundRefreshInFlightRef.current = true;
     const startedAt = performance.now();
-    const results = await Promise.allSettled([
-      warmLauncherFileIndex(),
-      loadLibraryMarkdown(),
-      loadArtifacts(),
-      loadBookmarkAuthors(),
-      loadBookmarkPosts(),
-      loadActiveWebPage(),
-    ]);
-    traceLauncherLoad('load-launcher-background-data', startedAt, {
-      rejectedCount: results.filter(result => result.status === 'rejected').length,
-    });
-  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadLibraryMarkdown, warmLauncherFileIndex]);
+    try {
+      const results = await Promise.allSettled([
+        loadHandoffs(),
+        warmLauncherFileIndex(),
+        loadLibraryMarkdown(),
+        loadArtifacts(),
+        loadBookmarkAuthors(),
+        loadBookmarkPosts(),
+        loadActiveWebPage(),
+      ]);
+      traceLauncherLoad('load-launcher-background-data', startedAt, {
+        rejectedCount: results.filter(result => result.status === 'rejected').length,
+      });
+    } finally {
+      launcherBackgroundRefreshInFlightRef.current = false;
+    }
+  }, [loadActiveWebPage, loadArtifacts, loadBookmarkAuthors, loadBookmarkPosts, loadHandoffs, loadLibraryMarkdown, warmLauncherFileIndex]);
 
   const loadLauncherData = useCallback(async (options: { includeBackground?: boolean } = {}) => {
     const includeBackground = options.includeBackground ?? true;
@@ -1233,12 +1253,29 @@ function CommandLauncher() {
     }
   }, [loadCommands, loadHandoffs, loadHotkeys, loadLauncherBackgroundData, loadLauncherSettings, loadRecentEntries, refreshLauncherContext]);
 
+  const loadLauncherOpenData = useCallback(async () => {
+    const startedAt = performance.now();
+    const results = await Promise.allSettled([
+      loadRecentEntries(),
+      refreshLauncherContext(),
+    ]);
+    traceLauncherLoad('load-launcher-open-data', startedAt, {
+      rejectedCount: results.filter(result => result.status === 'rejected').length,
+    });
+  }, [loadRecentEntries, refreshLauncherContext]);
+
   const scheduleLauncherBackgroundRefresh = useCallback(() => {
     if (launcherBackgroundRefreshTimeoutRef.current !== null) {
       window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
     }
 
     const runBackgroundRefresh = () => {
+      if (!launcherActiveRef.current) {
+        traceLauncher('background-refresh-skipped-hidden');
+        launcherBackgroundRefreshTimeoutRef.current = null;
+        return;
+      }
+
       if ((inputRef.current?.value ?? '').trim()) {
         traceLauncher('background-refresh-deferred-for-input', {
           delayMs: LAUNCHER_BACKGROUND_REFRESH_DELAY_MS,
@@ -1318,7 +1355,13 @@ function CommandLauncher() {
 
   const prepareLauncherForNextOpen = useCallback((options: { revealWhenReady?: boolean } = {}) => {
     const revealWhenReady = options.revealWhenReady ?? true;
+    launcherActiveRef.current = false;
+    if (launcherBackgroundRefreshTimeoutRef.current !== null) {
+      window.clearTimeout(launcherBackgroundRefreshTimeoutRef.current);
+      launcherBackgroundRefreshTimeoutRef.current = null;
+    }
     flushSync(() => {
+      setLauncherActive(false);
       setLauncherSessionReady(false);
       clearLauncherSessionState();
     });
@@ -1335,14 +1378,12 @@ function CommandLauncher() {
     resizeLauncher(LAUNCHER_COLLAPSED_HEIGHT);
 
     void loadLauncherData({ includeBackground: false });
-    scheduleLauncherBackgroundRefresh();
 
     // Load current Field Theory theme preference and keep this separate window in sync.
     themeAPI.getTheme().then(applyTheme).catch(() => {});
     const unsubscribeTheme = themeAPI.onThemeChanged?.(applyTheme);
 
     // Listen for reset events (when window is shown).
-    // Reload commands and handoffs each time to pick up newly added ones without restart.
     const handleReset = (payload?: LauncherResetPayload) => {
       const resetStartedAt = performance.now();
       launcherFirstInputTracedRef.current = false;
@@ -1357,6 +1398,8 @@ function CommandLauncher() {
         : '';
       flushSync(() => {
         launcherClosingForInvocationRef.current = false;
+        launcherActiveRef.current = true;
+        setLauncherActive(true);
         setPinnedItemIds(readLibraryPinnedItemIds());
         clearLauncherSessionState();
         if (earlyTypedQuery) setQuery(earlyTypedQuery);
@@ -1368,7 +1411,7 @@ function CommandLauncher() {
         hadEarlyTypedQuery: Boolean(earlyTypedQuery),
         generation: payload?.generation ?? null,
       });
-      void loadLauncherData({ includeBackground: false });
+      void loadLauncherOpenData();
       scheduleLauncherBackgroundRefresh();
       void themeAPI.getTheme()
         .then(dark => applyTheme(dark ?? payload?.isDarkMode ?? false))
@@ -1384,8 +1427,8 @@ function CommandLauncher() {
       setShowSquaresInCommandLauncher(normalizeSquaresConfig(config).showInCommandLauncher);
     });
     const unsubscribeBookmarks = bookmarksAPI?.onChanged?.(() => {
-      loadBookmarkAuthors();
-      loadBookmarkPosts();
+      if (!launcherActiveRef.current) return;
+      scheduleLauncherBackgroundRefresh();
       const handle = authorNamespaceRef.current;
       if (handle) loadAuthorBookmarks(handle);
       const namespace = bookmarkNamespaceRef.current;
@@ -1398,9 +1441,11 @@ function CommandLauncher() {
         .catch(() => setCommandDirectories([]));
     });
     const unsubscribeLibraryRoots = libraryAPI?.onRootsChanged?.(() => {
-      void loadLibraryMarkdown();
+      if (!launcherActiveRef.current) return;
+      scheduleLauncherBackgroundRefresh();
     });
     const unsubscribeRecent = recentAPI?.onChanged?.(() => {
+      if (!launcherActiveRef.current) return;
       loadRecentEntries();
     });
     return () => {
@@ -1417,7 +1462,7 @@ function CommandLauncher() {
       unsubscribeLibraryRoots?.();
       unsubscribeRecent?.();
     };
-  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadBookmarkPosts, loadLibraryMarkdown, resizeLauncher, scheduleLauncherBackgroundRefresh]);
+  }, [applyTheme, clearLauncherSessionState, focusLauncherInput, loadAuthorBookmarks, loadBookmarkNamespace, loadLauncherData, loadLauncherOpenData, loadRecentEntries, resizeLauncher, scheduleLauncherBackgroundRefresh]);
 
   useEffect(() => {
     const handleBlur = () => {
@@ -1648,7 +1693,7 @@ function CommandLauncher() {
     cancelIdle();
     clearWarmTimeout();
     launcherSearchCacheWarmIndexRef.current = 0;
-    if (allItems.length === 0) return;
+    if (!launcherActive || !launcherSessionReady || allItems.length === 0) return;
     const startedAt = performance.now();
 
     const warmSearchCache = () => {
@@ -1701,7 +1746,7 @@ function CommandLauncher() {
       cancelIdle();
       clearWarmTimeout();
     };
-  }, [allItems]);
+  }, [allItems, launcherActive, launcherSessionReady]);
 
   const fileSearchQuery = useMemo(() => getLauncherFileSearchQuery(query), [query]);
   const clipboardSearchQuery = clipboardSearchActive ? query : null;
@@ -1983,6 +2028,10 @@ function CommandLauncher() {
   }, [flushLauncherIconDataBatch]);
 
   useEffect(() => () => {
+    if (launcherIconLoadTimeoutRef.current !== null) {
+      window.clearTimeout(launcherIconLoadTimeoutRef.current);
+      launcherIconLoadTimeoutRef.current = null;
+    }
     if (launcherIconDataFlushFrameRef.current !== null) {
       window.cancelAnimationFrame(launcherIconDataFlushFrameRef.current);
       launcherIconDataFlushFrameRef.current = null;
@@ -2135,28 +2184,44 @@ function CommandLauncher() {
   }, [authorNamespace, bookmarkNamespace, clipboardSearchQuery, directoryNamespace, fileSearchEnabled, fileSearchQuery, moveSource, namespacePrefix]);
 
   useEffect(() => {
-    for (const filePath of visibleLauncherIconPaths) {
-      if (Object.prototype.hasOwnProperty.call(launcherIconDataByPath, filePath)) continue;
-      if (launcherIconPendingPathsRef.current.has(filePath)) continue;
-      launcherIconPendingPathsRef.current.add(filePath);
-      const iconStartedAt = performance.now();
-      void commandsAPI.getLauncherFileIcon(filePath)
-        .then((result) => {
-          queueLauncherIconData(filePath, result.success ? (result.iconDataUrl ?? null) : null);
-          traceLauncherLoad('load-launcher-file-icon', iconStartedAt, {
-            success: result.success,
-            hasIconDataUrl: Boolean(result.iconDataUrl),
-          });
-        })
-        .catch(() => {
-          queueLauncherIconData(filePath, null);
-          traceLauncherLoad('load-launcher-file-icon', iconStartedAt, { success: false });
-        })
-        .finally(() => {
-          launcherIconPendingPathsRef.current.delete(filePath);
-        });
+    if (launcherIconLoadTimeoutRef.current !== null) {
+      window.clearTimeout(launcherIconLoadTimeoutRef.current);
+      launcherIconLoadTimeoutRef.current = null;
     }
-  }, [launcherIconDataByPath, queueLauncherIconData, visibleLauncherIconPaths]);
+    if (!launcherActive || !launcherSessionReady || visibleLauncherIconPaths.length === 0) return;
+
+    launcherIconLoadTimeoutRef.current = window.setTimeout(() => {
+      launcherIconLoadTimeoutRef.current = null;
+      for (const filePath of visibleLauncherIconPaths) {
+        if (Object.prototype.hasOwnProperty.call(launcherIconDataByPath, filePath)) continue;
+        if (launcherIconPendingPathsRef.current.has(filePath)) continue;
+        launcherIconPendingPathsRef.current.add(filePath);
+        const iconStartedAt = performance.now();
+        void commandsAPI.getLauncherFileIcon(filePath)
+          .then((result) => {
+            queueLauncherIconData(filePath, result.success ? (result.iconDataUrl ?? null) : null);
+            traceLauncherLoad('load-launcher-file-icon', iconStartedAt, {
+              success: result.success,
+              hasIconDataUrl: Boolean(result.iconDataUrl),
+            });
+          })
+          .catch(() => {
+            queueLauncherIconData(filePath, null);
+            traceLauncherLoad('load-launcher-file-icon', iconStartedAt, { success: false });
+          })
+          .finally(() => {
+            launcherIconPendingPathsRef.current.delete(filePath);
+          });
+      }
+    }, LAUNCHER_ICON_LOAD_DELAY_MS);
+
+    return () => {
+      if (launcherIconLoadTimeoutRef.current !== null) {
+        window.clearTimeout(launcherIconLoadTimeoutRef.current);
+        launcherIconLoadTimeoutRef.current = null;
+      }
+    };
+  }, [launcherActive, launcherIconDataByPath, launcherSessionReady, queueLauncherIconData, visibleLauncherIconPaths]);
 
   // Filter items when query changes.
   useEffect(() => {
