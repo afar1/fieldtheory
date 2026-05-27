@@ -135,7 +135,14 @@ import { inferLibrarianSetupComplete } from './librarianSetupState';
 import { buildLibraryMigrationPlan, executeLibraryMigration } from './libraryMigration';
 import { commandsDir, libraryDir } from './fieldTheoryPaths';
 import { getPossibleIdeaBatch, listPossibleIdeaBatches } from './possibleIdeasManager';
-import { autoUpdaterReleaseRepoForBuildChannel, resolveFieldTheoryBuildChannel } from './buildChannel';
+import {
+  autoUpdaterAllowsPrereleaseForBuildChannel,
+  autoUpdaterAuthTokenForBuildChannel,
+  autoUpdaterFeedOptionsForBuildChannel,
+  autoUpdaterReleaseRepoForBuildChannel,
+  normalizeGitHubToken,
+  resolveFieldTheoryBuildChannel,
+} from './buildChannel';
 import { isAllowedMarkdownExt, resolveIncomingMarkdownPath } from './openFileRouter';
 import { isLibraryTextDocumentPath, libraryTextDocumentFileNameFromUserInput, stripMarkdownFileExtension } from './pathSafety';
 import { setMarkdownArchivedState, stampMarkdownContentEditIfBodyChanged } from '../shared/markdownFrontmatter';
@@ -285,7 +292,7 @@ const MARKDOWN_PREVIEW_MAX_BYTES = 512 * 1024;
 const BOOKMARK_BACKGROUND_SYNC_STALE_MS = 15 * 60 * 1000;
 
 // Helper for exec with timeout to prevent osascript hangs (especially with Finder)
-const { exec, execFile: execFileCp } = require('child_process');
+const { exec, execFile: execFileCp, execFileSync } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFileCp);
 
@@ -996,17 +1003,33 @@ const autoUpdaterReleaseRepo = autoUpdaterReleaseRepoForBuildChannel(fieldTheory
 const isAutoUpdaterEnabled = autoUpdaterReleaseRepo !== null;
 let autoUpdaterInstance: import('electron-updater').AppUpdater | null = null;
 
+function resolveAutoUpdaterAuthHeader(): string | null {
+  const envToken = autoUpdaterAuthTokenForBuildChannel(fieldTheoryBuildChannel, process.env);
+  if (envToken) return envToken;
+
+  if (fieldTheoryBuildChannel !== 'experimental') return null;
+
+  try {
+    const ghToken = execFileSync('gh', ['auth', 'token'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 1500,
+    });
+    return normalizeGitHubToken(ghToken);
+  } catch {
+    return null;
+  }
+}
+
 function getAutoUpdater(): import('electron-updater').AppUpdater {
   if (!autoUpdaterInstance) {
     const { autoUpdater } = require('electron-updater') as typeof import('electron-updater');
     autoUpdater.autoDownload = false;
-    autoUpdater.allowPrerelease = false;
-    if (autoUpdaterReleaseRepo) {
-      autoUpdater.setFeedURL({
-        provider: 'github',
-        owner: 'afar1',
-        repo: autoUpdaterReleaseRepo,
-      });
+    autoUpdater.allowPrerelease = autoUpdaterAllowsPrereleaseForBuildChannel(fieldTheoryBuildChannel);
+    const autoUpdaterAuthToken = resolveAutoUpdaterAuthHeader();
+    const feedOptions = autoUpdaterFeedOptionsForBuildChannel(fieldTheoryBuildChannel, autoUpdaterAuthToken);
+    if (feedOptions) {
+      autoUpdater.setFeedURL(feedOptions);
     }
     autoUpdaterInstance = autoUpdater;
   }

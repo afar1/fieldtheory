@@ -14,7 +14,8 @@
   "publish": {
     "provider": "github",
     "owner": "afar1",
-    "repo": "field-releases-experimental"
+    "repo": "oscar",
+    "private": true
   },
   "mac": {
     "category": "public.app-category.productivity",

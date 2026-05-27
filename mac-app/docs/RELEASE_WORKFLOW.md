@@ -3,11 +3,13 @@
 ## Overview
 
 Field Theory releases are published to a **separate public repository** (`afar1/field-releases`) to keep the source code private while allowing public distribution via GitHub Releases.
+Experimental releases are published as prereleases on the private source repository (`afar1/oscar`) from its `experimental` branch.
 
 ## Repository Setup
 
-- **Source code**: `afar1/field-theory` (private)
-- **Releases**: `afar1/field-releases` (public) — only contains release assets, no source code
+- **Source code**: `afar1/oscar` (private)
+- **Production releases**: `afar1/field-releases` (public) — only contains release assets, no source code
+- **Experimental releases**: `afar1/oscar` (private) — prerelease assets targeted at the `experimental` branch
 
 ## Configuration
 
@@ -22,11 +24,7 @@ Field Theory releases are published to a **separate public repository** (`afar1/
 
 ### `electron/main/index.ts` (autoUpdater feed URL)
 ```typescript
-autoUpdater.setFeedURL({ 
-  provider: 'github', 
-  owner: 'afar1', 
-  repo: 'field-releases' 
-});
+autoUpdater.setFeedURL(autoUpdaterFeedOptionsForBuildChannel(fieldTheoryBuildChannel, token));
 ```
 
 ## Publishing a New Release
@@ -56,7 +54,7 @@ This uploads:
    # Install the DMG from mac-app/release/
    ```
 
-2. Publish a newer version to `field-releases`
+2. Publish a newer version to `field-releases`, or publish an experimental prerelease to `oscar` from the `experimental` branch
 
 3. Run the installed app from terminal to see updater logs:
    ```bash
@@ -82,10 +80,10 @@ The `field-releases` repo has no releases yet. Publish one first.
 Your `GH_TOKEN` doesn't have write access to `field-releases`. Update token permissions.
 
 ### Auto-updater not checking
-- Only runs in production builds (not when `ELECTRON_START_URL` is set)
+- Only runs in packaged builds with an enabled updater feed (not when `ELECTRON_START_URL` is set)
+- Experimental builds need `FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN` or local GitHub CLI auth at runtime so they can read private `afar1/oscar` release assets
 - Checks on startup (5s delay) and every 30 minutes
 - Use "Check for Updates…" in tray menu for manual check
-
 
 
 
