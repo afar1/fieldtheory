@@ -9,6 +9,8 @@ import { libraryDir } from './fieldTheoryPaths';
 export const CodexTerminalIPCChannels = {
   CREATE: 'codexTerminal:create',
   LIST: 'codexTerminal:list',
+  LIST_HISTORY: 'codexTerminal:listHistory',
+  READ_HISTORY_PREVIEW: 'codexTerminal:readHistoryPreview',
   GET_BUFFER: 'codexTerminal:getBuffer',
   INPUT: 'codexTerminal:input',
   RESIZE: 'codexTerminal:resize',
@@ -58,11 +60,45 @@ export interface CodexTerminalAttachedContext {
   attachedAt: string;
 }
 
+export interface CodexTerminalHistoryListInput {
+  query?: string;
+  limit?: number;
+}
+
+export interface CodexTerminalHistoryEntry {
+  filePath: string;
+  fileName: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  sizeBytes: number;
+  preview: string;
+}
+
+export interface CodexTerminalHistoryPreviewInput {
+  maxBytes?: number;
+}
+
+export interface CodexTerminalHistoryPreview {
+  filePath: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  preview: string;
+  truncated: boolean;
+}
+
 interface CodexTerminalSession extends CodexTerminalSessionSummary {
   process: pty.IPty | null;
   outputBuffer: string;
   codexLaunchTimer: ReturnType<typeof setTimeout> | null;
 }
+
+type CodexHistoryFileEntry = { filePath: string; updatedAt: string; sizeBytes: number };
 
 interface CodexTerminalManagerOptions {
   defaultCwd: string;
@@ -72,12 +108,20 @@ interface CodexTerminalManagerOptions {
   contextDirPath?: string;
   sessionStateFilePath?: string;
   transcriptDirPath?: string;
+  codexSessionsDirPath?: string;
 }
 
 const DEFAULT_MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_PERSISTED_SESSIONS = 24;
+const DEFAULT_HISTORY_LIMIT = 50;
+const MAX_HISTORY_LIMIT = 200;
+const HISTORY_SUMMARY_BYTES = 64 * 1024;
+const DEFAULT_HISTORY_PREVIEW_BYTES = 128 * 1024;
+const MAX_HISTORY_PREVIEW_BYTES = 512 * 1024;
+const HISTORY_FILE_CACHE_MS = 2000;
 const CODEX_COMMAND = 'codex';
 const CODEX_LAUNCH_FALLBACK_MS = 1200;
+const SAFE_CODEX_LAUNCH_COMMAND_PATTERN = /^codex(?: resume [A-Za-z0-9_-]+)?$/;
 const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
 const CODEX_INPUT_PLACEHOLDERS = [
   'Run /review on my current changes',
@@ -101,6 +145,10 @@ function commonInteractivePath(): string {
 
 function defaultContextDirPath(): string {
   return path.join(libraryDir(), 'Codex Context');
+}
+
+function defaultCodexSessionsDirPath(): string {
+  return path.join(os.homedir(), '.codex', 'sessions');
 }
 
 function isDirectory(candidate: string): boolean {
@@ -180,6 +228,103 @@ function stripTerminalControlSequences(value: string): string {
   return value.replace(ANSI_PATTERN, '');
 }
 
+function clampInteger(value: unknown, fallback: number, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
+function parseJsonLine(line: string): unknown | null {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+function contentText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content
+    .map((item) => {
+      if (!item || typeof item !== 'object') return '';
+      const record = item as Record<string, unknown>;
+      return typeof record.text === 'string'
+        ? record.text
+        : typeof record.input_text === 'string'
+          ? record.input_text
+          : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function extractHistoryRecordText(record: unknown): { role: string; text: string } | null {
+  if (!record || typeof record !== 'object') return null;
+  const top = record as Record<string, unknown>;
+  const type = top.type;
+  const payload = top.payload;
+  if (!payload || typeof payload !== 'object') return null;
+  const body = payload as Record<string, unknown>;
+
+  if (type === 'event_msg' && typeof body.message === 'string') {
+    const eventType = typeof body.type === 'string'
+      ? body.type
+      : typeof body.kind === 'string'
+        ? body.kind
+        : 'event';
+    const role = eventType === 'user_message'
+      ? 'user'
+      : eventType === 'agent_message'
+        ? 'assistant'
+        : 'status';
+    return { role, text: body.message };
+  }
+
+  if (type === 'event_msg' && typeof body.last_agent_message === 'string') {
+    return { role: 'assistant', text: body.last_agent_message };
+  }
+
+  if (type === 'response_item' && body.type === 'message') {
+    const role = typeof body.role === 'string' ? body.role : 'message';
+    const text = contentText(body.content);
+    return text ? { role, text } : null;
+  }
+
+  return null;
+}
+
+function normalizePreviewText(value: string): string {
+  return stripTerminalControlSequences(value)
+    .replace(/\r/g, '')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+
+function sanitizeLaunchCommand(input: unknown): string {
+  if (typeof input !== 'string') return CODEX_COMMAND;
+  const trimmed = input.replace(/[\r\n]+/g, ' ').trim();
+  return SAFE_CODEX_LAUNCH_COMMAND_PATTERN.test(trimmed) ? trimmed : CODEX_COMMAND;
+}
+
+function formatHistoryPreview(records: Array<{ role: string; text: string }>, maxChars: number): string {
+  const lines = records
+    .map((record) => {
+      const text = normalizePreviewText(record.text);
+      if (!text) return '';
+      return `${record.role}: ${text}`;
+    })
+    .filter(Boolean);
+  const preview = lines.join('\n\n');
+  return preview.length > maxChars ? preview.slice(preview.length - maxChars).trimStart() : preview;
+}
+
+function formatHistoryTitle(records: Array<{ role: string; text: string }>): string {
+  const userRecord = records.find((record) => record.role === 'user' && record.text.trim());
+  const firstRecord = userRecord ?? records.find((record) => record.text.trim());
+  const title = firstRecord ? normalizePreviewText(firstRecord.text).split('\n').find(Boolean) ?? '' : '';
+  return title.length > 96 ? `${title.slice(0, 93)}...` : title;
+}
+
 export function stripCodexInputPlaceholders(value: string): string {
   return CODEX_INPUT_PLACEHOLDERS.reduce((current, placeholder) => (
     current.replaceAll(placeholder, ' '.repeat(placeholder.length))
@@ -204,6 +349,8 @@ export class CodexTerminalManager {
   private readonly contextDirPath: string;
   private readonly sessionStateFilePath: string;
   private readonly transcriptDirPath: string;
+  private readonly codexSessionsDirPath: string;
+  private historyFileCache: { scannedAt: number; files: CodexHistoryFileEntry[] } | null = null;
 
   constructor(options: CodexTerminalManagerOptions) {
     this.defaultCwd = options.defaultCwd;
@@ -213,10 +360,11 @@ export class CodexTerminalManager {
     this.provenanceFilePath = options.provenanceFilePath ?? path.join(this.contextDirPath, 'session-provenance.json');
     this.sessionStateFilePath = options.sessionStateFilePath ?? path.join(this.contextDirPath, 'session-state.json');
     this.transcriptDirPath = options.transcriptDirPath ?? path.join(this.contextDirPath, 'transcripts');
+    this.codexSessionsDirPath = options.codexSessionsDirPath ?? defaultCodexSessionsDirPath();
     this.loadPersistedSessions();
   }
 
-  createSession(input: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean } = {}): CodexTerminalSessionSummary {
+  createSession(input: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string } = {}): CodexTerminalSessionSummary {
     if (input.auto) {
       const existing = Array.from(this.sessions.values()).find((session) => !session.exitedAt && session.process);
       if (existing) return this.toSummary(existing);
@@ -224,6 +372,7 @@ export class CodexTerminalManager {
     const id = crypto.randomUUID();
     const cwd = input.cwd && isDirectory(input.cwd) ? input.cwd : this.defaultCwd;
     const title = input.title?.trim() || `Codex ${this.sessions.size + 1}`;
+    const launchCommand = sanitizeLaunchCommand(input.launchCommand);
     const createdAt = new Date().toISOString();
     const transcriptPath = path.join(this.transcriptDirPath, `${id}.ansi`);
     const child = this.spawnPty(process.env.SHELL || '/bin/zsh', ['-l'], {
@@ -267,7 +416,7 @@ export class CodexTerminalManager {
         clearTimeout(session.codexLaunchTimer);
         session.codexLaunchTimer = null;
       }
-      session.process.write(`${CODEX_COMMAND}\r`);
+      session.process.write(`${launchCommand}\r`);
     };
     session.codexLaunchTimer = setTimeout(launchCodex, CODEX_LAUNCH_FALLBACK_MS);
 
@@ -300,6 +449,61 @@ export class CodexTerminalManager {
 
   listSessions(): CodexTerminalSessionSummary[] {
     return Array.from(this.sessions.values()).map((session) => this.toSummary(session));
+  }
+
+  listHistory(input: CodexTerminalHistoryListInput = {}): CodexTerminalHistoryEntry[] {
+    const limit = clampInteger(input.limit, DEFAULT_HISTORY_LIMIT, 1, MAX_HISTORY_LIMIT);
+    const query = input.query?.trim().toLocaleLowerCase() ?? '';
+    const files = this.findHistoryFiles()
+      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+    const entries: CodexTerminalHistoryEntry[] = [];
+
+    for (const file of files) {
+      const entry = this.readHistoryEntry(file.filePath, file.updatedAt, file.sizeBytes);
+      if (!entry) continue;
+      const haystack = [
+        entry.filePath,
+        entry.fileName,
+        entry.threadId ?? '',
+        entry.title,
+        entry.cwd ?? '',
+        entry.preview,
+      ].join('\n').toLocaleLowerCase();
+      if (query && !haystack.includes(query)) continue;
+      entries.push(entry);
+      if (entries.length >= limit) break;
+    }
+
+    return entries;
+  }
+
+  readHistoryPreview(filePath: string, input: CodexTerminalHistoryPreviewInput = {}): CodexTerminalHistoryPreview | null {
+    const safePath = this.resolveHistoryFilePath(filePath);
+    if (!safePath) return null;
+    let stat: fs.Stats;
+    try {
+      stat = fs.statSync(safePath);
+    } catch {
+      return null;
+    }
+    if (!stat.isFile() || !path.basename(safePath).startsWith('rollout-') || !safePath.endsWith('.jsonl')) return null;
+
+    const maxBytes = clampInteger(input.maxBytes, DEFAULT_HISTORY_PREVIEW_BYTES, 4096, MAX_HISTORY_PREVIEW_BYTES);
+    const content = this.readFileTail(safePath, maxBytes);
+    if (content === null) return null;
+    const metadata = this.readHistoryMetadata(safePath, HISTORY_SUMMARY_BYTES);
+    const records = this.extractHistoryRecords(content.text, 24);
+
+    return {
+      filePath: safePath,
+      threadId: metadata.threadId,
+      title: formatHistoryTitle(records),
+      cwd: metadata.cwd,
+      startedAt: metadata.startedAt,
+      updatedAt: stat.mtime.toISOString(),
+      preview: formatHistoryPreview(records, maxBytes),
+      truncated: content.truncated,
+    };
   }
 
   getBuffer(id: string): string | null {
@@ -418,6 +622,142 @@ export class CodexTerminalManager {
     const next = `${existing}${chunk}`;
     if (next.length <= this.maxBufferBytes) return next;
     return next.slice(next.length - this.maxBufferBytes);
+  }
+
+  private findHistoryFiles(): CodexHistoryFileEntry[] {
+    const now = Date.now();
+    if (this.historyFileCache && now - this.historyFileCache.scannedAt < HISTORY_FILE_CACHE_MS) {
+      return this.historyFileCache.files;
+    }
+    const root = this.codexSessionsDirPath;
+    const files: CodexHistoryFileEntry[] = [];
+    const visit = (dir: string) => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        const candidate = path.join(dir, entry.name);
+        if (entry.isDirectory()) {
+          visit(candidate);
+          continue;
+        }
+        if (!entry.isFile() || !entry.name.startsWith('rollout-') || !entry.name.endsWith('.jsonl')) continue;
+        try {
+          const stat = fs.statSync(candidate);
+          files.push({ filePath: candidate, updatedAt: stat.mtime.toISOString(), sizeBytes: stat.size });
+        } catch {
+          // A session file can disappear while Codex is writing or pruning it.
+        }
+      }
+    };
+    visit(root);
+    this.historyFileCache = { scannedAt: now, files };
+    return files;
+  }
+
+  private resolveHistoryFilePath(filePath: string): string | null {
+    if (typeof filePath !== 'string' || !filePath) return null;
+    let root: string;
+    let resolved: string;
+    try {
+      root = fs.realpathSync(this.codexSessionsDirPath);
+      resolved = fs.realpathSync(path.resolve(filePath));
+    } catch {
+      return null;
+    }
+    const relative = path.relative(root, resolved);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) return null;
+    return resolved;
+  }
+
+  private readHistoryEntry(filePath: string, updatedAt: string, sizeBytes: number): CodexTerminalHistoryEntry | null {
+    const safePath = this.resolveHistoryFilePath(filePath);
+    if (!safePath) return null;
+    const content = this.readFileHead(safePath, HISTORY_SUMMARY_BYTES);
+    if (content === null) return null;
+    const metadata = this.readHistoryMetadata(safePath, HISTORY_SUMMARY_BYTES, content);
+    const records = this.extractHistoryRecords(content, 5, 'first');
+    return {
+      filePath: safePath,
+      fileName: path.basename(safePath),
+      threadId: metadata.threadId,
+      title: formatHistoryTitle(records),
+      cwd: metadata.cwd,
+      startedAt: metadata.startedAt,
+      updatedAt,
+      sizeBytes,
+      preview: formatHistoryPreview(records, 1200),
+    };
+  }
+
+  private readHistoryMetadata(filePath: string, maxBytes: number, content = this.readFileHead(filePath, maxBytes)): { threadId: string | null; cwd: string | null; startedAt: string | null } {
+    if (content === null) return { threadId: null, cwd: null, startedAt: null };
+    for (const line of content.split('\n')) {
+      const record = parseJsonLine(line);
+      if (!record || typeof record !== 'object') continue;
+      const top = record as Record<string, unknown>;
+      if (top.type !== 'session_meta' || !top.payload || typeof top.payload !== 'object') continue;
+      const payload = top.payload as Record<string, unknown>;
+      return {
+        threadId: typeof payload.id === 'string' ? payload.id : null,
+        cwd: typeof payload.cwd === 'string' ? payload.cwd : null,
+        startedAt: typeof payload.timestamp === 'string' ? payload.timestamp : null,
+      };
+    }
+    return { threadId: null, cwd: null, startedAt: null };
+  }
+
+  private extractHistoryRecords(content: string, limit: number, mode: 'first' | 'last' = 'last'): Array<{ role: string; text: string }> {
+    const records: Array<{ role: string; text: string }> = [];
+    for (const line of content.split('\n')) {
+      const record = extractHistoryRecordText(parseJsonLine(line));
+      if (!record) continue;
+      if (mode === 'first' && records.length >= limit) break;
+      records.push(record);
+      if (mode === 'last' && records.length > limit) records.shift();
+    }
+    return records;
+  }
+
+  private readFileHead(filePath: string, maxBytes: number): string | null {
+    try {
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const buffer = Buffer.alloc(maxBytes);
+        const bytesRead = fs.readSync(fd, buffer, 0, maxBytes, 0);
+        return buffer.subarray(0, bytesRead).toString('utf8');
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  private readFileTail(filePath: string, maxBytes: number): { text: string; truncated: boolean } | null {
+    try {
+      const stat = fs.statSync(filePath);
+      const start = Math.max(0, stat.size - maxBytes);
+      const length = stat.size - start;
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const buffer = Buffer.alloc(length);
+        const bytesRead = fs.readSync(fd, buffer, 0, length, start);
+        let text = buffer.subarray(0, bytesRead).toString('utf8');
+        if (start > 0) {
+          const firstNewline = text.indexOf('\n');
+          text = firstNewline >= 0 ? text.slice(firstNewline + 1) : '';
+        }
+        return { text, truncated: start > 0 };
+      } finally {
+        fs.closeSync(fd);
+      }
+    } catch {
+      return null;
+    }
   }
 
   private appendProvenance(attachedContext: CodexTerminalAttachedContext): void {

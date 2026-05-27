@@ -5233,12 +5233,41 @@ type CodexTerminalAttachResult = {
   error?: string;
 };
 
+type CodexTerminalHistoryEntry = {
+  filePath: string;
+  fileName: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  sizeBytes: number;
+  preview: string;
+};
+
+type CodexTerminalHistoryPreview = {
+  filePath: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  preview: string;
+  truncated: boolean;
+};
+
 const codexTerminalAPI = {
-  create: async (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean }): Promise<CodexTerminalSessionSummary> => {
+  create: async (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string }): Promise<CodexTerminalSessionSummary> => {
     return ipcRenderer.invoke('codexTerminal:create', input);
   },
   list: async (): Promise<CodexTerminalSessionSummary[]> => {
     return ipcRenderer.invoke('codexTerminal:list');
+  },
+  listHistory: async (input?: { query?: string; limit?: number }): Promise<CodexTerminalHistoryEntry[]> => {
+    return ipcRenderer.invoke('codexTerminal:listHistory', input);
+  },
+  readHistoryPreview: async (filePath: string, input?: { maxBytes?: number }): Promise<CodexTerminalHistoryPreview | null> => {
+    return ipcRenderer.invoke('codexTerminal:readHistoryPreview', filePath, input);
   },
   getBuffer: async (id: string): Promise<string | null> => {
     return ipcRenderer.invoke('codexTerminal:getBuffer', id);
