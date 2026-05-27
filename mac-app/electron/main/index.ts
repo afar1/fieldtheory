@@ -5267,7 +5267,7 @@ function setupLibrarianIPCHandlers(): void {
     return librarianManager?.uninstallCodexReadPermissionHook() ?? { success: false, message: 'Manager not ready' };
   });
 
-  ipcMain.handle(CodexTerminalIPCChannels.CREATE, (_event, input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean }) => {
+  ipcMain.handle(CodexTerminalIPCChannels.CREATE, (_event, input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string }) => {
     const manager = getCodexTerminalManager();
     const session = manager.createSession(input);
     broadcastCodexTerminalSessions(manager);
@@ -5276,6 +5276,14 @@ function setupLibrarianIPCHandlers(): void {
 
   ipcMain.handle(CodexTerminalIPCChannels.LIST, () => {
     return getCodexTerminalManager().listSessions();
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.LIST_HISTORY, (_event, input?: { query?: string; limit?: number }) => {
+    return getCodexTerminalManager().listHistory(input);
+  });
+
+  ipcMain.handle(CodexTerminalIPCChannels.READ_HISTORY_PREVIEW, (_event, filePath: string, input?: { maxBytes?: number }) => {
+    return getCodexTerminalManager().readHistoryPreview(filePath, input);
   });
 
   ipcMain.handle(CodexTerminalIPCChannels.GET_BUFFER, (_event, id: string): string | null => {

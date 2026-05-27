@@ -1,5 +1,5 @@
 import { EventEmitter } from 'events';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +45,7 @@ function createManager(maxBufferBytes = 1024, input?: {
   contextDirPath?: string;
   sessionStateFilePath?: string;
   transcriptDirPath?: string;
+  codexSessionsDirPath?: string;
 }) {
   const ptys: FakePty[] = [];
   const spawnPty = vi.fn(() => {
@@ -59,6 +60,7 @@ function createManager(maxBufferBytes = 1024, input?: {
     contextDirPath: input?.contextDirPath,
     sessionStateFilePath: input?.sessionStateFilePath,
     transcriptDirPath: input?.transcriptDirPath,
+    codexSessionsDirPath: input?.codexSessionsDirPath,
     spawnPty: spawnPty as any,
   });
   return { manager, ptys, spawnPty };
@@ -214,6 +216,24 @@ describe('CodexTerminalManager', () => {
     expect((spawnPty as any).mock.calls[0]?.[1]).toEqual(['-l']);
     expect(ptys[0].written).toEqual([]);
     ptys[0].emit('data', promptFor(process.cwd()));
+    expect(ptys[0].written[0]).toBe('codex\r');
+  });
+
+  it('can launch a Codex resume command for a new terminal session', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession({ launchCommand: 'codex resume thread-1' });
+
+    ptys[0].emit('data', promptFor(process.cwd()));
+
+    expect(ptys[0].written[0]).toBe('codex resume thread-1\r');
+  });
+
+  it('falls back to plain Codex for unsafe launch commands', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession({ launchCommand: 'codex resume thread-1; echo no' });
+
+    ptys[0].emit('data', promptFor(process.cwd()));
+
     expect(ptys[0].written[0]).toBe('codex\r');
   });
 
@@ -453,6 +473,138 @@ describe('CodexTerminalManager', () => {
     } finally {
       rmSync(libraryDir, { recursive: true, force: true });
       rmSync(defaultCwd, { recursive: true, force: true });
+    }
+  });
+
+  it('lists and searches Codex JSONL history without importing it into the library', () => {
+    const libraryDir = mkdtempSync(join(tmpdir(), 'codex-terminal-library-'));
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'codex-sessions-'));
+    const sessionDayDir = join(sessionsDir, '2026', '05', '26');
+    mkdirSync(sessionDayDir, { recursive: true });
+    const historyPath = join(sessionDayDir, 'rollout-2026-05-26T10-00-00-thread.jsonl');
+    writeFileSync(historyPath, [
+      JSON.stringify({
+        type: 'session_meta',
+        payload: {
+          id: 'thread-1',
+          timestamp: '2026-05-26T10:00:00.000Z',
+          cwd: '/Users/afar/dev/fieldtheory',
+        },
+      }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'build terminal history overlay' } }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'wire a read-only preview API' }],
+        },
+      }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const { manager } = createManager(1024, {
+        contextDirPath: join(libraryDir, 'Codex Context'),
+        codexSessionsDirPath: sessionsDir,
+      });
+
+      const entries = manager.listHistory({ query: 'preview API' });
+
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        filePath: realpathSync(historyPath),
+        fileName: 'rollout-2026-05-26T10-00-00-thread.jsonl',
+        threadId: 'thread-1',
+        title: 'build terminal history overlay',
+        cwd: '/Users/afar/dev/fieldtheory',
+        startedAt: '2026-05-26T10:00:00.000Z',
+      });
+      expect(entries[0].preview).toContain('user: build terminal history overlay');
+      expect(entries[0].preview).toContain('assistant: wire a read-only preview API');
+      expect(existsSync(join(libraryDir, 'Codex Context', 'sessions'))).toBe(false);
+    } finally {
+      rmSync(libraryDir, { recursive: true, force: true });
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('uses the first user message for history titles instead of later repeated turns', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'codex-sessions-'));
+    const sessionDayDir = join(sessionsDir, '2026', '05', '26');
+    mkdirSync(sessionDayDir, { recursive: true });
+    const historyPath = join(sessionDayDir, 'rollout-2026-05-26T19-01-02-thread.jsonl');
+    writeFileSync(historyPath, [
+      JSON.stringify({
+        type: 'session_meta',
+        payload: {
+          id: 'thread-3',
+          timestamp: '2026-05-26T19:01:02.000Z',
+          cwd: '/Users/afar/dev/fieldtheory',
+        },
+      }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'first visual typing lag request' } }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'I will inspect the renderer path.' } }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'be a good engineer here. find the most elegant solution.' } }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'be a good engineer here. find the most elegant solution.' } }),
+    ].join('\n'), 'utf8');
+
+    try {
+      const { manager } = createManager(1024, {
+        codexSessionsDirPath: sessionsDir,
+      });
+
+      const entries = manager.listHistory();
+
+      expect(entries[0]).toMatchObject({
+        filePath: realpathSync(historyPath),
+        title: 'first visual typing lag request',
+      });
+      expect(entries[0].preview).toContain('user: first visual typing lag request');
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reads previews only for Codex history files inside the sessions directory', () => {
+    const sessionsDir = mkdtempSync(join(tmpdir(), 'codex-sessions-'));
+    const sessionDayDir = join(sessionsDir, '2026', '05', '26');
+    mkdirSync(sessionDayDir, { recursive: true });
+    const historyPath = join(sessionDayDir, 'rollout-2026-05-26T11-00-00-thread.jsonl');
+    const outsidePath = join(tmpdir(), 'rollout-outside.jsonl');
+    const symlinkPath = join(sessionDayDir, 'rollout-symlink.jsonl');
+    writeFileSync(historyPath, [
+      JSON.stringify({
+        type: 'session_meta',
+        payload: {
+          id: 'thread-2',
+          timestamp: '2026-05-26T11:00:00.000Z',
+          cwd: '/tmp/project',
+        },
+      }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'show recent transcript' } }),
+    ].join('\n'), 'utf8');
+    writeFileSync(outsidePath, '{}\n', 'utf8');
+    symlinkSync(outsidePath, symlinkPath);
+
+    try {
+      const { manager } = createManager(1024, {
+        codexSessionsDirPath: sessionsDir,
+      });
+
+      expect(manager.readHistoryPreview(outsidePath)).toBeNull();
+      expect(manager.readHistoryPreview(symlinkPath)).toBeNull();
+      expect(manager.readHistoryPreview(join(sessionDayDir, 'not-rollout.jsonl'))).toBeNull();
+      expect(manager.readHistoryPreview(historyPath)).toMatchObject({
+        filePath: realpathSync(historyPath),
+        threadId: 'thread-2',
+        cwd: '/tmp/project',
+        startedAt: '2026-05-26T11:00:00.000Z',
+        preview: 'user: show recent transcript',
+        truncated: false,
+      });
+    } finally {
+      rmSync(sessionsDir, { recursive: true, force: true });
+      rmSync(outsidePath, { force: true });
     }
   });
 });

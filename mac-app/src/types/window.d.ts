@@ -2696,6 +2696,29 @@ declare global {
     setLocalEnabled: (enabled: boolean) => Promise<FieldTheorySyncStatus>;
   }
 
+  interface CodexTerminalHistoryEntry {
+    filePath: string;
+    fileName: string;
+    threadId: string | null;
+    title: string;
+    cwd: string | null;
+    startedAt: string | null;
+    updatedAt: string;
+    sizeBytes: number;
+    preview: string;
+  }
+
+  interface CodexTerminalHistoryPreview {
+    filePath: string;
+    threadId: string | null;
+    title: string;
+    cwd: string | null;
+    startedAt: string | null;
+    updatedAt: string;
+    preview: string;
+    truncated: boolean;
+  }
+
   interface Window {
     audioAPI?: AudioAPI;
     gazeAPI?: GazeAPI;
@@ -2784,6 +2807,29 @@ interface CodexTerminalAttachResult {
   error?: string;
 }
 
+interface CodexTerminalHistoryEntry {
+  filePath: string;
+  fileName: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  sizeBytes: number;
+  preview: string;
+}
+
+interface CodexTerminalHistoryPreview {
+  filePath: string;
+  threadId: string | null;
+  title: string;
+  cwd: string | null;
+  startedAt: string | null;
+  updatedAt: string;
+  preview: string;
+  truncated: boolean;
+}
+
 interface CodexTerminalAttachedContext {
   sessionId: string;
   sessionTitle: string;
@@ -2799,8 +2845,10 @@ interface CodexTerminalAttachedContext {
 }
 
 interface CodexTerminalAPI {
-  create: (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean }) => Promise<CodexTerminalSessionSummary>;
+  create: (input?: { cwd?: string; title?: string; cols?: number; rows?: number; auto?: boolean; launchCommand?: string }) => Promise<CodexTerminalSessionSummary>;
   list: () => Promise<CodexTerminalSessionSummary[]>;
+  listHistory: (input?: { query?: string; limit?: number }) => Promise<CodexTerminalHistoryEntry[]>;
+  readHistoryPreview: (filePath: string, input?: { maxBytes?: number }) => Promise<CodexTerminalHistoryPreview | null>;
   getBuffer: (id: string) => Promise<string | null>;
   input: (id: string, data: string) => Promise<boolean>;
   resize: (id: string, cols: number, rows: number) => Promise<boolean>;

@@ -39,6 +39,7 @@ const TERMINAL_BOTTOM_RESERVED_ROWS = 1;
 const TERMINAL_VIEWPORT_TOP_PADDING = 8;
 const TERMINAL_DOCK_DIVIDER_SIZE = 2;
 const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
+const HISTORY_OVERLAY_WIDTH = 420;
 
 interface TerminalHandle {
   term: Terminal;
@@ -143,6 +144,14 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const [bottomHeight, setBottomHeight] = useState(() => clampBottomHeight(readStoredNumber(CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY, DEFAULT_BOTTOM_HEIGHT)));
   const [rightWidth, setRightWidth] = useState(() => clampRightWidth(readStoredNumber(CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY, DEFAULT_RIGHT_WIDTH)));
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  const [historyQuery, setHistoryQuery] = useState('');
+  const [debouncedHistoryQuery, setDebouncedHistoryQuery] = useState('');
+  const [historyEntries, setHistoryEntries] = useState<CodexTerminalHistoryEntry[]>([]);
+  const [historyPreview, setHistoryPreview] = useState<CodexTerminalHistoryPreview | null>(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyOverlayRect, setHistoryOverlayRect] = useState<CSSProperties | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [topExtension, setTopExtension] = useState(0);
   const topExtensionRef = useRef(0);
@@ -176,6 +185,59 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       : next[0]?.id ?? null);
   }, []);
 
+  const updateHistoryOverlayRect = useCallback(() => {
+    const panel = panelRef.current;
+    if (!panel || dockSide !== 'right') {
+      setHistoryOverlayRect(null);
+      return;
+    }
+    const rect = panel.getBoundingClientRect();
+    const availableWidth = Math.max(260, rect.left - 12);
+    const width = Math.min(HISTORY_OVERLAY_WIDTH, availableWidth);
+    setHistoryOverlayRect({
+      position: 'fixed',
+      top: `${rect.top}px`,
+      left: `${Math.max(8, rect.left - width)}px`,
+      width: `${width}px`,
+      height: `${rect.height}px`,
+    });
+  }, [dockSide]);
+
+  const refreshHistory = useCallback(async (query: string) => {
+    setHistoryLoading(true);
+    setHistoryError(null);
+    try {
+      if (!window.codexTerminalAPI?.listHistory) {
+        setHistoryError('Restart Field Theory to load Codex history.');
+        setHistoryEntries([]);
+        return;
+      }
+      const next = await window.codexTerminalAPI.listHistory({ query, limit: 60 });
+      setHistoryEntries(next ?? []);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Could not load Codex history.');
+      setHistoryEntries([]);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, []);
+
+  const readHistoryPreview = useCallback(async (entry: CodexTerminalHistoryEntry) => {
+    setHistoryError(null);
+    try {
+      if (!window.codexTerminalAPI?.readHistoryPreview) {
+        setHistoryError('Restart Field Theory to load Codex history.');
+        setHistoryPreview(null);
+        return;
+      }
+      const preview = await window.codexTerminalAPI.readHistoryPreview(entry.filePath);
+      setHistoryPreview(preview ?? null);
+    } catch (error) {
+      setHistoryError(error instanceof Error ? error.message : 'Could not load Codex thread preview.');
+      setHistoryPreview(null);
+    }
+  }, []);
+
   const fitActiveTerminal = useCallback(() => {
     if (!activeSessionId) return;
     const handle = terminalHandlesRef.current.get(activeSessionId);
@@ -197,11 +259,12 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     handle?.term.focus();
   }, [activeSessionId]);
 
-  const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean }) => {
+  const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean; launchCommand?: string }) => {
     const session = await window.codexTerminalAPI?.create({
       title: input?.title ?? `Codex ${sessions.length + 1}`,
       cwd: input?.cwd,
       auto: input?.auto,
+      launchCommand: input?.launchCommand,
     });
     if (!session) return;
     setSessions((current) => mergeCodexTerminalSessions(current, [session]));
@@ -209,9 +272,70 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     window.setTimeout(() => terminalHandlesRef.current.get(session.id)?.term.focus(), 80);
   }, [sessions.length]);
 
+  const resumeHistoryEntry = useCallback(async (entry: CodexTerminalHistoryEntry) => {
+    if (!entry.threadId) {
+      setHistoryError('This Codex thread is missing a resume id.');
+      return;
+    }
+    setHistoryOpen(false);
+    await createSession({
+      cwd: entry.cwd ?? undefined,
+      title: `Resume ${entry.title || entry.threadId}`,
+      launchCommand: `codex resume ${entry.threadId}`,
+    });
+  }, [createSession]);
+
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const timer = window.setTimeout(() => setDebouncedHistoryQuery(historyQuery), 140);
+    return () => window.clearTimeout(timer);
+  }, [historyOpen, historyQuery]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    updateHistoryOverlayRect();
+    void refreshHistory(debouncedHistoryQuery);
+  }, [debouncedHistoryQuery, historyOpen, refreshHistory, updateHistoryOverlayRect]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    updateHistoryOverlayRect();
+    window.addEventListener('resize', updateHistoryOverlayRect);
+    window.addEventListener('scroll', updateHistoryOverlayRect, true);
+    return () => {
+      window.removeEventListener('resize', updateHistoryOverlayRect);
+      window.removeEventListener('scroll', updateHistoryOverlayRect, true);
+    };
+  }, [historyOpen, updateHistoryOverlayRect]);
+
+  useEffect(() => {
+    if (!historyOpen) {
+      setHistoryPreview(null);
+      return;
+    }
+    if (!historyEntries.some((entry) => entry.filePath === historyPreview?.filePath)) {
+      const first = historyEntries[0];
+      if (first) {
+        void readHistoryPreview(first);
+      } else {
+        setHistoryPreview(null);
+      }
+    }
+  }, [historyEntries, historyOpen, historyPreview?.filePath, readHistoryPreview]);
+
+  useEffect(() => {
+    if (!historyOpen) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setHistoryOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [historyOpen]);
 
   useEffect(() => {
     localStorage.setItem(CODEX_TERMINAL_DOCK_STORAGE_KEY, dockSide);
@@ -628,6 +752,29 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
         }}
       >
+        <button
+          type="button"
+          aria-label={historyOpen ? 'Close Codex history' : 'Open Codex history'}
+          onClick={() => {
+            setHistoryOpen((current) => !current);
+            window.setTimeout(updateHistoryOverlayRect, 0);
+          }}
+          title={historyOpen ? 'Close Codex history' : 'Open Codex history'}
+          style={{
+            ...toolbarButtonStyle(theme),
+            width: '26px',
+            padding: 0,
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: historyOpen ? theme.text : theme.textSecondary,
+            backgroundColor: historyOpen ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)') : 'transparent',
+            flexShrink: 0,
+            ...(toolbarItemOffset ?? {}),
+          }}
+        >
+          <ClockIcon size={13} />
+        </button>
         {visibleSessions.map((session) => {
           const active = session.id === activeSession?.id;
           return (
@@ -749,6 +896,121 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           Close
         </button>
       </div>
+      {historyOpen && historyOverlayRect && (
+        <div
+          data-ft-codex-history-overlay="true"
+          style={{
+            ...historyOverlayRect,
+            zIndex: 30,
+            display: 'flex',
+            flexDirection: 'column',
+            borderLeft: `1px solid ${terminalSoftBorder}`,
+            borderTop: `1px solid ${terminalSoftBorder}`,
+            borderBottom: `1px solid ${terminalSoftBorder}`,
+            backgroundColor: terminalChrome,
+            boxShadow: theme.isDark ? '-18px 0 38px rgba(0,0,0,0.34)' : '-18px 0 34px rgba(0,0,0,0.12)',
+            ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
+          }}
+        >
+          <div style={{ height: `${36 + toolbarTopInset}px`, display: 'flex', alignItems: 'center', gap: '8px', padding: '0 10px', borderBottom: `1px solid ${terminalSoftBorder}`, flexShrink: 0 }}>
+            <ClockIcon />
+            <input
+              value={historyQuery}
+              onChange={(event) => setHistoryQuery(event.currentTarget.value)}
+              placeholder="Search Codex history"
+              style={{
+                minWidth: 0,
+                flex: 1,
+                height: '24px',
+                border: `1px solid ${terminalSoftBorder}`,
+                borderRadius: '5px',
+                padding: '0 8px',
+                backgroundColor: terminalBackground,
+                color: theme.text,
+                fontSize: '11px',
+                outline: 'none',
+              }}
+            />
+            <button type="button" onClick={() => setHistoryOpen(false)} title="Close Codex history" style={{ ...toolbarButtonStyle(theme), width: '24px', padding: 0 }}>
+              ×
+            </button>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '160px minmax(0, 1fr)', minHeight: 0, flex: 1 }}>
+            <div style={{ minHeight: 0, overflowY: 'auto', borderRight: `1px solid ${terminalSoftBorder}`, backgroundColor: theme.isDark ? '#12151a' : '#e8dfd1' }}>
+              {historyLoading && <div style={{ padding: '10px', color: terminalMutedText, fontSize: '11px' }}>Loading...</div>}
+              {!historyLoading && historyEntries.length === 0 && <div style={{ padding: '10px', color: terminalMutedText, fontSize: '11px' }}>No threads found</div>}
+              {historyEntries.map((entry) => {
+                const active = historyPreview?.filePath === entry.filePath;
+                return (
+                  <div
+                    key={entry.filePath}
+                    title={entry.filePath}
+                    style={{
+                      width: '100%',
+                      display: 'grid',
+                      gridTemplateColumns: 'minmax(0, 1fr) 24px',
+                      alignItems: 'center',
+                      gap: '6px',
+                      padding: '7px 7px 7px 9px',
+                      borderBottom: `1px solid ${terminalSoftBorder}`,
+                      backgroundColor: active ? (theme.isDark ? '#202833' : 'rgba(16,185,129,0.12)') : 'transparent',
+                      color: active ? theme.text : theme.textSecondary,
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => void readHistoryPreview(entry)}
+                      style={{
+                        minWidth: 0,
+                        padding: 0,
+                        border: 0,
+                        backgroundColor: 'transparent',
+                        color: 'inherit',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <span style={{ display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '11px', fontWeight: 600 }}>{entry.title || entry.fileName}</span>
+                      <span style={{ display: 'block', marginTop: '3px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: terminalMutedText, fontSize: '10px' }}>{formatHistoryDate(entry.startedAt ?? entry.updatedAt)}</span>
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Resume ${entry.title || entry.fileName}`}
+                      onClick={() => void resumeHistoryEntry(entry)}
+                      title="Resume thread"
+                      style={{
+                        width: '22px',
+                        height: '22px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: 0,
+                        border: `1px solid ${terminalSoftBorder}`,
+                        borderRadius: '5px',
+                        backgroundColor: theme.isDark ? '#171b22' : '#f0eadf',
+                        color: theme.textSecondary,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      <PlayIcon />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ minHeight: 0, overflowY: 'auto', padding: '12px', backgroundColor: terminalBackground, color: theme.text }}>
+              {historyError && <div style={{ color: '#ef4444', fontSize: '11px' }}>{historyError}</div>}
+              {!historyError && historyPreview && (
+                <>
+                  <div style={{ marginBottom: '8px', color: theme.text, fontSize: '12px', fontWeight: 700 }}>{historyPreview.title || 'Codex thread'}</div>
+                  <div style={{ marginBottom: '10px', color: terminalMutedText, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '10px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{formatTerminalCwdLabel(historyPreview.cwd ?? '')}</div>
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap', color: theme.text, fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace', fontSize: '11px', lineHeight: 1.45 }}>{historyPreview.preview || 'No readable preview available.'}</pre>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
         <style>
           {`.codex-terminal-host .xterm,
@@ -781,6 +1043,57 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         ))}
       </div>
     </div>
+  );
+}
+
+function formatHistoryDate(input: string): string {
+  const date = new Date(input);
+  if (Number.isNaN(date.getTime())) return input;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function ClockIcon({ size = 15 }: { size?: number }) {
+  const handScale = size / 15;
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-flex',
+        width: `${size}px`,
+        height: `${size}px`,
+        alignItems: 'center',
+        justifyContent: 'center',
+        border: '1.5px solid currentColor',
+        borderRadius: '50%',
+        position: 'relative',
+        flexShrink: 0,
+      }}
+    >
+      <span style={{ position: 'absolute', width: `${1.5 * handScale}px`, height: `${4.5 * handScale}px`, top: `${3 * handScale}px`, backgroundColor: 'currentColor', borderRadius: '999px' }} />
+      <span style={{ position: 'absolute', width: `${4.5 * handScale}px`, height: `${1.5 * handScale}px`, left: `${7 * handScale}px`, top: `${7 * handScale}px`, backgroundColor: 'currentColor', borderRadius: '999px' }} />
+    </span>
+  );
+}
+
+function PlayIcon() {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block',
+        width: 0,
+        height: 0,
+        borderTop: '5px solid transparent',
+        borderBottom: '5px solid transparent',
+        borderLeft: '8px solid currentColor',
+        marginLeft: '2px',
+      }}
+    />
   );
 }
 
