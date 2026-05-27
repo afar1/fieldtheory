@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { mergeCodexTerminalSessions, nativeTerminalNavigationSequence, terminalTheme } from '../CodexTerminalPanel';
+import {
+  formatTerminalCwdLabel,
+  isTerminalFocusToggleSequence,
+  mergeCodexTerminalSessions,
+  nativeTerminalNavigationSequence,
+  terminalTheme,
+} from '../CodexTerminalPanel';
 
 function session(input: { id: string; title?: string; cwd?: string }) {
   return {
@@ -50,6 +56,11 @@ describe('nativeTerminalNavigationSequence', () => {
     expect(nativeTerminalNavigationSequence(event({ key: 'ArrowRight', metaKey: true }))).toBe('\x05');
   });
 
+  it('maps command delete to the readline line-kill sequence', () => {
+    expect(nativeTerminalNavigationSequence(event({ key: 'Backspace', metaKey: true }))).toBe('\x15');
+    expect(nativeTerminalNavigationSequence(event({ key: 'Delete', metaKey: true }))).toBe('\x15');
+  });
+
   it('maps option arrows to word navigation escape sequences', () => {
     expect(nativeTerminalNavigationSequence(event({ key: 'ArrowLeft', altKey: true }))).toBe('\x1bb');
     expect(nativeTerminalNavigationSequence(event({ key: 'ArrowRight', altKey: true }))).toBe('\x1bf');
@@ -62,13 +73,38 @@ describe('nativeTerminalNavigationSequence', () => {
   });
 });
 
+describe('isTerminalFocusToggleSequence', () => {
+  const event = (input: Partial<Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>>) => ({
+    altKey: false,
+    ctrlKey: false,
+    key: '',
+    metaKey: false,
+    shiftKey: false,
+    ...input,
+  });
+
+  it('handles unmodified Control+Tab for terminal focus release', () => {
+    expect(isTerminalFocusToggleSequence(event({ key: 'Tab', ctrlKey: true }))).toBe(true);
+    expect(isTerminalFocusToggleSequence(event({ key: 'Tab', altKey: true, ctrlKey: true }))).toBe(false);
+    expect(isTerminalFocusToggleSequence(event({ key: 'Tab', ctrlKey: true, shiftKey: true }))).toBe(false);
+    expect(isTerminalFocusToggleSequence(event({ key: 'a', ctrlKey: true }))).toBe(false);
+  });
+});
+
 describe('terminalTheme', () => {
   it('uses visible ANSI white values for both light and dark backgrounds', () => {
-    expect(terminalTheme(false)?.background).toBe('#fbf9f4');
+    expect(terminalTheme(false)?.background).toBe('#f0eadf');
     expect(terminalTheme(false)?.white).toBe('#4b5563');
     expect(terminalTheme(false)?.brightWhite).toBe('#111827');
     expect(terminalTheme(true)?.background).toBe('#101113');
     expect(terminalTheme(true)?.white).toBe('#e8e3d8');
     expect(terminalTheme(true)?.brightWhite).toBe('#ffffff');
+  });
+});
+
+describe('formatTerminalCwdLabel', () => {
+  it('shortens user home paths for the terminal toolbar label', () => {
+    expect(formatTerminalCwdLabel('/Users/afar/dev/fieldtheory')).toBe('~/dev/fieldtheory');
+    expect(formatTerminalCwdLabel('/tmp/fieldtheory')).toBe('/tmp/fieldtheory');
   });
 });

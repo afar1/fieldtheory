@@ -836,6 +836,7 @@ function CommandLauncher() {
   const resizeFrameRef = useRef<number | null>(null);
   const resizeHeightRef = useRef<number>(LAUNCHER_COLLAPSED_HEIGHT);
   const launcherClosingForInvocationRef = useRef(false);
+  const launcherInvocationInFlightRef = useRef(false);
 
   const resizeLauncher = useCallback((height: number) => {
     const nextHeight = Math.max(LAUNCHER_COLLAPSED_HEIGHT, Math.round(height));
@@ -890,6 +891,7 @@ function CommandLauncher() {
   }, [filtered]);
 
   const showLauncherMessage = useCallback((message: string) => {
+    launcherInvocationInFlightRef.current = false;
     setCommittedItemId(null);
     setClipboardSearchActive(false);
     setClipboardSelectedItemIds(new Set());
@@ -1294,6 +1296,7 @@ function CommandLauncher() {
     activeWebPageRequestRef.current += 1;
     previewRequestRef.current += 1;
     manualPreviewRef.current = false;
+    launcherInvocationInFlightRef.current = false;
     hasNavigatedRef.current = false;
     hasExplicitSelectionRef.current = false;
     setQuery('');
@@ -2160,7 +2163,7 @@ function CommandLauncher() {
 
   // Filter items when query changes.
   useEffect(() => {
-    if (committedItemId) return;
+    if (committedItemId || launcherInvocationInFlightRef.current) return;
 
     const filterStartedAt = performance.now();
     const inputHeight = LAUNCHER_COLLAPSED_HEIGHT;
@@ -3013,6 +3016,13 @@ function CommandLauncher() {
       prepareLauncherForNextOpen();
       commandsAPI.launcherClose({ ...closeOptions, generation: invocationGeneration });
     };
+    if (item.type === 'source' && item.sourceId) {
+      traceLauncher('invoke-source-scope', { sourceId: item.sourceId });
+      setCommittedItemId(null);
+      enterLauncherSource(item.sourceId);
+      return;
+    }
+    launcherInvocationInFlightRef.current = true;
     const visibilityPolicy = getLauncherInvocationVisibilityPolicy({
       itemType: item.type,
       openFieldTheoryTarget: options.openFieldTheoryTarget,
@@ -3040,6 +3050,7 @@ function CommandLauncher() {
       const message = error ?? fallback;
       traceLauncher(event, { error: message });
       launcherClosingForInvocationRef.current = false;
+      launcherInvocationInFlightRef.current = false;
       setCommittedItemId(null);
       setLauncherSessionReady(true);
       setQuery(message);
@@ -3067,12 +3078,6 @@ function CommandLauncher() {
       return true;
     };
     const latestContext = await commandsAPI.getLauncherContext().catch(() => ({ fieldTheoryActive: false, targetApp: null }));
-    if (item.type === 'source' && item.sourceId) {
-      traceLauncher('invoke-source-scope', { sourceId: item.sourceId });
-      setCommittedItemId(null);
-      enterLauncherSource(item.sourceId);
-      return;
-    }
     const shouldResolveFieldTheoryTarget = options.openFieldTheoryTarget || latestContext?.fieldTheoryActive;
     const fieldTheoryTarget = shouldResolveFieldTheoryTarget ? getFieldTheoryTarget(item) : null;
     traceLauncher('invoke-item', {
@@ -3157,7 +3162,10 @@ function CommandLauncher() {
       closeForInvocation({ skipActivation: true });
       return;
     }
-    if (options.openFieldTheoryTarget && !fieldTheoryTarget) return;
+    if (options.openFieldTheoryTarget && !fieldTheoryTarget) {
+      launcherInvocationInFlightRef.current = false;
+      return;
+    }
     if (fieldTheoryTarget) {
       if (options.openFieldTheoryTarget) {
         const result = await commandsAPI.openFieldTheoryMarkdown(fieldTheoryTarget);
@@ -3189,6 +3197,7 @@ function CommandLauncher() {
         return;
       }
       if (item.directoryPath) {
+        launcherInvocationInFlightRef.current = false;
         setCommittedItemId(null);
         setDirectoryNamespace({
           label: item.displayName,
@@ -3197,6 +3206,8 @@ function CommandLauncher() {
         });
         setQuery('');
         selectIndex(0);
+      } else {
+        launcherInvocationInFlightRef.current = false;
       }
     } else if (item.type === 'bookmark-author') {
       if (item.authorHandle) {
@@ -3205,10 +3216,13 @@ function CommandLauncher() {
       closeForInvocation();
     } else if (item.type === 'bookmark-facet') {
       if (item.facetPaths?.length) {
+        launcherInvocationInFlightRef.current = false;
         setCommittedItemId(null);
         setBookmarkNamespace({ kind: 'facet', label: item.displayName, paths: item.facetPaths });
         setQuery('');
         selectIndex(0);
+      } else {
+        launcherInvocationInFlightRef.current = false;
       }
     } else if (item.type === 'bookmark') {
       if (item.bookmarkId) {
@@ -3367,6 +3381,7 @@ function CommandLauncher() {
 
           manualPreviewRef.current = true;
           previewRequestRef.current += 1;
+          launcherInvocationInFlightRef.current = false;
           setQuery('');
           setFiltered([]);
           selectIndex(0);
@@ -3390,15 +3405,18 @@ function CommandLauncher() {
         case 'move-current-library-file': {
           if (!latestContext?.fieldTheoryActive) {
             showLauncherMessage('Open Field Theory to move the current file');
+            launcherInvocationInFlightRef.current = false;
             setCommittedItemId(null);
             return;
           }
           const source = await commandsAPI.getActiveLibraryFileContext?.();
           if (!source) {
             showLauncherMessage('No current Library file to move');
+            launcherInvocationInFlightRef.current = false;
             setCommittedItemId(null);
             return;
           }
+          launcherInvocationInFlightRef.current = false;
           setCommittedItemId(null);
           setMoveSource(source);
           setQuery('');

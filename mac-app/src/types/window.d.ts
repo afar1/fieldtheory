@@ -1216,6 +1216,12 @@ interface LocalCommandStatus {
   updatedAt: number;
 }
 
+interface ReplaceSelectedMarkdownTextRequest {
+  requestId: string;
+  expectedText: string;
+  replacementText: string;
+}
+
 type MaxwellRunStatus =
   | 'pending'
   | 'generated'
@@ -1846,6 +1852,7 @@ interface LibrarianAPI {
   onShowNewReading: (callback: (readingPath: string) => void) => () => void;
   setMarkdownEditorFocused: (focused: boolean) => void;
   onInsertMarkdownText: (callback: (text: string) => void) => () => void;
+  onReplaceSelectedMarkdownText?: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
   setImmersiveDismissable: (dismissable: boolean) => void;
   setSizeKey: (key: 'fields' | 'library' | 'canvas' | 'draw') => void;

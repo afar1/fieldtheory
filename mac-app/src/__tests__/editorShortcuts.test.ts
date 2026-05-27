@@ -4,6 +4,7 @@ import {
   COLLAPSED_SIDEBAR_HOVER_STRIP_WIDTH,
   DEFAULT_SHARED_FILE_TOGGLE_HOTKEY,
   RENDERED_EDIT_CLICK_MODE_STORAGE_KEY,
+  RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY,
   SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY,
   TEXT_CURSOR_BLINK_STORAGE_KEY,
   isCommandDeleteShortcut,
@@ -27,9 +28,11 @@ import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   persistSharedFileToggleHotkey,
   persistRenderedEditClickMode,
+  persistRenderedTextCursorStyle,
   persistTextCursorBlink,
   restoreSharedFileToggleHotkey,
   restoreRenderedEditClickMode,
+  restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
   shouldEnterEditOnClick,
   shouldRevealFooterChrome,
@@ -354,6 +357,19 @@ describe('shared file toggle shortcut', () => {
     persistSharedFileToggleHotkey(storage, 'Command+Shift+R');
     expect(store.get(SHARED_FILE_TOGGLE_HOTKEY_STORAGE_KEY)).toBe('Command+Shift+R');
     expect(restoreSharedFileToggleHotkey(storage)).toBe('Command+Shift+R');
+  });
+
+  it('restores and persists the rendered text cursor style', () => {
+    const store = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => store.get(key) ?? null,
+      setItem: (key: string, value: string) => { store.set(key, value); },
+    };
+
+    expect(restoreRenderedTextCursorStyle(storage)).toBe('bar');
+    persistRenderedTextCursorStyle(storage, 'block');
+    expect(store.get(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('block');
+    expect(restoreRenderedTextCursorStyle(storage)).toBe('block');
   });
 });
 

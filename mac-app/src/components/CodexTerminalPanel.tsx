@@ -12,7 +12,10 @@ interface CodexTerminalPanelProps {
   visible: boolean;
   pageContext: CodexTerminalPageContext | null;
   extendToViewportTop?: boolean;
+  focusRequestKey?: number;
   onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
+  onFocusToggleShortcut?: () => void;
+  onTerminalFocusChange?: (focused: boolean) => void;
   onVisibleChange: (visible: boolean) => void;
 }
 
@@ -32,8 +35,9 @@ const TERMINAL_GUTTER_TOP = 12;
 const TERMINAL_GUTTER_RIGHT = 28;
 const TERMINAL_GUTTER_BOTTOM = 40;
 const TERMINAL_GUTTER_LEFT = 14;
-const TERMINAL_SCROLLBAR_LANE = 14;
+const TERMINAL_BOTTOM_RESERVED_ROWS = 1;
 const TERMINAL_VIEWPORT_TOP_PADDING = 8;
+const TERMINAL_DOCK_DIVIDER_SIZE = 2;
 const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 
 interface TerminalHandle {
@@ -55,6 +59,7 @@ export function nativeTerminalNavigationSequence(event: Pick<KeyboardEvent, 'alt
   if (event.metaKey && !event.altKey) {
     if (event.key === 'ArrowLeft') return '\x01';
     if (event.key === 'ArrowRight') return '\x05';
+    if (event.key === 'Backspace' || event.key === 'Delete') return '\x15';
   }
   if (event.altKey && !event.metaKey) {
     if (event.key === 'ArrowLeft') return '\x1bb';
@@ -63,14 +68,26 @@ export function nativeTerminalNavigationSequence(event: Pick<KeyboardEvent, 'alt
   return null;
 }
 
+export function isTerminalFocusToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.key === 'Tab'
+    && event.ctrlKey
+    && !event.altKey
+    && !event.metaKey
+    && !event.shiftKey;
+}
+
 function pathBasename(input: string): string {
   const parts = input.split('/').filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : input;
 }
 
+export function formatTerminalCwdLabel(input: string): string {
+  return input.replace(/^\/Users\/[^/]+(?=\/|$)/, '~');
+}
+
 export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
   return {
-    background: isDark ? '#101113' : '#fbf9f4',
+    background: isDark ? '#101113' : '#f0eadf',
     foreground: isDark ? '#e8e3d8' : '#1f2328',
     cursor: '#10b981',
     selectionBackground: isDark ? '#2f4a43' : '#cfe9df',
@@ -114,7 +131,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, onDockSideChange, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -125,7 +142,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   ));
   const [bottomHeight, setBottomHeight] = useState(() => clampBottomHeight(readStoredNumber(CODEX_TERMINAL_BOTTOM_SIZE_STORAGE_KEY, DEFAULT_BOTTOM_HEIGHT)));
   const [rightWidth, setRightWidth] = useState(() => clampRightWidth(readStoredNumber(CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY, DEFAULT_RIGHT_WIDTH)));
-  const [editingTitle, setEditingTitle] = useState('');
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const [isResizing, setIsResizing] = useState(false);
   const [topExtension, setTopExtension] = useState(0);
@@ -135,6 +151,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const pendingDataRef = useRef(new Map<string, string[]>());
   const autoAttachedContextRef = useRef(new Set<string>());
   const liveContextUpdateRef = useRef<number | null>(null);
+  const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
+
+  useEffect(() => {
+    onFocusToggleShortcutRef.current = onFocusToggleShortcut;
+  }, [onFocusToggleShortcut]);
 
   const updateDockSide = useCallback((nextDockSide: CodexTerminalDockSide) => {
     setDockSide(nextDockSide);
@@ -161,6 +182,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     if (!handle) return;
     try {
       handle.fit.fit();
+      if (handle.term.rows > TERMINAL_BOTTOM_RESERVED_ROWS) {
+        handle.term.resize(handle.term.cols, handle.term.rows - TERMINAL_BOTTOM_RESERVED_ROWS);
+      }
       void window.codexTerminalAPI?.resize(activeSessionId, handle.term.cols, handle.term.rows);
     } catch {
       // Resize can race while the panel is hidden or changing dock sides.
@@ -223,7 +247,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     if (!panel) return;
     const updateTopExtension = () => {
       const { top } = panel.getBoundingClientRect();
-      const next = Math.max(0, Math.round(top + topExtensionRef.current - TERMINAL_VIEWPORT_TOP_PADDING));
+      const next = Math.max(0, Math.round(top + topExtensionRef.current));
       topExtensionRef.current = next;
       setTopExtension(next);
     };
@@ -235,10 +259,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       window.removeEventListener('resize', updateTopExtension);
     };
   }, [dockSide, extendToViewportTop, visible]);
-
-  useEffect(() => {
-    setEditingTitle(activeSession?.title ?? '');
-  }, [activeSession?.id, activeSession?.title]);
 
   useEffect(() => {
     if (visible && sessions.length === 0) {
@@ -304,6 +324,32 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [activeSessionId, fitActiveTerminal, focusActiveTerminal, visible]);
 
   useEffect(() => {
+    if (!visible || focusRequestKey <= 0) return;
+    const timer = window.setTimeout(() => {
+      fitActiveTerminal();
+      focusActiveTerminal();
+    }, 30);
+    return () => window.clearTimeout(timer);
+  }, [fitActiveTerminal, focusActiveTerminal, focusRequestKey, visible]);
+
+  useEffect(() => {
+    const panel = panelRef.current;
+    if (!panel || !onTerminalFocusChange) return;
+    const handleFocusIn = () => onTerminalFocusChange(true);
+    const handleFocusOut = () => {
+      window.setTimeout(() => {
+        onTerminalFocusChange(panel.contains(document.activeElement));
+      }, 0);
+    };
+    panel.addEventListener('focusin', handleFocusIn);
+    panel.addEventListener('focusout', handleFocusOut);
+    return () => {
+      panel.removeEventListener('focusin', handleFocusIn);
+      panel.removeEventListener('focusout', handleFocusOut);
+    };
+  }, [onTerminalFocusChange, visible]);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       if (!visible || !event.metaKey) return;
       if (event.key.toLowerCase() === 'c' && activeSessionId) {
@@ -351,6 +397,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     terminalHandlesRef.current.set(sessionId, { term, fit });
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
+      if (isTerminalFocusToggleSequence(event)) {
+        event.preventDefault();
+        onFocusToggleShortcutRef.current?.();
+        return false;
+      }
       const sequence = nativeTerminalNavigationSequence(event);
       if (!sequence) return true;
       event.preventDefault();
@@ -372,6 +423,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     }
     window.setTimeout(() => {
       fit.fit();
+      if (term.rows > TERMINAL_BOTTOM_RESERVED_ROWS) {
+        term.resize(term.cols, term.rows - TERMINAL_BOTTOM_RESERVED_ROWS);
+      }
       void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
       if (sessionId === activeSessionId) term.focus();
     }, 30);
@@ -379,15 +433,17 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);
+    if (remainingSessions.length === 0) {
+      setActiveSessionId(sessionId);
+      onVisibleChange(false);
+      return;
+    }
     await window.codexTerminalAPI?.kill(sessionId);
     const handle = terminalHandlesRef.current.get(sessionId);
     handle?.term.dispose();
     terminalHandlesRef.current.delete(sessionId);
     pendingDataRef.current.delete(sessionId);
-    if (remainingSessions.length === 0) {
-      setActiveSessionId(null);
-      onVisibleChange(false);
-    } else if (activeSessionId === sessionId) {
+    if (activeSessionId === sessionId) {
       setActiveSessionId(remainingSessions[0].id);
     }
     await refreshSessions();
@@ -407,14 +463,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const restartSession = useCallback(async (session: CodexTerminalSessionSummary) => {
     await createSession({ cwd: session.cwd, title: session.title });
   }, [createSession]);
-
-  const renameActiveSession = useCallback(async () => {
-    if (!activeSession) return;
-    const nextTitle = editingTitle.trim();
-    if (!nextTitle || nextTitle === activeSession.title) return;
-    const didRename = await window.codexTerminalAPI?.rename(activeSession.id, nextTitle);
-    if (didRename) await refreshSessions();
-  }, [activeSession, editingTitle, refreshSessions]);
 
   useEffect(() => {
     if (!visible || !pageContext || !activeSession) return;
@@ -477,11 +525,13 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       minWidth: `${MIN_RIGHT_WIDTH}px`,
     };
   const activeCwd = activeSession?.cwd ?? '';
-  const terminalBackground = theme.isDark ? '#101113' : '#fbf9f4';
-  const terminalChrome = theme.isDark ? '#15181e' : '#f5f4f2';
-  const terminalBorder = theme.isDark ? '#2a2d35' : '#e3e0db';
-  const terminalSoftBorder = theme.isDark ? '#242832' : '#e3e0db';
-  const terminalMutedText = theme.isDark ? '#8a8f99' : '#6b6b6b';
+  const activeCwdLabel = formatTerminalCwdLabel(activeCwd);
+  const terminalBackground = theme.isDark ? '#101113' : '#f0eadf';
+  const terminalChrome = theme.isDark ? '#15181e' : '#ebe3d6';
+  const terminalSoftBorder = theme.isDark ? '#242832' : '#ded3c2';
+  const terminalMutedText = theme.isDark ? '#8a8f99' : '#635f58';
+  const toolbarTopInset = dockSide === 'right' && extendToViewportTop ? TERMINAL_VIEWPORT_TOP_PADDING : 0;
+  const toolbarItemOffset: CSSProperties | undefined = toolbarTopInset > 0 ? { marginTop: `${toolbarTopInset}px` } : undefined;
 
   const startResize = useCallback((event: ReactMouseEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -529,8 +579,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         minHeight: 0,
         zIndex: extendToViewportTop ? 25 : undefined,
         backgroundColor: terminalBackground,
-        borderTop: dockSide === 'bottom' ? `1px solid ${terminalBorder}` : undefined,
-        borderLeft: dockSide === 'right' ? `1px solid ${terminalBorder}` : undefined,
         boxShadow: theme.isDark ? '0 -12px 32px rgba(0,0,0,0.26)' : '0 -12px 28px rgba(0,0,0,0.08)',
         ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
       }}
@@ -556,16 +604,16 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           position: 'absolute',
           top: dockSide === 'bottom' ? 0 : undefined,
           left: dockSide === 'right' ? 0 : undefined,
-          width: dockSide === 'right' ? '1px' : '100%',
-          height: dockSide === 'bottom' ? '1px' : '100%',
+          width: dockSide === 'right' ? `${TERMINAL_DOCK_DIVIDER_SIZE}px` : '100%',
+          height: dockSide === 'bottom' ? `${TERMINAL_DOCK_DIVIDER_SIZE}px` : '100%',
           backgroundColor: isResizing ? '#10b981' : terminalSoftBorder,
           pointerEvents: 'none',
-          zIndex: 3,
+          zIndex: 6,
         }}
       />
       <div
         style={{
-          height: '36px',
+          height: `${36 + toolbarTopInset}px`,
           display: 'flex',
           alignItems: 'center',
           gap: '7px',
@@ -598,6 +646,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
                   : (theme.isDark ? '#171b22' : 'transparent'),
                 color: active ? theme.text : theme.textSecondary,
                 flexShrink: 0,
+                ...(toolbarItemOffset ?? {}),
               }}
               title={`${session.title} — ${session.cwd}`}
             >
@@ -633,7 +682,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
                   event.stopPropagation();
                   void closeSession(session.id);
                 }}
-                title="Close session"
+                title={visibleSessions.length === 1 ? 'Close terminal' : 'Close session'}
                 style={{
                   width: '14px',
                   height: '14px',
@@ -657,34 +706,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
             </div>
           );
         })}
-        <button type="button" onClick={() => void createSession()} title="New Codex terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0 }}>
+        <button type="button" onClick={() => void createSession()} title="New Codex terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
           +
         </button>
-        {activeSession && (
-          <input
-            value={editingTitle}
-            onChange={(event) => setEditingTitle(event.target.value)}
-            onBlur={() => void renameActiveSession()}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') event.currentTarget.blur();
-              if (event.key === 'Escape') setEditingTitle(activeSession.title);
-            }}
-            title="Rename active Codex terminal"
-            style={{
-              width: dockSide === 'right' ? '92px' : '140px',
-              height: '24px',
-              flexShrink: 0,
-              border: `1px solid ${terminalSoftBorder}`,
-              borderRadius: '6px',
-              backgroundColor: theme.isDark ? '#171b22' : 'rgba(0,0,0,0.035)',
-              color: theme.text,
-              fontSize: '11px',
-              fontWeight: 600,
-              padding: '0 7px',
-              outline: 'none',
-            }}
-          />
-        )}
         {activeCwd && (
           <span
             title={activeCwd}
@@ -697,17 +721,18 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
               color: terminalMutedText,
               fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
               fontSize: '11px',
-              fontWeight: 600,
+              fontWeight: 400,
               flexShrink: 1,
+              ...(toolbarItemOffset ?? {}),
             }}
           >
-            {activeCwd}
+            {activeCwdLabel}
           </span>
         )}
         <div style={{ flex: 1, minWidth: '12px' }} />
-        {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{terminalStatus}</span>}
+        {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(toolbarItemOffset ?? {}) }}>{terminalStatus}</span>}
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
-          <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active Codex terminal" style={toolbarButtonStyle(theme)}>
+          <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active Codex terminal" style={{ ...toolbarButtonStyle(theme), ...(toolbarItemOffset ?? {}) }}>
             Restart
           </button>
         )}
@@ -716,12 +741,12 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           aria-label={dockSide === 'bottom' ? 'Dock terminal right' : 'Dock terminal bottom'}
           onClick={() => updateDockSide(dockSide === 'bottom' ? 'right' : 'bottom')}
           title={dockSide === 'bottom' ? 'Dock terminal right' : 'Dock terminal bottom'}
-          style={toolbarButtonStyle(theme)}
+          style={{ ...toolbarButtonStyle(theme), width: '34px', padding: 0, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', ...(toolbarItemOffset ?? {}) }}
         >
-          {dockSide === 'bottom' ? '▐' : '▁'}
+          <DockSideIcon side={dockSide === 'bottom' ? 'right' : 'bottom'} />
         </button>
-        <button type="button" onClick={() => onVisibleChange(false)} title="Hide terminal panel" style={toolbarButtonStyle(theme)}>
-          Hide
+        <button type="button" onClick={() => onVisibleChange(false)} title="Close terminal panel" style={{ ...toolbarButtonStyle(theme), ...(toolbarItemOffset ?? {}) }}>
+          Close
         </button>
       </div>
       <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
@@ -732,8 +757,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   background-color: ${terminalBackground} !important;
 }
 .codex-terminal-host .xterm .xterm-viewport {
-  right: -${TERMINAL_SCROLLBAR_LANE}px;
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
+}
+.codex-terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }`}
         </style>
         {sessions.map((session) => (
@@ -756,17 +784,38 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   );
 }
 
+function DockSideIcon({ side }: { side: CodexTerminalDockSide }) {
+  return (
+    <span
+      aria-hidden="true"
+      style={{
+        display: 'inline-block',
+        width: '16px',
+        color: 'currentColor',
+        fontFamily: 'SF Pro Text, -apple-system, BlinkMacSystemFont, sans-serif',
+        fontSize: side === 'bottom' ? '19px' : '18px',
+        fontWeight: 400,
+        lineHeight: 1,
+        textAlign: 'center',
+      }}
+    >
+      {side === 'bottom' ? '▁' : '▌'}
+    </span>
+  );
+}
+
 function toolbarButtonStyle(theme: Theme): CSSProperties {
+  const borderColor = theme.isDark ? theme.border : '#cbbfad';
   return {
     height: '24px',
     padding: '0 8px',
-    border: `1px solid ${theme.border}`,
+    border: `1px solid ${borderColor}`,
     borderRadius: '5px',
     backgroundColor: 'transparent',
     color: theme.textSecondary,
     cursor: 'pointer',
     fontSize: '11px',
-    fontWeight: 600,
+    fontWeight: 400,
     letterSpacing: 0,
   };
 }

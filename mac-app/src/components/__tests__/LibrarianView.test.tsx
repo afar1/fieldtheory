@@ -133,7 +133,7 @@ describe('LibrarianView render', () => {
     await waitFor(() => {
       expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: relPath, contentMode: 'rendered', sidebarCollapsed: true });
     });
-    expect(await screen.findByText('Select a page')).toBeTruthy();
+    expect(await screen.findByText('Select a file')).toBeTruthy();
   });
 
   it('keeps the current source document when command-clicking a different sidebar file into a document window', async () => {
@@ -211,7 +211,7 @@ describe('LibrarianView render', () => {
       expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: popoutRelPath, contentMode: 'rendered', sidebarCollapsed: true });
     });
     expect(screen.getByText('Current body')).toBeTruthy();
-    expect(screen.queryByText('Select a page')).toBeNull();
+    expect(screen.queryByText('Select a file')).toBeNull();
   });
 
   it('keeps an initial wiki target from being replaced by the default artifact', async () => {
@@ -389,7 +389,7 @@ describe('LibrarianView render', () => {
       expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: relPath, contentMode: 'rendered', sidebarCollapsed: true });
     });
     expect(screen.getByText('Still selected')).toBeTruthy();
-    expect(screen.queryByText('Select a page')).toBeNull();
+    expect(screen.queryByText('Select a file')).toBeNull();
   });
 
   it('offers a sidebar context menu action for opening a file in a document window', async () => {
@@ -477,7 +477,7 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.createFileWithDefaultTitle).toHaveBeenCalledWith('projects');
       expect(window.libraryAPI!.openDocumentWindow).toHaveBeenCalledWith({ kind: 'wiki', path: createdRelPath, contentMode: 'rendered' });
     });
-    expect(await screen.findByText('Select a page')).toBeTruthy();
+    expect(await screen.findByText('Select a file')).toBeTruthy();
   });
 
   function pasteText(target: HTMLElement, text: string): void {
@@ -634,7 +634,7 @@ describe('LibrarianView render', () => {
 
     const { container } = render(<LibrarianView sidebarCollapsed onSwitchToClipboard={vi.fn()} />);
 
-    await screen.findByText('Select a page');
+    await screen.findByText('Select a file');
     const sidebarPane = container.querySelector('[data-fieldtheory-collapsed-sidebar-pane="true"]') as HTMLElement | null;
     expect(sidebarPane?.style.width).not.toBe('0px');
     expect(container.querySelector('[data-fieldtheory-collapsed-sidebar-hover-strip="true"]')).toBeNull();
@@ -3085,6 +3085,9 @@ describe('LibrarianView render', () => {
     const getSidebarPane = () => root.querySelector(
       '[data-fieldtheory-collapsed-sidebar-pane="true"]'
     ) as HTMLElement | null;
+    const getResizeHandle = () => root.querySelector(
+      '[data-fieldtheory-sidebar-resize-handle="true"]'
+    ) as HTMLElement | null;
 
     fireEvent.click(await screen.findByText('example.md'));
     await waitFor(() => {
@@ -3103,6 +3106,8 @@ describe('LibrarianView render', () => {
 
     fireEvent.click(getHoverStrip()!);
     expect(getHoverStrip()).toBeNull();
+    expect(getSidebarPane()?.style.boxShadow).toContain('12px 0 24px');
+    expect(getResizeHandle()?.style.borderRight).toBe('0px solid transparent');
 
     fireEvent.mouseLeave(getSidebarPane()!);
     expect(getHoverStrip()).toBeNull();

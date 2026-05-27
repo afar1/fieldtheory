@@ -37,6 +37,8 @@ import {
   getMarkdownRenderedBodyStartLineIndex,
   getRenderedCaretEnsureSourceOffset,
   getRenderedMarkdownDisplayContent,
+  getVerifiedMarkdownSelectionReplacement,
+  isTerminalEditorFocusToggleShortcut,
   getRenderedTaskLinesByRenderedLine,
   getScrollRatio,
   getScrollTopForRatio,
@@ -1034,6 +1036,63 @@ describe('getRenderedDisplayReadingContent', () => {
   });
 });
 
+describe('isTerminalEditorFocusToggleShortcut', () => {
+  it('uses Control+Tab for terminal/editor focus instead of Option+Tab', () => {
+    expect(isTerminalEditorFocusToggleShortcut({
+      key: 'Tab',
+      ctrlKey: true,
+      altKey: false,
+      metaKey: false,
+      shiftKey: false,
+    })).toBe(true);
+    expect(isTerminalEditorFocusToggleShortcut({
+      key: 'Tab',
+      ctrlKey: false,
+      altKey: true,
+      metaKey: false,
+      shiftKey: false,
+    })).toBe(false);
+  });
+});
+
+describe('getVerifiedMarkdownSelectionReplacement', () => {
+  it('replaces only when the active editor selection matches the improved source text', () => {
+    expect(getVerifiedMarkdownSelectionReplacement(
+      'First\n\nSelected paragraph\n\nLast',
+      7,
+      25,
+      'Selected paragraph',
+      'Improved paragraph',
+    )).toEqual({
+      nextValue: 'First\n\nImproved paragraph\n\nLast',
+      selectionStart: 7,
+      selectionEnd: 25,
+    });
+
+    expect(getVerifiedMarkdownSelectionReplacement(
+      'First\n\nSelected paragraph\n\nLast',
+      7,
+      25,
+      'Different paragraph',
+      'Improved paragraph',
+    )).toBeNull();
+  });
+
+  it('preserves selection edge whitespace when matching trimmed copied text', () => {
+    expect(getVerifiedMarkdownSelectionReplacement(
+      'First\n\n Selected paragraph \n\nLast',
+      7,
+      27,
+      'Selected paragraph',
+      'Improved paragraph',
+    )).toEqual({
+      nextValue: 'First\n\n Improved paragraph \n\nLast',
+      selectionStart: 7,
+      selectionEnd: 27,
+    });
+  });
+});
+
 describe('getRenderedCaretEnsureSourceOffset', () => {
   it('preserves a trusted active caret before using the browser selection', () => {
     expect(getRenderedCaretEnsureSourceOffset({
@@ -1107,6 +1166,12 @@ describe('rendered markdown edit helpers', () => {
       nextValue: '**Done**\n',
       selectionStart: 9,
       selectionEnd: 9,
+    });
+
+    expect(getRenderedMarkdownEnterEdit('**Done**', 2, 2)).toEqual({
+      nextValue: '\n**Done**',
+      selectionStart: 1,
+      selectionEnd: 1,
     });
 
     expect(getRenderedMarkdownEnterEdit('[[Target Page|Alias]]', 19, 19)).toEqual({
@@ -1421,6 +1486,14 @@ describe('rendered markdown edit helpers', () => {
     });
     expect(getRenderedMarkdownSelectionFormatEdit('hello *world*', 7, 12, 'italic')?.nextValue).toBe('hello world');
     expect(getRenderedMarkdownSelectionFormatEdit('hello `world`', 7, 12, 'code')?.nextValue).toBe('hello world');
+  });
+
+  it('toggles split rendered bold markers off after a bad rendered newline split', () => {
+    expect(getRenderedMarkdownSelectionFormatEdit('**What are Delights?\n**', 2, 20, 'bold')).toEqual({
+      nextValue: 'What are Delights?\n',
+      selectionStart: 0,
+      selectionEnd: 18,
+    });
   });
 
   it('toggles inline formatting off when the selected source includes the markers', () => {

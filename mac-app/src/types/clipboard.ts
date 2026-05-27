@@ -75,32 +75,4 @@ export const TAB_LABELS: Record<ViewMode, string> = {
   sketch: 'Sketch',
 };
 
-/** The left-group top-nav tabs that Control+Tab / Shift+Control+Tab cycles between. */
-export function nextTopNavViewMode(
-  prev: ViewMode,
-  direction: 1 | -1,
-  _librarianEnabled: boolean,
-): ViewMode {
-  const tabs: ViewMode[] = ['librarian', 'clipboard'];
-  const idx = tabs.indexOf(prev);
-  const nextIdx = idx === -1 ? 0 : (idx + direction + tabs.length) % tabs.length;
-  return tabs[nextIdx];
-}
-
-const TOP_NAV_SEARCH_ATTRIBUTE = 'data-fieldtheory-top-nav-search';
-
-export function shouldCycleTopNavWithControlTab(activeTarget?: string | Element | null): boolean {
-  const activeTagName = typeof activeTarget === 'string'
-    ? activeTarget
-    : activeTarget?.tagName ?? null;
-
-  if (!activeTagName?.match(/^(INPUT|TEXTAREA)$/i)) return true;
-
-  if (typeof activeTarget !== 'string') {
-    return activeTarget?.getAttribute(TOP_NAV_SEARCH_ATTRIBUTE) === 'true';
-  }
-
-  return false;
-}
-
 export const MAX_UNDO = 20;

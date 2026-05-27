@@ -46,6 +46,7 @@ import {
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
+  getMarkdownCodeEditorCursorShapeStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
@@ -73,6 +74,28 @@ describe('MarkdownCodeEditor cursor blink', () => {
       animation: 'none',
       animationName: 'none',
       animationDuration: '0s',
+    });
+  });
+});
+
+describe('MarkdownCodeEditor cursor shape', () => {
+  it('uses an explicit bar cursor style when requested', () => {
+    expect(getMarkdownCodeEditorCursorShapeStyle('bar', '#10b981', '#111')).toEqual({
+      backgroundColor: 'transparent',
+      borderLeft: '1.2px solid #10b981',
+      marginLeft: '-0.6px',
+      minWidth: '0',
+      width: '0',
+    });
+  });
+
+  it('uses a filled block cursor style when requested', () => {
+    expect(getMarkdownCodeEditorCursorShapeStyle('block', '#10b981', '#111')).toEqual({
+      backgroundColor: '#10b981',
+      borderLeft: 'none',
+      marginLeft: '0',
+      minWidth: '0.62em',
+      width: '0.62em',
     });
   });
 });

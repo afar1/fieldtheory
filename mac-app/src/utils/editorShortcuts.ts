@@ -202,11 +202,14 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
 ];
 
 export type RenderedEditClickMode = 'click' | 'command-click';
+export type RenderedTextCursorStyle = 'bar' | 'block';
 
 export const RENDERED_EDIT_CLICK_MODE_STORAGE_KEY = 'fieldtheory-rendered-edit-click-mode';
 export const RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT = 'fieldtheory:rendered-edit-click-mode-changed';
 export const TEXT_CURSOR_BLINK_STORAGE_KEY = 'fieldtheory-text-cursor-blink';
 export const TEXT_CURSOR_BLINK_CHANGED_EVENT = 'fieldtheory:text-cursor-blink-changed';
+export const RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY = 'fieldtheory-rendered-text-cursor-style';
+export const RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT = 'fieldtheory:rendered-text-cursor-style-changed';
 export const LINE_NUMBERS_STORAGE_KEY = 'fieldtheory-line-numbers';
 
 export function restoreRenderedEditClickMode(storage: Pick<Storage, 'getItem'>): RenderedEditClickMode {
@@ -223,6 +226,14 @@ export function restoreTextCursorBlink(storage: Pick<Storage, 'getItem'>): boole
 
 export function persistTextCursorBlink(storage: Pick<Storage, 'setItem'>, enabled: boolean): void {
   storage.setItem(TEXT_CURSOR_BLINK_STORAGE_KEY, enabled ? 'true' : 'false');
+}
+
+export function restoreRenderedTextCursorStyle(storage: Pick<Storage, 'getItem'>): RenderedTextCursorStyle {
+  return storage.getItem(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY) === 'block' ? 'block' : 'bar';
+}
+
+export function persistRenderedTextCursorStyle(storage: Pick<Storage, 'setItem'>, style: RenderedTextCursorStyle): void {
+  storage.setItem(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY, style);
 }
 
 /** True when a click on the rendered markdown body should switch to edit

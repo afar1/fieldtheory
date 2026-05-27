@@ -2949,6 +2949,12 @@ type LocalCommandStatus = {
   updatedAt: number;
 };
 
+type ReplaceSelectedMarkdownTextRequest = {
+  requestId: string;
+  expectedText: string;
+  replacementText: string;
+};
+
 const diagnosticsAPI: DiagnosticsAPI = {
   getDiagnostics: async (): Promise<unknown> => {
     return ipcRenderer.invoke(DiagnosticsIPCChannels.GET_DIAGNOSTICS);
@@ -3788,6 +3794,23 @@ const librarianAPI = {
     const handler = (_event: Electron.IpcRendererEvent, text: string) => callback(text);
     ipcRenderer.on('librarian:insertMarkdownText', handler);
     return () => ipcRenderer.removeListener('librarian:insertMarkdownText', handler);
+  },
+
+  onReplaceSelectedMarkdownText: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>): (() => void) => {
+    const handler = async (_event: Electron.IpcRendererEvent, request: ReplaceSelectedMarkdownTextRequest) => {
+      let success = false;
+      try {
+        success = await callback(request);
+      } catch {
+        success = false;
+      }
+      ipcRenderer.send('librarian:replaceSelectedMarkdownTextResult', {
+        requestId: request.requestId,
+        success,
+      });
+    };
+    ipcRenderer.on('librarian:replaceSelectedMarkdownText', handler);
+    return () => ipcRenderer.removeListener('librarian:replaceSelectedMarkdownText', handler);
   },
 
   // Notify main process of immersive mode changes (affects blur-to-hide behavior)

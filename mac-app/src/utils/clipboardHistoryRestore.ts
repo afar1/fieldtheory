@@ -83,10 +83,25 @@ export function getAppNavigationSurface(state: { viewMode: ViewMode; showSetting
   return state.showSettings ? 'settings' : state.viewMode;
 }
 
+export function shouldKeepLibrarianMounted(state: { viewMode: ViewMode; librarianEverRendered: boolean }): boolean {
+  return state.librarianEverRendered || state.viewMode === 'librarian';
+}
+
+export function isLibrarianSurfaceVisible(state: { viewMode: ViewMode; showSettings: boolean }): boolean {
+  return !state.showSettings && state.viewMode === 'librarian';
+}
+
 export function getAppBracketNavigationDirection(event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): -1 | 1 | null {
   if (!event.metaKey || event.shiftKey || event.altKey || event.ctrlKey) return null;
   if (event.key === '[' || event.code === 'BracketLeft') return -1;
   if (event.key === ']' || event.code === 'BracketRight') return 1;
+  return null;
+}
+
+export function getAppNumberTabSurface(event: Pick<KeyboardEvent, 'key' | 'code' | 'metaKey' | 'shiftKey' | 'altKey' | 'ctrlKey'>): 'librarian' | 'clipboard' | null {
+  if (!event.metaKey || event.shiftKey || event.altKey || event.ctrlKey) return null;
+  if (event.key === '1' || event.code === 'Digit1') return 'librarian';
+  if (event.key === '2' || event.code === 'Digit2') return 'clipboard';
   return null;
 }
 
