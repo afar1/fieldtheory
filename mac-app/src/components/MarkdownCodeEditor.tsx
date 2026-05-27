@@ -55,6 +55,7 @@ import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
 import type { RenderedTextCursorStyle } from '../utils/editorShortcuts';
+import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEditor';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
@@ -89,6 +90,26 @@ export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-ta
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR = 'data-ft-source-from';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
+export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
+
+function renderedMarkdownEditorTimingEnabled(): boolean {
+  try {
+    return window.localStorage.getItem(RENDERED_EDITOR_DEBUG_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+}
+
+function emitRenderedMarkdownEditorTiming(stage: string, details: Record<string, unknown>): void {
+  if (!renderedMarkdownEditorTimingEnabled()) return;
+  window.dispatchEvent(new CustomEvent(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, {
+    detail: {
+      timestamp: Date.now(),
+      stage,
+      ...details,
+    },
+  }));
+}
 
 export interface MarkdownCodeEditorHandle {
   focus: (options?: { preventScroll?: boolean }) => void;
@@ -231,7 +252,15 @@ export const checkedMarkdownTaskLineExtension = ViewPlugin.fromClass(
 
     update(update: { docChanged: boolean; state: EditorState }) {
       if (update.docChanged) {
+        const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
         this.decorations = buildCheckedMarkdownTaskLineDecorations(update.state);
+        if (startedAt > 0) {
+          emitRenderedMarkdownEditorTiming('code-editor-checked-task-decorations', {
+            durationMs: performance.now() - startedAt,
+            lines: update.state.doc.lines,
+            docLength: update.state.doc.length,
+          });
+        }
       }
     }
   },
@@ -1205,6 +1234,14 @@ export function buildRenderedMarkdownEditorDecorations(state: EditorState, docum
   return buildRenderedMarkdownEditorDecorationsForRanges(state, [{ from: 0, to: state.doc.length }], documentPath);
 }
 
+function countRenderedMarkdownEditorRangeLines(
+  state: EditorState,
+  ranges: readonly RenderedMarkdownEditorRange[],
+): number {
+  return normalizeRenderedMarkdownEditorLineRanges(state, ranges)
+    .reduce((sum, range) => sum + Math.max(0, range.toLine - range.fromLine + 1), 0);
+}
+
 export function createRenderedMarkdownEditorPresentationExtension(documentPath?: string | null) {
   return ViewPlugin.fromClass(
     class {
@@ -1212,7 +1249,16 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
 
       constructor(view: EditorView) {
         const activeDocumentPath = documentPath ?? view.state.facet(renderedMarkdownDocumentPathFacet);
+        const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
         this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(view.state, view.visibleRanges, activeDocumentPath);
+        if (startedAt > 0) {
+          emitRenderedMarkdownEditorTiming('rendered-decorations-initial-build', {
+            durationMs: performance.now() - startedAt,
+            lines: countRenderedMarkdownEditorRangeLines(view.state, view.visibleRanges),
+            visibleRanges: view.visibleRanges.length,
+            docLength: view.state.doc.length,
+          });
+        }
       }
 
       update(update: ViewUpdate) {
@@ -1223,7 +1269,19 @@ export function createRenderedMarkdownEditorPresentationExtension(documentPath?:
           || update.startState.facet(renderedMarkdownDocumentPathFacet) !== update.state.facet(renderedMarkdownDocumentPathFacet)
         ) {
           const activeDocumentPath = documentPath ?? update.state.facet(renderedMarkdownDocumentPathFacet);
+          const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
           this.decorations = buildRenderedMarkdownEditorDecorationsForRanges(update.state, update.view.visibleRanges, activeDocumentPath);
+          if (startedAt > 0) {
+            emitRenderedMarkdownEditorTiming('rendered-decorations-update', {
+              durationMs: performance.now() - startedAt,
+              docChanged: update.docChanged,
+              selectionSet: update.selectionSet,
+              viewportChanged: update.viewportChanged,
+              lines: countRenderedMarkdownEditorRangeLines(update.state, update.view.visibleRanges),
+              visibleRanges: update.view.visibleRanges.length,
+              docLength: update.state.doc.length,
+            });
+          }
         }
       }
     },
@@ -1836,17 +1894,37 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               sampleMarkdownInputInteraction();
               const next = update.state.doc.toString();
               lastAppliedValueRef.current = next;
+              const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
               onChangeRef.current?.(next);
+              if (startedAt > 0) {
+                emitRenderedMarkdownEditorTiming('code-editor-on-change-callback', {
+                  durationMs: performance.now() - startedAt,
+                  presentation,
+                  docLength: next.length,
+                });
+              }
             }
             if (update.docChanged || update.selectionSet) {
               const input = update.docChanged ? lastBeforeInputRef.current : null;
               if (update.docChanged) lastBeforeInputRef.current = null;
-              onSelectionChangeRef.current?.(getMarkdownCodeEditorSelectionSnapshot(update.view, {
+              const startedAt = renderedMarkdownEditorTimingEnabled() ? performance.now() : 0;
+              const snapshot = getMarkdownCodeEditorSelectionSnapshot(update.view, {
                 docChanged: update.docChanged,
                 inputType: input?.inputType,
                 inputData: input?.data,
                 value: lastAppliedValueRef.current,
-              }));
+              });
+              onSelectionChangeRef.current?.(snapshot);
+              if (startedAt > 0) {
+                emitRenderedMarkdownEditorTiming('code-editor-selection-callback', {
+                  durationMs: performance.now() - startedAt,
+                  presentation,
+                  docChanged: update.docChanged,
+                  selectionSet: update.selectionSet,
+                  inputType: input?.inputType ?? null,
+                  docLength: snapshot.value.length,
+                });
+              }
             }
           }),
           EditorView.domEventHandlers({

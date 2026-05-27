@@ -613,12 +613,14 @@ describe('LibrarianView render', () => {
     });
   });
 
-  it('renders the empty library state without changing hook order', async () => {
+  it('keeps the library shell visible when artifact readings are empty', async () => {
     window.librarianAPI!.getReadings = vi.fn(async () => []);
 
     render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
 
-    expect(await screen.findByText('No artifacts yet')).toBeTruthy();
+    expect(await screen.findByText('Select a file')).toBeTruthy();
+    expect(screen.queryByText('No artifacts yet')).toBeNull();
+    expect(window.librarianAPI!.discoverLibrarianDirs).not.toHaveBeenCalled();
   });
 
   it('shows the sidebar while Library has no selected page even when sidebar collapse is enabled', async () => {
@@ -1669,7 +1671,7 @@ describe('LibrarianView render', () => {
       content,
       documentVersion: { mtimeMs: 1, size: content.length, sha256: 'debug-disabled-version' },
     };
-    const appendRenderedEditorDebug = vi.fn(async () => ({ ok: true, path: '/tmp/rendered-debug.log' }));
+    const appendRenderedEditorDebug = vi.fn(async (_entry: unknown) => ({ ok: true, path: '/tmp/rendered-debug.log' }));
 
     vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
       key === 'librarian-last-selection'
@@ -1718,6 +1720,148 @@ describe('LibrarianView render', () => {
       );
     }, { timeout: 1200 });
     expect(appendRenderedEditorDebug).not.toHaveBeenCalled();
+  });
+
+  it('records rendered editor timing entries while debug is enabled', async () => {
+    const relPath = 'scratchpad/rendered-debug-timing-test';
+    const content = Array.from({ length: 120 }, (_, index) => (
+      index % 4 === 0
+        ? `- [ ] task ${index} with **bold** and [[Target ${index}]]`
+        : `Paragraph ${index} with [a link](https://example.com/${index}) and *emphasis*.`
+    )).join('\n');
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-debug-timing-test',
+      title: 'rendered-debug-timing-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'debug-timing-version' },
+    };
+    const appendRenderedEditorDebug = vi.fn(async (_entry: unknown) => ({ ok: true, path: '/tmp/rendered-debug.log' }));
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'fieldtheory-rendered-editor-debug') return 'true';
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'debug-timing-saved-version' },
+    });
+    Object.defineProperty(window, 'diagnosticsAPI', {
+      configurable: true,
+      value: {
+        getDiagnostics: vi.fn(async () => ({})),
+        getDiagnosticsMarkdown: vi.fn(async () => ''),
+        appendRenderedEditorDebug,
+        getRenderedEditorDebugLogPath: vi.fn(async () => '/tmp/rendered-debug.log'),
+        clearRenderedEditorDebugLog: vi.fn(async () => ({ ok: true, path: '/tmp/rendered-debug.log' })),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('Paragraph 1');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('Paragraph 1');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      const stages = appendRenderedEditorDebug.mock.calls.map(([entry]) => (entry as { stage?: string }).stage);
+      expect(stages).toContain('apply-rendered-editor-body');
+      expect(stages).toContain('local-content-state-scheduled');
+    }, { timeout: 1200 });
+
+    const timingEntries = appendRenderedEditorDebug.mock.calls
+      .map(([entry]) => entry as { stage?: string; details?: Record<string, unknown> })
+      .filter((entry) => (
+        entry.stage === 'apply-rendered-editor-body'
+        || entry.stage === 'local-content-state-scheduled'
+        || entry.stage === 'handle-rendered-editor-change'
+      ));
+    expect(timingEntries.length).toBeGreaterThan(0);
+    expect(timingEntries.every((entry) => typeof entry.details?.durationMs === 'number')).toBe(true);
+  });
+
+  it('waits for a quiet rendered typing window before autosaving', async () => {
+    const relPath = 'scratchpad/rendered-quiet-save-test';
+    const content = 'quiet save';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-quiet-save-test',
+      title: 'rendered-quiet-save-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'quiet-save-version' },
+    };
+    const appendRenderedEditorDebug = vi.fn(async (_entry: unknown) => ({ ok: true, path: '/tmp/rendered-debug.log' }));
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => {
+      if (key === 'fieldtheory-rendered-editor-debug') return 'true';
+      if (key === 'librarian-last-selection') return JSON.stringify({ type: 'wiki', relPath });
+      return null;
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'quiet-save-saved-version' },
+    });
+    Object.defineProperty(window, 'diagnosticsAPI', {
+      configurable: true,
+      value: {
+        getDiagnostics: vi.fn(async () => ({})),
+        getDiagnosticsMarkdown: vi.fn(async () => ''),
+        appendRenderedEditorDebug,
+        getRenderedEditorDebugLogPath: vi.fn(async () => '/tmp/rendered-debug.log'),
+        clearRenderedEditorDebugLog: vi.fn(async () => ({ ok: true, path: '/tmp/rendered-debug.log' })),
+      },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('quiet save');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('quiet save');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      const stages = appendRenderedEditorDebug.mock.calls.map(([entry]) => (entry as { stage?: string }).stage);
+      expect(stages).toContain('save-rescheduled-active-typing');
+    }, { timeout: 900 });
+    expect(window.wikiAPI!.save).not.toHaveBeenCalled();
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'quiet save!',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
   });
 
   it('keeps River sync in the background after a rendered editor save', async () => {
