@@ -10,6 +10,7 @@ import {
   getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionCommitEdit,
+  getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
   getWikiBacklinks,
   getWikiLinkedPages,
@@ -789,6 +790,31 @@ describe('getActiveMarkdownWikiLinkCompletion', () => {
     expect(getActiveMarkdownWikiLinkCompletion('See [[Con\ns', 10, 10)).toBeNull();
     expect(getActiveMarkdownWikiLinkCompletion('See [[Target|alias', 18, 18)).toBeNull();
     expect(getActiveMarkdownWikiLinkCompletion('See [[Cons', 7, 9)).toBeNull();
+  });
+
+  it('deletes characters inside an active auto-closed link without committing it', () => {
+    const input = 'See [[Brand New]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Backspace')).toEqual({
+      nextValue: 'See [[Brand Ne]] today',
+      selectionStart: 14,
+      selectionEnd: 14,
+    });
+    expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Delete')).toBeNull();
+  });
+
+  it('deletes the opening brackets one character at a time after the query is gone', () => {
+    const input = 'See [[]] today';
+    const caret = input.indexOf(']]');
+    const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
+
+    expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Backspace')).toEqual({
+      nextValue: 'See []] today',
+      selectionStart: 5,
+      selectionEnd: 5,
+    });
   });
 });
 

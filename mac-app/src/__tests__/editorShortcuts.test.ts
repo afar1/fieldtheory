@@ -140,18 +140,19 @@ describe('line number shortcuts', () => {
 });
 
 describe('isMarkdownModeToggleShortcut', () => {
-  it('accepts Cmd+Period', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(true);
+  it('accepts Cmd+Semicolon', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon', metaKey: true }))).toBe(true);
   });
 
-  it('rejects Cmd+Shift+Period and unrelated modifiers', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '>', code: 'Period', metaKey: true, shiftKey: true }))).toBe(false);
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, altKey: true }))).toBe(false);
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true, ctrlKey: true }))).toBe(false);
+  it('rejects Cmd+Shift+Semicolon and unrelated modifiers', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ':', code: 'Semicolon', metaKey: true, shiftKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon', metaKey: true, altKey: true }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon', metaKey: true, ctrlKey: true }))).toBe(false);
   });
 
-  it('rejects bare period and Cmd+Comma', () => {
-    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period' }))).toBe(false);
+  it('rejects bare semicolon, Cmd+Period, and Cmd+Comma', () => {
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: ';', code: 'Semicolon' }))).toBe(false);
+    expect(isMarkdownModeToggleShortcut(mkKey({ key: '.', code: 'Period', metaKey: true }))).toBe(false);
     expect(isMarkdownModeToggleShortcut(mkKey({ key: ',', code: 'Comma', metaKey: true }))).toBe(false);
   });
 });
@@ -263,7 +264,8 @@ describe('shortcut reference rows', () => {
       expect.arrayContaining([
         { keys: 'Command+/', label: 'Toggle focus mode' },
         { keys: 'Command+,', label: 'Toggle sidebar' },
-        { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+        { keys: 'Command+.', label: 'Toggle terminal panel' },
+        { keys: 'Command+;', label: 'Toggle rendered/markdown' },
         { keys: 'Command+Shift+S', label: 'Toggle River sharing' },
         { keys: 'Command+B / I / U', label: 'Bold, italic, or underline selection' },
       ])

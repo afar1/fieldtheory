@@ -273,7 +273,9 @@ describe('SharedSyncService cache behavior', () => {
     });
 
     const cachePath = path.join(sharedFilesRoot(), 'brief AM.md');
-    expect(fs.readFileSync(cachePath, 'utf-8')).toContain('shared_author_callsign: "afar"');
+    const cachedContent = fs.readFileSync(cachePath, 'utf-8');
+    expect(cachedContent).toContain('title: "brief"');
+    expect(cachedContent).toContain('shared_author_callsign: "afar"');
   });
 
   it('does not create a shared row for solo users', async () => {
@@ -579,7 +581,9 @@ describe('SharedSyncService cache behavior', () => {
 
     expect(status.shared).toBe(true);
     expect(upsertedRow).toMatchObject({ author_callsign: 'afar' });
-    expect(fs.readFileSync(status.cachePath ?? '', 'utf-8')).toContain('shared_author_callsign: "afar"');
+    const cachedContent = fs.readFileSync(status.cachePath ?? '', 'utf-8');
+    expect(cachedContent).toContain('title: "Note"');
+    expect(cachedContent).toContain('shared_author_callsign: "afar"');
   });
 
   it('returns the database error when sharing is blocked', async () => {

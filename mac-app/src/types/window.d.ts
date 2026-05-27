@@ -1331,6 +1331,11 @@ interface PortableCommandInfo {
   displayName: string;    // Human-readable name
   filePath: string;       // Full path to the markdown file
   lastModified: number;   // File modification time
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
 }
 
 /**
@@ -1852,6 +1857,7 @@ interface LibrarianAPI {
   onShowNewReading: (callback: (readingPath: string) => void) => () => void;
   setMarkdownEditorFocused: (focused: boolean) => void;
   onInsertMarkdownText: (callback: (text: string) => void) => () => void;
+  onInsertPlainMarkdownText?: (callback: (text: string) => void) => () => void;
   onReplaceSelectedMarkdownText?: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>) => () => void;
   setImmersiveMode: (immersive: boolean) => void;
   setImmersiveDismissable: (dismissable: boolean) => void;

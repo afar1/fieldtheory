@@ -788,6 +788,36 @@ describe('flattenLibraryRootsForLauncher', () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ relPath: 'entries/commerce', displayName: 'Commerce' });
   });
+
+  it('carries River shared callsigns into launcher markdown items', () => {
+    const [item] = flattenLibraryRootsForLauncher([
+      {
+        path: '/Users/afar/.fieldtheory/library/River (shared)',
+        label: 'River (shared)',
+        builtin: false,
+        tree: [
+          {
+            kind: 'file',
+            relPath: 'brief AM',
+            absPath: '/Users/afar/.fieldtheory/library/River (shared)/brief AM.md',
+            name: 'brief AM',
+            title: 'brief',
+            lastUpdated: 2,
+            sharedOriginalSourcePath: 'Commands/brief.md',
+            sharedAuthorCallsign: 'AMB-MAC',
+          },
+        ],
+      },
+    ]);
+
+    expect(item).toMatchObject({
+      displayName: 'brief — River (shared)',
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
+    });
+    expect(item.keywords).toContain('AMB-MAC');
+  });
 });
 
 describe('launcher root search labels', () => {

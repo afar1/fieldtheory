@@ -200,17 +200,18 @@ describe('CommandsManager default internal commands', () => {
     const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
     const commandPath = join(sharedRoot, 'daily-brief.md');
     mkdirSync(sharedRoot, { recursive: true });
-    writeFileSync(commandPath, '---\nshared: true\nshared_id: "shared-daily-brief"\nshared_type: "command"\nshared_team: "Field Theory Team"\n---\n\nRiver brief body\n');
+    writeFileSync(commandPath, '---\ntitle: "daily-brief"\nshared: true\nshared_id: "shared-daily-brief"\nshared_type: "command"\nshared_team: "Field Theory Team"\nshared_author_callsign: "AMB-MAC"\n---\n\nRiver brief body\n');
 
     await manager.reinitializeForUser();
 
     const command = manager.getCommand('daily-brief');
     expect(command).toEqual(expect.objectContaining({
       name: 'daily-brief',
-      displayName: 'daily-brief - River (shared)',
+      displayName: 'daily-brief',
       filePath: commandPath,
       source: 'shared',
       sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
       sourceRootPath: sharedRoot,
       sourceRelPath: 'daily-brief.md',
     }));
@@ -251,22 +252,42 @@ describe('CommandsManager default internal commands', () => {
     const sharedCommandsDir = join(tempRoot, '.fieldtheory', 'library', 'River (shared)', 'Commands');
     const commandPath = join(sharedCommandsDir, 'standup.md');
     mkdirSync(sharedCommandsDir, { recursive: true });
-    writeFileSync(commandPath, 'Shared standup body\n');
+    writeFileSync(commandPath, '---\ntitle: "standup"\nshared: true\nshared_id: "shared-standup"\nshared_type: "command"\nshared_author_callsign: "AMB-MAC"\n---\n\nShared standup body\n');
 
     await manager.reinitializeForUser();
     manager.setMobileSyncEnabled(defaultDir, true);
 
     expect(manager.getCommand('standup')).toEqual(expect.objectContaining({
       name: 'standup',
-      displayName: 'standup - River (shared)',
+      displayName: 'standup',
       filePath: commandPath,
       source: 'shared',
       sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
       sourceRelPath: 'Commands/standup.md',
     }));
 
     const syncableCommands = await manager.getCommandsForMobileSync();
     expect(syncableCommands.map(command => command.name)).not.toContain('standup');
+  });
+
+  it('does not display initials-suffixed River command cache filenames as command titles', async () => {
+    const sharedRoot = join(tempRoot, '.fieldtheory', 'library', 'River (shared)');
+    const commandPath = join(sharedRoot, 'brief AM.md');
+    mkdirSync(sharedRoot, { recursive: true });
+    writeFileSync(commandPath, '---\nshared: true\nshared_id: "shared-brief"\nshared_type: "command"\nshared_author_callsign: "AMB-MAC"\n---\n\nRiver brief body\n');
+
+    await manager.reinitializeForUser();
+
+    const command = manager.getCommand('brief am');
+    expect(command).toEqual(expect.objectContaining({
+      name: 'brief am',
+      displayName: 'Untitled',
+      filePath: commandPath,
+      source: 'shared',
+      sourceLabel: 'River (shared)',
+      sharedAuthorCallsign: 'AMB-MAC',
+    }));
   });
 
   it('rejects command names that would write outside the selected directory', async () => {

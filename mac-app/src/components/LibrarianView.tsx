@@ -121,6 +121,7 @@ import {
   getMarkdownWikiLinkPasteText,
   getMarkdownWikiLinkAutoCloseEdit,
   getMarkdownWikiLinkCompletionCommitEdit,
+  getMarkdownWikiLinkCompletionDeleteEdit,
   getMarkdownWikiLinkCompletionReplacement,
   normalizeWikiRelPath,
   transformWikiLinks,
@@ -466,6 +467,7 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
 
 export function isTerminalEditorFocusToggleShortcut(input: {
   key: string;
+  code?: string;
   altKey: boolean;
   ctrlKey: boolean;
   metaKey: boolean;
@@ -476,6 +478,21 @@ export function isTerminalEditorFocusToggleShortcut(input: {
     && !input.altKey
     && !input.metaKey
     && !input.shiftKey;
+}
+
+export function isTerminalPanelVisibilityToggleShortcut(input: {
+  key: string;
+  code?: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return input.metaKey
+    && !input.shiftKey
+    && !input.altKey
+    && !input.ctrlKey
+    && (input.key === '.' || input.code === 'Period');
 }
 
 export function shouldOpenMarkdownLinkFromMouseDown(input: {
@@ -4947,6 +4964,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     restoreTerminalReturnEditorSelection,
   ]);
 
+  const toggleCodexTerminalPanel = useCallback(() => {
+    setCodexTerminalVisible((current) => !current);
+  }, []);
+
   const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
     setLineNumbersMode((current) => {
       if (mode) return current === mode ? 'hidden' : mode;
@@ -5081,6 +5102,42 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         event.stopPropagation();
         setMarkdownWikiLinkCompletion(null);
         return true;
+      }
+
+      if (
+        (event.key === 'Backspace' || event.key === 'Delete')
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.shiftKey
+      ) {
+        const editor = renderedMarkdownEditorRef.current;
+        const currentValue = editor?.getValue() ?? displaySourceBody;
+        const selection = editor?.getSelectionRange();
+        const liveCompletion = selection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, selection.start, selection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionDeleteEdit(currentValue, liveCompletion ?? completion, event.key);
+        if (edit) {
+          event.preventDefault();
+          event.stopPropagation();
+          applyRenderedEditorBody(edit.nextValue, {
+            selectionStart: edit.selectionStart,
+            selectionEnd: edit.selectionEnd,
+          });
+          pendingRenderedEditorSelectionRef.current = {
+            start: edit.selectionStart,
+            end: edit.selectionEnd,
+          };
+          focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+          setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+            edit.nextValue,
+            edit.selectionStart,
+            edit.selectionEnd,
+            { top: completion.top, left: completion.left },
+          ));
+          return true;
+        }
       }
 
       if (markdownWikiLinkSuggestions.length > 0) {
@@ -5348,14 +5405,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return true;
   }, [displaySourceBody, openLinkAction, wikiIndex]);
 
-  const applyRenderedTextInsertion = useCallback((text: string) => {
+  const applyRenderedTextInsertion = useCallback((
+    text: string,
+    options: { convertLocalImagePaths?: boolean } = {},
+  ) => {
     if (!text || !activeReading || contentMode !== 'rendered') return;
     const editor = renderedMarkdownEditorRef.current;
     const currentValue = editor?.getValue() ?? displaySourceBody;
     const selection = editor?.getSelectionRange();
     const selectionStart = selection?.start ?? currentValue.length;
     const selectionEnd = selection?.end ?? selectionStart;
-    const insertedText = formatPastedLocalImageMarkdown(text) ?? text;
+    const shouldConvertLocalImagePaths = options.convertLocalImagePaths !== false;
+    const insertedText = shouldConvertLocalImagePaths
+      ? formatPastedLocalImageMarkdown(text) ?? text
+      : text;
     const pasteEdit = getRenderedMarkdownPasteTextEdit(currentValue, selectionStart, selectionEnd, insertedText);
     if (pasteEdit) {
       applyRenderedEditorBody(pasteEdit.nextValue, {
@@ -5398,12 +5461,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       void insertPastedClipboardImagePathInRenderedEditor(clipboardData);
       return true;
     }
-	    if (!pastedText) return false;
+    if (!pastedText) return false;
 
-	    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
-	    applyRenderedTextInsertion(localImageMarkdown ?? pastedText);
-	    return true;
-	  }, [applyRenderedTextInsertion, insertPastedClipboardImagePathInRenderedEditor]);
+    const localImageMarkdown = formatPastedLocalImageMarkdown(pastedText);
+    applyRenderedTextInsertion(localImageMarkdown ?? pastedText);
+    return true;
+  }, [applyRenderedTextInsertion, insertPastedClipboardImagePathInRenderedEditor]);
 
   useEffect(() => {
     clearRenderedEditingState('path-or-mode-changed');
@@ -5728,7 +5791,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
 
-  const applyMarkdownTextInsertion = useCallback((text: string) => {
+  const applyMarkdownTextInsertion = useCallback((
+    text: string,
+    options: { convertLocalImagePaths?: boolean } = {},
+  ) => {
     if (!text) return;
     markWritingActive();
     setMarkdownUrlPasteChoice(null);
@@ -5739,7 +5805,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const selection = editor?.getSelectionRange();
     const selectionStart = selection?.start ?? currentValue.length;
     const selectionEnd = selection?.end ?? selectionStart;
-    const insertedText = formatPastedLocalImageMarkdown(text) ?? text;
+    const shouldConvertLocalImagePaths = options.convertLocalImagePaths !== false;
+    const insertedText = shouldConvertLocalImagePaths
+      ? formatPastedLocalImageMarkdown(text) ?? text
+      : text;
     const nextValue = `${currentValue.slice(0, selectionStart)}${insertedText}${currentValue.slice(selectionEnd)}`;
     const nextSelection = selectionStart + insertedText.length;
     pendingMarkdownInsertionSelectionRef.current = {
@@ -5812,6 +5881,20 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       return;
     }
     applyMarkdownTextInsertion(text);
+  }, [applyMarkdownTextInsertion, applyRenderedTextInsertion, contentMode]);
+
+  const insertPlainMarkdownText = useCallback((text: string) => {
+    const options = { convertLocalImagePaths: false };
+    if (contentMode === 'rendered') {
+      applyRenderedTextInsertion(text, options);
+      return;
+    }
+    if (contentMode !== 'markdown') {
+      setContentMode('markdown');
+      requestAnimationFrame(() => applyMarkdownTextInsertion(text, options));
+      return;
+    }
+    applyMarkdownTextInsertion(text, options);
   }, [applyMarkdownTextInsertion, applyRenderedTextInsertion, contentMode]);
 
   useLayoutEffect(() => {
@@ -6038,6 +6121,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         return true;
       }
 
+      if (
+        (event.key === 'Backspace' || event.key === 'Delete')
+        && !event.metaKey
+        && !event.ctrlKey
+        && !event.altKey
+        && !event.shiftKey
+      ) {
+        const editor = markdownCodeEditorRef.current;
+        const currentValue = editor?.getValue() ?? editContent;
+        const liveSelection = editor?.getSelectionRange();
+        const liveCompletion = liveSelection
+          ? getActiveMarkdownWikiLinkCompletion(currentValue, liveSelection.start, liveSelection.end)
+          : null;
+        const edit = getMarkdownWikiLinkCompletionDeleteEdit(currentValue, liveCompletion ?? completion, event.key);
+        if (edit) {
+          event.preventDefault();
+          event.stopPropagation();
+          applyMarkdownCodeEditorTextEdit(edit, { preserveCompletion: true });
+          setMarkdownWikiLinkCompletion(getMarkdownWikiLinkCompletionState(
+            edit.nextValue,
+            edit.selectionStart,
+            edit.selectionEnd,
+            { top: completion.top, left: completion.left },
+          ));
+          return true;
+        }
+      }
+
       if (markdownWikiLinkSuggestions.length > 0) {
         if (event.key === 'ArrowDown') {
           event.preventDefault();
@@ -6222,6 +6333,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const unsubscribe = window.librarianAPI?.onInsertMarkdownText(insertMarkdownText);
     return () => unsubscribe?.();
   }, [active, insertMarkdownText]);
+
+  useEffect(() => {
+    if (!active) return;
+    const unsubscribe = window.librarianAPI?.onInsertPlainMarkdownText?.(insertPlainMarkdownText);
+    return () => unsubscribe?.();
+  }, [active, insertPlainMarkdownText]);
 
   useEffect(() => {
     if (!active) return;
@@ -7271,6 +7388,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     function handleKeyDown(e: KeyboardEvent) {
+      if (isTerminalPanelVisibilityToggleShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleCodexTerminalPanel();
+        return;
+      }
+
       if (isTerminalEditorFocusToggleShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
@@ -7293,7 +7417,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         toggleLineNumbers('faded');
         return;
       }
-      // Cmd+. - cycles the available markdown content modes.
+      // Cmd+; - cycles the available markdown content modes.
       if (isMarkdownModeToggleShortcut(e)) {
         e.preventDefault();
         const nextMode = getNextMarkdownContentMode(contentMode, {
@@ -7566,7 +7690,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, toggleCodexTerminalPanel, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -8505,7 +8629,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               {focusToolbarControlsVisible && (
                 <button
                   type="button"
-                  onClick={() => setCodexTerminalVisible((current) => !current)}
+                  onClick={toggleCodexTerminalPanel}
                   title={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   aria-label={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   style={{

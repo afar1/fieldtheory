@@ -77,6 +77,14 @@ export function isTerminalFocusToggleSequence(event: Pick<KeyboardEvent, 'altKey
     && !event.shiftKey;
 }
 
+export function isTerminalPanelVisibilityToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.key === '.'
+    && event.metaKey
+    && !event.altKey
+    && !event.ctrlKey
+    && !event.shiftKey;
+}
+
 function pathBasename(input: string): string {
   const parts = input.split('/').filter(Boolean);
   return parts.length > 0 ? parts[parts.length - 1] : input;
@@ -88,27 +96,31 @@ export function formatTerminalCwdLabel(input: string): string {
 
 export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
   return {
-    background: isDark ? '#101113' : '#f0eadf',
-    foreground: isDark ? '#e8e3d8' : '#1f2328',
-    cursor: '#10b981',
-    selectionBackground: isDark ? '#2f4a43' : '#cfe9df',
-    black: isDark ? '#111315' : '#1f2328',
-    red: isDark ? '#ef4444' : '#b42318',
-    green: '#10b981',
-    yellow: isDark ? '#f59e0b' : '#b45309',
-    blue: isDark ? '#60a5fa' : '#2563eb',
-    magenta: isDark ? '#a78bfa' : '#7c3aed',
-    cyan: isDark ? '#22d3ee' : '#0891b2',
-    white: isDark ? '#e8e3d8' : '#4b5563',
-    brightBlack: isDark ? '#6b7280' : '#6b7280',
-    brightRed: isDark ? '#f87171' : '#dc2626',
-    brightGreen: isDark ? '#34d399' : '#059669',
-    brightYellow: isDark ? '#fbbf24' : '#d97706',
+    background: isDark ? '#101113' : '#f7f2e8',
+    foreground: isDark ? '#e8e3d8' : '#111827',
+    cursor: isDark ? '#10b981' : '#047857',
+    selectionBackground: isDark ? '#2f4a43' : '#b7d9cb',
+    black: isDark ? '#111315' : '#111827',
+    red: isDark ? '#ef4444' : '#991b1b',
+    green: isDark ? '#10b981' : '#047857',
+    yellow: isDark ? '#f59e0b' : '#92400e',
+    blue: isDark ? '#60a5fa' : '#1d4ed8',
+    magenta: isDark ? '#a78bfa' : '#6d28d9',
+    cyan: isDark ? '#22d3ee' : '#0e7490',
+    white: isDark ? '#e8e3d8' : '#374151',
+    brightBlack: isDark ? '#6b7280' : '#4b5563',
+    brightRed: isDark ? '#f87171' : '#b91c1c',
+    brightGreen: isDark ? '#34d399' : '#047857',
+    brightYellow: isDark ? '#fbbf24' : '#a16207',
     brightBlue: isDark ? '#93c5fd' : '#1d4ed8',
     brightMagenta: isDark ? '#c4b5fd' : '#6d28d9',
-    brightCyan: isDark ? '#67e8f9' : '#0e7490',
+    brightCyan: isDark ? '#67e8f9' : '#0f766e',
     brightWhite: isDark ? '#ffffff' : '#111827',
   };
+}
+
+export function terminalContrastRatio(isDark: boolean): number {
+  return isDark ? 1 : 4.5;
 }
 
 function readStoredNumber(key: string, fallback: number): number {
@@ -512,6 +524,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.18,
+      minimumContrastRatio: terminalContrastRatio(theme.isDark),
       scrollback: 8000,
       theme: terminalTheme(theme.isDark),
     });
@@ -521,6 +534,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     terminalHandlesRef.current.set(sessionId, { term, fit });
     term.attachCustomKeyEventHandler((event) => {
       if (event.type !== 'keydown') return true;
+      if (isTerminalPanelVisibilityToggleSequence(event)) {
+        event.preventDefault();
+        onVisibleChange(false);
+        return false;
+      }
       if (isTerminalFocusToggleSequence(event)) {
         event.preventDefault();
         onFocusToggleShortcutRef.current?.();
@@ -553,7 +571,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
       if (sessionId === activeSessionId) term.focus();
     }, 30);
-  }, [activeSessionId, theme.isDark]);
+  }, [activeSessionId, onVisibleChange, theme.isDark]);
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);

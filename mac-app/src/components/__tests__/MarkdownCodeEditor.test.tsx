@@ -25,6 +25,7 @@ import {
   RENDERED_MARKDOWN_EDITOR_STRIKE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS,
+  RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS,
   RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS,
   RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS,
@@ -46,6 +47,7 @@ import {
   selectedLineNumberGutterExtension,
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
+  getMarkdownCodeEditorContentAttributes,
   getMarkdownCodeEditorCursorAnimationStyle,
   getMarkdownCodeEditorSelectionDrawConfig,
   getMarkdownCodeEditorCursorShapeStyle,
@@ -54,6 +56,7 @@ import {
   getMarkdownCodeEditorSourcePosition,
   getRenderedMarkdownImagePreviewFromEventTarget,
   getRenderedMarkdownFormattingBoundaryLineBreakEdit,
+  getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
   getRenderedMarkdownListIndentStyle,
   getRenderedMarkdownListLineLayoutStyle,
@@ -82,6 +85,33 @@ describe('MarkdownCodeEditor cursor blink', () => {
   it('sets CodeMirror cursor blink rate through the drawn selection layer', () => {
     expect(getMarkdownCodeEditorSelectionDrawConfig(true)).toEqual({ cursorBlinkRate: 1200 });
     expect(getMarkdownCodeEditorSelectionDrawConfig(false)).toEqual({ cursorBlinkRate: 0 });
+  });
+});
+
+describe('MarkdownCodeEditor spellcheck attributes', () => {
+  it('enables native editing spellcheck attributes when requested', () => {
+    expect(getMarkdownCodeEditorContentAttributes({
+      spellCheck: true,
+      placeholder: 'Write here',
+      dataAttributes: {
+        'data-ft-agent-context': 'markdown',
+        ignored: undefined,
+      },
+    })).toEqual({
+      spellcheck: 'true',
+      autocorrect: 'on',
+      autocapitalize: 'sentences',
+      'aria-label': 'Write here',
+      'data-ft-agent-context': 'markdown',
+    });
+  });
+
+  it('can explicitly disable native spellcheck attributes', () => {
+    expect(getMarkdownCodeEditorContentAttributes({ spellCheck: false })).toEqual({
+      spellcheck: 'false',
+      autocorrect: 'off',
+      autocapitalize: 'off',
+    });
   });
 });
 
@@ -716,10 +746,34 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('anchors empty rendered list items in the body column', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- asdfadsf\n- ',
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const lines = Array.from(parent.querySelectorAll(`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`)) as HTMLElement[];
+    const emptyBody = lines[1].querySelector(`.${RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS}`) as HTMLElement | null;
+
+    expect(lines).toHaveLength(2);
+    expect(emptyBody).not.toBeNull();
+    expect(emptyBody?.classList.contains(RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS)).toBe(true);
+    expect(lines[1].textContent).toBe('•');
+
+    view.destroy();
+    parent.remove();
+  });
+
   it('redirects typing from hidden list markers into the rendered list body', () => {
     expect(getRenderedMarkdownListBodyStart('- make', 0)).toBe(2);
     expect(getRenderedMarkdownListBodyStart('10. make', 0)).toBe(4);
     expect(getRenderedMarkdownListBodyStart('  - [ ] make', 1)).toBe(8);
+    expect(getRenderedMarkdownListBodyStart('- ', 2)).toBe(2);
     expect(getRenderedMarkdownListBodyStart('- make', 2)).toBeNull();
     expect(getRenderedMarkdownListBodyStart('> quote', 0)).toBeNull();
 
@@ -756,6 +810,22 @@ describe('MarkdownCodeEditor rendered presentation', () => {
 
     view.destroy();
     parent.remove();
+  });
+
+  it('moves rendered list marker clicks to the first text position', () => {
+    const event = new MouseEvent('mousedown', { button: 0 });
+
+    expect(getRenderedMarkdownListBodyClickPosition('- make', 0, event)).toBe(2);
+    expect(getRenderedMarkdownListBodyClickPosition('10. make', 1, event)).toBe(4);
+    expect(getRenderedMarkdownListBodyClickPosition('  - [ ] make', 3, event)).toBe(8);
+    expect(getRenderedMarkdownListBodyClickPosition('- ', 2, event)).toBe(2);
+    expect(getRenderedMarkdownListBodyClickPosition('1. ', 3, event)).toBe(3);
+    expect(getRenderedMarkdownListBodyClickPosition('- [ ] ', 6, event)).toBe(6);
+    expect(getRenderedMarkdownListBodyClickPosition('- make', 2, event)).toBeNull();
+    expect(getRenderedMarkdownListBodyClickPosition('- make', 0, new MouseEvent('mousedown', {
+      button: 0,
+      metaKey: true,
+    }))).toBeNull();
   });
 
   it('keeps inline rendered formatting inside the list body column', () => {

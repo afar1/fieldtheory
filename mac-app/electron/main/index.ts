@@ -2565,7 +2565,7 @@ function registerHotkeysAfterOnboarding(): void {
       })) {
         const imagePath = await clipboardManager.exportCurrentClipboardImageToCache();
         if (imagePath) {
-          clipboardWindow?.webContents.send('librarian:insertMarkdownText', imagePath);
+          clipboardWindow?.webContents.send('librarian:insertPlainMarkdownText', imagePath);
           return;
         }
         const text = clipboard.readText();
