@@ -7,6 +7,7 @@ import {
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
+  RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   RENDERED_MARKDOWN_EDITOR_CODE_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_CLASS,
   RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS,
@@ -321,6 +322,58 @@ describe('MarkdownCodeEditor line numbers', () => {
 });
 
 describe('MarkdownCodeEditor rendered presentation', () => {
+  it('emits debug-gated timing entries for rendered decoration work', () => {
+    const originalLocalStorage = window.localStorage;
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: vi.fn((key: string) => (
+          key === 'fieldtheory-rendered-editor-debug' ? 'true' : null
+        )),
+      },
+    });
+    const timings: Array<Record<string, unknown>> = [];
+    const handleTiming = (event: Event) => {
+      if (event instanceof CustomEvent) timings.push(event.detail);
+    };
+    window.addEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleTiming);
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: Array.from({ length: 200 }, (_, index) => (
+          index % 5 === 0
+            ? `- [ ] task ${index} with **bold** and [[Wiki Target ${index}]]`
+            : `Paragraph ${index} with [a link](https://example.com/${index}) and *emphasis*.`
+        )).join('\n'),
+        extensions: [
+          checkedMarkdownTaskLineExtension,
+          createRenderedMarkdownEditorPresentationExtension(),
+        ],
+      }),
+      parent,
+    });
+
+    view.dispatch({
+      changes: { from: view.state.doc.length, insert: '\nnew paragraph' },
+      selection: { anchor: view.state.doc.length + '\nnew paragraph'.length },
+      annotations: Transaction.userEvent.of('input.type'),
+    });
+
+    expect(timings.some((entry) => entry.stage === 'rendered-decorations-update')).toBe(true);
+    expect(timings.some((entry) => entry.stage === 'code-editor-checked-task-decorations')).toBe(true);
+    expect(timings.every((entry) => typeof entry.durationMs === 'number')).toBe(true);
+
+    view.destroy();
+    parent.remove();
+    window.removeEventListener(RENDERED_MARKDOWN_EDITOR_TIMING_EVENT, handleTiming);
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: originalLocalStorage,
+    });
+  });
+
   it('inserts Enter before a rendered bold span so the word keeps its styling markers', () => {
     expect(getRenderedMarkdownFormattingBoundaryLineBreakEdit('**bold**', 2)).toEqual({
       insertAt: 0,
