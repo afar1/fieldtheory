@@ -527,10 +527,12 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         flexShrink: 0,
         minWidth: 0,
         minHeight: 0,
+        zIndex: extendToViewportTop ? 25 : undefined,
         backgroundColor: terminalBackground,
         borderTop: dockSide === 'bottom' ? `1px solid ${terminalBorder}` : undefined,
         borderLeft: dockSide === 'right' ? `1px solid ${terminalBorder}` : undefined,
         boxShadow: theme.isDark ? '0 -12px 32px rgba(0,0,0,0.26)' : '0 -12px 28px rgba(0,0,0,0.08)',
+        ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
       }}
     >
       <div
@@ -573,6 +575,9 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           flexShrink: 0,
           overflowX: 'auto',
           overflowY: 'hidden',
+          position: 'relative',
+          zIndex: 5,
+          ...(extendToViewportTop ? ({ WebkitAppRegion: 'no-drag' } as CSSProperties) : {}),
         }}
       >
         {visibleSessions.map((session) => {
@@ -680,6 +685,25 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
             }}
           />
         )}
+        {activeCwd && (
+          <span
+            title={activeCwd}
+            style={{
+              minWidth: dockSide === 'right' ? '64px' : '120px',
+              maxWidth: dockSide === 'right' ? '180px' : '360px',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+              color: terminalMutedText,
+              fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+              fontSize: '11px',
+              fontWeight: 600,
+              flexShrink: 1,
+            }}
+          >
+            {activeCwd}
+          </span>
+        )}
         <div style={{ flex: 1, minWidth: '12px' }} />
         {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{terminalStatus}</span>}
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
@@ -699,27 +723,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         <button type="button" onClick={() => onVisibleChange(false)} title="Hide terminal panel" style={toolbarButtonStyle(theme)}>
           Hide
         </button>
-      </div>
-      <div
-        style={{
-          height: '32px',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '9px',
-          padding: '0 12px',
-          borderBottom: `1px solid ${terminalSoftBorder}`,
-          backgroundColor: terminalChrome,
-          color: terminalMutedText,
-          flexShrink: 0,
-          overflow: 'hidden',
-          fontSize: '11px',
-          fontWeight: 600,
-        }}
-      >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>
-          {activeCwd || '~/dev/fieldtheory'}
-        </span>
-        <div style={{ flex: 1, minWidth: '8px' }} />
       </div>
       <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
         <style>
