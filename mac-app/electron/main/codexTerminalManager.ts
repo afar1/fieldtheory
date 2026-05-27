@@ -96,9 +96,11 @@ interface CodexTerminalSession extends CodexTerminalSessionSummary {
   process: pty.IPty | null;
   outputBuffer: string;
   codexLaunchTimer: ReturnType<typeof setTimeout> | null;
+  pendingLaunchEcho: PendingLaunchEcho | null;
 }
 
 type CodexHistoryFileEntry = { filePath: string; updatedAt: string; sizeBytes: number };
+export type PendingLaunchEcho = { commandRemaining: string; stripLineEnding: boolean };
 
 interface CodexTerminalManagerOptions {
   defaultCwd: string;
@@ -331,6 +333,36 @@ export function stripCodexInputPlaceholders(value: string): string {
   ), value);
 }
 
+export function stripPendingLaunchCommandEcho(value: string, pendingEcho: PendingLaunchEcho | null): { value: string; pendingEcho: PendingLaunchEcho | null } {
+  if (!pendingEcho || value.length === 0) return { value, pendingEcho };
+  let index = 0;
+  let consumed = '';
+  let nextPendingEcho: PendingLaunchEcho | null = { ...pendingEcho };
+
+  while (nextPendingEcho.commandRemaining && index < value.length) {
+    if (value[index] !== nextPendingEcho.commandRemaining[0]) {
+      nextPendingEcho = null;
+      return { value: consumed + value.slice(index), pendingEcho: nextPendingEcho };
+    }
+    consumed += value[index];
+    nextPendingEcho.commandRemaining = nextPendingEcho.commandRemaining.slice(1);
+    index += 1;
+  }
+
+  if (nextPendingEcho.commandRemaining) {
+    return { value: '', pendingEcho: nextPendingEcho };
+  }
+
+  while (nextPendingEcho.stripLineEnding && index < value.length && (value[index] === '\r' || value[index] === '\n')) {
+    index += 1;
+  }
+  nextPendingEcho = index < value.length
+    ? null
+    : { commandRemaining: '', stripLineEnding: true };
+
+  return { value: value.slice(index), pendingEcho: nextPendingEcho };
+}
+
 export function isCodexTerminalPromptReady(output: string, cwd: string): boolean {
   const visible = stripTerminalControlSequences(output);
   const cwdName = path.basename(cwd) || cwd;
@@ -402,6 +434,7 @@ export class CodexTerminalManager {
       process: child,
       outputBuffer: '',
       codexLaunchTimer: null,
+      pendingLaunchEcho: null,
     };
     this.sessions.set(id, session);
     fs.mkdirSync(this.transcriptDirPath, { recursive: true });
@@ -416,12 +449,16 @@ export class CodexTerminalManager {
         clearTimeout(session.codexLaunchTimer);
         session.codexLaunchTimer = null;
       }
+      session.pendingLaunchEcho = { commandRemaining: launchCommand, stripLineEnding: true };
       session.process.write(`${launchCommand}\r`);
     };
     session.codexLaunchTimer = setTimeout(launchCodex, CODEX_LAUNCH_FALLBACK_MS);
 
     child.onData((data) => {
-      const displayData = stripCodexInputPlaceholders(data);
+      const echoResult = stripPendingLaunchCommandEcho(data, session.pendingLaunchEcho);
+      session.pendingLaunchEcho = echoResult.pendingEcho;
+      const displayData = stripCodexInputPlaceholders(echoResult.value);
+      if (!displayData) return;
       session.outputBuffer = this.appendToBuffer(session.outputBuffer, displayData);
       try {
         fs.appendFileSync(transcriptPath, displayData, 'utf8');

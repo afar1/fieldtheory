@@ -3597,10 +3597,10 @@ function CommandLauncher() {
     if (item.source !== 'shared' && item.sourceLabel !== 'River (shared)') return null;
     return (
       <span style={styles.riverMeta} title={item.sharedAuthorCallsign ? `Shared by ${item.sharedAuthorCallsign}` : 'River shared'}>
-        <SidebarRiverIcon color="currentColor" style={{ opacity: 0.7 }} />
         {item.sharedAuthorCallsign && (
           <span style={styles.riverCallsign}>{item.sharedAuthorCallsign}</span>
         )}
+        <SidebarRiverIcon color="currentColor" style={{ opacity: 0.7 }} />
       </span>
     );
   };

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { tmpdir } from 'os';
 import { basename, join } from 'path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { CodexTerminalManager, isCodexTerminalPromptReady, stripCodexInputPlaceholders } from './codexTerminalManager';
+import { CodexTerminalManager, isCodexTerminalPromptReady, stripCodexInputPlaceholders, stripPendingLaunchCommandEcho, type PendingLaunchEcho } from './codexTerminalManager';
 
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -217,6 +217,35 @@ describe('CodexTerminalManager', () => {
     expect(ptys[0].written).toEqual([]);
     ptys[0].emit('data', promptFor(process.cwd()));
     expect(ptys[0].written[0]).toBe('codex\r');
+  });
+
+  it('removes the automatically written Codex command echo from displayed output', () => {
+    let pendingEcho: PendingLaunchEcho | null = { commandRemaining: 'codex', stripLineEnding: true };
+    const first = stripPendingLaunchCommandEcho('co', pendingEcho);
+    expect(first.value).toBe('');
+    pendingEcho = first.pendingEcho;
+
+    const second = stripPendingLaunchCommandEcho('dex\r\n\x1b[?1049hOpenAI Codex', pendingEcho);
+    expect(second.value).toBe('\x1b[?1049hOpenAI Codex');
+    expect(second.pendingEcho).toBeNull();
+  });
+
+  it('keeps real output if the pending launch echo does not finish matching', () => {
+    const result = stripPendingLaunchCommandEcho('config loaded', { commandRemaining: 'codex', stripLineEnding: true });
+    expect(result.value).toBe('config loaded');
+    expect(result.pendingEcho).toBeNull();
+  });
+
+  it('does not keep the automatic Codex launch echo in terminal scrollback', () => {
+    const { manager, ptys } = createManager();
+    const session = manager.createSession();
+
+    ptys[0].emit('data', promptFor(process.cwd()));
+    ptys[0].emit('data', 'co');
+    ptys[0].emit('data', 'dex\r\nOpenAI Codex');
+
+    expect(manager.getBuffer(session.id)).toContain('OpenAI Codex');
+    expect(manager.getBuffer(session.id)).not.toContain('codex\r\n');
   });
 
   it('can launch a Codex resume command for a new terminal session', () => {

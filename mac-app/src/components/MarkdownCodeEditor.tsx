@@ -60,6 +60,7 @@ import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEdit
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS = 1200;
+export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_OPACITY = 0.68;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
 export const RENDERED_MARKDOWN_EDITOR_HEADING_CLASS = 'cm-rendered-markdown-heading';
@@ -864,10 +865,187 @@ export function getRenderedMarkdownFormattingBoundaryLineBreakEdit(
   return null;
 }
 
+type RenderedMarkdownInlineSourceRange = {
+  from: number;
+  to: number;
+  contentFrom: number;
+  contentTo: number;
+  kind: 'formatting' | 'wiki';
+};
+
+function collectRenderedMarkdownInlineSourceRanges(value: string, offset: number): RenderedMarkdownInlineSourceRange[] {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const text = value.slice(lineStart, lineEnd);
+  const ranges: RenderedMarkdownInlineSourceRange[] = [];
+  const protectedRanges: Array<{ from: number; to: number }> = [];
+  const protect = (from: number, to: number) => protectedRanges.push({ from, to });
+  const isProtected = (from: number, to: number) => protectedRanges.some((range) => rangesIntersect(range, { from, to }));
+  const pushRange = (
+    from: number,
+    to: number,
+    contentFrom: number,
+    contentTo: number,
+    kind: RenderedMarkdownInlineSourceRange['kind'] = 'formatting',
+  ) => {
+    if (isProtected(from, to)) return;
+    protect(from, to);
+    ranges.push({ from, to, contentFrom, contentTo, kind });
+  };
+
+  for (const match of text.matchAll(/`([^`\n]+)`/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    pushRange(from, to, from + 1, to - 1);
+  }
+
+  for (const match of text.matchAll(/\[\[([^\]|\n]+)(?:\|([^\]\n]+))?\]\]/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    const targetFrom = from + 2;
+    const targetTo = targetFrom + match[1].length;
+    const aliasFrom = match[2] === undefined ? targetFrom : targetTo + 1;
+    const aliasTo = match[2] === undefined ? targetTo : aliasFrom + match[2].length;
+    pushRange(from, to, aliasFrom, aliasTo, 'wiki');
+  }
+
+  for (const match of text.matchAll(/\[([^\]\n]+)\]\(([^)\n]*)\)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const labelFrom = from + 1;
+    const labelTo = labelFrom + match[1].length;
+    pushRange(from, from + match[0].length, labelFrom, labelTo);
+  }
+
+  for (const match of text.matchAll(/<u>([^<\n]+)<\/u>/gi)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    pushRange(from, to, from + 3, to - 4);
+  }
+
+  for (const match of text.matchAll(/~~([^~\n]+)~~/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    pushRange(from, to, from + 2, to - 2);
+  }
+
+  for (const match of text.matchAll(/\*\*([^*\n]+)\*\*/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    pushRange(from, to, from + 2, to - 2);
+  }
+
+  for (const match of text.matchAll(/(?<!\*)\*([^*\n]+)\*(?!\*)/g)) {
+    if (match.index === undefined) continue;
+    const from = lineStart + match.index;
+    const to = from + match[0].length;
+    pushRange(from, to, from + 1, to - 1);
+  }
+
+  return ranges;
+}
+
+export function getRenderedMarkdownArrowRightEdit(value: string, offset: number): { selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineEndIndex = value.indexOf('\n', caret);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
+    if (range.kind === 'wiki') continue;
+    if (caret < range.contentTo || caret >= range.to) continue;
+    const selection = range.to === lineEnd && lineEnd < value.length ? lineEnd + 1 : range.to;
+    return selection === caret ? null : { selection };
+  }
+  return null;
+}
+
+export function getRenderedMarkdownArrowLeftEdit(value: string, offset: number): { selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const lineStart = caret === 0 ? 0 : value.lastIndexOf('\n', caret - 1) + 1;
+  for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
+    if (range.kind === 'wiki') continue;
+    if (caret <= range.from || caret > range.contentFrom) continue;
+    const selection = range.from === lineStart && lineStart > 0 ? lineStart - 1 : range.from;
+    return selection === caret ? null : { selection };
+  }
+  return null;
+}
+
+export function getRenderedMarkdownOptionArrowEdit(
+  value: string,
+  offset: number,
+  direction: 'left' | 'right',
+): { selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const ranges = collectRenderedMarkdownInlineSourceRanges(value, caret);
+  if (direction === 'right') {
+    for (const range of ranges) {
+      if (caret < range.from || caret >= range.to) continue;
+      return range.to === caret ? null : { selection: range.to };
+    }
+    return null;
+  }
+  for (const range of [...ranges].reverse()) {
+    if (caret <= range.from || caret > range.to) continue;
+    return range.from === caret ? null : { selection: range.from };
+  }
+  return null;
+}
+
+export function handleRenderedMarkdownEditorArrowRight(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const edit = getRenderedMarkdownArrowRightEdit(view.state.doc.toString(), selection.from);
+  if (!edit) return false;
+  view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
+  return true;
+}
+
+export function handleRenderedMarkdownEditorArrowLeft(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const edit = getRenderedMarkdownArrowLeftEdit(view.state.doc.toString(), selection.from);
+  if (!edit) return false;
+  view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
+  return true;
+}
+
+export function handleRenderedMarkdownEditorOptionArrow(view: EditorView, direction: 'left' | 'right'): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const edit = getRenderedMarkdownOptionArrowEdit(view.state.doc.toString(), selection.from, direction);
+  if (!edit) return false;
+  view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
+  return true;
+}
+
+export function handleRenderedMarkdownEditorCommandArrow(view: EditorView, direction: 'left' | 'right'): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const next = view.moveToLineBoundary(selection, direction === 'right', true);
+  if (next.head === selection.head) return false;
+  view.dispatch({ selection: { anchor: next.head, head: next.head } });
+  return true;
+}
+
+export function handleRenderedMarkdownEditorKeyDown(view: EditorView, event: KeyboardEvent): boolean {
+  if (event.metaKey || event.altKey || event.ctrlKey || event.shiftKey || event.isComposing) {
+    return false;
+  }
+  if (event.key === 'ArrowRight') return handleRenderedMarkdownEditorArrowRight(view);
+  if (event.key === 'ArrowLeft') return handleRenderedMarkdownEditorArrowLeft(view);
+  return false;
+}
+
 function shouldRevealRenderedMarkdownSource(state: EditorState, from: number, to: number): boolean {
   return state.selection.ranges.some((range) => {
-    if (range.empty) return range.from >= from && range.from <= to;
-    return range.from <= to && range.to >= from;
+    return range.empty && range.from >= from && range.from <= to;
   });
 }
 
@@ -1488,6 +1666,7 @@ export function getMarkdownCodeEditorCursorShapeStyle(
     borderLeft: 'none',
     marginLeft: '0',
     minWidth: '0.62em',
+    opacity: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_OPACITY,
     width: '0.62em',
   };
 }
@@ -1940,7 +2119,35 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         doc: value,
         extensions: [
           historyCompartment.of(history()),
-          keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
+          keymap.of([
+            {
+              key: 'ArrowRight',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorArrowRight(view) : false),
+            },
+            {
+              key: 'ArrowLeft',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorArrowLeft(view) : false),
+            },
+            {
+              key: 'Alt-ArrowRight',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorOptionArrow(view, 'right') : false),
+            },
+            {
+              key: 'Alt-ArrowLeft',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorOptionArrow(view, 'left') : false),
+            },
+            {
+              mac: 'Mod-ArrowRight',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorCommandArrow(view, 'right') : false),
+            },
+            {
+              mac: 'Mod-ArrowLeft',
+              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorCommandArrow(view, 'left') : false),
+            },
+            ...defaultKeymap,
+            ...historyKeymap,
+            indentWithTab,
+          ]),
           markdown(),
           documentPathCompartment.of(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
           ...(presentation === 'rendered' ? [createRenderedMarkdownEditorPresentationExtension()] : []),
