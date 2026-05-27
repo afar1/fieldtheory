@@ -28,7 +28,7 @@ const expectedByIdentity = {
   'com.fieldtheory.experimental|Field Theory Experimental': {
     channel: 'experimental',
     output: 'release-experimental',
-    repo: 'field-releases-experimental',
+    repo: 'oscar',
     configLabel: 'electron-builder.experimental.json',
     artifactName: 'Field.Theory.Experimental-${version}-${arch}.${ext}',
   },
@@ -61,6 +61,14 @@ if (expected) {
     || buildConfig.publish?.owner !== 'afar1'
     || buildConfig.publish?.repo !== expected.repo) {
     failures.push(`${expected.channel} build must publish to afar1/${expected.repo}`);
+  }
+
+  if (expected.channel === 'experimental' && buildConfig.publish?.private !== true) {
+    failures.push('experimental build must mark the GitHub release feed as private');
+  }
+
+  if (expected.channel === 'production' && buildConfig.publish?.private === true) {
+    failures.push('production build must not mark the GitHub release feed as private');
   }
 
   if (buildConfig.afterSign !== 'scripts/notarize.js') {

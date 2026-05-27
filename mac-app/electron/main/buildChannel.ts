@@ -1,7 +1,16 @@
 export type FieldTheoryBuildChannel = 'production' | 'experimental';
 
 export const FIELD_THEORY_PRODUCTION_RELEASE_REPO = 'field-releases';
-export const FIELD_THEORY_EXPERIMENTAL_RELEASE_REPO = 'field-releases-experimental';
+export const FIELD_THEORY_EXPERIMENTAL_RELEASE_REPO = 'oscar';
+export const FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN_ENV = 'FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN';
+
+export type FieldTheoryUpdaterFeedOptions = {
+  provider: 'github';
+  owner: 'afar1';
+  repo: string;
+  private?: boolean;
+  token?: string;
+};
 
 export function resolveFieldTheoryBuildChannel(options: {
   env?: NodeJS.ProcessEnv;
@@ -38,11 +47,51 @@ export function releaseRepoForBuildChannel(channel: FieldTheoryBuildChannel): st
 }
 
 export function isAutoUpdaterEnabledForBuildChannel(channel: FieldTheoryBuildChannel): boolean {
-  return channel === 'production';
+  return channel === 'production' || channel === 'experimental';
 }
 
 export function autoUpdaterReleaseRepoForBuildChannel(channel: FieldTheoryBuildChannel): string | null {
   return isAutoUpdaterEnabledForBuildChannel(channel)
     ? releaseRepoForBuildChannel(channel)
     : null;
+}
+
+export function autoUpdaterAllowsPrereleaseForBuildChannel(channel: FieldTheoryBuildChannel): boolean {
+  return channel === 'experimental';
+}
+
+export function autoUpdaterAuthTokenForBuildChannel(
+  channel: FieldTheoryBuildChannel,
+  env: NodeJS.ProcessEnv = process.env,
+): string | null {
+  if (channel !== 'experimental') return null;
+  const token = env[FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN_ENV]?.trim();
+  if (!token) return null;
+  return normalizeGitHubToken(token);
+}
+
+export function normalizeGitHubToken(token: string): string {
+  const trimmed = token.trim();
+  return trimmed.replace(/^(token|bearer)\s+/i, '').trim();
+}
+
+export function autoUpdaterFeedOptionsForBuildChannel(
+  channel: FieldTheoryBuildChannel,
+  token: string | null = null,
+): FieldTheoryUpdaterFeedOptions | null {
+  const repo = autoUpdaterReleaseRepoForBuildChannel(channel);
+  if (!repo) return null;
+
+  const feed: FieldTheoryUpdaterFeedOptions = {
+    provider: 'github',
+    owner: 'afar1',
+    repo,
+  };
+
+  if (channel === 'experimental' && token) {
+    feed.private = true;
+    feed.token = token;
+  }
+
+  return feed;
 }
