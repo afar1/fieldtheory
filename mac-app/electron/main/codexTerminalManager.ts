@@ -61,6 +61,7 @@ export interface CodexTerminalAttachedContext {
 interface CodexTerminalSession extends CodexTerminalSessionSummary {
   process: pty.IPty | null;
   outputBuffer: string;
+  codexLaunchTimer: ReturnType<typeof setTimeout> | null;
 }
 
 interface CodexTerminalManagerOptions {
@@ -76,6 +77,12 @@ interface CodexTerminalManagerOptions {
 const DEFAULT_MAX_BUFFER_BYTES = 512 * 1024;
 const MAX_PERSISTED_SESSIONS = 24;
 const CODEX_COMMAND = 'codex';
+const CODEX_LAUNCH_FALLBACK_MS = 1200;
+const ANSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\)/g;
+const CODEX_INPUT_PLACEHOLDERS = [
+  'Run /review on my current changes',
+  'Write tests for @filename',
+] as const;
 
 function broadcast(channel: string, payload: unknown): void {
   for (const window of BrowserWindow.getAllWindows()) {
@@ -169,6 +176,25 @@ function resolveGitInfo(cwd: string): { repoPath: string | null; gitBranch: stri
   return { repoPath: null, gitBranch: null };
 }
 
+function stripTerminalControlSequences(value: string): string {
+  return value.replace(ANSI_PATTERN, '');
+}
+
+export function stripCodexInputPlaceholders(value: string): string {
+  return CODEX_INPUT_PLACEHOLDERS.reduce((current, placeholder) => (
+    current.replaceAll(placeholder, ' '.repeat(placeholder.length))
+  ), value);
+}
+
+export function isCodexTerminalPromptReady(output: string, cwd: string): boolean {
+  const visible = stripTerminalControlSequences(output);
+  const cwdName = path.basename(cwd) || cwd;
+  if (!visible.includes(cwdName)) return false;
+  const lines = visible.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const lastLine = lines.at(-1) ?? '';
+  return /(?:[$%#❯➜›])\s*$/.test(lastLine);
+}
+
 export class CodexTerminalManager {
   private readonly sessions = new Map<string, CodexTerminalSession>();
   private readonly defaultCwd: string;
@@ -226,28 +252,48 @@ export class CodexTerminalManager {
       attachedContexts: [],
       process: child,
       outputBuffer: '',
+      codexLaunchTimer: null,
     };
     this.sessions.set(id, session);
     fs.mkdirSync(this.transcriptDirPath, { recursive: true });
     fs.writeFileSync(transcriptPath, '', 'utf8');
     this.persistSessionState();
 
+    let didLaunchCodex = false;
+    const launchCodex = () => {
+      if (didLaunchCodex || session.exitedAt || !session.process) return;
+      didLaunchCodex = true;
+      if (session.codexLaunchTimer) {
+        clearTimeout(session.codexLaunchTimer);
+        session.codexLaunchTimer = null;
+      }
+      session.process.write(`${CODEX_COMMAND}\r`);
+    };
+    session.codexLaunchTimer = setTimeout(launchCodex, CODEX_LAUNCH_FALLBACK_MS);
+
     child.onData((data) => {
-      session.outputBuffer = this.appendToBuffer(session.outputBuffer, data);
+      const displayData = stripCodexInputPlaceholders(data);
+      session.outputBuffer = this.appendToBuffer(session.outputBuffer, displayData);
       try {
-        fs.appendFileSync(transcriptPath, data, 'utf8');
+        fs.appendFileSync(transcriptPath, displayData, 'utf8');
       } catch {
         // Terminal output should keep flowing even if transcript persistence fails.
       }
-      broadcast(CodexTerminalIPCChannels.DATA, { id, data });
+      broadcast(CodexTerminalIPCChannels.DATA, { id, data: displayData });
+      if (isCodexTerminalPromptReady(session.outputBuffer, cwd)) {
+        launchCodex();
+      }
     });
     child.onExit(({ exitCode }) => {
+      if (session.codexLaunchTimer) {
+        clearTimeout(session.codexLaunchTimer);
+        session.codexLaunchTimer = null;
+      }
       session.exitedAt = new Date().toISOString();
       session.exitCode = exitCode;
       this.persistSessionState();
       broadcast(CodexTerminalIPCChannels.EXIT, this.toSummary(session));
     });
-    child.write(`${CODEX_COMMAND}\r`);
 
     return this.toSummary(session);
   }
@@ -279,6 +325,10 @@ export class CodexTerminalManager {
   kill(id: string): boolean {
     const session = this.sessions.get(id);
     if (!session) return false;
+    if (session.codexLaunchTimer) {
+      clearTimeout(session.codexLaunchTimer);
+      session.codexLaunchTimer = null;
+    }
     if (!session.exitedAt && session.process) session.process.kill();
     this.sessions.delete(id);
     this.persistSessionState();
@@ -346,6 +396,10 @@ export class CodexTerminalManager {
       if (!session.exitedAt) {
         session.exitedAt = new Date().toISOString();
         session.exitCode = null;
+      }
+      if (session.codexLaunchTimer) {
+        clearTimeout(session.codexLaunchTimer);
+        session.codexLaunchTimer = null;
       }
       if (session.process) session.process.kill();
       session.process = null;

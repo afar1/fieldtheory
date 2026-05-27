@@ -2088,7 +2088,7 @@ export default function CommandsView({
           minWidth: sidebarVisible ? '4px' : '0px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: sidebarVisible ? `1px solid ${theme.border}` : '0 solid transparent',
+          borderRight: sidebarVisible && !sidebarTemporarilyExpanded ? `1px solid ${theme.border}` : '0 solid transparent',
           transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
           display: 'block',

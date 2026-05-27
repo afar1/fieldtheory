@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, clipboard, screen, Display, Notification, dialog, globalShortcut, shell, Menu, systemPreferences, powerMonitor, net, protocol, nativeImage, type IpcMainEvent } from 'electron';
 import { pathToFileURL } from 'url';
 import path from 'path';
 import os from 'os';
@@ -793,6 +793,42 @@ function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
   return true;
 }
 
+async function replaceSelectedTextInFieldTheoryMarkdown(input: {
+  expectedText: string;
+  replacementText: string;
+}): Promise<boolean> {
+  const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+  if (
+    !input.expectedText ||
+    !input.replacementText ||
+    !clipboardWindow ||
+    clipboardWindow.isDestroyed() ||
+    !clipboardWindow.isVisible()
+  ) {
+    return false;
+  }
+
+  const requestId = crypto.randomUUID();
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      ipcMain.removeListener('librarian:replaceSelectedMarkdownTextResult', onResult);
+      resolve(false);
+    }, 600);
+    const onResult = (_event: IpcMainEvent, result: { requestId?: string; success?: boolean }) => {
+      if (result?.requestId !== requestId) return;
+      clearTimeout(timeout);
+      ipcMain.removeListener('librarian:replaceSelectedMarkdownTextResult', onResult);
+      resolve(result.success === true);
+    };
+    ipcMain.on('librarian:replaceSelectedMarkdownTextResult', onResult);
+    clipboardWindow.webContents.send('librarian:replaceSelectedMarkdownText', {
+      requestId,
+      expectedText: input.expectedText,
+      replacementText: input.replacementText,
+    });
+  });
+}
+
 export function formatFieldTheoryMarkdownImageDestination(filePath: string): string {
   const expandedPath = filePath === '~' || filePath.startsWith('~/')
     ? `${os.homedir()}${filePath.slice(1)}`
@@ -1287,8 +1323,18 @@ async function runGlobalImproveSelection(): Promise<void> {
       },
     });
 
-    const pasted = await pasteTextToGlobalImproveTarget(replacement, targetApp);
+    const targetIsFieldTheory = isFieldTheoryBundleId(targetApp?.bundleId);
+    const pasted = targetIsFieldTheory
+      ? await replaceSelectedTextInFieldTheoryMarkdown({
+        expectedText: text,
+        replacementText: replacement,
+      })
+      : await pasteTextToGlobalImproveTarget(replacement, targetApp);
     if (!pasted) {
+      if (targetIsFieldTheory) {
+        clipboard.writeText(replacement);
+        clipboardManager?.syncClipboardHash();
+      }
       cursorStatusManager?.showNoTargetError('Improved text copied; paste failed');
       emitLocalCommandStatus({
         status: 'error',

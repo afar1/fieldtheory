@@ -1,9 +1,9 @@
 import { EventEmitter } from 'events';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { join } from 'path';
-import { describe, expect, it, vi } from 'vitest';
-import { CodexTerminalManager } from './codexTerminalManager';
+import { basename, join } from 'path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CodexTerminalManager, isCodexTerminalPromptReady, stripCodexInputPlaceholders } from './codexTerminalManager';
 
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -64,7 +64,19 @@ function createManager(maxBufferBytes = 1024, input?: {
   return { manager, ptys, spawnPty };
 }
 
+function promptFor(cwd: string): string {
+  return `\r\n${basename(cwd)} › `;
+}
+
 describe('CodexTerminalManager', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('buffers PTY output so a renderer can replay scrollback after remount', () => {
     const { manager, ptys } = createManager();
     const session = manager.createSession();
@@ -92,6 +104,20 @@ describe('CodexTerminalManager', () => {
     } finally {
       rmSync(libraryDir, { recursive: true, force: true });
     }
+  });
+
+  it('removes Codex empty-input placeholders from displayed terminal output', () => {
+    expect(stripCodexInputPlaceholders('\x1b[1m›\x1b[22m \x1b[2mWrite tests for @filename')).toBe(`\x1b[1m›\x1b[22m \x1b[2m${' '.repeat('Write tests for @filename'.length)}`);
+    expect(stripCodexInputPlaceholders('\x1b[1m›\x1b[22m \x1b[2mRun /review on my current changes')).toBe(`\x1b[1m›\x1b[22m \x1b[2m${' '.repeat('Run /review on my current changes'.length)}`);
+  });
+
+  it('buffers sanitized terminal output so placeholder text does not replay after remount', () => {
+    const { manager, ptys } = createManager();
+    const session = manager.createSession();
+
+    ptys[0].emit('data', '\x1b[1m›\x1b[22m \x1b[2mRun /review on my current changes');
+
+    expect(manager.getBuffer(session.id)).toBe(`\x1b[1m›\x1b[22m \x1b[2m${' '.repeat('Run /review on my current changes'.length)}`);
   });
 
   it('prunes persisted sessions on startup so old terminal tabs do not reopen', () => {
@@ -181,12 +207,30 @@ describe('CodexTerminalManager', () => {
     expect(manager.listSessions()).toHaveLength(1);
   });
 
-  it('starts Codex inside a login shell so interrupting Codex leaves the shell alive', () => {
+  it('starts Codex inside a login shell after the shell prompt is ready', () => {
     const { manager, ptys, spawnPty } = createManager();
     manager.createSession();
 
     expect((spawnPty as any).mock.calls[0]?.[1]).toEqual(['-l']);
+    expect(ptys[0].written).toEqual([]);
+    ptys[0].emit('data', promptFor(process.cwd()));
     expect(ptys[0].written[0]).toBe('codex\r');
+  });
+
+  it('falls back to starting Codex if the shell prompt is not detected', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession();
+
+    vi.advanceTimersByTime(1199);
+    expect(ptys[0].written).toEqual([]);
+
+    vi.advanceTimersByTime(1);
+    expect(ptys[0].written).toEqual(['codex\r']);
+  });
+
+  it('detects prompt readiness from the visible cwd prompt text', () => {
+    expect(isCodexTerminalPromptReady(`\x1b[0m${basename(process.cwd())} › `, process.cwd())).toBe(true);
+    expect(isCodexTerminalPromptReady('codex\r\ncodex\r\n', process.cwd())).toBe(false);
   });
 
   it('keeps only the bounded tail of terminal output', () => {
@@ -252,7 +296,7 @@ describe('CodexTerminalManager', () => {
       expect(updatedResult.prompt).toBeUndefined();
       expect(readFileSync(join(libraryDir, 'Codex Context', 'sessions', session.id, 'active.md'), 'utf8')).toBe('Updated live context.');
       expect(manager.listSessions()[0].attachedContexts).toHaveLength(1);
-      expect(ptys[0].written).toHaveLength(2);
+      expect(ptys[0].written).toHaveLength(1);
     } finally {
       if (previousLibraryDir === undefined) {
         delete process.env.FT_LIBRARY_DIR;
@@ -326,7 +370,7 @@ describe('CodexTerminalManager', () => {
       expect(result.ok).toBe(true);
       expect(result.prompt).toBeUndefined();
       expect(readFileSync(join(contextDirPath, 'sessions', session.id, 'active.md'), 'utf8')).toBe('Quiet context.');
-      expect(ptys[0].written).toEqual(['codex\r']);
+      expect(ptys[0].written).toEqual([]);
     } finally {
       rmSync(libraryDir, { recursive: true, force: true });
     }

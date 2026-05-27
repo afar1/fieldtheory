@@ -28,6 +28,7 @@ import {
   parseLocalLlmProgressEvent,
   parseLocalCommandReplacement,
   parseSimpleLocalCommandReplacement,
+  looksLikeStandaloneFieldTheoryFigurePath,
   resolveLocalLlmHarness,
   stripWholeMarkdownFence,
 } from './localLlmManager';
@@ -139,9 +140,21 @@ describe('LocalLlmManager', () => {
     expect(prompt).toContain('Return only the replacement text for the selected markdown.');
     expect(prompt).not.toContain('replacementText');
     expect(prompt).toContain('Do not return the full document.');
+    expect(prompt).toContain('Treat the full document context as read-only context.');
+    expect(prompt).toContain('Do not return paths, filenames, screenshots, or figure references from the context unless they were in the selected markdown.');
     expect(prompt).toContain('Command name: improve');
     expect(prompt).toContain('rough sentence');
     expect(prompt).toContain('Full document context:');
+  });
+
+  it('recognizes standalone Field Theory figure paths', () => {
+    expect(looksLikeStandaloneFieldTheoryFigurePath(
+      '`~/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png`',
+    )).toBe(true);
+    expect(looksLikeStandaloneFieldTheoryFigurePath(
+      '![Screenshot](~/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png)',
+    )).toBe(false);
+    expect(looksLikeStandaloneFieldTheoryFigurePath('clearer prose')).toBe(false);
   });
 
   it('includes Maxwell memory in selected-text prompts', () => {
@@ -515,6 +528,38 @@ describe('LocalLlmManager', () => {
       }),
       expect.objectContaining({ onEvent: expect.any(Function) }),
     );
+  });
+
+  it('rejects selected-text commands that return a standalone figure path for prose', async () => {
+    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    fs.closeSync(fs.openSync(modelPath, 'w'));
+    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+
+    const server = {
+      start: vi.fn(async () => {}),
+      send: vi.fn(async () => ({
+        ok: true,
+        text: '`~/Library/Application Support/fieldtheory-mac/users/u/figures/Screenshot 1.png`',
+      })),
+      stop: vi.fn(),
+    };
+    const manager = new LocalLlmManager({
+      userDataPath: tempDir,
+      resourcesPath: tempDir,
+      appPath: tempDir,
+      cwd: process.cwd(),
+      env: { FT_LOCAL_LLM_MODEL_PATH: modelPath },
+      serverFactory: () => server,
+    });
+
+    await expect(manager.runSelectionCommand({
+      commandName: 'improve',
+      commandContent: 'Improve this.',
+      targetTitle: 'Note',
+      targetPath: '/tmp/Note.md',
+      targetContent: 'rough sentence\n\n![Screenshot](./figures/Screenshot 1.png)',
+      selectedText: 'rough sentence',
+    })).rejects.toThrow('figure path instead of replacement text');
   });
 
   dogfoodIt('dogfoods the real Codex harness against the local Gemma runner', async () => {

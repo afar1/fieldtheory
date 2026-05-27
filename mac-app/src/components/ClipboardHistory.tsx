@@ -53,8 +53,6 @@ import {
   ClipboardQueryOptions,
   RunningApp,
   TAB_LABELS,
-  nextTopNavViewMode,
-  shouldCycleTopNavWithControlTab,
   MAX_UNDO,
 } from '../types/clipboard';
 import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
@@ -72,11 +70,14 @@ import {
   SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY,
   getAppBracketNavigationDirection,
   getAppNavigationSurface,
+  getAppNumberTabSurface,
+  isLibrarianSurfaceVisible,
   popAppBackHistory,
   popAppForwardHistory,
   persistClipboardSurface,
   pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  shouldKeepLibrarianMounted,
   type AppNavigationSurface,
 } from '../utils/clipboardHistoryRestore';
 import {
@@ -201,7 +202,7 @@ function compactFooterStatusDetail(value: string | undefined, maxLength = 96): s
 type TopNavPaintTrace = {
   from: ViewMode;
   to: TopNavMode;
-  source: 'keyboard-control-tab' | 'tab-click';
+  source: 'tab-click';
   startedAt: number;
   highlightAppliedAt?: number;
 };
@@ -592,6 +593,8 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   const [librarySidebarToggleRequestKey, setLibrarySidebarToggleRequestKey] = useState(0);
   const [librarySelectedItemType, setLibrarySelectedItemType] = useState<LibrarianSelectedItemType>(null);
   const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
+  const librarianSurfaceVisible = isLibrarianSurfaceVisible({ viewMode, showSettings });
+  const keepLibrarianMounted = shouldKeepLibrarianMounted({ viewMode, librarianEverRendered });
   const navSidebarToggleEnabled = isNavSidebarToggleEnabled({
     viewMode,
     showSettings,
@@ -670,31 +673,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     });
     return appliedAt;
   }, [theme.accent, theme.textSecondary]);
-  const switchTopNavView = useCallback((delta: 1 | -1) => {
-    const startedAt = performance.now();
-    const previous = viewModeRef.current;
-    const next = nextTopNavViewMode(previous, delta, librarianEnabled);
-    if (!isTopNavMode(next) || next === previous) return;
-
-    const highlightAppliedAt = applyTopNavVisualMode(next);
-    viewModeRef.current = next;
-    traceTopNav('top-nav-switch-start', {
-      source: 'keyboard-control-tab',
-      from: previous,
-      to: next,
-      activeTag: document.activeElement?.tagName ?? null,
-      activeTopNavMode: (document.activeElement as HTMLElement | null)?.dataset?.topNavMode ?? null,
-    });
-    topNavPaintTraceRef.current = {
-      from: previous,
-      to: next,
-      source: 'keyboard-control-tab',
-      startedAt,
-      highlightAppliedAt,
-    };
-    setLibraryKeepsCurrentSizeKey(next === 'librarian' && previous === 'clipboard');
-    setViewMode(next);
-  }, [applyTopNavVisualMode, librarianEnabled]);
   // Track if a new reading is available (shows blue dot indicator on Librarian tab)
   const [hasNewReading, setHasNewReading] = useState(false);
   const [pendingReadingPath, setPendingReadingPath] = useState<string | null>(null);
@@ -2952,28 +2930,11 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
         }
       }
 
-      // Control+Tab/Shift+Control+Tab cycles through the left-group top-nav tabs.
-      // Plain Tab is left to focused surfaces such as the Library sidebar.
-      if (key === 'Tab' && hasCtrl && !hasAlt && !hasMeta) {
-        if (!shouldCycleTopNavWithControlTab(activeElement)) {
-          traceTopNav('top-nav-tab-native', {
-            activeTag: document.activeElement?.tagName ?? null,
-          });
-          return; // Let fields keep native Tab behavior.
-        }
+      const numberTabSurface = getAppNumberTabSurface(e);
+      if (numberTabSurface) {
         e.preventDefault();
-
-        if (activeElement === inputRef.current) {
-          setSearchQuery('');
-          setDebouncedSearchQuery('');
-        }
-        if (activeElement instanceof HTMLElement) {
-          activeElement.blur();
-        }
-
         setShowSettings(false);
-        const delta = hasShift ? -1 : 1;
-        switchTopNavView(delta);
+        selectTopNavView(numberTabSurface);
         return;
       }
 
@@ -3812,7 +3773,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, switchTopNavView, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
+  }, [isVisible, items, selectedIndex, selectedIds, targetAppInfo, listRows, preview, hoveredImageId, dismissPreview, shareToTeam, shareStackToTeam, viewMode, canShare, librarianEnabled, setViewMode, updatePreviewForRow, loadFullImageForPreview, getFullImageData, getStackPreviewItems, stackPreviewIndex, stackPreviewItems, prefetchImages, toggleDarkMode, runLocalImproveSelection, showAgentImproveDialog, closeAgentImproveDialog, handleCreateMarkdownFromItems, viewOriginalIds]);
 
   // No automatic scrolling - user manually scrolls, keyboard only navigates visible items
   
@@ -4957,18 +4918,18 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
         </div>
       )}
 
-      {!showSettings && (librarianEverRendered || viewMode === 'librarian') && (
+      {keepLibrarianMounted && (
         <div
           style={{
             flex: 1,
             minHeight: 0,
-            display: viewMode === 'librarian' ? 'flex' : 'none',
+            display: librarianSurfaceVisible ? 'flex' : 'none',
             flexDirection: 'column',
             borderTop: focusChromeOverlayActive ? 'none' : `1px solid ${getSettingsDividerColor(theme)}`,
           }}
         >
           <LibrarianView
-            active={viewMode === 'librarian'}
+            active={librarianSurfaceVisible}
             onSwitchToClipboard={handleLibrarianSwitchToClipboard}
             onSwitchToSettings={handleLibrarianSwitchToSettings}
             onFullScreenChange={setLibrarianImmersive}

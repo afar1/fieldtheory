@@ -28,10 +28,14 @@ import { getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/Set
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
+  RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  type RenderedTextCursorStyle,
   persistSharedFileToggleHotkey,
+  persistRenderedTextCursorStyle,
   persistTextCursorBlink,
   restoreSharedFileToggleHotkey,
+  restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
 } from '../utils/editorShortcuts';
 
@@ -596,6 +600,9 @@ export default function SettingsPanel({
   const [fieldTheorySyncStatus, setFieldTheorySyncStatus] = useState<FieldTheorySyncStatus | null>(null);
   const [showInternalSyncToggle, setShowInternalSyncToggle] = useState(false);
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
+  const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
+    restoreRenderedTextCursorStyle(localStorage)
+  ));
 
   // Dynamic Island auto-hide toggle.
   const [dynamicIslandAutoHide, setDynamicIslandAutoHide] = useState<boolean | null>(null);
@@ -907,6 +914,12 @@ export default function SettingsPanel({
     setBlinkTextCursor(enabled);
     persistTextCursorBlink(localStorage, enabled);
     window.dispatchEvent(new Event(TEXT_CURSOR_BLINK_CHANGED_EVENT));
+  };
+
+  const handleRenderedTextCursorStyleChange = (nextStyle: RenderedTextCursorStyle) => {
+    setRenderedTextCursorStyle(nextStyle);
+    persistRenderedTextCursorStyle(localStorage, nextStyle);
+    window.dispatchEvent(new Event(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT));
   };
 
   const handleSetFieldTheoryWindowMode = async (mode: FieldTheoryWindowMode) => {
@@ -1572,6 +1585,37 @@ export default function SettingsPanel({
           >
             <span style={{ ...styles.toggleKnob, transform: blinkTextCursor ? 'translateX(16px)' : 'translateX(2px)' }} />
           </button>
+        </div>
+
+        <div style={styles.row}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+            <span style={styles.rowLabel}>Editor cursor</span>
+            <span style={{ fontSize: '11px', color: theme.textSecondary }}>
+              Choose the caret shape while writing Markdown
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {([
+              ['bar', 'Bar'],
+              ['block', 'Block'],
+            ] as const).map(([value, label]) => {
+              const selected = renderedTextCursorStyle === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => handleRenderedTextCursorStyleChange(value)}
+                  style={{
+                    ...styles.btn,
+                    ...(selected ? styles.btnActive : {}),
+                    minWidth: '58px',
+                  }}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
         </div>
 
         {/* Accent Color Presets */}

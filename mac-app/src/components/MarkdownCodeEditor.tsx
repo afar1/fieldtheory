@@ -22,6 +22,7 @@ import {
   EditorState,
   Compartment,
   Facet,
+  Prec,
   RangeSetBuilder,
   Text,
   Transaction,
@@ -53,6 +54,7 @@ import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
+import type { RenderedTextCursorStyle } from '../utils/editorShortcuts';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
@@ -159,6 +161,7 @@ interface MarkdownCodeEditorProps {
   selectionBackground?: string;
   lineNumbersMode?: 'hidden' | 'visible' | 'faded';
   blinkCursor?: boolean;
+  cursorStyle?: RenderedTextCursorStyle;
   placeholder?: string;
   readOnly?: boolean;
   spellCheck?: boolean;
@@ -1374,6 +1377,29 @@ export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean):
   return blinkCursor ? {} : { animation: 'none', animationName: 'none', animationDuration: '0s' };
 }
 
+export function getMarkdownCodeEditorCursorShapeStyle(
+  cursorStyle: RenderedTextCursorStyle,
+  caretColor: string | undefined,
+  fallbackColor: string,
+): React.CSSProperties {
+  if (cursorStyle !== 'block') {
+    return {
+      backgroundColor: 'transparent',
+      borderLeft: `1.2px solid ${caretColor ?? fallbackColor}`,
+      marginLeft: '-0.6px',
+      minWidth: '0',
+      width: '0',
+    };
+  }
+  return {
+    backgroundColor: caretColor ?? fallbackColor,
+    borderLeft: 'none',
+    marginLeft: '0',
+    minWidth: '0.62em',
+    width: '0.62em',
+  };
+}
+
 export function getMarkdownCodeEditorCursorScrollMargin(bottomRoomPx = MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX): { x: number; y: number } {
   return { x: 5, y: bottomRoomPx };
 }
@@ -1411,6 +1437,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       selectionBackground,
       lineNumbersMode = 'hidden',
       blinkCursor = true,
+      cursorStyle = 'bar',
       placeholder,
       readOnly = false,
       spellCheck = true,
@@ -1492,7 +1519,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         ? `${fontSizeNumber * lineHeightNumber}px`
         : lineHeightCss;
       const isRenderedPresentation = presentation === 'rendered';
-      return EditorView.theme(
+      const cursorAnimationStyle = getMarkdownCodeEditorCursorAnimationStyle(blinkCursor);
+      const cursorShapeStyle = getMarkdownCodeEditorCursorShapeStyle(
+        cursorStyle,
+        caretColor,
+        color,
+      );
+      return Prec.highest(EditorView.theme(
         {
           '&': {
             height: isRenderedPresentation ? 'auto' : '100%',
@@ -1533,8 +1566,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '.cm-cursor, .cm-dropCursor': {
             borderLeftColor: caretColor ?? color,
           },
+          '&.cm-focused > .cm-scroller > .cm-cursorLayer, &.cm-focused .cm-cursorLayer': {
+            ...cursorAnimationStyle,
+          },
           '.cm-cursor': {
-            ...getMarkdownCodeEditorCursorAnimationStyle(blinkCursor),
+            ...cursorShapeStyle,
+          },
+          '&.cm-focused .cm-cursorLayer .cm-cursor, .cm-cursorLayer .cm-cursor, .cm-cursor-primary': {
+            ...cursorShapeStyle,
           },
           '.cm-selectionBackground, ::selection, .cm-content ::selection': {
             backgroundColor: selectionBackground ?? (theme.isDark ? 'rgba(120,170,255,0.25)' : 'rgba(80,140,255,0.25)'),
@@ -1741,13 +1780,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
         },
         { dark: theme.isDark },
-      );
+      ));
     }, [
       background,
       blinkCursor,
       caretColor,
       color,
       bottomRoomPx,
+      cursorStyle,
       fontFamily,
       fontSize,
       h1Size,

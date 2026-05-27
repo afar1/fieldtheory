@@ -33,7 +33,9 @@ import { FEATURE_NARRATION_ENABLED, FEATURE_TYPEDOWN_ENABLED } from '../featureF
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
   LINE_NUMBERS_STORAGE_KEY,
+  RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT,
   TEXT_CURSOR_BLINK_CHANGED_EVENT,
+  type RenderedTextCursorStyle,
   isFadedLineNumbersShortcut,
   getMarkdownFormattingShortcut,
   getMarkdownListShortcutKind,
@@ -48,6 +50,7 @@ import {
   isSearchFocusShortcut,
   isSharedFileToggleShortcut,
   restoreSharedFileToggleHotkey,
+  restoreRenderedTextCursorStyle,
   restoreTextCursorBlink,
 } from '../utils/editorShortcuts';
 import {
@@ -396,6 +399,31 @@ export function getRenderedDisplayReadingContent(input: {
   return input.activeReadingContent;
 }
 
+export function getVerifiedMarkdownSelectionReplacement(
+  value: string,
+  selectionStart: number,
+  selectionEnd: number,
+  expectedText: string,
+  replacementText: string,
+): { nextValue: string; selectionStart: number; selectionEnd: number } | null {
+  const start = Math.max(0, Math.min(selectionStart, value.length));
+  const end = Math.max(start, Math.min(selectionEnd, value.length));
+  if (start === end || !expectedText || !replacementText) return null;
+  const selectedText = value.slice(start, end);
+  const selectedTrimmed = selectedText.trim();
+  if (selectedText !== expectedText && selectedTrimmed !== expectedText.trim()) return null;
+  const leading = selectedText.match(/^\s*/)?.[0] ?? '';
+  const trailing = selectedText.match(/\s*$/)?.[0] ?? '';
+  const insertedText = selectedText === expectedText
+    ? replacementText
+    : `${leading}${replacementText}${trailing}`;
+  return {
+    nextValue: `${value.slice(0, start)}${insertedText}${value.slice(end)}`,
+    selectionStart: start,
+    selectionEnd: start + insertedText.length,
+  };
+}
+
 export function getRenderedCaretEnsureSourceOffset(input: {
   activeSourceOffset: number | null;
   selectionRange: { start: number; end: number } | null;
@@ -433,6 +461,20 @@ export function shouldHandleMarkdownTodoTabShortcut(input: {
     && !input.ctrlKey
     && input.altKey
     && (input.selectedItemType === 'wiki' || input.selectedItemType === 'external');
+}
+
+export function isTerminalEditorFocusToggleShortcut(input: {
+  key: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  shiftKey: boolean;
+}): boolean {
+  return input.key === 'Tab'
+    && input.ctrlKey
+    && !input.altKey
+    && !input.metaKey
+    && !input.shiftKey;
 }
 
 export function shouldOpenMarkdownLinkFromMouseDown(input: {
@@ -623,6 +665,12 @@ type MarkdownTextEdit = {
   selectionStart: number;
   selectionEnd: number;
   deletedMarkdownImages?: string[];
+};
+
+type ReplaceSelectedMarkdownTextRequest = {
+  requestId: string;
+  expectedText: string;
+  replacementText: string;
 };
 
 type MarkdownUndoSnapshot = {
@@ -1229,13 +1277,32 @@ function getRenderedMarkdownHiddenInlineSuffixEnd(value: string, offset: number)
   return index;
 }
 
+function getRenderedMarkdownHiddenInlinePrefixStart(value: string, offset: number): number {
+  const lineEndIndex = value.indexOf('\n', offset);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const lineStart = value.lastIndexOf('\n', Math.max(0, offset - 1)) + 1;
+  const prefix = value.slice(lineStart, offset);
+  const suffix = value.slice(offset, lineEnd);
+  if (prefix.endsWith('**') && suffix.includes('**')) return offset - 2;
+  if (prefix.endsWith('~~') && suffix.includes('~~')) return offset - 2;
+  if (prefix.endsWith('<u>') && suffix.includes('</u>')) return offset - '<u>'.length;
+  if (prefix.endsWith('[[') && suffix.includes(']]')) return offset - 2;
+  if (prefix.endsWith('[') && /^[^\]\n]+\]\([^)\n]*\)/.test(suffix)) return offset - 1;
+  if (prefix.endsWith('`') && suffix.includes('`')) return offset - 1;
+  if (prefix.endsWith('*') && hasUnclosedStandaloneAsterisk(prefix) && /(?<!\*)\*(?!\*)/.test(suffix)) return offset - 1;
+  return offset;
+}
+
 export function getRenderedMarkdownEnterEdit(
   value: string,
   selectionStart: number,
   selectionEnd: number,
 ): MarkdownTextEdit | null {
   if (selectionStart !== selectionEnd) return null;
-  const insertionOffset = getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart);
+  const openingOffset = getRenderedMarkdownHiddenInlinePrefixStart(value, selectionStart);
+  const insertionOffset = openingOffset === selectionStart
+    ? getRenderedMarkdownHiddenInlineSuffixEnd(value, selectionStart)
+    : openingOffset;
   return getCarrotListEnterEdit(value, insertionOffset, insertionOffset)
     ?? getMarkdownListEnterEdit(value, insertionOffset, insertionOffset)
     ?? {
@@ -1511,6 +1578,22 @@ function getRenderedMarkdownInlineToggleEdit(
   close: string,
 ): MarkdownTextEdit {
   const selected = value.slice(start, end);
+  const splitClosePrefix = value.slice(end).match(/^\s*\n\s*/)?.[0] ?? null;
+  if (
+    value.slice(start - open.length, start) === open
+    && splitClosePrefix !== null
+    && value.slice(end + splitClosePrefix.length, end + splitClosePrefix.length + close.length) === close
+  ) {
+    const nextStart = start - open.length;
+    const nextEnd = end - open.length;
+    const closeStart = end + splitClosePrefix.length;
+    return {
+      nextValue: `${value.slice(0, nextStart)}${selected}${value.slice(end, closeStart)}${value.slice(closeStart + close.length)}`,
+      selectionStart: nextStart,
+      selectionEnd: nextEnd,
+    };
+  }
+
   if (hasInlineWrapperAroundSelection(value, start, end, open, close)) {
     const nextStart = start - open.length;
     const nextEnd = end - open.length;
@@ -2442,6 +2525,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     restoreLibrarianMaxwellItems(localStorage)
   ));
   const [blinkTextCursor, setBlinkTextCursor] = useState(() => restoreTextCursorBlink(localStorage));
+  const [renderedTextCursorStyle, setRenderedTextCursorStyle] = useState<RenderedTextCursorStyle>(() => (
+    restoreRenderedTextCursorStyle(localStorage)
+  ));
   const [lineNumbersMode, setLineNumbersMode] = useState<'hidden' | 'visible' | 'faded'>(() => {
     const saved = localStorage.getItem(LINE_NUMBERS_STORAGE_KEY);
     return saved === 'visible' || saved === 'faded' ? saved : 'hidden';
@@ -2538,6 +2624,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const latestMarkdownCursorSnapshotRef = useRef<(MarkdownCodeEditorSelectionSnapshot & { timestamp: number; stage: string }) | null>(null);
   const editorCursorSettleTimerRef = useRef<number | null>(null);
   const pendingRenderedEditorSelectionRef = useRef<{ start: number; end: number } | null>(null);
+  const terminalReturnEditorSelectionRef = useRef<{ mode: MarkdownContentMode; start: number; end: number } | null>(null);
 
   const renderedScrollSamplerRef = useScrollFpsSampler('rendered');
   const sampleRenderedEditorInteraction = useInteractionFpsSampler('rendered-editor-input');
@@ -2646,6 +2733,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const [codexTerminalVisible, setCodexTerminalVisible] = useState(() => (
     localStorage.getItem(CODEX_TERMINAL_VISIBLE_STORAGE_KEY) === 'true'
   ));
+  const [codexTerminalFocusRequestKey, setCodexTerminalFocusRequestKey] = useState(0);
+  const [codexTerminalFocused, setCodexTerminalFocused] = useState(false);
   const [codexTerminalDockSide, setCodexTerminalDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
   ));
@@ -3344,6 +3433,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return () => {
       window.removeEventListener('storage', syncTextCursorBlink);
       window.removeEventListener(TEXT_CURSOR_BLINK_CHANGED_EVENT, syncTextCursorBlink);
+    };
+  }, []);
+
+  useEffect(() => {
+    const syncRenderedTextCursorStyle = () => setRenderedTextCursorStyle(restoreRenderedTextCursorStyle(localStorage));
+    window.addEventListener('storage', syncRenderedTextCursorStyle);
+    window.addEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
+    return () => {
+      window.removeEventListener('storage', syncRenderedTextCursorStyle);
+      window.removeEventListener(RENDERED_TEXT_CURSOR_STYLE_CHANGED_EVENT, syncRenderedTextCursorStyle);
     };
   }, []);
 
@@ -4685,6 +4784,62 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activateRenderedTextEditing({ start: displaySourceBody.length, end: displaySourceBody.length });
   }, [activateRenderedTextEditing, activeReading, contentMode, deactivateSidebarKeyboard, displaySourceBody.length]);
 
+  const captureTerminalReturnEditorSelection = useCallback(() => {
+    if (contentMode === 'markdown') {
+      const selection = markdownCodeEditorRef.current?.getSelectionRange();
+      terminalReturnEditorSelectionRef.current = {
+        mode: 'markdown',
+        start: selection?.start ?? editContentRef.current.length,
+        end: selection?.end ?? selection?.start ?? editContentRef.current.length,
+      };
+      return;
+    }
+    const selection = renderedMarkdownEditorRef.current?.getSelectionRange();
+    const offset = selection?.end ?? activeRenderedCaretOffsetRef.current ?? displaySourceBody.length;
+    terminalReturnEditorSelectionRef.current = {
+      mode: 'rendered',
+      start: selection?.start ?? offset,
+      end: selection?.end ?? offset,
+    };
+  }, [contentMode, displaySourceBody.length]);
+
+  const restoreTerminalReturnEditorSelection = useCallback(() => {
+    const target = terminalReturnEditorSelectionRef.current;
+    deactivateSidebarKeyboard();
+    if (target?.mode === 'markdown') {
+      setContentMode('markdown');
+      requestAnimationFrame(() => {
+        const editor = markdownCodeEditorRef.current;
+        if (!editor) return;
+        const length = editor.getValue().length;
+        const start = Math.max(0, Math.min(target.start, length));
+        const end = Math.max(start, Math.min(target.end, length));
+        editor.focus({ preventScroll: true });
+        editor.setSelectionRange(start, end);
+      });
+      return;
+    }
+    const selection = target
+      ? { start: target.start, end: target.end }
+      : { start: activeRenderedCaretOffsetRef.current ?? displaySourceBody.length, end: activeRenderedCaretOffsetRef.current ?? displaySourceBody.length };
+    activateRenderedTextEditing(selection);
+  }, [activateRenderedTextEditing, deactivateSidebarKeyboard, displaySourceBody.length]);
+
+  const toggleTerminalEditorFocus = useCallback(() => {
+    if (codexTerminalVisible && codexTerminalFocused) {
+      restoreTerminalReturnEditorSelection();
+      return;
+    }
+    captureTerminalReturnEditorSelection();
+    setCodexTerminalVisible(true);
+    setCodexTerminalFocusRequestKey((key) => key + 1);
+  }, [
+    captureTerminalReturnEditorSelection,
+    codexTerminalFocused,
+    codexTerminalVisible,
+    restoreTerminalReturnEditorSelection,
+  ]);
+
   const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
     setLineNumbersMode((current) => {
       if (mode) return current === mode ? 'hidden' : mode;
@@ -5447,6 +5602,47 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     });
   }, [editContent, markWritingActive, scheduleEditorSessionPersist]);
 
+  const replaceSelectedMarkdownText = useCallback((request: ReplaceSelectedMarkdownTextRequest): boolean => {
+    if (contentMode === 'rendered') {
+      const editor = renderedMarkdownEditorRef.current;
+      const selection = editor?.getSelectionRange();
+      if (!editor || !selection) return false;
+      const edit = getVerifiedMarkdownSelectionReplacement(
+        editor.getValue(),
+        selection.start,
+        selection.end,
+        request.expectedText,
+        request.replacementText,
+      );
+      if (!edit) return false;
+      applyRenderedEditorBody(edit.nextValue, {
+        selectionStart: edit.selectionStart,
+        selectionEnd: edit.selectionEnd,
+      });
+      pendingRenderedEditorSelectionRef.current = {
+        start: edit.selectionStart,
+        end: edit.selectionEnd,
+      };
+      focusRenderedEditor(pendingRenderedEditorSelectionRef.current);
+      return true;
+    }
+
+    if (contentMode !== 'markdown') return false;
+    const editor = markdownCodeEditorRef.current;
+    const selection = editor?.getSelectionRange();
+    if (!editor || !selection) return false;
+    const edit = getVerifiedMarkdownSelectionReplacement(
+      editor.getValue(),
+      selection.start,
+      selection.end,
+      request.expectedText,
+      request.replacementText,
+    );
+    if (!edit) return false;
+    applyMarkdownCodeEditorTextEdit(edit);
+    return true;
+  }, [applyMarkdownCodeEditorTextEdit, applyRenderedEditorBody, contentMode, focusRenderedEditor]);
+
   const insertMarkdownText = useCallback((text: string) => {
     if (contentMode === 'rendered') {
       applyRenderedTextInsertion(text);
@@ -5868,6 +6064,12 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const unsubscribe = window.librarianAPI?.onInsertMarkdownText(insertMarkdownText);
     return () => unsubscribe?.();
   }, [active, insertMarkdownText]);
+
+  useEffect(() => {
+    if (!active) return;
+    const unsubscribe = window.librarianAPI?.onReplaceSelectedMarkdownText?.(replaceSelectedMarkdownText);
+    return () => unsubscribe?.();
+  }, [active, replaceSelectedMarkdownText]);
 
   useEffect(() => {
     if (!active) return;
@@ -6911,6 +7113,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     if (!active) return;
     function handleKeyDown(e: KeyboardEvent) {
+      if (isTerminalEditorFocusToggleShortcut(e)) {
+        e.preventDefault();
+        e.stopPropagation();
+        toggleTerminalEditorFocus();
+        return;
+      }
+
       if (isImmersiveToggleShortcut(e)) {
         e.preventDefault();
         toggleFocusChromeShortcut();
@@ -7199,7 +7408,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
+  }, [active, readings, selectedPath, isFullScreen, focusImmersive, contentMode, activeReading, activeIsMarkdownDocument, onSwitchToClipboard, enterEditMode, exitEditMode, switchToTypedownMode, flushCurrentEdit, handleCreateFile, handleCreateDir, selectedItemId, handleSelectItem, selectedItemType, handleDelete, handleToggleSharedFile, cycleSelectedMarkdownTodoState, focusActiveFileBodyAtEnd, isOnAutoPopArtifact, toggleFocusChromeShortcut, toggleImmersive, toggleLineNumbers, toggleTerminalEditorFocus, canNavigateBack, canNavigateForward, navigateHistory, openFileFind, copyActiveReadingTextOrPath, copyActiveReadingPath, sharedFileToggleHotkey, sharedFilesAvailable, shortcutsHelpOpen, createDefaultWikiFileInFolder, wikiSelectedRelPath]);
 
   // Listen for show reading requests (auto-show on new reading)
   // Note: fullscreen state is controlled separately by onSetFullscreen, not here
@@ -7708,13 +7917,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       </div>
       {/* Resize handle - hidden in full-screen mode but kept in DOM */}
       <div
+        data-fieldtheory-sidebar-resize-handle="true"
         onMouseDown={handleResizeMouseDown}
         style={{
           width: sidebarVisible ? '4px' : '0px',
           minWidth: sidebarVisible ? '4px' : '0px',
           cursor: 'col-resize',
           backgroundColor: isResizing ? theme.accent : 'transparent',
-          borderRight: sidebarVisible ? `1px solid ${theme.border}` : '0 solid transparent',
+          borderRight: sidebarVisible && !sidebarTemporarilyExpanded ? `1px solid ${theme.border}` : '0 solid transparent',
           transition: 'width 0.18s ease, min-width 0.18s ease, background-color 0.15s ease',
           flexShrink: 0,
           display: sidebarHidden ? 'none' : 'block',
@@ -8366,8 +8576,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 <button
                   type="button"
                   onClick={() => setCodexTerminalVisible((current) => !current)}
-                  title={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
-                  aria-label={codexTerminalVisible ? 'Hide Codex Terminal' : 'Open Codex Terminal'}
+                  title={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
+                  aria-label={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   style={{
                     height: '24px',
                     width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
@@ -8555,6 +8765,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
+                    cursorStyle={renderedTextCursorStyle}
                     placeholder={activeIsMarkdownDocument ? 'Write your markdown here...' : 'Write your source here...'}
                     documentPath={activeReading.path}
 	                    dataAttributes={{
@@ -8721,6 +8932,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     caretColor={theme.accent}
                     lineNumbersMode={lineNumbersMode}
                     blinkCursor={blinkTextCursor}
+                    cursorStyle={renderedTextCursorStyle}
                     placeholder="Rendered text editor"
                     documentPath={activeReading.path}
                     dataAttributes={{
@@ -8898,7 +9110,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               color: theme.textSecondary,
             }}
           >
-            Select a page
+            Select a file
           </div>
         )}
         </div>
@@ -8929,7 +9141,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           visible={codexTerminalVisible}
           pageContext={codexTerminalPageContext}
           extendToViewportTop={focusChromeActive && codexTerminalDockSide === 'right'}
+          focusRequestKey={codexTerminalFocusRequestKey}
           onDockSideChange={setCodexTerminalDockSide}
+          onFocusToggleShortcut={toggleTerminalEditorFocus}
+          onTerminalFocusChange={setCodexTerminalFocused}
           onVisibleChange={setCodexTerminalVisible}
         />
       </div>

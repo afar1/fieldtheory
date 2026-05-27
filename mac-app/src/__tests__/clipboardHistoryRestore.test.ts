@@ -3,14 +3,17 @@ import { describe, expect, it } from 'vitest';
 import {
   getAppBracketNavigationDirection,
   getAppNavigationSurface,
+  getAppNumberTabSurface,
   FIELD_THEORY_LAST_SURFACE_STORAGE_KEY,
   FIELD_THEORY_VIEW_STORAGE_KEY,
+  isLibrarianSurfaceVisible,
   popAppBackHistory,
   popAppForwardHistory,
   SHOULD_SHOW_FIELDS_ON_OPEN_STORAGE_KEY,
   persistClipboardSurface,
   pushAppNavigationHistory,
   resolveClipboardRestoreState,
+  shouldKeepLibrarianMounted,
 } from '../utils/clipboardHistoryRestore';
 
 function createStorage(initial: Record<string, string> = {}) {
@@ -111,12 +114,26 @@ describe('clipboardHistoryRestore', () => {
     expect(getAppNavigationSurface({ viewMode: 'librarian', showSettings: true })).toBe('settings');
   });
 
+  it('keeps the Library mounted while settings temporarily covers it', () => {
+    expect(shouldKeepLibrarianMounted({ viewMode: 'librarian', librarianEverRendered: false })).toBe(true);
+    expect(shouldKeepLibrarianMounted({ viewMode: 'clipboard', librarianEverRendered: true })).toBe(true);
+    expect(isLibrarianSurfaceVisible({ viewMode: 'librarian', showSettings: false })).toBe(true);
+    expect(isLibrarianSurfaceVisible({ viewMode: 'librarian', showSettings: true })).toBe(false);
+  });
+
   it('recognizes plain Command bracket navigation only', () => {
     expect(getAppBracketNavigationDirection({ key: '[', code: 'BracketLeft', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe(-1);
     expect(getAppBracketNavigationDirection({ key: ']', code: 'BracketRight', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe(1);
     expect(getAppBracketNavigationDirection({ key: 'å', code: 'BracketLeft', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe(-1);
     expect(getAppBracketNavigationDirection({ key: '[', code: 'BracketLeft', metaKey: true, shiftKey: true, altKey: false, ctrlKey: false })).toBeNull();
     expect(getAppBracketNavigationDirection({ key: '[', code: 'BracketLeft', metaKey: false, shiftKey: false, altKey: false, ctrlKey: false })).toBeNull();
+  });
+
+  it('maps Command number shortcuts to primary app tabs', () => {
+    expect(getAppNumberTabSurface({ key: '1', code: 'Digit1', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe('librarian');
+    expect(getAppNumberTabSurface({ key: '2', code: 'Digit2', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBe('clipboard');
+    expect(getAppNumberTabSurface({ key: '1', code: 'Digit1', metaKey: true, shiftKey: true, altKey: false, ctrlKey: false })).toBeNull();
+    expect(getAppNumberTabSurface({ key: '3', code: 'Digit3', metaKey: true, shiftKey: false, altKey: false, ctrlKey: false })).toBeNull();
   });
 
   it('tracks app-level back and forward surfaces', () => {

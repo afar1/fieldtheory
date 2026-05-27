@@ -234,6 +234,8 @@ export function buildLocalSelectionCommandPrompt(input: LocalCommandSelectionPro
     ...outputRules,
     '- Preserve the user intent, file paths, links, screenshots, and visible checkbox state.',
     '- Preserve surrounding markdown style unless the command explicitly asks to change it.',
+    '- Treat the full document context as read-only context. Replace only the selected markdown.',
+    '- Do not return paths, filenames, screenshots, or figure references from the context unless they were in the selected markdown.',
     ...(input.memorySnapshot
       ? [
           '- Use the Maxwell memory snapshot only when it is directly relevant to the command.',
@@ -309,6 +311,23 @@ export function parseSimpleLocalCommandReplacement(raw: string): string {
     throw new Error('Local command returned assistant text instead of replacement Markdown. No changes were saved.');
   }
   return cleaned;
+}
+
+export function looksLikeStandaloneFieldTheoryFigurePath(text: string): boolean {
+  const normalized = stripWholeMarkdownFence(text)
+    .trim()
+    .replace(/^`+|`+$/g, '')
+    .replace(/^file:\/\//i, '');
+  return /^(?:~|\/Users\/[^/]+)\/Library\/Application Support\/fieldtheory-mac\/users\/[^/]+\/figures\/[^`]+?\.(?:png|jpe?g|gif|webp)$/i.test(normalized);
+}
+
+export function assertSelectionReplacementMatchesSelection(input: LocalCommandSelectionPromptInput, replacement: string): void {
+  if (
+    looksLikeStandaloneFieldTheoryFigurePath(replacement)
+    && !looksLikeStandaloneFieldTheoryFigurePath(input.selectedText)
+  ) {
+    throw new Error('Local command returned a figure path instead of replacement text. No changes were saved.');
+  }
 }
 
 export function parseLocalLlmProgressEvent(event: ServerEvent): LocalLlmProgressEvent | null {
@@ -460,9 +479,11 @@ export class LocalLlmManager {
     const maxTokens = 2048;
     assertLocalLlmPromptFits(prompt, this.getEffectiveEnv(), maxTokens);
     const raw = await this.generate(prompt, { maxTokens, temperature: 0.1, onProgress: options.onProgress });
-    return harness === 'codex'
+    const replacement = harness === 'codex'
       ? parseLocalCommandReplacement(raw, 'replacementText')
       : parseSimpleLocalCommandReplacement(raw);
+    assertSelectionReplacementMatchesSelection(input, replacement);
+    return replacement;
   }
 
   stop(): void {
