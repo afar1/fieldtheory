@@ -7,6 +7,7 @@ import LibrarianView, {
   getHtmlPreviewSrcDoc,
   getLocalFileUrl,
   resolveCurrentWikiCreateFolder,
+  getFocusChromeContentCenterX,
 } from '../LibrarianView';
 
 vi.mock('../../contexts/ThemeContext', () => ({
@@ -69,6 +70,23 @@ describe('LibrarianView render', () => {
     expect(resolveCurrentWikiCreateFolder('wiki', 'projects/notes/plan')).toBe('projects/notes');
     expect(resolveCurrentWikiCreateFolder('wiki', 'loose-note')).toBe('scratchpad');
     expect(resolveCurrentWikiCreateFolder('artifact', null)).toBe('scratchpad');
+  });
+
+  it('centers focus chrome over the document area when the right terminal is open', () => {
+    expect(getFocusChromeContentCenterX({
+      readerLeft: 0,
+      readerRight: 1200,
+      terminalLeft: 700,
+      terminalDockedRight: true,
+      terminalVisible: true,
+    })).toBe(350);
+    expect(getFocusChromeContentCenterX({
+      readerLeft: 0,
+      readerRight: 1200,
+      terminalLeft: 700,
+      terminalDockedRight: false,
+      terminalVisible: true,
+    })).toBe(600);
   });
 
   it('opens a command-clicked sidebar file in a document window and clears the source selection', async () => {

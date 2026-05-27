@@ -470,6 +470,19 @@ export function isLibrarianDocumentFocusChromeActive(input: {
     && (input.focusImmersive || (input.isFocusedWritingMode && input.writingChromeHidden));
 }
 
+export function getFocusChromeContentCenterX(input: {
+  readerLeft: number;
+  readerRight: number;
+  terminalLeft: number | null;
+  terminalDockedRight: boolean;
+  terminalVisible: boolean;
+}): number {
+  const contentRight = input.terminalVisible && input.terminalDockedRight && input.terminalLeft !== null
+    ? Math.max(input.readerLeft, Math.min(input.readerRight, input.terminalLeft))
+    : input.readerRight;
+  return Math.round(input.readerLeft + ((contentRight - input.readerLeft) / 2));
+}
+
 export function isBookmarksCanvasChromeActive(input: {
   active: boolean;
   selectedItemType: LibrarianSelectedItemType;
@@ -2282,6 +2295,7 @@ interface LibrarianViewProps {
   onOpenCommandPath?: (path: string) => void;
   onFocusChromeShortcut?: () => void;
   onActiveFileUpdatedChange?: (file: { path: string; title: string; mtime: number } | null) => void;
+  onFocusChromeContentCenterChange?: (centerX: number | null) => void;
   preserveCurrentSizeKey?: boolean;
   // Sidebar collapse state is owned by ClipboardHistory so the footer
   // toggle can drive it regardless of which view is active.
@@ -2368,7 +2382,7 @@ export function isRenderedTaskListItem(node: unknown): boolean {
   return getRenderedTaskListItemChecked(node) !== null;
 }
 
-function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0 }: LibrarianViewProps) {
+function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings, onFullScreenChange, onFocusChromeActiveChange, onBookmarksCanvasActiveChange, onBookmarksCanvasToolbarTopChange, onSelectedItemTypeChange, focusChromeGroupOpacity = 0, focusChromeEnabled, onFocusChromeEnabledChange, initialReadingPath, initialOpenTarget, initialFullScreen, onInitialReadingConsumed, onInitialOpenTargetConsumed, autoPopArtifactPath, onAutoPopArtifactSuperseded, onOpenCommandPath, onFocusChromeShortcut, onActiveFileUpdatedChange, onFocusChromeContentCenterChange, preserveCurrentSizeKey = false, sidebarCollapsed, sidebarToggleRequestKey = 0 }: LibrarianViewProps) {
   const { theme } = useTheme();
   const { confirmDelete, deleteConfirmationDialog } = useDeleteConfirmation();
   const restoredSelection = useMemo(() => restoreLibrarianSelection(localStorage), []);
@@ -3487,6 +3501,43 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   useEffect(() => {
     onFocusChromeActiveChange?.(active && focusChromeActive);
   }, [active, focusChromeActive, onFocusChromeActiveChange]);
+
+  useLayoutEffect(() => {
+    if (!active || !focusChromeActive) {
+      onFocusChromeContentCenterChange?.(null);
+      return;
+    }
+    const readerPane = readerPaneRef.current;
+    if (!readerPane) return;
+
+    const updateCenter = () => {
+      const readerRect = readerPane.getBoundingClientRect();
+      const terminalRect = readerPane
+        .querySelector<HTMLElement>('[data-ft-codex-terminal-panel="true"]')
+        ?.getBoundingClientRect() ?? null;
+      onFocusChromeContentCenterChange?.(getFocusChromeContentCenterX({
+        readerLeft: readerRect.left,
+        readerRight: readerRect.right,
+        terminalLeft: terminalRect?.left ?? null,
+        terminalDockedRight: codexTerminalDockSide === 'right',
+        terminalVisible: codexTerminalVisible,
+      }));
+    };
+
+    updateCenter();
+    const frame = window.requestAnimationFrame(updateCenter);
+    const resizeObserver = new ResizeObserver(updateCenter);
+    resizeObserver.observe(readerPane);
+    for (const element of readerPane.querySelectorAll<HTMLElement>('[data-ft-codex-terminal-panel="true"]')) {
+      resizeObserver.observe(element);
+    }
+    window.addEventListener('resize', updateCenter);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      resizeObserver.disconnect();
+      window.removeEventListener('resize', updateCenter);
+    };
+  }, [active, codexTerminalDockSide, codexTerminalVisible, focusChromeActive, onFocusChromeContentCenterChange]);
 
   useEffect(() => {
     onBookmarksCanvasActiveChange?.(bookmarksFullscreenChromeActive);
@@ -7690,7 +7741,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           flex: 1,
           display: 'flex',
           flexDirection: codexTerminalVisible && codexTerminalDockSide === 'right' ? 'row' : 'column',
-          overflow: 'hidden',
+          overflow: focusChromeActive && codexTerminalVisible && codexTerminalDockSide === 'right' ? 'visible' : 'hidden',
           minHeight: 0, // Required for flex child to shrink below content size
           position: 'relative',
         }}
@@ -8877,6 +8928,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         <CodexTerminalPanel
           visible={codexTerminalVisible}
           pageContext={codexTerminalPageContext}
+          extendToViewportTop={focusChromeActive && codexTerminalDockSide === 'right'}
           onDockSideChange={setCodexTerminalDockSide}
           onVisibleChange={setCodexTerminalVisible}
         />

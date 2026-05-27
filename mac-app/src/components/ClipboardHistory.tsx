@@ -707,6 +707,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     () => initialLibraryOpenTarget?.focusChrome === true
   );
   const [focusChromeGroupOpacity, setFocusChromeGroupOpacity] = useState(0);
+  const [focusChromeContentCenterX, setFocusChromeContentCenterX] = useState<number | null>(null);
   const [themeToggleProximityVisible, setThemeToggleProximityVisible] = useState(false);
   const [bookmarksCanvasChromeActive, setBookmarksCanvasChromeActive] = useState(false);
   const [bookmarksCanvasToolbarTop, setBookmarksCanvasToolbarTop] = useState<number | null>(null);
@@ -4277,7 +4278,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           style={{
             position: 'absolute',
             top: `${chromeLogoTopPx}px`,
-            left: '50%',
+            left: focusChromeContentCenterX === null ? '50%' : `${focusChromeContentCenterX}px`,
             transform: 'translateX(-50%)',
             display: 'flex',
             alignItems: 'center',
@@ -4480,7 +4481,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           style={{
             position: 'absolute',
             top: focusChromeIconTop,
-            left: '50%',
+            left: focusChromeContentCenterX === null ? '50%' : `${focusChromeContentCenterX}px`,
             transform: 'translateX(-50%)',
             zIndex: 20,
             height: `${FOCUS_CHROME_ICON_SIZE_PX}px`,
@@ -4988,6 +4989,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             onOpenCommandPath={handleLibrarianOpenCommandPath}
             onFocusChromeShortcut={enableGlobalFocusChrome}
             onActiveFileUpdatedChange={setLibraryActiveFileUpdated}
+            onFocusChromeContentCenterChange={setFocusChromeContentCenterX}
             preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
             sidebarToggleRequestKey={librarySidebarToggleRequestKey}
