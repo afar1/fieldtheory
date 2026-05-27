@@ -47,6 +47,7 @@ import {
   dispatchMarkdownCodeEditorFileSwap,
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorCursorAnimationStyle,
+  getMarkdownCodeEditorSelectionDrawConfig,
   getMarkdownCodeEditorCursorShapeStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   getMarkdownCodeEditorSelectionSnapshot,
@@ -76,6 +77,11 @@ describe('MarkdownCodeEditor cursor blink', () => {
       animationName: 'none',
       animationDuration: '0s',
     });
+  });
+
+  it('sets CodeMirror cursor blink rate through the drawn selection layer', () => {
+    expect(getMarkdownCodeEditorSelectionDrawConfig(true)).toEqual({ cursorBlinkRate: 1200 });
+    expect(getMarkdownCodeEditorSelectionDrawConfig(false)).toEqual({ cursorBlinkRate: 0 });
   });
 });
 
