@@ -366,6 +366,9 @@ describe('shared file toggle shortcut', () => {
       setItem: (key: string, value: string) => { store.set(key, value); },
     };
 
+    expect(restoreRenderedTextCursorStyle(storage)).toBe('block');
+    persistRenderedTextCursorStyle(storage, 'bar');
+    expect(store.get(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('bar');
     expect(restoreRenderedTextCursorStyle(storage)).toBe('bar');
     persistRenderedTextCursorStyle(storage, 'block');
     expect(store.get(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY)).toBe('block');

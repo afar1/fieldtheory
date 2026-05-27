@@ -36,6 +36,7 @@ import {
   ViewPlugin,
   type ViewUpdate,
   WidgetType,
+  drawSelection,
   gutterLineClass,
   keymap,
   highlightActiveLine,
@@ -54,10 +55,11 @@ import { useScrollFpsSampler } from '../hooks/useScrollFpsSampler';
 import { useInteractionFpsSampler } from '../hooks/useInteractionFpsSampler';
 import { isCheckedMarkdownTaskLine } from '../utils/markdownTasks';
 import { normalizeMarkdownImageUrl } from '../utils/portableMarkdownImages';
-import type { RenderedTextCursorStyle } from '../utils/editorShortcuts';
+import { DEFAULT_RENDERED_TEXT_CURSOR_STYLE, type RenderedTextCursorStyle } from '../utils/editorShortcuts';
 import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEditor';
 
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
+export const MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS = 1200;
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
 export const RENDERED_MARKDOWN_EDITOR_HEADING_CLASS = 'cm-rendered-markdown-heading';
@@ -1435,6 +1437,10 @@ export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean):
   return blinkCursor ? {} : { animation: 'none', animationName: 'none', animationDuration: '0s' };
 }
 
+export function getMarkdownCodeEditorSelectionDrawConfig(blinkCursor: boolean): { cursorBlinkRate: number } {
+  return { cursorBlinkRate: blinkCursor ? MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS : 0 };
+}
+
 export function getMarkdownCodeEditorCursorShapeStyle(
   cursorStyle: RenderedTextCursorStyle,
   caretColor: string | undefined,
@@ -1495,7 +1501,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       selectionBackground,
       lineNumbersMode = 'hidden',
       blinkCursor = true,
-      cursorStyle = 'bar',
+      cursorStyle = DEFAULT_RENDERED_TEXT_CURSOR_STYLE,
       placeholder,
       readOnly = false,
       spellCheck = true,
@@ -1528,6 +1534,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const historyCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
     const documentPathCompartment = useRef(new Compartment()).current;
+    const selectionDrawCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
     const lineNumbersCompartment = useRef(new Compartment()).current;
     const scrollFpsSamplerRef = useScrollFpsSampler('markdown');
@@ -1883,6 +1890,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
           bracketMatching(),
           highlightActiveLine(),
+          selectionDrawCompartment.of(drawSelection(getMarkdownCodeEditorSelectionDrawConfig(blinkCursor))),
           checkedMarkdownTaskLineExtension,
           EditorView.lineWrapping,
           lineNumbersCompartment.of(lineNumbersExtension),
@@ -2046,6 +2054,16 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         ],
       });
     }, [editorTheme, syntaxHighlightCompartment, theme.isDark, themeCompartment]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: selectionDrawCompartment.reconfigure(
+          drawSelection(getMarkdownCodeEditorSelectionDrawConfig(blinkCursor)),
+        ),
+      });
+    }, [blinkCursor, selectionDrawCompartment]);
 
     useEffect(() => {
       const view = viewRef.current;

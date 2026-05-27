@@ -204,6 +204,7 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
 export type RenderedEditClickMode = 'click' | 'command-click';
 export type RenderedTextCursorStyle = 'bar' | 'block';
 
+export const DEFAULT_RENDERED_TEXT_CURSOR_STYLE: RenderedTextCursorStyle = 'block';
 export const RENDERED_EDIT_CLICK_MODE_STORAGE_KEY = 'fieldtheory-rendered-edit-click-mode';
 export const RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT = 'fieldtheory:rendered-edit-click-mode-changed';
 export const TEXT_CURSOR_BLINK_STORAGE_KEY = 'fieldtheory-text-cursor-blink';
@@ -229,7 +230,8 @@ export function persistTextCursorBlink(storage: Pick<Storage, 'setItem'>, enable
 }
 
 export function restoreRenderedTextCursorStyle(storage: Pick<Storage, 'getItem'>): RenderedTextCursorStyle {
-  return storage.getItem(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY) === 'block' ? 'block' : 'bar';
+  const saved = storage.getItem(RENDERED_TEXT_CURSOR_STYLE_STORAGE_KEY);
+  return saved === 'bar' || saved === 'block' ? saved : DEFAULT_RENDERED_TEXT_CURSOR_STYLE;
 }
 
 export function persistRenderedTextCursorStyle(storage: Pick<Storage, 'setItem'>, style: RenderedTextCursorStyle): void {
