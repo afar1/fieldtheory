@@ -139,6 +139,7 @@ import {
   autoUpdaterAllowsPrereleaseForBuildChannel,
   autoUpdaterAuthTokenForBuildChannel,
   autoUpdaterFeedOptionsForBuildChannel,
+  autoUpdaterGitHubCliPaths,
   autoUpdaterReleaseRepoForBuildChannel,
   normalizeGitHubToken,
   resolveFieldTheoryBuildChannel,
@@ -1009,16 +1010,32 @@ function resolveAutoUpdaterAuthHeader(): string | null {
 
   if (fieldTheoryBuildChannel !== 'experimental') return null;
 
-  try {
-    const ghToken = execFileSync('gh', ['auth', 'token'], {
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-      timeout: 1500,
-    });
-    return normalizeGitHubToken(ghToken);
-  } catch {
-    return null;
+  for (const ghPath of autoUpdaterGitHubCliPaths(process.env)) {
+    try {
+      const ghToken = execFileSync(ghPath, ['auth', 'token'], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: 1500,
+      });
+      return normalizeGitHubToken(ghToken);
+    } catch {
+      continue;
+    }
   }
+
+  return null;
+}
+
+function formatAutoUpdaterErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  if (
+    fieldTheoryBuildChannel === 'experimental'
+    && message.includes('releases.atom')
+    && message.includes('404')
+  ) {
+    return 'Experimental updates need GitHub auth for afar1/oscar. Run gh auth login or set FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN, then restart Field Theory Experimental.';
+  }
+  return message;
 }
 
 function getAutoUpdater(): import('electron-updater').AppUpdater {
@@ -12310,7 +12327,7 @@ if (!gotTheLock) {
     const checkForUpdatesManual = isAutoUpdaterEnabled
       ? () => {
         getAutoUpdater().checkForUpdates().catch((err) => {
-          log.error('Update check failed:', err);
+          log.error('Update check failed:', formatAutoUpdaterErrorMessage(err));
         });
       }
       : undefined;
@@ -12417,9 +12434,10 @@ if (!gotTheLock) {
 
       autoUpdater.on('error', (err) => {
         log.error('Updater error:', err);
+        const message = formatAutoUpdaterErrorMessage(err);
         BrowserWindow.getAllWindows().forEach((window) => {
           if (!window.isDestroyed()) {
-            window.webContents.send('updater:error', err.message);
+            window.webContents.send('updater:error', message);
           }
         });
       });
