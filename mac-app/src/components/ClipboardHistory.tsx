@@ -4278,7 +4278,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           style={{
             position: 'absolute',
             top: `${chromeLogoTopPx}px`,
-            left: focusChromeContentCenterX === null ? '50%' : `${focusChromeContentCenterX}px`,
+            left: '50%',
             transform: 'translateX(-50%)',
             display: 'flex',
             alignItems: 'center',
