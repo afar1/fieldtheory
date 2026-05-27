@@ -33,6 +33,7 @@ export interface SharedConflictFileNameOptions {
 
 export interface SharedFileFrontmatter {
   sharedId: string;
+  title?: string;
   teamId?: string;
   teamName?: string;
   authorId?: string;
@@ -274,6 +275,7 @@ export function serializeSharedFileFrontmatter(meta: SharedFileFrontmatter): str
     `shared_id: ${quoteYamlScalar(meta.sharedId)}`,
     `shared_type: ${quoteYamlScalar(meta.type)}`,
   ];
+  if (meta.title) lines.push(`title: ${quoteYamlScalar(meta.title.trim())}`);
   if (meta.teamId) lines.push(`shared_team_id: ${quoteYamlScalar(meta.teamId)}`);
   if (meta.teamName) lines.push(`shared_team: ${quoteYamlScalar(meta.teamName)}`);
   if (meta.authorId) lines.push(`shared_author_id: ${quoteYamlScalar(meta.authorId)}`);
@@ -295,6 +297,7 @@ export function parseSharedFileFrontmatter(content: string): SharedFileFrontmatt
 
   return {
     sharedId: parsed.meta.shared_id,
+    title: parsed.meta.title,
     type,
     teamId: parsed.meta.shared_team_id,
     teamName: parsed.meta.shared_team,
@@ -311,7 +314,7 @@ export function applySharedFileFrontmatter(content: string, meta: SharedFileFron
   const parsed = parseMarkdownFrontmatter(content);
   const body = parsed.raw === null ? content : parsed.body;
   const retainedLines = parsed.raw?.trim()
-    ? parsed.lines.filter((line) => !SHARED_CACHE_FRONTMATTER_RE.test(line))
+    ? parsed.lines.filter((line) => !SHARED_CACHE_FRONTMATTER_RE.test(line) && !/^\s*title\s*:/i.test(line))
     : [];
   const nextLines = [
     ...retainedLines.filter((line) => line.trim().length > 0),
@@ -426,6 +429,7 @@ export function parseSharedFrontmatterMetadata(content: string): ParsedSharedFro
     sharedPath: legacyPath,
     sharedDocumentId: legacy.sharedId,
     teamScopeUserId: legacy.teamId,
+    title: legacy.title,
     authorName: legacy.authorName,
     authorInitials: legacy.authorInitials,
   };

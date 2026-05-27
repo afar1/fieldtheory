@@ -201,6 +201,8 @@ export type MarkdownWikiLinkCompletionEdit = {
   selectionEnd: number;
 };
 
+export type MarkdownWikiLinkCompletionDeleteKey = 'Backspace' | 'Delete';
+
 export type WikiBacklinkInput = {
   relPath: string;
   title: string;
@@ -754,6 +756,30 @@ export function getMarkdownWikiLinkCompletionCommitEdit(
 ): MarkdownWikiLinkCompletionEdit | null {
   const currentTitle = markdown.slice(completion.queryStart, completion.replaceEnd).trim();
   return getMarkdownWikiLinkCompletionReplacement(markdown, completion, currentTitle);
+}
+
+export function getMarkdownWikiLinkCompletionDeleteEdit(
+  markdown: string,
+  completion: MarkdownWikiLinkCompletion,
+  key: MarkdownWikiLinkCompletionDeleteKey,
+): MarkdownWikiLinkCompletionEdit | null {
+  const caret = Math.max(completion.openStart, Math.min(completion.queryEnd, markdown.length));
+  const replaceEnd = Math.max(completion.queryStart, Math.min(completion.replaceEnd, markdown.length));
+  if (key === 'Backspace') {
+    if (caret <= completion.openStart) return null;
+    return {
+      nextValue: `${markdown.slice(0, caret - 1)}${markdown.slice(caret)}`,
+      selectionStart: caret - 1,
+      selectionEnd: caret - 1,
+    };
+  }
+
+  if (caret >= replaceEnd) return null;
+  return {
+    nextValue: `${markdown.slice(0, caret)}${markdown.slice(caret + 1)}`,
+    selectionStart: caret,
+    selectionEnd: caret,
+  };
 }
 
 export function getMarkdownWikiLinkAutoCloseEdit(

@@ -158,6 +158,7 @@ export interface PortableCommand {
   lastModified: number;   // File modification time for cache invalidation
   source?: 'private' | 'shared';
   sourceLabel?: string;
+  sharedAuthorCallsign?: string;
   sourceRootPath?: string;
   sourceRelPath?: string;
 }
@@ -179,6 +180,8 @@ interface CommandSourceContext {
 
 interface SharedCommandMetadata {
   type: ReturnType<typeof inferSharedFileType>;
+  title?: string;
+  authorCallsign?: string;
 }
 
 /**
@@ -416,8 +419,11 @@ export class CommandsManager extends EventEmitter {
   private sharedCommandMetadata(filePath: string): SharedCommandMetadata | null {
     try {
       const content = fs.readFileSync(filePath, 'utf-8');
+      const shared = parseSharedFileFrontmatter(content);
       return {
-        type: parseSharedFileFrontmatter(content)?.type ?? inferSharedFileType({ filePath, content }),
+        type: shared?.type ?? inferSharedFileType({ filePath, content }),
+        title: shared?.title,
+        authorCallsign: shared?.authorCallsign,
       };
     } catch (error) {
       log.warn(`Failed to read shared command metadata for ${filePath}:`, error);
@@ -858,17 +864,18 @@ export class CommandsManager extends EventEmitter {
       const stats = fs.statSync(filePath);
       const filename = path.basename(filePath);
       const nameWithoutExt = filename.replace(/\.(md|markdown)$/i, '');
-      const displayName = source.source === 'shared' && source.sourceLabel
-        ? `${nameWithoutExt} - ${source.sourceLabel}`
-        : nameWithoutExt;
+      const sharedTitle = source.source === 'shared' ? sharedMetadata?.title?.trim() : '';
+      const displayName = sharedTitle || (source.source === 'shared' ? 'Untitled' : nameWithoutExt);
+      const name = sharedTitle || nameWithoutExt;
 
       return {
-        name: nameWithoutExt.toLowerCase(),
+        name: name.toLowerCase(),
         filePath,
         displayName,
         lastModified: stats.mtimeMs,
         source: source.source,
         sourceLabel: source.sourceLabel,
+        sharedAuthorCallsign: sharedMetadata?.authorCallsign,
         sourceRootPath: source.sourceRootPath,
         sourceRelPath: source.source === 'shared' ? this.sharedCommandRelPath(filePath, source) : undefined,
       };

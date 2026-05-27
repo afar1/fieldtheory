@@ -39,6 +39,7 @@ import {
   getRenderedMarkdownDisplayContent,
   getVerifiedMarkdownSelectionReplacement,
   isTerminalEditorFocusToggleShortcut,
+  isTerminalPanelVisibilityToggleShortcut,
   getRenderedTaskLinesByRenderedLine,
   getScrollRatio,
   getScrollTopForRatio,
@@ -1037,6 +1038,25 @@ describe('getRenderedDisplayReadingContent', () => {
 });
 
 describe('isTerminalEditorFocusToggleShortcut', () => {
+  it('does not use Command+Period for terminal/editor focus', () => {
+    expect(isTerminalEditorFocusToggleShortcut({
+      key: '.',
+      code: 'Period',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: true,
+      shiftKey: false,
+    })).toBe(false);
+    expect(isTerminalEditorFocusToggleShortcut({
+      key: '.',
+      code: 'Period',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: true,
+      shiftKey: true,
+    })).toBe(false);
+  });
+
   it('uses Control+Tab for terminal/editor focus instead of Option+Tab', () => {
     expect(isTerminalEditorFocusToggleShortcut({
       key: 'Tab',
@@ -1051,6 +1071,27 @@ describe('isTerminalEditorFocusToggleShortcut', () => {
       altKey: true,
       metaKey: false,
       shiftKey: false,
+    })).toBe(false);
+  });
+});
+
+describe('isTerminalPanelVisibilityToggleShortcut', () => {
+  it('uses Command+Period for terminal panel visibility', () => {
+    expect(isTerminalPanelVisibilityToggleShortcut({
+      key: '.',
+      code: 'Period',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: true,
+      shiftKey: false,
+    })).toBe(true);
+    expect(isTerminalPanelVisibilityToggleShortcut({
+      key: '.',
+      code: 'Period',
+      ctrlKey: false,
+      altKey: false,
+      metaKey: true,
+      shiftKey: true,
     })).toBe(false);
   });
 });

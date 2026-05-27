@@ -2637,11 +2637,11 @@ export class LibrarianManager extends EventEmitter {
 
   private parseWikiMetadata(content: string, filePath: string): WikiFileMetadata {
     const frontmatter = parseMarkdownFrontmatter(content).meta;
-    const sharedTitle = frontmatter.shared === 'true' && frontmatter.title.trim()
-      ? frontmatter.title.trim()
-      : undefined;
+    const isShared = frontmatter.shared === 'true';
+    const frontmatterTitle = frontmatter.title?.trim();
+    const sharedTitle = isShared && frontmatterTitle ? frontmatterTitle : undefined;
     return {
-      title: sharedTitle ?? stripMarkdownFileExtension(path.basename(filePath)),
+      title: sharedTitle ?? (isShared ? 'Untitled' : stripMarkdownFileExtension(path.basename(filePath))),
       todoState: parseMarkdownTodoState(content) ?? undefined,
       archived: parseMarkdownArchivedState(content) || undefined,
       sharedOriginalSourcePath: frontmatter.shared_original_source_path,

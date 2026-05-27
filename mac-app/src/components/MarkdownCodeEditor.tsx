@@ -84,6 +84,7 @@ export const RENDERED_MARKDOWN_EDITOR_CODE_FENCE_MARKER_CLASS = 'cm-rendered-mar
 export const RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS = 'cm-rendered-markdown-list-line';
 export const RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS = 'cm-rendered-markdown-list-marker';
 export const RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS = 'cm-rendered-markdown-list-body';
+export const RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS = 'cm-rendered-markdown-list-empty-body';
 export const RENDERED_MARKDOWN_EDITOR_HEADING_MARKER_CLASS = 'cm-rendered-markdown-heading-marker';
 export const RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS = 'cm-rendered-markdown-quote-line';
 export const RENDERED_MARKDOWN_EDITOR_QUOTE_MARKER_CLASS = 'cm-rendered-markdown-quote-marker';
@@ -545,6 +546,14 @@ class RenderedMarkdownMarkerWidget extends WidgetType {
   }
 }
 
+class RenderedMarkdownEmptyListBodyWidget extends WidgetType {
+  toDOM(): HTMLElement {
+    const body = document.createElement('span');
+    body.className = `${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS} ${RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS}`;
+    return body;
+  }
+}
+
 function parseNullableMarkdownSourceOffset(value: string | null): number | null {
   if (value === null) return null;
   const parsed = Number.parseInt(value, 10);
@@ -729,6 +738,13 @@ function pushRenderedListBodyDecoration(
   to: number,
   className = '',
 ): void {
+  if (from === to) {
+    decorations.push(Decoration.widget({
+      widget: new RenderedMarkdownEmptyListBodyWidget(),
+      side: 1,
+    }).range(from));
+    return;
+  }
   pushRenderedInlineMark(
     decorations,
     from,
@@ -777,7 +793,19 @@ export function getRenderedMarkdownListBodyStart(value: string, offset: number):
   const markerLength = taskMatch?.[0].length ?? listMatch?.[0].length ?? 0;
   if (markerLength === 0) return null;
   const markerEnd = lineStart + markerLength;
-  return clampedOffset >= lineStart && clampedOffset < markerEnd ? markerEnd : null;
+  const isEmptyListBody = markerEnd === lineEnd;
+  const isInsideHiddenMarker = clampedOffset >= lineStart && clampedOffset < markerEnd;
+  const isEmptyBodyStart = isEmptyListBody && clampedOffset === markerEnd;
+  return isInsideHiddenMarker || isEmptyBodyStart ? markerEnd : null;
+}
+
+export function getRenderedMarkdownListBodyClickPosition(
+  value: string,
+  offset: number,
+  event: MouseEvent,
+): number | null {
+  if (event.button !== 0 || event.metaKey || event.altKey || event.ctrlKey || event.shiftKey) return null;
+  return getRenderedMarkdownListBodyStart(value, offset);
 }
 
 export function handleRenderedMarkdownEditorBeforeInput(view: EditorView, input: InputEvent): boolean {
@@ -1479,6 +1507,23 @@ export function handleMarkdownCodeEditorCapturedKeyDown(
   return true;
 }
 
+export function getMarkdownCodeEditorContentAttributes(input: {
+  spellCheck: boolean;
+  placeholder?: string;
+  dataAttributes?: Record<string, string | undefined>;
+}): Record<string, string> {
+  const attributes: Record<string, string> = {
+    spellcheck: input.spellCheck ? 'true' : 'false',
+    autocorrect: input.spellCheck ? 'on' : 'off',
+    autocapitalize: input.spellCheck ? 'sentences' : 'off',
+  };
+  if (input.placeholder) attributes['aria-label'] = input.placeholder;
+  Object.entries(input.dataAttributes ?? {}).forEach(([key, value]) => {
+    if (value !== undefined) attributes[key] = value;
+  });
+  return attributes;
+}
+
 const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEditorProps>(
   function MarkdownCodeEditor(props, ref) {
     const {
@@ -1537,6 +1582,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const selectionDrawCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
     const lineNumbersCompartment = useRef(new Compartment()).current;
+    const contentAttributesCompartment = useRef(new Compartment()).current;
     const scrollFpsSamplerRef = useScrollFpsSampler('markdown');
 
     useEffect(() => {
@@ -1714,6 +1760,12 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_BODY_CLASS}`]: {
             display: 'inline',
           },
+          [`.${RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS}`]: {
+            display: 'inline-block',
+            width: '0',
+            height: '1em',
+            verticalAlign: 'text-bottom',
+          },
           [`.${RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS}`]: {
             borderLeft: `3px solid ${theme.isDark ? 'rgba(255,255,255,0.18)' : 'rgba(0,0,0,0.16)'}`,
             paddingLeft: '0.9em',
@@ -1875,6 +1927,12 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         : [visualLineNumberOverlayExtension]
     ), [lineNumbersMode]);
 
+    const contentAttributes = useMemo(() => getMarkdownCodeEditorContentAttributes({
+      spellCheck,
+      placeholder,
+      dataAttributes,
+    }), [dataAttributes, placeholder, spellCheck]);
+
     // Mount once. Subsequent updates flow through compartments / dispatch.
     useLayoutEffect(() => {
       if (!containerRef.current) return;
@@ -1894,6 +1952,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           checkedMarkdownTaskLineExtension,
           EditorView.lineWrapping,
           lineNumbersCompartment.of(lineNumbersExtension),
+          contentAttributesCompartment.of(EditorView.contentAttributes.of(contentAttributes)),
           cursorScrollMarginCompartment.of(EditorView.cursorScrollMargin.of(getMarkdownCodeEditorCursorScrollMargin(bottomRoomPxRef.current))),
           themeCompartment.of(editorTheme),
           readOnlyCompartment.of(EditorState.readOnly.of(readOnly)),
@@ -1961,6 +2020,19 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               }
               const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
               if (pos === null) return false;
+              if (presentation === 'rendered') {
+                const listBodyPos = getRenderedMarkdownListBodyClickPosition(
+                  view.state.doc.toString(),
+                  pos,
+                  event,
+                );
+                if (listBodyPos !== null) {
+                  event.preventDefault();
+                  view.focus();
+                  view.dispatch({ selection: { anchor: listBodyPos, head: listBodyPos } });
+                  return true;
+                }
+              }
               return onMouseDownRef.current?.(event, pos) === true;
             },
             click: (event) => {
@@ -2001,18 +2073,6 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         handleMarkdownCodeEditorCapturedKeyDown(event, onKeyDownRef.current);
       };
       view.contentDOM.addEventListener('keydown', handleKeyDownCapture, true);
-
-      // Apply data-* attributes on the content node so existing agent-context
-      // selectors (data-ft-agent-context="markdown" etc.) still resolve.
-      if (dataAttributes) {
-        const contentEl = view.contentDOM;
-        Object.entries(dataAttributes).forEach(([key, val]) => {
-          if (val === undefined) return;
-          contentEl.setAttribute(key, val);
-        });
-      }
-      view.contentDOM.spellcheck = spellCheck;
-      if (placeholder) view.contentDOM.setAttribute('aria-label', placeholder);
 
       return () => {
         view.contentDOM.removeEventListener('keydown', handleKeyDownCapture, true);
@@ -2072,6 +2132,16 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         effects: lineNumbersCompartment.reconfigure(lineNumbersExtension),
       });
     }, [lineNumbersCompartment, lineNumbersExtension]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: contentAttributesCompartment.reconfigure(
+          EditorView.contentAttributes.of(contentAttributes),
+        ),
+      });
+    }, [contentAttributes, contentAttributesCompartment]);
 
     useEffect(() => {
       bottomRoomPxRef.current = bottomRoomPx;

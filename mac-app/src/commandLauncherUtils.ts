@@ -104,7 +104,7 @@ export function getLauncherInvocationVisibilityPolicy(input: {
 // =============================================================================
 
 export type LauncherLibraryNode =
-  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: 'open' | 'done' }
+  | { kind: 'file'; relPath: string; absPath: string; name: string; title: string; lastUpdated: number; documentKind?: 'markdown' | 'html' | 'css'; todoState?: 'open' | 'done'; sharedOriginalSourcePath?: string; sharedAuthorCallsign?: string }
   | { kind: 'dir'; name: string; relPath: string; children: LauncherLibraryNode[] };
 
 export interface LauncherLibraryRoot {
@@ -124,6 +124,9 @@ export interface LauncherLibraryMarkdownItem {
   relPath?: string;
   lastUpdated?: number;
   todoState?: 'open' | 'done';
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
 }
 
 export type LauncherRootSearchKind =
@@ -984,6 +987,8 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
     const isWikiMarkdown = root.builtin && (node.documentKind === undefined || node.documentKind === 'markdown');
     const type = isWikiMarkdown ? 'wiki-page' : 'markdown-file';
     const rootLabel = root.builtin ? 'wiki' : root.label;
+    const sharedAuthorCallsign = node.sharedAuthorCallsign?.trim();
+    const isSharedRiverFile = root.label === 'River (shared)' || Boolean(node.sharedOriginalSourcePath || sharedAuthorCallsign);
     const readableName = node.name.replace(/[-_]+/g, ' ');
     const todoKeywords = node.todoState
       ? ['todo', 'task', node.todoState, node.todoState === 'done' ? 'completed' : 'open']
@@ -999,6 +1004,7 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
         node.title,
         node.relPath,
         rootLabel,
+        sharedAuthorCallsign ?? '',
         ...node.name.split('-'),
         ...node.title.split(/\s+/),
         ...todoKeywords,
@@ -1007,6 +1013,9 @@ export function flattenLibraryRootsForLauncher(roots: LauncherLibraryRoot[]): La
       relPath: isWikiMarkdown ? node.relPath : undefined,
       lastUpdated: Number.isFinite(node.lastUpdated) ? node.lastUpdated : undefined,
       todoState: node.todoState,
+      source: isSharedRiverFile ? 'shared' : undefined,
+      sourceLabel: isSharedRiverFile ? root.label : undefined,
+      sharedAuthorCallsign,
     });
   };
 

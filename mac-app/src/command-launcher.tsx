@@ -15,6 +15,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { flushSync } from 'react-dom';
 import ReactDOM from 'react-dom/client';
 import ScrollDiagnosticsHUD from './components/ScrollDiagnosticsHUD';
+import { SidebarRiverIcon } from './components/SidebarIcons';
 import { useInteractionFpsSampler } from './hooks/useInteractionFpsSampler';
 import './utils/scrollDiagnostics.bootstrap';
 import {
@@ -114,6 +115,11 @@ interface PortableCommandInfo {
   displayName: string;
   filePath: string;
   lastModified: number;
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
 }
 
 interface PortableCommandDirectoryInfo {
@@ -230,6 +236,9 @@ interface LauncherItem {
   relPath?: string;
   isPinned?: boolean;
   lastUpdated?: number;
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
   recentKind?: LauncherRecentEntry['kind'];
   lastOpenedAt?: number;
   // For actions
@@ -713,6 +722,24 @@ const getStyles = (isDark: boolean) => ({
     display: 'inline-flex',
     alignItems: 'center',
     gap: '5px',
+    flexShrink: 0,
+  },
+  riverMeta: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: '4px',
+    flexShrink: 0,
+    color: isDark ? '#8c8c8c' : '#747474',
+  },
+  riverCallsign: {
+    fontSize: '9px',
+    lineHeight: '14px',
+    padding: '0 6px',
+    borderRadius: '999px',
+    color: isDark ? '#d4d4d4' : '#626262',
+    backgroundColor: isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.045)',
+    border: `1px solid ${isDark ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.08)'}`,
+    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
     flexShrink: 0,
   },
   itemTypeTag: {
@@ -1484,8 +1511,18 @@ function CommandLauncher() {
       type: 'command' as const,
       name: cmd.name,
       displayName: cmd.displayName,
-      keywords: [cmd.name, cmd.displayName, ...cmd.name.split('-'), ...cmd.name.split('_')],
+      keywords: [
+        cmd.name,
+        cmd.displayName,
+        cmd.sourceLabel ?? '',
+        cmd.sharedAuthorCallsign ?? '',
+        ...cmd.name.split('-'),
+        ...cmd.name.split('_'),
+      ].filter(Boolean),
       filePath: cmd.filePath,
+      source: cmd.source,
+      sourceLabel: cmd.sourceLabel,
+      sharedAuthorCallsign: cmd.sharedAuthorCallsign,
       isPinned: pinnedItemIds.has(`external:${cmd.filePath}`) || pinnedLibraryFilePaths.has(cmd.filePath),
       lastUpdated: cmd.lastModified,
     })), [commands, pinnedItemIds, pinnedLibraryFilePaths]);
@@ -3556,6 +3593,17 @@ function CommandLauncher() {
       </span>
     );
   };
+  const renderRiverMeta = (item: LauncherItem) => {
+    if (item.source !== 'shared' && item.sourceLabel !== 'River (shared)') return null;
+    return (
+      <span style={styles.riverMeta} title={item.sharedAuthorCallsign ? `Shared by ${item.sharedAuthorCallsign}` : 'River shared'}>
+        <SidebarRiverIcon color="currentColor" style={{ opacity: 0.7 }} />
+        {item.sharedAuthorCallsign && (
+          <span style={styles.riverCallsign}>{item.sharedAuthorCallsign}</span>
+        )}
+      </span>
+    );
+  };
   return (
     <div style={{
       ...styles.container,
@@ -3741,6 +3789,7 @@ function CommandLauncher() {
                   </span>
                   <span style={styles.itemMeta}>
                     {showMetaText && <span style={styles.itemHotkey}>{metaText}</span>}
+                    {renderRiverMeta(item)}
                     <span style={styles.itemTypeTag}>{launcherItemTypeLabel(item)}</span>
                   </span>
                 </li>

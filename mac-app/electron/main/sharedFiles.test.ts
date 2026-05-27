@@ -33,6 +33,7 @@ describe('sharedFiles metadata helpers', () => {
   it('preserves shared frontmatter metadata without dropping existing metadata', () => {
     const content = applySharedFileFrontmatter('---\nkind: command\n---\n\nRun this.\n', {
       sharedId: 'shared-1',
+      title: 'review',
       teamId: 'team-1',
       teamName: 'Field Theory Team',
       authorId: 'user-1',
@@ -48,6 +49,7 @@ describe('sharedFiles metadata helpers', () => {
     expect(content).toContain('shared: true');
     expect(parseSharedFileFrontmatter(content)).toEqual({
       sharedId: 'shared-1',
+      title: 'review',
       teamId: 'team-1',
       teamName: 'Field Theory Team',
       authorId: 'user-1',

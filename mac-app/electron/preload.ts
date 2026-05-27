@@ -3031,6 +3031,11 @@ type PortableCommandInfo = {
   displayName: string;
   filePath: string;
   lastModified: number;
+  source?: 'private' | 'shared';
+  sourceLabel?: string;
+  sharedAuthorCallsign?: string;
+  sourceRootPath?: string;
+  sourceRelPath?: string;
 };
 
 type PortableCommandDirectoryInfo = {
@@ -3794,6 +3799,12 @@ const librarianAPI = {
     const handler = (_event: Electron.IpcRendererEvent, text: string) => callback(text);
     ipcRenderer.on('librarian:insertMarkdownText', handler);
     return () => ipcRenderer.removeListener('librarian:insertMarkdownText', handler);
+  },
+
+  onInsertPlainMarkdownText: (callback: (text: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, text: string) => callback(text);
+    ipcRenderer.on('librarian:insertPlainMarkdownText', handler);
+    return () => ipcRenderer.removeListener('librarian:insertPlainMarkdownText', handler);
   },
 
   onReplaceSelectedMarkdownText: (callback: (request: ReplaceSelectedMarkdownTextRequest) => boolean | Promise<boolean>): (() => void) => {

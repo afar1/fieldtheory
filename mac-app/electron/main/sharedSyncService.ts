@@ -44,6 +44,10 @@ function safeTitleFromPath(filePath: string): string {
   return path.basename(filePath, path.extname(filePath)) || 'Untitled';
 }
 
+function sharedRowTitle(row: Pick<TeamDocumentRow, 'shared_name' | 'title'>): string {
+  return row.shared_name?.trim() || row.title?.trim() || 'Untitled';
+}
+
 function authorInitialsFromSession(session: ReturnType<AuthManager['getSession']>): string {
   const metadata = session?.user?.user_metadata as Record<string, unknown> | undefined;
   const name = [metadata?.first_name, metadata?.last_name].filter((part) => typeof part === 'string' && part.trim()).join(' ');
@@ -550,12 +554,13 @@ export class SharedSyncService extends EventEmitter {
     const cachePath = this.cachePathForRow(row);
     const type: SharedFileType = row.kind === 'command' ? 'command' : row.path.startsWith('Plans/') ? 'plan' : 'document';
     const portableContent = makeMarkdownImagesPortable(
-      path.join(sharedFilesRoot(), `${row.shared_name || row.title}.md`),
+      path.join(sharedFilesRoot(), `${sharedRowTitle(row)}.md`),
       stripSharedFileFrontmatter(row.content),
       { libraryRoots: [libraryDir()] },
     ).content;
     const content = applySharedFileFrontmatter(portableContent, {
       sharedId: row.id,
+      title: sharedRowTitle(row),
       teamId: row.team_scope_user_id,
       teamName: 'Field Theory Team',
       authorId: row.created_by,
@@ -573,7 +578,7 @@ export class SharedSyncService extends EventEmitter {
     const conflictDir = path.join(libraryDir(), 'Conflicts');
     ensureDir(conflictDir);
     const fileName = buildSharedConflictFileName({
-      fileName: `${row.shared_name || row.title}.md`,
+      fileName: `${sharedRowTitle(row)}.md`,
       authorInitials: row.author_initials ?? undefined,
       date: new Date(),
     });

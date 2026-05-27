@@ -2,10 +2,21 @@ import { describe, expect, it } from 'vitest';
 import {
   formatTerminalCwdLabel,
   isTerminalFocusToggleSequence,
+  isTerminalPanelVisibilityToggleSequence,
   mergeCodexTerminalSessions,
   nativeTerminalNavigationSequence,
+  terminalContrastRatio,
   terminalTheme,
 } from '../CodexTerminalPanel';
+
+const keyboardEvent = (input: Partial<Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>>) => ({
+  altKey: false,
+  ctrlKey: false,
+  key: '',
+  metaKey: false,
+  shiftKey: false,
+  ...input,
+});
 
 function session(input: { id: string; title?: string; cwd?: string }) {
   return {
@@ -74,31 +85,40 @@ describe('nativeTerminalNavigationSequence', () => {
 });
 
 describe('isTerminalFocusToggleSequence', () => {
-  const event = (input: Partial<Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>>) => ({
-    altKey: false,
-    ctrlKey: false,
-    key: '',
-    metaKey: false,
-    shiftKey: false,
-    ...input,
+  it('does not use Command+Period for terminal focus release', () => {
+    expect(isTerminalFocusToggleSequence(keyboardEvent({ key: '.', metaKey: true }))).toBe(false);
   });
 
-  it('handles unmodified Control+Tab for terminal focus release', () => {
-    expect(isTerminalFocusToggleSequence(event({ key: 'Tab', ctrlKey: true }))).toBe(true);
-    expect(isTerminalFocusToggleSequence(event({ key: 'Tab', altKey: true, ctrlKey: true }))).toBe(false);
-    expect(isTerminalFocusToggleSequence(event({ key: 'Tab', ctrlKey: true, shiftKey: true }))).toBe(false);
-    expect(isTerminalFocusToggleSequence(event({ key: 'a', ctrlKey: true }))).toBe(false);
+  it('keeps unmodified Control+Tab for terminal focus release', () => {
+    expect(isTerminalFocusToggleSequence(keyboardEvent({ key: 'Tab', ctrlKey: true }))).toBe(true);
+    expect(isTerminalFocusToggleSequence(keyboardEvent({ key: 'Tab', altKey: true, ctrlKey: true }))).toBe(false);
+    expect(isTerminalFocusToggleSequence(keyboardEvent({ key: 'Tab', ctrlKey: true, shiftKey: true }))).toBe(false);
+    expect(isTerminalFocusToggleSequence(keyboardEvent({ key: 'a', ctrlKey: true }))).toBe(false);
+  });
+});
+
+describe('isTerminalPanelVisibilityToggleSequence', () => {
+  it('uses Command+Period for terminal panel visibility', () => {
+    expect(isTerminalPanelVisibilityToggleSequence(keyboardEvent({ key: '.', metaKey: true }))).toBe(true);
+    expect(isTerminalPanelVisibilityToggleSequence(keyboardEvent({ key: '.', metaKey: true, shiftKey: true }))).toBe(false);
   });
 });
 
 describe('terminalTheme', () => {
   it('uses visible ANSI white values for both light and dark backgrounds', () => {
-    expect(terminalTheme(false)?.background).toBe('#f0eadf');
-    expect(terminalTheme(false)?.white).toBe('#4b5563');
+    expect(terminalTheme(false)?.background).toBe('#f7f2e8');
+    expect(terminalTheme(false)?.foreground).toBe('#111827');
+    expect(terminalTheme(false)?.white).toBe('#374151');
+    expect(terminalTheme(false)?.brightBlack).toBe('#4b5563');
     expect(terminalTheme(false)?.brightWhite).toBe('#111827');
     expect(terminalTheme(true)?.background).toBe('#101113');
     expect(terminalTheme(true)?.white).toBe('#e8e3d8');
     expect(terminalTheme(true)?.brightWhite).toBe('#ffffff');
+  });
+
+  it('raises light terminal contrast for diff backgrounds', () => {
+    expect(terminalContrastRatio(false)).toBe(4.5);
+    expect(terminalContrastRatio(true)).toBe(1);
   });
 });
 

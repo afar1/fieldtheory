@@ -351,6 +351,33 @@ describe('recursive wiki tree scan', () => {
     expect(shared.sharedAuthorCallsign).toBe('afar');
   });
 
+  it('does not derive River cache titles from initials-suffixed filenames', () => {
+    const root = makeTempDir();
+    fs.mkdirSync(path.join(root, 'River (shared)'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'River (shared)', 'field theory fnc AM.md'), [
+      '---',
+      'shared: true',
+      'shared_id: shared-1',
+      'shared_type: document',
+      'shared_original_source_path: scratchpad/field theory fnc.md',
+      'shared_author_callsign: AMB-MAC',
+      '---',
+      '',
+      'Body',
+    ].join('\n'));
+
+    const tree = scan(root);
+    const river = tree.find((node) => node.kind === 'dir' && node.name === 'River (shared)');
+    expect(river?.kind).toBe('dir');
+    if (river?.kind !== 'dir') return;
+    const shared = river.children[0];
+    expect(shared.kind).toBe('file');
+    if (shared.kind !== 'file') return;
+    expect(shared.name).toBe('field theory fnc AM');
+    expect(shared.title).toBe('Untitled');
+    expect(shared.sharedAuthorCallsign).toBe('AMB-MAC');
+  });
+
   it('includes .markdown files in the library tree', () => {
     const root = makeTempDir();
     fs.mkdirSync(path.join(root, 'entries'), { recursive: true });

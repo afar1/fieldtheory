@@ -539,6 +539,7 @@ describe('LibrarianView render', () => {
         getReading: vi.fn(async () => null),
         getShareStatus: vi.fn(async () => null),
         onInsertMarkdownText: vi.fn(() => () => {}),
+        onInsertPlainMarkdownText: vi.fn(() => () => {}),
         onShowReading: vi.fn(() => () => {}),
         onReadingAdded: vi.fn(() => () => {}),
         onReadingUpdated: vi.fn(() => () => {}),
@@ -1312,6 +1313,67 @@ describe('LibrarianView render', () => {
     }, { timeout: 1200 });
     expect(container.querySelector('[data-ft-rendered-editor-input="true"]')).toBe(renderedInput);
     expect(screen.getByLabelText('Switch to Markdown source')).toBeTruthy();
+  });
+
+  it('inserts super-pasted image paths as plain text in rendered mode', async () => {
+    const relPath = 'scratchpad/rendered-super-paste-image-path-test';
+    const content = 'hello rendered super paste';
+    const imagePath = '/Users/afar/Pictures/Inserted Image.png';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-super-paste-image-path-test',
+      title: 'rendered-super-paste-image-path-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-super-paste-image-path-version' },
+    };
+    let insertPlainMarkdownTextHandler: ((text: string) => void) | null = null;
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.librarianAPI!.onInsertPlainMarkdownText!).mockImplementation((callback) => {
+      insertPlainMarkdownTextHandler = callback;
+      return () => {
+        insertPlainMarkdownTextHandler = null;
+      };
+    });
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: content.length + imagePath.length, sha256: 'rendered-super-paste-image-path-saved' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain(content);
+      expect(insertPlainMarkdownTextHandler).toBeTruthy();
+      if (!root) throw new Error('Rendered editor root missing');
+      return root;
+    });
+    fireEvent.click(renderedRoot);
+
+    await waitFor(() => {
+      expect(container.querySelector('[data-ft-rendered-editor-input="true"]')?.textContent).toContain(content);
+    });
+
+    await act(async () => {
+      insertPlainMarkdownTextHandler?.(imagePath);
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    });
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        `${content}${imagePath}`,
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
   });
 
   it('keeps rendered mode when Enter commits the file title', async () => {
@@ -2639,6 +2701,70 @@ describe('LibrarianView render', () => {
       expect(window.wikiAPI!.save).toHaveBeenCalledWith(
         relPath,
         'See [[Consensus]]',
+        page.documentVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
+  it('keeps rendered wiki link completion editable when deleting a character', async () => {
+    const relPath = 'scratchpad/rendered-wiki-link-delete-test';
+    const content = 'See ';
+    const page: WikiPage = {
+      relPath,
+      absPath: `/Users/afar/.fieldtheory/library/${relPath}.md`,
+      name: 'rendered-wiki-link-delete-test',
+      title: 'rendered-wiki-link-delete-test',
+      lastUpdated: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'rendered-wiki-link-delete-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'wiki', relPath })
+        : null
+    ));
+    vi.mocked(window.wikiAPI!.getTree).mockResolvedValue([{
+      name: 'scratchpad',
+      files: [{
+        relPath: 'scratchpad/consensus',
+        absPath: '/Users/afar/.fieldtheory/library/scratchpad/consensus.md',
+        name: 'consensus',
+        title: 'Consensus',
+        lastUpdated: 2,
+      }],
+    }] as any);
+    vi.mocked(window.wikiAPI!.getPage).mockResolvedValue(page);
+    vi.mocked(window.wikiAPI!.save).mockResolvedValue({
+      ok: true,
+      version: { mtimeMs: 2, size: 'See [[Co'.length, sha256: 'rendered-wiki-link-delete-saved-version' },
+    });
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('See');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('See');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    pasteText(renderedInput, '[[Con');
+    await screen.findByRole('listbox', { name: 'Wiki link suggestions' });
+    fireEvent.keyDown(renderedInput, { key: 'Backspace' });
+
+    await waitFor(() => {
+      expect(window.wikiAPI!.save).toHaveBeenCalledWith(
+        relPath,
+        'See [[Co',
         page.documentVersion,
       );
     }, { timeout: 1200 });

@@ -27,7 +27,7 @@ export function isImmersiveToggleShortcut(e: KeyboardEvent | React.KeyboardEvent
 }
 
 export function isMarkdownModeToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
-  return (e.key === '.' || e.code === 'Period') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
+  return (e.key === ';' || e.code === 'Semicolon') && e.metaKey && !e.shiftKey && !e.ctrlKey && !e.altKey;
 }
 
 export function isLineNumbersToggleShortcut(e: KeyboardEvent | React.KeyboardEvent): boolean {
@@ -183,7 +183,8 @@ export const LIBRARIAN_KEYBOARD_SHORTCUTS: Array<{ keys: string; label: string }
   { keys: 'Command+B / I / U', label: 'Bold, italic, or underline selection' },
   { keys: 'Command+Enter', label: 'Toggle task checkbox line' },
   { keys: 'Command+Shift+0', label: 'Cycle task line' },
-  { keys: 'Command+.', label: 'Toggle rendered/markdown' },
+  { keys: 'Command+.', label: 'Toggle terminal panel' },
+  { keys: 'Command+;', label: 'Toggle rendered/markdown' },
   { keys: 'Command+Shift+K', label: 'Toggle line numbers' },
   { keys: 'Command+Option+R', label: 'Show faded line numbers' },
   { keys: 'Command+/', label: 'Toggle focus mode' },
