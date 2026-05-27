@@ -1131,6 +1131,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  const [showUpdateErrorModal, setShowUpdateErrorModal] = useState(false);
 
   // Network status for update checks.
   const [isOnline, setIsOnline] = useState(() => navigator.onLine);
@@ -1525,10 +1526,12 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     const cleanups = [
       window.updaterAPI.onCheckingForUpdate(() => {
         setUpdateStatus('checking');
+        setUpdateError(null);
       }),
       window.updaterAPI.onUpdateAvailable((info) => {
         setUpdateStatus('available');
         setUpdateVersion(info.version);
+        setUpdateError(null);
       }),
       window.updaterAPI.onDownloadProgress(() => {
         setUpdateStatus('downloading');
@@ -1536,9 +1539,11 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
       window.updaterAPI.onUpdateDownloaded((info) => {
         setUpdateStatus('ready');
         setUpdateVersion(info.version);
+        setUpdateError(null);
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
         setUpdateStatus('uptodate');
+        setUpdateError(null);
         // Don't auto-show release notes - only show when user explicitly requests via hover or button.
         // Reset to idle after 3 seconds so the version number returns.
         setTimeout(() => setUpdateStatus('idle'), 3000);
@@ -1552,6 +1557,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
         }
         setUpdateError(error);
         setUpdateStatus('error');
+        setShowUpdateErrorModal(false);
       }),
     ];
     
@@ -7393,7 +7399,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
         {/* Right side: update notification OR version + settings button */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px', fontSize: '9px', flex: 1, minHeight: '18px' }}>
           {/* Update notification (when active) or version number */}
-          {updateStatus !== 'idle' && updateStatus !== 'uptodate' ? (
+          {updateStatus !== 'idle' && updateStatus !== 'uptodate' && updateStatus !== 'error' ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               {/* Gift icon + text with shimmer overlay */}
               <div style={{
@@ -7410,8 +7416,8 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   <path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7z"/>
                   <path d="M12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>
                 </svg>
-                <span style={{ fontSize: '9px', color: updateStatus === 'error' ? theme.error : theme.text }}>
-                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : updateStatus === 'error' ? `Update failed: ${updateError}` : 'Update available'}
+                <span style={{ fontSize: '9px', color: theme.text }}>
+                  {updateStatus === 'checking' ? 'Checking...' : updateStatus === 'downloading' ? 'Downloading...' : updateStatus === 'ready' ? 'Update ready' : 'Update available'}
                 </span>
                 {/* Shimmer overlay */}
                 <div style={{
@@ -7425,7 +7431,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   pointerEvents: 'none',
                 }} />
               </div>
-              {updateStatus !== 'checking' && updateStatus !== 'downloading' && updateStatus !== 'error' && (
+              {updateStatus !== 'checking' && updateStatus !== 'downloading' && (
                 <>
                   <button
                     onClick={() => {
@@ -7479,25 +7485,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   </button>
                 </>
               )}
-              {updateStatus === 'error' && (
-                <button
-                  onClick={() => {
-                    setUpdateError(null);
-                    setUpdateStatus('idle');
-                  }}
-                  style={{
-                    padding: '2px 6px',
-                    fontSize: '9px',
-                    color: theme.text,
-                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)',
-                    border: `1px solid ${theme.border}`,
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Dismiss
-                </button>
-              )}
             </div>
           ) : (
             <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -7541,6 +7528,30 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                     <span style={{ color: updateStatus === 'uptodate' ? theme.success : theme.textSecondary, fontSize: '9px', fontStyle: 'italic' }}>
                       {updateStatus === 'uptodate' ? 'Up to date ✓' : `v${appVersion}`}
                     </span>
+                    {updateError && updateStatus === 'error' && (
+                      <button
+                        onClick={() => setShowUpdateErrorModal(true)}
+                        title="Update check failed"
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          padding: 0,
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          backgroundColor: 'transparent',
+                          border: 'none',
+                          cursor: 'pointer',
+                          opacity: 0.65,
+                        }}
+                      >
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -8334,6 +8345,88 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     </div>
 
     <PerformanceHud enabled={performanceHudEnabled} />
+
+    {showUpdateErrorModal && updateError && (
+      <div
+        onClick={() => setShowUpdateErrorModal(false)}
+        style={{
+          position: 'fixed',
+          inset: 0,
+          backgroundColor: theme.isDark ? 'rgba(0,0,0,0.42)' : 'rgba(255,255,255,0.58)',
+          backdropFilter: 'blur(8px)',
+          WebkitBackdropFilter: 'blur(8px)',
+          zIndex: 10000,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: '24px',
+        }}
+      >
+        <div
+          onClick={(event) => event.stopPropagation()}
+          style={{
+            width: 'min(420px, 100%)',
+            backgroundColor: theme.bg,
+            border: `1px solid ${theme.border}`,
+            borderRadius: '8px',
+            boxShadow: theme.isDark ? '0 18px 48px rgba(0,0,0,0.45)' : '0 18px 48px rgba(0,0,0,0.14)',
+            padding: '18px',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={theme.textSecondary} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+              <line x1="12" y1="9" x2="12" y2="13" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+            <div style={{ color: theme.text, fontSize: '14px', fontWeight: 600 }}>
+              Update check failed
+            </div>
+          </div>
+          <div style={{ color: theme.textSecondary, fontSize: '13px', lineHeight: 1.45, marginBottom: '16px', wordBreak: 'break-word' }}>
+            {updateError}
+          </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+            <button
+              onClick={() => {
+                setUpdateError(null);
+                setUpdateStatus('idle');
+                setShowUpdateErrorModal(false);
+              }}
+              style={{
+                padding: '6px 10px',
+                color: theme.textSecondary,
+                backgroundColor: 'transparent',
+                border: `1px solid ${theme.border}`,
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              Dismiss
+            </button>
+            <button
+              onClick={() => {
+                setShowUpdateErrorModal(false);
+                setUpdateError(null);
+                window.updaterAPI?.checkForUpdates?.();
+              }}
+              style={{
+                padding: '6px 10px',
+                color: '#fff',
+                backgroundColor: theme.accent,
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              Try again
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     {/* Release notes popup - shows after app update, on first install, or on version hover */}
     {showReleaseNotes && (

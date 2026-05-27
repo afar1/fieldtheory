@@ -4,6 +4,7 @@ import {
   autoUpdaterAllowsPrereleaseForBuildChannel,
   autoUpdaterAuthTokenForBuildChannel,
   autoUpdaterFeedOptionsForBuildChannel,
+  autoUpdaterGitHubCliPaths,
   autoUpdaterReleaseRepoForBuildChannel,
   isAutoUpdaterEnabledForBuildChannel,
   normalizeGitHubToken,
@@ -102,5 +103,19 @@ describe('buildChannel', () => {
     expect(normalizeGitHubToken('token abc123')).toBe('abc123');
     expect(normalizeGitHubToken('Bearer abc123')).toBe('abc123');
     expect(normalizeGitHubToken('abc123')).toBe('abc123');
+  });
+
+  it('looks for gh in Finder-safe Homebrew paths', () => {
+    expect(autoUpdaterGitHubCliPaths({})).toEqual([
+      'gh',
+      '/opt/homebrew/bin/gh',
+      '/usr/local/bin/gh',
+    ]);
+  });
+
+  it('allows an explicit gh path override for updater auth', () => {
+    expect(autoUpdaterGitHubCliPaths({
+      FIELD_THEORY_GITHUB_CLI_PATH: '/custom/bin/gh',
+    })[0]).toBe('/custom/bin/gh');
   });
 });

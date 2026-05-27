@@ -70,6 +70,19 @@ export function autoUpdaterAuthTokenForBuildChannel(
   return normalizeGitHubToken(token);
 }
 
+export function autoUpdaterGitHubCliPaths(env: NodeJS.ProcessEnv = process.env): string[] {
+  const candidates = [
+    env.FIELD_THEORY_GITHUB_CLI_PATH,
+    'gh',
+    '/opt/homebrew/bin/gh',
+    '/usr/local/bin/gh',
+  ];
+
+  return candidates.filter((candidate, index): candidate is string => (
+    Boolean(candidate) && candidates.indexOf(candidate) === index
+  ));
+}
+
 export function normalizeGitHubToken(token: string): string {
   const trimmed = token.trim();
   return trimmed.replace(/^(token|bearer)\s+/i, '').trim();
