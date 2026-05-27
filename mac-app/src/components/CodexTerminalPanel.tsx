@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
 import { Terminal, type ITerminalOptions } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
@@ -11,6 +11,7 @@ type CodexTerminalPageContext = Parameters<NonNullable<Window['codexTerminalAPI'
 interface CodexTerminalPanelProps {
   visible: boolean;
   pageContext: CodexTerminalPageContext | null;
+  extendToViewportTop?: boolean;
   onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
   onVisibleChange: (visible: boolean) => void;
 }
@@ -32,6 +33,7 @@ const TERMINAL_GUTTER_RIGHT = 28;
 const TERMINAL_GUTTER_BOTTOM = 40;
 const TERMINAL_GUTTER_LEFT = 14;
 const TERMINAL_SCROLLBAR_LANE = 14;
+const TERMINAL_VIEWPORT_TOP_PADDING = 8;
 const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
 
 interface TerminalHandle {
@@ -66,22 +68,28 @@ function pathBasename(input: string): string {
   return parts.length > 0 ? parts[parts.length - 1] : input;
 }
 
-function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
+export function terminalTheme(isDark: boolean): ITerminalOptions['theme'] {
   return {
     background: isDark ? '#101113' : '#fbf9f4',
     foreground: isDark ? '#e8e3d8' : '#1f2328',
     cursor: '#10b981',
     selectionBackground: isDark ? '#2f4a43' : '#cfe9df',
-    black: '#111315',
-    red: '#ef4444',
+    black: isDark ? '#111315' : '#1f2328',
+    red: isDark ? '#ef4444' : '#b42318',
     green: '#10b981',
-    yellow: '#f59e0b',
-    blue: '#60a5fa',
-    magenta: '#a78bfa',
-    cyan: '#22d3ee',
-    white: '#e8e3d8',
-    brightBlack: '#6b7280',
-    brightWhite: '#ffffff',
+    yellow: isDark ? '#f59e0b' : '#b45309',
+    blue: isDark ? '#60a5fa' : '#2563eb',
+    magenta: isDark ? '#a78bfa' : '#7c3aed',
+    cyan: isDark ? '#22d3ee' : '#0891b2',
+    white: isDark ? '#e8e3d8' : '#4b5563',
+    brightBlack: isDark ? '#6b7280' : '#6b7280',
+    brightRed: isDark ? '#f87171' : '#dc2626',
+    brightGreen: isDark ? '#34d399' : '#059669',
+    brightYellow: isDark ? '#fbbf24' : '#d97706',
+    brightBlue: isDark ? '#93c5fd' : '#1d4ed8',
+    brightMagenta: isDark ? '#c4b5fd' : '#6d28d9',
+    brightCyan: isDark ? '#67e8f9' : '#0e7490',
+    brightWhite: isDark ? '#ffffff' : '#111827',
   };
 }
 
@@ -106,7 +114,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, pageContext, onDockSideChange, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, onDockSideChange, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -120,6 +128,8 @@ export default function CodexTerminalPanel({ visible, pageContext, onDockSideCha
   const [editingTitle, setEditingTitle] = useState('');
   const [terminalStatus, setTerminalStatus] = useState<string | null>(null);
   const [isResizing, setIsResizing] = useState(false);
+  const [topExtension, setTopExtension] = useState(0);
+  const topExtensionRef = useRef(0);
   const panelRef = useRef<HTMLDivElement | null>(null);
   const terminalHandlesRef = useRef(new Map<string, TerminalHandle>());
   const pendingDataRef = useRef(new Map<string, string[]>());
@@ -202,6 +212,29 @@ export default function CodexTerminalPanel({ visible, pageContext, onDockSideCha
   useEffect(() => {
     localStorage.setItem(CODEX_TERMINAL_RIGHT_SIZE_STORAGE_KEY, String(rightWidth));
   }, [rightWidth]);
+
+  useLayoutEffect(() => {
+    if (!visible || dockSide !== 'right' || !extendToViewportTop) {
+      topExtensionRef.current = 0;
+      setTopExtension(0);
+      return;
+    }
+    const panel = panelRef.current;
+    if (!panel) return;
+    const updateTopExtension = () => {
+      const { top } = panel.getBoundingClientRect();
+      const next = Math.max(0, Math.round(top + topExtensionRef.current - TERMINAL_VIEWPORT_TOP_PADDING));
+      topExtensionRef.current = next;
+      setTopExtension(next);
+    };
+    updateTopExtension();
+    const frame = window.requestAnimationFrame(updateTopExtension);
+    window.addEventListener('resize', updateTopExtension);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener('resize', updateTopExtension);
+    };
+  }, [dockSide, extendToViewportTop, visible]);
 
   useEffect(() => {
     setEditingTitle(activeSession?.title ?? '');
@@ -437,7 +470,12 @@ export default function CodexTerminalPanel({ visible, pageContext, onDockSideCha
 
   const panelSize: CSSProperties = dockSide === 'bottom'
     ? { height: `${bottomHeight}px`, minHeight: `${MIN_BOTTOM_HEIGHT}px`, width: '100%' }
-    : { height: '100%', width: `${rightWidth}px`, minWidth: `${MIN_RIGHT_WIDTH}px` };
+    : {
+      height: topExtension > 0 ? `calc(100% + ${topExtension}px)` : '100%',
+      marginTop: topExtension > 0 ? `-${topExtension}px` : undefined,
+      width: `${rightWidth}px`,
+      minWidth: `${MIN_RIGHT_WIDTH}px`,
+    };
   const activeCwd = activeSession?.cwd ?? '';
   const terminalBackground = theme.isDark ? '#101113' : '#fbf9f4';
   const terminalChrome = theme.isDark ? '#15181e' : '#f5f4f2';
@@ -480,6 +518,7 @@ export default function CodexTerminalPanel({ visible, pageContext, onDockSideCha
   return (
     <div
       ref={panelRef}
+      data-ft-codex-terminal-panel="true"
       style={{
         ...panelSize,
         position: 'relative',
@@ -684,7 +723,15 @@ export default function CodexTerminalPanel({ visible, pageContext, onDockSideCha
       </div>
       <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
         <style>
-          {`.codex-terminal-host .xterm .xterm-viewport { right: -${TERMINAL_SCROLLBAR_LANE}px; scrollbar-gutter: stable; }`}
+          {`.codex-terminal-host .xterm,
+.codex-terminal-host .xterm .xterm-screen,
+.codex-terminal-host .xterm .xterm-viewport {
+  background-color: ${terminalBackground} !important;
+}
+.codex-terminal-host .xterm .xterm-viewport {
+  right: -${TERMINAL_SCROLLBAR_LANE}px;
+  scrollbar-gutter: stable;
+}`}
         </style>
         {sessions.map((session) => (
           <div
