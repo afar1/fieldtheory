@@ -61,6 +61,7 @@ import {
   getRenderedSelectionDebug,
   type RenderedEditorDebugApi,
   type RenderedEditorDebugEntry,
+  type RenderedEditorTimingEntry,
 } from '../utils/renderedMarkdownEditor';
 import {
   getMarkdownTodoState,
@@ -495,6 +496,45 @@ export function isTerminalPanelVisibilityToggleShortcut(input: {
     && (input.key === '.' || input.code === 'Period');
 }
 
+export function shouldRestoreEditorWhenTogglingTerminalPanel(input: {
+  terminalVisible: boolean;
+  terminalFocused: boolean;
+  restoreEditorFocus?: boolean;
+}): boolean {
+  return input.terminalVisible && (input.restoreEditorFocus === true || input.terminalFocused);
+}
+
+export function shouldRestoreEditorWhenTogglingTerminalFocus(input: {
+  terminalVisible: boolean;
+  terminalFocused: boolean;
+  restoreEditorFocus?: boolean;
+}): boolean {
+  return input.terminalVisible && (input.restoreEditorFocus === true || input.terminalFocused);
+}
+
+export function isCodexTerminalEventTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && !!target.closest('[data-ft-codex-terminal-panel="true"]');
+}
+
+const MARKDOWN_IMAGE_REFERENCE_RE = /!\[([^\]\n]*(?:\\.[^\]\n]*)*)\]\((<[^>\n]+>|[^)\s]+)\)/g;
+
+export function getMarkdownImageReferenceSnapshot(content: string): string[] {
+  return Array.from(content.matchAll(MARKDOWN_IMAGE_REFERENCE_RE), (match) => match[0]);
+}
+
+export function markdownContentMayNeedPortableImages(content: string): boolean {
+  return getMarkdownImageReferenceSnapshot(content).length > 0;
+}
+
+export function markdownPortableImagesChanged(previousContent: string | null | undefined, nextContent: string): boolean {
+  const nextImages = getMarkdownImageReferenceSnapshot(nextContent);
+  if (nextImages.length === 0) return false;
+  if (previousContent === null || previousContent === undefined) return true;
+  const previousImages = getMarkdownImageReferenceSnapshot(previousContent);
+  if (previousImages.length !== nextImages.length) return true;
+  return nextImages.some((image, index) => image !== previousImages[index]);
+}
+
 export function shouldOpenMarkdownLinkFromMouseDown(input: {
   button: number;
   metaKey?: boolean;
@@ -514,6 +554,16 @@ export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
   ctrlKey: boolean;
 }): boolean {
   return input.button === 0 && input.metaKey && !input.altKey && !input.ctrlKey;
+}
+
+export function shouldLetRenderedWikiLinkClickEnterEdit(input: {
+  renderedEditingActive: boolean;
+  metaKey: boolean;
+  actionKind: LinkAction['kind'];
+}): boolean {
+  return input.renderedEditingActive
+    && input.metaKey
+    && (input.actionKind === 'wiki' || input.actionKind === 'create');
 }
 
 export function isLibrarianDocumentFocusChromeActive(input: {
@@ -1506,6 +1556,20 @@ export function getRenderedMarkdownDeleteShortcutEdit(input: {
     selectionStart: deleteStart,
     selectionEnd: deleteStart,
   };
+}
+
+export function shouldLetRenderedCodeMirrorHandleLineBoundaryDelete(input: {
+  event: KeyboardEvent;
+  selectionStart: number;
+  selectionEnd: number;
+}): boolean {
+  const key = input.event.key;
+  return (key === 'Backspace' || key === 'Delete')
+    && input.event.metaKey
+    && !input.event.ctrlKey
+    && !input.event.altKey
+    && !input.event.shiftKey
+    && input.selectionStart === input.selectionEnd;
 }
 
 export type RenderedMarkdownFormatAction = 'bold' | 'italic' | 'code' | 'link' | 'unordered-list';
@@ -2971,6 +3035,41 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     window.dispatchEvent(new CustomEvent('fieldtheory:rendered-editor-debug', { detail: entry }));
     return entry;
   }, []);
+  const getRenderedEditorTimingEntries = useCallback((limit = 80): RenderedEditorTimingEntry[] => {
+    const safeLimit = Math.max(1, Math.min(RENDERED_EDITOR_DEBUG_ENTRY_LIMIT, Math.floor(limit)));
+    const entries = renderedEditorDebugEntriesRef.current.slice(-safeLimit);
+    return entries.map((entry, index) => {
+      const detailStage = typeof entry.details.stage === 'string' ? entry.details.stage : null;
+      const duration = entry.details.durationMs;
+      const previous = index > 0 ? entries[index - 1] : null;
+      return {
+        index,
+        timestamp: entry.timestamp,
+        sincePreviousMs: previous ? entry.timestamp - previous.timestamp : null,
+        stage: detailStage && entry.stage === 'rendered-editor-timing'
+          ? detailStage
+          : entry.stage,
+        durationMs: typeof duration === 'number' ? duration : null,
+        path: entry.path,
+        contentMode: entry.contentMode,
+        editingActive: entry.editingActive,
+        details: entry.details,
+      };
+    });
+  }, []);
+  const logRenderedEditorTimingTable = useCallback((limit = 80): RenderedEditorTimingEntry[] => {
+    const timings = getRenderedEditorTimingEntries(limit);
+    console.table(timings.map((entry) => ({
+      index: entry.index,
+      stage: entry.stage,
+      durationMs: entry.durationMs,
+      sincePreviousMs: entry.sincePreviousMs,
+      editingActive: entry.editingActive,
+      contentMode: entry.contentMode,
+      path: entry.path,
+    })));
+    return timings;
+  }, [getRenderedEditorTimingEntries]);
   const scheduleEditorCursorSettledDebug = useCallback((
     reason: string,
     markdownSnapshot?: MarkdownCodeEditorSelectionSnapshot | null,
@@ -3027,6 +3126,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             'window.ftDebugRenderedEditor.markdownCursor()',
             'window.ftDebugRenderedEditor.renderedCursor()',
             'window.ftDebugRenderedEditor.snapshot()',
+            'window.ftDebugRenderedEditor.timings()',
+            'window.ftDebugRenderedEditor.table()',
+            'window.ftDebugRenderedEditor.slow(8)',
             'window.ftDebugRenderedEditor.mark("label")',
           ],
         });
@@ -3042,6 +3144,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       markdownCursor: () => getMarkdownCursorDebugState('api-markdown-cursor'),
       renderedCursor: () => getRenderedCursorDebugState('api-rendered-cursor'),
       snapshot: () => [...renderedEditorDebugEntriesRef.current],
+      timings: getRenderedEditorTimingEntries,
+      slow: (thresholdMs = 8) => getRenderedEditorTimingEntries(RENDERED_EDITOR_DEBUG_ENTRY_LIMIT)
+        .filter((entry) => (entry.durationMs ?? 0) >= thresholdMs),
+      table: logRenderedEditorTimingTable,
       last: () => renderedEditorDebugEntriesRef.current[renderedEditorDebugEntriesRef.current.length - 1] ?? null,
       clear: () => {
         renderedEditorDebugEntriesRef.current = [];
@@ -3065,7 +3171,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         delete debugWindow.ftDebugRenderedEditor;
       }
     };
-  }, [getEditorCursorDebugState, getMarkdownCursorDebugState, getRenderedCursorDebugState, getRenderedEditorDebugState, recordRenderedEditorDebug]);
+  }, [getEditorCursorDebugState, getMarkdownCursorDebugState, getRenderedCursorDebugState, getRenderedEditorDebugState, getRenderedEditorTimingEntries, logRenderedEditorTimingTable, recordRenderedEditorDebug]);
   useEffect(() => {
     const handleDocumentKeyDownCapture = (event: KeyboardEvent) => {
       if (!renderedEditorDebugEnabledRef.current) return;
@@ -4479,7 +4585,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       : '';
 
   const markdownDisplay = useMemo(() => {
-    if (!activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external') || !activeReading) return null;
+    if (!activeIsMarkdownDocument || (selectedItemType !== 'wiki' && selectedItemType !== 'external' && selectedItemType !== 'artifact') || !activeReading) return null;
     return splitFrontmatter(renderedDisplayReadingContent ?? activeReading.content);
   }, [activeIsMarkdownDocument, selectedItemType, activeReading, renderedDisplayReadingContent]);
 
@@ -4504,14 +4610,38 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     return null;
   }, [activeReading?.path, selectedItemType, wikiSelectedRelPath]);
 
-  const linkedDocuments = useMemo<MarkdownLinkedDocument[]>(() => {
-    if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks' || selectedItemType === 'ember') return [];
-    return getMarkdownLinkedDocuments(
+  const linkedDocumentsResult = useMemo<{
+    links: MarkdownLinkedDocument[];
+    timing: Record<string, unknown>;
+  }>(() => {
+    const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+    const emptyTiming = (reason: string): Record<string, unknown> => ({
+      stage: 'linked-documents-compute',
+      durationMs: startedAt > 0 ? performance.now() - startedAt : null,
+      reason,
+      linkCount: 0,
+      relationDocumentCount: markdownLinkRelationDocuments.length,
+      contentLength: activeReadingContent?.length ?? activeReading?.content.length ?? 0,
+    });
+    if (!activeReading || !activeIsMarkdownDocument || selectedItemType === 'bookmarks' || selectedItemType === 'ember') {
+      return { links: [], timing: emptyTiming('inactive') };
+    }
+    const links = getMarkdownLinkedDocuments(
       activeMarkdownLinkTarget,
       activeReadingContent ?? activeReading.content,
       markdownLinkRelationDocuments,
       wikiIndex,
     );
+    return {
+      links,
+      timing: {
+        stage: 'linked-documents-compute',
+        durationMs: startedAt > 0 ? performance.now() - startedAt : null,
+        linkCount: links.length,
+        relationDocumentCount: markdownLinkRelationDocuments.length,
+        contentLength: (activeReadingContent ?? activeReading.content).length,
+      },
+    };
   }, [
     activeMarkdownLinkTarget,
     activeReading,
@@ -4521,6 +4651,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     selectedItemType,
     wikiIndex,
   ]);
+  const linkedDocuments = linkedDocumentsResult.links;
+  useEffect(() => {
+    if (!renderedEditorDebugEnabledRef.current) return;
+    recordRenderedEditorDebug('typing-hotpath', linkedDocumentsResult.timing);
+  }, [linkedDocumentsResult, recordRenderedEditorDebug]);
 
   const markdownWikiLinkSuggestionItems = useMemo(() => {
     const seen = new Set<string>();
@@ -4634,6 +4769,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, []);
 
   const saveRenderedContent = useCallback(async (nextContent: string) => {
+    const saveStartedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
     if (!activeReading) {
       recordRenderedEditorDebug('save-skipped', { reason: 'no-active-reading' });
       return;
@@ -4657,9 +4793,34 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     if (!deferReactState) setSaveStatus('saving');
     renderedSaveInFlightRef.current += 1;
     try {
-      normalizedContent = (await window.markdownImagesAPI?.makeImagesPortable(targetPath, normalizedContent))?.content ?? normalizedContent;
+      const previousSavedContent = lastSavedContentRef.current;
+      const portableImagesChanged = markdownPortableImagesChanged(previousSavedContent, normalizedContent);
+      if (portableImagesChanged) {
+        const portableImagesStartedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
+        const portableResult = await window.markdownImagesAPI?.makeImagesPortable(targetPath, normalizedContent);
+        normalizedContent = portableResult?.content ?? normalizedContent;
+        recordRenderedEditorDebug('save-phase', {
+          stage: 'portable-images',
+          durationMs: portableImagesStartedAt > 0 ? performance.now() - portableImagesStartedAt : null,
+          copied: portableResult?.copied ?? 0,
+          rewritten: portableResult?.rewritten ?? 0,
+          missing: portableResult?.missing ?? 0,
+          contentLength: normalizedContent.length,
+        });
+      } else {
+        recordRenderedEditorDebug('save-phase', {
+          stage: 'portable-images-skipped',
+          durationMs: 0,
+          reason: markdownContentMayNeedPortableImages(normalizedContent)
+            ? 'image-references-unchanged'
+            : 'no-markdown-images',
+          previousContentLength: previousSavedContent?.length ?? null,
+          contentLength: normalizedContent.length,
+        });
+      }
       let result: DocumentSaveResult | null | undefined;
       let overwrite: (version: DocumentVersion) => Promise<DocumentSaveResult | null | undefined>;
+      const documentSaveStartedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
       if (targetType === 'wiki' && wikiSelectedRelPath) {
         result = await window.wikiAPI?.save(wikiSelectedRelPath, normalizedContent, expectedVersion);
         overwrite = (version) => window.wikiAPI?.save(wikiSelectedRelPath, normalizedContent, version) ?? Promise.resolve(undefined);
@@ -4673,6 +4834,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         recordRenderedEditorDebug('save-skipped', { reason: 'no-target-path', targetType });
         return;
       }
+      recordRenderedEditorDebug('save-phase', {
+        stage: 'document-save',
+        durationMs: documentSaveStartedAt > 0 ? performance.now() - documentSaveStartedAt : null,
+        targetType,
+        resultOk: isDocumentSaveOk(result),
+        resultReason: result && !isDocumentSaveOk(result) ? result.reason : null,
+      });
 
       if (isDocumentSaveConflict(result)) {
         recordRenderedEditorDebug('save-conflict', { targetType });
@@ -4691,6 +4859,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         rememberSavedDocumentContent(targetPath, normalizedContent, nextVersion);
         flushPendingCopiedImageDeletes(targetPath, normalizedContent);
         recordRenderedEditorDebug('save-ok', {
+          stage: 'save-rendered-content',
+          durationMs: saveStartedAt > 0 ? performance.now() - saveStartedAt : null,
           targetType,
           nextVersion,
           deferredReactState: true,
@@ -4703,6 +4873,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       setSaveStatus('saved');
       flushPendingCopiedImageDeletes(targetPath, normalizedContent);
       recordRenderedEditorDebug('save-ok', {
+        stage: 'save-rendered-content',
+        durationMs: saveStartedAt > 0 ? performance.now() - saveStartedAt : null,
         targetType,
         nextVersion,
         cursor: getRenderedCursorDebugState('save-ok'),
@@ -4710,6 +4882,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     } catch (error) {
       if (!deferReactState) setSaveStatus('idle');
       recordRenderedEditorDebug('save-error', {
+        stage: 'save-rendered-content',
+        durationMs: saveStartedAt > 0 ? performance.now() - saveStartedAt : null,
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -4798,8 +4972,11 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         recordRenderedEditorDebug('react-state-commit-skipped', { reason: 'path-changed' });
         return;
       }
+      const startedAt = renderedEditorDebugEnabledRef.current ? performance.now() : 0;
       applyRenderedContentLocalState(pending.content, { updateRenderedDisplayContent: true });
       recordRenderedEditorDebug('react-state-commit-fired', {
+        stage: 'react-state-commit',
+        durationMs: startedAt > 0 ? performance.now() - startedAt : null,
         contentLength: pending.content.length,
       });
     }, 250);
@@ -4949,8 +5126,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     activateRenderedTextEditing(selection);
   }, [activateRenderedTextEditing, deactivateSidebarKeyboard, displaySourceBody.length]);
 
-  const toggleTerminalEditorFocus = useCallback(() => {
-    if (codexTerminalVisible && codexTerminalFocused) {
+  const toggleTerminalEditorFocus = useCallback((options?: { restoreEditorFocus?: boolean }) => {
+    if (shouldRestoreEditorWhenTogglingTerminalFocus({
+      terminalVisible: codexTerminalVisible,
+      terminalFocused: codexTerminalFocused,
+      restoreEditorFocus: options?.restoreEditorFocus,
+    })) {
+      setCodexTerminalFocused(false);
       restoreTerminalReturnEditorSelection();
       return;
     }
@@ -4964,9 +5146,30 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     restoreTerminalReturnEditorSelection,
   ]);
 
-  const toggleCodexTerminalPanel = useCallback(() => {
-    setCodexTerminalVisible((current) => !current);
-  }, []);
+  const closeCodexTerminalPanel = useCallback((options?: { restoreEditorFocus?: boolean }) => {
+    setCodexTerminalFocused(false);
+    setCodexTerminalVisible(false);
+    if (options?.restoreEditorFocus) {
+      window.requestAnimationFrame(() => restoreTerminalReturnEditorSelection());
+    }
+  }, [restoreTerminalReturnEditorSelection]);
+
+  const toggleCodexTerminalPanel = useCallback((options?: { restoreEditorFocus?: boolean }) => {
+    if (codexTerminalVisible) {
+      if (shouldRestoreEditorWhenTogglingTerminalPanel({
+        terminalVisible: codexTerminalVisible,
+        terminalFocused: codexTerminalFocused,
+        restoreEditorFocus: options?.restoreEditorFocus,
+      })) {
+        closeCodexTerminalPanel({ restoreEditorFocus: true });
+      } else {
+        closeCodexTerminalPanel();
+      }
+      return;
+    }
+    captureTerminalReturnEditorSelection();
+    setCodexTerminalVisible(true);
+  }, [captureTerminalReturnEditorSelection, closeCodexTerminalPanel, codexTerminalFocused, codexTerminalVisible]);
 
   const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
     setLineNumbersMode((current) => {
@@ -5280,13 +5483,19 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (indentEdit) return applyRenderedShortcutEdit(indentEdit);
     }
 
-    const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
+    if (!shouldLetRenderedCodeMirrorHandleLineBoundaryDelete({
       event,
-      value,
       selectionStart: selection.start,
       selectionEnd: selection.end,
-    });
-    if (deleteEdit) return applyRenderedShortcutEdit(deleteEdit);
+    })) {
+      const deleteEdit = getRenderedMarkdownDeleteShortcutEdit({
+        event,
+        value,
+        selectionStart: selection.start,
+        selectionEnd: selection.end,
+      });
+      if (deleteEdit) return applyRenderedShortcutEdit(deleteEdit);
+    }
 
     if (
       (event.key === 'Backspace' || event.key === 'Delete')
@@ -5399,6 +5608,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     })) return false;
     const action = getMarkdownEditorLinkActionAtOffset(displaySourceBody, offset, wikiIndex);
     if (action.kind === 'noop') return false;
+    if (shouldLetRenderedWikiLinkClickEnterEdit({
+      renderedEditingActive: renderedEditingActiveRef.current,
+      metaKey: event.metaKey,
+      actionKind: action.kind,
+    })) {
+      return false;
+    }
     event.preventDefault();
     event.stopPropagation();
     openLinkAction(action);
@@ -7391,14 +7607,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
       if (isTerminalPanelVisibilityToggleShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
-        toggleCodexTerminalPanel();
+        toggleCodexTerminalPanel({ restoreEditorFocus: isCodexTerminalEventTarget(e.target) });
         return;
       }
 
       if (isTerminalEditorFocusToggleShortcut(e)) {
         e.preventDefault();
         e.stopPropagation();
-        toggleTerminalEditorFocus();
+        toggleTerminalEditorFocus({ restoreEditorFocus: isCodexTerminalEventTarget(e.target) });
         return;
       }
 
@@ -8629,7 +8845,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
               {focusToolbarControlsVisible && (
                 <button
                   type="button"
-                  onClick={toggleCodexTerminalPanel}
+                  onClick={() => toggleCodexTerminalPanel()}
                   title={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   aria-label={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   style={{
@@ -9199,6 +9415,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           onDockSideChange={setCodexTerminalDockSide}
           onFocusToggleShortcut={toggleTerminalEditorFocus}
           onTerminalFocusChange={setCodexTerminalFocused}
+          onVisibilityToggleShortcut={toggleCodexTerminalPanel}
           onVisibleChange={setCodexTerminalVisible}
         />
       </div>

@@ -49,6 +49,18 @@ export type RenderedEditorDebugEntry = {
   details: Record<string, unknown>;
 };
 
+export type RenderedEditorTimingEntry = {
+  index: number;
+  timestamp: number;
+  sincePreviousMs: number | null;
+  stage: string;
+  durationMs: number | null;
+  path: string | null;
+  contentMode: MarkdownContentMode;
+  editingActive: boolean;
+  details: Record<string, unknown>;
+};
+
 export type RenderedEditorDebugApi = {
   enable: () => void;
   disable: () => void;
@@ -58,6 +70,9 @@ export type RenderedEditorDebugApi = {
   markdownCursor: () => Record<string, unknown>;
   renderedCursor: () => Record<string, unknown>;
   snapshot: () => RenderedEditorDebugEntry[];
+  timings: (limit?: number) => RenderedEditorTimingEntry[];
+  slow: (thresholdMs?: number) => RenderedEditorTimingEntry[];
+  table: (limit?: number) => RenderedEditorTimingEntry[];
   last: () => RenderedEditorDebugEntry | null;
   clear: () => void;
   mark: (label?: string) => RenderedEditorDebugEntry | null;
@@ -65,7 +80,7 @@ export type RenderedEditorDebugApi = {
 };
 
 export const RENDERED_EDITOR_DEBUG_STORAGE_KEY = 'fieldtheory-rendered-editor-debug';
-export const RENDERED_EDITOR_DEBUG_ENTRY_LIMIT = 80;
+export const RENDERED_EDITOR_DEBUG_ENTRY_LIMIT = 240;
 export const RENDERED_BLANK_LINE_ATTR = 'data-ft-rendered-blank-line';
 export const RENDERED_TRAILING_SPACE_ATTR = 'data-ft-rendered-trailing-space';
 const MARKDOWN_SOURCE_SYNTAX_CHAR = /[*_`#>\[\]()]/;

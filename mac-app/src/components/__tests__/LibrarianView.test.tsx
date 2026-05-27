@@ -2427,6 +2427,63 @@ describe('LibrarianView render', () => {
     }, { timeout: 1200 });
   });
 
+  it('preserves artifact frontmatter while editing the rendered editor body', async () => {
+    const artifactPath = '/tmp/library/artifact.md';
+    const content = '---\ncontent_edited_at: 1234\n---\n\nhello';
+    const reading = {
+      path: artifactPath,
+      title: 'artifact.md',
+      context: null,
+      readingTime: null,
+      modelSignature: null,
+      createdAt: 0,
+      mtime: 1,
+      content,
+      documentVersion: { mtimeMs: 1, size: content.length, sha256: 'artifact-frontmatter-version' },
+    };
+
+    vi.mocked(window.localStorage.getItem).mockImplementation((key) => (
+      key === 'librarian-last-selection'
+        ? JSON.stringify({ type: 'artifact', path: artifactPath })
+        : null
+    ));
+    window.librarianAPI!.getReadings = vi.fn(async () => [reading]);
+    window.librarianAPI!.getReading = vi.fn(async () => reading);
+    window.librarianAPI!.saveReading = vi.fn(async () => ({
+      ok: true as const,
+      version: { mtimeMs: 2, size: content.length + 1, sha256: 'artifact-frontmatter-saved-version' },
+    }));
+
+    const { container } = render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    const renderedRoot = await waitFor(() => {
+      const root = container.querySelector('[data-ft-rendered-editor-root="true"]') as HTMLElement | null;
+      expect(root?.textContent).toContain('hello');
+      expect(root?.textContent).not.toContain('content_edited_at');
+      return root;
+    });
+    if (!renderedRoot) throw new Error('Rendered editor root missing');
+
+    fireEvent.click(renderedRoot);
+    const renderedInput = await waitFor(() => {
+      const input = container.querySelector('[data-ft-rendered-editor-input="true"]') as HTMLElement | null;
+      expect(input?.textContent).toContain('hello');
+      expect(input?.textContent).not.toContain('content_edited_at');
+      return input;
+    });
+    if (!renderedInput) throw new Error('Rendered editor missing');
+
+    pasteText(renderedInput, '!');
+
+    await waitFor(() => {
+      expect(window.librarianAPI!.saveReading).toHaveBeenCalledWith(
+        artifactPath,
+        '---\ncontent_edited_at: 1234\n---\n\nhello!',
+        reading.documentVersion,
+      );
+    }, { timeout: 1200 });
+  });
+
   it('lets rendered editor input create the next rendered body line', async () => {
     const relPath = 'scratchpad/rendered-enter-blank-line-test';
     const content = 'hello';

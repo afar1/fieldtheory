@@ -14,8 +14,9 @@ interface CodexTerminalPanelProps {
   extendToViewportTop?: boolean;
   focusRequestKey?: number;
   onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
-  onFocusToggleShortcut?: () => void;
+  onFocusToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onTerminalFocusChange?: (focused: boolean) => void;
+  onVisibilityToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onVisibleChange: (visible: boolean) => void;
 }
 
@@ -77,12 +78,34 @@ export function isTerminalFocusToggleSequence(event: Pick<KeyboardEvent, 'altKey
     && !event.shiftKey;
 }
 
-export function isTerminalPanelVisibilityToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
-  return event.key === '.'
-    && event.metaKey
+export function isTerminalPanelVisibilityToggleSequence(event: Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>): boolean {
+  return event.metaKey
     && !event.altKey
     && !event.ctrlKey
-    && !event.shiftKey;
+    && !event.shiftKey
+    && (event.key === '.' || event.code === 'Period');
+}
+
+export function shouldFocusTerminalForRequest(input: { visible: boolean; focusRequestKey: number }): boolean {
+  return input.visible && input.focusRequestKey > 0;
+}
+
+export function terminalViewportStyleCss(terminalBackground: string): string {
+  return `.codex-terminal-host .xterm,
+.codex-terminal-host .xterm .xterm-screen,
+.codex-terminal-host .xterm .xterm-viewport {
+  background-color: ${terminalBackground} !important;
+}
+.codex-terminal-host .xterm .xterm-viewport {
+  scrollbar-width: none !important;
+  scrollbar-color: transparent transparent !important;
+  scrollbar-gutter: auto !important;
+}
+.codex-terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+}`;
 }
 
 function pathBasename(input: string): string {
@@ -123,6 +146,13 @@ export function terminalContrastRatio(isDark: boolean): number {
   return isDark ? 1 : 4.5;
 }
 
+export function terminalAppearanceOptions(isDark: boolean): Pick<ITerminalOptions, 'minimumContrastRatio' | 'theme'> {
+  return {
+    minimumContrastRatio: terminalContrastRatio(isDark),
+    theme: terminalTheme(isDark),
+  };
+}
+
 function readStoredNumber(key: string, fallback: number): number {
   const value = Number.parseInt(localStorage.getItem(key) ?? '', 10);
   return Number.isFinite(value) ? value : fallback;
@@ -144,7 +174,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -173,10 +203,16 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   const autoAttachedContextRef = useRef(new Set<string>());
   const liveContextUpdateRef = useRef<number | null>(null);
   const onFocusToggleShortcutRef = useRef(onFocusToggleShortcut);
+  const onVisibilityToggleShortcutRef = useRef<CodexTerminalPanelProps['onVisibilityToggleShortcut']>(undefined);
+  const terminalFocusRequestedRef = useRef(false);
 
   useEffect(() => {
     onFocusToggleShortcutRef.current = onFocusToggleShortcut;
   }, [onFocusToggleShortcut]);
+
+  useEffect(() => {
+    onVisibilityToggleShortcutRef.current = onVisibilityToggleShortcut;
+  }, [onVisibilityToggleShortcut]);
 
   const updateDockSide = useCallback((nextDockSide: CodexTerminalDockSide) => {
     setDockSide(nextDockSide);
@@ -266,9 +302,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [activeSessionId]);
 
   const focusActiveTerminal = useCallback(() => {
-    if (!activeSessionId) return;
+    if (!activeSessionId) return false;
     const handle = terminalHandlesRef.current.get(activeSessionId);
-    handle?.term.focus();
+    if (!handle) return false;
+    handle.term.focus();
+    return true;
   }, [activeSessionId]);
 
   const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean; launchCommand?: string }) => {
@@ -440,8 +478,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [fitActiveTerminal]);
 
   useEffect(() => {
+    const appearance = terminalAppearanceOptions(theme.isDark);
     for (const handle of terminalHandlesRef.current.values()) {
-      handle.term.options.theme = terminalTheme(theme.isDark);
+      handle.term.options.theme = appearance.theme;
+      handle.term.options.minimumContrastRatio = appearance.minimumContrastRatio;
+      handle.term.refresh(0, Math.max(0, handle.term.rows - 1));
     }
   }, [theme.isDark]);
 
@@ -451,19 +492,11 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   }, [dockSide, fitActiveTerminal, visible]);
 
   useEffect(() => {
-    if (!visible) return;
+    if (!shouldFocusTerminalForRequest({ visible, focusRequestKey })) return;
+    terminalFocusRequestedRef.current = true;
     const timer = window.setTimeout(() => {
       fitActiveTerminal();
-      focusActiveTerminal();
-    }, 80);
-    return () => window.clearTimeout(timer);
-  }, [activeSessionId, fitActiveTerminal, focusActiveTerminal, visible]);
-
-  useEffect(() => {
-    if (!visible || focusRequestKey <= 0) return;
-    const timer = window.setTimeout(() => {
-      fitActiveTerminal();
-      focusActiveTerminal();
+      if (focusActiveTerminal()) terminalFocusRequestedRef.current = false;
     }, 30);
     return () => window.clearTimeout(timer);
   }, [fitActiveTerminal, focusActiveTerminal, focusRequestKey, visible]);
@@ -524,9 +557,8 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       fontFamily: 'SFMono-Regular, Menlo, Monaco, Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.18,
-      minimumContrastRatio: terminalContrastRatio(theme.isDark),
       scrollback: 8000,
-      theme: terminalTheme(theme.isDark),
+      ...terminalAppearanceOptions(theme.isDark),
     });
     term.loadAddon(fit);
     term.loadAddon(webLinks);
@@ -536,12 +568,17 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       if (event.type !== 'keydown') return true;
       if (isTerminalPanelVisibilityToggleSequence(event)) {
         event.preventDefault();
-        onVisibleChange(false);
+        onTerminalFocusChange?.(false);
+        if (onVisibilityToggleShortcutRef.current) {
+          onVisibilityToggleShortcutRef.current({ restoreEditorFocus: true });
+        } else {
+          onVisibleChange(false);
+        }
         return false;
       }
       if (isTerminalFocusToggleSequence(event)) {
         event.preventDefault();
-        onFocusToggleShortcutRef.current?.();
+        onFocusToggleShortcutRef.current?.({ restoreEditorFocus: true });
         return false;
       }
       const sequence = nativeTerminalNavigationSequence(event);
@@ -569,9 +606,12 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         term.resize(term.cols, term.rows - TERMINAL_BOTTOM_RESERVED_ROWS);
       }
       void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
-      if (sessionId === activeSessionId) term.focus();
+      if (terminalFocusRequestedRef.current && sessionId === activeSessionId) {
+        term.focus();
+        terminalFocusRequestedRef.current = false;
+      }
     }, 30);
-  }, [activeSessionId, onVisibleChange, theme.isDark]);
+  }, [activeSessionId, onTerminalFocusChange, onVisibleChange, theme.isDark]);
 
   const closeSession = useCallback(async (sessionId: string) => {
     const remainingSessions = sessions.filter((session) => session.id !== sessionId);
@@ -1031,18 +1071,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       )}
       <div style={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0, backgroundColor: terminalBackground }}>
         <style>
-          {`.codex-terminal-host .xterm,
-.codex-terminal-host .xterm .xterm-screen,
-.codex-terminal-host .xterm .xterm-viewport {
-  background-color: ${terminalBackground} !important;
-}
-.codex-terminal-host .xterm .xterm-viewport {
-  scrollbar-width: none;
-}
-.codex-terminal-host .xterm .xterm-viewport::-webkit-scrollbar {
-  width: 0;
-  height: 0;
-}`}
+          {terminalViewportStyleCss(terminalBackground)}
         </style>
         {sessions.map((session) => (
           <div

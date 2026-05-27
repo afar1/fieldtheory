@@ -767,6 +767,19 @@ export function getMarkdownWikiLinkCompletionDeleteEdit(
   const replaceEnd = Math.max(completion.queryStart, Math.min(completion.replaceEnd, markdown.length));
   if (key === 'Backspace') {
     if (caret <= completion.openStart) return null;
+    if (
+      caret === completion.queryStart
+      && completion.queryStart === completion.replaceEnd
+      && markdown.slice(completion.openStart, completion.queryStart) === '[['
+      && markdown.slice(completion.replaceEnd, completion.replaceEnd + 2) === ']]'
+    ) {
+      const selection = completion.openStart + 1;
+      return {
+        nextValue: `${markdown.slice(0, selection)}${markdown.slice(completion.replaceEnd + 2)}`,
+        selectionStart: selection,
+        selectionEnd: selection,
+      };
+    }
     return {
       nextValue: `${markdown.slice(0, caret - 1)}${markdown.slice(caret)}`,
       selectionStart: caret - 1,

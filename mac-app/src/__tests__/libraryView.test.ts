@@ -21,6 +21,7 @@ import {
   getRenderedTaskListItemChecked,
   getRenderedMarkdownSelectionToolbarState,
   getRenderedMarkdownSelectionFormatEdit,
+  shouldLetRenderedCodeMirrorHandleLineBoundaryDelete,
   getFocusChromeScopedItemOpacity,
   getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
@@ -35,14 +36,19 @@ import {
   getLibrarianTitleFontSize,
   getMarkdownTaskLines,
   getMarkdownRenderedBodyStartLineIndex,
+  getMarkdownImageReferenceSnapshot,
+  markdownContentMayNeedPortableImages,
+  markdownPortableImagesChanged,
   getRenderedCaretEnsureSourceOffset,
   getRenderedMarkdownDisplayContent,
   getVerifiedMarkdownSelectionReplacement,
   isTerminalEditorFocusToggleShortcut,
   isTerminalPanelVisibilityToggleShortcut,
+  shouldRestoreEditorWhenTogglingTerminalFocus,
   getRenderedTaskLinesByRenderedLine,
   getScrollRatio,
   getScrollTopForRatio,
+  isCodexTerminalEventTarget,
   isBookmarksCanvasChromeActive,
   isLibrarianDocumentFocusChromeActive,
   isRenderedTaskListItem,
@@ -69,9 +75,11 @@ import {
   shouldRevealGroupedFocusChrome,
   shouldShowFocusToolbarControls,
   shouldHandleMarkdownTodoTabShortcut,
+  shouldRestoreEditorWhenTogglingTerminalPanel,
   shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
+  shouldLetRenderedWikiLinkClickEnterEdit,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
   splitFrontmatter,
@@ -1096,6 +1104,119 @@ describe('isTerminalPanelVisibilityToggleShortcut', () => {
   });
 });
 
+describe('shouldRestoreEditorWhenTogglingTerminalPanel', () => {
+  it('restores editor focus only when the visible terminal owns focus', () => {
+    expect(shouldRestoreEditorWhenTogglingTerminalPanel({
+      terminalVisible: true,
+      terminalFocused: true,
+    })).toBe(true);
+    expect(shouldRestoreEditorWhenTogglingTerminalPanel({
+      terminalVisible: true,
+      terminalFocused: false,
+    })).toBe(false);
+    expect(shouldRestoreEditorWhenTogglingTerminalPanel({
+      terminalVisible: false,
+      terminalFocused: true,
+    })).toBe(false);
+    expect(shouldRestoreEditorWhenTogglingTerminalPanel({
+      terminalVisible: true,
+      terminalFocused: false,
+      restoreEditorFocus: true,
+    })).toBe(true);
+  });
+});
+
+describe('shouldRestoreEditorWhenTogglingTerminalFocus', () => {
+  it('restores editor focus for focused or terminal-origin focus toggles', () => {
+    expect(shouldRestoreEditorWhenTogglingTerminalFocus({
+      terminalVisible: true,
+      terminalFocused: true,
+    })).toBe(true);
+    expect(shouldRestoreEditorWhenTogglingTerminalFocus({
+      terminalVisible: true,
+      terminalFocused: false,
+    })).toBe(false);
+    expect(shouldRestoreEditorWhenTogglingTerminalFocus({
+      terminalVisible: true,
+      terminalFocused: false,
+      restoreEditorFocus: true,
+    })).toBe(true);
+    expect(shouldRestoreEditorWhenTogglingTerminalFocus({
+      terminalVisible: false,
+      terminalFocused: true,
+      restoreEditorFocus: true,
+    })).toBe(false);
+  });
+});
+
+describe('isCodexTerminalEventTarget', () => {
+  it('detects keyboard events that originate inside the integrated terminal panel', () => {
+    const terminal = document.createElement('div');
+    terminal.dataset.ftCodexTerminalPanel = 'true';
+    const child = document.createElement('textarea');
+    terminal.appendChild(child);
+    const outside = document.createElement('button');
+
+    expect(isCodexTerminalEventTarget(child)).toBe(true);
+    expect(isCodexTerminalEventTarget(terminal)).toBe(true);
+    expect(isCodexTerminalEventTarget(outside)).toBe(false);
+    expect(isCodexTerminalEventTarget(null)).toBe(false);
+  });
+});
+
+describe('markdownContentMayNeedPortableImages', () => {
+  it('detects markdown image syntax before running portable image repair', () => {
+    expect(markdownContentMayNeedPortableImages('plain text\n[link](https://example.com)')).toBe(false);
+    expect(markdownContentMayNeedPortableImages('plain text with literal ![ marker')).toBe(false);
+    expect(markdownContentMayNeedPortableImages('![Image](</tmp/a.png>)')).toBe(true);
+  });
+});
+
+describe('markdownPortableImagesChanged', () => {
+  it('skips portable image repair when prose changes but image references do not', () => {
+    const previous = '![Image](</tmp/a.png>)\n\nold prose';
+    const next = '![Image](</tmp/a.png>)\n\nnew prose';
+    expect(getMarkdownImageReferenceSnapshot(next)).toEqual(['![Image](</tmp/a.png>)']);
+    expect(markdownPortableImagesChanged(previous, next)).toBe(false);
+  });
+
+  it('runs portable image repair when image references change', () => {
+    expect(markdownPortableImagesChanged(
+      'old prose',
+      'old prose\n![Image](</tmp/a.png>)',
+    )).toBe(true);
+    expect(markdownPortableImagesChanged(
+      '![Image](</tmp/a.png>)',
+      '![Image](</tmp/b.png>)',
+    )).toBe(true);
+  });
+});
+
+describe('shouldLetRenderedWikiLinkClickEnterEdit', () => {
+  it('keeps Command-click on rendered wiki links editable while editing is active', () => {
+    expect(shouldLetRenderedWikiLinkClickEnterEdit({
+      renderedEditingActive: true,
+      metaKey: true,
+      actionKind: 'wiki',
+    })).toBe(true);
+    expect(shouldLetRenderedWikiLinkClickEnterEdit({
+      renderedEditingActive: true,
+      metaKey: true,
+      actionKind: 'create',
+    })).toBe(true);
+    expect(shouldLetRenderedWikiLinkClickEnterEdit({
+      renderedEditingActive: true,
+      metaKey: true,
+      actionKind: 'external',
+    })).toBe(false);
+    expect(shouldLetRenderedWikiLinkClickEnterEdit({
+      renderedEditingActive: false,
+      metaKey: true,
+      actionKind: 'wiki',
+    })).toBe(false);
+  });
+});
+
 describe('getVerifiedMarkdownSelectionReplacement', () => {
   it('replaces only when the active editor selection matches the improved source text', () => {
     expect(getVerifiedMarkdownSelectionReplacement(
@@ -1408,6 +1529,29 @@ describe('rendered markdown edit helpers', () => {
       selectionStart: 5,
       selectionEnd: 5,
     });
+  });
+
+  it('lets CodeMirror handle collapsed rendered macOS line-boundary deletes', () => {
+    expect(shouldLetRenderedCodeMirrorHandleLineBoundaryDelete({
+      event: mkKey({ key: 'Backspace', metaKey: true }),
+      selectionStart: 5,
+      selectionEnd: 5,
+    })).toBe(true);
+    expect(shouldLetRenderedCodeMirrorHandleLineBoundaryDelete({
+      event: mkKey({ key: 'Delete', metaKey: true }),
+      selectionStart: 5,
+      selectionEnd: 5,
+    })).toBe(true);
+    expect(shouldLetRenderedCodeMirrorHandleLineBoundaryDelete({
+      event: mkKey({ key: 'Backspace', metaKey: true }),
+      selectionStart: 2,
+      selectionEnd: 5,
+    })).toBe(false);
+    expect(shouldLetRenderedCodeMirrorHandleLineBoundaryDelete({
+      event: mkKey({ key: 'Backspace' }),
+      selectionStart: 5,
+      selectionEnd: 5,
+    })).toBe(false);
   });
 
   it('applies task and list shortcuts from rendered edit mode', () => {

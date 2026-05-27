@@ -805,13 +805,13 @@ describe('getActiveMarkdownWikiLinkCompletion', () => {
     expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Delete')).toBeNull();
   });
 
-  it('deletes the opening brackets one character at a time after the query is gone', () => {
+  it('deletes an empty auto-closed wikilink back to one opening bracket', () => {
     const input = 'See [[]] today';
     const caret = input.indexOf(']]');
     const completion = getActiveMarkdownWikiLinkCompletion(input, caret, caret);
 
     expect(getMarkdownWikiLinkCompletionDeleteEdit(input, completion!, 'Backspace')).toEqual({
-      nextValue: 'See []] today',
+      nextValue: 'See [ today',
       selectionStart: 5,
       selectionEnd: 5,
     });

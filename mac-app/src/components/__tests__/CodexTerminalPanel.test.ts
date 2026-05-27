@@ -5,12 +5,16 @@ import {
   isTerminalPanelVisibilityToggleSequence,
   mergeCodexTerminalSessions,
   nativeTerminalNavigationSequence,
+  shouldFocusTerminalForRequest,
+  terminalAppearanceOptions,
   terminalContrastRatio,
   terminalTheme,
+  terminalViewportStyleCss,
 } from '../CodexTerminalPanel';
 
-const keyboardEvent = (input: Partial<Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>>) => ({
+const keyboardEvent = (input: Partial<Pick<KeyboardEvent, 'altKey' | 'code' | 'ctrlKey' | 'key' | 'metaKey' | 'shiftKey'>>) => ({
   altKey: false,
+  code: '',
   ctrlKey: false,
   key: '',
   metaKey: false,
@@ -100,7 +104,16 @@ describe('isTerminalFocusToggleSequence', () => {
 describe('isTerminalPanelVisibilityToggleSequence', () => {
   it('uses Command+Period for terminal panel visibility', () => {
     expect(isTerminalPanelVisibilityToggleSequence(keyboardEvent({ key: '.', metaKey: true }))).toBe(true);
+    expect(isTerminalPanelVisibilityToggleSequence(keyboardEvent({ code: 'Period', key: 'Unidentified', metaKey: true }))).toBe(true);
     expect(isTerminalPanelVisibilityToggleSequence(keyboardEvent({ key: '.', metaKey: true, shiftKey: true }))).toBe(false);
+  });
+});
+
+describe('shouldFocusTerminalForRequest', () => {
+  it('focuses the terminal only for explicit focus requests while visible', () => {
+    expect(shouldFocusTerminalForRequest({ visible: true, focusRequestKey: 1 })).toBe(true);
+    expect(shouldFocusTerminalForRequest({ visible: true, focusRequestKey: 0 })).toBe(false);
+    expect(shouldFocusTerminalForRequest({ visible: false, focusRequestKey: 1 })).toBe(false);
   });
 });
 
@@ -119,6 +132,28 @@ describe('terminalTheme', () => {
   it('raises light terminal contrast for diff backgrounds', () => {
     expect(terminalContrastRatio(false)).toBe(4.5);
     expect(terminalContrastRatio(true)).toBe(1);
+  });
+});
+
+describe('terminalAppearanceOptions', () => {
+  it('keeps terminal theme and contrast together for live theme changes', () => {
+    expect(terminalAppearanceOptions(true)).toEqual({
+      minimumContrastRatio: terminalContrastRatio(true),
+      theme: terminalTheme(true),
+    });
+    expect(terminalAppearanceOptions(false)).toEqual({
+      minimumContrastRatio: terminalContrastRatio(false),
+      theme: terminalTheme(false),
+    });
+  });
+});
+
+describe('terminalViewportStyleCss', () => {
+  it('hides xterm viewport scrollbars against global app scrollbar styling', () => {
+    const css = terminalViewportStyleCss('#f0eadf');
+    expect(css).toContain('scrollbar-width: none !important');
+    expect(css).toContain('scrollbar-color: transparent transparent !important');
+    expect(css).toContain('display: none !important');
   });
 });
 

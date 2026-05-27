@@ -55,6 +55,9 @@ import {
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
   getRenderedMarkdownImagePreviewFromEventTarget,
+  getRenderedMarkdownArrowLeftEdit,
+  getRenderedMarkdownOptionArrowEdit,
+  getRenderedMarkdownArrowRightEdit,
   getRenderedMarkdownFormattingBoundaryLineBreakEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
@@ -63,6 +66,9 @@ import {
   getRenderedMarkdownListMarkerLayoutStyle,
   getRenderedMarkdownTaskMarkerLayoutStyle,
   handleRenderedMarkdownEditorBeforeInput,
+  handleRenderedMarkdownEditorArrowLeft,
+  handleRenderedMarkdownEditorCommandArrow,
+  handleRenderedMarkdownEditorKeyDown,
   handleMarkdownCodeEditorCapturedKeyDown,
   isMarkdownCodeEditorFileSwapUpdate,
   isVisualLineNumberRowSelected,
@@ -132,6 +138,7 @@ describe('MarkdownCodeEditor cursor shape', () => {
       borderLeft: 'none',
       marginLeft: '0',
       minWidth: '0.62em',
+      opacity: 0.68,
       width: '0.62em',
     });
   });
@@ -415,6 +422,144 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       insertAt: 0,
       selection: 0,
     });
+  });
+
+  it('skips hidden rendered inline syntax when arrowing right', () => {
+    const boldLine = '**Software commission**\n- Total';
+    const boldContentEnd = 2 + 'Software commission'.length;
+    expect(getRenderedMarkdownArrowRightEdit(boldLine, boldContentEnd)).toEqual({
+      selection: '**Software commission**\n'.length,
+    });
+    expect(getRenderedMarkdownArrowRightEdit(boldLine, boldContentEnd + 1)).toEqual({
+      selection: '**Software commission**\n'.length,
+    });
+    expect(getRenderedMarkdownArrowRightEdit('**bold** tail', 6)).toEqual({
+      selection: 8,
+    });
+    expect(getRenderedMarkdownArrowRightEdit('See [Guide](wiki://guide) next', 10)).toEqual({
+      selection: 25,
+    });
+    expect(getRenderedMarkdownArrowRightEdit('[[Target|Alias]] next', 15)).toBeNull();
+  });
+
+  it('moves ArrowRight from rendered bold line end to the next line', () => {
+    const doc = '**Software commission**\n- Total';
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const contentEnd = 2 + 'Software commission'.length;
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(contentEnd),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const handled = handleRenderedMarkdownEditorKeyDown(view, new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+
+    expect(handled).toBe(true);
+    expect(view.state.selection.main.from).toBe('**Software commission**\n'.length);
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('**');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('skips hidden rendered inline opening syntax when arrowing left', () => {
+    expect(getRenderedMarkdownArrowLeftEdit('**Deal value**', 2)).toEqual({
+      selection: 0,
+    });
+    expect(getRenderedMarkdownArrowLeftEdit('**Deal value**', 1)).toEqual({
+      selection: 0,
+    });
+    expect(getRenderedMarkdownArrowLeftEdit('See **Deal value**', 6)).toEqual({
+      selection: 4,
+    });
+    expect(getRenderedMarkdownArrowLeftEdit('See [Guide](wiki://guide)', 5)).toEqual({
+      selection: 4,
+    });
+    expect(getRenderedMarkdownArrowLeftEdit('See [[Target|Alias]]', 13)).toBeNull();
+  });
+
+  it('uses Option+Arrow to jump rendered inline units without entering syntax', () => {
+    expect(getRenderedMarkdownOptionArrowEdit('See [[Target|Alias]] today', 4, 'right')).toEqual({
+      selection: 20,
+    });
+    expect(getRenderedMarkdownOptionArrowEdit('See [[Target|Alias]] today', 20, 'left')).toEqual({
+      selection: 4,
+    });
+    expect(getRenderedMarkdownOptionArrowEdit('See **Deal value** today', 4, 'right')).toEqual({
+      selection: 18,
+    });
+    expect(getRenderedMarkdownOptionArrowEdit('See **Deal value** today', 18, 'left')).toEqual({
+      selection: 4,
+    });
+  });
+
+  it('keeps ArrowLeft from rendered bold text out of source syntax', () => {
+    const doc = '**Deal value**';
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor(2),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    const handled = handleRenderedMarkdownEditorArrowLeft(view);
+
+    expect(handled).toBe(true);
+    expect(view.state.selection.main.from).toBe(0);
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('**');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('does not reveal wiki syntax for non-collapsed rendered selections', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const doc = 'See [[First Page|first]] today';
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.range(4, doc.indexOf('today') - 1),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(parent.querySelector('.cm-content')?.textContent).toContain('first');
+    expect(parent.querySelector('.cm-content')?.textContent).not.toContain('[[First Page');
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('moves rendered Command+Arrow to visual line boundaries', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: 'alpha beta',
+        selection: EditorSelection.cursor(5),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'left')).toBe(true);
+    expect(view.state.selection.main.from).toBe(0);
+    view.dispatch({ selection: EditorSelection.cursor(5) });
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'right')).toBe(true);
+    expect(view.state.selection.main.from).toBe('alpha beta'.length);
+
+    view.destroy();
+    parent.remove();
   });
 
 	  it('hides common markdown syntax behind styled editable text', () => {
