@@ -526,6 +526,28 @@ export function getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state: Ed
   return changed ? EditorSelection.create(ranges, state.selection.mainIndex) : null;
 }
 
+export function getRenderedMarkdownSelectionInsideListBody(state: EditorState): EditorSelection | null {
+  let changed = false;
+  const ranges = state.selection.ranges.map((range) => {
+    if (!range.empty) return range;
+    const bodyStart = getRenderedMarkdownListBodyStartAtOffset(state.doc.toString(), range.from);
+    if (bodyStart === null || range.from >= bodyStart) return range;
+    changed = true;
+    return EditorSelection.cursor(bodyStart);
+  });
+  return changed ? EditorSelection.create(ranges, state.selection.mainIndex) : null;
+}
+
+export const renderedMarkdownListCaretBoundaryExtension = ViewPlugin.fromClass(
+  class {
+    update(update: ViewUpdate): void {
+      if (!update.selectionSet) return;
+      const selection = getRenderedMarkdownSelectionInsideListBody(update.state);
+      if (selection) update.view.dispatch({ selection });
+    }
+  },
+);
+
 export const trailingLineStartSelectionExtension = ViewPlugin.fromClass(
   class {
     update(update: ViewUpdate): void {
@@ -2466,6 +2488,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           selectionDrawCompartment.of(drawSelection(getMarkdownCodeEditorSelectionDrawConfig(blinkCursor))),
           checkedMarkdownTaskLineExtension,
           trailingLineStartSelectionExtension,
+          ...(presentation === 'rendered' ? [renderedMarkdownListCaretBoundaryExtension] : []),
           rangeSelectionClassExtension,
           EditorView.lineWrapping,
           lineNumbersCompartment.of(lineNumbersExtension),
