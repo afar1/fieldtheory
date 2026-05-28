@@ -78,11 +78,13 @@ import {
   isLibrarianTypographyPresetId,
   persistLibrarianLineHeight,
   persistLibrarianTypographyPreset,
+  resolveLibrarianDocumentMaxWidth,
   resolveLibrarianLineHeight,
   resolveLibrarianParagraphSpacing,
   restoreLibrarianLineHeight,
   restoreLibrarianTypographyPreset,
   type LibrarianLineHeightId,
+  type LibrarianTextSizeId,
   type LibrarianTypographyPresetId,
 } from '../utils/librarianTypography';
 import { getMarkdownFormattingEdit } from '../utils/markdownFormatting';
@@ -2590,7 +2592,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   const lastSavedVersionRef = useRef<DocumentVersion | null>(null);
   const lastSeededPathRef = useRef<string | null>(null);
   const pendingCopiedImageDeletesRef = useRef<Array<{ documentPath: string; markdownImages: string[] }>>([]);
-  const [textSize, setTextSize] = useState<'small' | 'normal' | 'large'>(() => {
+  const [textSize, setTextSize] = useState<LibrarianTextSizeId>(() => {
     const saved = localStorage.getItem('librarian-text-size');
     return (saved === 'small' || saved === 'normal' || saved === 'large') ? saved : 'normal';
   });
@@ -3866,6 +3868,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     () => LIBRARIAN_TYPOGRAPHY_PRESETS.find((preset) => preset.id === typographyPresetId) ?? LIBRARIAN_TYPOGRAPHY_PRESETS[0],
     [typographyPresetId],
   );
+  const documentMaxWidth = resolveLibrarianDocumentMaxWidth(typographyPreset.maxWidth, textSize);
 
   const activeReading: Reading | null =
     selectedItemType === 'wiki' ? wikiSelectedPage :
@@ -8327,7 +8330,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
             {/* Inner container - always matches the centered document width. */}
             <div
               style={{
-                maxWidth: typographyPreset.maxWidth,
+                maxWidth: documentMaxWidth,
                 width: '100%',
                 display: 'flex',
                 alignItems: 'center',
@@ -8913,7 +8916,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           }}
           style={{
             flex: '0 1 auto',
-            width: `min(100%, calc(${typographyPreset.maxWidth} + 64px))`,
+            width: `min(100%, calc(${documentMaxWidth} + 64px))`,
             minHeight: 0,
             overflowY: contentMode === 'markdown' ? 'hidden' : 'auto',
             padding: `${contentTopPadding}px 32px 0 32px`,
@@ -8925,7 +8928,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
         {activeReading ? (
           <div
             style={{
-              maxWidth: typographyPreset.maxWidth,
+              maxWidth: documentMaxWidth,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',

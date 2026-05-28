@@ -5,6 +5,7 @@ export const LIBRARIAN_LINE_HEIGHT_STORAGE_KEY = 'librarian-line-height';
 
 export type LibrarianTypographyPresetId = 'book' | 'note' | 'draft';
 export type LibrarianLineHeightId = 'tight' | 'normal' | 'loose';
+export type LibrarianTextSizeId = 'small' | 'normal' | 'large';
 
 export type LibrarianTypographyPreset = {
   id: LibrarianTypographyPresetId;
@@ -80,6 +81,12 @@ export function resolveLibrarianParagraphSpacing(lineHeight: LibrarianLineHeight
   if (lineHeight === 'tight') return '0.36em';
   if (lineHeight === 'loose') return '0.78em';
   return '0.52em';
+}
+
+export function resolveLibrarianDocumentMaxWidth(maxWidth: string, textSize: LibrarianTextSizeId): string {
+  if (textSize === 'small') return `calc(${maxWidth} - 72px)`;
+  if (textSize === 'large') return `calc(${maxWidth} + 90px)`;
+  return maxWidth;
 }
 
 export function restoreLibrarianTypographyPreset(
