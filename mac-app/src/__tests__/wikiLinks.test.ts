@@ -58,13 +58,25 @@ describe('buildWikiIndex', () => {
     expect(idx.byRelPath.has('debates/b')).toBe(true);
   });
 
-  it('skips pages with an empty title so the empty string never maps anywhere', () => {
+  it('skips empty title keys while still indexing wiki pages by filename', () => {
     const idx = buildWikiIndex([
       { relPath: 'entries/untitled', title: '' },
       { relPath: 'entries/spaces', title: '   ' },
     ]);
-    expect(idx.byTitle.size).toBe(0);
+    expect(idx.byTitle.has('')).toBe(false);
+    expect(idx.byTitle.get('untitled')).toEqual({ kind: 'wiki', relPath: 'entries/untitled' });
+    expect(idx.byTitle.get('spaces')).toEqual({ kind: 'wiki', relPath: 'entries/spaces' });
     expect(idx.byRelPath.size).toBe(2);
+  });
+
+  it('indexes Library markdown pages by filename when display metadata is not the real title', () => {
+    const idx = buildWikiIndex([
+      { relPath: 'briefs/Nebius Three Run Comparison Brief', title: 'Untitled' },
+    ]);
+
+    expect(resolveWikiLink('Nebius Three Run Comparison Brief', idx).relPath).toBe(
+      'briefs/Nebius Three Run Comparison Brief',
+    );
   });
 });
 
@@ -144,6 +156,17 @@ describe('transformWikiLinks', () => {
   it('rewrites resolved links to wiki:// markdown links', () => {
     const out = transformWikiLinks('See [[My Page]] for context.', index);
     expect(out).toBe('See [My Page](wiki://entries/my-page) for context.');
+  });
+
+  it('rewrites title-only links that match a Library markdown filename', () => {
+    const briefIndex = buildWikiIndex([
+      { relPath: 'briefs/Nebius Three Run Comparison Brief', title: 'Untitled' },
+    ]);
+    const out = transformWikiLinks('All-three comparison: [[Nebius Three Run Comparison Brief]].', briefIndex);
+
+    expect(out).toBe(
+      'All-three comparison: [Nebius Three Run Comparison Brief](wiki://briefs/Nebius%20Three%20Run%20Comparison%20Brief).',
+    );
   });
 
   it('uses the alias as display text when provided', () => {

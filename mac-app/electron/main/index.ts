@@ -127,7 +127,7 @@ import {
 import { type DocumentSaveResult, type DocumentVersion, readDocumentVersion, writeTextFileWithConflictGuard } from './documentSaveGuard';
 import { CommandLauncherWindow } from './commandLauncherWindow';
 import { waitForTargetAppFrontmost } from './commandLauncherActivation';
-import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId } from './commandLauncherTarget';
+import { isExternalCommandTargetBundleId, isFieldTheoryCommandTargetBundleId, resolveCommandLauncherInvocationTarget } from './commandLauncherTarget';
 import { appendCommandLauncherTrace, getCommandLauncherTracePath } from './commandLauncherTrace';
 import { appendVisibilityTrace, isVisibilityTraceEnabled } from './visibilityTrace';
 import type { LibrarianManager, LibraryRoot, Reading, ReadingMeta, WatchedDir, WikiFolder, WikiPage, LibraryRenameEvent, ReadingRenameEvent, WikiNode } from './librarianManager';
@@ -793,12 +793,39 @@ function hasFocusedFieldTheoryMarkdownInsertionTarget(): boolean {
   );
 }
 
+function hasActiveFieldTheoryMarkdownInsertionTarget(): boolean {
+  const clipboardWindow = clipboardHistoryWindow?.getWindow() ?? null;
+  return Boolean(
+    activeLibraryFileContext &&
+    clipboardWindow &&
+    !clipboardWindow.isDestroyed() &&
+    clipboardWindow.isVisible()
+  );
+}
+
 function insertTextIntoFocusedFieldTheoryMarkdown(text: string): boolean {
   if (!text || !hasFocusedFieldTheoryMarkdownInsertionTarget()) {
     return false;
   }
   clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
   return true;
+}
+
+function insertTextIntoActiveFieldTheoryMarkdown(text: string): boolean {
+  if (!text || !hasActiveFieldTheoryMarkdownInsertionTarget()) {
+    return false;
+  }
+  clipboardHistoryWindow?.getWindow()?.webContents.send('librarian:insertMarkdownText', text);
+  return true;
+}
+
+function writeTextIntoFocusedCodexTerminal(text: string): boolean {
+  if (!text || !focusedCodexTerminalLauncherSessionId) return false;
+  const wrote = getCodexTerminalManager().writeInput(focusedCodexTerminalLauncherSessionId, text);
+  if (!wrote) {
+    focusedCodexTerminalLauncherSessionId = null;
+  }
+  return wrote;
 }
 
 async function replaceSelectedTextInFieldTheoryMarkdown(input: {
@@ -1117,6 +1144,7 @@ let todoStore: TodoStore | null = null;
 let hotMicManager: HotMicManager | null = null;
 let librarianMarkdownEditorFocused = false;
 let codexTerminalManager: CodexTerminalManager | null = null;
+let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
 let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
@@ -1883,6 +1911,15 @@ function getCommandLauncherTargetApp(): { bundleId: string; name: string } | nul
   return lastExternalCommandTargetApp?.bundleId && isExternalCommandTargetBundleId(lastExternalCommandTargetApp.bundleId)
     ? lastExternalCommandTargetApp
     : null;
+}
+
+function getCommandLauncherInvocationTarget(targetApp: { bundleId: string; name: string } | null) {
+  return resolveCommandLauncherInvocationTarget({
+    fieldTheoryActive: commandLauncherWindow?.wasFieldTheoryActiveOnShow() ?? false,
+    hasFocusedFieldTheoryTerminal: Boolean(focusedCodexTerminalLauncherSessionId),
+    hasActiveFieldTheoryMarkdown: hasActiveFieldTheoryMarkdownInsertionTarget(),
+    hasExternalTargetApp: Boolean(targetApp),
+  });
 }
 
 let visibilityAppTraceInstalled = false;
@@ -5336,6 +5373,11 @@ function setupLibrarianIPCHandlers(): void {
     return getCodexTerminalManager().writeInput(id, data);
   });
 
+  ipcMain.handle(CodexTerminalIPCChannels.SET_LAUNCHER_TARGET_SESSION, (_event, id: string | null): boolean => {
+    focusedCodexTerminalLauncherSessionId = typeof id === 'string' && id.trim() ? id : null;
+    return true;
+  });
+
   ipcMain.handle(CodexTerminalIPCChannels.RESIZE, (_event, id: string, cols: number, rows: number): boolean => {
     return getCodexTerminalManager().resize(id, cols, rows);
   });
@@ -8381,6 +8423,7 @@ function setupClipboardIPCHandlers(): void {
       frontmostName: frontmostApp?.name ?? null,
       fallbackBundleId: lastExternalCommandTargetApp?.bundleId ?? null,
       fallbackName: lastExternalCommandTargetApp?.name ?? null,
+      integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
       targetBundleId: targetApp?.bundleId ?? null,
       targetName: targetApp?.name ?? null,
     });
@@ -9138,12 +9181,53 @@ function setupClipboardIPCHandlers(): void {
 
     try {
       const targetApp = getCommandLauncherTargetApp();
+      const invocationTarget = getCommandLauncherInvocationTarget(targetApp);
       appendCommandLauncherTrace('invoke-handoff-start', {
         filePath,
         targetBundleId: targetApp?.bundleId ?? null,
         targetName: targetApp?.name ?? null,
+        integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+        invocationTarget: invocationTarget.kind,
       });
-      if (!targetApp) {
+      const fileName = path.basename(filePath);
+      if (invocationTarget.kind === 'field-theory-terminal') {
+        const handoffText = formatCommandFilePasteText({
+          kind: 'handoff',
+          fileName,
+          filePath,
+          mode: 'text-reference',
+          markdownContent: '',
+        });
+        if (writeTextIntoFocusedCodexTerminal(handoffText)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-handoff-integrated-terminal-success', {
+            filePath,
+            sessionId: focusedCodexTerminalLauncherSessionId,
+            textLength: handoffText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-handoff-integrated-terminal-failed', { filePath });
+      }
+      if (invocationTarget.kind === 'field-theory-markdown') {
+        const handoffText = formatCommandFilePasteText({
+          kind: 'handoff',
+          fileName,
+          filePath,
+          mode: 'text-reference',
+          markdownContent: '',
+        });
+        if (insertTextIntoActiveFieldTheoryMarkdown(handoffText)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-handoff-field-theory-markdown-success', {
+            filePath,
+            textLength: handoffText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-handoff-field-theory-markdown-failed', { filePath });
+      }
+      if (invocationTarget.kind !== 'external-app' || !targetApp) {
         commandLauncherWindow?.hide(true);
         appendCommandLauncherTrace('invoke-handoff-no-target', { filePath });
         return { success: false, error: 'No external target app available' };
@@ -9153,7 +9237,6 @@ function setupClipboardIPCHandlers(): void {
         const isTerminal = isTerminalApp(targetApp.bundleId);
         const isIDE = isIDEWithTerminal(targetApp.bundleId);
         const pasteMode = resolveCommandFilePasteMode({ isTerminal, isIDE });
-        const fileName = path.basename(filePath);
         const handoffText = formatCommandFilePasteText({
           kind: 'handoff',
           fileName,
@@ -9243,13 +9326,61 @@ function setupClipboardIPCHandlers(): void {
 
     try {
       const targetApp = getCommandLauncherTargetApp();
+      const invocationTarget = getCommandLauncherInvocationTarget(targetApp);
       appendCommandLauncherTrace('invoke-command-start', {
         commandName,
         commandPath: command.filePath,
         targetBundleId: targetApp?.bundleId ?? null,
         targetName: targetApp?.name ?? null,
+        integratedTerminalSessionId: focusedCodexTerminalLauncherSessionId,
+        invocationTarget: invocationTarget.kind,
       });
-      if (!targetApp) {
+      if (invocationTarget.kind === 'field-theory-terminal') {
+        const commandText = formatCommandFilePasteText({
+          kind: 'command',
+          name: command.name,
+          filePath: command.filePath,
+          mode: 'text-reference',
+          markdownContent: '',
+        });
+        if (writeTextIntoFocusedCodexTerminal(commandText)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-command-integrated-terminal-success', {
+            commandName,
+            commandPath: command.filePath,
+            sessionId: focusedCodexTerminalLauncherSessionId,
+            textLength: commandText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-command-integrated-terminal-failed', {
+          commandName,
+          commandPath: command.filePath,
+        });
+      }
+      if (invocationTarget.kind === 'field-theory-markdown') {
+        const commandText = formatCommandFilePasteText({
+          kind: 'command',
+          name: command.name,
+          filePath: command.filePath,
+          mode: 'text-reference',
+          markdownContent: '',
+        });
+        if (insertTextIntoActiveFieldTheoryMarkdown(commandText)) {
+          commandLauncherWindow?.hide(true);
+          appendCommandLauncherTrace('invoke-command-field-theory-markdown-success', {
+            commandName,
+            commandPath: command.filePath,
+            textLength: commandText.length,
+          });
+          return { success: true };
+        }
+        appendCommandLauncherTrace('invoke-command-field-theory-markdown-failed', {
+          commandName,
+          commandPath: command.filePath,
+        });
+      }
+      if (invocationTarget.kind !== 'external-app' || !targetApp) {
         appendCommandLauncherTrace('invoke-command-no-target', {
           commandName,
           commandPath: command.filePath,

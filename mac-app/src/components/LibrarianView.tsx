@@ -96,6 +96,7 @@ import { getMarkdownTaskShortcutEdit, getMarkdownTaskToggleEdit } from '../utils
 import { getDocumentSaveVersion, isDocumentSaveConflict, isDocumentSaveOk } from '../utils/documentSaveConflicts';
 import { formatLocalImageMarkdown, formatPastedLocalImageMarkdown } from '../utils/clipboardMarkdown';
 import MarkdownCodeEditor, {
+  RENDERED_MARKDOWN_EDITOR_LINK_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
   type MarkdownCodeEditorImagePreview,
   type MarkdownCodeEditorHandle,
@@ -564,6 +565,12 @@ export function shouldLetRenderedWikiLinkClickEnterEdit(input: {
   return input.renderedEditingActive
     && input.metaKey
     && (input.actionKind === 'wiki' || input.actionKind === 'create');
+}
+
+export function isRenderedMarkdownLinkEventTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof Node)) return false;
+  const element = target instanceof Element ? target : target.parentElement;
+  return element?.closest(`.${RENDERED_MARKDOWN_EDITOR_LINK_CLASS}`) !== null;
 }
 
 export function isLibrarianDocumentFocusChromeActive(input: {
@@ -5171,6 +5178,10 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     setCodexTerminalVisible(true);
   }, [captureTerminalReturnEditorSelection, closeCodexTerminalPanel, codexTerminalFocused, codexTerminalVisible]);
 
+  const handleCodexTerminalLauncherTargetSessionChange = useCallback((sessionId: string | null) => {
+    void window.codexTerminalAPI?.setLauncherTargetSession?.(sessionId);
+  }, []);
+
   const toggleLineNumbers = useCallback((mode?: 'visible' | 'faded') => {
     setLineNumbersMode((current) => {
       if (mode) return current === mode ? 'hidden' : mode;
@@ -5599,6 +5610,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
   }, [updateRenderedEditorWikiLinkCompletion]);
 
   const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
+    if (!isRenderedMarkdownLinkEventTarget(event.target)) return false;
     if (!shouldOpenMarkdownLinkFromMouseDown({
       button: event.button,
       metaKey: event.metaKey,
@@ -9016,6 +9028,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     onFocus={() => {
                       deactivateSidebarKeyboard();
                       commitTitleEditIfActive();
+                      handleCodexTerminalLauncherTargetSessionChange(null);
                       window.librarianAPI?.setMarkdownEditorFocused(true);
                     }}
                     onBlur={() => {
@@ -9178,6 +9191,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     onFocus={() => {
                       deactivateSidebarKeyboard();
                       commitTitleEditIfActive();
+                      handleCodexTerminalLauncherTargetSessionChange(null);
                       activateRenderedEditing();
                       window.librarianAPI?.setMarkdownEditorFocused(true);
                       recordRenderedEditorDebug('rendered-editor-focus', { state: getRenderedEditorDebugState() });
@@ -9414,6 +9428,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
           focusRequestKey={codexTerminalFocusRequestKey}
           onDockSideChange={setCodexTerminalDockSide}
           onFocusToggleShortcut={toggleTerminalEditorFocus}
+          onLauncherTargetSessionChange={handleCodexTerminalLauncherTargetSessionChange}
           onTerminalFocusChange={setCodexTerminalFocused}
           onVisibilityToggleShortcut={toggleCodexTerminalPanel}
           onVisibleChange={setCodexTerminalVisible}

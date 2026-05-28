@@ -80,6 +80,7 @@ import {
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
   shouldLetRenderedWikiLinkClickEnterEdit,
+  isRenderedMarkdownLinkEventTarget,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
   splitFrontmatter,
@@ -1214,6 +1215,24 @@ describe('shouldLetRenderedWikiLinkClickEnterEdit', () => {
       metaKey: true,
       actionKind: 'wiki',
     })).toBe(false);
+  });
+});
+
+describe('isRenderedMarkdownLinkEventTarget', () => {
+  it('accepts visible rendered link text but rejects nearby source syntax', () => {
+    const link = document.createElement('span');
+    link.className = 'cm-rendered-markdown-link cm-rendered-markdown-wiki-link';
+    link.textContent = 'Field Theory';
+    const syntax = document.createElement('span');
+    syntax.className = 'cm-rendered-markdown-wiki-syntax';
+    syntax.textContent = '[[';
+    const text = document.createTextNode('Field');
+    link.append(text);
+
+    expect(isRenderedMarkdownLinkEventTarget(link)).toBe(true);
+    expect(isRenderedMarkdownLinkEventTarget(text)).toBe(true);
+    expect(isRenderedMarkdownLinkEventTarget(syntax)).toBe(false);
+    expect(isRenderedMarkdownLinkEventTarget(document.createElement('span'))).toBe(false);
   });
 });
 

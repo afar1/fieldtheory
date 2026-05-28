@@ -82,21 +82,34 @@ function addWikiFilePathTarget(
   if (key && !byFilePath.has(key)) byFilePath.set(key, { title: title.trim() });
 }
 
+function addWikiTitleTarget(
+  byTitle: Map<string, WikiLinkTarget>,
+  title: string | undefined,
+  target: WikiLinkTarget,
+): void {
+  const key = title?.trim().toLowerCase();
+  if (key && !byTitle.has(key)) byTitle.set(key, target);
+}
+
+function wikiRelPathBasename(relPath: string): string {
+  const normalized = normalizeWikiRelPath(relPath);
+  return normalized.split('/').pop()?.trim() ?? '';
+}
+
 export function buildWikiIndex(pages: WikiIndexInput[]): WikiIndex {
   const byTitle = new Map<string, WikiLinkTarget>();
   const byRelPath = new Set<string>();
   const byFilePath = new Map<string, MarkdownWikiLinkPasteTarget>();
   for (const page of pages) {
-    if (!page.artifactPath && !page.commandPath) byRelPath.add(page.relPath);
+    const isWikiPage = !page.artifactPath && !page.commandPath;
+    if (isWikiPage) byRelPath.add(page.relPath);
     const target: WikiLinkTarget = page.artifactPath
       ? { kind: 'artifact', path: page.artifactPath }
       : page.commandPath
         ? { kind: 'command', path: page.commandPath }
         : { kind: 'wiki', relPath: page.relPath };
-    const key = page.title.trim().toLowerCase();
-    if (key && !byTitle.has(key)) {
-      byTitle.set(key, target);
-    }
+    addWikiTitleTarget(byTitle, page.title, target);
+    if (isWikiPage) addWikiTitleTarget(byTitle, wikiRelPathBasename(page.relPath), target);
     addWikiFilePathTarget(byFilePath, page.absPath, page.title);
     addWikiFilePathTarget(byFilePath, page.artifactPath, page.title);
     addWikiFilePathTarget(byFilePath, page.commandPath, page.title);

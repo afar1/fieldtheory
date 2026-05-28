@@ -94,7 +94,10 @@ export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-ta
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR = 'data-ft-source-from';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
+export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
+
+export type MarkdownCodeEditorPresentation = 'source' | 'rendered';
 
 function renderedMarkdownEditorTimingEnabled(): boolean {
   try {
@@ -169,7 +172,7 @@ export interface MarkdownCodeEditorImagePreview {
 interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
-  presentation?: 'source' | 'rendered';
+  presentation?: MarkdownCodeEditorPresentation;
   fontFamily: string;
   fontSize: number | string;
   lineHeight: number | string;
@@ -488,6 +491,31 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
         fragment.appendChild(element);
       }
       this.dom.replaceChildren(fragment);
+    }
+  },
+);
+
+export function hasMarkdownCodeEditorRangeSelection(state: EditorState): boolean {
+  return state.selection.ranges.some((range) => !range.empty);
+}
+
+export const rangeSelectionClassExtension = ViewPlugin.fromClass(
+  class {
+    constructor(view: EditorView) {
+      this.updateClass(view);
+    }
+
+    update(update: ViewUpdate): void {
+      if (update.selectionSet || update.docChanged) {
+        this.updateClass(update.view);
+      }
+    }
+
+    private updateClass(view: EditorView): void {
+      view.dom.classList.toggle(
+        MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS,
+        hasMarkdownCodeEditorRangeSelection(view.state),
+      );
     }
   },
 );
@@ -1647,6 +1675,18 @@ export function getMarkdownCodeEditorSelectionDrawConfig(blinkCursor: boolean): 
   return { cursorBlinkRate: blinkCursor ? MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS : 0 };
 }
 
+export function getMarkdownCodeEditorSelectionBackground(
+  isDark: boolean,
+  presentation: MarkdownCodeEditorPresentation,
+  override?: string,
+): string {
+  if (override) return override;
+  if (presentation === 'rendered') {
+    return isDark ? 'rgba(120,170,255,0.16)' : 'rgba(80,140,255,0.18)';
+  }
+  return isDark ? 'rgba(120,170,255,0.25)' : 'rgba(80,140,255,0.25)';
+}
+
 export function getMarkdownCodeEditorCursorShapeStyle(
   cursorStyle: RenderedTextCursorStyle,
   caretColor: string | undefined,
@@ -1865,8 +1905,19 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           '&.cm-focused .cm-cursorLayer .cm-cursor, .cm-cursorLayer .cm-cursor, .cm-cursor-primary': {
             ...cursorShapeStyle,
           },
+          [`&.${MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS} .cm-cursorLayer .cm-cursor`]: {
+            display: 'none',
+          },
           '.cm-selectionBackground, ::selection, .cm-content ::selection': {
-            backgroundColor: selectionBackground ?? (theme.isDark ? 'rgba(120,170,255,0.25)' : 'rgba(80,140,255,0.25)'),
+            backgroundColor: getMarkdownCodeEditorSelectionBackground(theme.isDark, presentation, selectionBackground),
+          },
+          ...(isRenderedPresentation ? {
+            '.cm-selectionBackground': {
+              borderRadius: '2px',
+            },
+          } : {}),
+          '.cm-content ::selection': {
+            backgroundColor: getMarkdownCodeEditorSelectionBackground(theme.isDark, presentation, selectionBackground),
           },
           '.cm-activeLine': {
             backgroundColor: 'transparent',
@@ -2157,6 +2208,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           highlightActiveLine(),
           selectionDrawCompartment.of(drawSelection(getMarkdownCodeEditorSelectionDrawConfig(blinkCursor))),
           checkedMarkdownTaskLineExtension,
+          rangeSelectionClassExtension,
           EditorView.lineWrapping,
           lineNumbersCompartment.of(lineNumbersExtension),
           contentAttributesCompartment.of(EditorView.contentAttributes.of(contentAttributes)),

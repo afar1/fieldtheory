@@ -13,3 +13,23 @@ export function isExternalCommandTargetBundleId(bundleId: string | null | undefi
     !isFieldTheoryCommandTargetBundleId(bundleId) &&
     !isDockCommandTargetBundleId(bundleId);
 }
+
+export type CommandLauncherInvocationTarget =
+  | { kind: 'field-theory-terminal' }
+  | { kind: 'field-theory-markdown' }
+  | { kind: 'external-app' }
+  | { kind: 'none' };
+
+export function resolveCommandLauncherInvocationTarget(input: {
+  fieldTheoryActive: boolean;
+  hasFocusedFieldTheoryTerminal: boolean;
+  hasActiveFieldTheoryMarkdown: boolean;
+  hasExternalTargetApp: boolean;
+}): CommandLauncherInvocationTarget {
+  if (input.fieldTheoryActive) {
+    if (input.hasFocusedFieldTheoryTerminal) return { kind: 'field-theory-terminal' };
+    if (input.hasActiveFieldTheoryMarkdown) return { kind: 'field-theory-markdown' };
+    return { kind: 'none' };
+  }
+  return input.hasExternalTargetApp ? { kind: 'external-app' } : { kind: 'none' };
+}
