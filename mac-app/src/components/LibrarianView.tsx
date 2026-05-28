@@ -8772,10 +8772,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                     padding: 0,
                     fontSize: '11px',
-                    color: sharedFileStatus?.shared ? '#2563eb' : theme.textSecondary,
-                    backgroundColor: sharedFileStatus?.shared
-                      ? (theme.isDark ? 'rgba(37,99,235,0.20)' : 'rgba(37,99,235,0.12)')
-                      : 'transparent',
+                    color: sharedFileStatus?.shared ? '#2563eb' : (theme.isDark ? 'rgba(255,255,255,0.66)' : 'rgba(17,17,17,0.58)'),
+                    backgroundColor: 'transparent',
                     border: 'none',
                     borderRadius: '4px',
                     cursor: isTogglingSharedFile ? 'default' : 'pointer',
@@ -8791,8 +8789,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   aria-label={sharedFileStatus?.shared ? 'Remove from River (shared)' : 'Add to River (shared)'}
                 >
                   <SidebarRiverIcon
-                    color={sharedFileStatus?.shared ? '#2563eb' : theme.textSecondary}
-                    style={{ opacity: isTogglingSharedFile ? 0.35 : sharedFileStatus?.shared ? 1 : 0.48 }}
+                    color={sharedFileStatus?.shared ? '#2563eb' : (theme.isDark ? 'rgba(255,255,255,0.66)' : 'rgba(17,17,17,0.58)')}
+                    style={{ opacity: isTogglingSharedFile ? 0.35 : 1 }}
                   />
                 </button>
               )}
