@@ -79,7 +79,6 @@ import {
   shouldSuppressRenderedMarkdownBoundaryDelete,
   shouldOpenMarkdownEditorLinkFromMouseDown,
   shouldOpenMarkdownLinkFromMouseDown,
-  shouldLetRenderedWikiLinkClickEnterEdit,
   isRenderedMarkdownLinkEventTarget,
   shouldInsertClipboardImagePathForPaste,
   isTextEntryInputType,
@@ -369,13 +368,33 @@ describe('shouldOpenMarkdownLinkFromMouseDown', () => {
     })).toBe(true);
   });
 
-  it('requires Command-click for rendered links while editing is active', () => {
+  it('opens rendered wiki links on ordinary primary click while editing is active', () => {
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
       metaKey: false,
       altKey: false,
       ctrlKey: false,
       renderedEditingActive: true,
+      actionKind: 'wiki',
+    })).toBe(true);
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+      renderedEditingActive: true,
+      actionKind: 'create',
+    })).toBe(true);
+  });
+
+  it('requires Command-click for non-wiki rendered links while editing is active', () => {
+    expect(shouldOpenMarkdownLinkFromMouseDown({
+      button: 0,
+      metaKey: false,
+      altKey: false,
+      ctrlKey: false,
+      renderedEditingActive: true,
+      actionKind: 'external',
     })).toBe(false);
     expect(shouldOpenMarkdownLinkFromMouseDown({
       button: 0,
@@ -383,6 +402,7 @@ describe('shouldOpenMarkdownLinkFromMouseDown', () => {
       altKey: false,
       ctrlKey: false,
       renderedEditingActive: true,
+      actionKind: 'external',
     })).toBe(true);
   });
 
@@ -1190,31 +1210,6 @@ describe('markdownPortableImagesChanged', () => {
       '![Image](</tmp/a.png>)',
       '![Image](</tmp/b.png>)',
     )).toBe(true);
-  });
-});
-
-describe('shouldLetRenderedWikiLinkClickEnterEdit', () => {
-  it('keeps Command-click on rendered wiki links editable while editing is active', () => {
-    expect(shouldLetRenderedWikiLinkClickEnterEdit({
-      renderedEditingActive: true,
-      metaKey: true,
-      actionKind: 'wiki',
-    })).toBe(true);
-    expect(shouldLetRenderedWikiLinkClickEnterEdit({
-      renderedEditingActive: true,
-      metaKey: true,
-      actionKind: 'create',
-    })).toBe(true);
-    expect(shouldLetRenderedWikiLinkClickEnterEdit({
-      renderedEditingActive: true,
-      metaKey: true,
-      actionKind: 'external',
-    })).toBe(false);
-    expect(shouldLetRenderedWikiLinkClickEnterEdit({
-      renderedEditingActive: false,
-      metaKey: true,
-      actionKind: 'wiki',
-    })).toBe(false);
   });
 });
 

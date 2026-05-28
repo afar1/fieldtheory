@@ -542,8 +542,10 @@ export function shouldOpenMarkdownLinkFromMouseDown(input: {
   altKey: boolean;
   ctrlKey: boolean;
   renderedEditingActive?: boolean;
+  actionKind?: LinkAction['kind'];
 }): boolean {
   if (input.button !== 0 || input.altKey || input.ctrlKey) return false;
+  if (input.renderedEditingActive && (input.actionKind === 'wiki' || input.actionKind === 'create')) return true;
   if (input.renderedEditingActive) return input.metaKey === true;
   return true;
 }
@@ -555,16 +557,6 @@ export function shouldOpenMarkdownEditorLinkFromMouseDown(input: {
   ctrlKey: boolean;
 }): boolean {
   return input.button === 0 && input.metaKey && !input.altKey && !input.ctrlKey;
-}
-
-export function shouldLetRenderedWikiLinkClickEnterEdit(input: {
-  renderedEditingActive: boolean;
-  metaKey: boolean;
-  actionKind: LinkAction['kind'];
-}): boolean {
-  return input.renderedEditingActive
-    && input.metaKey
-    && (input.actionKind === 'wiki' || input.actionKind === 'create');
 }
 
 export function isRenderedMarkdownLinkEventTarget(target: EventTarget | null): boolean {
@@ -5615,22 +5607,16 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   const handleRenderedEditorMouseDown = useCallback((event: MouseEvent, offset: number): boolean => {
     if (!isRenderedMarkdownLinkEventTarget(event.target)) return false;
+    const action = getMarkdownEditorLinkActionAtOffset(displaySourceBody, offset, wikiIndex);
+    if (action.kind === 'noop') return false;
     if (!shouldOpenMarkdownLinkFromMouseDown({
       button: event.button,
       metaKey: event.metaKey,
       altKey: event.altKey,
       ctrlKey: event.ctrlKey,
       renderedEditingActive: renderedEditingActiveRef.current,
-    })) return false;
-    const action = getMarkdownEditorLinkActionAtOffset(displaySourceBody, offset, wikiIndex);
-    if (action.kind === 'noop') return false;
-    if (shouldLetRenderedWikiLinkClickEnterEdit({
-      renderedEditingActive: renderedEditingActiveRef.current,
-      metaKey: event.metaKey,
       actionKind: action.kind,
-    })) {
-      return false;
-    }
+    })) return false;
     event.preventDefault();
     event.stopPropagation();
     openLinkAction(action);
