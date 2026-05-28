@@ -2353,12 +2353,10 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_START_CLASS}`]: {
             borderTopLeftRadius: '4px',
             borderTopRightRadius: '4px',
-            paddingTop: '0.24em',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_CODE_BLOCK_END_CLASS}`]: {
             borderBottomLeftRadius: '4px',
             borderBottomRightRadius: '4px',
-            paddingBottom: '0.24em',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_LINE_CLASS}`]: {
             paddingTop: `calc(${paragraphSpacing ?? '0.78em'} * 0.18)`,
