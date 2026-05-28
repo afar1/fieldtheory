@@ -385,11 +385,13 @@ export class AuthManager extends EventEmitter {
   /**
    * Initialize the auth manager with Supabase credentials.
    */
-  async init(supabaseUrl?: string, supabaseAnonKey?: string): Promise<void> {
+  async init(supabaseUrl?: string, supabasePublishableKey?: string): Promise<void> {
     const url = supabaseUrl || process.env.VITE_SUPABASE_URL;
-    const anonKey = supabaseAnonKey || process.env.VITE_SUPABASE_ANON_KEY;
+    const publishableKey = supabasePublishableKey
+      || process.env.FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY
+      || process.env.VITE_SUPABASE_ANON_KEY;
 
-    if (!url || !anonKey) {
+    if (!url || !publishableKey) {
       log.warn('No Supabase credentials available');
       return;
     }
@@ -399,7 +401,7 @@ export class AuthManager extends EventEmitter {
     this.fileStorage = new FileStorage(userDataPath);
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    this.supabase = createClient(url, anonKey, {
+    this.supabase = createClient(url, publishableKey, {
       auth: {
         storage: this.fileStorage,
         autoRefreshToken: false,  // DISABLED: We handle refresh ourselves to prevent race conditions
