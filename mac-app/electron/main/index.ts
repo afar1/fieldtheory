@@ -1118,6 +1118,7 @@ let librarianManager: LibrarianManager | null = null;
 let markdownAssetsConsolidated = false;
 let recentManager: RecentManager | null = null;
 let bookmarksManager: BookmarksManager | null = null;
+let bookmarksWatcherStarted = false;
 let taggedDocsManager: TaggedDocsManager | null = null;
 let commandsManager: CommandsManager | null = null;
 let localLlmManager: LocalLlmManager | null = null;
@@ -1152,6 +1153,26 @@ let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
 let globalImproveInFlight = false;
+
+function ensureBookmarksManager(): BookmarksManager {
+  if (!bookmarksManager) {
+    const { BookmarksManager } = require('./bookmarksManager') as typeof import('./bookmarksManager');
+    bookmarksManager = new BookmarksManager();
+  }
+  return bookmarksManager;
+}
+
+function ensureBookmarksWatcher(): void {
+  if (bookmarksWatcherStarted) return;
+  const manager = ensureBookmarksManager();
+  manager.startWatcher();
+  manager.on('bookmarks:changed', () => {
+    BrowserWindow.getAllWindows().forEach((w) => {
+      if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
+    });
+  });
+  bookmarksWatcherStarted = true;
+}
 
 async function ensureUserDataManagerRestored(): Promise<UserDataManager> {
   if (!userDataManager) {
@@ -4240,16 +4261,14 @@ function setupLibrarianIPCHandlers(): void {
   }
 
   ipcMain.handle('bookmarks:getAll', (): BookmarksSnapshot => {
-    if (!bookmarksManager) return { bookmarks: [], folders: [], xLastSyncedAt: null };
-    return bookmarksManager.getSnapshot();
+    return ensureBookmarksManager().getSnapshot();
   });
 
   ipcMain.handle('bookmarks:syncIfStale', () => syncBookmarksFromCliIfStale());
 
   ipcMain.handle('bookmarks:getAuthors', () => {
-    if (!bookmarksManager) return [];
     const { buildBookmarkAuthorSummaries } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
-    return buildBookmarkAuthorSummaries(bookmarksManager.getSnapshot().bookmarks);
+    return buildBookmarkAuthorSummaries(ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   const pasteBookmarkTextFromLauncher = async (
@@ -4291,22 +4310,20 @@ function setupLibrarianIPCHandlers(): void {
   };
 
   ipcMain.handle('bookmarks:getAuthorBookmarks', (_event, handle: string) => {
-    if (!bookmarksManager) return [];
     const { bookmarksForAuthor } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
-    return bookmarksForAuthor(handle, bookmarksManager.getSnapshot().bookmarks);
+    return bookmarksForAuthor(handle, ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:getTaxonomyBookmarks', (_event, filePaths: string[]) => {
-    if (!bookmarksManager) return [];
     if (!Array.isArray(filePaths)) return [];
     const { bookmarksForTaxonomyFiles } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
-    return bookmarksForTaxonomyFiles(filePaths, bookmarksManager.getSnapshot().bookmarks);
+    return bookmarksForTaxonomyFiles(filePaths, ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:search', (_event, query: string) => {
-    if (!bookmarksManager || typeof query !== 'string') return [];
+    if (typeof query !== 'string') return [];
     const { searchBookmarks } = require('./bookmarkCollections') as typeof import('./bookmarkCollections');
-    return searchBookmarks(query, bookmarksManager.getSnapshot().bookmarks);
+    return searchBookmarks(query, ensureBookmarksManager().getSnapshot().bookmarks);
   });
 
   ipcMain.handle('bookmarks:saveWebUrl', async (_event, url: string) => {
@@ -4314,15 +4331,13 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return { success: false, error: 'Field Theory is read-only' };
     }
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
+    const manager = ensureBookmarksManager();
     if (typeof url !== 'string' || !url.trim()) {
       return { success: false, error: 'URL is required' };
     }
 
     try {
-      const result = await bookmarksManager.saveWebBookmarkFromUrl(url);
+      const result = await manager.saveWebBookmarkFromUrl(url);
       return { success: true, ...result };
     } catch (error) {
       log.error('Error saving web bookmark:', error);
@@ -4375,9 +4390,7 @@ function setupLibrarianIPCHandlers(): void {
       blockWrite();
       return { success: false, error: 'Field Theory is read-only' };
     }
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
+    const manager = ensureBookmarksManager();
 
     const activePage = await getActiveWebPageForLauncher('save-active-web-page');
     if (!activePage.success || !activePage.page) {
@@ -4386,7 +4399,7 @@ function setupLibrarianIPCHandlers(): void {
 
     try {
       const { page } = activePage;
-      const result = await bookmarksManager.saveWebBookmarkFromUrl(page.url);
+      const result = await manager.saveWebBookmarkFromUrl(page.url);
       appendCommandLauncherTrace('save-active-web-page-success', {
         targetBundleId: page.bundleId,
         targetName: page.appName,
@@ -4407,12 +4420,8 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:invokeBookmark', async (_event, id: string) => {
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
-
     const { bookmarkById, formatBookmarkPost } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
-    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
     if (!bookmark) {
       return { success: false, error: 'Bookmark not found' };
     }
@@ -4421,14 +4430,10 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:copyForAgent', async (_event, id: string) => {
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
-
     const { buildBookmarkAgentCopyText } = require('./bookmarkAgentCopy') as typeof import('./bookmarkAgentCopy');
     const { bookmarkById } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
     const { mediaDir: bookmarkMediaDir } = require('./bookmarksManager') as typeof import('./bookmarksManager');
-    const bookmark = bookmarkById(id, bookmarksManager.getSnapshot().bookmarks);
+    const bookmark = bookmarkById(id, ensureBookmarksManager().getSnapshot().bookmarks);
     if (!bookmark) {
       return { success: false, error: 'Bookmark not found' };
     }
@@ -4444,12 +4449,8 @@ function setupLibrarianIPCHandlers(): void {
   });
 
   ipcMain.handle('bookmarks:invokeAuthorTimeline', async (_event, handle: string) => {
-    if (!bookmarksManager) {
-      return { success: false, error: 'Bookmarks not initialized' };
-    }
-
     const { formatBookmarkAuthorTimeline } = require('./bookmarkAuthorTimeline') as typeof import('./bookmarkAuthorTimeline');
-    const timeline = formatBookmarkAuthorTimeline(handle, bookmarksManager.getSnapshot().bookmarks);
+    const timeline = formatBookmarkAuthorTimeline(handle, ensureBookmarksManager().getSnapshot().bookmarks);
     if (!timeline) {
       return { success: false, error: 'No bookmarks found for author' };
     }
@@ -4457,14 +4458,7 @@ function setupLibrarianIPCHandlers(): void {
     return pasteBookmarkTextFromLauncher('invoke-bookmark-author', { handle }, timeline);
   });
 
-  if (bookmarksManager) {
-    bookmarksManager.startWatcher();
-    bookmarksManager.on('bookmarks:changed', () => {
-      BrowserWindow.getAllWindows().forEach((w) => {
-        if (!w.isDestroyed()) w.webContents.send('bookmarks:changed');
-      });
-    });
-  }
+  ensureBookmarksWatcher();
 
   // Get all watched directories
   ipcMain.handle('librarian:getWatchedDirs', (): WatchedDir[] => {
@@ -10644,8 +10638,7 @@ async function initTranscriberSystem(): Promise<void> {
   recentManager = new RecentManager();
 
   // Initialize bookmarks manager for reading synced X bookmarks.
-  const { BookmarksManager } = require('./bookmarksManager') as typeof import('./bookmarksManager');
-  bookmarksManager = new BookmarksManager();
+  ensureBookmarksManager();
 
   // Broadcast artifact-added events to all windows and auto-show if enabled
   librarianManager.on('reading-added', async (reading: Reading) => {
