@@ -1050,7 +1050,7 @@ describe('LibrarianView render', () => {
     const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
     const popOutButton = screen.getByRole('button', { name: 'Open in New Window' });
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
-    const terminalButton = screen.getByRole('button', { name: 'Open Codex Terminal' });
+    const terminalButton = screen.getByRole('button', { name: 'Open Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
     expect(riverButton.nextElementSibling).toBe(popOutButton);
     expect(popOutButton.nextElementSibling).toBe(markdownButton);

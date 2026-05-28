@@ -8858,8 +8858,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                 <button
                   type="button"
                   onClick={() => toggleCodexTerminalPanel()}
-                  title={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
-                  aria-label={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
+                  title={codexTerminalVisible ? 'Close Terminal' : 'Open Terminal'}
+                  aria-label={codexTerminalVisible ? 'Close Terminal' : 'Open Terminal'}
                   style={{
                     height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                     width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,

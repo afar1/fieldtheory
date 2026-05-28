@@ -209,9 +209,19 @@ describe('CodexTerminalManager', () => {
     expect(manager.listSessions()).toHaveLength(1);
   });
 
-  it('starts Codex inside a login shell after the shell prompt is ready', () => {
+  it('starts a plain login shell by default', () => {
     const { manager, ptys, spawnPty } = createManager();
     manager.createSession();
+
+    expect((spawnPty as any).mock.calls[0]?.[1]).toEqual(['-l']);
+    expect(ptys[0].written).toEqual([]);
+    ptys[0].emit('data', promptFor(process.cwd()));
+    expect(ptys[0].written).toEqual([]);
+  });
+
+  it('starts Codex inside a login shell when a launch command is provided', () => {
+    const { manager, ptys, spawnPty } = createManager();
+    manager.createSession({ launchCommand: 'codex' });
 
     expect((spawnPty as any).mock.calls[0]?.[1]).toEqual(['-l']);
     expect(ptys[0].written).toEqual([]);
@@ -236,9 +246,9 @@ describe('CodexTerminalManager', () => {
     expect(result.pendingEcho).toBeNull();
   });
 
-  it('does not keep the automatic Codex launch echo in terminal scrollback', () => {
+  it('does not keep the requested Codex launch echo in terminal scrollback', () => {
     const { manager, ptys } = createManager();
-    const session = manager.createSession();
+    const session = manager.createSession({ launchCommand: 'codex' });
 
     ptys[0].emit('data', promptFor(process.cwd()));
     ptys[0].emit('data', 'co');
@@ -266,9 +276,17 @@ describe('CodexTerminalManager', () => {
     expect(ptys[0].written[0]).toBe('codex\r');
   });
 
-  it('falls back to starting Codex if the shell prompt is not detected', () => {
+  it('does not start Codex on the fallback timer for plain shell sessions', () => {
     const { manager, ptys } = createManager();
     manager.createSession();
+
+    vi.advanceTimersByTime(1200);
+    expect(ptys[0].written).toEqual([]);
+  });
+
+  it('falls back to starting Codex if a requested launch command waits on an undetected prompt', () => {
+    const { manager, ptys } = createManager();
+    manager.createSession({ launchCommand: 'codex' });
 
     vi.advanceTimersByTime(1199);
     expect(ptys[0].written).toEqual([]);
@@ -454,7 +472,7 @@ describe('CodexTerminalManager', () => {
       provenanceFilePath,
       contextDirPath: join(libraryDir, 'Codex Context'),
     });
-    const session = manager.createSession({ title: 'Planning Codex' });
+    const session = manager.createSession({ title: 'Planning shell' });
 
     try {
       manager.attachPageContext(session.id, {
@@ -469,9 +487,9 @@ describe('CodexTerminalManager', () => {
       expect(provenance).toMatchObject([
         {
           sessionId: session.id,
-          sessionTitle: 'Planning Codex',
+          sessionTitle: 'Planning shell',
           sessionCwd: repoDir,
-          launchedCommand: 'codex',
+          launchedCommand: 'shell',
           repoPath: repoDir,
           gitBranch: 'codex-panel',
           filePath: join(libraryDir, 'Codex Context', 'sessions', session.id, 'context.json'),
