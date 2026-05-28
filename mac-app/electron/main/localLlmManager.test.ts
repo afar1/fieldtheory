@@ -349,6 +349,35 @@ describe('LocalLlmManager', () => {
     expect(capturedArgs).toEqual(expect.arrayContaining(['--model', modelPath, '--codex-model', DEFAULT_LOCAL_LLM_MODEL]));
   });
 
+  it('reports active generation while a local model request is in flight', async () => {
+    const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
+    fs.closeSync(fs.openSync(modelPath, 'w'));
+    fs.truncateSync(modelPath, 3 * 1024 * 1024 * 1024);
+
+    let resolveSend!: (value: { ok: boolean; text: string }) => void;
+    const server = {
+      start: vi.fn(async () => {}),
+      send: vi.fn(() => new Promise<{ ok: boolean; text: string }>((resolve) => {
+        resolveSend = resolve;
+      })),
+      stop: vi.fn(),
+    };
+    const manager = new LocalLlmManager({
+      userDataPath: tempDir,
+      resourcesPath: tempDir,
+      appPath: tempDir,
+      cwd: process.cwd(),
+      env: { FT_LOCAL_LLM_MODEL_PATH: modelPath },
+      serverFactory: () => server,
+    });
+
+    const run = manager.generate('hello');
+    await vi.waitFor(() => expect(manager.isRunning()).toBe(true));
+    resolveSend({ ok: true, text: '# Clean' });
+    await expect(run).resolves.toBe('# Clean');
+    expect(manager.isRunning()).toBe(false);
+  });
+
   it('refuses oversized prompts before starting the local model server', async () => {
     const modelPath = path.join(tempDir, 'gemma-4-E4B-it-Q4_K_M.gguf');
     fs.closeSync(fs.openSync(modelPath, 'w'));

@@ -295,6 +295,13 @@ export class AgentKickoffManager extends EventEmitter {
   getInFlightCount(): number {
     return this.runs.size;
   }
+
+  destroy(): void {
+    for (const child of this.runs.values()) {
+      try { child.kill('SIGTERM'); } catch { /* already gone */ }
+    }
+    this.runs.clear();
+  }
 }
 
 // ---- helpers (exported for unit tests) --------------------------------------

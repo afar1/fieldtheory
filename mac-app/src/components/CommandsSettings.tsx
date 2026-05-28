@@ -9,6 +9,7 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import {
+  SETTINGS_CARD_GAP,
   SettingsBadge,
   SettingsCard,
   SettingsDivider,
@@ -301,7 +302,7 @@ export default function CommandsSettings() {
   };
 
   return (
-    <div style={{ padding: '0', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+    <div style={{ padding: '0', display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       <p style={{
         fontSize: '12px',
         color: theme.textSecondary,

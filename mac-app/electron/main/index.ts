@@ -105,6 +105,7 @@ import { SharedSyncService, type SharedFilePresenceUser, type SharedFileShareInp
 import { SharedTeamService, type SharedTeamMutationResult } from './sharedTeamService';
 import { isFieldTheoryInternalSyncEnvEnabled, resolveFieldTheorySyncStatus, type FieldTheorySyncStatus } from './releaseSyncPolicy';
 import { resolveStartupReadiness } from './startupReadinessPolicy';
+import { collectQuitBlockingActivities, formatQuitBlockingActivityDetail } from './appQuitGuard';
 import {
   CommandsIPCChannels,
   type LauncherFileIconResult,
@@ -1059,8 +1060,7 @@ function formatAutoUpdaterErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   if (
     fieldTheoryBuildChannel === 'experimental'
-    && message.includes('releases.atom')
-    && message.includes('404')
+    && /(401|403|404|not found|forbidden|unauthorized)/i.test(message)
   ) {
     return 'Experimental updates need GitHub auth for afar1/oscar. Run gh auth login or set FIELD_THEORY_EXPERIMENTAL_UPDATE_TOKEN, then restart Field Theory Experimental.';
   }
@@ -1146,6 +1146,8 @@ let librarianMarkdownEditorFocused = false;
 let codexTerminalManager: CodexTerminalManager | null = null;
 let focusedCodexTerminalLauncherSessionId: string | null = null;
 let lastScratchpadOpenAt = 0;
+let appQuitConfirmedWithLocalWork = false;
+let appQuitConfirmationOpen = false;
 let appMetadataIPCHandlersInstalled = false;
 let onboardingIPCHandlersInstalled = false;
 let transcribeIPCHandlersInstalled = false;
@@ -1608,6 +1610,16 @@ function broadcastCodexTerminalSessions(manager = getCodexTerminalManager()): vo
     if (!window.isDestroyed()) {
       window.webContents.send(CodexTerminalIPCChannels.SESSIONS_CHANGED, manager.listSessions());
     }
+  });
+}
+
+function getQuitBlockingActivities() {
+  return collectQuitBlockingActivities({
+    transcriptionStatus: transcriberManager?.getStatus() ?? 'idle',
+    hotMicActive: hotMicManager?.isActive ?? false,
+    localLlmActive: localLlmManager?.isRunning() ?? false,
+    agentRunCount: agentKickoffManager?.getInFlightCount() ?? 0,
+    codexTerminalSessions: codexTerminalManager?.listSessions() ?? [],
   });
 }
 
@@ -2320,6 +2332,20 @@ function sendUpdateNotAvailable(): void {
       window.webContents.send('updater:updateNotAvailable');
     }
   });
+}
+
+function sendUpdaterErrorMessage(message: string): void {
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed()) {
+      window.webContents.send('updater:error', message);
+    }
+  });
+}
+
+function reportAutoUpdaterError(context: string, err: unknown): void {
+  const message = formatAutoUpdaterErrorMessage(err);
+  log.error('%s: %s', context, message);
+  sendUpdaterErrorMessage(message);
 }
 
 // Consolidated user state logging - single line showing auth/tier state
@@ -7059,6 +7085,9 @@ function setupClipboardIPCHandlers(): void {
 
     // Clean up TranscriberManager (stop persistent runtimes, unregister hotkeys)
     transcriberManager?.destroy();
+
+    // Stop any local agent kickoff subprocesses.
+    agentKickoffManager?.destroy();
 
     // Clean up embedded Codex terminals.
     codexTerminalManager?.destroy();
@@ -12459,9 +12488,7 @@ if (!gotTheLock) {
 
     const checkForUpdatesManual = isAutoUpdaterEnabled
       ? () => {
-        getAutoUpdater().checkForUpdates().catch((err) => {
-          log.error('Update check failed:', formatAutoUpdaterErrorMessage(err));
-        });
+        getAutoUpdater().checkForUpdates().catch((err) => reportAutoUpdaterError('Update check failed', err));
       }
       : undefined;
 
@@ -12567,12 +12594,7 @@ if (!gotTheLock) {
 
       autoUpdater.on('error', (err) => {
         log.error('Updater error:', err);
-        const message = formatAutoUpdaterErrorMessage(err);
-        BrowserWindow.getAllWindows().forEach((window) => {
-          if (!window.isDestroyed()) {
-            window.webContents.send('updater:error', message);
-          }
-        });
+        sendUpdaterErrorMessage(formatAutoUpdaterErrorMessage(err));
       });
 
       autoUpdater.on('download-progress', (progress) => {
@@ -12603,7 +12625,7 @@ if (!gotTheLock) {
     ipcMain.handle('updater:checkForUpdates', () => {
       if (!isAutoUpdaterEnabled) return;
       if (app.isPackaged) {
-        getAutoUpdater().checkForUpdates();
+        return getAutoUpdater().checkForUpdates().catch((err) => reportAutoUpdaterError('Update check failed', err));
       } else {
         // In dev mode, simulate "up to date" response.
         sendUpdateNotAvailable();
@@ -12831,7 +12853,42 @@ if (!gotTheLock) {
     }
   });
 
-  app.on('before-quit', () => {
+  app.on('before-quit', (event) => {
+    const blockingActivities = getQuitBlockingActivities();
+    if (!appQuitConfirmedWithLocalWork && blockingActivities.length > 0) {
+      event.preventDefault();
+      if (appQuitConfirmationOpen) return;
+      appQuitConfirmationOpen = true;
+
+      const options = {
+        type: 'warning' as const,
+        buttons: ['Quit and Stop Them', 'Cancel'],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+        title: 'Quit Field Theory?',
+        message: 'Field Theory is still running local work.',
+        detail: formatQuitBlockingActivityDetail(blockingActivities),
+      };
+      const parent = BrowserWindow.getFocusedWindow()
+        ?? BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+      const prompt = parent
+        ? dialog.showMessageBox(parent, options)
+        : dialog.showMessageBox(options);
+
+      void prompt.then(({ response }) => {
+        appQuitConfirmationOpen = false;
+        if (response === 0) {
+          appQuitConfirmedWithLocalWork = true;
+          app.quit();
+        }
+      }).catch((error) => {
+        appQuitConfirmationOpen = false;
+        log.warn('Quit confirmation failed: %s', error instanceof Error ? error.message : String(error));
+      });
+      return;
+    }
+
     log.info('App quitting, cleaning up...');
 
     if (feedbackManager) {
@@ -12871,6 +12928,8 @@ if (!gotTheLock) {
     if (clipboardManager) {
       clipboardManager.destroy();
     }
+
+    agentKickoffManager?.destroy();
 
     if (clipboardHistoryWindow) {
       clipboardHistoryWindow.destroy();

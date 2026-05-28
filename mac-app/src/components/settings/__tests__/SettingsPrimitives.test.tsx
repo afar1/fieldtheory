@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import {
+  SETTINGS_CARD_GAP,
   getSettingsBadgeStyle,
   SettingsBadge,
   SettingsDisabledBlock,
@@ -20,6 +21,12 @@ const theme = {
   warning: '#d97706',
   info: '#2563eb',
 } as any;
+
+describe('SETTINGS_CARD_GAP', () => {
+  it('defines the shared outer spacing between settings cards', () => {
+    expect(SETTINGS_CARD_GAP).toBe('16px');
+  });
+});
 
 describe('SettingsDisabledBlock', () => {
   it('disables nested form controls when disabled', () => {

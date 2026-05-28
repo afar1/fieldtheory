@@ -6,6 +6,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useTheme, Theme } from '../contexts/ThemeContext';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import {
+  SETTINGS_CARD_GAP,
   SettingsCard,
   SettingsDisabledBlock,
   SettingsRow,
@@ -1175,12 +1176,12 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     padding: 0,
     display: 'flex',
     flexDirection: 'column',
-    gap: '14px',
+    gap: SETTINGS_CARD_GAP,
   },
   cardStack: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '14px',
+    gap: SETTINGS_CARD_GAP,
   },
   row: {
     display: 'flex',

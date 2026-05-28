@@ -618,33 +618,13 @@ export class ClipboardHistoryWindow {
       this.emitBoundsChanged();
     }
 
-    const previousSizeKey = this.currentSizeKey;
     this.currentSizeKey = normalizedKey;
     this.preferencesManager.save({ clipboardHistoryLastSizeKey: normalizedKey }).catch((err) => {
       log.error('Failed to save clipboard history size key:', err);
     });
 
-    // While immersive, don't change visible dims; the exit path reads the key.
-    if (this.isImmersiveMode) return;
-
-    if (!this.window || this.window.isDestroyed()) return;
-
-    // Ordinary non-Draw view switches should not resize the window. Draw is
-    // the one view that opts into a distinct size profile.
-    const drawInvolved = previousSizeKey === 'draw' || normalizedKey === 'draw';
-    if (!drawInvolved) return;
-
-    // Keep the window anchored at its current on-screen position when
-    // Draw enters/exits; only width/height should track the size profile.
-    const saved = pickSavedBoundsByKey(this.preferencesManager.get(), normalizedKey);
-    const defaultDims = ClipboardHistoryWindow.DEFAULT_BOUNDS_BY_KEY[normalizedKey];
-    const current = this.window.getBounds();
-    this.setBoundsImmediately({
-      x: current.x,
-      y: current.y,
-      width: saved?.width ?? defaultDims.width,
-      height: saved?.height ?? defaultDims.height,
-    });
+    // View switches should not resize the window. The active key only decides
+    // where future user-driven bounds are persisted.
   }
 
   private resolveSavedBoundsForKey(key: ClipboardHistorySizeKey): Electron.Rectangle | null {

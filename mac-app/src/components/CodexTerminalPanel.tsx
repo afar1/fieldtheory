@@ -33,11 +33,6 @@ const MIN_BOTTOM_HEIGHT = 220;
 const MIN_RIGHT_WIDTH = 360;
 const MAX_BOTTOM_HEIGHT_RATIO = 0.72;
 const MAX_RIGHT_WIDTH_RATIO = 0.68;
-const TERMINAL_GUTTER_TOP = 12;
-const TERMINAL_GUTTER_RIGHT = 28;
-const TERMINAL_GUTTER_BOTTOM = 40;
-const TERMINAL_GUTTER_LEFT = 14;
-const TERMINAL_BOTTOM_RESERVED_ROWS = 1;
 const TERMINAL_VIEWPORT_TOP_PADDING = 8;
 const TERMINAL_DOCK_DIVIDER_SIZE = 2;
 const LIVE_CONTEXT_UPDATE_DELAY_MS = 700;
@@ -92,7 +87,10 @@ export function shouldFocusTerminalForRequest(input: { visible: boolean; focusRe
 }
 
 export function terminalViewportStyleCss(terminalBackground: string): string {
-  return `.codex-terminal-host .xterm,
+  return `.codex-terminal-host {
+  overflow: hidden;
+}
+.codex-terminal-host .xterm,
 .codex-terminal-host .xterm .xterm-screen,
 .codex-terminal-host .xterm .xterm-viewport {
   background-color: ${terminalBackground} !important;
@@ -106,6 +104,10 @@ export function terminalViewportStyleCss(terminalBackground: string): string {
   width: 0 !important;
   height: 0 !important;
   display: none !important;
+}
+.codex-terminal-host .xterm .xterm-scrollable-element > .scrollbar {
+  display: none !important;
+  width: 0 !important;
 }`;
 }
 
@@ -293,9 +295,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     if (!handle) return;
     try {
       handle.fit.fit();
-      if (handle.term.rows > TERMINAL_BOTTOM_RESERVED_ROWS) {
-        handle.term.resize(handle.term.cols, handle.term.rows - TERMINAL_BOTTOM_RESERVED_ROWS);
-      }
       void window.codexTerminalAPI?.resize(activeSessionId, handle.term.cols, handle.term.rows);
     } catch {
       // Resize can race while the panel is hidden or changing dock sides.
@@ -618,9 +617,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
     }
     window.setTimeout(() => {
       fit.fit();
-      if (term.rows > TERMINAL_BOTTOM_RESERVED_ROWS) {
-        term.resize(term.cols, term.rows - TERMINAL_BOTTOM_RESERVED_ROWS);
-      }
       void window.codexTerminalAPI?.resize(sessionId, term.cols, term.rows);
       if (terminalFocusRequestedRef.current && sessionId === activeSessionId) {
         term.focus();
@@ -930,12 +926,12 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         <button type="button" onClick={() => void createSession()} title="New Codex terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
           +
         </button>
-        {activeCwd && (
+        {activeCwd && dockSide === 'bottom' && (
           <span
             title={activeCwd}
             style={{
-              minWidth: dockSide === 'right' ? '64px' : '120px',
-              maxWidth: dockSide === 'right' ? '180px' : '360px',
+              minWidth: '120px',
+              maxWidth: '360px',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -987,7 +983,6 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
           }}
         >
           <div style={{ height: `${36 + toolbarTopInset}px`, display: 'flex', alignItems: 'center', gap: '8px', padding: '0 10px', borderBottom: `1px solid ${terminalSoftBorder}`, flexShrink: 0 }}>
-            <ClockIcon />
             <input
               value={historyQuery}
               onChange={(event) => setHistoryQuery(event.currentTarget.value)}
@@ -1096,10 +1091,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
             ref={(element) => setTerminalHost(session.id, element)}
             style={{
               position: 'absolute',
-              top: `${TERMINAL_GUTTER_TOP}px`,
-              right: `${TERMINAL_GUTTER_RIGHT}px`,
-              bottom: `${TERMINAL_GUTTER_BOTTOM}px`,
-              left: `${TERMINAL_GUTTER_LEFT}px`,
+              inset: 0,
               display: session.id === activeSession?.id ? 'block' : 'none',
             }}
           />
@@ -1162,21 +1154,24 @@ function PlayIcon() {
 
 function DockSideIcon({ side }: { side: CodexTerminalDockSide }) {
   return (
-    <span
+    <svg
       aria-hidden="true"
-      style={{
-        display: 'inline-block',
-        width: '16px',
-        color: 'currentColor',
-        fontFamily: 'SF Pro Text, -apple-system, BlinkMacSystemFont, sans-serif',
-        fontSize: side === 'bottom' ? '19px' : '18px',
-        fontWeight: 400,
-        lineHeight: 1,
-        textAlign: 'center',
-      }}
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
     >
-      {side === 'bottom' ? '▁' : '▌'}
-    </span>
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+      {side === 'bottom' ? (
+        <path d="M2.5 10.5h11" />
+      ) : (
+        <path d="M10.5 2.5v11" />
+      )}
+    </svg>
   );
 }
 

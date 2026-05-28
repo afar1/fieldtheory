@@ -348,6 +348,7 @@ export class LocalLlmManager {
   private selectedModel: LocalLlmModelId = DEFAULT_LOCAL_LLM_MODEL;
   private server: LocalLlmServer | null = null;
   private serverModelPath: string | null = null;
+  private activeRunCount = 0;
 
   constructor(private readonly options: LocalLlmManagerOptions = {}) {}
 
@@ -361,6 +362,10 @@ export class LocalLlmManager {
 
   getHarness(): LocalLlmHarness {
     return resolveLocalLlmHarness(this.options.env?.FT_LOCAL_LLM_HARNESS ?? process.env.FT_LOCAL_LLM_HARNESS);
+  }
+
+  isRunning(): boolean {
+    return this.activeRunCount > 0;
   }
 
   setSelectedModel(model: string): { success: boolean; error?: string } {
@@ -443,23 +448,28 @@ export class LocalLlmManager {
     }
 
     const server = this.getServer(health.modelPath);
-    await server.start();
-    const response = await server.send({
-      cmd: 'generate',
-      prompt,
-      maxTokens: options.maxTokens ?? 4096,
-      temperature: options.temperature ?? 0.1,
-      harness: this.getHarness(),
-    }, {
-      onEvent: (event) => {
-        const progress = parseLocalLlmProgressEvent(event);
-        if (progress) options.onProgress?.(progress);
-      },
-    });
-    if (!response.ok || typeof response.text !== 'string') {
-      throw new Error(response.error ?? 'Local Gemma generation failed');
+    this.activeRunCount += 1;
+    try {
+      await server.start();
+      const response = await server.send({
+        cmd: 'generate',
+        prompt,
+        maxTokens: options.maxTokens ?? 4096,
+        temperature: options.temperature ?? 0.1,
+        harness: this.getHarness(),
+      }, {
+        onEvent: (event) => {
+          const progress = parseLocalLlmProgressEvent(event);
+          if (progress) options.onProgress?.(progress);
+        },
+      });
+      if (!response.ok || typeof response.text !== 'string') {
+        throw new Error(response.error ?? 'Local Gemma generation failed');
+      }
+      return response.text;
+    } finally {
+      this.activeRunCount = Math.max(0, this.activeRunCount - 1);
     }
-    return response.text;
   }
 
   async runReplacementCommand(input: LocalCommandPromptInput, options: LocalLlmCommandOptions = {}): Promise<string> {

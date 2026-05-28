@@ -93,6 +93,7 @@ export const RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS = 'cm-rendered-markdown-
 export const RENDERED_MARKDOWN_EDITOR_DONE_TASK_CLASS = 'cm-rendered-markdown-task-done';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR = 'data-ft-source-from';
 export const RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR = 'data-ft-source-to';
+export const MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS = 'cm-ft-fileFindMatch';
 export const MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS = 'cm-ft-selectedLineNumber';
 export const MARKDOWN_CODE_EDITOR_HAS_RANGE_SELECTION_CLASS = 'cm-ft-hasRangeSelection';
 export const RENDERED_MARKDOWN_EDITOR_TIMING_EVENT = 'fieldtheory:rendered-editor-timing';
@@ -173,6 +174,7 @@ interface MarkdownCodeEditorProps {
   value: string;
   onChange: (next: string) => void;
   presentation?: MarkdownCodeEditorPresentation;
+  findQuery?: string;
   fontFamily: string;
   fontSize: number | string;
   lineHeight: number | string;
@@ -536,6 +538,63 @@ export const selectedLineNumberGutterExtension = gutterLineClass.compute(['selec
   return builder.finish();
 });
 
+const markdownCodeEditorFindQueryFacet = Facet.define<string, string>({
+  combine: (values) => values[0] ?? '',
+});
+
+export function getMarkdownCodeEditorFindMatchRanges(
+  value: string,
+  query: string,
+): Array<{ from: number; to: number }> {
+  const needle = query.trim();
+  if (!needle) return [];
+  const ranges: Array<{ from: number; to: number }> = [];
+  const haystack = value.toLowerCase();
+  const normalizedNeedle = needle.toLowerCase();
+  let index = haystack.indexOf(normalizedNeedle);
+  while (index >= 0) {
+    ranges.push({ from: index, to: index + normalizedNeedle.length });
+    index = haystack.indexOf(normalizedNeedle, index + normalizedNeedle.length);
+  }
+  return ranges;
+}
+
+export function buildMarkdownCodeEditorFindMatchDecorations(state: EditorState): DecorationSet {
+  const query = state.facet(markdownCodeEditorFindQueryFacet).trim();
+  const builder = new RangeSetBuilder<Decoration>();
+  if (!query) return builder.finish();
+  const decoration = Decoration.mark({ class: MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS });
+  for (const range of getMarkdownCodeEditorFindMatchRanges(
+    state.doc.toString(),
+    query,
+  )) {
+    builder.add(range.from, range.to, decoration);
+  }
+  return builder.finish();
+}
+
+export const markdownCodeEditorFindMatchExtension = ViewPlugin.fromClass(
+  class {
+    decorations: DecorationSet;
+
+    constructor(view: EditorView) {
+      this.decorations = buildMarkdownCodeEditorFindMatchDecorations(view.state);
+    }
+
+    update(update: ViewUpdate) {
+      if (
+        update.docChanged
+        || update.startState.facet(markdownCodeEditorFindQueryFacet) !== update.state.facet(markdownCodeEditorFindQueryFacet)
+      ) {
+        this.decorations = buildMarkdownCodeEditorFindMatchDecorations(update.state);
+      }
+    }
+  },
+  {
+    decorations: (plugin) => plugin.decorations,
+  },
+);
+
 function renderedMarkdownSourceAttributes(from: number, to: number): Record<string, string> {
   return {
     [RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR]: String(from),
@@ -593,6 +652,7 @@ export function getRenderedMarkdownImagePreviewFromEventTarget(target: EventTarg
   if (!(target instanceof Element)) return null;
   const image = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
   if (!(image instanceof HTMLElement)) return null;
+  if (target === image) return null;
   const src = image.getAttribute(RENDERED_MARKDOWN_EDITOR_IMAGE_SRC_ATTR);
   if (!src) return null;
   return {
@@ -601,6 +661,16 @@ export function getRenderedMarkdownImagePreviewFromEventTarget(target: EventTarg
     sourceFrom: parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR)),
     sourceTo: parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR)),
   };
+}
+
+export function getRenderedMarkdownImageSelectionFromEventTarget(target: EventTarget | null): { from: number; to: number } | null {
+  if (!(target instanceof Element)) return null;
+  const image = target.closest(`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`);
+  if (!(image instanceof HTMLElement) || target !== image) return null;
+  const sourceFrom = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_FROM_ATTR));
+  const sourceTo = parseNullableMarkdownSourceOffset(image.getAttribute(RENDERED_MARKDOWN_EDITOR_SOURCE_TO_ATTR));
+  if (sourceFrom === null || sourceTo === null || sourceTo <= sourceFrom) return null;
+  return { from: sourceFrom, to: sourceTo };
 }
 
 class RenderedMarkdownImageWidget extends WidgetType {
@@ -623,7 +693,7 @@ class RenderedMarkdownImageWidget extends WidgetType {
   }
 
   ignoreEvent(event: Event): boolean {
-    return event.type !== 'click';
+    return event.type !== 'click' && event.type !== 'mousedown';
   }
 
   toDOM(): HTMLElement {
@@ -811,21 +881,42 @@ export function getRenderedMarkdownTaskMarkerLayoutStyle(): Record<string, strin
   };
 }
 
-export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
+function getMarkdownLineBounds(value: string, offset: number): { lineStart: number; lineEnd: number } {
   const clampedOffset = Math.max(0, Math.min(value.length, offset));
   const lineStart = clampedOffset === 0 ? 0 : value.lastIndexOf('\n', clampedOffset - 1) + 1;
   const lineEndIndex = value.indexOf('\n', lineStart);
   const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
-  const text = value.slice(lineStart, lineEnd);
+  return { lineStart, lineEnd };
+}
+
+function getRenderedMarkdownListBodyOffsetInLine(text: string): number | null {
   const taskMatch = /^(\s*)((?:[-*+]\s+)?)\[([ xX]?)\](\s*)/.exec(text);
+  if (taskMatch) return taskMatch[0].length;
   const listMatch = /^(\s*)((?:[-*+])|(?:\d+[.)]))\s+/.exec(text);
-  const markerLength = taskMatch?.[0].length ?? listMatch?.[0].length ?? 0;
-  if (markerLength === 0) return null;
-  const markerEnd = lineStart + markerLength;
-  const isEmptyListBody = markerEnd === lineEnd;
-  const isInsideHiddenMarker = clampedOffset >= lineStart && clampedOffset < markerEnd;
-  const isEmptyBodyStart = isEmptyListBody && clampedOffset === markerEnd;
-  return isInsideHiddenMarker || isEmptyBodyStart ? markerEnd : null;
+  return listMatch ? listMatch[0].length : null;
+}
+
+export function getRenderedMarkdownListBodyStartForLine(value: string, lineStart: number): number | null {
+  const safeLineStart = Math.max(0, Math.min(value.length, lineStart));
+  const lineEndIndex = value.indexOf('\n', safeLineStart);
+  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const markerLength = getRenderedMarkdownListBodyOffsetInLine(value.slice(safeLineStart, lineEnd));
+  return markerLength === null ? null : safeLineStart + markerLength;
+}
+
+function getRenderedMarkdownListBodyStartAtOffset(value: string, offset: number): number | null {
+  return getRenderedMarkdownListBodyStartForLine(value, getMarkdownLineBounds(value, offset).lineStart);
+}
+
+export function getRenderedMarkdownListBodyStart(value: string, offset: number): number | null {
+  const clampedOffset = Math.max(0, Math.min(value.length, offset));
+  const { lineStart, lineEnd } = getMarkdownLineBounds(value, clampedOffset);
+  const bodyStart = getRenderedMarkdownListBodyStartForLine(value, lineStart);
+  if (bodyStart === null) return null;
+  const isEmptyListBody = bodyStart === lineEnd;
+  const isInsideHiddenMarker = clampedOffset >= lineStart && clampedOffset < bodyStart;
+  const isEmptyBodyStart = isEmptyListBody && clampedOffset === bodyStart;
+  return isInsideHiddenMarker || isEmptyBodyStart ? bodyStart : null;
 }
 
 export function getRenderedMarkdownListBodyClickPosition(
@@ -982,8 +1073,9 @@ function collectRenderedMarkdownInlineSourceRanges(value: string, offset: number
 
 export function getRenderedMarkdownArrowRightEdit(value: string, offset: number): { selection: number } | null {
   const caret = Math.max(0, Math.min(value.length, offset));
-  const lineEndIndex = value.indexOf('\n', caret);
-  const lineEnd = lineEndIndex === -1 ? value.length : lineEndIndex;
+  const { lineEnd } = getMarkdownLineBounds(value, caret);
+  const listBoundaryEdit = getMarkdownListArrowRightBoundaryEdit(value, caret);
+  if (listBoundaryEdit) return listBoundaryEdit;
   for (const range of collectRenderedMarkdownInlineSourceRanges(value, caret)) {
     if (range.kind === 'wiki') continue;
     if (caret < range.contentTo || caret >= range.to) continue;
@@ -1026,6 +1118,78 @@ export function getRenderedMarkdownOptionArrowEdit(
   return null;
 }
 
+export function getRenderedMarkdownCommandArrowSelection(
+  value: string,
+  targetOffset: number,
+  direction: 'left' | 'right',
+): number {
+  if (direction === 'right') return targetOffset;
+  const bodyStart = getRenderedMarkdownListBodyStartAtOffset(value, targetOffset);
+  return bodyStart !== null && targetOffset < bodyStart ? bodyStart : targetOffset;
+}
+
+export function getRenderedMarkdownVerticalNavigationEdit(
+  value: string,
+  targetOffset: number,
+): { selection: number } | null {
+  const bodyStart = getRenderedMarkdownListBodyStartAtOffset(value, targetOffset);
+  return bodyStart !== null && targetOffset < bodyStart ? { selection: bodyStart } : null;
+}
+
+export function getMarkdownListMarkerProtectedDeleteBackwardEdit(
+  value: string,
+  offset: number,
+): { from: number; to: number; selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const bodyStart = getRenderedMarkdownListBodyStartAtOffset(value, caret);
+  if (bodyStart === null) return null;
+  return {
+    from: bodyStart,
+    to: Math.max(bodyStart, caret),
+    selection: bodyStart,
+  };
+}
+
+export function getMarkdownListArrowRightBoundaryEdit(value: string, offset: number): { selection: number } | null {
+  const caret = Math.max(0, Math.min(value.length, offset));
+  const { lineEnd } = getMarkdownLineBounds(value, caret);
+  if (caret !== lineEnd || lineEnd >= value.length) return null;
+  const nextLineBodyStart = getRenderedMarkdownListBodyStartForLine(value, lineEnd + 1);
+  return nextLineBodyStart !== null && nextLineBodyStart > lineEnd + 1
+    ? { selection: nextLineBodyStart }
+    : null;
+}
+
+export function handleMarkdownCodeEditorListArrowRight(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const edit = getMarkdownListArrowRightBoundaryEdit(view.state.doc.toString(), selection.from);
+  if (!edit) return false;
+  view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
+  return true;
+}
+
+export function handleMarkdownCodeEditorListArrowDown(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const next = view.moveVertically(selection, true);
+  const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head);
+  if (!edit) return false;
+  view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
+  return true;
+}
+
+export function handleMarkdownCodeEditorListCommandArrowLeft(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const next = view.moveToLineBoundary(selection, false, true);
+  const nextHead = getRenderedMarkdownCommandArrowSelection(view.state.doc.toString(), next.head, 'left');
+  if (nextHead === next.head) return false;
+  if (nextHead === selection.head) return true;
+  view.dispatch({ selection: { anchor: nextHead, head: nextHead } });
+  return true;
+}
+
 export function handleRenderedMarkdownEditorArrowRight(view: EditorView): boolean {
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
@@ -1057,8 +1221,31 @@ export function handleRenderedMarkdownEditorCommandArrow(view: EditorView, direc
   const selection = view.state.selection.main;
   if (!selection.empty) return false;
   const next = view.moveToLineBoundary(selection, direction === 'right', true);
-  if (next.head === selection.head) return false;
-  view.dispatch({ selection: { anchor: next.head, head: next.head } });
+  const nextHead = getRenderedMarkdownCommandArrowSelection(view.state.doc.toString(), next.head, direction);
+  if (nextHead === selection.head) return next.head !== selection.head;
+  view.dispatch({ selection: { anchor: nextHead, head: nextHead } });
+  return true;
+}
+
+export function handleRenderedMarkdownEditorArrowDown(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const next = view.moveVertically(selection, true);
+  const edit = getRenderedMarkdownVerticalNavigationEdit(view.state.doc.toString(), next.head);
+  if (!edit) return false;
+  view.dispatch({ selection: { anchor: edit.selection, head: edit.selection } });
+  return true;
+}
+
+export function handleMarkdownCodeEditorCommandBackspace(view: EditorView): boolean {
+  const selection = view.state.selection.main;
+  if (!selection.empty) return false;
+  const edit = getMarkdownListMarkerProtectedDeleteBackwardEdit(view.state.doc.toString(), selection.from);
+  if (!edit) return false;
+  view.dispatch({
+    changes: edit.from === edit.to ? undefined : { from: edit.from, to: edit.to },
+    selection: { anchor: edit.selection, head: edit.selection },
+  });
   return true;
 }
 
@@ -1068,6 +1255,7 @@ export function handleRenderedMarkdownEditorKeyDown(view: EditorView, event: Key
   }
   if (event.key === 'ArrowRight') return handleRenderedMarkdownEditorArrowRight(view);
   if (event.key === 'ArrowLeft') return handleRenderedMarkdownEditorArrowLeft(view);
+  if (event.key === 'ArrowDown') return handleRenderedMarkdownEditorArrowDown(view);
   return false;
 }
 
@@ -1749,6 +1937,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
       value,
       onChange,
       presentation = 'source',
+      findQuery = '',
       fontFamily,
       fontSize,
       lineHeight,
@@ -1798,6 +1987,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const historyCompartment = useRef(new Compartment()).current;
     const readOnlyCompartment = useRef(new Compartment()).current;
     const documentPathCompartment = useRef(new Compartment()).current;
+    const findQueryCompartment = useRef(new Compartment()).current;
     const selectionDrawCompartment = useRef(new Compartment()).current;
     const cursorScrollMarginCompartment = useRef(new Compartment()).current;
     const lineNumbersCompartment = useRef(new Compartment()).current;
@@ -1956,6 +2146,12 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             opacity: 1,
             fontWeight: 600,
           },
+          [`.${MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS}`]: {
+            borderRadius: '2px',
+            backgroundColor: theme.isDark ? 'rgba(250, 204, 21, 0.34)' : 'rgba(250, 204, 21, 0.42)',
+            boxDecorationBreak: 'clone',
+            WebkitBoxDecorationBreak: 'clone',
+          },
           [`.${RENDERED_MARKDOWN_EDITOR_HEADING_CLASS}`]: {
             color,
             fontFamily: headingFontFamily ?? fontFamily,
@@ -1981,6 +2177,9 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_LINE_CLASS}`]: {
             ...getRenderedMarkdownListLineLayoutStyle(),
+            ...(isRenderedPresentation ? {
+              paddingBottom: `calc(${paragraphSpacing ?? '0.78em'} * 0.04)`,
+            } : {}),
           },
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_MARKER_CLASS}`]: {
             ...getRenderedMarkdownListMarkerLayoutStyle(),
@@ -2093,7 +2292,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS}`]: {
             display: 'flex',
             flexDirection: 'column',
-            alignItems: 'stretch',
+            alignItems: 'flex-start',
             gap: '0.25em',
             width: '100%',
             maxWidth: '100%',
@@ -2103,7 +2302,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           },
           [`.${RENDERED_MARKDOWN_EDITOR_IMAGE_CLASS} img`]: {
             display: 'block',
-            width: '100%',
+            width: 'auto',
             maxWidth: '100%',
             height: 'auto',
             borderRadius: '8px',
@@ -2173,11 +2372,27 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           keymap.of([
             {
               key: 'ArrowRight',
-              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorArrowRight(view) : false),
+              run: (view) => (
+                presentation === 'rendered'
+                  ? handleRenderedMarkdownEditorArrowRight(view)
+                  : handleMarkdownCodeEditorListArrowRight(view)
+              ),
+            },
+            {
+              key: 'ArrowDown',
+              run: (view) => (
+                presentation === 'rendered'
+                  ? handleRenderedMarkdownEditorArrowDown(view)
+                  : handleMarkdownCodeEditorListArrowDown(view)
+              ),
             },
             {
               key: 'ArrowLeft',
               run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorArrowLeft(view) : false),
+            },
+            {
+              mac: 'Mod-Backspace',
+              run: handleMarkdownCodeEditorCommandBackspace,
             },
             {
               key: 'Alt-ArrowRight',
@@ -2193,7 +2408,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
             },
             {
               mac: 'Mod-ArrowLeft',
-              run: (view) => (presentation === 'rendered' ? handleRenderedMarkdownEditorCommandArrow(view, 'left') : false),
+              run: (view) => (
+                presentation === 'rendered'
+                  ? handleRenderedMarkdownEditorCommandArrow(view, 'left')
+                  : handleMarkdownCodeEditorListCommandArrowLeft(view)
+              ),
             },
             ...defaultKeymap,
             ...historyKeymap,
@@ -2201,6 +2420,8 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           ]),
           markdown(),
           documentPathCompartment.of(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
+          findQueryCompartment.of(markdownCodeEditorFindQueryFacet.of(findQuery)),
+          markdownCodeEditorFindMatchExtension,
           ...(presentation === 'rendered' ? [createRenderedMarkdownEditorPresentationExtension()] : []),
           syntaxHighlightCompartment.of(syntaxHighlighting(buildHighlightStyle(theme.isDark))),
           syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
@@ -2280,6 +2501,13 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
               if (pos === null) return false;
               if (presentation === 'rendered') {
+                const imageSelection = getRenderedMarkdownImageSelectionFromEventTarget(event.target);
+                if (imageSelection !== null) {
+                  event.preventDefault();
+                  view.focus();
+                  view.dispatch({ selection: { anchor: imageSelection.from, head: imageSelection.to } });
+                  return true;
+                }
                 const listBodyPos = getRenderedMarkdownListBodyClickPosition(
                   view.state.doc.toString(),
                   pos,
@@ -2350,6 +2578,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
         effects: documentPathCompartment.reconfigure(renderedMarkdownDocumentPathFacet.of(documentPath ?? null)),
       });
     }, [documentPath, documentPathCompartment]);
+
+    useEffect(() => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        effects: findQueryCompartment.reconfigure(markdownCodeEditorFindQueryFacet.of(findQuery)),
+      });
+    }, [findQuery, findQueryCompartment]);
 
     // Sync external value into the editor before parent-scheduled cursor restores run.
     useLayoutEffect(() => {

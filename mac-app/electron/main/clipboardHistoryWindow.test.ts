@@ -386,7 +386,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(setBounds).not.toHaveBeenCalled();
   });
 
-  it('uses draw mechanics for the canvas size key', () => {
+  it('persists the draw size key without resizing the current window', () => {
     const save = vi.fn().mockResolvedValue(undefined);
     window = new ClipboardHistoryWindow({
       get: vi.fn(() => ({})),
@@ -401,15 +401,10 @@ describe('ClipboardHistoryWindow helper methods', () => {
     expect(window.getCurrentSizeKey()).toBe('draw');
     expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'draw' });
     expect(animateBounds).not.toHaveBeenCalled();
-    expect(setBounds).toHaveBeenCalledWith({
-      x: 100,
-      y: 100,
-      width: 1180,
-      height: 760,
-    });
+    expect(setBounds).not.toHaveBeenCalled();
   });
 
-  it('restores the target size profile when leaving draw', () => {
+  it('persists the target size key when leaving draw without resizing', () => {
     const save = vi.fn().mockResolvedValue(undefined);
     window = new ClipboardHistoryWindow({
       get: vi.fn(() => ({
@@ -428,12 +423,7 @@ describe('ClipboardHistoryWindow helper methods', () => {
 
     expect(window.getCurrentSizeKey()).toBe('fields');
     expect(save).toHaveBeenCalledWith({ clipboardHistoryLastSizeKey: 'fields' });
-    expect(setBounds).toHaveBeenCalledWith({
-      x: 100,
-      y: 100,
-      width: 940,
-      height: 620,
-    });
+    expect(setBounds).not.toHaveBeenCalled();
   });
 
   it('hides the window and restores the previous app when one is known', async () => {

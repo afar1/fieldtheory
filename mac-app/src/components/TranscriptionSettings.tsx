@@ -1044,7 +1044,6 @@ const getStyles = (theme: Theme): Record<string, React.CSSProperties> => ({
     border: `1px solid ${theme.border}`,
     borderRadius: '6px',
     padding: '18px 22px 16px',
-    marginBottom: '16px',
   },
   cardHeader: {
     marginBottom: '14px',

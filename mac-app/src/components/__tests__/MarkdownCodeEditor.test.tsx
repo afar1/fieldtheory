@@ -5,6 +5,7 @@ import { history, undo } from '@codemirror/commands';
 import {
   MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS,
   MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
+  MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS,
   MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT,
   MARKDOWN_CODE_EDITOR_SELECTED_LINE_NUMBER_CLASS,
   RENDERED_MARKDOWN_EDITOR_TIMING_EVENT,
@@ -49,13 +50,17 @@ import {
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorContentAttributes,
   getMarkdownCodeEditorCursorAnimationStyle,
+  getMarkdownCodeEditorFindMatchRanges,
   getMarkdownCodeEditorSelectionBackground,
   getMarkdownCodeEditorSelectionDrawConfig,
   getMarkdownCodeEditorCursorShapeStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
+  getMarkdownListArrowRightBoundaryEdit,
+  getMarkdownListMarkerProtectedDeleteBackwardEdit,
   hasMarkdownCodeEditorRangeSelection,
+  getRenderedMarkdownImageSelectionFromEventTarget,
   getRenderedMarkdownImagePreviewFromEventTarget,
   getRenderedMarkdownArrowLeftEdit,
   getRenderedMarkdownOptionArrowEdit,
@@ -63,12 +68,18 @@ import {
   getRenderedMarkdownFormattingBoundaryLineBreakEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
+  getRenderedMarkdownListBodyStartForLine,
   getRenderedMarkdownListIndentStyle,
   getRenderedMarkdownListLineLayoutStyle,
   getRenderedMarkdownListMarkerLayoutStyle,
   getRenderedMarkdownTaskMarkerLayoutStyle,
+  getRenderedMarkdownCommandArrowSelection,
+  getRenderedMarkdownVerticalNavigationEdit,
   handleRenderedMarkdownEditorBeforeInput,
   handleRenderedMarkdownEditorArrowLeft,
+  handleMarkdownCodeEditorListArrowRight,
+  handleMarkdownCodeEditorListCommandArrowLeft,
+  handleMarkdownCodeEditorCommandBackspace,
   handleRenderedMarkdownEditorCommandArrow,
   handleRenderedMarkdownEditorKeyDown,
   handleMarkdownCodeEditorCapturedKeyDown,
@@ -113,6 +124,17 @@ describe('MarkdownCodeEditor cursor blink', () => {
 
     expect(hasMarkdownCodeEditorRangeSelection(cursorState)).toBe(false);
     expect(hasMarkdownCodeEditorRangeSelection(rangeState)).toBe(true);
+  });
+});
+
+describe('MarkdownCodeEditor find matches', () => {
+  it('finds all case-insensitive matches for editor-owned highlighting', () => {
+    expect(MARKDOWN_CODE_EDITOR_FIND_MATCH_CLASS).toBe('cm-ft-fileFindMatch');
+    expect(getMarkdownCodeEditorFindMatchRanges('Alpha beta alpha', 'alpha')).toEqual([
+      { from: 0, to: 5 },
+      { from: 11, to: 16 },
+    ]);
+    expect(getMarkdownCodeEditorFindMatchRanges('Alpha', '')).toEqual([]);
   });
 });
 
@@ -584,6 +606,93 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     parent.remove();
   });
 
+  it('keeps rendered list line starts at the first editable character', () => {
+    const doc = '- first\n- second\n- ';
+    expect(getRenderedMarkdownListBodyStartForLine(doc, 0)).toBe(2);
+    expect(getRenderedMarkdownListBodyStartForLine(doc, '- first\n'.length)).toBe('- first\n- '.length);
+    expect(getRenderedMarkdownCommandArrowSelection(doc, 0, 'left')).toBe(2);
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, '- first\n'.length)).toEqual({
+      selection: '- first\n- '.length,
+    });
+    expect(getRenderedMarkdownVerticalNavigationEdit(doc, doc.length - 2)).toEqual({
+      selection: doc.length,
+    });
+    expect(getRenderedMarkdownArrowRightEdit(doc, '- first'.length)).toEqual({
+      selection: '- first\n- '.length,
+    });
+  });
+
+  it('moves rendered Command+Left to the list body instead of the hidden marker', () => {
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- first item',
+        selection: EditorSelection.cursor('- first'.length),
+        extensions: [renderedMarkdownEditorPresentationExtension],
+      }),
+      parent,
+    });
+
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'left')).toBe(true);
+    expect(view.state.selection.main.from).toBe(2);
+    expect(handleRenderedMarkdownEditorCommandArrow(view, 'left')).toBe(true);
+    expect(view.state.selection.main.from).toBe(2);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('preserves list markers on Command+Backspace', () => {
+    expect(getMarkdownListMarkerProtectedDeleteBackwardEdit('- first item', '- first item'.length)).toEqual({
+      from: 2,
+      to: '- first item'.length,
+      selection: 2,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: '- first item',
+        selection: EditorSelection.cursor('- first item'.length),
+      }),
+      parent,
+    });
+
+    expect(handleMarkdownCodeEditorCommandBackspace(view)).toBe(true);
+    expect(view.state.doc.toString()).toBe('- ');
+    expect(view.state.selection.main.from).toBe(2);
+
+    view.destroy();
+    parent.remove();
+  });
+
+  it('applies list body navigation in source mode too', () => {
+    const doc = '- first\n- second';
+    expect(getMarkdownListArrowRightBoundaryEdit(doc, '- first'.length)).toEqual({
+      selection: '- first\n- '.length,
+    });
+
+    const parent = document.createElement('div');
+    document.body.appendChild(parent);
+    const view = new EditorView({
+      state: EditorState.create({
+        doc,
+        selection: EditorSelection.cursor('- first'.length),
+      }),
+      parent,
+    });
+
+    expect(handleMarkdownCodeEditorListArrowRight(view)).toBe(true);
+    expect(view.state.selection.main.from).toBe('- first\n- '.length);
+    expect(handleMarkdownCodeEditorListCommandArrowLeft(view)).toBe(true);
+    expect(view.state.selection.main.from).toBe('- first\n- '.length);
+
+    view.destroy();
+    parent.remove();
+  });
+
 	  it('hides common markdown syntax behind styled editable text', () => {
 	    const parent = document.createElement('div');
 	    document.body.appendChild(parent);
@@ -633,6 +742,11 @@ describe('MarkdownCodeEditor rendered presentation', () => {
       alt: 'Figure',
       sourceFrom: doc.indexOf('![Figure]'),
       sourceTo: doc.indexOf('![Figure]') + '![Figure](<file:///tmp/Figure%201.png>)'.length,
+    });
+    expect(getRenderedMarkdownImagePreviewFromEventTarget(renderedImage)).toBeNull();
+    expect(getRenderedMarkdownImageSelectionFromEventTarget(renderedImage)).toEqual({
+      from: doc.indexOf('![Figure]'),
+      to: doc.indexOf('![Figure]') + '![Figure](<file:///tmp/Figure%201.png>)'.length,
     });
     expect((parent.querySelector(`.${RENDERED_MARKDOWN_EDITOR_TASK_MARKER_CLASS}`) as HTMLInputElement | null)?.checked).toBe(true);
 

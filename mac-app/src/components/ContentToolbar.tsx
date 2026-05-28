@@ -290,7 +290,7 @@ export function ContentToolbarMaxwellButton({
               textAlign: 'left',
             }}
           >
-            Field Theory Local Commands
+            Run a local command
           </div>
           {sortedItems.map((item) => (
             <div
@@ -415,7 +415,7 @@ export function ContentToolbarMaxwellButton({
               textAlign: 'right',
             }}
           >
-            {currentItemSaved ? 'remove current page from Field Theory' : 'add current page to Field Theory'}
+            {currentItemSaved ? 'remove current page from Field Theory' : 'add current page'}
           </button>
         </div>
       )}
