@@ -10,7 +10,7 @@ import TodoView from './TodoView';
 import DMsView from './DMsView';
 import PossibleGraphView from './PossibleGraphView';
 import ReleaseNotesPopup, { hasReleaseNotes } from './ReleaseNotesPopup';
-import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection, type LibrarianSelectedItemType } from './LibrarianView';
+import LibrarianView, { LIBRARIAN_IMMERSIVE_STORAGE_KEY, getFocusChromeSurfaceOpacity, getGroupedFocusChromeProximityOpacity, restoreLibrarianSelection } from './LibrarianView';
 import { dispatchLocalWikiAdded } from './WikiSidebar';
 import DebugConsole from './DebugConsole';
 import PerformanceHud from './PerformanceHud';
@@ -21,7 +21,6 @@ import { FEATURE_MESSAGE_SHORTCUT_ENABLED, FEATURE_NARRATION_ENABLED } from '../
 import { rendererSoundManager } from '../utils/rendererSoundManager';
 import { buildHotkeyString, hasNonShiftModifierHotkey, isTextEntryElement, normalizeHotkeyForComparison } from '../utils/hotkeys';
 import { isDocumentSaveOk } from '../utils/documentSaveConflicts';
-import { getBookmarks, onBookmarksChanged, peekBookmarks } from '../services/bookmarksCache';
 import { getAgentKickoffFooterStatus } from '../utils/agentKickoffStatus';
 
 // Lazy load SketchView (Excalidraw) to reduce initial bundle size
@@ -55,7 +54,7 @@ import {
   TAB_LABELS,
   MAX_UNDO,
 } from '../types/clipboard';
-import { formatRelativeTime, formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
+import { formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatCompactWords, formatFileSize } from '../utils/formatUtils';
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
 import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut } from '../utils/editorShortcuts';
 import { getAgentImproveContext, type AgentImproveContext } from '../utils/agentImproveContext';
@@ -274,7 +273,6 @@ const FOCUS_CHROME_GROUP_REVEAL_DISTANCE_PX = 220;
 const FOCUS_CHROME_TOP_FULL_OPACITY_DISTANCE_PX = 160;
 const FOCUS_CHROME_EDGE_FULL_OPACITY_DISTANCE_PX = 128;
 const FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX = 28;
-const FIELD_THEORY_CHROME_LOGO_TOP_PX = 24;
 const FIELD_THEORY_CHROME_TABS_TOP_PX = 60;
 const FIELD_THEORY_CHROME_TABS_BOTTOM_PX = 12;
 const FIELD_THEORY_CHROME_OVERLAY_TOP_PX = 10;
@@ -584,14 +582,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     }
     localStorage.setItem('librarian-sidebar-collapsed', navSidebarCollapsed ? '1' : '0');
   }, [navSidebarCollapsed]);
-  const [libraryActiveFileUpdated, setLibraryActiveFileUpdated] = useState<{
-    path: string;
-    title: string;
-    mtime: number;
-  } | null>(null);
   const [librarySidebarToggleRequestKey, setLibrarySidebarToggleRequestKey] = useState(0);
-  const [librarySelectedItemType, setLibrarySelectedItemType] = useState<LibrarianSelectedItemType>(null);
-  const bookmarksFooterActive = viewMode === 'librarian' && librarySelectedItemType === 'bookmarks';
   const librarianSurfaceVisible = isLibrarianSurfaceVisible({ viewMode, showSettings });
   const keepLibrarianMounted = shouldKeepLibrarianMounted({ viewMode, librarianEverRendered });
   const navSidebarToggleEnabled = isNavSidebarToggleEnabled({
@@ -1183,54 +1174,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   // Show in Dock - affects header padding for stoplight buttons.
   const [showInDock, setShowInDock] = useState(false);
   const appTitlebarOffsetPx = showInDock ? FIELD_THEORY_APP_TITLEBAR_HEIGHT_PX : 0;
-  const chromeLogoTopPx = FIELD_THEORY_CHROME_LOGO_TOP_PX - appTitlebarOffsetPx;
   const chromeTabsTopPx = FIELD_THEORY_CHROME_TABS_TOP_PX - appTitlebarOffsetPx;
   const focusChromeIconTop = bookmarksCanvasToolbarTop === null
     ? FOCUS_CHROME_ICON_TOP_PX
     : Math.max(8, Math.round(bookmarksCanvasToolbarTop / 2 - FOCUS_CHROME_ICON_SIZE_PX / 2));
 
-  // Center footer label: Bookmarks sync time, active Library timestamp, or fieldtheory.dev.
+  // Center footer logo visibility follows the old fieldtheory.dev footer setting.
   const [showFieldTheoryLink, setShowFieldTheoryLink] = useState(true);
-  const [footerRelativeTimeTick, setFooterRelativeTimeTick] = useState(() => Date.now());
-  const [xBookmarksLastSyncedAt, setXBookmarksLastSyncedAt] = useState<string | null | undefined>(
-    () => peekBookmarks()?.xLastSyncedAt
-  );
-  useEffect(() => {
-    if (viewMode !== 'librarian' || (!libraryActiveFileUpdated && !(bookmarksFooterActive && xBookmarksLastSyncedAt))) return;
-    const interval = window.setInterval(() => setFooterRelativeTimeTick(Date.now()), 60_000);
-    return () => window.clearInterval(interval);
-  }, [bookmarksFooterActive, xBookmarksLastSyncedAt, libraryActiveFileUpdated, viewMode]);
-
-  useEffect(() => {
-    if (!bookmarksFooterActive) return;
-    let cancelled = false;
-    const applySnapshot = (snapshot: BookmarksSnapshot) => {
-      if (!cancelled) setXBookmarksLastSyncedAt(snapshot.xLastSyncedAt ?? null);
-    };
-
-    const cachedBookmarks = peekBookmarks();
-    if (cachedBookmarks) applySnapshot(cachedBookmarks);
-    void getBookmarks().then(applySnapshot);
-    const unsubscribe = onBookmarksChanged(applySnapshot);
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [bookmarksFooterActive]);
-
-  const libraryFooterUpdatedLabel = useMemo(() => {
-    if (viewMode !== 'librarian' || !libraryActiveFileUpdated) return null;
-    return `Updated ${formatRelativeTime(libraryActiveFileUpdated.mtime)}`;
-  }, [footerRelativeTimeTick, libraryActiveFileUpdated, viewMode]);
-
-  const bookmarksFooterSyncLabel = useMemo(() => {
-    if (!bookmarksFooterActive) return null;
-    if (xBookmarksLastSyncedAt === undefined) return 'bookmarks last synced from X loading...';
-    if (!xBookmarksLastSyncedAt) return 'bookmarks last synced from X never';
-    const syncedAtMs = Date.parse(xBookmarksLastSyncedAt);
-    if (!Number.isFinite(syncedAtMs)) return 'bookmarks last synced from X unknown';
-    return `bookmarks last synced from X ${formatRelativeTime(syncedAtMs)}`;
-  }, [bookmarksFooterActive, xBookmarksLastSyncedAt, footerRelativeTimeTick]);
 
   // In-app performance HUD visibility.
   const [performanceHudEnabled, setPerformanceHudEnabled] = useState(false);
@@ -4395,32 +4345,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           transition: 'height 0.3s ease, min-height 0.3s ease, padding-top 0.3s ease, opacity 90ms linear',
         }}
       >
-        <div
-          style={{
-            position: 'absolute',
-            top: `${chromeLogoTopPx}px`,
-            left: '50%',
-            transform: 'translateX(-50%)',
-            display: 'flex',
-            alignItems: 'center',
-            maxWidth: '220px',
-            overflow: 'hidden',
-            pointerEvents: 'none',
-          }}
-        >
-          <img
-            src={theme.isDark ? "fieldtheory-logo-white.png" : "fieldtheory-logo-black.png"}
-            alt="Field Theory"
-            style={{
-              height: '20px',
-              width: 'auto',
-              maxWidth: '120px',
-              objectFit: 'contain',
-              flex: '0 0 auto',
-            }}
-          />
-        </div>
-
       </div>
 
       {showFocusChromeIcon && (
@@ -4927,7 +4851,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             onFocusChromeActiveChange={handleFocusChromeActiveChange}
             onBookmarksCanvasActiveChange={setBookmarksCanvasChromeActive}
             onBookmarksCanvasToolbarTopChange={setBookmarksCanvasToolbarTop}
-            onSelectedItemTypeChange={setLibrarySelectedItemType}
             focusChromeGroupOpacity={focusChromeGroupOpacity}
             focusChromeEnabled={focusChromeGlobalEnabled}
             onFocusChromeEnabledChange={handleGlobalFocusChromeChange}
@@ -4940,7 +4863,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             onAutoPopArtifactSuperseded={handleAutoPopArtifactSuperseded}
             onOpenCommandPath={handleLibrarianOpenCommandPath}
             onFocusChromeShortcut={enableGlobalFocusChrome}
-            onActiveFileUpdatedChange={setLibraryActiveFileUpdated}
             onFocusChromeContentCenterChange={setFocusChromeContentCenterX}
             preserveCurrentSizeKey={libraryKeepsCurrentSizeKey}
             sidebarCollapsed={navSidebarCollapsed}
@@ -7253,45 +7175,28 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
           </div>
         )}
 
-        {/* Center: Bookmarks sync time, active Library timestamp, or fieldtheory.dev link */}
+        {/* Center: Field Theory logo */}
         {(() => {
-          const showCenterLabel = !localCommandStatus && !agentImproveStatus &&
+          const showFooterLogo = !localCommandStatus && !agentImproveStatus && showFieldTheoryLink &&
             (!FEATURE_NARRATION_ENABLED || narrationPlayback.status === 'idle');
-          const centerLabel = showCenterLabel
-            ? (bookmarksFooterSyncLabel ?? libraryFooterUpdatedLabel ?? (showFieldTheoryLink ? 'fieldtheory.dev' : null))
-            : null;
-          const centerLabelOpensSite = centerLabel === 'fieldtheory.dev';
-          const centerLabelTitle = bookmarksFooterSyncLabel && xBookmarksLastSyncedAt && Number.isFinite(Date.parse(xBookmarksLastSyncedAt))
-            ? `bookmarks last synced from X ${new Date(xBookmarksLastSyncedAt).toLocaleString()}`
-            : libraryFooterUpdatedLabel && libraryActiveFileUpdated
-              ? libraryActiveFileUpdated.title
-              : undefined;
 
-          return centerLabel ? (
+          return showFooterLogo ? (
             <div
               style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}
             >
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                <span
-                  onClick={() => {
-                    if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
-                  }}
-                  title={centerLabelTitle}
+                <img
+                  src={theme.isDark ? 'fieldtheory-logo-white.png' : 'fieldtheory-logo-black.png'}
+                  alt="Field Theory"
                   style={{
-                    fontSize: '9px',
-                    color: theme.textSecondary,
-                    cursor: centerLabelOpensSite ? 'pointer' : 'default',
-                    opacity: 0.7,
-                    transition: 'opacity 0.15s',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    whiteSpace: 'nowrap',
+                    height: '14px',
+                    width: 'auto',
+                    maxWidth: '112px',
+                    objectFit: 'contain',
+                    opacity: 0.72,
+                    display: 'block',
                   }}
-                  onMouseEnter={(e) => { e.currentTarget.style.opacity = '1'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.opacity = '0.7'; }}
-                >
-                  {centerLabel}
-                </span>
+                />
               </div>
             </div>
           ) : null;
