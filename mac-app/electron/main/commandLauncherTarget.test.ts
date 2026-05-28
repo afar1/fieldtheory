@@ -3,6 +3,7 @@ import {
   isDockCommandTargetBundleId,
   isExternalCommandTargetBundleId,
   isFieldTheoryCommandTargetBundleId,
+  resolveCommandLauncherInvocationTarget,
 } from './commandLauncherTarget';
 
 describe('isFieldTheoryCommandTargetBundleId', () => {
@@ -33,5 +34,34 @@ describe('isExternalCommandTargetBundleId', () => {
   it('allows ordinary external apps', () => {
     expect(isExternalCommandTargetBundleId('com.apple.TextEdit')).toBe(true);
     expect(isExternalCommandTargetBundleId('com.superhuman.electron')).toBe(true);
+  });
+});
+
+describe('resolveCommandLauncherInvocationTarget', () => {
+  it('uses the focused integrated terminal only when Field Theory was active', () => {
+    expect(resolveCommandLauncherInvocationTarget({
+      fieldTheoryActive: true,
+      hasFocusedFieldTheoryTerminal: true,
+      hasActiveFieldTheoryMarkdown: true,
+      hasExternalTargetApp: true,
+    })).toEqual({ kind: 'field-theory-terminal' });
+  });
+
+  it('ignores a stale integrated terminal when another app was active', () => {
+    expect(resolveCommandLauncherInvocationTarget({
+      fieldTheoryActive: false,
+      hasFocusedFieldTheoryTerminal: true,
+      hasActiveFieldTheoryMarkdown: false,
+      hasExternalTargetApp: true,
+    })).toEqual({ kind: 'external-app' });
+  });
+
+  it('keeps command text inside the active Field Theory editor when it has focus', () => {
+    expect(resolveCommandLauncherInvocationTarget({
+      fieldTheoryActive: true,
+      hasFocusedFieldTheoryTerminal: false,
+      hasActiveFieldTheoryMarkdown: true,
+      hasExternalTargetApp: true,
+    })).toEqual({ kind: 'field-theory-markdown' });
   });
 });

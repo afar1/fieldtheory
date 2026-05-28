@@ -49,11 +49,13 @@ import {
   getMarkdownCodeEditorBottomRoom,
   getMarkdownCodeEditorContentAttributes,
   getMarkdownCodeEditorCursorAnimationStyle,
+  getMarkdownCodeEditorSelectionBackground,
   getMarkdownCodeEditorSelectionDrawConfig,
   getMarkdownCodeEditorCursorShapeStyle,
   getMarkdownCodeEditorCursorScrollMargin,
   getMarkdownCodeEditorSelectionSnapshot,
   getMarkdownCodeEditorSourcePosition,
+  hasMarkdownCodeEditorRangeSelection,
   getRenderedMarkdownImagePreviewFromEventTarget,
   getRenderedMarkdownArrowLeftEdit,
   getRenderedMarkdownOptionArrowEdit,
@@ -91,6 +93,26 @@ describe('MarkdownCodeEditor cursor blink', () => {
   it('sets CodeMirror cursor blink rate through the drawn selection layer', () => {
     expect(getMarkdownCodeEditorSelectionDrawConfig(true)).toEqual({ cursorBlinkRate: 1200 });
     expect(getMarkdownCodeEditorSelectionDrawConfig(false)).toEqual({ cursorBlinkRate: 0 });
+  });
+
+  it('uses a softer selection background for rendered prose', () => {
+    expect(getMarkdownCodeEditorSelectionBackground(true, 'rendered')).toBe('rgba(120,170,255,0.16)');
+    expect(getMarkdownCodeEditorSelectionBackground(true, 'source')).toBe('rgba(120,170,255,0.25)');
+    expect(getMarkdownCodeEditorSelectionBackground(false, 'rendered', 'custom')).toBe('custom');
+  });
+
+  it('detects range selections so the drawn cursor can hide while text is selected', () => {
+    const cursorState = EditorState.create({
+      doc: 'selected text',
+      selection: EditorSelection.cursor(0),
+    });
+    const rangeState = EditorState.create({
+      doc: 'selected text',
+      selection: EditorSelection.range(0, 8),
+    });
+
+    expect(hasMarkdownCodeEditorRangeSelection(cursorState)).toBe(false);
+    expect(hasMarkdownCodeEditorRangeSelection(rangeState)).toBe(true);
   });
 });
 

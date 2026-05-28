@@ -5293,6 +5293,9 @@ const codexTerminalAPI = {
   input: async (id: string, data: string): Promise<boolean> => {
     return ipcRenderer.invoke('codexTerminal:input', id, data);
   },
+  setLauncherTargetSession: async (id: string | null): Promise<boolean> => {
+    return ipcRenderer.invoke('codexTerminal:setLauncherTargetSession', id);
+  },
   resize: async (id: string, cols: number, rows: number): Promise<boolean> => {
     return ipcRenderer.invoke('codexTerminal:resize', id, cols, rows);
   },

@@ -16,6 +16,7 @@ interface CodexTerminalPanelProps {
   onDockSideChange?: (dockSide: CodexTerminalDockSide) => void;
   onFocusToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onTerminalFocusChange?: (focused: boolean) => void;
+  onLauncherTargetSessionChange?: (sessionId: string | null) => void;
   onVisibilityToggleShortcut?: (options?: { restoreEditorFocus?: boolean }) => void;
   onVisibleChange: (visible: boolean) => void;
 }
@@ -174,7 +175,7 @@ function clampRightWidth(value: number): number {
   return Math.max(MIN_RIGHT_WIDTH, Math.min(max, value));
 }
 
-export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
+export default function CodexTerminalPanel({ visible, pageContext, extendToViewportTop = false, focusRequestKey = 0, onDockSideChange, onFocusToggleShortcut, onTerminalFocusChange, onLauncherTargetSessionChange, onVisibilityToggleShortcut, onVisibleChange }: CodexTerminalPanelProps) {
   const { theme } = useTheme();
   const [dockSide, setDockSide] = useState<CodexTerminalDockSide>(() => (
     localStorage.getItem(CODEX_TERMINAL_DOCK_STORAGE_KEY) === 'right' ? 'right' : 'bottom'
@@ -504,10 +505,15 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
   useEffect(() => {
     const panel = panelRef.current;
     if (!panel || !onTerminalFocusChange) return;
-    const handleFocusIn = () => onTerminalFocusChange(true);
+    const handleFocusIn = () => {
+      onTerminalFocusChange(true);
+      onLauncherTargetSessionChange?.(activeSessionId);
+    };
     const handleFocusOut = () => {
       window.setTimeout(() => {
-        onTerminalFocusChange(panel.contains(document.activeElement));
+        const focused = panel.contains(document.activeElement);
+        onTerminalFocusChange(focused);
+        if (focused) onLauncherTargetSessionChange?.(activeSessionId);
       }, 0);
     };
     panel.addEventListener('focusin', handleFocusIn);
@@ -516,7 +522,17 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
       panel.removeEventListener('focusin', handleFocusIn);
       panel.removeEventListener('focusout', handleFocusOut);
     };
-  }, [onTerminalFocusChange, visible]);
+  }, [activeSessionId, onLauncherTargetSessionChange, onTerminalFocusChange, visible]);
+
+  useEffect(() => {
+    if (!visible || !panelRef.current?.contains(document.activeElement)) return;
+    onLauncherTargetSessionChange?.(activeSessionId);
+  }, [activeSessionId, onLauncherTargetSessionChange, visible]);
+
+  useEffect(() => {
+    if (visible) return;
+    onLauncherTargetSessionChange?.(null);
+  }, [onLauncherTargetSessionChange, visible]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {

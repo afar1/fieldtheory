@@ -2858,6 +2858,7 @@ interface CodexTerminalAPI {
   readHistoryPreview: (filePath: string, input?: { maxBytes?: number }) => Promise<CodexTerminalHistoryPreview | null>;
   getBuffer: (id: string) => Promise<string | null>;
   input: (id: string, data: string) => Promise<boolean>;
+  setLauncherTargetSession: (id: string | null) => Promise<boolean>;
   resize: (id: string, cols: number, rows: number) => Promise<boolean>;
   kill: (id: string) => Promise<boolean>;
   rename: (id: string, title: string) => Promise<boolean>;
