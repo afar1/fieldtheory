@@ -4465,7 +4465,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             marginBottom: `${FIELD_THEORY_CHROME_TABS_BOTTOM_PX}px`,
             height: 'auto',
             minHeight: '32px',
-            overflow: 'hidden',
+            overflow: 'visible',
             opacity: appChromeOpacity,
             pointerEvents: appChromeInteractive ? 'auto' : 'none',
             transition: 'height 0.3s ease, min-height 0.3s ease, margin-top 0.3s ease, margin-bottom 0.3s ease, opacity 90ms linear',
