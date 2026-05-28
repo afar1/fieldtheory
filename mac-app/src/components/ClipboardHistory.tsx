@@ -4161,6 +4161,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   border: 'none',
                   cursor: 'pointer',
                   textAlign: 'left',
+                  transition: 'background-color 0.15s ease',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
                 }}
               >
                 {!priorityDeviceId && <span style={{ color: theme.accent }}>✓</span>}
@@ -4197,6 +4204,17 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                     textAlign: 'left',
                     overflow: 'hidden',
                     opacity: priorityMicQuotaExhausted ? 0.5 : 1,
+                    transition: 'background-color 0.15s ease',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!priorityMicQuotaExhausted) {
+                      e.currentTarget.style.backgroundColor = theme.isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)';
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!priorityMicQuotaExhausted) {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }
                   }}
                 >
                   {priorityDeviceId === device.id && <span style={{ color: theme.accent }}>✓</span>}
