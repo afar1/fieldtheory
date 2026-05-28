@@ -89,6 +89,7 @@ import {
   isVisualLineNumberRowSelected,
   shouldMoveCaretToDocumentEndFromClick,
   startMarkdownCodeEditorBlankSpaceSelection,
+  trailingLineStartSelectionExtension,
 } from '../MarkdownCodeEditor';
 
 describe('MarkdownCodeEditor cursor blink', () => {
@@ -150,6 +151,36 @@ describe('MarkdownCodeEditor cursor blink', () => {
 
     expect(selection?.main.from).toBe(0);
     expect(selection?.main.to).toBe(paragraph.length);
+  });
+
+  it('keeps paragraph selections from including trailing whitespace before the blank line', () => {
+    const paragraph = 'The manifest presents it as Field Theory,\nLibrary notes, portable commands, active document context, and saved run records.';
+    const state = EditorState.create({
+      doc: `${paragraph}  \n\nWhat The Plugin Can Do`,
+      selection: EditorSelection.range(0, `${paragraph}  \n\n`.length),
+    });
+    const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state);
+
+    expect(selection?.main.from).toBe(0);
+    expect(selection?.main.to).toBe(paragraph.length);
+  });
+
+  it('clamps paragraph selection transactions before they render', () => {
+    const paragraph = 'The manifest presents it as Field Theory,\nLibrary notes, portable commands, active document context, and saved run records.';
+    const parent = document.createElement('div');
+    const view = new EditorView({
+      state: EditorState.create({
+        doc: `${paragraph}\n\nWhat The Plugin Can Do`,
+        extensions: [trailingLineStartSelectionExtension],
+      }),
+      parent,
+    });
+
+    view.dispatch({ selection: EditorSelection.range(0, `${paragraph}\n\n`.length) });
+
+    expect(view.state.selection.main.from).toBe(0);
+    expect(view.state.selection.main.to).toBe(paragraph.length);
+    view.destroy();
   });
 
   it('keeps reversed full-line selections from including the next line start', () => {
