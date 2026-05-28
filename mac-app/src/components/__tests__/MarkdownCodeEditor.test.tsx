@@ -88,6 +88,7 @@ import {
   isMarkdownCodeEditorFileSwapUpdate,
   isVisualLineNumberRowSelected,
   shouldMoveCaretToDocumentEndFromClick,
+  startMarkdownCodeEditorBlankSpaceSelection,
 } from '../MarkdownCodeEditor';
 
 describe('MarkdownCodeEditor cursor blink', () => {
@@ -351,6 +352,44 @@ describe('MarkdownCodeEditor blank-space clicks', () => {
     });
 
     expect(shouldMoveCaretToDocumentEndFromClick(buildView({ scrollHeight: 800 }), event)).toBe(false);
+  });
+
+  it('extends selection from end-of-document blank space during drag', () => {
+    const listeners: Partial<Record<string, (event: MouseEvent) => void>> = {};
+    const dispatches: unknown[] = [];
+    const ownerDocument = {
+      addEventListener: (type: string, listener: EventListener) => {
+        listeners[type] = listener as (event: MouseEvent) => void;
+      },
+      removeEventListener: (type: string) => {
+        delete listeners[type];
+      },
+    };
+    const view = {
+      ...buildView(),
+      state: EditorState.create({ doc: 'alpha\nlast line' }),
+      dom: { ownerDocument },
+      focus: vi.fn(),
+      posAtCoords: vi.fn(() => 'alpha\n'.length),
+      dispatch: vi.fn((spec) => dispatches.push(spec)),
+    } as unknown as EditorView;
+
+    const cleanup = startMarkdownCodeEditorBlankSpaceSelection(view, new MouseEvent('mousedown', {
+      button: 0,
+      clientY: 180,
+    }));
+    listeners.mousemove?.(new MouseEvent('mousemove', {
+      clientY: 90,
+      buttons: 1,
+    }));
+    cleanup?.();
+
+    expect(cleanup).not.toBeNull();
+    expect(dispatches).toEqual([
+      expect.objectContaining({ selection: { anchor: 'alpha\nlast line'.length, head: 'alpha\nlast line'.length } }),
+      { selection: { anchor: 'alpha\nlast line'.length, head: 'alpha\n'.length } },
+    ]);
+    expect(listeners.mousemove).toBeUndefined();
   });
 });
 
