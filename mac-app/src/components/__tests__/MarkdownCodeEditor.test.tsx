@@ -140,6 +140,18 @@ describe('MarkdownCodeEditor cursor blink', () => {
     expect(selection?.main.to).toBe('my name is andrew'.length);
   });
 
+  it('keeps paragraph selections from placing the head on the following blank line', () => {
+    const paragraph = 'The manifest presents it as Field Theory,\nLibrary notes, portable commands, active document context, and saved run records.';
+    const state = EditorState.create({
+      doc: `${paragraph}\n\nWhat The Plugin Can Do`,
+      selection: EditorSelection.range(0, `${paragraph}\n\n`.length),
+    });
+    const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state);
+
+    expect(selection?.main.from).toBe(0);
+    expect(selection?.main.to).toBe(paragraph.length);
+  });
+
   it('keeps reversed full-line selections from including the next line start', () => {
     const state = EditorState.create({
       doc: 'my name is andrew\n- ',
@@ -148,6 +160,18 @@ describe('MarkdownCodeEditor cursor blink', () => {
     const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state);
 
     expect(selection?.main.anchor).toBe('my name is andrew'.length);
+    expect(selection?.main.head).toBe(0);
+  });
+
+  it('keeps reversed paragraph selections from placing the anchor on the following blank line', () => {
+    const paragraph = 'The manifest presents it as Field Theory,\nLibrary notes, portable commands, active document context, and saved run records.';
+    const state = EditorState.create({
+      doc: `${paragraph}\n\nWhat The Plugin Can Do`,
+      selection: EditorSelection.range(`${paragraph}\n\n`.length, 0),
+    });
+    const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state);
+
+    expect(selection?.main.anchor).toBe(paragraph.length);
     expect(selection?.main.head).toBe(0);
   });
 });

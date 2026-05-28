@@ -508,16 +508,24 @@ function isMarkdownCodeEditorLineStartAfterBreak(doc: Text, offset: number): boo
   return offset > 0 && offset <= doc.length && doc.sliceString(offset - 1, offset) === '\n';
 }
 
+function getMarkdownCodeEditorOffsetBeforeTrailingLineBreaks(doc: Text, offset: number): number {
+  let nextOffset = offset;
+  while (isMarkdownCodeEditorLineStartAfterBreak(doc, nextOffset)) {
+    nextOffset -= 1;
+  }
+  return nextOffset;
+}
+
 export function getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state: EditorState): EditorSelection | null {
   let changed = false;
   const ranges = state.selection.ranges.map((range) => {
     if (range.empty) return range;
     let anchor = range.anchor;
     let head = range.head;
-    if (head > anchor && isMarkdownCodeEditorLineStartAfterBreak(state.doc, head)) {
-      head -= 1;
-    } else if (anchor > head && isMarkdownCodeEditorLineStartAfterBreak(state.doc, anchor)) {
-      anchor -= 1;
+    if (head > anchor) {
+      head = getMarkdownCodeEditorOffsetBeforeTrailingLineBreaks(state.doc, head);
+    } else if (anchor > head) {
+      anchor = getMarkdownCodeEditorOffsetBeforeTrailingLineBreaks(state.doc, anchor);
     }
     if (anchor === range.anchor && head === range.head) return range;
     changed = true;
