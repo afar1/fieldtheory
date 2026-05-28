@@ -384,7 +384,11 @@ function execWithTimeout(command: string, timeoutMs: number = 5000): Promise<{ s
 // Activate the target app, then optionally hide launcher chrome before pasting.
 async function activateAndPaste(
   targetApp: { bundleId: string; name: string } | null,
-  options: { beforePaste?: () => void | Promise<void>; clipboardTrace?: () => Record<string, unknown> } = {},
+  options: {
+    beforePaste?: () => void | Promise<void>;
+    clipboardTrace?: () => Record<string, unknown>;
+    requireFocusedTextInput?: boolean;
+  } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('activate-and-paste-start', {
     targetBundleId: targetApp?.bundleId ?? null,
@@ -428,6 +432,12 @@ async function activateAndPaste(
     appendCommandLauncherVisibilityTrace('command-launcher.activate-and-paste.before-keystroke', targetApp, {
       targetFrontmostAfterHide,
     });
+    if (options.requireFocusedTextInput) {
+      const focusedTextInput = await checkCommandLauncherFocusedTextInput('activate-and-paste-focused-text-input', targetApp);
+      if (!focusedTextInput) {
+        return false;
+      }
+    }
     const beforeKeystroke = nativeHelper?.getFrontmostApp() ?? null;
     appendCommandLauncherTrace('activate-and-paste-before-keystroke', {
       targetBundleId: bundleId,
@@ -509,6 +519,22 @@ function appendCommandLauncherVisibilityTrace(
   };
   appendCommandLauncherTrace(event, details);
   appendVisibilityTrace(event, details);
+}
+
+async function checkCommandLauncherFocusedTextInput(
+  event: string,
+  targetApp: { bundleId: string; name: string },
+  details: Record<string, unknown> = {},
+): Promise<boolean> {
+  const focusedTextInput = (await nativeHelper?.checkFocusedTextInput().catch(() => false)) ?? false;
+  appendCommandLauncherTrace(event, {
+    version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
+    targetBundleId: targetApp.bundleId,
+    targetName: targetApp.name,
+    focusedTextInput,
+    ...details,
+  });
+  return focusedTextInput;
 }
 
 function commandPayloadTrace(text: string): Record<string, unknown> {
@@ -616,7 +642,7 @@ async function activateCommandLauncherTargetApp(
 
 function activateAndPasteFromCommandLauncher(
   targetApp: { bundleId: string; name: string },
-  options: { clipboardTrace?: () => Record<string, unknown> } = {},
+  options: { clipboardTrace?: () => Record<string, unknown>; requireFocusedTextInput?: boolean } = {},
 ): Promise<boolean> {
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
@@ -627,6 +653,7 @@ function activateAndPasteFromCommandLauncher(
   return activateAndPaste(targetApp, {
     beforePaste: () => commandLauncherWindow?.hide(true),
     clipboardTrace: options.clipboardTrace,
+    requireFocusedTextInput: options.requireFocusedTextInput,
   });
 }
 
@@ -658,6 +685,10 @@ async function typeTextFromCommandLauncher(
   commandLauncherWindow?.hide(true);
   await new Promise(resolve => setTimeout(resolve, 40));
   appendCommandLauncherVisibilityTrace(`command-launcher.${tracePrefix}-native-type.after-hide-before-native-helper`, targetApp);
+  const focusedTextInput = await checkCommandLauncherFocusedTextInput(`${tracePrefix}-native-type-focused-text-input`, targetApp);
+  if (!focusedTextInput) {
+    return false;
+  }
 
   appendCommandLauncherTrace('command-launcher-paste-strategy', {
     version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
@@ -695,7 +726,7 @@ async function typeTextFromCommandLauncher(
       frontmostName: frontmost?.name ?? null,
       clipboard: readCommandPasteClipboardTrace(),
     });
-    return result.success;
+    return result.success && result.focusedTextInput !== false;
   } catch (error) {
     appendCommandLauncherTrace(`${tracePrefix}-native-type-error`, {
       version: COMMAND_LAUNCHER_PASTE_TRACE_VERSION,
@@ -9309,6 +9340,7 @@ function setupClipboardIPCHandlers(): void {
         if (!pasted) {
           pasted = await activateAndPasteFromCommandLauncher(targetApp, {
             clipboardTrace: readCommandPasteClipboardTrace,
+            requireFocusedTextInput: true,
           });
         }
         if (!pasted) {
@@ -9472,6 +9504,7 @@ function setupClipboardIPCHandlers(): void {
           if (!pasted) {
             pasted = await activateAndPasteFromCommandLauncher(targetApp, {
               clipboardTrace: readCommandPasteClipboardTrace,
+              requireFocusedTextInput: true,
             });
           }
           if (!pasted) {
