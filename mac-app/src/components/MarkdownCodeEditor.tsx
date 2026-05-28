@@ -1912,6 +1912,42 @@ export function shouldMoveCaretToDocumentEndFromClick(
   return event.clientY > lastLine.getBoundingClientRect().bottom;
 }
 
+export function startMarkdownCodeEditorBlankSpaceSelection(
+  view: EditorView,
+  event: MouseEvent,
+  bottomRoomPx = MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX,
+): (() => void) | null {
+  if (!shouldMoveCaretToDocumentEndFromClick(view, event, bottomRoomPx)) return null;
+  event.preventDefault();
+  view.focus();
+  const anchor = view.state.doc.length;
+  let head = anchor;
+  view.dispatch({
+    selection: { anchor, head },
+    effects: EditorView.scrollIntoView(anchor, { yMargin: bottomRoomPx }),
+  });
+
+  const ownerDocument = view.dom.ownerDocument;
+  const handleMouseMove = (moveEvent: MouseEvent): void => {
+    if (moveEvent.buttons !== 1) {
+      cleanup();
+      return;
+    }
+    const nextHead = view.posAtCoords({ x: moveEvent.clientX, y: moveEvent.clientY });
+    if (nextHead === null || nextHead === head) return;
+    head = nextHead;
+    view.dispatch({ selection: { anchor, head } });
+  };
+  const handleMouseUp = (): void => cleanup();
+  const cleanup = (): void => {
+    ownerDocument.removeEventListener('mousemove', handleMouseMove);
+    ownerDocument.removeEventListener('mouseup', handleMouseUp);
+  };
+  ownerDocument.addEventListener('mousemove', handleMouseMove);
+  ownerDocument.addEventListener('mouseup', handleMouseUp);
+  return cleanup;
+}
+
 export function getMarkdownCodeEditorCursorAnimationStyle(blinkCursor: boolean): React.CSSProperties {
   return blinkCursor ? {} : { animation: 'none', animationName: 'none', animationDuration: '0s' };
 }
@@ -2037,6 +2073,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     const onBlurRef = useRef(props.onBlur);
     const onSelectionChangeRef = useRef(props.onSelectionChange);
     const onScrollRef = useRef(onScroll);
+    const blankSpaceSelectionCleanupRef = useRef<(() => void) | null>(null);
     const sampleMarkdownInputInteraction = useInteractionFpsSampler('markdown-editor-input');
     const lastBeforeInputRef = useRef<{ inputType: string; data: string | null } | null>(null);
     const lastAppliedValueRef = useRef(value);
@@ -2087,6 +2124,11 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
     useEffect(() => {
       onScrollRef.current = onScroll;
     }, [onScroll]);
+
+    useEffect(() => () => {
+      blankSpaceSelectionCleanupRef.current?.();
+      blankSpaceSelectionCleanupRef.current = null;
+    }, []);
 
     const editorTheme = useMemo(() => {
       const fontSizePx = typeof fontSize === 'number' ? `${fontSize}px` : String(fontSize);
@@ -2548,14 +2590,14 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
               return false;
             },
             mousedown: (event, view) => {
-              if (shouldMoveCaretToDocumentEndFromClick(view, event, bottomRoomPxRef.current)) {
-                event.preventDefault();
-                view.focus();
-                const end = view.state.doc.length;
-                view.dispatch({
-                  selection: { anchor: end, head: end },
-                  effects: EditorView.scrollIntoView(end, { yMargin: bottomRoomPxRef.current }),
-                });
+              const blankSpaceSelectionCleanup = startMarkdownCodeEditorBlankSpaceSelection(
+                view,
+                event,
+                bottomRoomPxRef.current,
+              );
+              if (blankSpaceSelectionCleanup) {
+                blankSpaceSelectionCleanupRef.current?.();
+                blankSpaceSelectionCleanupRef.current = blankSpaceSelectionCleanup;
                 return true;
               }
               const pos = view.posAtCoords({ x: event.clientX, y: event.clientY });
