@@ -58,6 +58,7 @@ import { formatCompactTime, formatCompactTimeReadable, formatTimeAgo, formatComp
 import { shouldDeferCopyShortcutToNative } from '../utils/hotkeys';
 import { isNavSidebarToggleEnabled, isSidebarToggleShortcut, isThemeToggleShortcut } from '../utils/editorShortcuts';
 import { getAgentImproveContext, type AgentImproveContext } from '../utils/agentImproveContext';
+import { resolveUpdaterStatusTransition, type UpdateStatus } from '../../electron/shared/updaterState';
 import {
   buildClipboardListRows,
   getStackHydrationIds,
@@ -1117,7 +1118,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
   });
   
   // Update notification state.
-  type UpdateStatus = 'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'error' | 'uptodate';
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [updateVersion, setUpdateVersion] = useState<string | null>(null);
   const [updateError, setUpdateError] = useState<string | null>(null);
@@ -1466,49 +1466,49 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     // Query current update status on mount (in case we missed the IPC event).
     window.updaterAPI.getStatus().then((info) => {
       if (info) {
-        setUpdateStatus(info.status);
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, info.status));
         setUpdateVersion(info.version);
       }
     });
     
     const cleanups = [
       window.updaterAPI.onCheckingForUpdate(() => {
-        setUpdateStatus('checking');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'checking'));
         setUpdateError(null);
       }),
       window.updaterAPI.onUpdateAvailable((info) => {
-        setUpdateStatus('available');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'available'));
         setUpdateVersion(info.version);
         setUpdateError(null);
       }),
       window.updaterAPI.onDownloadProgress(() => {
-        setUpdateStatus('downloading');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'downloading'));
       }),
       window.updaterAPI.onUpdateDownloaded((info) => {
-        setUpdateStatus('ready');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'ready'));
         setUpdateVersion(info.version);
         setUpdateError(null);
       }),
       window.updaterAPI.onInstalling(() => {
-        setUpdateStatus('installing');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'installing'));
         setUpdateError(null);
       }),
       window.updaterAPI.onUpdateNotAvailable(() => {
-        setUpdateStatus('uptodate');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'uptodate'));
         setUpdateError(null);
         // Don't auto-show release notes - only show when user explicitly requests via hover or button.
         // Reset to idle after 3 seconds so the version number returns.
-        setTimeout(() => setUpdateStatus('idle'), 3000);
+        setTimeout(() => setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle')), 3000);
       }),
       window.updaterAPI.onError((error) => {
         console.error('[Updater] Error:', error);
         // Silently ignore network errors - button is disabled when offline anyway
         if (error?.includes('ERR_INTERNET_DISCONNECTED') || error?.includes('ERR_NETWORK') || error?.includes('ENOTFOUND')) {
-          setUpdateStatus('idle');
+          setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle'));
           return;
         }
         setUpdateError(error);
-        setUpdateStatus('error');
+        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'error'));
         setShowUpdateErrorModal(false);
       }),
     ];
@@ -7362,7 +7362,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                   <button
                     onClick={() => {
                       window.updaterAPI?.dismissUpdate();
-                      setUpdateStatus('idle');
+                      setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle', { force: true }));
                     }}
                     style={{
                       padding: '2px 5px',
@@ -7382,7 +7382,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
                         setUpdateStatus('installing');
                         window.updaterAPI?.installUpdate();
                       } else {
-                        setUpdateStatus('downloading');
+                        setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'downloading'));
                         window.updaterAPI?.downloadUpdate();
                       }
                     }}
@@ -8318,7 +8318,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             <button
               onClick={() => {
                 setUpdateError(null);
-                setUpdateStatus('idle');
+                setUpdateStatus((current) => resolveUpdaterStatusTransition(current, 'idle', { force: true }));
                 setShowUpdateErrorModal(false);
               }}
               style={{
