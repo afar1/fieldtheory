@@ -61,6 +61,8 @@ import { RENDERED_EDITOR_DEBUG_STORAGE_KEY } from '../utils/renderedMarkdownEdit
 export const MARKDOWN_CODE_EDITOR_CARET_BOTTOM_ROOM_PX = 59.2;
 export const MARKDOWN_CODE_EDITOR_CURSOR_BLINK_RATE_MS = 1200;
 export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_OPACITY = 0.68;
+export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_HEIGHT = '1lh';
+export const MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_WIDTH = '0.62em';
 export const MARKDOWN_CODE_EDITOR_CHECKED_TASK_LINE_CLASS = 'cm-markdown-task-line-checked';
 export const MARKDOWN_CODE_EDITOR_FILE_SWAP_USER_EVENT = 'swap.file';
 export const RENDERED_MARKDOWN_EDITOR_HEADING_CLASS = 'cm-rendered-markdown-heading';
@@ -1892,10 +1894,11 @@ export function getMarkdownCodeEditorCursorShapeStyle(
   return {
     backgroundColor: caretColor ?? fallbackColor,
     borderLeft: 'none',
+    height: `${MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_HEIGHT} !important`,
     marginLeft: '0',
-    minWidth: '0.62em',
+    minWidth: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_WIDTH,
     opacity: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_OPACITY,
-    width: '0.62em',
+    width: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_WIDTH,
   };
 }
 
@@ -2192,7 +2195,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           [`.${RENDERED_MARKDOWN_EDITOR_LIST_EMPTY_BODY_CLASS}`]: {
             display: 'inline-block',
             width: '0',
-            height: '1em',
+            height: MARKDOWN_CODE_EDITOR_BLOCK_CURSOR_HEIGHT,
             verticalAlign: 'text-bottom',
           },
           [`.${RENDERED_MARKDOWN_EDITOR_QUOTE_LINE_CLASS}`]: {

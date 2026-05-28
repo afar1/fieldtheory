@@ -180,6 +180,7 @@ describe('MarkdownCodeEditor cursor shape', () => {
     expect(getMarkdownCodeEditorCursorShapeStyle('block', '#10b981', '#111')).toEqual({
       backgroundColor: '#10b981',
       borderLeft: 'none',
+      height: '1lh !important',
       marginLeft: '0',
       minWidth: '0.62em',
       opacity: 0.68,
