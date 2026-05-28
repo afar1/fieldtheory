@@ -25,7 +25,7 @@ const keyboardEvent = (input: Partial<Pick<KeyboardEvent, 'altKey' | 'code' | 'c
 function session(input: { id: string; title?: string; cwd?: string }) {
   return {
     id: input.id,
-    title: input.title ?? 'Codex 1',
+    title: input.title ?? 'Terminal 1',
     cwd: input.cwd ?? '/repo',
     engine: 'pty' as const,
     createdAt: '2026-05-25T00:00:00.000Z',

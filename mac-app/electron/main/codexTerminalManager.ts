@@ -99,6 +99,7 @@ interface CodexTerminalSession extends CodexTerminalSessionSummary {
   outputBuffer: string;
   codexLaunchTimer: ReturnType<typeof setTimeout> | null;
   pendingLaunchEcho: PendingLaunchEcho | null;
+  launchedCommand: string;
 }
 
 type CodexHistoryFileEntry = { filePath: string; updatedAt: string; sizeBytes: number };
@@ -304,9 +305,10 @@ function normalizePreviewText(value: string): string {
     .trim();
 }
 
-function sanitizeLaunchCommand(input: unknown): string {
-  if (typeof input !== 'string') return CODEX_COMMAND;
+function sanitizeLaunchCommand(input: unknown): string | null {
+  if (typeof input !== 'string') return null;
   const trimmed = input.replace(/[\r\n]+/g, ' ').trim();
+  if (!trimmed) return null;
   return SAFE_CODEX_LAUNCH_COMMAND_PATTERN.test(trimmed) ? trimmed : CODEX_COMMAND;
 }
 
@@ -415,7 +417,7 @@ export class CodexTerminalManager {
     }
     const id = crypto.randomUUID();
     const cwd = input.cwd && isDirectory(input.cwd) ? input.cwd : this.defaultCwd;
-    const title = input.title?.trim() || `Codex ${this.sessions.size + 1}`;
+    const title = input.title?.trim() || `Terminal ${this.sessions.size + 1}`;
     const launchCommand = sanitizeLaunchCommand(input.launchCommand);
     const createdAt = new Date().toISOString();
     const transcriptPath = path.join(this.transcriptDirPath, `${id}.ansi`);
@@ -448,6 +450,7 @@ export class CodexTerminalManager {
       modelRunActive: false,
       codexLaunchTimer: null,
       pendingLaunchEcho: null,
+      launchedCommand: launchCommand ?? 'shell',
     };
     this.sessions.set(id, session);
     fs.mkdirSync(this.transcriptDirPath, { recursive: true });
@@ -456,6 +459,7 @@ export class CodexTerminalManager {
 
     let didLaunchCodex = false;
     const launchCodex = () => {
+      if (!launchCommand) return;
       if (didLaunchCodex || session.exitedAt || !session.process) return;
       didLaunchCodex = true;
       if (session.codexLaunchTimer) {
@@ -465,7 +469,7 @@ export class CodexTerminalManager {
       session.pendingLaunchEcho = { commandRemaining: launchCommand, stripLineEnding: true };
       session.process.write(`${launchCommand}\r`);
     };
-    session.codexLaunchTimer = setTimeout(launchCodex, CODEX_LAUNCH_FALLBACK_MS);
+    session.codexLaunchTimer = launchCommand ? setTimeout(launchCodex, CODEX_LAUNCH_FALLBACK_MS) : null;
 
     child.onData((data) => {
       const echoResult = stripPendingLaunchCommandEcho(data, session.pendingLaunchEcho);
@@ -602,8 +606,8 @@ export class CodexTerminalManager {
 
   attachPageContext(id: string, context: CodexTerminalPageContext, options: { notifyTerminal?: boolean } = {}): { ok: boolean; filePath?: string; prompt?: string; error?: string } {
     const session = this.sessions.get(id);
-    if (!session || session.exitedAt) return { ok: false, error: 'Codex terminal session is not running.' };
-    if (!session.process) return { ok: false, error: 'Codex terminal session is not running.' };
+    if (!session || session.exitedAt) return { ok: false, error: 'Terminal session is not running.' };
+    if (!session.process) return { ok: false, error: 'Terminal session is not running.' };
     const filePath = writePageContextBundle(this.contextDirPath, session.id, context);
     const gitInfo = resolveGitInfo(session.cwd);
     const existingContextIndex = session.attachedContexts.findIndex((attached) => attached.sourcePath === (context.path || 'unknown'));
@@ -612,7 +616,7 @@ export class CodexTerminalManager {
       sessionId: session.id,
       sessionTitle: session.title,
       sessionCwd: session.cwd,
-      launchedCommand: CODEX_COMMAND,
+      launchedCommand: session.launchedCommand,
       repoPath: gitInfo.repoPath,
       gitBranch: gitInfo.gitBranch,
       filePath,

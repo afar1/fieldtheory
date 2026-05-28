@@ -311,7 +311,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
 
   const createSession = useCallback(async (input?: { cwd?: string; title?: string; auto?: boolean; launchCommand?: string }) => {
     const session = await window.codexTerminalAPI?.create({
-      title: input?.title ?? `Codex ${sessions.length + 1}`,
+      title: input?.title ?? `Terminal ${sessions.length + 1}`,
       cwd: input?.cwd,
       auto: input?.auto,
       launchCommand: input?.launchCommand,
@@ -923,7 +923,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
             </div>
           );
         })}
-        <button type="button" onClick={() => void createSession()} title="New Codex terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
+        <button type="button" onClick={() => void createSession()} title="New terminal (⌘T)" style={{ ...toolbarButtonStyle(theme), flexShrink: 0, ...(toolbarItemOffset ?? {}) }}>
           +
         </button>
         {activeCwd && dockSide === 'bottom' && (
@@ -949,7 +949,7 @@ export default function CodexTerminalPanel({ visible, pageContext, extendToViewp
         <div style={{ flex: 1, minWidth: '12px' }} />
         {terminalStatus && <span style={{ color: theme.textSecondary, fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...(toolbarItemOffset ?? {}) }}>{terminalStatus}</span>}
         {activeSession && (activeSession.exitedAt || activeSession.restored) && (
-          <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active Codex terminal" style={{ ...toolbarButtonStyle(theme), ...(toolbarItemOffset ?? {}) }}>
+          <button type="button" onClick={() => void restartSession(activeSession)} title="Restart active terminal" style={{ ...toolbarButtonStyle(theme), ...(toolbarItemOffset ?? {}) }}>
             Restart
           </button>
         )}
