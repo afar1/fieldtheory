@@ -7,6 +7,7 @@ import {
   LIBRARIAN_TYPOGRAPHY_STORAGE_KEY,
   persistLibrarianLineHeight,
   persistLibrarianTypographyPreset,
+  resolveLibrarianDocumentMaxWidth,
   resolveLibrarianLineHeight,
   resolveLibrarianParagraphSpacing,
   restoreLibrarianLineHeight,
@@ -69,5 +70,13 @@ describe('librarian typography presets', () => {
     expect(resolveLibrarianParagraphSpacing('tight')).toBe('0.36em');
     expect(resolveLibrarianParagraphSpacing('normal')).toBe('0.52em');
     expect(resolveLibrarianParagraphSpacing('loose')).toBe('0.78em');
+  });
+
+  it('scales document width with text size shortcuts', () => {
+    const maxWidth = LIBRARIAN_TYPOGRAPHY_PRESETS[0].maxWidth;
+
+    expect(resolveLibrarianDocumentMaxWidth(maxWidth, 'small')).toBe(`calc(${maxWidth} - 72px)`);
+    expect(resolveLibrarianDocumentMaxWidth(maxWidth, 'normal')).toBe(maxWidth);
+    expect(resolveLibrarianDocumentMaxWidth(maxWidth, 'large')).toBe(`calc(${maxWidth} + 90px)`);
   });
 });
