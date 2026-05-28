@@ -1062,6 +1062,7 @@ describe('LibrarianView render', () => {
     expect(markdownButton.style.height).toBe(focusButton.style.width);
     expect(terminalButton.style.height).toBe(focusButton.style.width);
     expect(focusButton.style.height).toBe(focusButton.style.width);
+    expect(riverButton.getAttribute('style')).toContain('border: none;');
   });
 
   it('refreshes River availability after auth session changes', async () => {
@@ -1565,6 +1566,7 @@ describe('LibrarianView render', () => {
 
     expect(Boolean(meetingButton.compareDocumentPosition(maxwellButton) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
     expect(Boolean(maxwellButton.compareDocumentPosition(modeToggle) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(true);
+    expect(meetingButton.getAttribute('style')).toContain('border: none;');
   });
 
   it('adds the active wiki page to Field Theory commands and runs its content from the toolbar', async () => {
