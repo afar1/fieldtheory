@@ -7132,6 +7132,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             color: theme.textSecondary,
             userSelect: 'none',
             flex: 1,
+            minWidth: 0,
           }}
         >
           {/* Sidebar collapse toggle — actionable in Library (non-immersive)
@@ -7188,8 +7189,26 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               </button>
             );
           })()}
+          {renderMaxwellHistoryButton()}
           {/* Plan info - always show for logged in users */}
-          {authSession && cachedTier === 'pro' ? (
+          {localCommandStatus ? (
+                <>
+                  <span style={{ fontWeight: 500 }}>Local model:</span>
+                  <span
+                    style={{
+                      color: localCommandStatus.status === 'error' ? theme.error : theme.textSecondary,
+                      opacity: 0.85,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {footerStatusLabel}
+                  </span>
+                  {localCommandStatus.status === 'running' && localCommandStatus.runId ? renderMaxwellCancelButton() : null}
+                </>
+              ) : authSession && cachedTier === 'pro' ? (
                 // Pro Plan: show cycling stats on click
                 <>
                   <span style={{ fontWeight: 500 }}>Pro:</span>
@@ -7214,15 +7233,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               ) : null}
         </div>
 
-        {footerStatusLabel && (
+        {agentImproveStatus && !localCommandStatus && (
           <div style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0, maxWidth: 'min(620px, 54vw)' }}>
-              {localCommandStatus ? renderMaxwellHistoryButton() : null}
-              {localCommandStatus?.status === 'running' && localCommandStatus.runId ? renderMaxwellCancelButton() : null}
               <span
                 style={{
                   fontSize: '9px',
-                  color: localCommandStatus?.status === 'error' ? theme.error : theme.textSecondary,
+                  color: theme.textSecondary,
                   opacity: 0.85,
                   minWidth: 0,
                   overflow: 'hidden',
@@ -7255,11 +7272,6 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
               style={{ flex: 1, display: 'flex', justifyContent: 'center', minWidth: 0 }}
             >
               <div style={{ position: 'relative', display: 'flex', alignItems: 'center', minWidth: 0 }}>
-                {renderMaxwellHistoryButton({
-                  position: 'absolute',
-                  right: '100%',
-                  marginRight: '6px',
-                })}
                 <span
                   onClick={() => {
                     if (centerLabelOpensSite) window.shellAPI?.openExternal('https://fieldtheory.dev');
