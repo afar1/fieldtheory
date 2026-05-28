@@ -2015,6 +2015,8 @@ declare global {
     createdAt: number;
     mtime: number;
     todoState?: MarkdownTodoState;
+    sharedOriginalSourcePath?: string;
+    sharedAuthorCallsign?: string;
   }
 
   /**

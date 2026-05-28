@@ -26,6 +26,7 @@ import {
   getFocusChromeSurfaceOpacity,
   getMarkdownWikiLinkCompletionState,
   getNewlyCheckedMarkdownTasks,
+  getReadingUpdatedByline,
   getLibrarianBracketNavigationDirection,
   getLibrarianContentBottomScrollSpace,
   getLibrarianContentTopPadding,
@@ -148,7 +149,10 @@ import {
   stampMarkdownContentEditIfBodyChanged,
 } from '../../electron/shared/markdownFrontmatter';
 
+const REAL_DATE_NOW = Date.now;
+
 afterEach(() => {
+  Date.now = REAL_DATE_NOW;
   clearLibraryDragData();
   window.getSelection()?.removeAllRanges();
 });
@@ -1063,6 +1067,20 @@ describe('getRenderedDisplayReadingContent', () => {
       renderedDisplayContent: { path: '/notes/b.md', content: 'other file' },
       activeReadingContent: 'current file',
     })).toBe('current file');
+  });
+});
+
+describe('getReadingUpdatedByline', () => {
+  it('keeps ordinary documents as an updated timestamp', () => {
+    Date.now = () => 3 * 60 * 60 * 1000;
+
+    expect(getReadingUpdatedByline({ mtime: 0 })).toBe('Updated 3 hours ago');
+  });
+
+  it('adds the River author callsign when present', () => {
+    Date.now = () => 3 * 60 * 60 * 1000;
+
+    expect(getReadingUpdatedByline({ mtime: 0, sharedAuthorCallsign: 'AMB-MAC' })).toBe('Updated 3 hours ago by AMB-MAC');
   });
 });
 
