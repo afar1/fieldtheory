@@ -158,4 +158,16 @@ describe('clipboardHistoryRestore', () => {
     expect(forward.backHistory).toEqual(['librarian']);
     expect(forward.forwardHistory).toEqual([]);
   });
+
+  it('tracks sketch as an overlay that can return to the previous surface', () => {
+    const back = popAppBackHistory({
+      backHistory: ['librarian'],
+      forwardHistory: [],
+      current: 'sketch',
+    });
+
+    expect(back.target).toBe('librarian');
+    expect(back.backHistory).toEqual([]);
+    expect(back.forwardHistory).toEqual(['sketch']);
+  });
 });

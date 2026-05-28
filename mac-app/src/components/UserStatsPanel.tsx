@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
-import { SettingsSectionHeading } from './settings/SettingsPrimitives';
+import { SETTINGS_CARD_GAP, SettingsSectionHeading } from './settings/SettingsPrimitives';
 
 interface UserMetrics {
   transcriptions: number;
@@ -258,7 +258,7 @@ export default function UserStatsPanel() {
       : 'Not synced yet';
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       <SettingsSectionHeading
         theme={theme}
         title="Stats"

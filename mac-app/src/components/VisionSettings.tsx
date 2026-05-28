@@ -1,7 +1,7 @@
 import { CSSProperties, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { summarizeGazeTrackingHealth } from '../lib/gazeTrackingDiagnostics';
-import { SettingsDisabledBlock } from './settings/SettingsPrimitives';
+import { SETTINGS_CARD_GAP, SettingsDisabledBlock } from './settings/SettingsPrimitives';
 
 const PREVIEW_STORAGE_KEY = 'fieldTheoryVisionPreviewEnabled';
 type GazeAPI = NonNullable<Window['gazeAPI']>;
@@ -294,7 +294,7 @@ export default function VisionSettings() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       <div style={styles.card(theme)}>
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

@@ -102,7 +102,7 @@ describe('ContentToolbar', () => {
     expect((spacer?.style as CSSStyleDeclaration & { WebkitAppRegion?: string }).WebkitAppRegion).toBe('no-drag');
   });
 
-  it('uses the Field Theory icon for Maxwell', () => {
+  it('uses the Field Theory icon for Field Theory commands', () => {
     const { container } = render(
       <ContentToolbarMaxwellButton
         canAddCurrent
@@ -114,12 +114,12 @@ describe('ContentToolbar', () => {
       />
     );
 
-    const maxwellButton = screen.getByRole('button', { name: 'Maxwell' });
-    expect(maxwellButton.textContent).toBe('');
+    const fieldTheoryButton = screen.getByRole('button', { name: 'Field Theory' });
+    expect(fieldTheoryButton.textContent).toBe('');
     expect(container.querySelector('img[src="/field-theory-icon-black.png"]')).toBeTruthy();
   });
 
-  it('shows local command controls and can remove saved Maxwell pages', () => {
+  it('shows local command controls and can remove saved Field Theory pages', () => {
     const onRunItem = vi.fn();
     const onRemoveItem = vi.fn();
     const onVisitItem = vi.fn();
@@ -145,23 +145,23 @@ describe('ContentToolbar', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Maxwell' }));
-    expect(screen.getByText('Maxwell Local Commands')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
+    expect(screen.getByText('Run a local command')).toBeTruthy();
     expect(screen.getByText('A Maxwell Page').compareDocumentPosition(screen.getByText('Z Maxwell Page')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('Commands/A Maxwell Page')).toBeNull();
     fireEvent.click(screen.getAllByText('Run')[0]);
     expect(onRunItem).toHaveBeenCalledWith('a-page');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Maxwell' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
     fireEvent.click(screen.getByLabelText('Open A Maxwell Page'));
     expect(onVisitItem).toHaveBeenCalledWith('a-page');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Maxwell' }));
-    fireEvent.click(screen.getByLabelText('Remove A Maxwell Page from Maxwell'));
+    fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
+    fireEvent.click(screen.getByLabelText('Remove A Maxwell Page from Field Theory'));
     expect(onRemoveItem).toHaveBeenCalledWith('a-page');
   });
 
-  it('shows a lowercase add action without closing Maxwell', () => {
+  it('shows a lowercase add action without closing Field Theory commands', () => {
     const onAddCurrent = vi.fn();
 
     render(
@@ -172,13 +172,13 @@ describe('ContentToolbar', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Maxwell' }));
-    fireEvent.click(screen.getByText('add current page to maxwell'));
+    fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
+    fireEvent.click(screen.getByText('add current page'));
     expect(onAddCurrent).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('No saved Maxwell pages yet.')).toBeTruthy();
+    expect(screen.getByText('No saved Field Theory pages yet.')).toBeTruthy();
   });
 
-  it('shows remove-current when the current page is already saved in Maxwell', () => {
+  it('shows remove-current when the current page is already saved in Field Theory commands', () => {
     const onRemoveItem = vi.fn();
 
     render(
@@ -194,8 +194,8 @@ describe('ContentToolbar', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Maxwell' }));
-    fireEvent.click(screen.getByText('remove current page from maxwell'));
+    fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
+    fireEvent.click(screen.getByText('remove current page from Field Theory'));
     expect(onRemoveItem).toHaveBeenCalledWith('current-page');
   });
 });

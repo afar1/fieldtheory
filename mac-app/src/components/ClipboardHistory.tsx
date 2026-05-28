@@ -2016,8 +2016,10 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
     localStorage.removeItem('pendingSketch');
     setEditingSketchItem(null);
     setSketchAssociatedTranscripts([]);
-    setViewMode('clipboard');
-  }, []);
+    if (!navigateAppHistory(-1)) {
+      setViewMode('clipboard');
+    }
+  }, [navigateAppHistory]);
 
   const openSketchForEditing = useCallback(async (item: ClipboardItem) => {
     setEditingSketchItem(item);
@@ -2950,7 +2952,7 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
 
       // When not in clipboard view, let other views handle their own navigation.
       if (viewMode !== 'clipboard') {
-        // In sketch mode, let SketchView handle Escape (returns to clipboard view).
+        // In sketch mode, let SketchView handle Escape (returns to the previous surface).
         // Don't close the window - SketchView's handler calls handleSketchClose.
         if (viewMode === 'sketch' && key === 'Escape') {
           return;

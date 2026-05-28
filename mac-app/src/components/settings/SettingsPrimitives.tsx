@@ -40,6 +40,8 @@ interface SettingsDisabledBlockProps {
 
 export type SettingsBadgeTone = 'neutral' | 'success' | 'warning' | 'info';
 
+export const SETTINGS_CARD_GAP = '16px';
+
 interface SettingsBadgeProps {
   theme: Theme;
   tone?: SettingsBadgeTone;

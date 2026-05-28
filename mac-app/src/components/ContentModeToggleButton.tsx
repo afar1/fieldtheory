@@ -55,15 +55,16 @@ export default function ContentModeToggleButton({
       aria-label={label}
       aria-pressed={mode !== 'rendered'}
       style={{
+        height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
         width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
         boxSizing: 'border-box',
         justifyContent: 'center',
-        padding: '4px 8px',
+        padding: 0,
         fontSize: '11px',
         color: theme.textSecondary,
         backgroundColor: 'transparent',
         border: `1px solid ${theme.border}`,
-        borderRadius: '6px',
+        borderRadius: '5px',
         cursor: disabled ? 'default' : 'pointer',
         display: 'flex',
         alignItems: 'center',

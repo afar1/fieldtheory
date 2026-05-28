@@ -1050,11 +1050,57 @@ describe('LibrarianView render', () => {
     const riverButton = await screen.findByRole('button', { name: 'Add to River (shared)' });
     const popOutButton = screen.getByRole('button', { name: 'Open in New Window' });
     const markdownButton = screen.getByRole('button', { name: 'Switch to Markdown source' });
+    const terminalButton = screen.getByRole('button', { name: 'Open Codex Terminal' });
     const focusButton = screen.getByRole('button', { name: 'Enter immersive view' });
     expect(riverButton.nextElementSibling).toBe(popOutButton);
     expect(popOutButton.nextElementSibling).toBe(markdownButton);
     expect(popOutButton.style.width).toBe(focusButton.style.width);
     expect(markdownButton.style.width).toBe(focusButton.style.width);
+    expect(terminalButton.style.width).toBe(focusButton.style.width);
+    expect(riverButton.style.width).toBe(focusButton.style.width);
+    expect(popOutButton.style.height).toBe(focusButton.style.width);
+    expect(markdownButton.style.height).toBe(focusButton.style.width);
+    expect(terminalButton.style.height).toBe(focusButton.style.width);
+    expect(focusButton.style.height).toBe(focusButton.style.width);
+  });
+
+  it('refreshes River availability after auth session changes', async () => {
+    let sessionChanged: ((session: unknown | null) => void) | null = null;
+    let available = false;
+    const getAvailability = vi.fn(async () => ({ available, hasTeamMembers: available }));
+    const sync = vi.fn(async () => ({ written: 0, removed: 0, errors: [] }));
+    Object.defineProperty(window, 'sharedFilesAPI', {
+      configurable: true,
+      value: {
+        getAvailability,
+        sync,
+        getStatus: vi.fn(async () => ({ shared: false })),
+        setActivePresence: vi.fn(async () => []),
+        onPresenceChanged: vi.fn(() => () => {}),
+      },
+    });
+    Object.defineProperty(window, 'authAPI', {
+      configurable: true,
+      value: {
+        onSessionChanged: vi.fn((handler: (session: unknown | null) => void) => {
+          sessionChanged = handler;
+          return vi.fn();
+        }),
+      },
+    });
+
+    render(<LibrarianView sidebarCollapsed={false} onSwitchToClipboard={vi.fn()} />);
+
+    await waitFor(() => expect(getAvailability).toHaveBeenCalledTimes(1));
+    expect(sync).not.toHaveBeenCalled();
+
+    available = true;
+    await act(async () => {
+      sessionChanged?.({ user: { id: 'user-1' } });
+    });
+
+    await waitFor(() => expect(getAvailability).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(sync).toHaveBeenCalledTimes(1));
   });
 
   it('resets rendered document scroll when selecting a different sidebar file', async () => {
@@ -1541,7 +1587,7 @@ describe('LibrarianView render', () => {
 
     const maxwellButton = await screen.findByRole('button', { name: 'Field Theory' });
     fireEvent.click(maxwellButton);
-    fireEvent.click(screen.getByRole('button', { name: 'add current page to Field Theory' }));
+    fireEvent.click(screen.getByRole('button', { name: 'add current page' }));
 
     await waitFor(() => {
       expect(window.localStorage.setItem).toHaveBeenCalledWith(

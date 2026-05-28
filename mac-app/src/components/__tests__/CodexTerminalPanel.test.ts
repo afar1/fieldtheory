@@ -151,9 +151,12 @@ describe('terminalAppearanceOptions', () => {
 describe('terminalViewportStyleCss', () => {
   it('hides xterm viewport scrollbars against global app scrollbar styling', () => {
     const css = terminalViewportStyleCss('#f0eadf');
+    expect(css).toContain('.codex-terminal-host {\n  overflow: hidden;');
     expect(css).toContain('scrollbar-width: none !important');
     expect(css).toContain('scrollbar-color: transparent transparent !important');
     expect(css).toContain('display: none !important');
+    expect(css).toContain('.xterm-scrollable-element > .scrollbar');
+    expect(css).toContain('width: 0 !important');
   });
 });
 

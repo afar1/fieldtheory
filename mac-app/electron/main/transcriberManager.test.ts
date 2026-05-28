@@ -50,7 +50,7 @@ import { formatWhisperSpeakerTurnTranscript, TranscriberManager } from './transc
 // since both engines use the shared StdioJsonServer class.
 
 describe('formatWhisperSpeakerTurnTranscript', () => {
-  it('turns whisper.cpp tinydiarize markers into unbounded speaker turn labels', () => {
+  it('removes whisper.cpp tinydiarize markers without inventing speakers', () => {
     const text = formatWhisperSpeakerTurnTranscript([
       '[00:00:00.000 --> 00:00:03.800] Hello there. [SPEAKER_TURN]',
       '[00:00:03.800 --> 00:00:06.200] Hi, can you hear me? [SPEAKER_TURN]',
@@ -59,11 +59,11 @@ describe('formatWhisperSpeakerTurnTranscript', () => {
     ].join('\n'));
 
     expect(text).toBe([
-      'Speaker 1: Hello there.',
-      'Speaker 2: Hi, can you hear me?',
-      'Speaker 3: Third voice joining.',
-      'Speaker 4: Yes, sounds good.',
-    ].join('\n'));
+      'Hello there.',
+      'Hi, can you hear me?',
+      'Third voice joining.',
+      'Yes, sounds good.',
+    ].join('\n\n'));
   });
 });
 

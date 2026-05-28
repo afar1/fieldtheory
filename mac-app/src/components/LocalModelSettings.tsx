@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import {
+  SETTINGS_CARD_GAP,
   SettingsBadge,
   SettingsCard,
   SettingsNotice,
@@ -243,7 +244,7 @@ export default function LocalModelSettings() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       <SettingsSectionHeading
         theme={theme}
         title="Local model"

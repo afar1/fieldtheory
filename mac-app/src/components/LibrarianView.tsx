@@ -2792,9 +2792,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
     const unsubscribe = window.teamAPI?.onTeamChanged?.(() => {
       void loadAvailability();
     });
+    const unsubscribeAuth = window.authAPI?.onSessionChanged?.(() => {
+      void loadAvailability();
+    });
     return () => {
       cancelled = true;
       unsubscribe?.();
+      unsubscribeAuth?.();
     };
   }, []);
 
@@ -5839,14 +5843,14 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
 
   useEffect(() => {
     const root = renderedContentRef.current;
-    if (!root || contentMode === 'markdown') return;
+    if (!root || contentMode === 'markdown' || activeIsMarkdownDocument) return;
     if (!fileFindOpen) {
       clearFileFindMarks(root);
       return;
     }
     highlightFileFindMatches(root, fileFindQuery);
     return () => clearFileFindMarks(root);
-  }, [contentMode, displaySourceBody, fileFindOpen, fileFindQuery]);
+  }, [activeIsMarkdownDocument, contentMode, displaySourceBody, fileFindOpen, fileFindQuery]);
 
   const captureContentScrollRatio = useCallback(() => {
     const scrollEl = contentMode === 'markdown' ? markdownCodeEditorRef.current : contentScrollRef.current;
@@ -8562,13 +8566,13 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   title={meetingToolbarTitle}
                   aria-label={meetingToolbarTitle}
                   style={{
-                    width: '26px',
-                    height: '24px',
-                    padding: '4px 6px',
+                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    padding: 0,
                     color: meetingToolbarRecording ? '#dc2626' : theme.textSecondary,
                     backgroundColor: 'transparent',
-                    border: 'none',
-                    borderRadius: '4px',
+                    border: `1px solid ${theme.border}`,
+                    borderRadius: '5px',
                     cursor: meetingToolbarDisabled ? 'default' : 'pointer',
                     opacity: meetingToolbarDisabled ? 0.65 : 1,
                     display: 'flex',
@@ -8626,8 +8630,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   title="Run a local agent on this file (Claude Code or Codex)"
                   aria-label="Run agent on this file"
                   style={{
-                    width: '26px',
-                    height: '24px',
+                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                     padding: 0,
                     fontSize: '12px',
                     fontWeight: 500,
@@ -8766,9 +8770,9 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   onClick={handleToggleSharedFile}
                   disabled={isTogglingSharedFile}
                   style={{
-                    height: '24px',
-                    minWidth: '24px',
-                    padding: '3px 6px',
+                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
+                    padding: 0,
                     fontSize: '11px',
                     color: sharedFileStatus?.shared ? '#2563eb' : theme.textSecondary,
                     backgroundColor: sharedFileStatus?.shared
@@ -8776,8 +8780,8 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                       : 'transparent',
                     border: `1px solid ${sharedFileStatus?.shared
                       ? (theme.isDark ? 'rgba(96,165,250,0.36)' : 'rgba(37,99,235,0.28)')
-                      : 'transparent'}`,
-                    borderRadius: '4px',
+                      : theme.border}`,
+                    borderRadius: '5px',
                     cursor: isTogglingSharedFile ? 'default' : 'pointer',
                     opacity: isTogglingSharedFile ? 0.6 : 1,
                     display: 'flex',
@@ -8805,7 +8809,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     title="Open in New Window"
                     aria-label="Open in New Window"
                     style={{
-                      height: '24px',
+                      height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                       width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                       boxSizing: 'border-box',
                       padding: 0,
@@ -8861,7 +8865,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   title={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   aria-label={codexTerminalVisible ? 'Close Codex Terminal' : 'Open Codex Terminal'}
                   style={{
-                    height: '24px',
+                    height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                     width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
                     boxSizing: 'border-box',
                     padding: 0,
@@ -9015,6 +9019,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                   <MarkdownCodeEditor
                     ref={markdownCodeEditorRef}
                     value={editContent}
+                    findQuery={fileFindOpen ? fileFindQuery : ''}
                     onChange={(next) => {
                       const normalizedNext = removeEmptyMarkdownCommentPlaceholders(next);
                       markdownEditUndoStackRef.current = [];
@@ -9183,6 +9188,7 @@ function LibrarianView({ active = true, onSwitchToClipboard, onSwitchToSettings,
                     ref={renderedMarkdownEditorRef}
                     presentation="rendered"
                     value={displaySourceBody}
+                    findQuery={fileFindOpen ? fileFindQuery : ''}
                     onChange={handleRenderedEditorChange}
                     onKeyDown={handleRenderedEditorKeyDown}
                     onMouseDown={handleRenderedEditorMouseDown}

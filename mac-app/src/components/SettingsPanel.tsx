@@ -24,7 +24,7 @@ import { accentPresets, AccentPreset } from '../design/tokens';
 import { buildHotkeyString, isModifierOnly } from '../utils/hotkeys';
 import { normalizeSquaresConfig } from '../utils/squaresConfig';
 import { buildTeamSettingsState } from '../utils/teamSettingsState';
-import { getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
+import { SETTINGS_CARD_GAP, getSettingsDividerColor, getSettingsSurfaceStyle } from './settings/SettingsPrimitives';
 import { useAuthSessionBridge } from '../hooks/useAuthSessionBridge';
 import {
   LIBRARIAN_KEYBOARD_SHORTCUTS,
@@ -1554,8 +1554,8 @@ export default function SettingsPanel({
       </header>
       {/* Appearance Section - Dark mode toggle, accent colors, intensity */}
       {selectedSection === 'appearance' && (
-        <>
-      <div style={styles.section}>
+        <div style={styles.sectionStack}>
+          <div style={styles.section}>
         <SectionHeader title="Appearance" styles={styles} />
         <div style={styles.row}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
@@ -1842,7 +1842,7 @@ export default function SettingsPanel({
           </p>
         )}
       </div>
-        </>
+        </div>
       )}
 
       {/* Keyboard Shortcuts Section - First for easy access */}
@@ -2180,144 +2180,137 @@ export default function SettingsPanel({
 
       {/* Audio & Transcription Section (combined) */}
       {selectedSection === 'audio' && (
-      <>
-      <div style={styles.section}>
-        <SectionHeader title="Microphone" styles={styles} />
+      <div style={styles.sectionStack}>
         <AudioSettingsPanel />
-      </div>
-
-      {/* Transcription Section */}
-      <div style={styles.section}>
         <TranscriptionSettings />
-      </div>
 
-      {/* Word Substitutions Section */}
-      <div style={styles.section}>
-        <SectionHeader title="Word Corrections" styles={styles} />
-        <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
-          Fix common transcription mistakes. Words on the left will be replaced with words on the right.
-        </p>
-
-        {/* Existing substitutions list */}
-        {wordSubstitutions.length > 0 && (
-          <div style={{
-            marginBottom: '12px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '6px',
-          }}>
-            {wordSubstitutions.map((sub, index) => (
-              <div
-                key={index}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '8px',
-                  padding: '8px 12px',
-                  borderRadius: '6px',
-                  backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
-                  border: `1px solid ${theme.border}`,
-                }}
-              >
-                <span style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  color: theme.text,
-                  fontFamily: 'monospace',
-                }}>
-                  {sub.from}
-                </span>
-                <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
-                <span style={{
-                  flex: 1,
-                  fontSize: '12px',
-                  color: theme.text,
-                  fontFamily: 'monospace',
-                }}>
-                  {sub.to || '(remove)'}
-                </span>
-                <button
-                  onClick={() => handleRemoveWordSubstitution(index)}
-                  style={{
-                    background: 'transparent',
-                    border: 'none',
-                    color: theme.textSecondary,
-                    cursor: 'pointer',
-                    padding: '4px',
-                    fontSize: '14px',
-                    lineHeight: 1,
-                  }}
-                  title="Remove"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add new substitution form */}
-        <div style={{
-          display: 'flex',
-          gap: '8px',
-          alignItems: 'center',
-        }}>
-          <input
-            type="text"
-            value={newSubFrom}
-            onChange={(e) => setNewSubFrom(e.target.value)}
-            placeholder="Heard as..."
-            style={{
-              ...styles.input,
-              flex: 1,
-              minWidth: 0,
-              fontFamily: 'monospace',
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
-            }}
-          />
-          <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
-          <input
-            type="text"
-            value={newSubTo}
-            onChange={(e) => setNewSubTo(e.target.value)}
-            placeholder="Change to..."
-            style={{
-              ...styles.input,
-              flex: 1,
-              minWidth: 0,
-              fontFamily: 'monospace',
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
-            }}
-          />
-          <button
-            onClick={handleAddWordSubstitution}
-            disabled={!newSubFrom.trim()}
-            style={{
-              ...styles.btn,
-              opacity: newSubFrom.trim() ? 1 : 0.5,
-              minWidth: '60px',
-            }}
-          >
-            Add
-          </button>
-        </div>
-
-        {wordSubstitutions.length === 0 && (
-          <p style={{
-            fontSize: '11px',
-            color: theme.textSecondary,
-            marginTop: '8px',
-            fontStyle: 'italic',
-          }}>
-            Example: "main" → "main" (for git branches)
+        {/* Word Substitutions Section */}
+        <div style={styles.section}>
+          <SectionHeader title="Word Corrections" styles={styles} />
+          <p style={{ fontSize: '12px', color: theme.textSecondary, marginBottom: '12px' }}>
+            Fix common transcription mistakes. Words on the left will be replaced with words on the right.
           </p>
-        )}
+
+          {/* Existing substitutions list */}
+          {wordSubstitutions.length > 0 && (
+            <div style={{
+              marginBottom: '12px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '6px',
+            }}>
+              {wordSubstitutions.map((sub, index) => (
+                <div
+                  key={index}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    padding: '8px 12px',
+                    borderRadius: '6px',
+                    backgroundColor: theme.isDark ? 'rgba(255,255,255,0.05)' : 'rgba(0,0,0,0.03)',
+                    border: `1px solid ${theme.border}`,
+                  }}
+                >
+                  <span style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    color: theme.text,
+                    fontFamily: 'monospace',
+                  }}>
+                    {sub.from}
+                  </span>
+                  <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
+                  <span style={{
+                    flex: 1,
+                    fontSize: '12px',
+                    color: theme.text,
+                    fontFamily: 'monospace',
+                  }}>
+                    {sub.to || '(remove)'}
+                  </span>
+                  <button
+                    onClick={() => handleRemoveWordSubstitution(index)}
+                    style={{
+                      background: 'transparent',
+                      border: 'none',
+                      color: theme.textSecondary,
+                      cursor: 'pointer',
+                      padding: '4px',
+                      fontSize: '14px',
+                      lineHeight: 1,
+                    }}
+                    title="Remove"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Add new substitution form */}
+          <div style={{
+            display: 'flex',
+            gap: '8px',
+            alignItems: 'center',
+          }}>
+            <input
+              type="text"
+              value={newSubFrom}
+              onChange={(e) => setNewSubFrom(e.target.value)}
+              placeholder="Heard as..."
+              style={{
+                ...styles.input,
+                flex: 1,
+                minWidth: 0,
+                fontFamily: 'monospace',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
+              }}
+            />
+            <span style={{ color: theme.textSecondary, fontSize: '12px' }}>→</span>
+            <input
+              type="text"
+              value={newSubTo}
+              onChange={(e) => setNewSubTo(e.target.value)}
+              placeholder="Change to..."
+              style={{
+                ...styles.input,
+                flex: 1,
+                minWidth: 0,
+                fontFamily: 'monospace',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newSubFrom.trim()) handleAddWordSubstitution();
+              }}
+            />
+            <button
+              onClick={handleAddWordSubstitution}
+              disabled={!newSubFrom.trim()}
+              style={{
+                ...styles.btn,
+                opacity: newSubFrom.trim() ? 1 : 0.5,
+                minWidth: '60px',
+              }}
+            >
+              Add
+            </button>
+          </div>
+
+          {wordSubstitutions.length === 0 && (
+            <p style={{
+              fontSize: '11px',
+              color: theme.textSecondary,
+              marginTop: '8px',
+              fontStyle: 'italic',
+            }}>
+              Example: "main" → "main" (for git branches)
+            </p>
+          )}
+        </div>
       </div>
-      </>
       )}
 
       {/* Portable Commands Section */}
@@ -2957,13 +2950,11 @@ const getStyles = (theme: Theme): SettingsStyles => ({
   // Section with divider line
   section: {
     ...getSettingsSurfaceStyle(theme),
-    marginBottom: '16px',
   },
   sectionStack: {
     display: 'flex',
     flexDirection: 'column',
-    gap: '16px',
-    marginBottom: '16px',
+    gap: SETTINGS_CARD_GAP,
   },
   sectionHeader: {
     display: 'flex',

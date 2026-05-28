@@ -294,4 +294,18 @@ describe('AgentKickoffManager.kickoff', () => {
     await pending;
     expect(mgr.getInFlightCount()).toBe(0);
   });
+
+  it('destroy() sends SIGTERM to in-flight runs and clears them', () => {
+    const fake = new FakeChild();
+    const mgr = new AgentKickoffManager(((_: string, __: ReadonlyArray<string>) => fake as never) as never);
+
+    const started = mgr.start({ absPath: mdPath, instruction: 'go', model: 'codex' });
+
+    expect(started.ok).toBe(true);
+    expect(mgr.getInFlightCount()).toBe(1);
+    mgr.destroy();
+    expect(fake.killed).toBe(true);
+    expect(fake.killSignal).toBe('SIGTERM');
+    expect(mgr.getInFlightCount()).toBe(0);
+  });
 });

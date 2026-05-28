@@ -10,6 +10,7 @@ import { useTheme } from '../contexts/ThemeContext';
 import { FEATURE_NARRATION_ENABLED } from '../featureFlags';
 import { RENDERED_EDIT_CLICK_MODE_CHANGED_EVENT, persistRenderedEditClickMode, restoreRenderedEditClickMode } from '../utils/editorShortcuts';
 import {
+  SETTINGS_CARD_GAP,
   SettingsBadge,
   SettingsCard,
   SettingsDisabledBlock,
@@ -460,7 +461,7 @@ export default function LibrarianSettings({ librarianEnabled = true, onLibrarian
         style={{
           display: 'flex',
           flexDirection: 'column',
-          gap: '16px',
+          gap: SETTINGS_CARD_GAP,
           padding: 0,
         }}
       >

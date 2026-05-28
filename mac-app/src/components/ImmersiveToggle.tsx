@@ -23,15 +23,16 @@ export default function ImmersiveToggle({ isFullScreen, onToggle, title }: Immer
       title={title ?? (isFullScreen ? 'Exit immersive view' : 'Enter immersive view')}
       aria-label={isFullScreen ? 'Exit immersive view' : 'Enter immersive view'}
       style={{
+        height: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
         width: `${FOCUS_TOOLBAR_BUTTON_WIDTH}px`,
         boxSizing: 'border-box',
         justifyContent: 'center',
-        padding: '4px 8px',
+        padding: 0,
         fontSize: '11px',
         color: theme.textSecondary,
         backgroundColor: 'transparent',
         border: `1px solid ${theme.border}`,
-        borderRadius: '6px',
+        borderRadius: '5px',
         cursor: 'pointer',
         display: 'flex',
         alignItems: 'center',

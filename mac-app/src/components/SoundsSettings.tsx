@@ -5,6 +5,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import {
+  SETTINGS_CARD_GAP,
   SettingsCard,
   SettingsRow,
   SettingsSectionHeading,
@@ -64,7 +65,7 @@ export default function SoundsSettings() {
   }, []);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: SETTINGS_CARD_GAP }}>
       <SettingsCard theme={theme}>
         <SettingsSectionHeading
           theme={theme}

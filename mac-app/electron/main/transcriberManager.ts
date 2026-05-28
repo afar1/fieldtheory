@@ -68,12 +68,9 @@ const WHISPER_SPEAKER_TURN_PATTERN = /\[SPEAKER_TURN\]/gi;
 
 export function formatWhisperSpeakerTurnTranscript(stdout: string): string {
   const ansiEscapeRegex = /\u001b\[[0-9;]*m/g;
-  let speakerIndex = 1;
   const lines: string[] = [];
 
   for (const rawLine of stdout.replace(ansiEscapeRegex, '').split(/\r?\n/)) {
-    const hasSpeakerTurn = WHISPER_SPEAKER_TURN_PATTERN.test(rawLine);
-    WHISPER_SPEAKER_TURN_PATTERN.lastIndex = 0;
     const text = rawLine
       .replace(WHISPER_SPEAKER_TURN_PATTERN, '')
       .replace(WHISPER_METADATA_PATTERN, '')
@@ -86,13 +83,11 @@ export function formatWhisperSpeakerTurnTranscript(stdout: string): string {
       && !text.match(/^\[\d+:\d+:\d+/)
       && !text.match(/^(###|Transcription|END|BEGIN|Running whisper\.cpp inference)/i)
     ) {
-      lines.push(`Speaker ${speakerIndex}: ${text}`);
+      lines.push(text);
     }
-
-    if (hasSpeakerTurn) speakerIndex += 1;
   }
 
-  return lines.join('\n').trim();
+  return lines.join('\n\n').trim();
 }
 
 interface PersistedParakeetEngineState {
