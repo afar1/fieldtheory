@@ -66,6 +66,7 @@ import {
   getRenderedMarkdownArrowLeftEdit,
   getRenderedMarkdownOptionArrowEdit,
   getRenderedMarkdownArrowRightEdit,
+  getRenderedMarkdownSelectionInsideListBody,
   getRenderedMarkdownFormattingBoundaryLineBreakEdit,
   getRenderedMarkdownListBodyClickPosition,
   getRenderedMarkdownListBodyStart,
@@ -634,6 +635,12 @@ describe('MarkdownCodeEditor rendered presentation', () => {
     const doc = '- first\n- second\n- ';
     expect(getRenderedMarkdownListBodyStartForLine(doc, 0)).toBe(2);
     expect(getRenderedMarkdownListBodyStartForLine(doc, '- first\n'.length)).toBe('- first\n- '.length);
+    const markerState = EditorState.create({
+      doc,
+      selection: EditorSelection.cursor('- first\n'.length),
+    });
+    const bodySelection = getRenderedMarkdownSelectionInsideListBody(markerState);
+    expect(bodySelection?.main.from).toBe('- first\n- '.length);
     expect(getRenderedMarkdownCommandArrowSelection(doc, 0, 'left')).toBe(2);
     expect(getRenderedMarkdownVerticalNavigationEdit(doc, '- first\n'.length)).toEqual({
       selection: '- first\n- '.length,
