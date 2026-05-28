@@ -569,6 +569,7 @@ export class SharedSyncService extends EventEmitter {
       type,
       originalSourcePath: row.original_source_path ?? undefined,
       revision: row.revision ?? 0,
+      updatedAt: row.updated_at,
     });
     fs.writeFileSync(cachePath, content, 'utf-8');
     return cachePath;

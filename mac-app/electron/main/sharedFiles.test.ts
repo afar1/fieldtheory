@@ -43,10 +43,12 @@ describe('sharedFiles metadata helpers', () => {
       type: 'command',
       originalSourcePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
       revision: 4,
+      updatedAt: '2026-05-28T12:00:00.000Z',
     });
 
     expect(content).toContain('kind: command');
     expect(content).toContain('shared: true');
+    expect(content).toContain('shared_updated_at: "2026-05-28T12:00:00.000Z"');
     expect(parseSharedFileFrontmatter(content)).toEqual({
       sharedId: 'shared-1',
       title: 'review',
@@ -59,6 +61,7 @@ describe('sharedFiles metadata helpers', () => {
       type: 'command',
       originalSourcePath: '/Users/afar/.fieldtheory/library/Commands/review.md',
       revision: 4,
+      updatedAt: '2026-05-28T12:00:00.000Z',
     });
   });
 

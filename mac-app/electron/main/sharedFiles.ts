@@ -43,6 +43,7 @@ export interface SharedFileFrontmatter {
   type: SharedFileType;
   originalSourcePath?: string;
   revision?: number;
+  updatedAt?: string;
 }
 
 function safeFileNamePart(value: string): string {
@@ -284,6 +285,7 @@ export function serializeSharedFileFrontmatter(meta: SharedFileFrontmatter): str
   if (meta.authorCallsign) lines.push(`shared_author_callsign: ${quoteYamlScalar(meta.authorCallsign.trim())}`);
   if (meta.originalSourcePath) lines.push(`shared_original_source_path: ${quoteYamlScalar(meta.originalSourcePath)}`);
   if (typeof meta.revision === 'number') lines.push(`shared_revision: ${Math.max(0, Math.floor(meta.revision))}`);
+  if (meta.updatedAt) lines.push(`shared_updated_at: ${quoteYamlScalar(meta.updatedAt.trim())}`);
   return lines;
 }
 
@@ -307,6 +309,7 @@ export function parseSharedFileFrontmatter(content: string): SharedFileFrontmatt
     authorCallsign: parsed.meta.shared_author_callsign,
     originalSourcePath: parsed.meta.shared_original_source_path,
     revision: Number.isFinite(revision) ? revision : undefined,
+    updatedAt: parsed.meta.shared_updated_at,
   };
 }
 

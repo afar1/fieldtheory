@@ -2640,13 +2640,15 @@ export class LibrarianManager extends EventEmitter {
     const isShared = frontmatter.shared === 'true';
     const frontmatterTitle = frontmatter.title?.trim();
     const sharedTitle = isShared && frontmatterTitle ? frontmatterTitle : undefined;
+    const sharedUpdatedAt = isShared ? Date.parse(frontmatter.shared_updated_at ?? '') : Number.NaN;
     return {
       title: sharedTitle ?? (isShared ? 'Untitled' : stripMarkdownFileExtension(path.basename(filePath))),
       todoState: parseMarkdownTodoState(content) ?? undefined,
       archived: parseMarkdownArchivedState(content) || undefined,
       sharedOriginalSourcePath: frontmatter.shared_original_source_path,
       sharedAuthorCallsign: frontmatter.shared_author_callsign,
-      contentEditedAt: parseMarkdownContentEditedAt(content) ?? undefined,
+      contentEditedAt: parseMarkdownContentEditedAt(content)
+        ?? (Number.isFinite(sharedUpdatedAt) ? sharedUpdatedAt : undefined),
     };
   }
 
@@ -3000,7 +3002,7 @@ export class LibrarianManager extends EventEmitter {
         absPath,
         name,
         title: metadata.title,
-        lastUpdated: Math.floor(stats.mtimeMs),
+        lastUpdated: metadata.contentEditedAt ?? Math.floor(stats.mtimeMs),
         documentKind: documentKind ?? undefined,
         todoState: metadata.todoState,
         archived: metadata.archived,
@@ -3303,9 +3305,11 @@ export class LibrarianManager extends EventEmitter {
         absPath,
         name: nameWithoutExt,
         title: metadata.title,
-        lastUpdated: Math.floor(stats.mtimeMs),
+        lastUpdated: metadata.contentEditedAt ?? Math.floor(stats.mtimeMs),
         todoState: metadata.todoState,
         archived: metadata.archived,
+        sharedOriginalSourcePath: metadata.sharedOriginalSourcePath,
+        sharedAuthorCallsign: metadata.sharedAuthorCallsign,
         content,
         documentVersion: readDocumentVersion(absPath),
       };
