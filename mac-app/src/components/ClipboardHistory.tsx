@@ -4669,11 +4669,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             tabIndex={0}
             style={{
               padding: '5px',
+              width: '22px',
+              height: '22px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: viewMode === 'feedback' && !showSettings ? theme.accent : 'transparent',
               color: viewMode === 'feedback' && !showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
+              border: `1px solid ${viewMode === 'feedback' && !showSettings ? theme.accent : theme.border}`,
               borderRadius: '3px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
@@ -4719,11 +4721,13 @@ function ClipboardHistoryApp({ initialLibraryOpenTarget = null }: { initialLibra
             tabIndex={0}
             style={{
               padding: '5px',
+              width: '22px',
+              height: '22px',
               fontSize: '9px',
               fontWeight: 500,
               backgroundColor: showSettings ? theme.accent : 'transparent',
               color: showSettings ? '#fff' : theme.textSecondary,
-              border: 'none',
+              border: `1px solid ${showSettings ? theme.accent : theme.border}`,
               borderRadius: '3px',
               cursor: 'pointer',
               transition: 'all 0.15s ease',
