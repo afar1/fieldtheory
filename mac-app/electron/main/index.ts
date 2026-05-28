@@ -956,21 +956,23 @@ function getOptionalEnvValue(key: string): string | undefined {
 // Load environment variables from .env.local for Supabase credentials.
 // In development, the file is in the mac-app directory.
 // In production, we use the bundled values or fall back to hardcoded ones.
-function loadEnvVars(): { supabaseUrl?: string; supabaseAnonKey?: string } {
+function loadEnvVars(): { supabaseUrl?: string; supabasePublishableKey?: string } {
   const supabaseUrl = getOptionalEnvValue('VITE_SUPABASE_URL');
-  const supabaseAnonKey = getOptionalEnvValue('VITE_SUPABASE_ANON_KEY');
+  const supabasePublishableKey = getOptionalEnvValue('FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY')
+    ?? getOptionalEnvValue('VITE_SUPABASE_ANON_KEY');
 
-  if (supabaseUrl && supabaseAnonKey) {
+  if (supabaseUrl && supabasePublishableKey) {
     return {
       supabaseUrl,
-      supabaseAnonKey,
+      supabasePublishableKey,
     };
   }
 
-  // Production fallback - anon key is public by design, protected by RLS.
+  // Production fallback: this publishable key is public app config. RLS and the
+  // user's auth session decide what data the app can read or write.
   return {
     supabaseUrl: 'https://FIELD_THEORY_SUPABASE_URL.example',
-    supabaseAnonKey: 'REDACTED_JWT',
+    supabasePublishableKey: 'FIELD_THEORY_SUPABASE_PUBLISHABLE_KEY',
   };
 }
 
@@ -11270,7 +11272,7 @@ async function initTranscriberSystem(): Promise<void> {
   // Now safe to init AuthManager - handlers are registered. Keep this off the
   // cold-start critical path; returning users can open local surfaces while the
   // SDK restores or refreshes the server session.
-  void authManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey)
+  void authManager.init(envVars.supabaseUrl, envVars.supabasePublishableKey)
     .then(() => startupMark('auth-manager-init-complete'))
     .catch((error) => {
       log.warn('Auth initialization failed during background startup:', error);
@@ -11357,8 +11359,8 @@ async function initTranscriberSystem(): Promise<void> {
 
   // Initialize quota manager with Supabase credentials and session getter.
   // Server is the single source of truth for usage data.
-  if (quotaManager && envVars.supabaseUrl && envVars.supabaseAnonKey) {
-    quotaManager.init(envVars.supabaseUrl, envVars.supabaseAnonKey, () => {
+  if (quotaManager && envVars.supabaseUrl && envVars.supabasePublishableKey) {
+    quotaManager.init(envVars.supabaseUrl, envVars.supabasePublishableKey, () => {
       const session = authManager?.getSession();
       if (!session) return null;
       return {

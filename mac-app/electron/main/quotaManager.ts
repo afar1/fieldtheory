@@ -121,9 +121,9 @@ export class QuotaManager extends EventEmitter {
    * Initialize with Supabase credentials and session getter.
    * Call this after auth is set up in main process.
    */
-  init(supabaseUrl: string, supabaseAnonKey: string, getSession: () => { access_token: string; refresh_token: string; user: { id: string } } | null): void {
+  init(supabaseUrl: string, supabasePublishableKey: string, getSession: () => { access_token: string; refresh_token: string; user: { id: string } } | null): void {
     this.supabaseUrl = supabaseUrl;
-    this.supabase = createClient(supabaseUrl, supabaseAnonKey);
+    this.supabase = createClient(supabaseUrl, supabasePublishableKey);
     this.getSession = getSession;
 
     // Start background sync loop.
