@@ -269,8 +269,10 @@ export function ContentToolbarMaxwellButton({
             top: '28px',
             right: 0,
             zIndex: 21,
-            width: '260px',
-            padding: '6px',
+            width: 'max-content',
+            minWidth: '176px',
+            maxWidth: 'min(260px, calc(100vw - 24px))',
+            padding: '5px',
             borderRadius: '8px',
             border: `1px solid ${theme.border}`,
             backgroundColor: theme.isDark ? 'rgba(24,24,24,0.96)' : 'rgba(255,255,255,0.98)',
@@ -283,7 +285,7 @@ export function ContentToolbarMaxwellButton({
         >
           <div
             style={{
-              padding: '2px 6px 5px',
+              padding: '1px 5px 3px',
               color: theme.textSecondary,
               fontSize: '10px',
               fontWeight: 600,
@@ -297,10 +299,10 @@ export function ContentToolbarMaxwellButton({
               key={item.id}
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'auto 1fr auto auto',
+                gridTemplateColumns: 'auto minmax(72px, max-content) auto auto',
                 gap: '4px',
                 alignItems: 'center',
-                padding: '4px',
+                padding: '2px',
                 borderRadius: '6px',
               }}
             >
@@ -314,7 +316,7 @@ export function ContentToolbarMaxwellButton({
                 aria-label={`Open ${item.title}`}
                 style={{
                   width: '18px',
-                  height: '24px',
+                  height: '20px',
                   padding: 0,
                   color: theme.textSecondary,
                   backgroundColor: 'transparent',
@@ -332,7 +334,7 @@ export function ContentToolbarMaxwellButton({
                 title={item.subtitle}
                 style={{
                   minWidth: 0,
-                  padding: '3px 2px',
+                  padding: '1px 2px',
                   textAlign: 'left',
                 }}
               >
@@ -348,8 +350,8 @@ export function ContentToolbarMaxwellButton({
                   setMaxwellMenuOpen(false);
                 }}
                 style={{
-                  height: '24px',
-                  padding: '0 8px',
+                  height: '20px',
+                  padding: '0 6px',
                   color: theme.textSecondary,
                   backgroundColor: theme.isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.05)',
                   border: 'none',
@@ -369,8 +371,8 @@ export function ContentToolbarMaxwellButton({
                   onRemoveItem?.(item.id);
                 }}
                 style={{
-                  width: '24px',
-                  height: '24px',
+                  width: '20px',
+                  height: '20px',
                   padding: 0,
                   color: theme.textSecondary,
                   backgroundColor: 'transparent',
@@ -402,7 +404,7 @@ export function ContentToolbarMaxwellButton({
               }
             }}
             style={{
-              height: '28px',
+              height: '24px',
               alignSelf: 'flex-end',
               padding: '0 9px',
               color: canAddCurrent ? theme.textSecondary : theme.textSecondary,

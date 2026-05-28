@@ -147,6 +147,7 @@ describe('ContentToolbar', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Field Theory' }));
     expect(screen.getByText('Run a local command')).toBeTruthy();
+    expect(screen.getByText('Run a local command').parentElement?.style.width).toBe('max-content');
     expect(screen.getByText('A Maxwell Page').compareDocumentPosition(screen.getByText('Z Maxwell Page')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(screen.queryByText('Commands/A Maxwell Page')).toBeNull();
     fireEvent.click(screen.getAllByText('Run')[0]);
