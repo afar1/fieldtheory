@@ -727,7 +727,7 @@ interface OnboardingAPI {
 interface UpdaterAPI {
   getVersion: () => string;
   isEnabled: () => boolean;
-  getStatus: () => Promise<{ status: 'available' | 'downloading' | 'ready'; version: string } | null>;
+  getStatus: () => Promise<{ status: 'available' | 'downloading' | 'ready' | 'installing'; version: string } | null>;
   checkForUpdates: () => Promise<void>;
   downloadUpdate: () => Promise<void>;
   installUpdate: () => Promise<void>;
@@ -737,6 +737,7 @@ interface UpdaterAPI {
   onUpdateNotAvailable: (callback: () => void) => () => void;
   onDownloadProgress: (callback: (percent: number) => void) => () => void;
   onUpdateDownloaded: (callback: (info: UpdateInfo) => void) => () => void;
+  onInstalling: (callback: () => void) => () => void;
   onError: (callback: (error: string) => void) => () => void;
 }
 
