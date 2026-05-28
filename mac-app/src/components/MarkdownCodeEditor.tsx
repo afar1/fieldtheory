@@ -504,34 +504,48 @@ export function hasMarkdownCodeEditorRangeSelection(state: EditorState): boolean
   return state.selection.ranges.some((range) => !range.empty);
 }
 
-function isMarkdownCodeEditorLineStartAfterBreak(doc: Text, offset: number): boolean {
-  return offset > 0 && offset <= doc.length && doc.sliceString(offset - 1, offset) === '\n';
-}
-
-function getMarkdownCodeEditorOffsetBeforeTrailingLineBreaks(doc: Text, offset: number): number {
+function getMarkdownCodeEditorOffsetBeforeTrailingParagraphWhitespace(doc: Text, offset: number): number {
   let nextOffset = offset;
-  while (isMarkdownCodeEditorLineStartAfterBreak(doc, nextOffset)) {
-    nextOffset -= 1;
+  let sawLineBreak = false;
+  while (nextOffset > 0) {
+    const previousChar = doc.sliceString(nextOffset - 1, nextOffset);
+    if (previousChar === '\n') {
+      sawLineBreak = true;
+      nextOffset -= 1;
+      continue;
+    }
+    if (sawLineBreak && (previousChar === ' ' || previousChar === '\t')) {
+      nextOffset -= 1;
+      continue;
+    }
+    break;
   }
-  return nextOffset;
+  return sawLineBreak ? nextOffset : offset;
 }
 
-export function getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state: EditorState): EditorSelection | null {
+function getMarkdownCodeEditorSelectionWithoutTrailingLineStartForDoc(
+  doc: Text,
+  selection: EditorSelection,
+): EditorSelection | null {
   let changed = false;
-  const ranges = state.selection.ranges.map((range) => {
+  const ranges = selection.ranges.map((range) => {
     if (range.empty) return range;
     let anchor = range.anchor;
     let head = range.head;
     if (head > anchor) {
-      head = getMarkdownCodeEditorOffsetBeforeTrailingLineBreaks(state.doc, head);
+      head = getMarkdownCodeEditorOffsetBeforeTrailingParagraphWhitespace(doc, head);
     } else if (anchor > head) {
-      anchor = getMarkdownCodeEditorOffsetBeforeTrailingLineBreaks(state.doc, anchor);
+      anchor = getMarkdownCodeEditorOffsetBeforeTrailingParagraphWhitespace(doc, anchor);
     }
     if (anchor === range.anchor && head === range.head) return range;
     changed = true;
     return EditorSelection.range(anchor, head);
   });
-  return changed ? EditorSelection.create(ranges, state.selection.mainIndex) : null;
+  return changed ? EditorSelection.create(ranges, selection.mainIndex) : null;
+}
+
+export function getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state: EditorState): EditorSelection | null {
+  return getMarkdownCodeEditorSelectionWithoutTrailingLineStartForDoc(state.doc, state.selection);
 }
 
 export function getRenderedMarkdownSelectionInsideListBody(state: EditorState): EditorSelection | null {
@@ -556,15 +570,25 @@ export const renderedMarkdownListCaretBoundaryExtension = ViewPlugin.fromClass(
   },
 );
 
-export const trailingLineStartSelectionExtension = ViewPlugin.fromClass(
-  class {
-    update(update: ViewUpdate): void {
-      if (!update.selectionSet) return;
-      const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(update.state);
-      if (selection) update.view.dispatch({ selection });
-    }
-  },
-);
+export const trailingLineStartSelectionExtension = [
+  EditorState.transactionFilter.of((tr) => {
+    if (!tr.selection || tr.docChanged || tr.effects.length > 0) return tr;
+    const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStartForDoc(
+      tr.newDoc,
+      tr.newSelection,
+    );
+    return selection ? { selection, scrollIntoView: tr.scrollIntoView } : tr;
+  }),
+  ViewPlugin.fromClass(
+    class {
+      update(update: ViewUpdate): void {
+        if (!update.selectionSet) return;
+        const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(update.state);
+        if (selection) update.view.dispatch({ selection });
+      }
+    },
+  ),
+];
 
 export const rangeSelectionClassExtension = ViewPlugin.fromClass(
   class {
