@@ -19,6 +19,7 @@ import {
   useRef,
 } from 'react';
 import {
+  EditorSelection,
   EditorState,
   Compartment,
   Facet,
@@ -502,6 +503,38 @@ export const visualLineNumberOverlayExtension = ViewPlugin.fromClass(
 export function hasMarkdownCodeEditorRangeSelection(state: EditorState): boolean {
   return state.selection.ranges.some((range) => !range.empty);
 }
+
+function isMarkdownCodeEditorLineStartAfterBreak(doc: Text, offset: number): boolean {
+  return offset > 0 && offset <= doc.length && doc.sliceString(offset - 1, offset) === '\n';
+}
+
+export function getMarkdownCodeEditorSelectionWithoutTrailingLineStart(state: EditorState): EditorSelection | null {
+  let changed = false;
+  const ranges = state.selection.ranges.map((range) => {
+    if (range.empty) return range;
+    let anchor = range.anchor;
+    let head = range.head;
+    if (head > anchor && isMarkdownCodeEditorLineStartAfterBreak(state.doc, head)) {
+      head -= 1;
+    } else if (anchor > head && isMarkdownCodeEditorLineStartAfterBreak(state.doc, anchor)) {
+      anchor -= 1;
+    }
+    if (anchor === range.anchor && head === range.head) return range;
+    changed = true;
+    return EditorSelection.range(anchor, head);
+  });
+  return changed ? EditorSelection.create(ranges, state.selection.mainIndex) : null;
+}
+
+export const trailingLineStartSelectionExtension = ViewPlugin.fromClass(
+  class {
+    update(update: ViewUpdate): void {
+      if (!update.selectionSet) return;
+      const selection = getMarkdownCodeEditorSelectionWithoutTrailingLineStart(update.state);
+      if (selection) update.view.dispatch({ selection });
+    }
+  },
+);
 
 export const rangeSelectionClassExtension = ViewPlugin.fromClass(
   class {
@@ -2432,6 +2465,7 @@ const MarkdownCodeEditor = forwardRef<MarkdownCodeEditorHandle, MarkdownCodeEdit
           highlightActiveLine(),
           selectionDrawCompartment.of(drawSelection(getMarkdownCodeEditorSelectionDrawConfig(blinkCursor))),
           checkedMarkdownTaskLineExtension,
+          trailingLineStartSelectionExtension,
           rangeSelectionClassExtension,
           EditorView.lineWrapping,
           lineNumbersCompartment.of(lineNumbersExtension),
